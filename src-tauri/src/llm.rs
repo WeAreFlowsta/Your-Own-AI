@@ -52,6 +52,10 @@ pub struct LLMState {
     pub current_mmproj: Mutex<Option<String>>,
     pub server_process: Mutex<Option<CommandChild>>, // llama-server process
     pub is_server_running: Mutex<bool>,
+    /// Which engine backend the RUNNING chat server was spawned with
+    /// ("cuda" | "bundled") — the Engines card reports the truth of what's
+    /// serving right now, not just what's installed.
+    pub spawned_backend: Mutex<Option<String>>,
     /// Cancellation token for the active streaming request.
     /// Set to true to abort the current stream_chat_completion.
     pub cancel_stream: std::sync::atomic::AtomicBool,
@@ -85,6 +89,7 @@ impl LLMState {
             current_mmproj: Mutex::new(None),
             server_process: Mutex::new(None),
             is_server_running: Mutex::new(false),
+            spawned_backend: Mutex::new(None),
             cancel_stream: std::sync::atomic::AtomicBool::new(false),
             embed_process: Mutex::new(None),
             embed_running: Mutex::new(false),
@@ -645,6 +650,13 @@ pub async fn start_llama_server(
 
     *state.server_process.lock().await = Some(child);
     *is_running = true;
+    *state.spawned_backend.lock().await = Some(
+        match backend {
+            crate::engine::Backend::Cuda => "cuda",
+            crate::engine::Backend::Bundled => "bundled",
+        }
+        .to_string(),
+    );
 
     println!("[LLM] llama-server started on port {} ({:?} engine)", CHAT_PORT, backend);
     

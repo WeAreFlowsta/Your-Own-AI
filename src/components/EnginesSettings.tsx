@@ -26,7 +26,10 @@ interface EngineStatus {
   supported: boolean;
   installed: boolean;
   stale_version_installed: boolean;
+  /** What the next chat-server start will use. */
   active_backend: "bundled" | "cuda";
+  /** What the RUNNING chat server was spawned with, if one is running. */
+  running_backend: "bundled" | "cuda" | null;
   tag: string;
   download_url: string | null;
 }
@@ -42,7 +45,6 @@ export default component$(() => {
   const downloading = useSignal(false);
   const percent = useSignal(0);
   const error = useSignal("");
-  const justInstalled = useSignal(false);
 
   const refresh = $(async () => {
     try {
@@ -87,7 +89,6 @@ export default component$(() => {
     percent.value = 0;
     try {
       await invoke("download_cuda_engine", {});
-      justInstalled.value = true;
       await refresh();
     } catch (e) {
       error.value = e instanceof Error ? e.message : String(e);
@@ -98,7 +99,6 @@ export default component$(() => {
 
   const doRemove = $(async () => {
     error.value = "";
-    justInstalled.value = false;
     try {
       await invoke("remove_cuda_engine");
       await refresh();
@@ -239,12 +239,12 @@ export default component$(() => {
                 <div class="mt-2">
                   <div class="h-1.5 w-full rounded-full bg-[var(--border-subtle)] overflow-hidden">
                     <div
-                      class="h-full bg-[var(--bg-button-primary)] transition-all"
+                      class={`h-full bg-[var(--bg-button-primary)] transition-all ${percent.value >= 100 ? "animate-pulse" : ""}`}
                       style={{ width: `${percent.value}%` }}
                     />
                   </div>
                   <p class="text-[11px] text-[var(--text-muted)] mt-1">
-                    Downloading… {percent.value}%
+                    {percent.value >= 100 ? "Installing…" : `Downloading… ${percent.value}%`}
                   </p>
                 </div>
               )}
@@ -252,9 +252,9 @@ export default component$(() => {
               {s.installed && !downloading.value && !cudaLaddered.value && (
                 <p class="mt-2 text-[11px] text-emerald-400/80 flex items-center gap-1">
                   <LuCheck class="w-3 h-3" />
-                  {s.active_backend === "cuda"
+                  {s.running_backend === "cuda"
                     ? "Active - powering your chats."
-                    : justInstalled.value
+                    : s.active_backend === "cuda"
                       ? "Installed - takes over the next time a model loads."
                       : "Installed."}
                 </p>
@@ -272,7 +272,7 @@ export default component$(() => {
                 </LiquidMetalButton>
               ) : downloading.value ? (
                 <span class="flex items-center gap-1.5 px-3 py-1.5 text-xs text-[var(--text-muted)]">
-                  {percent.value}%
+                  {percent.value >= 100 ? "Installing…" : `${percent.value}%`}
                 </span>
               ) : (
                 <LiquidMetalButton

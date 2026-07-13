@@ -126,21 +126,34 @@ pub struct EngineStatus {
     pub installed: bool,
     /// An older CUDA engine version is on disk (update available).
     pub stale_version_installed: bool,
+    /// What the NEXT chat-server spawn will use.
     pub active_backend: Backend,
+    /// What the RUNNING chat server was actually spawned with, if one runs -
+    /// the card says "powering your chats" only when this says so.
+    pub running_backend: Option<String>,
     pub tag: String,
     pub download_url: Option<String>,
 }
 
 #[tauri::command]
-pub fn engine_status(app: AppHandle) -> EngineStatus {
-    EngineStatus {
+pub async fn engine_status(
+    app: AppHandle,
+    state: tauri::State<'_, crate::llm::LLMState>,
+) -> Result<EngineStatus, String> {
+    let running_backend = if *state.is_server_running.lock().await {
+        state.spawned_backend.lock().await.clone()
+    } else {
+        None
+    };
+    Ok(EngineStatus {
         supported: cuda_triple().is_some(),
         installed: cuda_engine_binary(&app).is_some(),
         stale_version_installed: other_cuda_version_installed(&app),
         active_backend: active_backend(&app),
+        running_backend,
         tag: LLAMA_ENGINE_TAG.to_string(),
         download_url: cuda_download_url(),
-    }
+    })
 }
 
 /// Download + install the CUDA engine. Reuses the model downloader's
