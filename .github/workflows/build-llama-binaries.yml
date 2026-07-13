@@ -208,10 +208,13 @@ jobs:
   # llama-server plus the cudart/cublas libraries beside it ($ORIGIN
   # rpath on Linux; exe-dir DLL search on Windows).
   # CUDA 12.9, NOT 13: CUDA 13 drops Pascal (sm_61 - the GTX 10xx cards).
-  # Driver floor stays R525+ via CUDA 12 minor-version compatibility (all
-  # archs get SASS in the fatbin - no PTX JIT dependency). Arch list =
-  # Pascal (61) through Hopper (90) + Blackwell consumer (120, RTX 50xx).
-  # sm_121 (DGX Spark) is a separate future build.
+  # Driver floor stays R525+ via CUDA 12 minor-version compatibility.
+  # Arch list caps at sm_89 (Ada), matching upstream's CUDA-12 builds:
+  # mixing Pascal with sm_90+ in one binary makes runtime feature probes
+  # (PDL) hit kernel variants that have no Pascal image and abort with
+  # "device kernel image is invalid". Newer GPUs (Hopper/Blackwell) run
+  # via PTX JIT from the 89 target - their drivers are new enough.
+  # Native sm_90+/sm_121 builds are a separate future CUDA-13 variant.
   build-linux-cuda:
     runs-on: ubuntu-22.04
     steps:
@@ -240,7 +243,7 @@ jobs:
             -DGGML_FMA=ON \
             -DGGML_F16C=ON \
             -DGGML_CUDA=ON \
-            -DCMAKE_CUDA_ARCHITECTURES="61;70;75;80;86;89;90;120" \
+            -DCMAKE_CUDA_ARCHITECTURES="61;70;75;80;86;89" \
             -DCMAKE_BUILD_RPATH='$ORIGIN' \
             -DCMAKE_INSTALL_RPATH='$ORIGIN' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
@@ -313,7 +316,7 @@ jobs:
             -DGGML_F16C=ON `
             -DGGML_CUDA=ON `
             -DCMAKE_CUDA_FLAGS="-allow-unsupported-compiler" `
-            -DCMAKE_CUDA_ARCHITECTURES="61;70;75;80;86;89;90;120" `
+            -DCMAKE_CUDA_ARCHITECTURES="61;70;75;80;86;89" `
             -DLLAMA_CURL=OFF `
             -DLLAMA_SERVER_WEBUI=OFF
           cmake --build build --target llama-server
