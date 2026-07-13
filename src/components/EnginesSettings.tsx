@@ -213,8 +213,9 @@ export default component$(() => {
                 <span class="text-xs font-normal text-[var(--text-muted)]">~850 MB</span>
               </h3>
               <p class="text-sm text-[var(--text-secondary)] mt-0.5">
-                Built for NVIDIA graphics cards. Often faster than the
-                standard engine, especially on long prompts.
+                Built for NVIDIA graphics cards. Reads long prompts and
+                documents much faster; generation speed varies by card
+                generation. Needs an NVIDIA driver from 2023 or newer.
               </p>
               {s.stale_version_installed && !s.installed && (
                 <p class="mt-1.5 text-xs text-amber-500/90">
