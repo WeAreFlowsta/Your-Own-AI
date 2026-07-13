@@ -207,8 +207,13 @@ jobs:
   # bundled in installers. Dynamic CUDA runtime: each zip ships
   # llama-server plus the cudart/cublas libraries beside it ($ORIGIN
   # rpath on Linux; exe-dir DLL search on Windows).
-  # CUDA 12.9, NOT 13: CUDA 13 drops Pascal (sm_61 - the GTX 10xx cards).
-  # Driver floor stays R525+ via CUDA 12 minor-version compatibility.
+  # CUDA 12.x, NOT 13: CUDA 13 drops Pascal (sm_61 - the GTX 10xx cards).
+  # Toolkit version is per-platform and driver-driven: kernels built by a
+  # newer 12.x toolkit FAIL to load on older drivers ("device kernel image
+  # is invalid" - minor-version compatibility does not cover it). Linux
+  # boxes run years-old distro drivers, so Linux builds with 12.2 (loads
+  # on R525+). Windows builds with 12.9 (older toolkits reject the
+  # runners' MSVC; Windows users track drivers - floor R560+).
   # Arch list caps at sm_89 (Ada), matching upstream's CUDA-12 builds:
   # mixing Pascal with sm_90+ in one binary makes runtime feature probes
   # (PDL) hit kernel variants that have no Pascal image and abort with
@@ -218,13 +223,13 @@ jobs:
   build-linux-cuda:
     runs-on: ubuntu-22.04
     steps:
-      - name: Install CUDA toolkit 12.9 (NVIDIA apt repo)
+      - name: Install CUDA toolkit 12.2 (NVIDIA apt repo)
         run: |
           wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update
-          sudo apt-get install -y cuda-nvcc-12-9 cuda-cudart-dev-12-9 libcublas-dev-12-9
-          echo "/usr/local/cuda-12.9/bin" >> $GITHUB_PATH
+          sudo apt-get install -y cuda-nvcc-12-2 cuda-cudart-dev-12-2 libcublas-dev-12-2
+          echo "/usr/local/cuda-12.2/bin" >> $GITHUB_PATH
 
       - name: Checkout llama.cpp
         uses: actions/checkout@v4
@@ -257,7 +262,7 @@ jobs:
           cp build/bin/llama-server pkg/
           strip pkg/llama-server
           # Runtime libs the binary needs beside it ($ORIGIN rpath).
-          CUDA_LIB=/usr/local/cuda-12.9/targets/x86_64-linux/lib
+          CUDA_LIB=/usr/local/cuda-12.2/targets/x86_64-linux/lib
           for lib in libcudart.so.12 libcublas.so.12 libcublasLt.so.12; do
             cp -L "$CUDA_LIB/$lib" pkg/
           done
@@ -405,7 +410,7 @@ jobs:
             - All platforms fall back to CPU if no compatible GPU is found
 
             **Optional CUDA engine (llama-server-cuda-*.zip):**
-            - Faster generation on NVIDIA GPUs (Pascal through Blackwell), CUDA 12.9 runtime included, drivers R525+
+            - Faster generation on NVIDIA GPUs, CUDA runtime included (Linux: CUDA 12.2, drivers R525+; Windows: CUDA 12.9, drivers R560+)
             - Downloaded on demand from Settings — never bundled in installers
 
             **Configuration:**
