@@ -210,7 +210,7 @@ export default component$(() => {
             <div class="min-w-0 flex-1">
               <h3 class="text-base font-semibold text-[var(--text-primary)] flex items-center gap-2">
                 CUDA engine
-                <span class="text-xs font-normal text-[var(--text-muted)]">~400 MB</span>
+                <span class="text-xs font-normal text-[var(--text-muted)]">~850 MB</span>
               </h3>
               <p class="text-sm text-[var(--text-secondary)] mt-0.5">
                 Built for NVIDIA graphics cards. Often faster than the
