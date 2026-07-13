@@ -170,6 +170,10 @@ pub async fn download_cuda_engine(app: AppHandle, url: Option<String>) -> Result
 
 /// Extract the downloaded zip (flat: binary + CUDA runtime libraries) into
 /// the versioned engine dir and mark the server binary executable.
+/// Extraction is ATOMIC: everything lands in a `.partial` sibling first and
+/// only a complete, verified extract is renamed into place - so an app
+/// killed mid-extract can never leave a half-engine that the presence check
+/// would activate.
 fn install_cuda_zip(app: &AppHandle, zip_name: &str) -> Result<(), String> {
     let zip_path = crate::llm::get_models_dir(app)?.join(zip_name);
     let file = std::fs::File::open(&zip_path)
@@ -177,7 +181,12 @@ fn install_cuda_zip(app: &AppHandle, zip_name: &str) -> Result<(), String> {
     let mut archive =
         zip::ZipArchive::new(file).map_err(|e| format!("bad engine zip: {}", e))?;
 
-    let dir = cuda_engine_dir(app)?;
+    let final_dir = cuda_engine_dir(app)?;
+    let dir = final_dir
+        .parent()
+        .ok_or("engine dir has no parent")?
+        .join(format!("cuda-{}.partial", tag_version()));
+    let _ = std::fs::remove_dir_all(&dir); // stale partial from a killed run
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create engine dir: {}", e))?;
 
     for i in 0..archive.len() {
@@ -213,6 +222,11 @@ fn install_cuda_zip(app: &AppHandle, zip_name: &str) -> Result<(), String> {
     if !dir.join(server_binary_name()).exists() {
         return Err("engine zip did not contain llama-server".into());
     }
+
+    // Complete + verified: move into place in one step.
+    let _ = std::fs::remove_dir_all(&final_dir);
+    std::fs::rename(&dir, &final_dir)
+        .map_err(|e| format!("could not finalize engine install: {}", e))?;
     Ok(())
 }
 
