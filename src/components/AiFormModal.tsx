@@ -739,7 +739,9 @@ const AiFormModal = component$<AiFormModalProps>(
                             ? 'Auto — Offline Only'
                             : store.model === 'auto:online-offline'
                               ? 'Auto — Online and Offline'
-                              : store.model.startsWith('online:')
+                              : store.model === 'auto:my-hardware'
+                                ? 'Auto — My Hardware'
+                                : store.model.startsWith('online:')
                                 ? `${store.onlineModels.find((m) => m.id === store.model)?.display_name || store.model.slice(7)} (online)`
                                 : store.model.startsWith('external:')
                                   ? `${store.model.slice(9)} (your server)`
@@ -757,6 +759,11 @@ const AiFormModal = component$<AiFormModalProps>(
                       </li>
                       {[
                         { id: 'auto:offline', label: 'Auto — Offline Only', hint: 'best of your offline models' },
+                        // Offered when a server is connected; an AI already SET
+                        // to it keeps the option so editing never strips it.
+                        ...(store.externalModels.length > 0 || store.model === 'auto:my-hardware'
+                          ? [{ id: 'auto:my-hardware', label: 'Auto — My Hardware', hint: 'your device + your connected server' }]
+                          : []),
                         // Offered with a plan; an AI already SET to it keeps the
                         // option visible so editing never strips the setting.
                         ...(store.onlineModels.length > 0 &&

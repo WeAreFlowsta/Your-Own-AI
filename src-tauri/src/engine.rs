@@ -471,6 +471,20 @@ pub async fn external_engine_info(app: AppHandle) -> ExternalEngineInfo {
     }
 }
 
+/// Quick reachability check on the connected external server - a short
+/// probe so routing can fall back to a local model instead of handing a
+/// chat to a server that's off. Two-second budget: routing latency matters.
+pub async fn external_reachable(app: &AppHandle) -> bool {
+    let Some(url) = external_engine_url(app) else { return false };
+    reqwest::Client::new()
+        .get(format!("{}/v1/models", url))
+        .timeout(std::time::Duration::from_secs(2))
+        .send()
+        .await
+        .map(|r| r.status().is_success())
+        .unwrap_or(false)
+}
+
 /// The cached external-engine state for ROUTING: (model ids, measured tps).
 /// Reads the connect-time cache - no network. Empty when nothing connected.
 pub fn external_models_cached(app: &AppHandle) -> (Vec<String>, Option<f64>) {

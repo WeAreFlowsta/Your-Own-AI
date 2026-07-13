@@ -254,6 +254,9 @@ async fn chat_completions(
     // online/offline logic below runs on the resolved value.
     let auto_mode = ai.model.strip_prefix("auto:").map(str::to_string);
     if let Some(m) = auto_mode {
+        // "my-hardware" maps to offline HERE: this server has no
+        // external-chat path yet, so a resolved external model couldn't be
+        // served. The in-app chat handles the full my-hardware mode.
         let mode = if m == "online-offline" { "online-offline" } else { "offline" };
         // Per-request routing hints (a code editor sends "X-Your-Own-AI-Task: code").
         // Validated to known values; absent/unknown → neutral defaults (= prior

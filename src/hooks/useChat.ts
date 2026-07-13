@@ -505,7 +505,11 @@ export function useChat(props: UseChatProps) {
 
       if (!modelOverride && preferredModel?.startsWith("auto:")) {
         const mode =
-          preferredModel === "auto:online-offline" ? "online-offline" : "offline";
+          preferredModel === "auto:online-offline"
+            ? "online-offline"
+            : preferredModel === "auto:my-hardware"
+              ? "my-hardware"
+              : "offline";
         // Eagerness (online FRESHNESS threshold) — Settings → Routing.
         const eagerness =
           localStorage.getItem("smartRoutingEagerness") || "balanced";

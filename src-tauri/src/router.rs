@@ -367,26 +367,40 @@ pub async fn route(
             let local_cap = local
                 .as_deref()
                 .map(|m| crate::model_caps::caps_for(m).by_task(task));
-            if let Some((ext_id, ext_cap)) = best_external(&ext_models, task) {
-                if external_beats_local(lean, local_cap, Some(ext_cap), ext_tps, None) {
+            // Only hand a chat to the server when it answers RIGHT NOW —
+            // otherwise fall through to the local pick, same graceful shape
+            // as the online fallthrough.
+            let want_external = best_external(&ext_models, task)
+                .filter(|(_, cap)| {
+                    external_beats_local(lean, local_cap, Some(*cap), ext_tps, None)
+                })
+                .map(|(id, _)| id)
+                .or_else(|| {
+                    if local.is_none() {
+                        ext_models.first().cloned() // rescue: nothing local runs
+                    } else {
+                        None
+                    }
+                });
+            if let Some(ext_id) = want_external {
+                if crate::engine::external_reachable(app).await {
+                    let why = if local.is_some() {
+                        "your server — stronger for this task"
+                    } else {
+                        "your server — no local model fits"
+                    };
                     return Ok(RouteResult {
                         model: format!("external:{}", ext_id),
-                        reason: "your server — stronger for this task".to_string(),
+                        reason: why.to_string(),
                     });
                 }
+                log::warn!("[Router] external engine unreachable — using the local pick");
             }
             if let Some(local) = local {
                 return Ok(RouteResult { model: local, reason: "offline".to_string() });
             }
-            // Nothing local runs — any external model is the rescue.
-            if let Some(first) = ext_models.first() {
-                return Ok(RouteResult {
-                    model: format!("external:{}", first),
-                    reason: "your server — no local model fits".to_string(),
-                });
-            }
         }
-        // No server connected (or empty) — behave exactly like offline-only.
+        // No server connected (or nothing usable) — behave like offline-only.
     }
 
     let model = pick_offline(app, task, lean).await?;
