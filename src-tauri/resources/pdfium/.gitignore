@@ -1,0 +1,4 @@
+# pdfium binaries are fetched per-platform, not committed (~6–10 MB each).
+*.so
+*.dylib
+*.dll

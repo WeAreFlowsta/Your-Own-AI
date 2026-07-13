@@ -1,0 +1,1142 @@
+import {
+  component$,
+  useStore,
+  useSignal,
+  useVisibleTask$,
+  $,
+  type QRL,
+} from '@builder.io/qwik';
+import type { UserDefinedAI, CreateUserAiData, UpdateUserAiData, LocalModel, LengthDisposition, TurnMode } from '../types';
+import { getCachedModels, refreshLocalModels, refreshFits, refreshOnlineModels } from '../utils/modelCache';
+
+/** Per-AI default turn mode (Edit-AI dropdown). */
+const DEFAULT_MODE_OPTIONS: { id: TurnMode; name: string; description: string }[] = [
+  { id: 'chat', name: 'Chat', description: 'Normal conversational replies' },
+  { id: 'report', name: 'Report', description: 'Always a structured, reasoned report' },
+  { id: 'code', name: 'Code', description: 'Always code-first' },
+];
+import { useAiData, useAiDataActions } from '../contexts/AiDataContext';
+import {
+  LuX,
+  LuSave,
+  LuAlertTriangle,
+  LuLoader2,
+  LuUploadCloud,
+  LuTrash2,
+  LuChevronDown,
+  LuCheck,
+} from '@qwikest/icons/lucide';
+import { invoke } from '@tauri-apps/api/core';
+import { formatModelDisplayName } from '../utils/modelNameFormatter';
+import { modelFamilies } from '../data/recommended-models';
+import { isModelPaused } from '../utils/modelPrefs';
+import { ImageCropModal } from './ImageCropModal';
+import { LiquidMetalBorder } from './LiquidMetalBorder';
+import LiquidMetalButton from './LiquidMetalButton';
+
+/**
+ * Display name that includes the size variant, so two models from the same
+ * family (e.g. Gemma 4 E2B vs E4B) are distinguishable in the picker. Matches
+ * the downloaded file against the catalog; falls back to filename formatting.
+ */
+function richModelName(filename: string): string {
+  for (const family of modelFamilies) {
+    const variant = family.variants.find((v) => v.filename === filename);
+    if (variant) return `${family.name} ${variant.parameterCount}`;
+  }
+  return formatModelDisplayName(filename);
+}
+
+interface AiFormModalProps {
+  isOpen: boolean;
+  onClose$: QRL<() => void>;
+  editingAi: UserDefinedAI | null;
+  currentDisplayableThumbnailUrl?: string | null;
+}
+
+// Static local placeholder
+const GENERIC_PLACEHOLDER_IMG = '/generic-ai-placeholder.svg';
+
+// Sanitizer function to prevent XSS
+const sanitizeImageUrl = (url: string | null | undefined): string => {
+  if (!url) return GENERIC_PLACEHOLDER_IMG;
+  const trimmedUrl = url.trim();
+  if (trimmedUrl.startsWith('blob:') || trimmedUrl.startsWith('/')) {
+    return trimmedUrl;
+  }
+  return GENERIC_PLACEHOLDER_IMG;
+};
+
+const AiFormModal = component$<AiFormModalProps>(
+  ({ isOpen, onClose$, editingAi, currentDisplayableThumbnailUrl }) => {
+    const aiData = useAiData();
+    const { addUserAi, editUserAi, refreshThumbnail } = useAiDataActions();
+
+    const store = useStore({
+      name: '',
+      baseArchetypeId: '',
+      description: '',
+      isDescriptionCustomized: false,
+      lengthDisposition: 'conversational' as LengthDisposition,
+      defaultMode: 'chat' as TurnMode,
+      systemPrompt: '',
+      model: 'auto:offline',
+      askBlurb: '',
+      useEmojis: false,
+      localModels: [] as LocalModel[],
+      onlineModels: [] as { id: string; display_name: string; description: string }[],
+      // Models served by the user's connected external engine (Settings → Engines).
+      externalModels: [] as string[],
+      // May online options be OFFERED for new selections? (signed in + plan;
+      // starts true so a slow check never hides options from a paying user.)
+      onlineEntitled: true,
+      // model filename → fit grade (how well it runs on this device)
+      fits: {} as Record<string, 'green' | 'yellow' | 'red'>,
+      // true while the offline list is being fetched with nothing cached to show yet
+      modelsLoading: false,
+      useArchetypeThumbnail: false,
+      localPreviewOverride: null as string | null,
+      originalImageSrc: null as string | null,
+      showCropModal: false,
+      formError: null as string | null,
+      isSubmitting: false,
+    });
+
+    // We keep thumbnailFile in a signal since File objects are non-serializable
+    const thumbnailFile = useSignal<File | null>(null);
+    const previewSrc = useSignal<string | null>(null);
+
+    // Dropdown open states
+    const personalityDropdownOpen = useSignal(false);
+    const responseLengthDropdownOpen = useSignal(false);
+    const defaultModeDropdownOpen = useSignal(false);
+    const modelDropdownOpen = useSignal(false);
+
+    const closeAllDropdowns = $((except?: string) => {
+      if (except !== 'personality') personalityDropdownOpen.value = false;
+      if (except !== 'responseLength') responseLengthDropdownOpen.value = false;
+      if (except !== 'defaultMode') defaultModeDropdownOpen.value = false;
+      if (except !== 'model') modelDropdownOpen.value = false;
+    });
+
+    // Get all archetype templates (all personalities available)
+    const getArchetypeTemplates = () => {
+      const raw = aiData.archetypeTemplates;
+      return Array.isArray(raw) ? raw : [];
+    };
+
+    // Generate default description
+    const generateDefaultDescription = (aiName: string, archetypeId: string): string => {
+      if (!aiName.trim() || !archetypeId) return '';
+      const templates = getArchetypeTemplates();
+      const archetype = templates.find((a) => a.id === archetypeId);
+      const archetypeName = archetype ? archetype.name.toLowerCase() : 'archetype';
+      const article = /^[aeiou]/.test(archetypeName) ? 'an' : 'a';
+      return `${aiName} is my custom AI with the personality of ${article} ${archetypeName}.`;
+    };
+
+    // Fetch local models
+    // eslint-disable-next-line qwik/no-use-visible-task
+    useVisibleTask$(({ track }) => {
+      track(() => isOpen);
+      if (!isOpen) return;
+
+      // Seed instantly from the session cache, then revalidate in the background —
+      // so a cold open shows a spinner (not a misleading "No models available") and
+      // a warm re-open is instant.
+      const cached = getCachedModels();
+      if (cached.local) store.localModels = cached.local;
+      if (cached.fits) store.fits = cached.fits;
+      if (cached.online) store.onlineModels = cached.online;
+      // Only show the loading state when there's nothing cached to display yet.
+      store.modelsLoading = !cached.local;
+
+      refreshOnlineModels()
+        .then((models) => { store.onlineModels = models; })
+        .catch(() => { /* offline or proxy unreachable — online section just hides */ });
+
+      // The user's own connected server (Settings → Engines), if healthy.
+      invoke<{ healthy: boolean; models: string[] }>('external_engine_info')
+        .then((info) => { store.externalModels = info.healthy ? info.models : []; })
+        .catch(() => { store.externalModels = []; });
+
+      // Online options are only OFFERED with a plan (existing online/auto
+      // selections stay visible either way — billing is enforced per request).
+      import('../utils/entitlement')
+        .then(({ getOnlineEntitlement }) => getOnlineEntitlement())
+        .then((e) => { store.onlineEntitled = e.entitled; })
+        .catch(() => { /* keep fail-open default */ });
+
+      // How well each offline model runs on this device (green/yellow/red dots).
+      refreshFits()
+        .then((fits) => { store.fits = fits; })
+        .catch(() => { /* fit unavailable — dots just don't show */ });
+
+      refreshLocalModels()
+        .then((models) => {
+          store.localModels = models;
+          store.modelsLoading = false;
+          // Online models ("online:") and Auto modes ("auto:") aren't local
+          // files — don't treat them as a deleted local model and reset to the
+          // first offline model.
+          const isSpecial =
+            !!store.model &&
+            (store.model.startsWith('online:') ||
+              store.model.startsWith('auto:') ||
+              store.model.startsWith('external:'));
+          const modelExists =
+            store.model && (isSpecial || models.some((m) => m.name === store.model));
+          if (store.model && !modelExists && models.length > 0) {
+            // The saved model file is gone — fall back to Auto (offline), which
+            // is always valid and lets the router pick the best available model.
+            store.model = 'auto:offline';
+          }
+        })
+        .catch((err) => {
+          store.modelsLoading = false;
+          console.error('Failed to load models:', err);
+        });
+    });
+
+    // Body scroll lock
+    // eslint-disable-next-line qwik/no-use-visible-task
+    useVisibleTask$(({ track, cleanup }) => {
+      track(() => isOpen);
+      if (isOpen) {
+        document.body.classList.add('modal-open');
+      } else {
+        document.body.classList.remove('modal-open');
+      }
+      cleanup(() => {
+        document.body.classList.remove('modal-open');
+      });
+    });
+
+    // Initialize/reset form state when modal opens or editingAi changes
+    // eslint-disable-next-line qwik/no-use-visible-task
+    useVisibleTask$(({ track, cleanup }) => {
+      track(() => isOpen);
+      track(() => editingAi);
+
+      if (isOpen) {
+        store.isSubmitting = false;
+        store.formError = null;
+        thumbnailFile.value = null;
+        store.localPreviewOverride = null;
+        store.useArchetypeThumbnail = false;
+        previewSrc.value = null;
+
+        const templates = getArchetypeTemplates();
+
+        if (editingAi) {
+          store.name = editingAi.name;
+          store.baseArchetypeId = editingAi.baseArchetypeId;
+          store.systemPrompt = editingAi.systemPrompt || '';
+          store.lengthDisposition = editingAi.lengthDisposition || 'conversational';
+          store.defaultMode = editingAi.defaultMode || 'chat';
+          store.model = editingAi.model || 'auto:offline';
+          store.askBlurb = editingAi.askBlurb || '';
+          store.useEmojis = editingAi.useEmojis ?? false;
+
+          const defaultDescription = generateDefaultDescription(
+            editingAi.name,
+            editingAi.baseArchetypeId
+          );
+          const currentDescription = editingAi.description || defaultDescription;
+          store.description = currentDescription;
+          store.isDescriptionCustomized = currentDescription !== defaultDescription;
+
+          if (!currentDisplayableThumbnailUrl) {
+            store.useArchetypeThumbnail = true;
+          }
+        } else {
+          store.name = '';
+          const defaultArchetype = templates.length > 0 ? templates[0] : null;
+          store.baseArchetypeId = defaultArchetype?.id || '';
+          store.systemPrompt = defaultArchetype?.systemPromptTemplate || '';
+          store.description = '';
+          store.lengthDisposition = 'conversational';
+          store.defaultMode = 'chat';
+          // New AIs default to Auto (offline) — always valid, router-picked.
+          store.model = 'auto:offline';
+          store.askBlurb = '';
+          store.useEmojis = false;
+          store.isDescriptionCustomized = false;
+          store.useArchetypeThumbnail = true;
+        }
+      } else {
+        // Cleanup local blob URL when modal closes
+        if (store.localPreviewOverride && store.localPreviewOverride.startsWith('blob:')) {
+          URL.revokeObjectURL(store.localPreviewOverride);
+        }
+        store.localPreviewOverride = null;
+      }
+
+      cleanup(() => {
+        if (store.localPreviewOverride && store.localPreviewOverride.startsWith('blob:')) {
+          URL.revokeObjectURL(store.localPreviewOverride);
+        }
+      });
+    });
+
+    // Update system prompt when archetype changes (new AI only)
+    // eslint-disable-next-line qwik/no-use-visible-task
+    useVisibleTask$(({ track }) => {
+      const archetypeId = track(() => store.baseArchetypeId);
+      if (archetypeId && !editingAi) {
+        const templates = getArchetypeTemplates();
+        const archetype = templates.find((a) => a.id === archetypeId);
+        if (archetype) {
+          store.systemPrompt = archetype.systemPromptTemplate;
+        }
+      }
+    });
+
+    // Auto-update description when name or personality changes
+    // eslint-disable-next-line qwik/no-use-visible-task
+    useVisibleTask$(({ track }) => {
+      const name = track(() => store.name);
+      const archetypeId = track(() => store.baseArchetypeId);
+      const isCustomized = track(() => store.isDescriptionCustomized);
+
+      if (!isCustomized && name.trim() && archetypeId) {
+        store.description = generateDefaultDescription(name, archetypeId);
+      }
+    });
+
+    // Handle file selection - open crop modal
+    const handleFileChange$ = $((e: Event) => {
+      const input = e.target as HTMLInputElement;
+      const file = input.files?.[0];
+      if (file) {
+        if (file.size > 10 * 1024 * 1024) {
+          store.formError = 'Thumbnail image must be less than 10MB.';
+          return;
+        }
+        if (!file.type.startsWith('image/')) {
+          store.formError = 'Please select an image file.';
+          return;
+        }
+        store.formError = null;
+
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          store.originalImageSrc = reader.result as string;
+          store.showCropModal = true;
+        };
+        reader.readAsDataURL(file);
+      }
+    });
+
+    // Handle cropped image from modal
+    const handleCroppedImage$ = $((croppedImageBlob: Blob) => {
+      const croppedFile = new File([croppedImageBlob], 'thumbnail.jpg', { type: 'image/jpeg' });
+      thumbnailFile.value = croppedFile;
+
+      // Create preview URL
+      if (store.localPreviewOverride) {
+        URL.revokeObjectURL(store.localPreviewOverride);
+      }
+      const objectUrl = URL.createObjectURL(croppedFile);
+      store.localPreviewOverride = objectUrl;
+      store.useArchetypeThumbnail = false;
+      previewSrc.value = objectUrl;
+    });
+
+    // Clear thumbnail
+    const handleClearThumbnail$ = $(() => {
+      if (store.localPreviewOverride) {
+        URL.revokeObjectURL(store.localPreviewOverride);
+      }
+      thumbnailFile.value = null;
+      store.localPreviewOverride = null;
+      const fileInput = document.getElementById('thumbnailFile') as HTMLInputElement;
+      if (fileInput) fileInput.value = '';
+      store.useArchetypeThumbnail = true;
+      store.formError = null;
+      // Force preview to archetype default
+      const archetypeUrl = aiData.archetypeDefaultThumbnailsMap[store.baseArchetypeId];
+      previewSrc.value = archetypeUrl || GENERIC_PLACEHOLDER_IMG;
+    });
+
+    // Form submission
+    const handleSubmit$ = $(async (e: SubmitEvent) => {
+      e.preventDefault();
+      if (store.isSubmitting) return;
+      store.formError = null;
+
+      if (!store.name.trim()) {
+        store.formError = 'AI Name is required.';
+        return;
+      }
+      if (!store.baseArchetypeId) {
+        store.formError = 'Personality is required.';
+        return;
+      }
+      if (!store.model) {
+        store.formError = 'Please select a model.';
+        return;
+      }
+
+      store.isSubmitting = true;
+
+      try {
+        let success = false;
+        const commonData = {
+          name: store.name.trim(),
+          baseArchetypeId: store.baseArchetypeId,
+          systemPrompt: store.systemPrompt.trim(),
+          description: store.description.trim(),
+          lengthDisposition: store.lengthDisposition,
+          defaultMode: store.defaultMode,
+          model: store.model,
+          askBlurb: store.askBlurb.trim(),
+          useEmojis: store.useEmojis,
+        };
+
+        if (editingAi) {
+          const updateData: UpdateUserAiData = { ...commonData };
+
+          if (thumbnailFile.value) {
+            try {
+              const fileBuffer = await thumbnailFile.value.arrayBuffer();
+              const thumbnailPath = await invoke<string>('save_ai_thumbnail', {
+                aiId: editingAi.id,
+                thumbnailData: Array.from(new Uint8Array(fileBuffer)),
+              });
+              console.log('[AiFormModal] Thumbnail saved:', thumbnailPath);
+            } catch (err) {
+              console.error('[AiFormModal] Failed to save thumbnail:', err);
+              store.formError = 'Failed to save thumbnail. Please try again.';
+              store.isSubmitting = false;
+              return;
+            }
+          } else if (store.useArchetypeThumbnail) {
+            try {
+              await invoke('delete_ai_thumbnail', { aiId: editingAi.id });
+              console.log('[AiFormModal] Custom thumbnail deleted, reverting to archetype default');
+            } catch (err) {
+              console.log('[AiFormModal] No custom thumbnail to delete');
+            }
+          }
+
+          const result = await editUserAi(editingAi.id, updateData);
+          if (result) {
+            success = true;
+            await refreshThumbnail(editingAi.id);
+          }
+        } else {
+          const createData: CreateUserAiData = { ...commonData };
+          const result = await addUserAi(createData);
+          if (result) {
+            success = true;
+
+            if (thumbnailFile.value && result.id) {
+              try {
+                const fileBuffer = await thumbnailFile.value.arrayBuffer();
+                const thumbnailPath = await invoke<string>('save_ai_thumbnail', {
+                  aiId: result.id,
+                  thumbnailData: Array.from(new Uint8Array(fileBuffer)),
+                });
+                console.log('[AiFormModal] Thumbnail saved for new AI:', thumbnailPath);
+                await refreshThumbnail(result.id);
+              } catch (err) {
+                console.error('[AiFormModal] Failed to save thumbnail for new AI:', err);
+              }
+            }
+          }
+        }
+
+        if (success) {
+          onClose$();
+        } else {
+          store.formError = aiData.userAisError || 'An unexpected error occurred. Please try again.';
+        }
+      } catch (err: any) {
+        console.error('Error submitting AI form:', err);
+        store.formError = err.message || 'Submission failed. Please check your connection and try again.';
+      } finally {
+        store.isSubmitting = false;
+      }
+    });
+
+    if (!isOpen) return null;
+
+    const archetypeTemplates = getArchetypeTemplates();
+
+    return (
+      <div
+        class="fixed inset-0 bg-black/60 flex items-start justify-center p-4 z-50 transition-opacity duration-300 ease-in-out overflow-y-auto"
+        onClick$={(e, el) => {
+          // Qwik resets e.currentTarget to null in async handlers — use the
+          // element arg so a backdrop click actually closes the modal.
+          if (e.target === el) onClose$();
+        }}
+      >
+        <div
+          class="bg-[var(--bg-header-footer)] p-6 md:p-8 rounded-xl shadow-2xl w-full max-w-lg relative my-8"
+          onClick$={(e) => e.stopPropagation()}
+        >
+          {store.isSubmitting && (
+            <div class="absolute inset-0 bg-[var(--bg-header-footer)] bg-opacity-70 flex items-center justify-center z-10 rounded-xl">
+              <LuLoader2 class="h-10 w-10 animate-spin text-[var(--text-link)]" />
+            </div>
+          )}
+          <div class="flex justify-between items-center mb-6">
+            <h2 class="text-2xl font-semibold text-[var(--text-primary)] font-varela">
+              {editingAi ? 'Edit AI' : 'Create New AI'}
+            </h2>
+            <button
+              onClick$={onClose$}
+              class="p-2 rounded-full text-[var(--text-muted)] hover:bg-[var(--bg-dropdown-hover)] transition-colors"
+              aria-label="Close modal"
+              disabled={store.isSubmitting}
+            >
+              <LuX class="w-6 h-6" />
+            </button>
+          </div>
+
+          <form preventdefault:submit onSubmit$={handleSubmit$} class="space-y-4 md:space-y-6">
+            {/* AI Name */}
+            <div>
+              <div class="flex justify-between items-center mb-1">
+                <label for="aiName" class="block text-sm font-medium text-[var(--text-secondary)]">
+                  AI Name *
+                </label>
+                <span
+                  class={`text-sm font-medium ${
+                    store.name.length > 25 ? 'text-red-500' : 'text-[var(--text-muted)]'
+                  }`}
+                >
+                  {store.name.length} / 25
+                </span>
+              </div>
+              <LiquidMetalBorder borderRadius="9999px">
+                <input
+                  type="text"
+                  id="aiName"
+                  value={store.name}
+                  onInput$={(e) => {
+                    store.name = (e.target as HTMLInputElement).value;
+                  }}
+                  required
+                  maxLength={25}
+                  disabled={store.isSubmitting}
+                  class="w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2.5 placeholder-[var(--text-muted)] transition-colors disabled:opacity-70 gradient-border-target"
+                  placeholder="E.g., Marketing Guru Bot"
+                />
+              </LiquidMetalBorder>
+            </div>
+
+            {/* Personality */}
+            <div>
+              <label
+                for="baseArchetypeId"
+                class="block text-sm font-medium text-[var(--text-secondary)] mb-1"
+              >
+                Personality *
+              </label>
+              <LiquidMetalBorder borderRadius="9999px">
+                <div class="relative">
+                  <button
+                    type="button"
+                    class="relative w-full cursor-default rounded-full bg-[var(--bg-input)] py-2.5 pl-4 pr-10 text-left text-[var(--text-primary)] focus:outline-none disabled:opacity-70 gradient-border-target"
+                    disabled={store.isSubmitting}
+                    onClick$={() => {
+                      closeAllDropdowns('personality');
+                      personalityDropdownOpen.value = !personalityDropdownOpen.value;
+                    }}
+                  >
+                    <span class="block truncate">
+                      {archetypeTemplates.find(a => a.id === store.baseArchetypeId)?.name || 'Select...'}
+                    </span>
+                    <span class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
+                      <LuChevronDown class="h-5 w-5 text-[var(--text-muted)]" aria-hidden="true" />
+                    </span>
+                  </button>
+                  {personalityDropdownOpen.value && (
+                    <ul class="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-2xl bg-[var(--bg-card)] py-1 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
+                      {archetypeTemplates.map((arch) => (
+                        <li
+                          key={arch.id}
+                          class={`relative cursor-default select-none py-2 pl-10 pr-4 hover:bg-[var(--bg-dropdown-hover)] hover:text-[var(--text-primary)] ${
+                            store.baseArchetypeId === arch.id
+                              ? 'bg-[var(--bg-dropdown-hover)] text-[var(--text-primary)]'
+                              : 'text-[var(--text-dropdown)]'
+                          }`}
+                          onClick$={() => {
+                            store.baseArchetypeId = arch.id;
+                            personalityDropdownOpen.value = false;
+                          }}
+                        >
+                          <span class={`block truncate ${store.baseArchetypeId === arch.id ? 'font-medium' : 'font-normal'}`}>
+                            {arch.name}
+                          </span>
+                          {store.baseArchetypeId === arch.id && (
+                            <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-[var(--text-link)]">
+                              <LuCheck class="h-5 w-5" aria-hidden="true" />
+                            </span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </LiquidMetalBorder>
+            </div>
+
+            {/* Response Length + Default Mode (edit only) */}
+            {editingAi && (
+              <>
+              <div>
+                <label class="block text-sm font-medium text-[var(--text-secondary)] mb-1">
+                  Response Length *
+                </label>
+                <LiquidMetalBorder borderRadius="9999px">
+                  <div class="relative">
+                    <button
+                      type="button"
+                      class="relative w-full cursor-default rounded-full bg-[var(--bg-input)] py-2.5 pl-4 pr-10 text-left text-[var(--text-primary)] focus:outline-none disabled:opacity-70 gradient-border-target"
+                      disabled={store.isSubmitting}
+                      onClick$={() => {
+                        closeAllDropdowns('responseLength');
+                        responseLengthDropdownOpen.value = !responseLengthDropdownOpen.value;
+                      }}
+                    >
+                      <span class="block truncate">
+                        {aiData.responseLengthOptions.find(
+                          (opt) => opt.id === store.lengthDisposition
+                        )?.name || 'Select...'}
+                      </span>
+                      <span class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
+                        <LuChevronDown
+                          class="h-5 w-5 text-[var(--text-muted)]"
+                          aria-hidden="true"
+                        />
+                      </span>
+                    </button>
+                    {responseLengthDropdownOpen.value && (
+                      <ul class="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-2xl bg-[var(--bg-card)] py-1 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
+                        {aiData.responseLengthOptions.map((option) => (
+                          <li
+                            key={option.id}
+                            class={`relative cursor-default select-none py-2 pl-10 pr-4 hover:bg-[var(--bg-dropdown-hover)] hover:text-[var(--text-primary)] ${
+                              store.lengthDisposition === option.id
+                                ? 'bg-[var(--bg-dropdown-hover)] text-[var(--text-primary)]'
+                                : 'text-[var(--text-dropdown)]'
+                            }`}
+                            onClick$={() => {
+                              store.lengthDisposition = option.id;
+                              responseLengthDropdownOpen.value = false;
+                            }}
+                          >
+                            <span
+                              class={`block truncate ${
+                                store.lengthDisposition === option.id ? 'font-medium' : 'font-normal'
+                              }`}
+                            >
+                              {option.name}
+                            </span>
+                            {store.lengthDisposition === option.id && (
+                              <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-[var(--text-link)]">
+                                <LuCheck class="h-5 w-5" aria-hidden="true" />
+                              </span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </LiquidMetalBorder>
+              </div>
+
+              {/* Default Mode — what kind of answer this AI gives by default. */}
+              <div>
+                <label class="block text-sm font-medium text-[var(--text-secondary)] mb-1">
+                  Default Mode
+                </label>
+                <LiquidMetalBorder borderRadius="9999px">
+                  <div class="relative">
+                    <button
+                      type="button"
+                      class="relative w-full cursor-default rounded-full bg-[var(--bg-input)] py-2.5 pl-4 pr-10 text-left text-[var(--text-primary)] focus:outline-none disabled:opacity-70 gradient-border-target"
+                      disabled={store.isSubmitting}
+                      onClick$={() => {
+                        closeAllDropdowns('defaultMode');
+                        defaultModeDropdownOpen.value = !defaultModeDropdownOpen.value;
+                      }}
+                    >
+                      <span class="block truncate">
+                        {DEFAULT_MODE_OPTIONS.find((opt) => opt.id === store.defaultMode)?.name || 'Chat'}
+                      </span>
+                      <span class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
+                        <LuChevronDown class="h-5 w-5 text-[var(--text-muted)]" aria-hidden="true" />
+                      </span>
+                    </button>
+                    {defaultModeDropdownOpen.value && (
+                      <ul class="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-2xl bg-[var(--bg-card)] py-1 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
+                        {DEFAULT_MODE_OPTIONS.map((option) => (
+                          <li
+                            key={option.id}
+                            class={`relative cursor-default select-none py-2 pl-10 pr-4 hover:bg-[var(--bg-dropdown-hover)] hover:text-[var(--text-primary)] ${
+                              store.defaultMode === option.id
+                                ? 'bg-[var(--bg-dropdown-hover)] text-[var(--text-primary)]'
+                                : 'text-[var(--text-dropdown)]'
+                            }`}
+                            onClick$={() => {
+                              store.defaultMode = option.id;
+                              defaultModeDropdownOpen.value = false;
+                            }}
+                          >
+                            <span class={`block truncate ${store.defaultMode === option.id ? 'font-medium' : 'font-normal'}`}>
+                              {option.name}
+                            </span>
+                            {store.defaultMode === option.id && (
+                              <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-[var(--text-link)]">
+                                <LuCheck class="h-5 w-5" aria-hidden="true" />
+                              </span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </LiquidMetalBorder>
+                <p class="text-xs text-[var(--text-muted)] mt-1">
+                  Most AIs stay on Chat. Set Report for an AI that should always write structured reports, or Code for a coding assistant.
+                </p>
+              </div>
+              </>
+            )}
+
+            {/* Base Model */}
+            <div>
+              <label class="block text-sm font-medium text-[var(--text-secondary)] mb-1">
+                Base Model *
+              </label>
+              <LiquidMetalBorder borderRadius="9999px">
+                <div class="relative">
+                  <button
+                    type="button"
+                    class="relative w-full cursor-default rounded-full bg-[var(--bg-input)] py-2.5 pl-4 pr-10 text-left text-[var(--text-primary)] focus:outline-none disabled:opacity-70 gradient-border-target"
+                    disabled={store.isSubmitting || store.modelsLoading || (store.localModels.length === 0 && store.onlineModels.length === 0 && store.externalModels.length === 0)}
+                    onClick$={() => {
+                      closeAllDropdowns('model');
+                      modelDropdownOpen.value = !modelDropdownOpen.value;
+                    }}
+                  >
+                    <span class="flex items-center gap-2 truncate">
+                      {store.modelsLoading && store.localModels.length === 0 ? (
+                        <>
+                          <span class="w-3.5 h-3.5 border-2 border-[var(--text-muted)] border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                          <span class="text-[var(--text-muted)]">Loading your models…</span>
+                        </>
+                      ) : store.localModels.length === 0 && store.onlineModels.length === 0 && store.externalModels.length === 0
+                        ? 'No models available'
+                        : !store.model || store.model === ''
+                          ? 'Select a model...'
+                          : store.model === 'auto:offline'
+                            ? 'Auto — Offline Only'
+                            : store.model === 'auto:online-offline'
+                              ? 'Auto — Online and Offline'
+                              : store.model.startsWith('online:')
+                                ? `${store.onlineModels.find((m) => m.id === store.model)?.display_name || store.model.slice(7)} (online)`
+                                : store.model.startsWith('external:')
+                                  ? `${store.model.slice(9)} (your server)`
+                                  : richModelName(store.model)}
+                    </span>
+                    <span class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
+                      <LuChevronDown class="h-5 w-5 text-[var(--text-muted)]" aria-hidden="true" />
+                    </span>
+                  </button>
+                  {modelDropdownOpen.value && (
+                    <ul class="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-2xl bg-[var(--bg-card)] py-1 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
+                      {/* Smart routing — Auto modes pick the model per question */}
+                      <li class="select-none pb-1 pl-4 pr-4 text-xs uppercase tracking-wider text-[var(--text-muted)]">
+                        Smart routing
+                      </li>
+                      {[
+                        { id: 'auto:offline', label: 'Auto — Offline Only', hint: 'best of your offline models' },
+                        // Offered with a plan; an AI already SET to it keeps the
+                        // option visible so editing never strips the setting.
+                        ...(store.onlineModels.length > 0 &&
+                        (store.onlineEntitled || store.model === 'auto:online-offline')
+                          ? [{ id: 'auto:online-offline', label: 'Auto — Online and Offline', hint: 'offline, + online for up-to-date questions' }]
+                          : []),
+                      ].map((opt) => (
+                        <li
+                          key={opt.id}
+                          class={`relative cursor-default select-none py-2 pl-10 pr-4 hover:bg-[var(--bg-dropdown-hover)] hover:text-[var(--text-primary)] ${
+                            store.model === opt.id
+                              ? 'bg-[var(--bg-dropdown-hover)] text-[var(--text-primary)]'
+                              : 'text-[var(--text-dropdown)]'
+                          }`}
+                          onClick$={() => {
+                            store.model = opt.id;
+                            modelDropdownOpen.value = false;
+                          }}
+                        >
+                          <span class={`block truncate ${store.model === opt.id ? 'font-medium' : 'font-normal'}`}>
+                            {opt.label}
+                            <span class="ml-2 text-xs text-[var(--text-muted)]">{opt.hint}</span>
+                          </span>
+                          {store.model === opt.id && (
+                            <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-[var(--text-link)]">
+                              <LuCheck class="h-5 w-5" aria-hidden="true" />
+                            </span>
+                          )}
+                        </li>
+                      ))}
+                      {store.localModels.length > 0 && (
+                        <li class="select-none border-t border-[var(--border-subtle)] mt-1 pt-2 pb-1 pl-4 pr-4 text-xs uppercase tracking-wider text-[var(--text-muted)]">
+                          Your offline models
+                        </li>
+                      )}
+                      {store.localModels
+                        .filter((m) => !isModelPaused(m.name) || m.name === store.model)
+                        .map((localModel) => (
+                        <li
+                          key={localModel.name}
+                          class={`relative cursor-default select-none py-2 pl-10 pr-4 hover:bg-[var(--bg-dropdown-hover)] hover:text-[var(--text-primary)] ${
+                            store.model === localModel.name
+                              ? 'bg-[var(--bg-dropdown-hover)] text-[var(--text-primary)]'
+                              : 'text-[var(--text-dropdown)]'
+                          }`}
+                          onClick$={() => {
+                            store.model = localModel.name;
+                            modelDropdownOpen.value = false;
+                          }}
+                        >
+                          <span
+                            class={`block truncate ${
+                              store.model === localModel.name ? 'font-medium' : 'font-normal'
+                            }`}
+                          >
+                            {(() => {
+                              const fit = store.fits[localModel.name];
+                              if (!fit) return null;
+                              const color =
+                                fit === 'green'
+                                  ? 'bg-green-500'
+                                  : fit === 'yellow'
+                                    ? 'bg-yellow-500'
+                                    : 'bg-red-500';
+                              const title =
+                                fit === 'green'
+                                  ? 'Fits fully on your GPU — fast'
+                                  : fit === 'yellow'
+                                    ? 'Partly runs on the CPU — slower'
+                                    : "Too big for this device — may be very slow";
+                              return (
+                                <span
+                                  class={`inline-block w-2 h-2 rounded-full mr-2 align-middle ${color}`}
+                                  title={title}
+                                />
+                              );
+                            })()}
+                            {richModelName(localModel.name)}
+                            <span class="ml-2 text-xs text-[var(--text-muted)]">{localModel.size}</span>
+                          </span>
+                          {store.model === localModel.name && (
+                            <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-[var(--text-link)]">
+                              <LuCheck class="h-5 w-5" aria-hidden="true" />
+                            </span>
+                          )}
+                        </li>
+                      ))}
+                      {store.onlineModels.length > 0 && !store.onlineEntitled && (
+                        <li class="select-none border-t border-[var(--border-subtle)] mt-1 pt-2 pb-2 pl-4 pr-4 text-xs text-[var(--text-muted)]">
+                          Online models (and Auto — Online and Offline) unlock with a
+                          plan — set up on the Online Models page.
+                        </li>
+                      )}
+                      {store.onlineModels.length > 0 && store.onlineEntitled && (
+                        <li class="select-none border-t border-[var(--border-subtle)] mt-1 pt-2 pb-1 pl-4 pr-4 text-xs uppercase tracking-wider text-[var(--text-muted)]">
+                          Online models · Flowsta sign-in
+                        </li>
+                      )}
+                      {store.onlineModels
+                        // Offered with a plan; the one already selected stays either way.
+                        .filter((om) => store.onlineEntitled || om.id === store.model)
+                        .filter((om) => !isModelPaused(om.id) || om.id === store.model)
+                        .map((om) => (
+                        <li
+                          key={om.id}
+                          class={`relative cursor-default select-none py-2 pl-10 pr-4 hover:bg-[var(--bg-dropdown-hover)] hover:text-[var(--text-primary)] ${
+                            store.model === om.id
+                              ? 'bg-[var(--bg-dropdown-hover)] text-[var(--text-primary)]'
+                              : 'text-[var(--text-dropdown)]'
+                          }`}
+                          onClick$={() => {
+                            store.model = om.id;
+                            modelDropdownOpen.value = false;
+                          }}
+                        >
+                          <span class={`block truncate ${store.model === om.id ? 'font-medium' : 'font-normal'}`}>
+                            {om.display_name}
+                            <span class="ml-2 text-xs text-[var(--text-muted)]">{om.description}</span>
+                          </span>
+                          {store.model === om.id && (
+                            <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-[var(--text-link)]">
+                              <LuCheck class="h-5 w-5" aria-hidden="true" />
+                            </span>
+                          )}
+                        </li>
+                      ))}
+                      {store.externalModels.length > 0 && (
+                        <li class="select-none border-t border-[var(--border-subtle)] mt-1 pt-2 pb-1 pl-4 pr-4 text-xs uppercase tracking-wider text-[var(--text-muted)]">
+                          Your server · external engine
+                        </li>
+                      )}
+                      {store.externalModels
+                        .map((id) => `external:${id}`)
+                        .filter((full) => !isModelPaused(full) || full === store.model)
+                        .map((full) => (
+                        <li
+                          key={full}
+                          class={`relative cursor-default select-none py-2 pl-10 pr-4 hover:bg-[var(--bg-dropdown-hover)] hover:text-[var(--text-primary)] ${
+                            store.model === full
+                              ? 'bg-[var(--bg-dropdown-hover)] text-[var(--text-primary)]'
+                              : 'text-[var(--text-dropdown)]'
+                          }`}
+                          onClick$={() => {
+                            store.model = full;
+                            modelDropdownOpen.value = false;
+                          }}
+                        >
+                          <span class={`block truncate ${store.model === full ? 'font-medium' : 'font-normal'}`}>
+                            {full.slice(9)}
+                            <span class="ml-2 text-xs text-[var(--text-muted)]">runs on your connected server</span>
+                          </span>
+                          {store.model === full && (
+                            <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-[var(--text-link)]">
+                              <LuCheck class="h-5 w-5" aria-hidden="true" />
+                            </span>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </LiquidMetalBorder>
+            </div>
+
+            {/* Use Emojis */}
+            <div>
+              <label class="block text-sm font-medium text-[var(--text-secondary)] mb-2">
+                Use Emojis in Responses
+              </label>
+              <LiquidMetalBorder borderRadius="9999px">
+                <div class="flex rounded-full overflow-hidden bg-[var(--bg-card)]">
+                  <button
+                    type="button"
+                    onClick$={() => {
+                      store.useEmojis = false;
+                    }}
+                    disabled={store.isSubmitting}
+                    class={`flex-1 px-4 py-2.5 font-medium focus:outline-none transition-colors disabled:opacity-70
+                      ${
+                        !store.useEmojis
+                          ? 'bg-[var(--bg-main)] text-[var(--text-primary)] font-semibold'
+                          : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
+                      }
+                    `}
+                  >
+                    Off
+                  </button>
+                  <button
+                    type="button"
+                    onClick$={() => {
+                      store.useEmojis = true;
+                    }}
+                    disabled={store.isSubmitting}
+                    class={`flex-1 px-4 py-2.5 font-medium focus:outline-none transition-colors disabled:opacity-70
+                      ${
+                        store.useEmojis
+                          ? 'bg-[var(--bg-main)] text-[var(--text-primary)] font-semibold'
+                          : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
+                      }
+                    `}
+                  >
+                    On
+                  </button>
+                </div>
+              </LiquidMetalBorder>
+            </div>
+
+            {/* Description (edit only) */}
+            {editingAi && (
+              <div>
+                <label
+                  for="aiDescription"
+                  class="block text-sm font-medium text-[var(--text-secondary)] mb-1"
+                >
+                  Description
+                </label>
+                <LiquidMetalBorder borderRadius="1rem">
+                  <textarea
+                    id="aiDescription"
+                    value={store.description}
+                    onInput$={(e) => {
+                      store.description = (e.target as HTMLTextAreaElement).value;
+                      store.isDescriptionCustomized = true;
+                    }}
+                    disabled={store.isSubmitting}
+                    class="w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-2xl px-4 py-2.5 placeholder-[var(--text-muted)] transition-colors disabled:opacity-70 gradient-border-target border-none"
+                    placeholder="A brief description of your AI."
+                    rows={3}
+                  />
+                </LiquidMetalBorder>
+              </div>
+            )}
+
+            {/* Ask Blurb (edit only) */}
+            {editingAi && (
+              <div>
+                <div class="flex justify-between items-center mb-1">
+                  <label
+                    for="askBlurb"
+                    class="block text-sm font-medium text-[var(--text-secondary)]"
+                  >
+                    Ask {store.name || '(AI Name)'} {store.askBlurb || '(description)'}..
+                  </label>
+                  <span
+                    class={`text-sm font-medium ${
+                      store.askBlurb.length > 25 ? 'text-red-500' : 'text-[var(--text-muted)]'
+                    }`}
+                  >
+                    {store.askBlurb.length} / 25
+                  </span>
+                </div>
+                <LiquidMetalBorder borderRadius="9999px">
+                  <input
+                    type="text"
+                    id="askBlurb"
+                    value={store.askBlurb}
+                    onInput$={(e) => {
+                      store.askBlurb = (e.target as HTMLInputElement).value;
+                    }}
+                    maxLength={25}
+                    disabled={store.isSubmitting}
+                    class="w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2.5 placeholder-[var(--text-muted)] transition-colors disabled:opacity-70 gradient-border-target"
+                    placeholder="about marketing strategies"
+                  />
+                </LiquidMetalBorder>
+              </div>
+            )}
+
+            {/* Thumbnail (edit only) */}
+            {editingAi && (
+              <div class="space-y-2">
+                <p class="block text-sm font-medium text-[var(--text-secondary)]">Thumbnail</p>
+                <div class="flex items-center space-x-4">
+                  <div class="w-16 h-16 rounded-full border border-[var(--border-subtle)] shadow-sm bg-[var(--bg-card)] flex-shrink-0 overflow-hidden flex items-center justify-center">
+                    <img
+                      src={sanitizeImageUrl(
+                        previewSrc.value
+                          || (editingAi && currentDisplayableThumbnailUrl)
+                          || aiData.archetypeDefaultThumbnailsMap[store.baseArchetypeId]
+                          || GENERIC_PLACEHOLDER_IMG
+                      )}
+                      alt="Thumbnail preview"
+                      class="w-full h-full object-cover object-center"
+                      onError$={(e) => {
+                        const img = e.target as HTMLImageElement;
+                        if (img.src.endsWith(GENERIC_PLACEHOLDER_IMG)) return;
+                        img.src = GENERIC_PLACEHOLDER_IMG;
+                      }}
+                    />
+                  </div>
+                  <div class="flex flex-col space-y-2">
+                    <label
+                      for="thumbnailFile"
+                      class={`px-4 py-2 border border-[#71717a] rounded-full text-sm font-medium text-[var(--text-secondary)] bg-[var(--bg-input)] hover:border-[#B8B0A4] hover:text-[var(--text-primary)] cursor-pointer transition-all ${
+                        store.isSubmitting ? 'opacity-70 cursor-not-allowed' : ''
+                      }`}
+                    >
+                      <LuUploadCloud class="w-4 h-4 inline mr-2" />
+                      {thumbnailFile.value ? 'Change Image' : 'Add Image'}
+                    </label>
+                    <input
+                      type="file"
+                      id="thumbnailFile"
+                      accept="image/png, image/jpeg, image/gif, image/webp"
+                      onChange$={handleFileChange$}
+                      class="sr-only"
+                      disabled={store.isSubmitting}
+                    />
+                    {(thumbnailFile.value ||
+                      (editingAi &&
+                        currentDisplayableThumbnailUrl &&
+                        !store.useArchetypeThumbnail)) && (
+                      <button
+                        type="button"
+                        onClick$={handleClearThumbnail$}
+                        disabled={store.isSubmitting}
+                        class={`px-4 py-2 border border-[#5c2a2a] rounded-full text-sm font-medium text-[#c08080] bg-[#2a1515] hover:border-[#7a3a3a] hover:text-[#d49090] focus:outline-none transition-all ${
+                          store.isSubmitting ? 'opacity-70 cursor-not-allowed' : ''
+                        }`}
+                      >
+                        <LuTrash2 class="w-4 h-4 inline mr-2" /> Clear Custom
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {store.formError && thumbnailFile.value && (
+                  <p class="text-xs text-red-500 mt-1">
+                    {store.formError.replace('Thumbnail image', 'Uploaded thumbnail image')}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Form Error */}
+            {store.formError && (
+              <div class="flex items-start p-3 bg-red-50 dark:bg-red-900/30 rounded-lg border border-red-200 dark:border-red-700/50">
+                <LuAlertTriangle
+                  class="h-5 w-5 text-red-500 dark:text-red-400 mr-2 flex-shrink-0"
+                  aria-hidden="true"
+                />
+                <p class="text-sm text-red-700 dark:text-red-300">{store.formError}</p>
+              </div>
+            )}
+
+            {/* Buttons */}
+            <div class="flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-3 pt-2">
+              <LiquidMetalButton
+                variant="secondary"
+                onClick$={onClose$}
+                disabled={store.isSubmitting}
+                class="mt-3 sm:mt-0 w-full sm:w-auto inline-flex justify-center px-6 py-2.5 text-base font-medium focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[var(--focus-ring)] transition-colors disabled:opacity-70"
+              >
+                Cancel
+              </LiquidMetalButton>
+              <LiquidMetalButton
+                type="submit"
+                disabled={store.isSubmitting}
+                class="w-full sm:w-auto inline-flex justify-center items-center px-6 py-2.5 text-base font-medium focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[var(--focus-ring)] transition-colors disabled:opacity-70"
+              >
+                {store.isSubmitting ? (
+                  <LuLoader2 class="h-5 w-5 animate-spin mr-2" />
+                ) : (
+                  <LuSave class="w-[18px] h-[18px] mr-2" />
+                )}
+                {editingAi ? 'Save Changes' : 'Create AI'}
+              </LiquidMetalButton>
+            </div>
+          </form>
+        </div>
+        <ImageCropModal
+          show={store.showCropModal}
+          onHide$={$(() => {
+            store.showCropModal = false;
+          })}
+          imageSrc={store.originalImageSrc}
+          onCropComplete$={handleCroppedImage$}
+        />
+      </div>
+    );
+  }
+);
+
+export default AiFormModal;

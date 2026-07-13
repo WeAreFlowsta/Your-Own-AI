@@ -1,0 +1,572 @@
+//! Model routing for the Auto modes.
+//!
+//! A single Rust router that both the in-app chat (via the `route_model`
+//! command) and the inference server call, so there's one source of truth and
+//! no TS/Rust drift. It resolves an `auto:*` model to a concrete model (a GGUF
+//! filename or `online:<id>`) for a given query; callers then run their normal
+//! offline/online logic on the resolved value.
+//!
+//! Step 1 (this): minimal resolver — offline picks an available model; the
+//! online+offline mode uses a cheap keyword freshness gate. Later steps add the
+//! capability registry, exact VRAM fit, and the bge-small semantic gate.
+
+use serde::Serialize;
+use tauri::{AppHandle, Manager};
+
+#[derive(Serialize, Clone)]
+pub struct RouteResult {
+    /// The concrete model to use: a GGUF filename or `online:<id>`.
+    pub model: String,
+    /// Short human-readable reason (for logs).
+    pub reason: String,
+}
+
+const QUERY_INSTRUCTION: &str = "Represent this sentence for searching relevant passages: ";
+const EMBED_MODEL: &str = "bge-small-en-v1.5-f16.gguf";
+
+/// How much better (on the 0–9 task scale) a candidate must be than the loaded
+/// model to justify a reload. Generous so near-equal models don't thrash; small
+/// enough that a real coder (coding 9) beats a general model (coding 6) on code.
+const SWITCH_MARGIN: u8 = 2;
+
+/// Freshness threshold (max cosine vs the reference phrases) per eagerness
+/// setting. Calibrated against bge-small on real queries: fresh queries cluster
+/// ≥0.57, evergreen ≤0.564. Balanced (0.58) keeps evergreen local while catching
+/// clearly-fresh paraphrases; privacy-first only escalates obvious cases;
+/// freshness-first leans online.
+fn threshold_for(eagerness: &str) -> f32 {
+    match eagerness {
+        "privacy" => 0.62,
+        "freshness" => 0.52,
+        _ => 0.58, // balanced (default)
+    }
+}
+
+/// Reference phrases that exemplify "needs current / up-to-date info." Embedded
+/// once (document-style, no instruction prefix) and cached; a query is compared
+/// against all of them.
+const FRESH_REFERENCES: &[&str] = &[
+    "what's the latest news",
+    "today's headlines",
+    "current weather forecast today",
+    "live sports score who won the game",
+    "current stock price right now",
+    "what happened recently in the news this week",
+    "latest release version of the software",
+    "who is the current president leader right now",
+    "what's trending right now",
+    "recent events and announcements this week",
+    "exchange rate today",
+    "is it raining now",
+    "newest model phone released this year",
+    "what time is it currently",
+];
+
+fn cosine(a: &[f32], b: &[f32]) -> f32 {
+    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if na == 0.0 || nb == 0.0 {
+        0.0
+    } else {
+        dot / (na * nb)
+    }
+}
+
+/// Reference embeddings, computed once on first use (needs the embedding server).
+static FRESH_REFS: tokio::sync::OnceCell<Vec<Vec<f32>>> = tokio::sync::OnceCell::const_new();
+
+async fn fresh_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec<f32>>> {
+    FRESH_REFS
+        .get_or_try_init(|| async {
+            let state = app.state::<crate::llm::LLMState>();
+            let texts = FRESH_REFERENCES.iter().map(|s| s.to_string()).collect();
+            crate::llm::embed_texts(app.clone(), state, texts, EMBED_MODEL.to_string()).await
+        })
+        .await
+        .ok()
+}
+
+/// Stage-1 semantic freshness: how close (max cosine) is the query to the
+/// "needs-current-info" reference phrases? `None` if embedding is unavailable
+/// (→ caller treats as not-fresh, i.e. stays offline). Catches paraphrases the
+/// keyword gate misses ("what's the newest phone", "is it raining").
+async fn semantic_fresh_score(app: &AppHandle, query: &str) -> Option<f32> {
+    let refs = fresh_reference_vecs(app).await?;
+    let state = app.state::<crate::llm::LLMState>();
+    let qtext = format!("{QUERY_INSTRUCTION}{query}");
+    let qvec = crate::llm::embed_texts(app.clone(), state, vec![qtext], EMBED_MODEL.to_string())
+        .await
+        .ok()?
+        .pop()?;
+    Some(refs.iter().map(|r| cosine(&qvec, r)).fold(0.0f32, f32::max))
+}
+
+/// Stage-0 freshness gate: does the query look like it needs up-to-date info?
+/// Cheap, high-precision keyword/temporal cues — deliberately conservative
+/// (privacy-first: bias toward staying offline). The bge-small *semantic* gate
+/// (Stage 1) catches paraphrases this misses.
+fn looks_time_sensitive(query: &str) -> bool {
+    let q = query.to_lowercase();
+    const CUES: &[&str] = &[
+        "today", "tonight", "right now", "currently", "latest", "breaking",
+        "this week", "this month", "as of ", "up to date", "up-to-date",
+        "weather", "forecast", "stock price", "share price", "exchange rate",
+        "who won", "headline", "in the news", "recent news", "current price",
+        "2025", "2026", "2027",
+    ];
+    CUES.iter().any(|c| q.contains(c))
+}
+
+/// One offline candidate reduced to what the ranking sees — extracted from
+/// `pick_offline` so the lean orderings are unit-testable without an app.
+#[derive(Clone, Copy, Debug)]
+struct OfflineRank {
+    cap: u8,      // task capability score
+    tier: u8,     // fit: green 2 / yellow 1 / red 0
+    params_b: f64,
+}
+
+/// The lean-dependent ordering (greater = better; see `pick_offline` docs).
+fn offline_ordering(lean: &str, a: OfflineRank, b: OfflineRank) -> std::cmp::Ordering {
+    use std::cmp::Ordering::Equal;
+    match lean {
+        "speed" => a
+            .tier
+            .cmp(&b.tier)
+            .then(a.cap.cmp(&b.cap))
+            // Smaller wins size ties — fewer parameters = faster tokens.
+            .then(b.params_b.partial_cmp(&a.params_b).unwrap_or(Equal)),
+        "quality" => a
+            .cap
+            .cmp(&b.cap)
+            .then(a.params_b.partial_cmp(&b.params_b).unwrap_or(Equal))
+            .then(a.tier.cmp(&b.tier)),
+        _ => a
+            .cap
+            .cmp(&b.cap)
+            .then(a.tier.cmp(&b.tier))
+            .then(a.params_b.partial_cmp(&b.params_b).unwrap_or(Equal)),
+    }
+}
+
+/// Pick the best offline model. `assess` already excludes embedding models
+/// (bge etc.) and models that don't fit at all (red) are de-prioritised.
+/// Capability is the **task-specific** score (`by_task` — coding for a code
+/// query, etc.; `"general"` → overall). `lean` biases the ranking via
+/// `offline_ordering`:
+/// - `"balanced"` (default): capability, then fit tier (green = fully-on-GPU
+///   over yellow = partial offload), then size — the shipped behavior.
+/// - `"speed"`: fit tier first, then capability, and SMALLER wins size ties —
+///   a fully-on-GPU model over a stronger one that spills to CPU.
+/// - `"quality"`: capability, then size, then fit tier — willing to take
+///   partial offload for the strongest model that still runs.
+/// To avoid reloading on every turn, the currently-loaded model is kept unless
+/// a candidate beats it on THIS task by at least `SWITCH_MARGIN` (so a real
+/// specialist for a real task is worth the reload, but near-equal models
+/// don't thrash).
+async fn pick_offline(app: &AppHandle, task: &str, lean: &str) -> Result<String, String> {
+    let all = crate::fit::assess(app).await;
+    if all.is_empty() {
+        return Err("No offline models downloaded".to_string());
+    }
+
+    // fit tier: green(2) > yellow(1) > red(0).
+    let tier = |f: &crate::fit::ModelFit| match f.fit {
+        crate::fit::Fit::Green => 2,
+        crate::fit::Fit::Yellow => 1,
+        crate::fit::Fit::Red => 0,
+    };
+    let cap = |name: &str| crate::model_caps::caps_for(name).by_task(task);
+
+    // Prefer models that actually run (green/yellow); fall back to red only if
+    // every model is red (better to try than to refuse). Models that already
+    // OOM'd the GPU this session are excluded outright — the loader rejects
+    // them instantly, so picking one would turn every auto request into an
+    // error even though the pre-load fit estimate still grades them runnable.
+    let usable = |f: &&crate::fit::ModelFit| !crate::llm::is_model_too_big(f.name.clone());
+    let runnable: Vec<&crate::fit::ModelFit> =
+        all.iter().filter(|f| tier(f) > 0).filter(usable).collect();
+    let pool: Vec<&crate::fit::ModelFit> = if runnable.is_empty() {
+        let any_usable: Vec<&crate::fit::ModelFit> = all.iter().filter(usable).collect();
+        if any_usable.is_empty() {
+            all.iter().collect() // everything proven too big — let the loader say so
+        } else {
+            any_usable
+        }
+    } else {
+        runnable
+    };
+
+    let rank = |f: &crate::fit::ModelFit| OfflineRank {
+        cap: cap(&f.name),
+        tier: tier(f),
+        params_b: f.params_b,
+    };
+    let best = *pool
+        .iter()
+        .max_by(|a, b| offline_ordering(lean, rank(a), rank(b)))
+        .unwrap(); // pool is non-empty
+
+    // Keep the loaded model unless a candidate beats it on THIS task by at least
+    // SWITCH_MARGIN — a reload is worth it for a real specialist, not a marginal gain.
+    let current = app
+        .state::<crate::llm::LLMState>()
+        .current_model
+        .lock()
+        .await
+        .clone();
+    if let Some(cur) = current.filter(|c| !c.starts_with("online:")) {
+        if let Some(cf) = pool.iter().find(|f| f.name == cur) {
+            if cap(&cf.name) + SWITCH_MARGIN >= cap(&best.name) {
+                return Ok(cur.clone());
+            }
+        }
+    }
+    Ok(best.name.clone())
+}
+
+/// Pick an online model. For a FRESH query it must see live web, so prefer a
+/// **web-search-capable** model (Grok-with-search → Sonar → any per-search-fee →
+/// anything). For a difficulty/task escalation (no live web needed) pick the best
+/// online model FOR THE TASK via the online capability registry — a coding model
+/// for code, a reasoning model for a hard question, etc.
+async fn pick_online(task: &str, fresh: bool) -> Option<String> {
+    let models = crate::flowsta::list_online_models().await.ok()?;
+    let text = |m: &crate::flowsta::OnlineModel| {
+        format!("{} {} {}", m.id, m.display_name, m.description).to_lowercase()
+    };
+
+    if fresh {
+        let has_search_fee = |m: &crate::flowsta::OnlineModel| {
+            m.pricing.as_ref().and_then(|p| p.search_per_call_usd).is_some()
+        };
+        return models
+            .iter()
+            .find(|m| {
+                let t = text(m);
+                t.contains("grok") && (t.contains("search") || has_search_fee(m))
+            })
+            .or_else(|| {
+                models
+                    .iter()
+                    .find(|m| { let t = text(m); t.contains("sonar") || t.contains("perplexity") })
+            })
+            .or_else(|| models.iter().find(|m| has_search_fee(m)))
+            .or_else(|| models.first())
+            .map(|m| m.id.clone());
+    }
+
+    models
+        .iter()
+        .max_by_key(|m| crate::model_caps::online_caps_for(&text(m)).by_task(task))
+        .map(|m| m.id.clone())
+}
+
+/// Should the connected external server take this query instead of the
+/// local pick? Pure decision (unit-tested): the external model wins only
+/// when its capability is RECOGNIZED and beats the local best by
+/// `SWITCH_MARGIN` (the beefier-box case), or when nothing local runs at
+/// all (rescue). With capabilities within the margin, `lean == "speed"`
+/// defers to the external only when its measured speed is known and beats
+/// the local estimate. Unknown external families never win on confidence.
+fn external_beats_local(
+    lean: &str,
+    local_best_cap: Option<u8>,
+    external_cap: Option<u8>,
+    external_tps: Option<f64>,
+    local_tps_estimate: Option<f64>,
+) -> bool {
+    let Some(ext) = external_cap else { return local_best_cap.is_none() };
+    match local_best_cap {
+        None => true, // nothing local runs — any recognized external is a rescue
+        Some(local) => {
+            if ext >= local.saturating_add(SWITCH_MARGIN) {
+                return true;
+            }
+            if lean == "speed" && ext + SWITCH_MARGIN > local {
+                if let (Some(et), Some(lt)) = (external_tps, local_tps_estimate) {
+                    return et > lt;
+                }
+            }
+            false
+        }
+    }
+}
+
+/// Best external candidate for a task from the cached scan: highest
+/// RECOGNIZED capability (unknown families are skipped — they can still be
+/// picked explicitly, never confidently by the router).
+fn best_external(models: &[String], task: &str) -> Option<(String, u8)> {
+    models
+        .iter()
+        .filter_map(|id| {
+            crate::model_caps::known_caps(id).map(|c| (id.clone(), c.by_task(task)))
+        })
+        .max_by_key(|(_, cap)| *cap)
+}
+
+/// Resolve an Auto mode to a concrete model for this query.
+/// `mode` = `"offline"` | `"online-offline"` | `"my-hardware"` (this device
+/// plus the user's connected server — never the online proxy). `eagerness`
+/// tunes the online FRESHNESS threshold only: `"privacy"` | `"balanced"` |
+/// `"freshness"`.
+/// `lean` biases the offline pick (`"speed"` | `"balanced"` | `"quality"`).
+/// `escalate_hard` is the single owner of difficulty escalation - a hard
+/// query may use a stronger online model. (The old freshness-implies-
+/// escalation coupling is gone; callers migrate freshness users to
+/// escalate_hard=true so shipped behavior carries over.)
+pub async fn route(
+    app: &AppHandle,
+    mode: &str,
+    query: &str,
+    eagerness: &str,
+    task: &str,
+    difficulty: &str,
+    lean: &str,
+    escalate_hard: bool,
+) -> Result<RouteResult, String> {
+    if mode == "online-offline" {
+        // Stage 0: cheap keyword cues. Stage 1 (only if Stage 0 is negative):
+        // bge-small semantic similarity to "needs-current-info" phrases. Stage 2:
+        // difficulty escalation — a HARD query goes to a stronger online model,
+        // opt-in via `escalate_hard` alone (off = privacy over a marginally-
+        // better answer). `is_fresh` = the query needs LIVE WEB (→ a search
+        // model), vs a difficulty escalation (→ the best online model for the
+        // task).
+        let (why, is_fresh) = if looks_time_sensitive(query) {
+            (Some("looks like it needs current info"), true)
+        } else if semantic_fresh_score(app, query)
+            .await
+            .is_some_and(|s| s >= threshold_for(eagerness))
+        {
+            (Some("seems to need up-to-date info"), true)
+        } else if difficulty == "hard" && escalate_hard {
+            (Some("a hard question — using a stronger model"), false)
+        } else {
+            (None, false)
+        };
+        if let Some(why) = why {
+            if let Some(model) = pick_online(task, is_fresh).await {
+                return Ok(RouteResult {
+                    model,
+                    reason: format!("online — {why}"),
+                });
+            }
+            // No online model available → fall through to offline.
+        }
+    }
+    // "My hardware": the local pick may hand off to the user's connected
+    // server when the scan shows a clearly stronger (or, on the speed lean,
+    // faster) RECOGNIZED model there. Never the online proxy in this mode;
+    // an unreachable server falls through to local at request time.
+    if mode == "my-hardware" {
+        let (ext_models, ext_tps) = crate::engine::external_models_cached(app);
+        if !ext_models.is_empty() {
+            let local = pick_offline(app, task, lean).await.ok();
+            let local_cap = local
+                .as_deref()
+                .map(|m| crate::model_caps::caps_for(m).by_task(task));
+            if let Some((ext_id, ext_cap)) = best_external(&ext_models, task) {
+                if external_beats_local(lean, local_cap, Some(ext_cap), ext_tps, None) {
+                    return Ok(RouteResult {
+                        model: format!("external:{}", ext_id),
+                        reason: "your server — stronger for this task".to_string(),
+                    });
+                }
+            }
+            if let Some(local) = local {
+                return Ok(RouteResult { model: local, reason: "offline".to_string() });
+            }
+            // Nothing local runs — any external model is the rescue.
+            if let Some(first) = ext_models.first() {
+                return Ok(RouteResult {
+                    model: format!("external:{}", first),
+                    reason: "your server — no local model fits".to_string(),
+                });
+            }
+        }
+        // No server connected (or empty) — behave exactly like offline-only.
+    }
+
+    let model = pick_offline(app, task, lean).await?;
+    let reason = if mode == "online-offline" {
+        "offline — no fresh info needed"
+    } else {
+        "offline"
+    };
+    Ok(RouteResult {
+        model,
+        reason: reason.to_string(),
+    })
+}
+
+/// Which routing tasks would actually change the offline pick — i.e. some runnable
+/// model beats the overall-best model on that task by `SWITCH_MARGIN`. **Empty =
+/// no specialist installed → the caller should SKIP task classification** (there's
+/// nothing to route to, so don't spend a classifier call). Cheap (no model loads):
+/// it's the gate that keeps task routing free for users without specialists.
+#[tauri::command]
+pub async fn routing_specialist_tasks(app: AppHandle) -> Result<Vec<String>, String> {
+    let pool: Vec<crate::fit::ModelFit> = crate::fit::assess(&app)
+        .await
+        .into_iter()
+        .filter(|f| !matches!(f.fit, crate::fit::Fit::Red)) // can't run → can't route to
+        .collect();
+    if pool.len() < 2 {
+        return Ok(vec![]); // 0/1 runnable model → nothing to route between
+    }
+    let overall_best = pool
+        .iter()
+        .max_by_key(|f| crate::model_caps::caps_for(&f.name).overall)
+        .unwrap();
+    let ob = crate::model_caps::caps_for(&overall_best.name);
+    let mut out = Vec::new();
+    for task in ["code", "math", "reasoning"] {
+        let task_best = pool
+            .iter()
+            .max_by_key(|f| crate::model_caps::caps_for(&f.name).by_task(task))
+            .unwrap();
+        let tb = crate::model_caps::caps_for(&task_best.name).by_task(task);
+        if task_best.name != overall_best.name && tb >= ob.by_task(task) + SWITCH_MARGIN {
+            out.push(task.to_string());
+        }
+    }
+    Ok(out)
+}
+
+/// Resolve an Auto mode for the in-app chat. The frontend calls this when an
+/// AI's model is `auto:offline` / `auto:online-offline`.
+#[tauri::command]
+pub async fn route_model(
+    app: AppHandle,
+    mode: String,
+    query: String,
+    eagerness: Option<String>,
+    task: Option<String>,
+    difficulty: Option<String>,
+    lean: Option<String>,
+    escalate_hard: Option<bool>,
+) -> Result<RouteResult, String> {
+    route(
+        &app,
+        &mode,
+        &query,
+        eagerness.as_deref().unwrap_or("balanced"),
+        task.as_deref().unwrap_or("general"),
+        difficulty.as_deref().unwrap_or("easy"),
+        lean.as_deref().unwrap_or("balanced"),
+        escalate_hard.unwrap_or(false),
+    )
+    .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cmp::Ordering;
+
+    fn c(cap: u8, tier: u8, params_b: f64) -> OfflineRank {
+        OfflineRank { cap, tier, params_b }
+    }
+
+    /// The best of two candidates under a lean (mirrors max_by semantics).
+    fn best(lean: &str, a: OfflineRank, b: OfflineRank) -> OfflineRank {
+        if offline_ordering(lean, a, b) == Ordering::Less { b } else { a }
+    }
+
+    #[test]
+    fn speed_prefers_fully_on_gpu_over_stronger_offload() {
+        let green_small = c(5, 2, 8.0); // fits fully, decent
+        let yellow_big = c(7, 1, 24.0); // stronger, spills to CPU
+        assert_eq!(best("speed", green_small, yellow_big).params_b, 8.0);
+        // balanced and quality both take the stronger model
+        assert_eq!(best("balanced", green_small, yellow_big).params_b, 24.0);
+        assert_eq!(best("quality", green_small, yellow_big).params_b, 24.0);
+    }
+
+    #[test]
+    fn speed_smaller_wins_ties() {
+        let small = c(5, 2, 4.0);
+        let big = c(5, 2, 8.0);
+        assert_eq!(best("speed", small, big).params_b, 4.0);
+        // the other leans keep the bigger model on a full tie
+        assert_eq!(best("balanced", small, big).params_b, 8.0);
+        assert_eq!(best("quality", small, big).params_b, 8.0);
+    }
+
+    #[test]
+    fn speed_capability_still_matters_within_a_tier() {
+        let weak_small = c(3, 2, 4.0);
+        let strong_big = c(7, 2, 24.0);
+        assert_eq!(best("speed", weak_small, strong_big).cap, 7);
+    }
+
+    #[test]
+    fn quality_takes_offload_for_the_bigger_equal_cap_model() {
+        let green_small = c(8, 2, 8.0);
+        let yellow_big = c(8, 1, 24.0); // same capability score, bigger
+        assert_eq!(best("quality", green_small, yellow_big).params_b, 24.0);
+        // balanced breaks the cap tie on fit tier instead
+        assert_eq!(best("balanced", green_small, yellow_big).params_b, 8.0);
+    }
+
+    #[test]
+    fn capability_dominates_for_balanced_and_quality() {
+        let strong_red_risk = c(9, 1, 30.0);
+        let weak_green = c(4, 2, 3.0);
+        assert_eq!(best("balanced", strong_red_risk, weak_green).cap, 9);
+        assert_eq!(best("quality", strong_red_risk, weak_green).cap, 9);
+    }
+
+    #[test]
+    fn unknown_lean_falls_back_to_balanced_order() {
+        let a = c(5, 2, 8.0);
+        let b = c(7, 1, 24.0);
+        assert_eq!(
+            offline_ordering("nonsense", a, b),
+            offline_ordering("balanced", a, b)
+        );
+    }
+
+    #[test]
+    fn unknown_external_never_beats_a_running_local() {
+        assert!(!external_beats_local("balanced", Some(5), None, Some(50.0), None));
+    }
+
+    #[test]
+    fn any_external_rescues_when_nothing_local_runs() {
+        assert!(external_beats_local("balanced", None, None, None, None));
+        assert!(external_beats_local("balanced", None, Some(3), None, None));
+    }
+
+    #[test]
+    fn recognized_external_needs_the_switch_margin() {
+        // local 5, margin 2: external 7 wins, external 6 does not.
+        assert!(external_beats_local("balanced", Some(5), Some(7), None, None));
+        assert!(!external_beats_local("balanced", Some(5), Some(6), None, None));
+    }
+
+    #[test]
+    fn speed_lean_defers_to_measured_speed_within_margin() {
+        // caps within margin; external only wins with a KNOWN faster speed.
+        assert!(external_beats_local("speed", Some(5), Some(5), Some(50.0), Some(20.0)));
+        assert!(!external_beats_local("speed", Some(5), Some(5), Some(10.0), Some(20.0)));
+        assert!(!external_beats_local("speed", Some(5), Some(5), None, Some(20.0)));
+        // other leans never speed-arbitrate
+        assert!(!external_beats_local("balanced", Some(5), Some(5), Some(50.0), Some(20.0)));
+    }
+
+    #[test]
+    fn best_external_skips_unknown_families() {
+        let models = vec![
+            "totally-unknown-model.bin".to_string(),
+            "Phi-4-mini-instruct-Q4_K_M.gguf".to_string(),
+            "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf".to_string(),
+        ];
+        let (id, cap) = best_external(&models, "code").unwrap();
+        assert_eq!(id, "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf");
+        assert_eq!(cap, 9);
+        assert!(best_external(&["mystery.bin".to_string()], "general").is_none());
+    }
+}

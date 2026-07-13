@@ -1,0 +1,121 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Your Own AI",
+  "version": "0.1.0",
+  "identifier": "com.solar.yourowai",
+  "build": {
+    "beforeDevCommand": "rm -rf node_modules/.vite .qwik tmp dist 2>/dev/null; npm run dev",
+    "devUrl": "http://localhost:5173/chat/",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Your Own AI",
+        "width": 800,
+        "height": 600,
+        "url": "/chat/",
+        "backgroundColor": "#e3e5fdff"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' blob: data:",
+      "dangerousDisableAssetCspModification": [
+        "style-src"
+      ],
+      "assetProtocol": {
+        "scope": [
+          "**"
+        ]
+      },
+      "capabilities": [
+        {
+          "identifier": "main-capability",
+          "description": "Main app permissions",
+          "windows": [
+            "main"
+          ],
+          "permissions": [
+            "core:default",
+            "opener:default",
+            {
+              "identifier": "opener:allow-open-url",
+              "allow": [
+                {
+                  "url": "https://yourownai.net/*"
+                },
+                {
+                  "url": "https://*.yourownai.net/*"
+                },
+                {
+                  "url": "https://flowsta.com/*"
+                }
+              ]
+            },
+            "core:window:allow-set-size",
+            "core:window:allow-set-position",
+            "shell:allow-open",
+            "dialog:default",
+            "http:default",
+            "store:default",
+            "store:allow-load",
+            "store:allow-save",
+            {
+              "identifier": "http:allow-fetch",
+              "allow": [
+                {
+                  "url": "http://localhost:*"
+                },
+                {
+                  "url": "http://127.0.0.1:*"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "withGlobalTauri": true
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "publisher": "Your Own AI",
+    "shortDescription": "Offline-first AI App",
+    "longDescription": "A powerful offline-first AI assistant that runs locally on your machine. Chat with AI models without requiring an internet connection.",
+    "homepage": "https://yourownai.net",
+    "license": "TBA",
+    "category": "Productivity",
+    "externalBin": [
+      "bin/llama-server",
+      "binaries/yourowai-holochain",
+      "binaries/yourowai-lair-keystore"
+    ],
+    "resources": [
+      "resources/*.happ",
+      "resources/pdfium/*"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "linux": {
+      "deb": {
+        "section": "utils",
+        "priority": "optional"
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      }
+    }
+  }
+}

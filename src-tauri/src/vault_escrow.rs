@@ -1,0 +1,1111 @@
+//! Transcript-key escrow in the user's Flowsta Vault.
+//!
+//! The transcript encryption key + per-user network seed live in a local
+//! file (`transcript_crypto::RECOVERY_FILE`). Losing that file makes every
+//! transcript - including copies on the user's own future devices and
+//! archive nodes - permanently unreadable. When the user signs in with
+//! Flowsta, a copy of that recovery material is stored in their Vault via
+//! the standard third-party backup endpoint, under a canonical backup
+//! payload's `app_keys` block, so it rides both the single-app export and
+//! the Vault's full "Download Export" (the CAL-mandated one).
+//!
+//! Safety rules this module enforces:
+//! - The escrow is written only when the Vault copy is absent or already
+//!   identical. A DIFFERENT Vault copy is never overwritten silently -
+//!   that's surfaced as a conflict for the user to resolve.
+//! - Restoring the Vault copy onto this device preserves the old local key
+//!   as a timestamped file, and refuses to run while local conversations
+//!   exist unless the user explicitly accepted losing them.
+//! - "Keep this device's key" (the other conflict resolution) first saves
+//!   the about-to-be-replaced Vault copy to a local timestamped file, in
+//!   case it was the last copy of an old key.
+
+use crate::commands_holochain::HolochainState;
+use crate::flowsta::{self, http, AUTH_STORE, VAULT_ORIGIN, YOAI_HOLOCHAIN_CLIENT_ID};
+use crate::transcript_crypto::{self, RecoveryMaterial};
+use holochain_types::prelude::ExternIO;
+use serde::Serialize;
+use std::sync::Arc;
+use tauri::Manager;
+use tauri_plugin_store::StoreExt;
+
+/// Fixed label so re-escrow overwrites the same named snapshot instead of
+/// accumulating timestamped ones.
+const ESCROW_LABEL: &str = "recovery";
+
+#[derive(Serialize, Clone)]
+pub struct EscrowStatus {
+    /// "synced" | "conflict" | "unlinked" | "vault_unavailable" | "error"
+    pub state: String,
+    /// Raw conversation-record count across local agents; only filled when
+    /// it matters (state == "conflict").
+    pub local_conversations: Option<u64>,
+    pub error: Option<String>,
+}
+
+impl EscrowStatus {
+    fn state(s: &str) -> Self {
+        Self { state: s.into(), local_conversations: None, error: None }
+    }
+    fn error(e: String) -> Self {
+        Self { state: "error".into(), local_conversations: None, error: Some(e) }
+    }
+}
+
+/// The canonical backup payload. `cells` is empty for now - this backup
+/// exists to carry the recovery material in `app_keys`; record-level
+/// conversation backup is a separate, later feature.
+fn escrow_payload(recovery: &RecoveryMaterial) -> serde_json::Value {
+    serde_json::json!({
+        "version": 1,
+        "_readme": "Your Own AI transcript recovery material, backed up from your device. \
+                    The app_keys block holds the encryption key and network seed that make \
+                    your AI conversation transcripts readable. Keep any export of this file \
+                    private - anyone with the key can decrypt your transcripts.",
+        "license": "Cryptographic Autonomy License v1.0 (CAL-1.0)",
+        "app": { "name": "Your Own AI", "client_id": YOAI_HOLOCHAIN_CLIENT_ID },
+        "exported_at_iso": iso_now(),
+        "_summary": { "countsByEntryType": {}, "totalRecords": 0 },
+        "cells": [],
+        "app_keys": {
+            "_readme": "The transcript encryption key (hex) and per-user network seed Your \
+                        Own AI generates locally. Needed to decrypt this user's transcripts \
+                        on any device.",
+            "transcript_data_key_hex": recovery.data_key_hex,
+            "transcript_network_seed": recovery.network_seed,
+            "version": recovery.version,
+        },
+    })
+}
+
+pub(crate) fn parse_escrow(data: &serde_json::Value) -> Option<RecoveryMaterial> {
+    let keys = data.get("app_keys")?;
+    Some(RecoveryMaterial {
+        network_seed: keys.get("transcript_network_seed")?.as_str()?.to_string(),
+        data_key_hex: keys.get("transcript_data_key_hex")?.as_str()?.to_string(),
+        version: keys.get("version").and_then(|v| v.as_u64()).unwrap_or(1) as u32,
+    })
+}
+
+fn iso_now() -> String {
+    // Seconds-precision ISO timestamp without pulling in chrono.
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let days = secs / 86400;
+    let (mut y, mut rem_days) = (1970i64, days as i64);
+    loop {
+        let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+        let len = if leap { 366 } else { 365 };
+        if rem_days < len {
+            break;
+        }
+        rem_days -= len;
+        y += 1;
+    }
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let months = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut m = 0usize;
+    while rem_days >= months[m] {
+        rem_days -= months[m];
+        m += 1;
+    }
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        y, m + 1, rem_days + 1,
+        (secs % 86400) / 3600, (secs % 3600) / 60, secs % 60
+    )
+}
+
+/// Fetch the escrowed material from Vault. `Ok(None)` = no escrow stored.
+async fn fetch_escrow(port: u16) -> Result<Option<RecoveryMaterial>, String> {
+    let resp = http()
+        .post(format!("http://127.0.0.1:{}/backup/retrieve", port))
+        .header("Origin", VAULT_ORIGIN)
+        .json(&serde_json::json!({
+            "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
+            "label": ESCROW_LABEL,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("vault unreachable: {}", e))?;
+
+    match resp.status() {
+        reqwest::StatusCode::NOT_FOUND => return Ok(None),
+        s if s.is_success() => {}
+        _ => {
+            let body: serde_json::Value = resp.json().await.unwrap_or_default();
+            return Err(body["error"].as_str().unwrap_or("retrieve_failed").to_string());
+        }
+    }
+    let v: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("bad retrieve response: {}", e))?;
+    // An escrow snapshot whose app_keys can't be parsed is treated as a hard
+    // error, NOT as absent - writing over it could destroy a key.
+    match parse_escrow(&v["data"]) {
+        Some(m) => Ok(Some(m)),
+        None => Err("escrow_unreadable".into()),
+    }
+}
+
+async fn write_escrow(port: u16, recovery: &RecoveryMaterial) -> Result<(), String> {
+    let resp = http()
+        .post(format!("http://127.0.0.1:{}/backup", port))
+        .header("Origin", VAULT_ORIGIN)
+        .json(&serde_json::json!({
+            "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
+            "app_name": "Your Own AI",
+            "label": ESCROW_LABEL,
+            "data": escrow_payload(recovery),
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("vault unreachable: {}", e))?;
+    if !resp.status().is_success() {
+        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+        return Err(body["error"].as_str().unwrap_or("backup_failed").to_string());
+    }
+    Ok(())
+}
+
+/// The local recovery material, read-only (never generates). Prefers the
+/// running manager's copy; falls back to the file before the conductor is up.
+pub(crate) fn local_recovery(app: &tauri::AppHandle) -> Result<RecoveryMaterial, String> {
+    if let Some(hc) = app.try_state::<Arc<HolochainState>>() {
+        if let Ok(manager) = hc.get() {
+            return Ok(manager.recovery.clone());
+        }
+    }
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("no app data dir: {}", e))?;
+    transcript_crypto::load_recovery_material(&data_dir)?
+        .ok_or_else(|| "no local recovery material yet".to_string())
+}
+
+/// Preconditions shared by every escrow operation. Returns the Vault port.
+/// The link ceremony is never triggered from here - it rides sign-in; without
+/// a completed link the escrow simply waits ("unlinked").
+pub(crate) async fn escrow_port(app: &tauri::AppHandle) -> Result<u16, EscrowStatus> {
+    let store = app
+        .store(AUTH_STORE)
+        .map_err(|e| EscrowStatus::error(e.to_string()))?;
+    if !store.get("link_done").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Err(EscrowStatus::state("unlinked"));
+    }
+    let vault = flowsta::find_vault().await;
+    match vault.port {
+        Some(p) => Ok(p),
+        None => Err(EscrowStatus::state("vault_unavailable")),
+    }
+}
+
+/// Raw conversation-record count across every local agent (no decryption -
+/// undecryptable records still count as data worth protecting).
+async fn count_local_conversations(app: &tauri::AppHandle) -> Result<u64, String> {
+    let hc = app
+        .try_state::<Arc<HolochainState>>()
+        .ok_or("holochain state missing")?;
+    let manager = hc.get()?;
+    let keys: Vec<String> = {
+        let agents = manager.agents.lock().await;
+        agents.keys().cloned().collect()
+    };
+    let mut total = 0u64;
+    for key in keys {
+        let payload = ExternIO::encode(()).map_err(|e| e.to_string())?;
+        match manager
+            .call_zome(&key, "transcript", "get_all_conversations", payload)
+            .await
+        {
+            Ok(result) => {
+                let records: Vec<holochain_types::prelude::Record> =
+                    ExternIO::decode(&result).map_err(|e| e.to_string())?;
+                total += records.len() as u64;
+            }
+            Err(e) => {
+                // A cell that can't answer might hold data - fail safe by
+                // treating the count as unknown rather than zero.
+                return Err(format!("conversation count failed for {}: {}", key, e));
+            }
+        }
+    }
+    Ok(total)
+}
+
+/// Reconcile the escrow with the Vault. Writes only into an empty slot;
+/// reports "conflict" (with the local record count) when the Vault holds
+/// different material. Safe to call repeatedly.
+#[tauri::command]
+pub async fn vault_escrow_sync(app: tauri::AppHandle) -> EscrowStatus {
+    let port = match escrow_port(&app).await {
+        Ok(p) => p,
+        Err(s) => return s,
+    };
+    let local = match local_recovery(&app) {
+        Ok(r) => r,
+        Err(e) => return EscrowStatus::error(e),
+    };
+    match fetch_escrow(port).await {
+        Ok(None) => match write_escrow(port, &local).await {
+            Ok(()) => {
+                log::info!("[escrow] transcript recovery material escrowed to Vault");
+                schedule_full_backup(&app);
+                EscrowStatus::state("synced")
+            }
+            Err(e) if e == "vault_never_unlocked" => EscrowStatus::state("vault_unavailable"),
+            Err(e) => EscrowStatus::error(e),
+        },
+        Ok(Some(ref m)) if *m == local => {
+            schedule_full_backup(&app);
+            EscrowStatus::state("synced")
+        }
+        Ok(Some(_)) => {
+            let count = count_local_conversations(&app).await.ok();
+            EscrowStatus {
+                state: "conflict".into(),
+                local_conversations: count,
+                error: None,
+            }
+        }
+        Err(e) if e == "vault_never_unlocked" => EscrowStatus::state("vault_unavailable"),
+        Err(e) if e == "not_linked" => EscrowStatus::state("unlinked"),
+        Err(e) => EscrowStatus::error(e),
+    }
+}
+
+/// Conflict resolution A: adopt the Vault's key on this device. Preserves the
+/// current local key as a timestamped file, wipes the conductor + lair state
+/// and the derived memory caches (all keyed to the old material), then
+/// relaunches so the app re-provisions onto the restored network seed.
+///
+/// Refuses while local conversations exist unless `accept_data_loss` - the
+/// old key file is kept either way, so nothing is silently destroyed.
+#[tauri::command]
+pub async fn vault_escrow_restore(
+    app: tauri::AppHandle,
+    accept_data_loss: bool,
+) -> Result<(), String> {
+    let port = match escrow_port(&app).await {
+        Ok(p) => p,
+        Err(s) => return Err(s.error.unwrap_or(s.state)),
+    };
+    let escrowed = fetch_escrow(port)
+        .await?
+        .ok_or("no escrow stored in Vault")?;
+    let local = local_recovery(&app)?;
+    if escrowed == local {
+        return Err("already in sync".into());
+    }
+    if !accept_data_loss {
+        let count = count_local_conversations(&app).await?;
+        if count > 0 {
+            return Err(format!("local_data_exists:{}", count));
+        }
+    }
+
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("no app data dir: {}", e))?;
+
+    // Stop the conductor + lair so their databases aren't held open (same
+    // signal-by-PID approach as the factory reset).
+    if let Some(hc) = app.try_state::<Arc<HolochainState>>() {
+        if let Some(manager) = hc.manager.get() {
+            for pid in [
+                manager.handle.conductor_child.id(),
+                manager.handle.lair_child.id(),
+            ] {
+                let _ = std::process::Command::new("kill")
+                    .arg(pid.to_string())
+                    .output();
+            }
+            log::info!("[escrow] signalled conductor + lair to stop for restore");
+        }
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+
+    // Swap the recovery material (old file preserved with a timestamp).
+    transcript_crypto::replace_recovery_material(&data_dir, &escrowed)?;
+
+    // Suspend automatic backups until the Vault conversations have been
+    // replayed onto this device - the Vault snapshot may be the only copy.
+    if let Err(e) = std::fs::write(data_dir.join(RESTORE_PENDING_FILE), b"") {
+        log::warn!("[escrow] could not write restore-pending marker: {}", e);
+    }
+
+    // The Holochain state and the derived memory caches are all keyed to the
+    // old material - remove them so relaunch starts clean on the restored
+    // seed. AI configs, models, and the Flowsta session are untouched.
+    for dir in ["conductor", "lair"] {
+        let p = data_dir.join(dir);
+        if p.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&p) {
+                log::warn!("[escrow] could not remove {dir}/: {e}");
+            }
+        }
+    }
+    let _ = std::fs::remove_file(data_dir.join("memory-facts.enc"));
+    if let Ok(entries) = std::fs::read_dir(&data_dir) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                if name.starts_with("transcript-emb-") && name.ends_with(".enc") {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
+    log::info!("[escrow] recovery material restored from Vault - relaunching");
+
+    #[cfg(not(debug_assertions))]
+    {
+        app.restart()
+    }
+    #[cfg(debug_assertions)]
+    {
+        log::info!("[escrow] dev build - exiting; re-run `npm run tauri dev` to relaunch");
+        app.exit(0);
+        Ok(())
+    }
+}
+
+/// Conflict resolution B: keep this device's key and overwrite the Vault
+/// copy. The replaced Vault material is first written to a timestamped local
+/// file - it may be the only copy of an old key, and transcripts encrypted
+/// under it (e.g. on another machine's export) would otherwise become
+/// unrecoverable with no warning.
+#[tauri::command]
+pub async fn vault_escrow_keep_local(app: tauri::AppHandle) -> Result<EscrowStatus, String> {
+    let port = match escrow_port(&app).await {
+        Ok(p) => p,
+        Err(s) => return Err(s.error.unwrap_or(s.state)),
+    };
+    let local = local_recovery(&app)?;
+    if let Some(old) = fetch_escrow(port).await? {
+        if old != local {
+            let data_dir = app
+                .path()
+                .app_data_dir()
+                .map_err(|e| format!("no app data dir: {}", e))?;
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let path = data_dir.join(format!("transcript-recovery.vault-replaced-{}.json", ts));
+            let json = serde_json::to_string_pretty(&old).map_err(|e| e.to_string())?;
+            std::fs::write(&path, &json).map_err(|e| e.to_string())?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            }
+            log::info!("[escrow] previous Vault key preserved at {:?}", path.file_name());
+        }
+    }
+    write_escrow(port, &local).await?;
+    Ok(EscrowStatus::state("synced"))
+}
+
+// ── Full-data backup (label "latest") ───────────────────────────────
+//
+// The key-only "recovery" escrow above makes transcripts recoverABLE; this
+// backup makes them recoverED: every conversation, message, and grounding
+// annotation - decrypted to a human-readable view (the Vault encrypts the
+// backup at rest and the user's CAL export must be readable) plus the
+// on-chain encrypted bytes for a future replay-restore. Written debounced
+// after transcript writes, and after each successful escrow sync.
+
+pub(crate) const DATA_LABEL: &str = "latest";
+/// Stay under Vault's 50 MB per-backup cap with headroom for JSON overhead.
+const BACKUP_BUDGET_BYTES: usize = 45 * 1024 * 1024;
+
+/// Marker file left by the key restore: this device holds the right key
+/// but has NOT replayed the Vault conversations yet. While it exists,
+/// automatic backups are suspended - anything written from here (even
+/// after a first chat) would overwrite the user's Vault copy with a
+/// near-empty snapshot. Cleared by a successful conversation restore.
+const RESTORE_PENDING_FILE: &str = "conversation-restore-pending";
+
+pub(crate) fn restore_pending_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join(RESTORE_PENDING_FILE))
+}
+
+pub(crate) fn clear_restore_pending(app: &tauri::AppHandle) {
+    if let Some(p) = restore_pending_path(app) {
+        if p.exists() {
+            let _ = std::fs::remove_file(&p);
+            log::info!("[escrow] conversation restore complete - automatic backups resume");
+        }
+    }
+}
+
+/// Marker left by a conversation restore: the per-AI memory index (episodic
+/// recall vectors + authored-knowledge vectors) is stale or missing and
+/// should be rebuilt by the frontend walker once the embedding model is
+/// available. Cleared by the walker when the rebuild finishes.
+const REEMBED_PENDING_FILE: &str = "memory-reembed-pending";
+
+pub(crate) fn reembed_pending_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join(REEMBED_PENDING_FILE))
+}
+
+pub(crate) fn set_reembed_pending(app: &tauri::AppHandle) {
+    if let Some(p) = reembed_pending_path(app) {
+        if let Err(e) = std::fs::write(&p, b"") {
+            log::warn!("[escrow] could not write re-embed marker: {}", e);
+        }
+    }
+}
+
+/// One conversation with its entries, ready for assembly.
+struct ConvBundle {
+    installed_app_id: String,
+    started_at: i64,
+    /// Conversation record first, then its entries in chain order.
+    records: Vec<serde_json::Value>,
+    size: usize,
+}
+
+/// Decrypt one on-chain record; returns (plain JSON, raw entry bytes).
+pub(crate) fn open_record(
+    key: &[u8; 32],
+    record: &holochain_types::prelude::Record,
+) -> Option<(serde_json::Value, Vec<u8>)> {
+    let entry = record.entry().as_option()?;
+    let app_bytes = entry.as_app_entry()?;
+    let raw = app_bytes.as_ref().bytes().to_vec();
+    let ee: crate::commands_holochain::EncryptedEntryRaw = rmp_serde::from_slice(&raw).ok()?;
+    let plain_bytes = crate::transcript_crypto::decrypt(key, &ee.nonce, &ee.cipher).ok()?;
+    let plain: serde_json::Value = serde_json::from_slice(&plain_bytes).ok()?;
+    Some((plain, raw))
+}
+
+/// Canonical-shape record object.
+fn backup_record(
+    entry_type: &str,
+    record: &holochain_types::prelude::Record,
+    human: serde_json::Value,
+    raw: &[u8],
+) -> serde_json::Value {
+    use base64::Engine;
+    let hash_hex = hex::encode(record.action_address().get_raw_39());
+    let created_ms = record.action().timestamp().as_micros() / 1000;
+    serde_json::json!({
+        "entryType": entry_type,
+        "actionHash": hash_hex,
+        "createdAtMs": created_ms,
+        "human_readable": human,
+        "raw_record": {
+            "entry_b64": base64::engine::general_purpose::STANDARD.encode(raw),
+            "action_address": hash_hex,
+            "action_type": "Create",
+        },
+    })
+}
+
+/// Walk every agent's conversations + entries, decrypting as we go.
+/// Records that fail to decrypt (wrong key) are skipped, not fatal.
+async fn collect_conversations(app: &tauri::AppHandle) -> Result<Vec<ConvBundle>, String> {
+    use holochain_types::prelude::Record;
+
+    let hc = app
+        .try_state::<Arc<HolochainState>>()
+        .ok_or("holochain state missing")?;
+    let manager = hc.get()?;
+    let key = manager.data_key()?;
+    let agents: Vec<(String, String)> = {
+        let map = manager.agents.lock().await;
+        map.iter()
+            .map(|(k, a)| (k.clone(), a.installed_app_id.clone()))
+            .collect()
+    };
+
+    let mut bundles = Vec::new();
+    for (agent_key, installed_app_id) in agents {
+        let payload = ExternIO::encode(()).map_err(|e| e.to_string())?;
+        let result = manager
+            .call_zome(&agent_key, "transcript", "get_all_conversations", payload)
+            .await
+            .map_err(|e| format!("get_all_conversations({}): {}", agent_key, e))?;
+        let conv_records: Vec<Record> = ExternIO::decode(&result).map_err(|e| e.to_string())?;
+
+        for conv in &conv_records {
+            let Some((conv_plain, conv_raw)) = open_record(&key, conv) else { continue };
+            let started_at = conv_plain["started_at"].as_i64().unwrap_or(0);
+            let conv_hash = conv.action_address().clone();
+            let conv_hash_hex = hex::encode(conv_hash.get_raw_39());
+            let mut records =
+                vec![backup_record("Conversation", conv, conv_plain, &conv_raw)];
+
+            let payload =
+                ExternIO::encode(conv_hash).map_err(|e| e.to_string())?;
+            let result = manager
+                .call_zome(&agent_key, "transcript", "get_conversation_entries", payload)
+                .await
+                .map_err(|e| format!("get_conversation_entries: {}", e))?;
+            let entry_records: Vec<Record> =
+                ExternIO::decode(&result).map_err(|e| e.to_string())?;
+            for er in &entry_records {
+                let Some((mut plain, raw)) = open_record(&key, er) else { continue };
+                let entry_type = if plain["annotation"] == "grounding" {
+                    "GroundingAnnotation"
+                } else {
+                    "Message"
+                };
+                // Linkage lives in DHT links, which don't survive an export -
+                // carry it inside the readable view instead.
+                if let Some(obj) = plain.as_object_mut() {
+                    obj.insert(
+                        "conversation_action_hash".into(),
+                        serde_json::json!(conv_hash_hex),
+                    );
+                }
+                records.push(backup_record(entry_type, er, plain, &raw));
+            }
+
+            let size: usize = records
+                .iter()
+                .map(|r| serde_json::to_vec(r).map(|v| v.len()).unwrap_or(0))
+                .sum();
+            bundles.push(ConvBundle {
+                installed_app_id: installed_app_id.clone(),
+                started_at,
+                records,
+                size,
+            });
+        }
+    }
+    Ok(bundles)
+}
+
+/// Pure assembly: newest-first inclusion under the size budget, grouped
+/// into cells per transcript app, canonical shape + app_keys + ai_configs.
+fn assemble_full_payload(
+    recovery: &RecoveryMaterial,
+    ai_configs: Option<serde_json::Value>,
+    mut convs: Vec<ConvBundle>,
+    budget: usize,
+) -> serde_json::Value {
+    convs.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+    let total = convs.len();
+    let mut used = 0usize;
+    let mut kept: Vec<ConvBundle> = Vec::new();
+    for c in convs {
+        if used + c.size <= budget {
+            used += c.size;
+            kept.push(c);
+        }
+    }
+    let dropped = total - kept.len();
+
+    // Oldest-first within each cell so the export reads chronologically.
+    kept.sort_by(|a, b| a.started_at.cmp(&b.started_at));
+    let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut cells: Vec<(String, Vec<serde_json::Value>)> = Vec::new();
+    for c in kept {
+        for r in &c.records {
+            let t = r["entryType"].as_str().unwrap_or("Unknown").to_string();
+            *counts.entry(t).or_insert(0) += 1;
+        }
+        match cells.iter_mut().find(|(id, _)| *id == c.installed_app_id) {
+            Some((_, records)) => records.extend(c.records),
+            None => cells.push((c.installed_app_id, c.records)),
+        }
+    }
+    let total_records: usize = counts.values().sum();
+
+    let mut payload = serde_json::json!({
+        "version": 1,
+        "_readme": "Your Own AI conversation transcripts, backed up from your device. \
+                    Each record's human_readable view is the decrypted content; \
+                    raw_record holds the encrypted on-chain bytes. The app_keys \
+                    block holds the encryption key and network seed. Keep any \
+                    export of this file private.",
+        "license": "Cryptographic Autonomy License v1.0 (CAL-1.0)",
+        "app": { "name": "Your Own AI", "client_id": YOAI_HOLOCHAIN_CLIENT_ID },
+        "exported_at_iso": iso_now(),
+        "_summary": {
+            "countsByEntryType": counts,
+            "totalRecords": total_records,
+        },
+        "cells": cells
+            .into_iter()
+            .map(|(id, records)| {
+                serde_json::json!({
+                    "role_name": id,
+                    "_readme": "One AI personality's transcript chain.",
+                    "records": records,
+                })
+            })
+            .collect::<Vec<_>>(),
+        "app_keys": {
+            "_readme": "The transcript encryption key (hex) and per-user network \
+                        seed Your Own AI generates locally. Needed to decrypt this \
+                        user's transcripts on any device.",
+            "transcript_data_key_hex": recovery.data_key_hex,
+            "transcript_network_seed": recovery.network_seed,
+            "version": recovery.version,
+        },
+    });
+    if dropped > 0 {
+        payload["truncated_conversations"] = serde_json::json!(dropped);
+        payload["_truncation_note"] = serde_json::json!(format!(
+            "{} oldest conversation(s) did not fit the backup size budget and were left out.",
+            dropped
+        ));
+    }
+    if let Some(cfg) = ai_configs {
+        payload["ai_configs"] = serde_json::json!({
+            "_readme": "Your AI personalities (names, personas, settings) as \
+                        stored on this device. Thumbnails are not included.",
+            "data": cfg,
+        });
+    }
+    payload
+}
+
+/// Whether a backup holding `local_records` records may overwrite the
+/// existing Vault snapshot (`existing_records` = None when there is none).
+/// An EMPTY snapshot never overwrites a non-empty one: a device that just
+/// restored its key (or hasn't restored conversations yet) has zero local
+/// records while the Vault may hold the user's only copy - the launch-sync
+/// backup fired in that window would silently destroy it.
+fn may_overwrite(local_records: u64, existing_records: Option<u64>) -> bool {
+    local_records > 0 || existing_records.unwrap_or(0) == 0
+}
+
+/// Record count of the existing "latest" snapshot in Vault.
+/// `Ok(None)` = no snapshot stored. A snapshot whose summary can't be read
+/// counts as non-empty - when in doubt, don't overwrite.
+async fn fetch_existing_data_records(port: u16) -> Result<Option<u64>, String> {
+    let resp = http()
+        .post(format!("http://127.0.0.1:{}/backup/retrieve", port))
+        .header("Origin", VAULT_ORIGIN)
+        .json(&serde_json::json!({
+            "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
+            "label": DATA_LABEL,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("vault unreachable: {}", e))?;
+    match resp.status() {
+        reqwest::StatusCode::NOT_FOUND => return Ok(None),
+        s if s.is_success() => {}
+        _ => {
+            let body: serde_json::Value = resp.json().await.unwrap_or_default();
+            return Err(body["error"].as_str().unwrap_or("retrieve_failed").to_string());
+        }
+    }
+    let v: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("bad retrieve response: {}", e))?;
+    Ok(Some(
+        v["data"]["_summary"]["totalRecords"].as_u64().unwrap_or(1),
+    ))
+}
+
+/// Your Memory profile-facts store - a local encrypted file, NOT Holochain
+/// data, so it needs its own ride in the backup.
+pub(crate) const FACTS_FILE: &str = "memory-facts.enc";
+/// A thumbnail bigger than this is skipped rather than bloating the backup.
+const THUMBNAIL_CAP_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Decrypt the facts file to its CAL-readable view: the fact list minus the
+/// per-fact `embedding` vectors (bulky derived data, not human-meaningful).
+/// `None` = wrong key or unreadable envelope.
+pub(crate) fn facts_human_readable(
+    key: &[u8; 32],
+    file_bytes: &[u8],
+) -> Option<serde_json::Value> {
+    let envelope: serde_json::Value = serde_json::from_slice(file_bytes).ok()?;
+    let nonce = hex::decode(envelope["nonce"].as_str()?).ok()?;
+    let cipher = hex::decode(envelope["cipher"].as_str()?).ok()?;
+    let plain = crate::transcript_crypto::decrypt(key, &nonce, &cipher).ok()?;
+    let mut facts: serde_json::Value = serde_json::from_slice(&plain).ok()?;
+    if let Some(arr) = facts.as_array_mut() {
+        for fact in arr {
+            if let Some(obj) = fact.as_object_mut() {
+                obj.remove("embedding");
+            }
+        }
+    }
+    Some(facts)
+}
+
+/// Per-AI thumbnails as base64, keyed by AI id. Only ids in `ai_ids` are
+/// collected (orphaned files stay local), oversized ones are skipped.
+fn collect_thumbnails(app: &tauri::AppHandle, ai_ids: &[String]) -> serde_json::Map<String, serde_json::Value> {
+    use base64::Engine;
+    let mut out = serde_json::Map::new();
+    let Ok(dir) = app.path().app_data_dir() else { return out };
+    for id in ai_ids {
+        let path = dir.join("thumbnails").join(format!("{}.jpg", id));
+        let Ok(meta) = std::fs::metadata(&path) else { continue };
+        if meta.len() > THUMBNAIL_CAP_BYTES {
+            log::info!("[escrow] thumbnail for {} skipped ({} bytes over cap)", id, meta.len());
+            continue;
+        }
+        if let Ok(bytes) = std::fs::read(&path) {
+            out.insert(
+                id.clone(),
+                serde_json::json!(base64::engine::general_purpose::STANDARD.encode(bytes)),
+            );
+        }
+    }
+    out
+}
+
+/// Per-AI authored knowledge (kind "authored" in the transcript-embedding
+/// store), keyed by AI id, text only - the vectors are derived data,
+/// re-embedded on the restored device. Unlike episodic entries (rebuilt
+/// from the replayed transcripts), authored knowledge exists nowhere else,
+/// so leaving it out of the backup would lose it for good on device loss.
+fn collect_ai_knowledge(
+    app: &tauri::AppHandle,
+    key: &[u8; 32],
+    ai_ids: &[String],
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut out = serde_json::Map::new();
+    for id in ai_ids {
+        let Ok(entries) = crate::transcript_memory::read_for(app, key, id) else { continue };
+        let authored: Vec<serde_json::Value> = entries
+            .iter()
+            .filter(|e| e.kind == "authored")
+            .map(|e| serde_json::json!({ "text": e.text, "created_at": e.created_at }))
+            .collect();
+        if !authored.is_empty() {
+            out.insert(id.clone(), serde_json::json!(authored));
+        }
+    }
+    out
+}
+
+/// Build + write the full-data backup. Returns small stats for callers/UI.
+pub async fn write_full_backup(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let port = match escrow_port(app).await {
+        Ok(p) => p,
+        Err(s) => return Err(s.error.unwrap_or(s.state)),
+    };
+    // Restore pending: the key came from Vault but the conversations
+    // haven't been replayed yet - any snapshot from this device would
+    // shadow the user's Vault copy. Sit tight until the restore runs,
+    // unless the Vault slot turns out to be empty (nothing to protect).
+    if restore_pending_path(app).map(|p| p.exists()).unwrap_or(false) {
+        match fetch_existing_data_records(port).await {
+            Ok(existing) if existing.unwrap_or(0) == 0 => clear_restore_pending(app),
+            _ => {
+                log::warn!(
+                    "[escrow] full backup skipped: conversation restore from Vault is \
+                     pending on this device (Settings → Restore conversations from Vault)"
+                );
+                return Ok(serde_json::json!({
+                    "skipped": "restore_pending",
+                    "conversations": 0, "records": 0, "truncated_conversations": 0,
+                }));
+            }
+        }
+    }
+
+    let recovery = local_recovery(app)?;
+    let convs = collect_conversations(app).await?;
+
+    // Overwrite guard: with nothing recorded locally, only write when the
+    // Vault slot is empty too (first-ever backup). Errors probing the slot
+    // also skip - when in doubt, never overwrite.
+    if convs.is_empty() {
+        match fetch_existing_data_records(port).await {
+            Ok(existing) if may_overwrite(0, existing) => {}
+            Ok(_) => {
+                log::warn!(
+                    "[escrow] full backup skipped: no local conversations but the \
+                     Vault snapshot has records - refusing to overwrite it \
+                     (restore conversations from Vault to bring them back)"
+                );
+                return Ok(serde_json::json!({
+                    "skipped": "empty_would_overwrite",
+                    "conversations": 0, "records": 0, "truncated_conversations": 0,
+                }));
+            }
+            Err(e) => {
+                log::warn!("[escrow] full backup skipped: could not probe the existing snapshot: {}", e);
+                return Ok(serde_json::json!({
+                    "skipped": "probe_failed",
+                    "conversations": 0, "records": 0, "truncated_conversations": 0,
+                }));
+            }
+        }
+    }
+    let ai_configs = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("ai-data.json"))
+        .filter(|p| p.exists())
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+
+    let conversations = convs.len();
+    let mut payload = assemble_full_payload(&recovery, ai_configs, convs, BACKUP_BUDGET_BYTES);
+    let total_records = payload["_summary"]["totalRecords"].as_u64().unwrap_or(0);
+    let truncated = payload["truncated_conversations"].as_u64().unwrap_or(0);
+
+    // Your Memory profile facts: local encrypted file, not Holochain data.
+    // Carried readable (CAL) + as the raw file for a lossless restore.
+    if let Ok(dir) = app.path().app_data_dir() {
+        let facts_path = dir.join(FACTS_FILE);
+        if let Ok(bytes) = std::fs::read(&facts_path) {
+            use base64::Engine;
+            let mut block = serde_json::json!({
+                "_readme": "Your Memory - the profile facts your AIs have learned \
+                            (or you authored), as stored on this device. \
+                            human_readable is the decrypted view; raw_b64 is the \
+                            encrypted file itself, restorable with app_keys.",
+                "raw_b64": base64::engine::general_purpose::STANDARD.encode(&bytes),
+            });
+            if let Ok(key) = recovery.data_key() {
+                if let Some(human) = facts_human_readable(&key, &bytes) {
+                    block["human_readable"] = human;
+                }
+            }
+            payload["memory_facts"] = block;
+        }
+    }
+
+    // Per-AI thumbnails (small jpgs), keyed by AI id.
+    let ai_ids: Vec<String> = payload["ai_configs"]["data"]["custom-ais"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|a| a["id"].as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let thumbs = collect_thumbnails(app, &ai_ids);
+    if !thumbs.is_empty() {
+        payload["thumbnails"] = serde_json::json!({
+            "_readme": "Your AIs' images (base64 JPEG), keyed by AI id.",
+            "data": thumbs,
+        });
+    }
+
+    // Per-AI authored knowledge - user-given, not derivable from transcripts.
+    if let Ok(key) = recovery.data_key() {
+        let knowledge = collect_ai_knowledge(app, &key, &ai_ids);
+        if !knowledge.is_empty() {
+            payload["ai_knowledge"] = serde_json::json!({
+                "_readme": "Knowledge you gave each AI (its Remembers tab), keyed \
+                            by AI id. Embedding vectors are rebuilt on restore.",
+                "data": knowledge,
+            });
+        }
+    }
+
+    let resp = http()
+        .post(format!("http://127.0.0.1:{}/backup", port))
+        .header("Origin", VAULT_ORIGIN)
+        .json(&serde_json::json!({
+            "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
+            "app_name": "Your Own AI",
+            "label": DATA_LABEL,
+            "data": payload,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("vault unreachable: {}", e))?;
+    if !resp.status().is_success() {
+        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+        return Err(body["error"].as_str().unwrap_or("backup_failed").to_string());
+    }
+    log::info!(
+        "[escrow] full backup written: {} conversations, {} records{}",
+        conversations,
+        total_records,
+        if truncated > 0 { format!(" ({} truncated)", truncated) } else { String::new() }
+    );
+    Ok(serde_json::json!({
+        "conversations": conversations,
+        "records": total_records,
+        "truncated_conversations": truncated,
+    }))
+}
+
+/// Debounced trigger: transcript writes call this freely; one backup runs
+/// ~60s after the last write. Silent no-op when not linked / Vault away.
+pub fn schedule_full_backup(app: &tauri::AppHandle) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static GENERATION: AtomicU64 = AtomicU64::new(0);
+    let my_gen = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        if GENERATION.load(Ordering::SeqCst) != my_gen {
+            return; // a newer write re-armed the debounce
+        }
+        match write_full_backup(&app).await {
+            Ok(_) => {}
+            Err(e) if e == "unlinked" || e == "vault_unavailable" => {
+                log::debug!("[escrow] full backup skipped: {}", e);
+            }
+            Err(e) => log::warn!("[escrow] full backup failed: {}", e),
+        }
+    });
+}
+
+/// Manual full backup for the UI ("Back up now") and for testing.
+#[tauri::command]
+pub async fn vault_backup_now(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    write_full_backup(&app).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn material() -> RecoveryMaterial {
+        RecoveryMaterial {
+            network_seed: "yoai-user-00ff".into(),
+            data_key_hex: "ab".repeat(32),
+            version: 1,
+        }
+    }
+
+    #[test]
+    fn payload_roundtrips_through_app_keys() {
+        let m = material();
+        let payload = escrow_payload(&m);
+        // The shape Vault recognizes as canonical (version 1 + cells array).
+        assert_eq!(payload["version"], 1);
+        assert!(payload["cells"].is_array());
+        let parsed = parse_escrow(&payload).expect("app_keys parse");
+        assert!(parsed == m);
+    }
+
+    #[test]
+    fn parse_rejects_missing_keys() {
+        assert!(parse_escrow(&serde_json::json!({})).is_none());
+        assert!(parse_escrow(&serde_json::json!({ "app_keys": {} })).is_none());
+        // Missing version defaults to 1 instead of failing.
+        let v = serde_json::json!({ "app_keys": {
+            "transcript_data_key_hex": "aa",
+            "transcript_network_seed": "seed",
+        }});
+        assert_eq!(parse_escrow(&v).unwrap().version, 1);
+    }
+
+    #[test]
+    fn facts_roundtrip_strips_embeddings() {
+        let key = [9u8; 32];
+        let facts = serde_json::json!([
+            { "id": "f1", "subject": "user", "predicate": "likes", "value": "sailing",
+              "embedding": [0.1, 0.2, 0.3] },
+            { "id": "f2", "subject": "user", "predicate": "name", "value": "Eric" },
+        ]);
+        let plain = serde_json::to_vec(&facts).unwrap();
+        let (nonce, cipher) = crate::transcript_crypto::encrypt(&key, &plain).unwrap();
+        let file = serde_json::to_vec(&serde_json::json!({
+            "version": 1, "nonce": hex::encode(nonce), "cipher": hex::encode(cipher),
+        }))
+        .unwrap();
+        let human = facts_human_readable(&key, &file).expect("decrypts");
+        assert_eq!(human[0]["value"], "sailing");
+        assert!(human[0].get("embedding").is_none()); // bulky vector stripped
+        assert_eq!(human[1]["value"], "Eric");
+        // Wrong key = None, never garbage.
+        assert!(facts_human_readable(&[1u8; 32], &file).is_none());
+    }
+
+    #[test]
+    fn empty_snapshot_never_overwrites_records() {
+        assert!(!may_overwrite(0, Some(96))); // the launch-sync-after-key-restore trap
+        assert!(may_overwrite(0, None)); // first-ever backup
+        assert!(may_overwrite(0, Some(0))); // existing snapshot already empty
+        assert!(may_overwrite(1, Some(96))); // non-empty writes are allowed
+    }
+
+    #[test]
+    fn iso_now_shape() {
+        let s = iso_now();
+        assert_eq!(s.len(), 20);
+        assert!(s.ends_with('Z'));
+        assert!(s.starts_with("20"));
+    }
+
+    fn bundle(app_id: &str, started_at: i64, n_msgs: usize, pad: usize) -> ConvBundle {
+        let mut records = vec![serde_json::json!({
+            "entryType": "Conversation",
+            "human_readable": { "started_at": started_at, "pad": "x".repeat(pad) },
+        })];
+        for i in 0..n_msgs {
+            records.push(serde_json::json!({
+                "entryType": "Message",
+                "human_readable": { "sequence": i, "pad": "x".repeat(pad) },
+            }));
+        }
+        let size = records
+            .iter()
+            .map(|r| serde_json::to_vec(r).unwrap().len())
+            .sum();
+        ConvBundle {
+            installed_app_id: app_id.to_string(),
+            started_at,
+            records,
+            size,
+        }
+    }
+
+    #[test]
+    fn full_payload_shape_counts_and_grouping() {
+        let m = material();
+        let payload = assemble_full_payload(
+            &m,
+            Some(serde_json::json!({ "ais": [{ "name": "Reeves" }] })),
+            vec![bundle("transcript_a", 100, 2, 0), bundle("transcript_a", 200, 1, 0),
+                 bundle("transcript_b", 150, 3, 0)],
+            usize::MAX,
+        );
+        assert_eq!(payload["version"], 1);
+        assert_eq!(payload["_summary"]["countsByEntryType"]["Conversation"], 3);
+        assert_eq!(payload["_summary"]["countsByEntryType"]["Message"], 6);
+        assert_eq!(payload["_summary"]["totalRecords"], 9);
+        // Two cells, records grouped per app; app_keys + ai_configs present.
+        assert_eq!(payload["cells"].as_array().unwrap().len(), 2);
+        assert!(parse_escrow(&payload).unwrap() == m);
+        assert_eq!(payload["ai_configs"]["data"]["ais"][0]["name"], "Reeves");
+        assert!(payload.get("truncated_conversations").is_none());
+    }
+
+    #[test]
+    fn full_payload_truncates_oldest_first() {
+        let m = material();
+        // Three conversations of ~equal size; budget fits roughly two.
+        let convs = vec![
+            bundle("app", 100, 1, 400), // oldest - should be dropped
+            bundle("app", 300, 1, 400),
+            bundle("app", 200, 1, 400),
+        ];
+        let budget = convs[0].size * 2 + 10;
+        let payload = assemble_full_payload(&m, None, convs, budget);
+        assert_eq!(payload["truncated_conversations"], 1);
+        assert_eq!(payload["_summary"]["countsByEntryType"]["Conversation"], 2);
+        // The kept ones are the two NEWEST (started_at 300 + 200).
+        let records = payload["cells"][0]["records"].as_array().unwrap();
+        let starts: Vec<i64> = records
+            .iter()
+            .filter(|r| r["entryType"] == "Conversation")
+            .map(|r| r["human_readable"]["started_at"].as_i64().unwrap())
+            .collect();
+        assert_eq!(starts, vec![200, 300]); // chronological within the cell
+    }
+}

@@ -1,0 +1,52 @@
+{
+  "name": "your-own-ai",
+  "description": "Offline-first AI App",
+  "author": "Your Own AI",
+  "license": "AGPL-3.0-or-later",
+  "homepage": "https://yourownai.net",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --mode ssr",
+    "build": "vite build && vite build -c adapters/static/vite.config.ts",
+    "build.client": "vite build",
+    "build.static": "vite build -c adapters/static/vite.config.ts",
+    "preview": "vite preview",
+    "qwik": "qwik",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@builder.io/qwik": "^1.19.2",
+    "@builder.io/qwik-city": "^1.19.2",
+    "@flowsta/login-button": "^0.1.4",
+    "@paper-design/shaders": "^0.0.72",
+    "@qwik-ui/headless": "^0.7.4",
+    "@qwikest/icons": "^0.0.13",
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2.6.0",
+    "@tauri-apps/plugin-http": "^2.5.2",
+    "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-shell": "^2.3.1",
+    "@tauri-apps/plugin-store": "^2.4.0",
+    "cropperjs": "^1.6.2",
+    "highlight.js": "^11.11.1",
+    "jdenticon": "^3.3.0",
+    "lottie-web": "^5.13.0",
+    "marked": "^17.0.4",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/uuid": "^10.0.0",
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.17",
+    "typescript": "~5.8.3",
+    "vite": "^6.4.2",
+    "vite-tsconfig-paths": "^6.1.1"
+  },
+  "overrides": {
+    "picomatch": ">=4.0.4"
+  }
+}

@@ -1,0 +1,415 @@
+name: Build llama-server Binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      llama_cpp_version:
+        description: 'llama.cpp git tag or commit (e.g., b8377, master)'
+        required: true
+        default: 'master'
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          # spirv-headers/spirv-tools: required by llama.cpp's Vulkan backend
+          # (ggml-vulkan find_package(SPIRV-Headers)) since ~mid-2026.
+          sudo apt-get install -y build-essential cmake libvulkan-dev glslang-tools glslc spirv-headers spirv-tools
+
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: ${{ github.event.inputs.llama_cpp_version || 'master' }}
+
+      - name: Build binary with Vulkan GPU support
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_STATIC=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_AVX=ON \
+            -DGGML_AVX2=ON \
+            -DGGML_FMA=ON \
+            -DGGML_F16C=ON \
+            -DGGML_VULKAN=ON \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_SERVER_WEBUI=OFF
+          cmake --build build --config Release --target llama-server -j $(nproc)
+
+      - name: Verify binary
+        run: |
+          ldd build/bin/llama-server || echo "Static binary (expected)"
+          ./build/bin/llama-server --version
+          strip build/bin/llama-server
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-server-linux-x64
+          path: build/bin/llama-server
+          retention-days: 7
+
+  build-macos-arm64:
+    runs-on: macos-14  # M1/M2/M3 runner
+    steps:
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: ${{ github.event.inputs.llama_cpp_version || 'master' }}
+
+      - name: Build binary with Metal GPU support
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_STATIC=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_METAL=ON \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_SERVER_WEBUI=OFF
+          cmake --build build --config Release --target llama-server -j $(sysctl -n hw.ncpu)
+
+      - name: Verify binary
+        run: |
+          otool -L build/bin/llama-server
+          ./build/bin/llama-server --version
+          strip build/bin/llama-server
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-server-macos-arm64
+          path: build/bin/llama-server
+          retention-days: 7
+
+  build-macos-x64:
+    runs-on: macos-15  # Cross-compile for Intel from ARM runner
+    steps:
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: ${{ github.event.inputs.llama_cpp_version || 'master' }}
+
+      - name: Install x86_64 OpenSSL for cross-compilation
+        run: |
+          arch -x86_64 /usr/local/homebrew/bin/brew install openssl@3 2>/dev/null || true
+          # Fallback: install via universal approach
+          if [ ! -d "/usr/local/opt/openssl@3" ]; then
+            arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || true
+            arch -x86_64 /usr/local/bin/brew install openssl@3 || true
+          fi
+
+      - name: Build binary for x86_64 (CPU only, no Metal on Intel Macs)
+        run: |
+          OPENSSL_X64="/usr/local/opt/openssl@3"
+          CMAKE_EXTRA=""
+          if [ -d "$OPENSSL_X64" ]; then
+            CMAKE_EXTRA="-DOPENSSL_ROOT_DIR=$OPENSSL_X64"
+          fi
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_STATIC=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_AVX=ON \
+            -DGGML_AVX2=ON \
+            -DGGML_FMA=ON \
+            -DGGML_F16C=ON \
+            -DGGML_METAL=OFF \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_SERVER_WEBUI=OFF \
+            $CMAKE_EXTRA
+          cmake --build build --config Release --target llama-server -j $(sysctl -n hw.ncpu)
+
+      - name: Verify binary
+        run: |
+          file build/bin/llama-server
+          otool -L build/bin/llama-server
+          strip build/bin/llama-server
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-server-macos-x64
+          path: build/bin/llama-server
+          retention-days: 7
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Setup MSVC
+        uses: microsoft/setup-msbuild@v1.1
+
+      - name: Install Vulkan SDK
+        uses: jakoch/install-vulkan-sdk-action@v1.0.0
+        with:
+          vulkan_version: 1.4.309.0
+          install_runtime: false
+          cache: true
+          # stripdown removes SPIRV-Headers, which llama.cpp's Vulkan backend
+          # now requires (find_package(SPIRV-Headers)). Keep the full SDK.
+          stripdown: false
+
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: ${{ github.event.inputs.llama_cpp_version || 'master' }}
+
+      # The LunarG Vulkan SDK doesn't ship a SPIRV-Headers cmake config where
+      # llama.cpp's find_package(SPIRV-Headers) looks, so provide it from source
+      # (header-only — fast). Tag matches the installed Vulkan SDK.
+      - name: Provide SPIRV-Headers
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch vulkan-sdk-1.4.309.0 https://github.com/KhronosGroup/SPIRV-Headers.git spirv-headers-src
+          cmake -B spirv-headers-src/build -S spirv-headers-src -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/spirv-prefix"
+          cmake --build spirv-headers-src/build --target install --config Release
+
+      - name: Build binary with Vulkan GPU support
+        run: |
+          cmake -B build `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_PREFIX_PATH="${{ github.workspace }}/spirv-prefix" `
+            -DBUILD_SHARED_LIBS=OFF `
+            -DGGML_STATIC=ON `
+            -DGGML_NATIVE=OFF `
+            -DGGML_AVX=ON `
+            -DGGML_AVX2=ON `
+            -DGGML_FMA=ON `
+            -DGGML_F16C=ON `
+            -DGGML_VULKAN=ON `
+            -DLLAMA_CURL=OFF `
+            -DLLAMA_SERVER_WEBUI=OFF
+          cmake --build build --config Release --target llama-server
+
+      - name: Verify binary
+        run: |
+          .\build\bin\Release\llama-server.exe --version
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-server-windows-x64
+          path: build/bin/Release/llama-server.exe
+          retention-days: 7
+
+  # ── Optional CUDA engine builds ──────────────────────────────────────
+  # Downloaded on demand by NVIDIA users (Settings → Engines), never
+  # bundled in installers. Dynamic CUDA runtime: each zip ships
+  # llama-server plus the cudart/cublas libraries beside it ($ORIGIN
+  # rpath on Linux; exe-dir DLL search on Windows).
+  # CUDA 12.9, NOT 13: CUDA 13 drops Pascal (sm_61 - the GTX 10xx cards).
+  # Driver floor stays R525+ via CUDA 12 minor-version compatibility (all
+  # archs get SASS in the fatbin - no PTX JIT dependency). Arch list =
+  # Pascal (61) through Hopper (90) + Blackwell consumer (120, RTX 50xx).
+  # sm_121 (DGX Spark) is a separate future build.
+  build-linux-cuda:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Install CUDA toolkit 12.9 (NVIDIA apt repo)
+        run: |
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y cuda-nvcc-12-9 cuda-cudart-dev-12-9 libcublas-dev-12-9
+          echo "/usr/local/cuda-12.9/bin" >> $GITHUB_PATH
+
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: ${{ github.event.inputs.llama_cpp_version || 'master' }}
+
+      - name: Build binary with CUDA support
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_NATIVE=OFF \
+            -DGGML_AVX=ON \
+            -DGGML_AVX2=ON \
+            -DGGML_FMA=ON \
+            -DGGML_F16C=ON \
+            -DGGML_CUDA=ON \
+            -DCMAKE_CUDA_ARCHITECTURES="61;70;75;80;86;89;90;120" \
+            -DCMAKE_BUILD_RPATH='$ORIGIN' \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_SERVER_WEBUI=OFF
+          cmake --build build --config Release --target llama-server -j $(nproc)
+
+      - name: Package with CUDA runtime libraries
+        run: |
+          mkdir -p pkg
+          cp build/bin/llama-server pkg/
+          strip pkg/llama-server
+          # Runtime libs the binary needs beside it ($ORIGIN rpath).
+          CUDA_LIB=/usr/local/cuda-12.9/targets/x86_64-linux/lib
+          for lib in libcudart.so.12 libcublas.so.12 libcublasLt.so.12; do
+            cp -L "$CUDA_LIB/$lib" pkg/
+          done
+          # Sanity: everything must resolve from the packaged libs EXCEPT
+          # libcuda.so.1 - that's the NVIDIA DRIVER library, which lives on
+          # the user's machine and is correctly absent here (no GPU on the
+          # runner, which is also why the binary can't be executed in CI).
+          cd pkg
+          missing=$(LD_LIBRARY_PATH=. ldd llama-server | grep "not found" | grep -v "libcuda.so.1" || true)
+          if [ -n "$missing" ]; then echo "❌ unresolved libraries:"; echo "$missing"; exit 1; fi
+          test "$(wc -c < llama-server)" -gt 5000000 || { echo "❌ binary too small"; exit 1; }
+          ls -lh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-server-cuda-linux-x64
+          path: pkg/*
+          retention-days: 7
+
+  build-windows-cuda:
+    # windows-2022, NOT windows-latest: newer images ship a Visual Studio
+    # that CUDA 12.x's nvcc rejects outright ("unsupported Microsoft Visual
+    # Studio version", and -allow-unsupported-compiler doesn't reach CMake's
+    # compiler-identification step). The 2022 image's VS 2022 toolchain is
+    # supported by CUDA 12.9.
+    runs-on: windows-2022
+    steps:
+      # Ninja generator, NOT Visual Studio: the VS generator needs CUDA's
+      # MSBuild integration ("No CUDA toolset found" on runner images);
+      # Ninja drives nvcc + cl directly. msvc-dev-cmd provides cl in PATH.
+      - name: Setup MSVC dev environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install CUDA toolkit 12.9
+        uses: Jimver/cuda-toolkit@v0.2.35
+        with:
+          cuda: '12.9.1'
+          method: 'local'
+
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: ${{ github.event.inputs.llama_cpp_version || 'master' }}
+
+      - name: Build binary with CUDA support
+        run: |
+          cmake -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DBUILD_SHARED_LIBS=OFF `
+            -DGGML_NATIVE=OFF `
+            -DGGML_AVX=ON `
+            -DGGML_AVX2=ON `
+            -DGGML_FMA=ON `
+            -DGGML_F16C=ON `
+            -DGGML_CUDA=ON `
+            -DCMAKE_CUDA_FLAGS="-allow-unsupported-compiler" `
+            -DCMAKE_CUDA_ARCHITECTURES="61;70;75;80;86;89;90;120" `
+            -DLLAMA_CURL=OFF `
+            -DLLAMA_SERVER_WEBUI=OFF
+          cmake --build build --target llama-server
+
+      - name: Package with CUDA runtime DLLs
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path pkg | Out-Null
+          Copy-Item build\bin\llama-server.exe pkg\
+          # Runtime DLLs beside the exe (standard exe-dir search order).
+          # No execution check: the runner has no NVIDIA driver (nvcuda.dll),
+          # so the binary can't run here - presence + size checks only.
+          $cudaBin = "$env:CUDA_PATH\bin"
+          foreach ($dll in @("cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll")) {
+            Copy-Item "$cudaBin\$dll" pkg\
+          }
+          if ((Get-Item pkg\llama-server.exe).Length -lt 5MB) { Write-Error "binary too small"; exit 1 }
+          foreach ($dll in @("cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll")) {
+            if (-not (Test-Path "pkg\$dll")) { Write-Error "missing $dll"; exit 1 }
+          }
+          Get-ChildItem pkg | Format-Table Name, Length
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-server-cuda-windows-x64
+          path: pkg/*
+          retention-days: 7
+
+  create-release:
+    needs: [build-linux, build-macos-arm64, build-macos-x64, build-windows, build-linux-cuda, build-windows-cuda]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: binaries
+
+      - name: Create release tag
+        id: tag
+        run: |
+          # Deterministic tag = llama-<version> (no timestamp) so the app build
+          # can PIN to an exact release. Build a specific llama.cpp tag, not
+          # 'master', so the bundled engine is reproducible until we bump.
+          LLAMA_VERSION="${{ github.event.inputs.llama_cpp_version || 'master' }}"
+          TAG_NAME="llama-${LLAMA_VERSION}"
+          echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
+          echo "llama_version=${LLAMA_VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Rename binaries
+        run: |
+          mkdir -p release
+          mv binaries/llama-server-linux-x64/llama-server release/llama-server-x86_64-unknown-linux-gnu
+          mv binaries/llama-server-macos-arm64/llama-server release/llama-server-aarch64-apple-darwin
+          mv binaries/llama-server-macos-x64/llama-server release/llama-server-x86_64-apple-darwin
+          mv binaries/llama-server-windows-x64/llama-server.exe release/llama-server-x86_64-pc-windows-msvc.exe
+          chmod +x release/llama-server-*
+          # Optional CUDA engine zips (binary + CUDA runtime libs, downloaded
+          # on demand by the app - never bundled in installers).
+          V="${{ steps.tag.outputs.llama_version }}"
+          chmod +x binaries/llama-server-cuda-linux-x64/llama-server
+          (cd binaries/llama-server-cuda-linux-x64 && zip -9 -j "$GITHUB_WORKSPACE/release/llama-server-cuda-${V}-x86_64-unknown-linux-gnu.zip" ./*)
+          (cd binaries/llama-server-cuda-windows-x64 && zip -9 -j "$GITHUB_WORKSPACE/release/llama-server-cuda-${V}-x86_64-pc-windows-msvc.zip" ./*)
+          ls -lh release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.tag.outputs.tag_name }}
+          name: "llama.cpp ${{ steps.tag.outputs.llama_version }} - GPU Accelerated Binaries"
+          body: |
+            Static llama-server binaries compiled from llama.cpp ${{ steps.tag.outputs.llama_version }}
+
+            **Built for:**
+            - Linux x86_64 (Vulkan GPU + CPU fallback)
+            - macOS Apple Silicon (Metal GPU)
+            - macOS Intel (CPU only)
+            - Windows x64 (Vulkan GPU + CPU fallback)
+
+            **GPU Support:**
+            - Linux & Windows: Vulkan — works with NVIDIA, AMD, and Intel GPUs
+            - macOS ARM: Metal — native Apple Silicon acceleration
+            - macOS Intel: CPU only (no GPU acceleration)
+            - All platforms fall back to CPU if no compatible GPU is found
+
+            **Optional CUDA engine (llama-server-cuda-*.zip):**
+            - Faster generation on NVIDIA GPUs (Pascal through Blackwell), CUDA 12.9 runtime included, drivers R525+
+            - Downloaded on demand from Settings — never bundled in installers
+
+            **Configuration:**
+            - WebUI excluded (-DLLAMA_SERVER_WEBUI=OFF)
+            - No CURL dependency (-DLLAMA_CURL=OFF)
+
+            Built on: $(date -u)
+          files: release/*
+          draft: false
+          prerelease: false

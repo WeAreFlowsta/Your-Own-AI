@@ -1,0 +1,515 @@
+import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
+import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { getButtonUrl } from "@flowsta/login-button";
+import LiquidMetalButton from "./LiquidMetalButton";
+import ConfirmModal from "./ConfirmModal";
+import { useAiDataActions } from "../contexts/AiDataContext";
+
+interface VaultStatus {
+  installed: boolean;
+  unlocked: boolean;
+}
+
+interface FlowstaSession {
+  signed_in: boolean;
+  agent_pub_key: string | null;
+  tier: string | null;
+  linked: boolean | null;
+  display_name: string | null;
+  web_username: string | null;
+  profile_picture: string | null;
+}
+
+interface EscrowStatus {
+  state: "synced" | "conflict" | "unlinked" | "vault_unavailable" | "error";
+  local_conversations: number | null;
+  error: string | null;
+}
+
+interface RestoreStats {
+  ais_added: number;
+  ais_replaced: number;
+  conversations_restored: number;
+  records_restored: number;
+  conversations_preserved: number;
+  records_preserved: number;
+  conversations_skipped: number;
+  memory_facts_restored: boolean;
+  thumbnails_restored: number;
+}
+
+const VAULT_DOWNLOAD_URL = "https://flowsta.com/vault";
+
+/**
+ * Flowsta account + backups settings. Vault detection, sign in with
+ * Flowsta (via Vault's approval dialog), plan + Link-my-plan, and the
+ * backups/recovery block. Local features never require any of it.
+ *
+ * `section` renders one half so the settings page can place the account
+ * card first and "Backups & recovery" as its own section below: the two
+ * halves share this component's state logic, so they stay one component
+ * rendered twice rather than a copy-paste split.
+ */
+interface FlowstaAccountProps {
+  section?: "account" | "backups" | "all";
+}
+
+export default component$<FlowstaAccountProps>((props) => {
+  const section = props.section ?? "all";
+  const vault = useSignal<VaultStatus | null>(null);
+  const session = useSignal<FlowstaSession | null>(null);
+  const busy = useSignal(false);
+  const error = useSignal("");
+  const escrow = useSignal<EscrowStatus | null>(null);
+  const escrowBusy = useSignal(false);
+  // Which confirmation dialog is open, if any.
+  const confirmAction = useSignal<"restore" | "keep_local" | "restore_data" | null>(null);
+  const restarting = useSignal(false);
+  const restoreDataBusy = useSignal(false);
+  const restoreDataResult = useSignal("");
+  const { refreshUserAis } = useAiDataActions();
+
+  const syncEscrow = $(async () => {
+    if (escrowBusy.value) return;
+    escrowBusy.value = true;
+    try {
+      escrow.value = await invoke<EscrowStatus>("vault_escrow_sync");
+    } catch (e) {
+      console.warn("[Flowsta] escrow sync failed:", e);
+    } finally {
+      escrowBusy.value = false;
+    }
+  });
+
+  const refresh = $(async () => {
+    try {
+      const [v, s] = await Promise.all([
+        invoke<VaultStatus>("flowsta_vault_status"),
+        invoke<FlowstaSession>("flowsta_session"),
+      ]);
+      vault.value = v;
+      session.value = s;
+      // Reconcile the transcript-key escrow whenever we're signed in. The
+      // backend never overwrites a differing Vault copy - a mismatch just
+      // reports "conflict" for the panel below.
+      if (s.signed_in) await syncEscrow();
+    } catch (e) {
+      console.warn("[Flowsta] status check failed:", e);
+    }
+  });
+
+  const handleRestore = $(async () => {
+    const count = escrow.value?.local_conversations ?? 0;
+    try {
+      restarting.value = true;
+      await invoke("vault_escrow_restore", { acceptDataLoss: count > 0 });
+      // On success the app restarts; in dev builds it exits instead.
+    } catch (e) {
+      restarting.value = false;
+      error.value = `Restore failed: ${String(e)}`;
+    } finally {
+      confirmAction.value = null;
+    }
+  });
+
+  // Replay conversations (and any missing AIs) from the Vault "latest"
+  // backup onto this device. Idempotent on the backend - conversations
+  // already here are skipped, so re-running is always safe.
+  const handleRestoreData = $(async () => {
+    confirmAction.value = null;
+    restoreDataBusy.value = true;
+    restoreDataResult.value = "";
+    error.value = "";
+    try {
+      const stats = await invoke<RestoreStats>("vault_restore_conversations");
+      const parts: string[] = [];
+      if (stats.conversations_restored > 0) {
+        parts.push(
+          `Restored ${stats.conversations_restored} conversation${stats.conversations_restored === 1 ? "" : "s"} (${stats.records_restored} records).`
+        );
+      }
+      const aisBack = stats.ais_added + stats.ais_replaced;
+      if (aisBack > 0) {
+        parts.push(`${aisBack} AI${aisBack === 1 ? "" : "s"} brought back.`);
+      }
+      if (stats.memory_facts_restored) {
+        parts.push("Your Memory profile facts restored.");
+      }
+      if (stats.conversations_preserved > 0) {
+        parts.push(
+          `${stats.conversations_preserved} conversation${stats.conversations_preserved === 1 ? "" : "s"} from deleted AIs preserved - kept in your data and backups, not shown in the app.`
+        );
+      }
+      if (stats.conversations_restored === 0 && stats.conversations_preserved === 0) {
+        parts.push(
+          stats.conversations_skipped > 0
+            ? "Everything in your Vault backup is already on this device."
+            : "No conversations found in your Vault backup."
+        );
+      }
+      restoreDataResult.value = parts.join(" ");
+      await refreshUserAis();
+    } catch (e) {
+      const msg = String(e);
+      if (msg.includes("key_mismatch")) {
+        error.value =
+          "Your Vault backup was made under a different transcript key. Restore the key from Vault first (above), then try again.";
+      } else if (msg.includes("no_backup")) {
+        error.value = "No conversation backup found in your Vault yet.";
+      } else if (msg.includes("vault_unavailable")) {
+        error.value = "Flowsta Vault isn't running - start it and try again.";
+      } else {
+        error.value = `Restore failed: ${msg}`;
+      }
+    } finally {
+      restoreDataBusy.value = false;
+    }
+  });
+
+  const handleKeepLocal = $(async () => {
+    try {
+      escrow.value = await invoke<EscrowStatus>("vault_escrow_keep_local");
+    } catch (e) {
+      error.value = `Could not update the Vault backup: ${String(e)}`;
+    } finally {
+      confirmAction.value = null;
+    }
+  });
+
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async ({ cleanup }) => {
+    await refresh();
+    // Live-poll Vault state until signed in — installing or unlocking
+    // Vault updates this section without restarting the app.
+    const interval = setInterval(async () => {
+      // Don't poll while a sign-in is in flight — the authenticate call
+      // holds a long request open on Vault, and concurrent /status polls
+      // pile up against it. Also stop once signed in.
+      if (!session.value?.signed_in && !busy.value) await refresh();
+    }, 5000);
+    cleanup(() => clearInterval(interval));
+  });
+
+  const handleSignIn = $(async () => {
+    busy.value = true;
+    error.value = "";
+    try {
+      session.value = await invoke<FlowstaSession>("flowsta_sign_in");
+    } catch (e) {
+      const msg = String(e);
+      if (msg.includes("vault_locked")) {
+        error.value = "Your Vault is locked — unlock it and try again.";
+      } else if (msg.includes("vault_not_found")) {
+        error.value = "Flowsta Vault isn't running — start it and try again.";
+      } else if (msg.includes("vault_interrupted")) {
+        error.value =
+          "Vault stopped responding before sign-in finished (it may have locked). Unlock Vault and try again.";
+      } else if (msg.includes("denied") || msg.includes("rejected") || msg.includes("user_denied")) {
+        error.value = "Sign-in was declined in Vault.";
+      } else {
+        error.value = `Sign-in failed: ${msg}`;
+      }
+      // Re-probe so the section reflects Vault's real current state
+      // (locked / gone) and offers the right next action.
+      await refresh();
+    } finally {
+      busy.value = false;
+      await refresh();
+    }
+  });
+
+  const handleSignOut = $(async () => {
+    await invoke("flowsta_sign_out");
+    await refresh();
+  });
+
+  const handleLinkPlan = $(async () => {
+    try {
+      const url = await invoke<string>("flowsta_link_url");
+      await openUrl(url);
+    } catch (e) {
+      error.value = String(e);
+    }
+  });
+
+  const signedIn = () => !!session.value?.signed_in;
+
+  return (
+    <section class="bg-[var(--bg-card)] rounded-2xl p-6 border border-[var(--border-subtle)]">
+      {section !== "backups" && (
+        <>
+      <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela mb-1">
+        Your Flowsta Account
+      </h2>
+      <p class="text-sm text-[var(--text-secondary)] mb-4">
+        Everything local works without an account, forever. Connecting your
+        Flowsta Vault — on this device, no passwords on servers — adds:
+      </p>
+      {!signedIn() && (
+        <ul class="mb-4 space-y-1.5 text-sm text-[var(--text-secondary)]">
+          <li class="flex items-start gap-2">
+            <span class="text-emerald-400 mt-0.5">✓</span>
+            <span>
+              Your AI world backed up automatically — conversations, memory,
+              and AI personalities — with one-click recovery if you ever lose
+              this device.
+            </span>
+          </li>
+          <li class="flex items-start gap-2">
+            <span class="text-emerald-400 mt-0.5">✓</span>
+            <span>
+              Exports signed with your identity, so anyone can verify they
+              really came from you.
+            </span>
+          </li>
+          <li class="flex items-start gap-2">
+            <span class="text-emerald-400 mt-0.5">✓</span>
+            <span>Online frontier models, when you want them.</span>
+          </li>
+        </ul>
+      )}
+
+      {error.value && (
+        <p class="mb-4 rounded-lg border border-red-800 bg-red-900/30 p-3 text-sm text-red-300">
+          {error.value}
+        </p>
+      )}
+
+      {!vault.value ? (
+        <p class="text-sm text-[var(--text-muted)]">Checking for Flowsta Vault…</p>
+      ) : !vault.value.installed ? (
+        <div class="space-y-3">
+          <p class="text-sm text-[var(--text-secondary)]">
+            Flowsta Vault isn't installed (or isn't running). Vault holds
+            your Flowsta identity on your own device — no passwords on
+            servers — and is how Your Own AI signs you in.
+          </p>
+          <LiquidMetalButton onClick$={() => openUrl(VAULT_DOWNLOAD_URL)}>
+            <span class="px-5 py-2.5 text-sm">Get Flowsta Vault</span>
+          </LiquidMetalButton>
+          <button
+            class="ml-3 text-sm text-[var(--text-link)] hover:underline"
+            onClick$={refresh}
+          >
+            I've installed it — check again
+          </button>
+        </div>
+      ) : !session.value?.signed_in ? (
+        <div class="space-y-3">
+          {!vault.value.unlocked && (
+            <p class="text-sm text-amber-300">
+              Vault is locked — unlock it, then sign in.
+            </p>
+          )}
+          <button
+            type="button"
+            onClick$={handleSignIn}
+            disabled={busy.value || !vault.value.unlocked}
+            aria-label="Sign in with Flowsta"
+            class="block cursor-pointer transition-opacity hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-50"
+            style={{ border: "none", background: "transparent", padding: "0" }}
+          >
+            <img
+              src={getButtonUrl("dark", "pill")}
+              alt="Sign in with Flowsta"
+              width={175}
+              height={40}
+            />
+          </button>
+          <p class="text-xs text-[var(--text-muted)]">
+            {busy.value
+              ? "Waiting for Vault approval…"
+              : "Vault will ask you to approve the sign-in."}
+          </p>
+        </div>
+      ) : (
+        <div class="space-y-4">
+          <div class="flex items-center justify-between rounded-lg bg-[var(--bg-main)] p-4">
+            <div class="flex min-w-0 items-center gap-3">
+              {session.value.profile_picture ? (
+                <img
+                  src={session.value.profile_picture}
+                  alt=""
+                  width={40}
+                  height={40}
+                  class="h-10 w-10 shrink-0 rounded-full object-cover"
+                />
+              ) : (
+                <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--bg-button-secondary)] font-varela text-white">
+                  {(session.value.display_name || session.value.web_username || "?").charAt(0).toUpperCase()}
+                </div>
+              )}
+              <div class="min-w-0">
+                <p class="truncate text-sm text-[var(--text-primary)]">
+                  {session.value.display_name || "Signed in via Vault"}
+                  {session.value.web_username && (
+                    <span class="ml-2 text-xs text-[var(--text-muted)]">@{session.value.web_username}</span>
+                  )}
+                </p>
+                <p class="truncate font-mono text-xs text-[var(--text-muted)]">
+                  {session.value.agent_pub_key?.slice(0, 12)}…{session.value.agent_pub_key?.slice(-6)}
+                </p>
+              </div>
+            </div>
+            <span
+              class={`rounded-full px-3 py-1 text-xs font-medium ${
+                session.value.tier && session.value.tier !== "free"
+                  ? "bg-emerald-900/50 text-emerald-300"
+                  : "bg-[var(--bg-input)] text-[var(--text-secondary)]"
+              }`}
+            >
+              {(session.value.tier || "free").toUpperCase()}
+            </span>
+          </div>
+
+          {session.value.linked === false && (
+            <div class="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] p-4">
+              <p class="text-sm text-[var(--text-primary)]">
+                Link this device to your plan
+              </p>
+              <p class="mt-1 text-xs text-[var(--text-muted)]">
+                To use online models here, link this device to your
+                yourownai.net plan (or subscribe) in the browser — it takes a
+                few seconds.
+              </p>
+              <div class="mt-3">
+                <LiquidMetalButton onClick$={handleLinkPlan}>
+                  <span class="px-5 py-2 text-sm">Link my plan</span>
+                </LiquidMetalButton>
+                <button
+                  class="ml-3 text-sm text-[var(--text-link)] hover:underline"
+                  onClick$={refresh}
+                >
+                  I've linked it — refresh
+                </button>
+              </div>
+            </div>
+          )}
+
+          {escrow.value?.state === "conflict" && (
+            <div class="rounded-lg border border-amber-700/60 bg-amber-900/20 p-4">
+              <p class="text-sm font-medium text-amber-200">
+                Your Vault holds a different transcript key
+              </p>
+              <p class="mt-1 text-xs text-[var(--text-secondary)]">
+                {(escrow.value.local_conversations ?? 0) > 0
+                  ? `This usually means this device was set up fresh while your Vault kept the key from a previous install. This device currently has ${escrow.value.local_conversations} conversation record${escrow.value.local_conversations === 1 ? "" : "s"} under its own key - restoring the Vault key deletes them.`
+                  : "This usually means this device was set up fresh while your Vault kept the key from a previous install. Nothing has been written under this device's key yet, so restoring is safe."}
+              </p>
+              <div class="mt-3 flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
+                <button
+                  class="rounded-full border border-[var(--border-subtle)] px-5 py-2 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)]"
+                  onClick$={() => (confirmAction.value = "keep_local")}
+                >
+                  Keep this device's key
+                </button>
+                <LiquidMetalButton onClick$={() => (confirmAction.value = "restore")}>
+                  <span class="px-5 py-2 text-sm">Restore key from Vault</span>
+                </LiquidMetalButton>
+              </div>
+            </div>
+          )}
+
+          <button
+            class="text-sm text-[var(--text-muted)] underline hover:text-[var(--text-secondary)]"
+            onClick$={handleSignOut}
+          >
+            Sign out
+          </button>
+        </div>
+      )}
+        </>
+      )}
+
+      {/* Backups & recovery — the CAL story. The recovery KEY is escrowed
+          automatically when signed in; the copy stays precise about which
+          is which. Standalone section when `section === "backups"`. */}
+      {section !== "account" && (
+      <div class={section === "backups" ? "" : "mt-6 border-t border-[var(--border-subtle)] pt-4"}>
+        {section === "backups" ? (
+          <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela mb-1">
+            Backups & recovery
+          </h2>
+        ) : (
+          <h3 class="text-sm font-semibold text-[var(--text-primary)]">
+            Backups & data export
+          </h3>
+        )}
+        <p class="mt-1 text-sm text-[var(--text-secondary)]">
+          Your AIs' conversations live on this device, encrypted with a key
+          only you hold (you can export the recovery key from any AI's
+          Memory page). While you're signed in, Your Own AI automatically
+          backs up that key AND your conversations to your Flowsta Vault -
+          and Vault's "Download Export" hands you all of it, readable, with
+          the keys, yours to take anywhere. No lock-in, by design.
+        </p>
+        {!signedIn() && section === "backups" && (
+          <p class="mt-2 text-xs text-[var(--text-muted)]">
+            Connect your Flowsta Vault above to turn on automatic backup.
+          </p>
+        )}
+        {signedIn() && escrow.value?.state === "synced" && (
+          <p class="mt-2 text-xs text-emerald-400">
+            ✓ Recovery key and conversations back up to your Vault
+            automatically.
+          </p>
+        )}
+        {signedIn() && (
+          <div class="mt-3">
+            <button
+              class="rounded-full border border-[var(--border-subtle)] px-5 py-2 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)] disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={restoreDataBusy.value}
+              onClick$={() => (confirmAction.value = "restore_data")}
+            >
+              {restoreDataBusy.value
+                ? "Restoring conversations…"
+                : "Restore conversations from Vault"}
+            </button>
+            <p class="mt-2 text-xs text-[var(--text-muted)]">
+              New device, or something missing? This brings the conversations
+              (and AIs) in your Vault backup onto this device. Nothing here is
+              deleted or overwritten.
+            </p>
+            {restoreDataResult.value && (
+              <p class="mt-2 text-xs text-emerald-400">{restoreDataResult.value}</p>
+            )}
+          </div>
+        )}
+      </div>
+      )}
+
+      <ConfirmModal
+        isOpen={confirmAction.value === "restore"}
+        title="Restore transcript key from Vault?"
+        message={
+          (escrow.value?.local_conversations ?? 0) > 0
+            ? `Your Own AI will switch to the key stored in your Vault and restart. The ${escrow.value?.local_conversations} conversation record${escrow.value?.local_conversations === 1 ? "" : "s"} on this device will be permanently deleted - they belong to this device's current key. That key is saved to a local file first, and your AIs and downloaded models stay untouched.`
+            : "Your Own AI will switch to the key stored in your Vault and restart. Your AIs and downloaded models stay untouched, and this device's current key is saved to a local file first."
+        }
+        confirmLabel={restarting.value ? "Restarting…" : "Restore & restart"}
+        variant={(escrow.value?.local_conversations ?? 0) > 0 ? "danger" : "default"}
+        busy={restarting.value}
+        onConfirm$={handleRestore}
+        onCancel$={() => (confirmAction.value = null)}
+      />
+      <ConfirmModal
+        isOpen={confirmAction.value === "restore_data"}
+        title="Restore conversations from Vault?"
+        message="Your Own AI will bring the conversations stored in your Vault backup onto this device, and add any AIs from the backup that aren't here yet. Conversations already on this device are skipped - nothing is deleted or overwritten."
+        confirmLabel="Restore conversations"
+        onConfirm$={handleRestoreData}
+        onCancel$={() => (confirmAction.value = null)}
+      />
+      <ConfirmModal
+        isOpen={confirmAction.value === "keep_local"}
+        title="Keep this device's key?"
+        message="The key stored in your Vault will be replaced with this device's key. Any transcripts created under the old key stay unreadable without it, so a copy of the old key is saved to a local file on this device before the switch."
+        confirmLabel="Replace Vault backup"
+        variant="danger"
+        onConfirm$={handleKeepLocal}
+        onCancel$={() => (confirmAction.value = null)}
+      />
+    </section>
+  );
+});

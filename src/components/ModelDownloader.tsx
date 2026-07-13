@@ -1,0 +1,1143 @@
+/**
+ * Model Downloader Component (Qwik)
+ *
+ * Allows users to browse and download AI models from Hugging Face.
+ * Shows recommendations based on system RAM and provides progress tracking.
+ *
+ * UX: Models grouped by category with badges, progressive disclosure of
+ * technical details, and a "Recommended for You" highlight.
+ */
+
+import {
+  component$,
+  useStore,
+  useSignal,
+  useVisibleTask$,
+  $,
+} from '@builder.io/qwik';
+import {
+  modelFamilies,
+  VISION_PROJECTORS,
+  type ModelVariant,
+  type ModelFamily,
+  getBestVariantForSystem,
+  isVariantSuitable,
+  isFamilyRunnable,
+  getGPUStatus,
+  getModality,
+  getRunMode,
+  formatContext,
+  type Capability,
+  traitInfo,
+  capabilityInfo,
+} from '../data/recommended-models';
+import { modelManager, type DownloadProgress } from '../utils/modelManager';
+import {
+  LuHardDriveDownload,
+  LuCheck,
+  LuTrash2,
+  LuChevronDown,
+  LuX,
+  LuPlus,
+  LuInfo,
+  LuPauseCircle,
+  LuPlayCircle,
+} from '@qwikest/icons/lucide';
+import { getPausedModels, setModelPaused } from '../utils/modelPrefs';
+import { LiquidMetalBorder } from './LiquidMetalBorder';
+import LiquidMetalButton from './LiquidMetalButton';
+import { Callout } from './Callout';
+import type { LocalModel } from '../types';
+import { formatModelDisplayName } from '../utils/modelNameFormatter';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import DeleteModelModal from './DeleteModelModal';
+import CustomModelModal from './CustomModelModal';
+import { useAiData, useAiDataActions } from '../contexts/AiDataContext';
+
+/** Shape persisted to localStorage while a download is in progress */
+interface ActiveDownload {
+  familyId: string;       // model family id, or 'custom'
+  familyName: string;
+  filename: string;
+  isFirstModel: boolean;
+  startedAt: number;
+}
+
+const ACTIVE_DOWNLOAD_KEY = 'activeModelDownload';
+
+export interface SystemInfo {
+  total_memory_gb: number;
+  used_memory_gb: number;
+  cpu_count: number;
+  os_name: string;
+  os_version: string;
+  gpu_name: string | null;
+  total_vram_gb: number | null;
+}
+
+interface ModelDownloaderProps {
+  systemInfo: SystemInfo | null;
+  onModelSelected$?: (filename: string) => void;
+  onClose$?: () => void;
+}
+
+/**
+ * Convert technical error messages to user-friendly messages
+ */
+function getUserFriendlyErrorMessage(error: unknown): string {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+
+  if (errorMessage.includes('No space left on device') || errorMessage.includes('os error 28')) {
+    return 'Download Failed: Please free up some disk space and try again';
+  }
+  if (errorMessage.includes('Network error') || errorMessage.includes('Failed to fetch')) {
+    return 'Download Failed: Network connection error. Please check your internet connection';
+  }
+  if (errorMessage.includes('Permission denied') || errorMessage.includes('os error 13')) {
+    return 'Download Failed: Permission denied. Please check file permissions';
+  }
+  if (errorMessage.includes('401') || errorMessage.includes('403') || errorMessage.includes('Unauthorized')) {
+    return 'Download Failed: The model file is not accessible. This model may have been removed or requires authentication';
+  }
+  if (errorMessage.includes('404') || errorMessage.includes('Not Found')) {
+    return 'Download Failed: Model file not found. The download link may be broken';
+  }
+  return errorMessage.startsWith('Download Failed:') ? errorMessage : `Download Failed: ${errorMessage}`;
+}
+
+export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo }) => {
+  const aiData = useAiData();
+  const {
+    updateAllAisWithFirstModel,
+    updateCustomAi,
+    refreshUserAis,
+  } = useAiDataActions();
+
+  const store = useStore({
+    downloadedModels: [] as LocalModel[],
+    downloading: null as string | null,
+    downloadProgress: null as DownloadProgress | null,
+    error: null as string | null,
+    modelsDirectory: '',
+    successMessage: null as string | null,
+    selectedVariants: {} as Record<string, ModelVariant>,
+    deleteModalOpen: false,
+    modelToDelete: null as { filename: string; displayName: string } | null,
+    isDeleting: false,
+    customModelModalOpen: false,
+    openDropdowns: {} as Record<string, boolean>,
+    expandedDetails: {} as Record<string, boolean>,
+    selectedTask: 'all' as 'all' | Capability | 'vision',
+    sortBy: 'new' as 'new' | 'name-asc' | 'name-desc' | 'size-asc' | 'size-desc',
+    sortOpen: false,
+    showTooBig: false,
+    pausedModels: [] as string[],
+    // True until the first listModels() resolves, so the section can show a spinner
+    // instead of popping in late. Only the initial load flips this (set in finally).
+    loadingModels: true,
+  });
+
+  const successBannerRef = useSignal<HTMLDivElement>();
+
+  // Initialize selected variants based on system capabilities
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(() => {
+    const totalRAM = systemInfo?.total_memory_gb || 8;
+    const totalVRAM = systemInfo?.total_vram_gb || null;
+
+    const initialVariants: Record<string, ModelVariant> = {};
+    modelFamilies.forEach((family) => {
+      const bestVariant = getBestVariantForSystem(family, totalRAM, totalVRAM);
+      if (bestVariant) {
+        initialVariants[family.id] = bestVariant;
+      } else if (family.variants.length > 0) {
+        initialVariants[family.id] = family.variants[0];
+      }
+    });
+    store.selectedVariants = initialVariants;
+  });
+
+  // Load downloaded models and models directory
+  const loadModels = $(async () => {
+    try {
+      const models = await modelManager.listModels();
+      store.downloadedModels = models;
+    } catch (error) {
+      console.error('Failed to load models:', error);
+    } finally {
+      store.loadingModels = false;
+    }
+  });
+
+  const getModelsDir = $(async () => {
+    try {
+      const dir = await modelManager.getModelsDirectory();
+      store.modelsDirectory = dir;
+    } catch (error) {
+      console.error('Failed to get models directory:', error);
+    }
+  });
+
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(() => {
+    loadModels();
+    getModelsDir();
+    store.pausedModels = [...getPausedModels()];
+  });
+
+  // Pause/resume a downloaded model. Paused models stay on disk but are hidden
+  // from the AI model picker (Your AIs). Mirrors pausing an AI.
+  const handleTogglePause$ = $((filename: string) => {
+    const paused = !store.pausedModels.includes(filename);
+    setModelPaused(filename, paused);
+    store.pausedModels = paused
+      ? [...store.pausedModels, filename]
+      : store.pausedModels.filter((n) => n !== filename);
+  });
+
+  // Post-download setup: load model, update AIs if first model, show success
+  const finalizeDownload = $(async (filename: string, displayName: string, isFirstModel: boolean) => {
+    await loadModels();
+
+    if (isFirstModel) {
+      try {
+        await updateAllAisWithFirstModel(filename);
+        await refreshUserAis();
+      } catch (e) {
+        console.error('[ModelDownloader] Failed to update AIs:', e);
+      }
+    }
+
+    try {
+      await invoke('load_model', { filename, withVision: false, reason: "post-download" });
+    } catch (e) {
+      console.error('[ModelDownloader] Failed to load model:', e);
+    }
+
+    store.successMessage = displayName;
+    localStorage.setItem('completedModelDownload', JSON.stringify({ modelName: displayName, timestamp: Date.now() }));
+    localStorage.removeItem(ACTIVE_DOWNLOAD_KEY);
+    store.downloading = null;
+    store.downloadProgress = null;
+
+    setTimeout(() => { store.successMessage = null; }, 10000);
+  });
+
+  // On mount: check for completed or in-progress downloads
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ cleanup }) => {
+    // 1. Show recent completion banner (user navigated away and came back after download finished)
+    const completedDownload = localStorage.getItem('completedModelDownload');
+    if (completedDownload) {
+      try {
+        const info = JSON.parse(completedDownload);
+        if (Date.now() - info.timestamp < 300000) {
+          store.successMessage = info.modelName;
+          setTimeout(() => { store.successMessage = null; }, 10000);
+        }
+        localStorage.removeItem('completedModelDownload');
+      } catch {
+        localStorage.removeItem('completedModelDownload');
+      }
+    }
+
+    // 2. Check if a download is still in progress (user navigated away mid-download)
+    const activeRaw = localStorage.getItem(ACTIVE_DOWNLOAD_KEY);
+    if (!activeRaw) return;
+
+    let active: ActiveDownload;
+    try {
+      active = JSON.parse(activeRaw);
+    } catch {
+      localStorage.removeItem(ACTIVE_DOWNLOAD_KEY);
+      return;
+    }
+
+    // Stale check: if started more than 2 hours ago, assume it failed
+    if (Date.now() - active.startedAt > 2 * 60 * 60 * 1000) {
+      localStorage.removeItem(ACTIVE_DOWNLOAD_KEY);
+      return;
+    }
+
+    // Re-show downloading state
+    store.downloading = active.familyId;
+
+    // Listen for progress events for this download
+    const unlistenProgress = listen<{ filename: string; downloaded: number; total: number; percent: number }>(
+      'model-download-progress',
+      (event) => {
+        if (event.payload.filename === active.filename) {
+          store.downloadProgress = event.payload;
+        }
+      }
+    );
+
+    // Listen for completion
+    const unlistenComplete = listen<{ filename: string }>(
+      'model-download-complete',
+      (event) => {
+        if (event.payload.filename === active.filename) {
+          finalizeDownload(active.filename, active.familyName, active.isFirstModel);
+        }
+      }
+    );
+
+    // Check if model already appeared on disk (download finished while we were away)
+    modelManager.listModels().then((models) => {
+      const alreadyDone = models.some(m => m.name === active.filename);
+      if (alreadyDone) {
+        finalizeDownload(active.filename, active.familyName, active.isFirstModel);
+      }
+    });
+
+    cleanup(() => {
+      unlistenProgress.then(fn => fn());
+      unlistenComplete.then(fn => fn());
+    });
+  });
+
+  // Scroll success banner into view
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    track(() => store.successMessage);
+    if (store.successMessage && successBannerRef.value) {
+      successBannerRef.value.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    }
+  });
+
+  const handleDownload$ = $(async (familyId: string) => {
+    const variant = store.selectedVariants[familyId];
+    const family = modelFamilies.find((f) => f.id === familyId);
+    if (!variant || !family) return;
+
+    store.downloading = familyId;
+    store.error = null;
+    store.downloadProgress = null;
+    store.successMessage = null;
+
+    const modelsBeforeDownload = await modelManager.listModels();
+    const isFirstModel = modelsBeforeDownload.length === 0;
+    const displayName = `${family.name} ${variant.parameterCount}`;
+
+    // Persist active download so it survives page navigation
+    const activeDownload: ActiveDownload = {
+      familyId,
+      familyName: displayName,
+      filename: variant.filename,
+      isFirstModel,
+      startedAt: Date.now(),
+    };
+    localStorage.setItem(ACTIVE_DOWNLOAD_KEY, JSON.stringify(activeDownload));
+
+    try {
+      await modelManager.downloadModel(variant.downloadUrl, variant.filename, (progress) => {
+        store.downloadProgress = progress;
+      });
+
+      // A vision model is only half-installed without its projector (the "eyes").
+      // Pull the matching one too — paired by the same filename-prefix rule the
+      // conductor uses — so "download a vision model" actually enables vision.
+      if (getModality(family).in.includes('vision')) {
+        const vlc = variant.filename.toLowerCase();
+        const proj = VISION_PROJECTORS.find((p) => {
+          const key = p.filename.toLowerCase().split('-mmproj')[0];
+          return !!key && vlc.startsWith(key);
+        });
+        if (proj && !(await modelManager.isModelDownloaded(proj.filename))) {
+          store.downloadProgress = null;
+          await modelManager.downloadModel(proj.downloadUrl, proj.filename, (progress) => {
+            store.downloadProgress = progress;
+          });
+        }
+      }
+
+      await finalizeDownload(variant.filename, displayName, isFirstModel);
+    } catch (error) {
+      console.error('Download failed:', error);
+      store.error = getUserFriendlyErrorMessage(error);
+      localStorage.removeItem(ACTIVE_DOWNLOAD_KEY);
+      store.downloading = null;
+      store.downloadProgress = null;
+    }
+  });
+
+  const handleCustomModelDownload$ = $(async (downloadUrl: string, filename: string) => {
+    store.downloading = 'custom';
+    store.error = null;
+    store.downloadProgress = null;
+    store.successMessage = null;
+
+    const modelsBeforeDownload = await modelManager.listModels();
+    const isFirstModel = modelsBeforeDownload.length === 0;
+    const displayName = formatModelDisplayName(filename);
+
+    const activeDownload: ActiveDownload = {
+      familyId: 'custom',
+      familyName: displayName,
+      filename,
+      isFirstModel,
+      startedAt: Date.now(),
+    };
+    localStorage.setItem(ACTIVE_DOWNLOAD_KEY, JSON.stringify(activeDownload));
+
+    try {
+      await modelManager.downloadModel(downloadUrl, filename, (progress) => {
+        store.downloadProgress = progress;
+      });
+
+      store.customModelModalOpen = false;
+      await finalizeDownload(filename, displayName, isFirstModel);
+    } catch (error) {
+      console.error('Custom model download failed:', error);
+      store.error = getUserFriendlyErrorMessage(error);
+      localStorage.removeItem(ACTIVE_DOWNLOAD_KEY);
+      store.downloading = null;
+      store.downloadProgress = null;
+    }
+  });
+
+  const handleDeleteClick$ = $((filename: string) => {
+    const displayName = formatModelDisplayName(filename);
+    store.modelToDelete = { filename, displayName };
+    store.deleteModalOpen = true;
+  });
+
+  const handleDeleteConfirm$ = $(async () => {
+    if (!store.modelToDelete) return;
+
+    store.isDeleting = true;
+    try {
+      const deletedFilename = store.modelToDelete.filename;
+
+      const affectedAis = aiData.userDefinedAis.filter(
+        (ai) => ai.model === deletedFilename
+      );
+      const affectedAiNames = affectedAis.map((ai) => ai.name);
+
+      await modelManager.deleteModel(deletedFilename);
+      await loadModels();
+
+      const storedModel = localStorage.getItem('currentModel');
+      if (storedModel === deletedFilename) {
+        localStorage.removeItem('currentModel');
+        window.dispatchEvent(
+          new CustomEvent('modelDeleted', { detail: { filename: deletedFilename } })
+        );
+      }
+
+      const remainingModels = store.downloadedModels.filter((m) => m.name !== deletedFilename);
+      const fallbackModel = remainingModels[0]?.name || null;
+
+      if (fallbackModel && affectedAis.length > 0) {
+        for (const ai of affectedAis) {
+          await updateCustomAi(ai.id, { model: fallbackModel });
+        }
+
+        const aiList =
+          affectedAiNames.length <= 3
+            ? affectedAiNames.join(', ')
+            : `${affectedAiNames.slice(0, 3).join(', ')} and ${affectedAiNames.length - 3} more`;
+
+        store.successMessage = `Model deleted successfully. Updated ${affectedAiNames.length} AI${affectedAiNames.length === 1 ? '' : 's'} (${aiList}) to use ${formatModelDisplayName(fallbackModel)}.`;
+      } else if (affectedAis.length > 0 && !fallbackModel) {
+        for (const ai of affectedAis) {
+          await updateCustomAi(ai.id, { model: '' });
+        }
+        store.successMessage = `Model deleted successfully. ${affectedAiNames.length} AI${affectedAiNames.length === 1 ? ' has' : 's have'} been reset. Please download a new model.`;
+      } else {
+        store.successMessage = `Model deleted successfully.`;
+      }
+
+      if (affectedAiNames.length > 0) {
+        setTimeout(() => {
+          store.successMessage = null;
+        }, 10000);
+      }
+
+      store.deleteModalOpen = false;
+      store.modelToDelete = null;
+    } catch (error) {
+      console.error('Delete failed:', error);
+      store.error = 'Failed to delete model: ' + error;
+    } finally {
+      store.isDeleting = false;
+    }
+  });
+
+  const handleDeleteCancel$ = $(() => {
+    store.deleteModalOpen = false;
+    store.modelToDelete = null;
+  });
+
+  const totalRAM = systemInfo?.total_memory_gb || 8;
+  const totalVRAM = systemInfo?.total_vram_gb || null;
+  const downloadedFilenames = new Set(store.downloadedModels.map((m) => m.name));
+  // Task filters — the capability axis users actually shop by ("what's it for").
+  // Size is handled separately by the runnable / "needs more memory" split below,
+  // so these tabs don't need to repeat it. Order = most-shopped first.
+  const TASK_FILTERS: Capability[] = ['coding', 'reasoning', 'agentic', 'writing', 'math'];
+  // A family matches a tab by capability — except 'vision', which is a modality
+  // (the model sees images), not a "good at" capability.
+  const matchesTask = (f: ModelFamily, task: 'all' | Capability | 'vision') =>
+    task === 'all' ? true
+      : task === 'vision' ? getModality(f).in.includes('vision')
+      : f.capabilities.includes(task);
+  const SORT_OPTIONS = [
+    { key: 'new', label: 'Newest' },
+    { key: 'name-asc', label: 'A–Z' },
+    { key: 'name-desc', label: 'Z–A' },
+    { key: 'size-asc', label: 'Smallest' },
+    { key: 'size-desc', label: 'Largest' },
+  ] as const;
+
+  // Find the single best recommended family + variant for this system.
+  // Prefers models that fit fully in VRAM (fastest), then largest suitable.
+  const bestPick = (() => {
+    const candidates = modelFamilies
+      .filter(f => f.recommended && getBestVariantForSystem(f, totalRAM, totalVRAM) !== null)
+      .map(f => {
+        const variant = getBestVariantForSystem(f, totalRAM, totalVRAM)!;
+        const gpu = getGPUStatus(variant, totalVRAM);
+        return { family: f, variant, gpu };
+      });
+
+    // Sort: full GPU first, then by size descending within each group
+    candidates.sort((a, b) => {
+      if (a.gpu.isFull !== b.gpu.isFull) return a.gpu.isFull ? -1 : 1;
+      return b.variant.size - a.variant.size;
+    });
+
+    return candidates[0] || null;
+  })();
+
+  // Families for the current tab, in the user's chosen sort order. 'Size' uses the
+  // smallest variant (the floor to run it). 'Newest' floats New-tagged models up,
+  // then alphabetical. The runnable / "needs more memory" split happens after.
+  const familyMinSize = (f: ModelFamily) => Math.min(...f.variants.map(v => v.size));
+  const visibleFamilies = modelFamilies
+    .filter(f => matchesTask(f, store.selectedTask))
+    .sort((a, b) => {
+      switch (store.sortBy) {
+        case 'name-asc': return a.name.localeCompare(b.name);
+        case 'name-desc': return b.name.localeCompare(a.name);
+        case 'size-asc': return familyMinSize(a) - familyMinSize(b);
+        case 'size-desc': return familyMinSize(b) - familyMinSize(a);
+        case 'new':
+        default: {
+          // Newest release first (ISO dates compare lexically); undated last, then A–Z.
+          const ad = a.released ?? '', bd = b.released ?? '';
+          if (ad !== bd) return ad > bd ? -1 : 1;
+          return a.name.localeCompare(b.name);
+        }
+      }
+    });
+
+  // Split into what this machine can run vs. what needs more memory. The latter
+  // is grouped under a collapsible divider (in-place), not just greyed at the
+  // bottom — so the action and its effect sit in the same spot.
+  const runnableFamilies = visibleFamilies.filter(f => isFamilyRunnable(f, totalRAM, totalVRAM));
+  const tooBigFamilies = visibleFamilies.filter(f => !isFamilyRunnable(f, totalRAM, totalVRAM));
+
+
+  /** Render a single model card */
+  // Variant picker writes through data-attrs + closest(), NOT an inline closure:
+  // Qwik's `$()` closures inside `.map()` don't reliably capture loop variables
+  // (here NESTED maps — family × variant), so an inline handler could write the
+  // wrong/stale variant and make the card look frozen. See qwik-pitfalls.md
+  // "Event handling in `.map()` loops".
+  const selectVariant$ = $((e: Event) => {
+    const li = (e.target as HTMLElement).closest('[data-variant-file]') as HTMLElement | null;
+    if (!li) return;
+    const familyId = li.dataset.familyId;
+    const file = li.dataset.variantFile;
+    if (!familyId || !file) return;
+    const family = modelFamilies.find((f) => f.id === familyId);
+    const variant = family?.variants.find((v) => v.filename === file);
+    if (!variant) return;
+    store.selectedVariants = { ...store.selectedVariants, [familyId]: variant };
+    store.openDropdowns = { ...store.openDropdowns, [familyId]: false };
+  });
+
+  // NB: `selectedVariant` is passed IN (read from the store at the .map call site in
+  // JSX), NOT read from the store here. Qwik only tracks reactive reads that happen
+  // inside a JSX expression; a read inside this nested helper isn't tracked, so the
+  // card wouldn't re-render on a variant pick. Reading it at the call site fixes that.
+  const renderModelCard = (family: ModelFamily, selectedVariant: ModelVariant | undefined) => {
+    if (!selectedVariant) return null;
+
+    const isDownloaded = downloadedFilenames.has(selectedVariant.filename);
+    const isDownloading = store.downloading === family.id;
+    const isSuitable = isVariantSuitable(selectedVariant, totalRAM, totalVRAM);
+    const runMode = getRunMode(selectedVariant, totalRAM, totalVRAM);
+    const isExpanded = store.expandedDetails[family.id];
+
+    // "Best for you" only shows when the selected variant matches the recommended one
+    const isBestPick = bestPick !== null
+      && bestPick.family.id === family.id
+      && bestPick.variant.filename === selectedVariant.filename;
+
+    return (
+      <div
+        key={family.id}
+        class={`generic-container rounded-2xl overflow-hidden flex flex-col justify-between transition-all hover:shadow-2xl transform hover:-translate-y-1 ${
+          !isSuitable ? 'opacity-75' : ''
+        }`}
+      >
+        {/* One consistent vertical rhythm for the whole card body (space-y) instead of
+            ad-hoc per-element margins, which drifted and looked squished. */}
+        <div class="p-5 space-y-3.5">
+          {/* Header: name on its own line, badges wrapping on a row below — so a long
+              name never squishes the badges or pushes them off the card. */}
+          <div>
+            <h3 class="text-lg font-semibold text-[var(--text-primary)] leading-tight">{family.name}</h3>
+            <div class="flex flex-wrap gap-1 mt-2.5">
+              {!isSuitable && (
+                <span class="px-2 py-0.5 bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/40 text-[10px] rounded-full font-semibold whitespace-nowrap">
+                  {totalVRAM && totalVRAM > 0
+                    ? "Too big for your GPU"
+                    : `Needs ${selectedVariant.minRAM}GB RAM`}
+                </span>
+              )}
+              {isSuitable && runMode === 'gpu' && (
+                <span class="px-2 py-0.5 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/40 text-[10px] rounded-full font-semibold whitespace-nowrap">
+                  Your GPU
+                </span>
+              )}
+              {isBestPick && (
+                <span class="px-2 py-0.5 bg-[var(--bg-button-primary)] text-[var(--text-button-primary)] text-[10px] rounded-full font-semibold whitespace-nowrap">
+                  Best for you
+                </span>
+              )}
+              {family.traits.map(trait => {
+                const info = traitInfo[trait];
+                if (!info) return null;
+                return (
+                  <span
+                    key={trait}
+                    title={info.description}
+                    class={`px-1.5 py-0.5 ${info.color} text-white text-[10px] rounded-full font-semibold whitespace-nowrap`}
+                  >
+                    {info.label}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Description — full, not clamped (curated + short; truncating them read as broken).
+              min-h keeps cards in a row roughly aligned when descriptions differ in length. */}
+          <p class="text-sm text-[var(--text-secondary)] min-h-[2.5rem]">
+            {family.description}
+          </p>
+
+          {/* Size variant dropdown */}
+          {family.variants.length > 1 && (
+            <div>
+              <LiquidMetalBorder borderRadius="9999px">
+                <div class="relative">
+                  <button
+                    type="button"
+                    class="relative w-full cursor-default rounded-full bg-[var(--bg-input)] py-2 pl-3 pr-10 text-left text-[var(--text-primary)] focus:outline-none disabled:opacity-50 gradient-border-target text-sm"
+                    disabled={isDownloading}
+                    onClick$={() => {
+                      store.openDropdowns = {
+                        ...store.openDropdowns,
+                        [family.id]: !store.openDropdowns[family.id],
+                      };
+                    }}
+                  >
+                    <span class="block truncate">
+                      {selectedVariant.parameterCount} ({selectedVariant.size}GB download)
+                    </span>
+                    <span class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
+                      <LuChevronDown class="h-4 w-4 text-[var(--text-muted)]" aria-hidden="true" />
+                    </span>
+                  </button>
+                  {store.openDropdowns[family.id] && (
+                    <>
+                      <div class="fixed inset-0 z-[5]" onClick$={() => {
+                        store.openDropdowns = { ...store.openDropdowns, [family.id]: false };
+                      }} />
+                      <ul class="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-2xl bg-[var(--bg-card)] py-1 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none text-sm">
+                        {family.variants.map((variant, idx) => {
+                          const variantSuitable = isVariantSuitable(variant, totalRAM, totalVRAM);
+                          return (
+                            <li
+                              key={idx}
+                              data-family-id={family.id}
+                              data-variant-file={variant.filename}
+                              class={`relative cursor-default select-none py-2 pl-10 pr-4 hover:bg-[var(--bg-dropdown-hover)] hover:text-[var(--text-primary)] ${
+                                selectedVariant.filename === variant.filename
+                                  ? 'bg-[var(--bg-dropdown-hover)] text-[var(--text-primary)]'
+                                  : 'text-[var(--text-dropdown)]'
+                              } ${!variantSuitable ? 'opacity-40' : ''}`}
+                              onClick$={selectVariant$}
+                            >
+                              <span
+                                class={`block truncate ${
+                                  selectedVariant.filename === variant.filename ? 'font-medium' : 'font-normal'
+                                }`}
+                              >
+                                {variant.parameterCount} ({variant.size}GB)
+                                {!variantSuitable && ' — needs more RAM'}
+                              </span>
+                              {selectedVariant.filename === variant.filename && (
+                                <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-[var(--text-link)]">
+                                  <LuCheck class="h-4 w-4" aria-hidden="true" />
+                                </span>
+                              )}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </>
+                  )}
+                </div>
+              </LiquidMetalBorder>
+            </div>
+          )}
+
+          {/* Capability chips — what it's good at (also the future routing signal) */}
+          <div class="flex flex-wrap gap-1">
+            {family.capabilities.slice(0, 4).map((cap) => (
+              <span
+                key={cap}
+                class="px-2 py-0.5 bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] rounded text-xs text-[var(--text-primary)]"
+              >
+                {capabilityInfo[cap].label}
+              </span>
+            ))}
+            {family.contextWindow && (
+              <span
+                class="px-2 py-0.5 bg-[var(--bg-main)] border border-[var(--border-subtle)] rounded text-xs text-[var(--text-muted)]"
+                title="Model's trained context window. Your Own AI loads at a smaller, RAM-capped context by default."
+              >
+                {formatContext(family.contextWindow)} context
+              </span>
+            )}
+          </div>
+
+          {/* Expandable technical details — button + panel grouped so they stay tight
+              (one rhythm unit; the panel hugs its toggle rather than floating away). */}
+          <div>
+          <button
+            type="button"
+            class="flex items-center gap-1 text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors"
+            onClick$={() => {
+              store.expandedDetails = {
+                ...store.expandedDetails,
+                [family.id]: !isExpanded,
+              };
+            }}
+          >
+            <LuInfo class="w-3 h-3" />
+            {isExpanded ? 'Hide details' : 'Technical details'}
+          </button>
+
+          {isExpanded && (
+            <div class="mt-2 space-y-1 text-xs text-[var(--text-muted)] bg-[var(--bg-main)] rounded-lg p-3">
+              <div class="flex justify-between">
+                <span>Download size</span>
+                <span class="font-medium text-[var(--text-secondary)]">{selectedVariant.size}GB</span>
+              </div>
+              <div class="flex justify-between">
+                <span>Parameters</span>
+                <span class="font-medium text-[var(--text-secondary)]">{selectedVariant.parameterCount}</span>
+              </div>
+              {family.contextWindow && (
+                <div class="flex justify-between">
+                  <span>Context window</span>
+                  <span class="font-medium text-[var(--text-secondary)]">{formatContext(family.contextWindow)} tokens</span>
+                </div>
+              )}
+              <div class="flex justify-between">
+                <span>Quantization</span>
+                <span class="font-medium text-[var(--text-secondary)]">{selectedVariant.quantization}</span>
+              </div>
+              <div class="flex justify-between">
+                <span>Min RAM</span>
+                <span class="font-medium text-[var(--text-secondary)]">{selectedVariant.minRAM}GB</span>
+              </div>
+            </div>
+          )}
+          </div>
+        </div>
+
+        {/* Footer: download / status */}
+        <div class="px-5 py-3 mt-auto">
+          {isDownloaded ? (
+            <div class="flex justify-center">
+              <div class="flex items-center gap-2 text-green-600 dark:text-green-400 text-sm font-medium">
+                <LuCheck class="w-4 h-4" />
+                Downloaded
+              </div>
+            </div>
+          ) : isDownloading ? (
+            <div>
+              <div class="flex items-center gap-2 mb-2 justify-center">
+                <div class="w-4 h-4 border-2 border-[var(--text-primary)] border-t-transparent rounded-full animate-spin" />
+                <span class="text-sm text-[var(--text-primary)]">Downloading...</span>
+              </div>
+              {store.downloadProgress && (
+                <div>
+                  <div class="w-full bg-[var(--border-subtle)] rounded-full h-2 overflow-hidden mb-1">
+                    <div
+                      class="bg-blue-600 h-full transition-all duration-300"
+                      style={{ width: `${store.downloadProgress.percent}%` }}
+                    />
+                  </div>
+                  <p class="text-xs text-[var(--text-muted)] text-center">
+                    {store.downloadProgress.percent}% •{' '}
+                    {modelManager.formatModelSize(store.downloadProgress.downloaded)}
+                  </p>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div class="flex justify-end">
+              <LiquidMetalButton
+                onClick$={() => handleDownload$(family.id)}
+                disabled={!isSuitable || store.downloading !== null}
+                class="flex items-center gap-2 px-4 py-2 text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <LuHardDriveDownload class="w-4 h-4" />
+                {family.variants.length === 1
+                  ? `Download (${selectedVariant.size}GB)`
+                  : 'Download'}
+              </LiquidMetalButton>
+            </div>
+          )}
+
+          {!isSuitable && (
+            <p class="text-xs text-[var(--text-muted)] text-center mt-2">
+              Needs {selectedVariant.minRAM}GB RAM minimum
+            </p>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div class="max-w-7xl mx-auto px-6">
+      {/* Help tip — privacy (verifiable, not trust-based) */}
+      <Callout
+        intent="success"
+        title="Private, and verifiable"
+        id="offline-private"
+        iconPath="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"
+        class="mb-6"
+      >
+        Offline models run entirely on your device, and Your Own AI is open
+        source — so this isn't "trust us." Anyone can read the code and confirm
+        your conversations never leave your computer. No account or internet
+        needed once a model's downloaded.
+      </Callout>
+
+      {/* Success Banner */}
+      {store.successMessage && (
+        <div
+          ref={successBannerRef}
+          class="mb-4 p-4 bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-700 rounded-lg flex items-start justify-between"
+        >
+          <div class="flex-1">
+            {store.successMessage.includes('deleted') ? (
+              <p class="text-sm font-medium text-green-800 dark:text-green-200">
+                {store.successMessage}
+              </p>
+            ) : (
+              <>
+                <p class="text-sm font-medium text-green-800 dark:text-green-200">
+                  <strong>{store.successMessage}</strong> has been downloaded and is ready to use!
+                </p>
+                <p class="text-sm text-green-700 dark:text-green-300 mt-1">
+                  To use this model, go to the <strong>Your AIs</strong> page and edit the AI
+                  you'd like to use it with.
+                </p>
+              </>
+            )}
+          </div>
+          <button
+            onClick$={() => { store.successMessage = null; }}
+            class="ml-4 text-green-600 dark:text-green-400 hover:text-green-800 dark:hover:text-green-200 transition-colors"
+            aria-label="Dismiss"
+          >
+            <LuX class="w-5 h-5" />
+          </button>
+        </div>
+      )}
+
+      {/* Error Display */}
+      {store.error && (
+        <div class="mb-4 p-4 bg-red-100 dark:bg-red-900 border border-red-200 dark:border-red-700 rounded-lg">
+          <p class="text-sm text-red-700 dark:text-red-300">{store.error}</p>
+        </div>
+      )}
+
+      {/* Downloaded Models */}
+      {(store.loadingModels || store.downloadedModels.length > 0) && (
+        <div class="mb-8">
+          <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela mb-4 border-b border-[var(--border-subtle)] pb-2">
+            Downloaded Models{store.loadingModels ? '' : ` (${store.downloadedModels.length})`}
+          </h2>
+          {store.loadingModels ? (
+            <div class="flex items-center justify-center gap-3 py-12 text-[var(--text-secondary)]">
+              <div class="w-5 h-5 border-2 border-[var(--text-muted)] border-t-transparent rounded-full animate-spin" />
+              <span class="text-sm">Loading your models…</span>
+            </div>
+          ) : (
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {store.downloadedModels.map((model) => {
+              // Match against catalog for rich metadata
+              const catalogMatch = modelFamilies.reduce<{ family: ModelFamily; variant: ModelVariant } | null>((found, family) => {
+                if (found) return found;
+                const variant = family.variants.find(v => v.filename === model.name);
+                return variant ? { family, variant } : null;
+              }, null);
+
+              const displayName = catalogMatch
+                ? `${catalogMatch.family.name} ${catalogMatch.variant.parameterCount}`
+                : formatModelDisplayName(model.name);
+
+              const paramSize = catalogMatch?.variant.parameterCount || model.parameter_size;
+              const quantization = catalogMatch?.variant.quantization || model.quantization;
+              const description = catalogMatch?.family.description || null;
+              const isPaused = store.pausedModels.includes(model.name);
+
+              return (
+                <div
+                  key={model.name}
+                  class={`generic-container rounded-2xl overflow-hidden flex flex-col justify-between transition-all hover:shadow-2xl transform hover:-translate-y-1 ${
+                    isPaused ? 'opacity-60' : ''
+                  }`}
+                >
+                  <div class="p-5">
+                    <div class="flex items-center gap-2 mb-1">
+                      <h3 class="text-lg font-semibold text-[var(--text-primary)]">
+                        {displayName}
+                      </h3>
+                      {isPaused && (
+                        <span class="px-2 py-0.5 bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] text-[var(--text-muted)] text-[10px] rounded-full font-semibold whitespace-nowrap">
+                          Paused
+                        </span>
+                      )}
+                    </div>
+                    <p class="text-sm text-[var(--text-secondary)] mb-2">
+                      {paramSize} • {quantization} • {model.size}
+                    </p>
+                    {description && (
+                      <p class="text-xs text-[var(--text-muted)] line-clamp-2">
+                        {description}
+                      </p>
+                    )}
+                  </div>
+                  <div class="px-5 py-3 mt-auto">
+                    <div class="flex justify-end items-center gap-2">
+                      <LiquidMetalButton
+                        variant="secondary"
+                        onClick$={() => handleTogglePause$(model.name)}
+                        title={isPaused ? 'Resume — show this model in the AI picker' : 'Pause — hide this model from the AI picker'}
+                        class="p-2 transition-colors"
+                      >
+                        {isPaused ? (
+                          <LuPlayCircle class="w-[18px] h-[18px]" />
+                        ) : (
+                          <LuPauseCircle class="w-[18px] h-[18px]" />
+                        )}
+                      </LiquidMetalButton>
+                      <LiquidMetalButton
+                        variant="danger"
+                        onClick$={() => handleDeleteClick$(model.name)}
+                        class="p-2 transition-colors"
+                      >
+                        <LuTrash2 class="w-4 h-4" />
+                      </LiquidMetalButton>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          )}
+        </div>
+      )}
+
+      {/* Model Catalog — tab bar + filtered grid */}
+      <div class="mb-8">
+        <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela mb-4 border-b border-[var(--border-subtle)] pb-2">
+          Available Offline Models
+        </h2>
+
+        {/* Task filters + sort control */}
+        <div class="flex items-center justify-between gap-4 mb-6 sticky top-0 z-[5] bg-[var(--bg-main)] pt-2 -mt-2">
+          <div class="flex gap-1 overflow-x-auto pb-1">
+          {([
+            { key: 'all' as const, label: 'All' },
+            ...TASK_FILTERS.map(c => ({ key: c, label: capabilityInfo[c].label })),
+            { key: 'vision' as const, label: 'Vision' },
+          ]).map((tab) => {
+            const isActive = store.selectedTask === tab.key;
+            const count = tab.key === 'all'
+              ? modelFamilies.length
+              : modelFamilies.filter(f => matchesTask(f, tab.key)).length;
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                onClick$={() => { store.selectedTask = tab.key as any; }}
+                class={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
+                  isActive
+                    ? 'bg-[var(--bg-button-primary)] text-[var(--text-button-primary)] shadow-md'
+                    : 'bg-[var(--bg-card)] text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:bg-[var(--bg-dropdown-hover)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                {tab.label}
+                <span class={`ml-1.5 text-xs ${isActive ? 'opacity-80' : 'opacity-50'}`}>
+                  {count}
+                </span>
+              </button>
+            );
+          })}
+          </div>
+
+          {/* Sort — custom dropdown (a native <select> popup is GTK-themed on
+              webkit and ignores our light/dark vars); right-aligned in the row. */}
+          <div class="flex items-center gap-2 shrink-0">
+            <label class="text-sm text-[var(--text-muted)] whitespace-nowrap">Sort</label>
+            <div class="relative">
+              <button
+                type="button"
+                onClick$={() => { store.sortOpen = !store.sortOpen; }}
+                class="flex items-center justify-between gap-2 min-w-[7rem] px-3 py-2 rounded-full text-sm font-medium bg-[var(--bg-card)] text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:text-[var(--text-primary)] focus:outline-none"
+              >
+                <span>{SORT_OPTIONS.find(o => o.key === store.sortBy)?.label}</span>
+                <LuChevronDown class="w-4 h-4 text-[var(--text-muted)] flex-shrink-0" />
+              </button>
+              {store.sortOpen && (
+                <>
+                  <div class="fixed inset-0 z-40" onClick$={() => { store.sortOpen = false; }} />
+                  <div class="absolute right-0 top-full mt-1 min-w-[8rem] z-50 rounded-lg bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] shadow-xl py-1">
+                    {SORT_OPTIONS.map(o => (
+                      <button
+                        key={o.key}
+                        type="button"
+                        onClick$={() => { store.sortBy = o.key; store.sortOpen = false; }}
+                        class={`block w-full text-left px-3 py-1.5 text-sm whitespace-nowrap hover:bg-[var(--bg-card)] transition-colors ${
+                          o.key === store.sortBy
+                            ? 'text-[var(--text-primary)] font-medium'
+                            : 'text-[var(--text-secondary)]'
+                        }`}
+                      >
+                        {o.label}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Model grid — what you can run, then a collapsible "needs more memory" group */}
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          {runnableFamilies.map((family) => (
+            <div class="contents" key={`${family.id}:${store.selectedVariants[family.id]?.filename ?? ''}`}>
+              {renderModelCard(family, store.selectedVariants[family.id])}
+            </div>
+          ))}
+
+          {tooBigFamilies.length > 0 && (
+            <button
+              type="button"
+              onClick$={() => { store.showTooBig = !store.showTooBig; }}
+              class="col-span-full flex items-center gap-3 mt-2 group"
+            >
+              <div class="h-px flex-1 bg-[var(--border-subtle)]" />
+              <span class="text-xs font-medium text-[var(--text-muted)] group-hover:text-[var(--text-secondary)] whitespace-nowrap flex items-center gap-1.5 transition-colors">
+                <LuChevronDown class={`w-3.5 h-3.5 transition-transform ${store.showTooBig ? '' : '-rotate-90'}`} />
+                {store.showTooBig
+                  ? 'Needs more memory than this machine has'
+                  : `${tooBigFamilies.length} model${tooBigFamilies.length === 1 ? '' : 's'} need more memory — show`}
+              </span>
+              <div class="h-px flex-1 bg-[var(--border-subtle)]" />
+            </button>
+          )}
+
+          {store.showTooBig && tooBigFamilies.map((family) => (
+            <div class="contents" key={`${family.id}:${store.selectedVariants[family.id]?.filename ?? ''}`}>
+              {renderModelCard(family, store.selectedVariants[family.id])}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Custom Model Section */}
+      <div class="mt-8 generic-container p-6 rounded-2xl text-center">
+        <p class="text-[var(--text-secondary)] mb-4">Want a different model?</p>
+        <LiquidMetalButton
+          onClick$={() => { store.customModelModalOpen = true; }}
+          class="inline-flex items-center gap-2 px-6 py-3 font-medium transition-all hover:scale-105"
+        >
+          <LuPlus class="w-5 h-5" />
+          Add Custom Model from Hugging Face
+        </LiquidMetalButton>
+      </div>
+
+      {/* System Information */}
+      <div class="mt-8 generic-container p-6 rounded-2xl">
+        <h3 class="font-semibold text-[var(--text-primary)] mb-3 text-base">
+          System Information
+        </h3>
+        <div class="text-sm text-[var(--text-secondary)] space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-[var(--text-muted)]">System RAM:</span>
+            <span class="font-semibold">{totalRAM.toFixed(1)}GB</span>
+          </div>
+          {systemInfo?.gpu_name && (
+            <div class="flex items-center justify-between">
+              <span class="text-[var(--text-muted)]">GPU:</span>
+              <span class="font-semibold">{systemInfo.gpu_name}</span>
+            </div>
+          )}
+          {systemInfo?.total_vram_gb && (
+            <div class="flex items-center justify-between">
+              <span class="text-[var(--text-muted)]">VRAM:</span>
+              <span class="font-semibold">{systemInfo.total_vram_gb.toFixed(1)}GB</span>
+            </div>
+          )}
+          <div class="flex flex-col gap-1">
+            <span class="text-[var(--text-muted)]">Models Directory:</span>
+            <code class="text-xs bg-[var(--bg-dropdown)] px-2 py-1 rounded border border-[var(--border-subtle)] break-all">
+              {store.modelsDirectory}
+            </code>
+          </div>
+        </div>
+      </div>
+
+
+      {/* Delete Confirmation Modal */}
+      <DeleteModelModal
+        isOpen={store.deleteModalOpen}
+        onClose={handleDeleteCancel$}
+        onConfirm={handleDeleteConfirm$}
+        modelName={store.modelToDelete?.displayName || ''}
+        isDeleting={store.isDeleting}
+      />
+
+      {/* Custom Model Modal */}
+      <CustomModelModal
+        isOpen={store.customModelModalOpen}
+        onClose$={$(() => { store.customModelModalOpen = false; })}
+        onDownload$={handleCustomModelDownload$}
+        isDownloading={store.downloading === 'custom'}
+        downloadProgress={store.downloading === 'custom' ? store.downloadProgress : null}
+      />
+    </div>
+  );
+});
+
+export default ModelDownloader;

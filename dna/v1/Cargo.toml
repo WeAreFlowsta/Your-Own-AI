@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "zomes/transcript/integrity",
+    "zomes/transcript/coordinator",
+]
+resolver = "2"

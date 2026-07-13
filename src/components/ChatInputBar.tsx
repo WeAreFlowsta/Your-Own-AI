@@ -1,0 +1,114 @@
+import { component$, type QRL, type Signal } from '@builder.io/qwik';
+import type { SelectedAiModel, ChatAction, AttachedFile, AttachedImage } from '../types';
+import { AiSelector } from './AiSelector';
+import { ContentEditor } from './ContentEditor';
+import { FileContextShelf } from './FileContextShelf';
+import { LiquidMetalBorder } from './LiquidMetalBorder';
+
+interface ChatInputBarProps {
+  input: Signal<string>;
+  setInput$: QRL<(value: string) => void>;
+  handleSubmit$: QRL<() => void>;
+  isLoading: boolean;
+  currentPlaceholder: string;
+  selectedAi: SelectedAiModel;
+  setSelectedAi$: QRL<(ai: SelectedAiModel) => void>;
+  dynamicModelOptions: SelectedAiModel[];
+  getDisplayImageUrl$: QRL<(model: SelectedAiModel | undefined) => string | undefined>;
+  currentSelectedOptionInListbox: SelectedAiModel | undefined;
+  stopChat$?: QRL<() => void>;
+  isBottomBar?: boolean;
+  selectedAction: ChatAction;
+  setSelectedAction$: QRL<(action: ChatAction) => void>;
+  attachedFiles: Signal<AttachedFile[]>;
+  attachedImages: Signal<AttachedImage[]>;
+  contextWindowSize: number;
+  onAttachFiles$: QRL<(paths: string[]) => void>;
+  theme: 'light' | 'dark';
+}
+
+export const ChatInputBar = component$<ChatInputBarProps>(({
+  input,
+  setInput$,
+  handleSubmit$,
+  isLoading,
+  currentPlaceholder,
+  selectedAi,
+  setSelectedAi$,
+  dynamicModelOptions,
+  getDisplayImageUrl$,
+  currentSelectedOptionInListbox,
+  stopChat$,
+  isBottomBar = false,
+  selectedAction,
+  setSelectedAction$,
+  attachedFiles,
+  attachedImages,
+  contextWindowSize,
+  onAttachFiles$,
+  theme,
+}) => {
+  const askBlurbText = (selectedAi.aiConfig?.askBlurb && selectedAi.aiConfig.askBlurb.trim() !== '')
+    ? (() => {
+        const blurb = selectedAi.aiConfig.askBlurb!;
+        if (blurb.length <= 22) return blurb;
+        const truncated = blurb.substring(0, 20);
+        const lastSpace = truncated.lastIndexOf(' ');
+        return (lastSpace > 5 ? truncated.substring(0, lastSpace) : truncated) + '..';
+      })()
+    : 'anything..';
+
+  const aiSelectorPositionClass = isBottomBar ? 'absolute bottom-full mb-1' : 'absolute mt-1';
+
+  return (
+    <div class="max-w-4xl mx-auto w-full">
+      <div class={isBottomBar ? 'mb-2' : 'mb-3'}>
+        <div class="flex items-center relative z-10">
+          <span class="mr-2 text-[var(--text-primary)] text-xs sm:text-base">Ask</span>
+          <LiquidMetalBorder class="w-[165px]" borderRadius="9999px" theme={theme}>
+            <AiSelector
+              selectedAi={selectedAi}
+              setSelectedAi$={setSelectedAi$}
+              dynamicModelOptions={dynamicModelOptions}
+              getDisplayImageUrl$={getDisplayImageUrl$}
+              currentSelectedOptionInListbox={currentSelectedOptionInListbox}
+              isLoading={isLoading}
+              positionClass={aiSelectorPositionClass}
+            />
+          </LiquidMetalBorder>
+          <span class="ml-2 text-[var(--text-primary)] text-xs sm:text-base">
+            {askBlurbText}
+          </span>
+        </div>
+      </div>
+
+      <form
+        preventdefault:submit
+        onSubmit$={() => { handleSubmit$(); }}
+        class="flex-grow"
+      >
+        <LiquidMetalBorder borderRadius="1.5rem" theme={theme}>
+          <ContentEditor
+            input={input}
+            handleSubmit$={handleSubmit$}
+            isLoading={isLoading}
+            currentPlaceholder={currentPlaceholder}
+            selectedAction={selectedAction}
+            setSelectedAction$={setSelectedAction$}
+            stopChat$={stopChat$}
+            attachedFiles={attachedFiles}
+            onAttachFiles$={onAttachFiles$}
+            selectedAiId={selectedAi.id}
+          />
+        </LiquidMetalBorder>
+      </form>
+
+      {/* File context shelf — shows attached files with token budget */}
+      <FileContextShelf
+        files={attachedFiles}
+        images={attachedImages}
+        contextWindowSize={contextWindowSize}
+      />
+    </div>
+  );
+});

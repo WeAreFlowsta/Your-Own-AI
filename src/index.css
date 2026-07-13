@@ -1,0 +1,884 @@
+/* Self-hosted fonts (bundled in public/fonts) — no runtime Google Fonts dependency (offline-safe, private) */
+@font-face{font-family:'Plus Jakarta Sans';font-style:normal;font-weight:300;font-display:swap;src:url('/fonts/jakarta-300-latinext.woff2') format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}
+@font-face{font-family:'Plus Jakarta Sans';font-style:normal;font-weight:300;font-display:swap;src:url('/fonts/jakarta-300-latin.woff2') format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}
+@font-face{font-family:'Plus Jakarta Sans';font-style:normal;font-weight:400;font-display:swap;src:url('/fonts/jakarta-400-latinext.woff2') format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}
+@font-face{font-family:'Plus Jakarta Sans';font-style:normal;font-weight:400;font-display:swap;src:url('/fonts/jakarta-400-latin.woff2') format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}
+@font-face{font-family:'Plus Jakarta Sans';font-style:normal;font-weight:500;font-display:swap;src:url('/fonts/jakarta-500-latinext.woff2') format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}
+@font-face{font-family:'Plus Jakarta Sans';font-style:normal;font-weight:500;font-display:swap;src:url('/fonts/jakarta-500-latin.woff2') format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}
+@font-face{font-family:'Plus Jakarta Sans';font-style:normal;font-weight:600;font-display:swap;src:url('/fonts/jakarta-600-latinext.woff2') format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}
+@font-face{font-family:'Plus Jakarta Sans';font-style:normal;font-weight:600;font-display:swap;src:url('/fonts/jakarta-600-latin.woff2') format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}
+@font-face{font-family:'Plus Jakarta Sans';font-style:normal;font-weight:700;font-display:swap;src:url('/fonts/jakarta-700-latinext.woff2') format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}
+@font-face{font-family:'Plus Jakarta Sans';font-style:normal;font-weight:700;font-display:swap;src:url('/fonts/jakarta-700-latin.woff2') format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}
+@font-face{font-family:'Varela Round';font-style:normal;font-weight:400;font-display:swap;src:url('/fonts/varela-400-latinext.woff2') format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}
+@font-face{font-family:'Varela Round';font-style:normal;font-weight:400;font-display:swap;src:url('/fonts/varela-400-latin.woff2') format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}
+@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400;font-display:swap;src:url('/fonts/jetbrains-400-latinext.woff2') format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}
+@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:400;font-display:swap;src:url('/fonts/jetbrains-400-latin.woff2') format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}
+@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:500;font-display:swap;src:url('/fonts/jetbrains-500-latinext.woff2') format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;}
+@font-face{font-family:'JetBrains Mono';font-style:normal;font-weight:500;font-display:swap;src:url('/fonts/jetbrains-500-latin.woff2') format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;}
+
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+  .btn-primary {
+    @apply bg-[var(--bg-button-primary)] text-[var(--text-button-primary)] border border-[var(--border-primary)] hover:bg-[var(--bg-button-primary-hover)] hover:text-[var(--text-button-primary-hover)] hover:border-[var(--border-primary-hover)] subpixel-antialiased dark:antialiased;
+    font-family: 'Varela Round', sans-serif;
+  }
+
+  /* --- Button Styles --- */
+
+  /* Glass Interactive Button */
+  .theme-light .btn-glass-interactive {
+    border: 1px solid rgba(0, 0, 0, 0.05);
+    transition: all 150ms ease-in-out;
+    background-color: var(--bg-header-footer);
+    color: var(--text-primary);
+    background-image: radial-gradient(50% 150% at 50% -10%, rgba(255, 255, 255, 0.6) 0%, transparent 100%);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1),
+                inset 0 2px 4px 0 rgba(0, 0, 0, 0.08),
+                inset 0 -2px 3px 0 rgba(255, 255, 255, 0.9);
+  }
+
+
+  .theme-dark .btn-glass-interactive {
+    border: none;
+    background-color: var(--bg-button-primary-hover);
+    color: #ffffff;
+    background-image: radial-gradient(50% 150% at 50% -10%, rgba(255, 255, 255, 0.15) 0%, transparent 100%);
+    box-shadow: inset 0 0 10px 0 rgba(255, 255, 255, 0.1), 
+                inset 0 3px 5px 0 rgba(255, 255, 255, 0.15), 
+                inset 0 1px 1px 0 rgba(255, 255, 255, 0.4),
+                inset 0 -1px 1px 0 rgba(0, 0, 0, 0.2);
+  }
+
+  .theme-dark .btn-glass-interactive:hover {
+    filter: brightness(1.5);
+  }
+
+  .theme-light .btn-glass-interactive:hover {
+    filter: brightness(0.85);
+  }
+
+  .btn-glass-interactive:active {
+    transform: scale(.97);
+    box-shadow: inset 0 2px 10px 0 rgba(0, 0, 0, 0.2);
+  }
+
+  /* Secondary Button */
+  .theme-light .btn-glass-secondary {
+    @apply subpixel-antialiased;
+    font-family: 'Varela Round', sans-serif;
+    border: 1px solid rgba(0, 0, 0, 0.05);
+    transition: all 150ms ease-in-out;
+    background-color: #e5e7eb;
+    color: #374151;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -2px rgba(0, 0, 0, 0.08),
+                inset 0 2px 4px 0 rgba(0, 0, 0, 0.05),
+                inset 0 -2px 3px 0 rgba(255, 255, 255, 0.8);
+  }
+
+  .theme-dark .btn-glass-secondary {
+    border: none;
+    background-color: #3f3f46;
+    color: #f4f4f5;
+    box-shadow: inset 0 2px 4px 0 rgba(255, 255, 255, 0.06),
+                inset 0 -2px 3px 0 rgba(0, 0, 0, 0.2);
+  }
+
+  .theme-dark .btn-glass-secondary:hover {
+    filter: brightness(1.1);
+  }
+
+  .theme-light .btn-glass-secondary:hover {
+    filter: brightness(0.95);
+  }
+
+  .btn-glass-secondary:active {
+    transform: scale(.97);
+    box-shadow: inset 0 2px 10px 0 rgba(0, 0, 0, 0.2) !important;
+  }
+
+  /* Danger Button */
+  .theme-light .btn-glass-danger {
+    @apply subpixel-antialiased;
+    font-family: 'Varela Round', sans-serif;
+    border: 1px solid rgba(0, 0, 0, 0.05);
+    transition: all 150ms ease-in-out;
+    background-color: #fee2e2;
+    color: #b91c1c;
+    box-shadow: 0 4px 6px -1px rgba(239, 68, 68, 0.1), 0 2px 4px -2px rgba(239, 68, 68, 0.1),
+                inset 0 2px 4px 0 rgba(239, 68, 68, 0.1),
+                inset 0 -2px 3px 0 rgba(255, 255, 255, 0.7);
+  }
+
+  .theme-dark .btn-glass-danger {
+    border: none;
+    background-color: #450a0a;
+    color: #fca5a5;
+    box-shadow: inset 0 2px 4px 0 rgba(255, 255, 255, 0.1),
+                inset 0 -2px 3px 0 rgba(0, 0, 0, 0.2);
+  }
+
+  .theme-dark .btn-glass-danger:hover {
+    filter: brightness(1.15);
+  }
+
+  .theme-light .btn-glass-danger:hover {
+    background-color: #fecaca;
+    filter: brightness(0.98);
+  }
+
+  .btn-glass-danger:active {
+    transform: scale(.97);
+    box-shadow: inset 0 2px 10px 0 rgba(0, 0, 0, 0.2) !important;
+  }
+
+  /* --- Metallic Button (CSS-only, for small/inline buttons) --- */
+  .btn-metallic {
+    border: 1px solid #71717a;
+    border-radius: 9999px;
+    background: #0e0e1a;
+    color: #d0d0d8;
+    font-family: 'Varela Round', sans-serif;
+    transition: all 200ms ease;
+  }
+  .btn-metallic:hover {
+    border-color: #B8B0A4;
+    color: #ffffff;
+    background: #1a1a24;
+    box-shadow: 0 0 10px rgba(184, 176, 164, 0.25), 0 0 3px rgba(184, 176, 164, 0.15);
+  }
+  .btn-metallic:active {
+    transform: scale(0.96);
+  }
+  .theme-light .btn-metallic {
+    border-color: #b8b8c0;
+    background: #f0f0f4;
+    color: #3a3a42;
+  }
+  .theme-light .btn-metallic:hover {
+    border-color: #686070;
+    color: #1a1a22;
+    background: #e8e8ec;
+    box-shadow: 0 0 10px rgba(104, 96, 112, 0.2), 0 0 3px rgba(104, 96, 112, 0.15);
+  }
+
+  /* --- Metallic Secondary Button (CSS-only) --- */
+  .btn-metallic-secondary {
+    border: 1px solid #52525b;
+    border-radius: 9999px;
+    background: transparent;
+    color: #a1a1aa;
+    font-family: 'Varela Round', sans-serif;
+    transition: all 200ms ease;
+  }
+  .btn-metallic-secondary:hover {
+    border-color: #a1a1aa;
+    color: #d0d0d8;
+    background: #18181b;
+    box-shadow: 0 0 8px rgba(161, 161, 170, 0.15);
+  }
+  .btn-metallic-secondary:active {
+    transform: scale(0.96);
+  }
+  .theme-light .btn-metallic-secondary {
+    border-color: #c0c0c8;
+    background: transparent;
+    color: #6b7280;
+  }
+  .theme-light .btn-metallic-secondary:hover {
+    border-color: #808088;
+    color: #374151;
+    background: #f0f0f4;
+    box-shadow: 0 0 8px rgba(128, 128, 136, 0.15);
+  }
+
+  /* --- Metallic Danger Button (CSS-only) --- */
+  .btn-metallic-danger {
+    border: 1px solid #5c2a2a;
+    border-radius: 9999px;
+    background: #2a1515;
+    color: #c08080;
+    font-family: 'Varela Round', sans-serif;
+    transition: all 200ms ease;
+  }
+  .btn-metallic-danger:hover {
+    border-color: #7a3a3a;
+    background: #351a1a;
+    color: #d49090;
+    box-shadow: 0 0 8px rgba(192, 128, 128, 0.15);
+  }
+  .btn-metallic-danger:active {
+    transform: scale(0.96);
+  }
+  .theme-light .btn-metallic-danger {
+    border-color: #d4a0a0;
+    background: #f5e8e8;
+    color: #8a4040;
+  }
+  .theme-light .btn-metallic-danger:hover {
+    border-color: #c08080;
+    background: #f0dede;
+    color: #703030;
+    box-shadow: 0 0 8px rgba(140, 64, 64, 0.12);
+  }
+
+  /* Secondary + danger variants are now flat (outlined / red-on-bg), rendered by
+     LiquidMetalButton itself — the liquid-metal treatment is primary-only. */
+
+  .btn-liquid-metal[disabled] {
+    opacity: 0.7;
+    cursor: not-allowed;
+  }
+
+  /* --- Liquid Metal Button (WebGL shader) --- */
+  .btn-liquid-metal {
+    position: relative;
+    border: none;
+    border-radius: 9999px;
+    background: transparent;
+    padding: 1px;
+    color: #d0d0d8;
+    font-family: 'Varela Round', sans-serif;
+    transition: color 200ms ease, transform 150ms ease;
+  }
+
+  .btn-liquid-metal:hover {
+    color: #ffffff;
+  }
+
+
+  .btn-liquid-metal:hover .btn-content {
+    animation: metallic-shimmer 2s ease infinite;
+  }
+
+  @keyframes metallic-shimmer {
+    0%, 100% { color: #c0c0c8; }
+    25% { color: #e8e8f0; }
+    50% { color: #a0a0b0; }
+    75% { color: #f0f0f0; }
+  }
+
+  .theme-light .btn-liquid-metal:hover .btn-content {
+    animation: metallic-shimmer-light 2s ease infinite;
+  }
+
+  @keyframes metallic-shimmer-light {
+    0%, 100% { color: #4a4a52; }
+    25% { color: #2a2a32; }
+    50% { color: #5a5a62; }
+    75% { color: #1a1a22; }
+  }
+
+  .btn-liquid-metal:active {
+    transform: scale(0.96);
+  }
+
+  /* Light theme overrides */
+  .theme-light .btn-liquid-metal {
+    color: #3a3a42;
+  }
+
+  .theme-light .btn-liquid-metal:hover {
+    color: #1a1a22;
+  }
+
+  .theme-light .btn-liquid-metal .shader-inner-fill {
+    background: #f0f0f4;
+  }
+
+
+  /* CSS metallic gradient border by default */
+  .theme-dark .btn-liquid-metal {
+    background: linear-gradient(90deg, #3f3f46, #71717a, #52525b, #71717a, #3f3f46);
+  }
+  .theme-light .btn-liquid-metal {
+    background: linear-gradient(90deg, #a0a0a8, #d0d0d8, #b8b8c0, #d0d0d8, #a0a0a8);
+  }
+
+  /* Shader canvas — extends beyond button to form border ring */
+  .btn-liquid-metal .shader-border {
+    position: absolute;
+    inset: 0;
+    border-radius: 9999px;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0;
+    transition: opacity 300ms ease;
+  }
+  .btn-liquid-metal:hover .shader-border {
+    opacity: 1;
+  }
+
+  /* Solid dark center — masks shader, leaving only the edge ring visible.
+     #13131f (≈9.0% lightness) sits ~1.9% above the #000000 app bg, a touch more
+     separation than the old #0e0e1a (≈7.1%). Dark theme only — light theme fill is
+     overridden below. */
+  .btn-liquid-metal .shader-inner-fill {
+    position: absolute;
+    inset: 1px;
+    border-radius: 9999px;
+    background: #13131f;
+    z-index: 1;
+    pointer-events: none;
+  }
+
+  /* Button content sits on top of everything */
+  .btn-liquid-metal .btn-content {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+  }
+
+  /* --- Secondary buttons (LiquidMetalButton variant="secondary"): the same
+     liquid-metal treatment as primary (same shape + Varela Round font) but muted —
+     fill matched to the app bg, a dimmer metal ring, muted text. Still lights up to
+     full metal on hover. The difference from primary: primary has a dark fill +
+     full-strength ring/text; secondary blends + is muted. --- */
+  .btn-secondary-metal .shader-inner-fill {
+    background: var(--bg-main) !important;
+  }
+  .btn-secondary-metal {
+    color: var(--text-muted);
+  }
+  .theme-dark .btn-secondary-metal {
+    background: linear-gradient(90deg, #2c2c31, #515158, #3a3a3f, #515158, #2c2c31) !important;
+  }
+  .theme-light .btn-secondary-metal {
+    background: linear-gradient(90deg, #cacace, #e4e4e8, #d6d6da, #e4e4e8, #cacace) !important;
+  }
+  /* On hover the ring lights up (the shared WebGL shader); keep the text solid +
+     theme-aware (over the bg-matched fill) instead of the light shimmer. */
+  .btn-secondary-metal:hover .btn-content {
+    animation: none;
+    color: var(--text-secondary);
+  }
+
+  /* Danger = the same muted-metal treatment as secondary (same ring + shape, so the
+     family and icon rows stay consistent) but with red text — "red on the existing
+     bg". Lights up to metal on hover like the rest. */
+  .btn-danger-metal .shader-inner-fill {
+    background: var(--bg-main) !important;
+  }
+  .btn-danger-metal {
+    color: #ef4444;
+  }
+  .theme-dark .btn-danger-metal {
+    background: linear-gradient(90deg, #2c2c31, #515158, #3a3a3f, #515158, #2c2c31) !important;
+  }
+  .theme-light .btn-danger-metal {
+    background: linear-gradient(90deg, #cacace, #e4e4e8, #d6d6da, #e4e4e8, #cacace) !important;
+  }
+  .btn-danger-metal:hover .btn-content {
+    animation: none;
+    color: #f87171;
+  }
+
+  /* Amber-accent: a secondary pill whose content reads amber — a caution/state flag
+     (e.g. the memory "Paused" toggle). Stays amber on hover. */
+  .btn-amber-accent .btn-content {
+    color: #fbbf24;
+  }
+  .btn-amber-accent:hover .btn-content {
+    color: #fbbf24 !important;
+  }
+
+
+  .generic-container {
+    @apply bg-[var(--bg-card)] border border-[var(--border-subtle)] shadow-sm rounded-lg transition-all;
+  }
+
+  .chat-bubble-border {
+    border: 1px solid var(--border-user-bubble);
+  }
+
+  /* --- User Avatar Enhancement --- */
+  div[aria-label="User identicon"] {
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+    transition: box-shadow 0.2s ease-in-out;
+  }
+
+  div[aria-label="User identicon"]:hover {
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1), 0 0 0 3px rgba(var(--bg-button-primary-rgb, 78, 92, 222), 0.5);
+  }
+
+}
+
+/* Define CSS Variables for themes */
+@layer base {
+
+/* Fallback variables — applied before JS adds .theme-light/dark.
+   Uses the dark-theme palette so nothing is unstyled on first paint. */
+:root {
+  --bg-main: #000000;
+  --bg-header-footer: #000000;
+  --bg-card: #27272a;
+  --bg-user-message: #0f0f12;
+  --bg-assistant-message: #000000;
+  --bg-input: #161616;
+  --bg-dropdown: #000000;
+  --bg-dropdown-hover: #18181b;
+  --bg-button-primary: #f5f5f5;
+  --bg-button-primary-hover: #18181b;
+  --bg-button-secondary: #3f3f46;
+  --bg-button-secondary-hover: #52525b;
+  --bg-menu-item-active: #3f3f46;
+  --text-main: #e4e4e7;
+  --text-primary: #ffffff;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+  --text-dropdown: #e4e4e7;
+  --text-dropdown-active: #818cf8;
+  --text-link: #818cf8;
+  --text-button-primary: #18181b;
+  --text-button-primary-hover: #ffffff;
+  --text-button-secondary: #e4e4e7;
+  --text-button-secondary-hover: #ffffff;
+  --text-logout: #f87171;
+  --text-logout-active: #ef4444;
+  --text-status-pulse: #ffffff;
+  --border-subtle: #3f3f46;
+  --border-user-bubble: #3f3f46;
+  --border-input: #52525b;
+  --input-wrapper-border-color: var(--border-input);
+  --border-dropdown: #3f3f46;
+  --border-divider: #27272a;
+  --border-primary: #818cf8;
+  --border-primary-hover: #6366f1;
+  --border-secondary: #3f3f46;
+  --border-secondary-hover: #52525b;
+  --focus-ring: #818cf8;
+  --bs-border-color: var(--border-user-bubble);
+  --scrollbar-track: #18181b;
+  --scrollbar-thumb: #3f3f46;
+  --scrollbar-thumb-hover: #52525b;
+  --main-scrollbar-track: #000000;
+  --main-scrollbar-thumb: #27272a;
+  --main-scrollbar-thumb-hover: #3f3f46;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+  .theme-dark {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+
+    /* --- Dark Theme Variables --- */
+    --bg-main: #000000;
+    --bg-header-footer: #000000;
+    --bg-card: #27272a;
+    --bg-user-message: #0f0f12;
+    --bg-assistant-message: #000000;
+    --bg-input: #161616;
+    --bg-dropdown: #000000;
+    --bg-dropdown-hover: #18181b;
+    --bg-button-primary: #f5f5f5;
+    --bg-button-primary-hover: #18181b;
+    --bg-button-secondary: #3f3f46;
+    --bg-button-secondary-hover: #52525b;
+    --bg-menu-item-active: #3f3f46;
+    --text-main: #e4e4e7;
+    --text-primary: #ffffff;
+    --text-secondary: #a1a1a1;
+    --text-muted: #97979e;
+    --text-dropdown: #d1d5db;
+    --text-dropdown-active: #ffffff;
+    --text-link: #38bdf8;
+    --text-button-primary: #000000;
+    --text-button-primary-hover: #ffffff;
+    --text-button-secondary: #ffffff;
+    --text-button-secondary-hover: #ffffff;
+    --text-logout: #f87171;
+    --text-logout-active: #ef4444;
+    --text-status-pulse: #ffffff;
+    --border-subtle: #3f3f46;
+    --border-user-bubble: #52525b;
+    --border-input: #52525b;
+    --input-wrapper-border-color: var(--border-input);
+    --border-dropdown: #141414;
+    --border-divider: #333338;
+    --border-primary: #141414;
+    --border-primary-hover: #71717a;
+    --border-secondary: #3f3f46;
+    --border-secondary-hover: #52525b;
+    --focus-ring: #52525b;
+    --bs-border-color: var(--border-user-bubble);
+    --scrollbar-track: #27272A;
+    --scrollbar-thumb: #71717A;
+    --scrollbar-thumb-hover: #a1a1b3;
+    --main-scrollbar-track: #27272a;
+    --main-scrollbar-thumb: #52525b;
+    --main-scrollbar-thumb-hover: #71717a;
+  }
+
+  .theme-light {
+    /* --- Start with a copy of Dark Theme Variables for perfect replication --- */
+    --bg-main: #000000;
+    --bg-header-footer: #000000;
+    --bg-card: #27272a;
+    --bg-user-message: #0f0f12;
+    --bg-assistant-message: #000000;
+    --bg-input: #27272a;
+    --bg-dropdown: #000000;
+    --bg-dropdown-hover: #18181b;
+    --bg-button-primary: #f5f5f5;
+    --bg-button-primary-hover: #18181b;
+    --bg-button-secondary: #3f3f46;
+    --bg-button-secondary-hover: #52525b;
+    --bg-menu-item-active: #3f3f46;
+    --text-main: #e4e4e7;
+    --text-primary: #ffffff;
+    --text-secondary: #a1a1a1;
+    --text-muted: #97979e;
+    --text-dropdown: #d1d5db;
+    --text-dropdown-active: #ffffff;
+    --text-link: #38bdf8;
+    --text-button-primary: #000000;
+    --text-button-primary-hover: #ffffff;
+    --text-button-secondary: #ffffff;
+    --text-button-secondary-hover: #ffffff;
+    --text-logout: #f87171;
+    --text-logout-active: #ef4444;
+    --border-subtle: #3f3f46;
+    --border-user-bubble: #52525b;
+    --border-input: #52525b;
+    --input-wrapper-border-color: var(--border-input);
+    --border-dropdown: #141414;
+    --border-divider: #333338;
+    --border-primary: #141414;
+    --border-primary-hover: #71717a;
+    --border-secondary: #3f3f46;
+    --border-secondary-hover: #52525b;
+    --focus-ring: #52525b;
+    --bs-border-color: var(--border-user-bubble);
+    --scrollbar-track: #27272A;
+    --scrollbar-thumb: #71717A;
+    --scrollbar-thumb-hover: #a1a1b3;
+    --main-scrollbar-track: #27272a;
+    --main-scrollbar-thumb: #52525b;
+    --main-scrollbar-thumb-hover: #71717a;
+    
+    /* --- Light Theme Overrides — white bg, grey cards (inverse of dark) --- */
+    --bg-main: #fafafc;
+    --bg-header-footer: #fafafc;
+    --bg-card: #f0f0f4;
+    --bg-user-message: #f7f7fb;
+    --bg-assistant-message: #fafafc;
+    --bg-input: #ffffff;
+    --bg-dropdown: #ffffff;
+    /* ~10% darker than the white dropdown (mirrors dark theme's #000→#18181b);
+       #f0f0f4 was == --bg-card and invisible on white. */
+    --bg-dropdown-hover: #e4e4e8;
+    --bg-button-primary: #1a1a1d;
+    --bg-button-primary-hover: #53535a;
+    --bg-button-secondary: #e5e7eb;
+    --bg-button-secondary-hover: #d1d5db;
+    --bg-menu-item-active: #f3f4f6;
+    --text-main: #18181b;
+    --text-primary: #1f2937;
+    --text-secondary: #6b7280;
+    --text-muted: #696e75;
+    --text-dropdown: #374151;
+    --text-dropdown-active: #111827;
+    --text-link: #0284c7;
+    --text-button-primary: #ffffff;
+    --text-button-primary-hover: #ffffff;
+    --text-button-secondary: #1f2937;
+    --text-button-secondary-hover: #111827;
+    --text-logout: #dc2626;
+    --text-logout-active: #b91c1c;
+    --text-status-pulse: #1f2937;
+    --border-subtle: #ced2da;
+    --border-user-bubble: #ced2da;
+    --border-input: #ced2da;
+    --border-dropdown: #d1d5db;
+    --border-divider: #e5e7eb;
+    --border-primary: #1a1a1d;
+    --border-primary-hover: #a0a0a0;
+    --border-secondary: #e5e7eb;
+    --border-secondary-hover: #d1d5db;
+    --focus-ring: #38bdf8;
+    --scrollbar-track: #e5e7eb;
+    --scrollbar-thumb: #9ca3af;
+    --scrollbar-thumb-hover: #6b7280;
+    --main-scrollbar-track: #f3f4f6;
+    --main-scrollbar-thumb: #d1d5db;
+    --main-scrollbar-thumb-hover: #9ca3af;
+  }
+}
+
+/* Custom Scrollbar for Webkit browsers (Chrome, Safari) */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: var(--border-subtle);
+  border-radius: 10px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: var(--border-interactive);
+}
+
+/* Custom Scrollbar for Firefox */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-subtle) transparent;
+}
+
+
+.chat-input-grid-container {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  align-items: center; /* Default to vertical centering for single-line */
+}
+
+.chat-input-grid-container.multi-line {
+  align-items: start; /* Switch to top-alignment for multi-line */
+}
+
+
+.chat-input-grid-container > * {
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+  min-width: 0; /* Prevents layout blowout */
+}
+
+/* Force consistent cursor height on new lines in contenteditable.
+   Browsers insert <div>/<p> blocks on Enter/wrap which have their own line-height. */
+[contenteditable] * {
+  font: inherit;
+  line-height: inherit;
+  margin: 0;
+  padding: 0;
+}
+
+.action-tag {
+  @apply text-xs sm:text-base; /* Apply responsive text sizes */
+  background-color: rgb(55 65 81); /* A dark charcoal/slate color */
+  color: white;
+  padding: 0.25rem 0.5rem;
+  border-radius: 5px;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+}
+
+.action-tag button {
+  background: none;
+  border: none;
+  color: white;
+  margin-left: 6px;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0.7;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.action-tag button:hover {
+  opacity: 1;
+}
+
+@keyframes rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Add dark theme scrollbar styling */
+/* Webkit browsers (Chrome, Safari, Edge, etc.) */
+html::-webkit-scrollbar {
+  width: 10px; /* Adjust width as needed */
+}
+
+html::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+  border-radius: 5px;
+}
+
+html::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: 5px;
+  border: 2px solid var(--scrollbar-track);
+}
+
+html::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+}
+
+/* Firefox */
+html {
+  scrollbar-width: thin; /* Or "auto" */
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+/* If specific elements within the app also scroll, */
+/* you might need to apply similar rules to those elements' selectors. */
+/* Example: */
+/* .scrollable-chat-area::-webkit-scrollbar { ... } */
+/* .scrollable-chat-area { scrollbar-color: #555 #1f1f1f; } */
+
+/* Force Inter font on body and apply themed background/color */
+body {
+  font-family: 'Plus Jakarta Sans', sans-serif !important; 
+  /* Apply theme colors via CSS variables, REMOVE !important */
+  background-color: var(--bg-main); 
+  color: var(--text-main); 
+}
+
+body.modal-open {
+  overflow: hidden;
+}
+
+/* Ensure html, body, #root take full height and inherit */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  /* overflow: hidden; */ /* Allow scrolling if needed */
+  background-color: inherit;
+  color: inherit;
+}
+
+/* Custom scrollbar styles for WebKit browsers */
+main::-webkit-scrollbar {
+  width: 8px;
+}
+
+main::-webkit-scrollbar-track {
+  background: var(--main-scrollbar-track);
+}
+
+main::-webkit-scrollbar-thumb {
+  background-color: var(--main-scrollbar-thumb);
+  border-radius: 10px;
+  border: 2px solid var(--main-scrollbar-track);
+}
+
+main::-webkit-scrollbar-thumb:hover {
+  background-color: var(--main-scrollbar-thumb-hover);
+}
+
+/* Ensure main content area scrolls if needed */
+main {
+  scrollbar-width: thin; /* For Firefox */
+  scrollbar-color: var(--main-scrollbar-thumb) var(--main-scrollbar-track); /* For Firefox */
+}
+
+/* Example of a utility class if needed */
+.text-balance {
+  text-wrap: balance;
+}
+
+/* Add Tailwind's spin animation utility */
+@layer utilities {
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  .animate-spin {
+    animation: spin 1s linear infinite;
+  }
+  /* Liquid Metal Border — WebGL shader wrapper for inputs */
+  .liquid-metal-border {
+    position: relative;
+    padding: 1px;
+    background: linear-gradient(90deg, #3f3f46, #71717a, #52525b, #71717a, #3f3f46);
+  }
+  .liquid-metal-border-shader {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0;
+    transition: opacity 300ms ease;
+  }
+  .theme-light .liquid-metal-border {
+    background: linear-gradient(90deg, #a0a0a8, #d0d0d8, #b8b8c0, #d0d0d8, #a0a0a8);
+  }
+  .liquid-metal-border-inner {
+    position: relative;
+    border-radius: inherit;
+    background: var(--bg-main);
+  }
+
+  /* Legacy fallback for any remaining gradient-border-container usage */
+  .gradient-border-container {
+    @apply relative p-[1px] rounded-3xl;
+    background: linear-gradient(90deg, #52525b, #a1a1aa, #71717a, #a1a1aa, #52525b);
+    transition: background 300ms ease-in-out;
+  }
+  .gradient-border-target:focus {
+    outline: none;
+    box-shadow: none !important;
+  }
+
+  /* Dropdown panel metallic border */
+  .dropdown-metallic-border {
+    border: 1px solid #71717a;
+  }
+  .theme-light .dropdown-metallic-border {
+    border: 1px solid #b8b8c0;
+  }
+}
+
+/* Circular crop overlay for AI thumbnails */
+.cropper-circle-overlay .cropper-view-box,
+.cropper-circle-overlay .cropper-face {
+  border-radius: 50%;
+}
+.cropper-circle-overlay .cropper-view-box {
+  outline: 2px solid rgba(255, 255, 255, 0.8);
+  outline-offset: -1px;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
+}
+.cropper-circle-overlay .cropper-dashed,
+.cropper-circle-overlay .cropper-line {
+  display: none;
+}
+
+/* Add any other global styles here */
+
+/* Gradient status text styling */
+.status-text-gradient {
+  animation: metallic-status-pulse 2s ease infinite;
+}
+
+@keyframes metallic-status-pulse {
+  0%, 100% { color: #a0a0a8; }
+  33% { color: #B8B0A4; }
+  66% { color: #909098; }
+}
+
+.theme-light .status-text-gradient {
+  animation: metallic-status-pulse-light 2s ease infinite;
+}
+
+@keyframes metallic-status-pulse-light {
+  0%, 100% { color: #606068; }
+  33% { color: #484050; }
+  66% { color: #585060; }
+}

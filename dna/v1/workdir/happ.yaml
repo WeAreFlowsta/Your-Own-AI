@@ -1,0 +1,16 @@
+---
+manifest_version: "0"
+name: yourown_ai_transcript_v1_happ
+description: "Your Own AI transcript DNA v1 - tamper-proof conversation recording"
+roles:
+  - id: transcript
+    name: transcript
+    provisioning:
+      strategy: create
+      deferred: false
+    dna:
+      path: yourown_ai_transcript_v1.dna
+      properties: ~
+      uid: ~
+      version: ~
+      clone_limit: 0

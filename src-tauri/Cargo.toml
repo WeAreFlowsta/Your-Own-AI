@@ -1,0 +1,86 @@
+[package]
+name = "app"
+version = "0.1.0"
+description = "Offline-first AI App"
+authors = ["Your Own AI"]
+homepage = "https://yourownai.net"
+# Required since bin/census.rs exists: tauri dev's bare `cargo run`
+# must keep launching the app, not the census tool.
+default-run = "app"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-store = "2"
+tauri-plugin-http = "2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+axum = "0.7"
+async-stream = "0.3"
+sysinfo = "0.33"
+futures = "0.3"
+ash = "0.38"
+tauri-plugin-dialog = "2.6.0"
+zip = "7"
+calamine = "0.34.0"
+pdf-extract = "0.10.0"
+# OCR for scanned PDFs (optional models downloaded at runtime). pdfium renders any
+# page (incl. CCITT/JBIG2 scans); ocrs (pure-Rust, RTen) does text recognition.
+# rten pinned to ocrs 0.11's version so the `Model` type unifies.
+ocrs = "0.11"
+rten = "0.22"
+pdfium-render = "0.8"
+tauri-plugin-window-state = "2.4.1"
+tauri-plugin-log = "2"
+log = "0.4"
+
+# Holochain (conductor + lair keystore management)
+# Pinned to the Holochain 0.6.1-compatible set proven in ProofPoll:
+# 0.6.1 pins lair_keystore_api to exactly 0.6.3, and holochain_client
+# 0.8.1 / holochain_types 0.6.1 move in lockstep with the conductor.
+lair_keystore_api = "=0.6.3"
+holochain_client = { version = "=0.8.1", default-features = false }
+holochain_types = "=0.6.1"
+rmp-serde = "1"
+hex = "0.4"
+# Transcript encryption (Phase A): XSalsa20-Poly1305 secretbox with the
+# user-level data key.
+crypto_secretbox = "0.1"
+rand = "0.8"
+base64 = "0.22"
+ed25519-dalek = "2"
+percent-encoding = "2"
+
+# ML inference (OCR via ocrs/rten) is unusably slow in an unoptimised debug build —
+# a single scanned page took ~2 min. Compile just the ML crates with optimisations
+# even in dev, so OCR runs at near-release speed while our own code stays debuggable.
+[profile.dev.package.rten]
+opt-level = 3
+[profile.dev.package."rten-base"]
+opt-level = 3
+[profile.dev.package."rten-gemm"]
+opt-level = 3
+[profile.dev.package."rten-simd"]
+opt-level = 3
+[profile.dev.package."rten-tensor"]
+opt-level = 3
+[profile.dev.package."rten-model-file"]
+opt-level = 3
+[profile.dev.package.ocrs]
+opt-level = 3

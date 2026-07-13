@@ -1,0 +1,16 @@
+---
+manifest_version: "0"
+name: yourown_ai_transcript_v1
+integrity:
+  network_seed: "yourown-ai-transcript-v1-TEMPLATE-overridden-per-user-at-install"
+  properties: ~
+  zomes:
+    - name: transcript_integrity
+      path: transcript_integrity.wasm
+      dependencies: []
+coordinator:
+  zomes:
+    - name: transcript
+      path: transcript_coordinator.wasm
+      dependencies:
+        - name: transcript_integrity
