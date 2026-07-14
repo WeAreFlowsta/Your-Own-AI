@@ -1,7 +1,6 @@
 import {
   component$,
   useSignal,
-  useVisibleTask$,
   $,
   type QRL,
   noSerialize,
@@ -9,8 +8,7 @@ import {
 } from '@builder.io/qwik';
 import { LuX, LuCheck } from '@qwikest/icons/lucide';
 import LiquidMetalButton from './LiquidMetalButton';
-import Cropper from 'cropperjs';
-import 'cropperjs/dist/cropper.css';
+import ImageCropper from './ImageCropper';
 
 interface ImageCropModalProps {
   show: boolean;
@@ -21,68 +19,22 @@ interface ImageCropModalProps {
 
 export const ImageCropModal = component$<ImageCropModalProps>(
   ({ show, onHide$, imageSrc, onCropComplete$ }) => {
-    const imgRef = useSignal<HTMLImageElement>();
-    const cropperRef = useSignal<NoSerialize<Cropper>>();
     const error = useSignal<string | null>(null);
+    // ImageCropper exports a fresh canvas on every crop change; we keep the
+    // latest one and only commit it when the user hits Crop & Save.
+    const latestCanvas = useSignal<NoSerialize<HTMLCanvasElement>>();
 
-    // Initialize cropperjs when image loads and modal is shown
-    // eslint-disable-next-line qwik/no-use-visible-task
-    useVisibleTask$(({ track, cleanup }) => {
-      track(() => show);
-      track(() => imageSrc);
-
-      if (!show || !imageSrc) return;
-
-      // Wait for the image element to be rendered
-      const timer = setTimeout(() => {
-        const imgEl = imgRef.value;
-        if (!imgEl) return;
-
-        const cropper = new Cropper(imgEl, {
-          aspectRatio: 1,
-          viewMode: 1,
-          autoCropArea: 0.9,
-          responsive: true,
-          guides: false,
-          center: true,
-          highlight: false,
-          cropBoxMovable: true,
-          cropBoxResizable: true,
-          toggleDragModeOnDblclick: false,
-        });
-
-        cropperRef.value = noSerialize(cropper);
-      }, 100);
-
-      cleanup(() => {
-        clearTimeout(timer);
-        if (cropperRef.value) {
-          cropperRef.value.destroy();
-          cropperRef.value = undefined;
-        }
-      });
+    const handleCropChange$ = $((canvas: HTMLCanvasElement) => {
+      latestCanvas.value = noSerialize(canvas);
+      error.value = null;
     });
 
-    const handleCrop$ = $(async () => {
-      error.value = null;
-      const cropper = cropperRef.value;
-      if (!cropper) {
+    const handleSave$ = $(() => {
+      const canvas = latestCanvas.value;
+      if (!canvas) {
         error.value = 'Could not crop image. Please try again.';
         return;
       }
-
-      const canvas = cropper.getCroppedCanvas({
-        width: 256,
-        height: 256,
-        imageSmoothingEnabled: true,
-        imageSmoothingQuality: 'high',
-      });
-
-      if (!canvas) {
-        error.value = 'Could not process image. Please try again.';
-        return;
-      }
-
       canvas.toBlob(
         (blob) => {
           if (blob) {
@@ -109,8 +61,11 @@ export const ImageCropModal = component$<ImageCropModalProps>(
           }
         }}
       >
+        {/* No transform/scale on this dialog: cropperjs v2's bounds check
+            mixes getBoundingClientRect (scaled) with canvas coords (unscaled),
+            so a scaled ancestor makes it reject the maximized selection. */}
         <div
-          class="bg-[var(--bg-header-footer)] p-6 md:p-8 rounded-xl shadow-2xl w-full max-w-lg transform transition-all duration-300 ease-in-out scale-95 relative my-8"
+          class="bg-[var(--bg-header-footer)] p-6 md:p-8 rounded-xl shadow-2xl w-full max-w-lg relative my-8"
           onClick$={(e) => e.stopPropagation()}
         >
           <div class="flex justify-between items-center mb-6">
@@ -133,14 +88,12 @@ export const ImageCropModal = component$<ImageCropModalProps>(
               </div>
             )}
             {imageSrc && (
-              <div class="flex justify-center bg-black/20 rounded-lg p-4 cropper-circle-overlay">
-                <img
-                  ref={imgRef}
-                  alt="Crop me"
-                  src={imageSrc}
-                  style={{ maxHeight: '60vh', objectFit: 'contain' }}
-                />
-              </div>
+              <ImageCropper
+                imageSrc={imageSrc}
+                cropShape="square"
+                outputSize={256}
+                onCropComplete$={handleCropChange$}
+              />
             )}
           </div>
 
@@ -153,11 +106,11 @@ export const ImageCropModal = component$<ImageCropModalProps>(
               Cancel
             </LiquidMetalButton>
             <LiquidMetalButton
-              onClick$={handleCrop$}
+              onClick$={handleSave$}
               class="w-full sm:w-auto inline-flex justify-center items-center px-6 py-2.5 text-base font-medium focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[var(--focus-ring)] transition-colors disabled:opacity-70"
             >
               <LuCheck class="w-[18px] h-[18px] mr-2" />
-              Crop & Save
+              Crop &amp; Save
             </LiquidMetalButton>
           </div>
         </div>

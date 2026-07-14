@@ -845,21 +845,6 @@ main {
   }
 }
 
-/* Circular crop overlay for AI thumbnails */
-.cropper-circle-overlay .cropper-view-box,
-.cropper-circle-overlay .cropper-face {
-  border-radius: 50%;
-}
-.cropper-circle-overlay .cropper-view-box {
-  outline: 2px solid rgba(255, 255, 255, 0.8);
-  outline-offset: -1px;
-  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
-}
-.cropper-circle-overlay .cropper-dashed,
-.cropper-circle-overlay .cropper-line {
-  display: none;
-}
-
 /* Add any other global styles here */
 
 /* Gradient status text styling */
