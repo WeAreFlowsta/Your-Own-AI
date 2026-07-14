@@ -22,7 +22,8 @@ import {
   LuAlertTriangle,
   LuLoader2,
   LuUploadCloud,
-  LuTrash2,
+  LuRefreshCw,
+  LuImage,
   LuChevronDown,
   LuCheck,
 } from '@qwikest/icons/lucide';
@@ -31,6 +32,8 @@ import { formatModelDisplayName } from '../utils/modelNameFormatter';
 import { modelFamilies } from '../data/recommended-models';
 import { isModelPaused } from '../utils/modelPrefs';
 import { ImageCropModal } from './ImageCropModal';
+import { ThumbnailGalleryModal } from './ThumbnailGalleryModal';
+import type { GalleryThumb } from '../data/thumbnail-gallery';
 import { LiquidMetalBorder } from './LiquidMetalBorder';
 import LiquidMetalButton from './LiquidMetalButton';
 
@@ -98,6 +101,9 @@ const AiFormModal = component$<AiFormModalProps>(
       localPreviewOverride: null as string | null,
       originalImageSrc: null as string | null,
       showCropModal: false,
+      showGalleryModal: false,
+      // Bundled path of the gallery thumb picked this session (selected ring)
+      galleryPath: null as string | null,
       formError: null as string | null,
       isSubmitting: false,
     });
@@ -224,6 +230,7 @@ const AiFormModal = component$<AiFormModalProps>(
         thumbnailFile.value = null;
         store.localPreviewOverride = null;
         store.useArchetypeThumbnail = false;
+        store.galleryPath = null;
         previewSrc.value = null;
 
         const templates = getArchetypeTemplates();
@@ -292,6 +299,18 @@ const AiFormModal = component$<AiFormModalProps>(
       }
     });
 
+    // While in "match personality" mode, keep the preview following the
+    // selected personality's art (a gallery pick or upload overrides this).
+    // eslint-disable-next-line qwik/no-use-visible-task
+    useVisibleTask$(({ track }) => {
+      const archetypeId = track(() => store.baseArchetypeId);
+      if (!archetypeId || thumbnailFile.value || !store.useArchetypeThumbnail) return;
+      const archetypeUrl = aiData.archetypeDefaultThumbnailsMap[archetypeId];
+      if (previewSrc.value) {
+        previewSrc.value = archetypeUrl || GENERIC_PLACEHOLDER_IMG;
+      }
+    });
+
     // Auto-update description when name or personality changes
     // eslint-disable-next-line qwik/no-use-visible-task
     useVisibleTask$(({ track }) => {
@@ -340,10 +359,33 @@ const AiFormModal = component$<AiFormModalProps>(
       const objectUrl = URL.createObjectURL(croppedFile);
       store.localPreviewOverride = objectUrl;
       store.useArchetypeThumbnail = false;
+      store.galleryPath = null;
       previewSrc.value = objectUrl;
     });
 
-    // Clear thumbnail
+    // Handle gallery pick — saved through the same custom-thumbnail path as
+    // an upload, so it sticks across personality changes.
+    const handleGallerySelect$ = $(async (thumb: GalleryThumb) => {
+      store.showGalleryModal = false;
+      try {
+        const response = await fetch(thumb.path);
+        const blob = await response.blob();
+        thumbnailFile.value = new File([blob], 'thumbnail.jpg', { type: 'image/jpeg' });
+        if (store.localPreviewOverride) {
+          URL.revokeObjectURL(store.localPreviewOverride);
+          store.localPreviewOverride = null;
+        }
+        store.useArchetypeThumbnail = false;
+        store.galleryPath = thumb.path;
+        store.formError = null;
+        previewSrc.value = thumb.path;
+      } catch (err) {
+        console.error('[AiFormModal] Failed to load gallery thumbnail:', err);
+        store.formError = 'Failed to load that thumbnail. Please try another.';
+      }
+    });
+
+    // Clear thumbnail — the AI follows its personality's art from here on
     const handleClearThumbnail$ = $(() => {
       if (store.localPreviewOverride) {
         URL.revokeObjectURL(store.localPreviewOverride);
@@ -353,6 +395,7 @@ const AiFormModal = component$<AiFormModalProps>(
       const fileInput = document.getElementById('thumbnailFile') as HTMLInputElement;
       if (fileInput) fileInput.value = '';
       store.useArchetypeThumbnail = true;
+      store.galleryPath = null;
       store.formError = null;
       // Force preview to archetype default
       const archetypeUrl = aiData.archetypeDefaultThumbnailsMap[store.baseArchetypeId];
@@ -1032,70 +1075,80 @@ const AiFormModal = component$<AiFormModalProps>(
               </div>
             )}
 
-            {/* Thumbnail (edit only) */}
-            {editingAi && (
-              <div class="space-y-2">
-                <p class="block text-sm font-medium text-[var(--text-secondary)]">Thumbnail</p>
-                <div class="flex items-center space-x-4">
-                  <div class="w-16 h-16 rounded-full border border-[var(--border-subtle)] shadow-sm bg-[var(--bg-card)] flex-shrink-0 overflow-hidden flex items-center justify-center">
-                    <img
-                      src={sanitizeImageUrl(
-                        previewSrc.value
-                          || (editingAi && currentDisplayableThumbnailUrl)
-                          || aiData.archetypeDefaultThumbnailsMap[store.baseArchetypeId]
-                          || GENERIC_PLACEHOLDER_IMG
-                      )}
-                      alt="Thumbnail preview"
-                      class="w-full h-full object-cover object-center"
-                      onError$={(e) => {
-                        const img = e.target as HTMLImageElement;
-                        if (img.src.endsWith(GENERIC_PLACEHOLDER_IMG)) return;
-                        img.src = GENERIC_PLACEHOLDER_IMG;
-                      }}
-                    />
-                  </div>
-                  <div class="flex flex-col space-y-2">
-                    <label
-                      for="thumbnailFile"
-                      class={`px-4 py-2 border border-[#71717a] rounded-full text-sm font-medium text-[var(--text-secondary)] bg-[var(--bg-input)] hover:border-[#B8B0A4] hover:text-[var(--text-primary)] cursor-pointer transition-all ${
+            {/* Thumbnail */}
+            <div class="space-y-2">
+              <p class="block text-sm font-medium text-[var(--text-secondary)]">Thumbnail</p>
+              <div class="flex items-center space-x-4">
+                <div class="w-16 h-16 rounded-full border border-[var(--border-subtle)] shadow-sm bg-[var(--bg-card)] flex-shrink-0 overflow-hidden flex items-center justify-center">
+                  <img
+                    src={sanitizeImageUrl(
+                      previewSrc.value
+                        || (editingAi && currentDisplayableThumbnailUrl)
+                        || aiData.archetypeDefaultThumbnailsMap[store.baseArchetypeId]
+                        || GENERIC_PLACEHOLDER_IMG
+                    )}
+                    alt="Thumbnail preview"
+                    class="w-full h-full object-cover object-center"
+                    onError$={(e) => {
+                      const img = e.target as HTMLImageElement;
+                      if (img.src.endsWith(GENERIC_PLACEHOLDER_IMG)) return;
+                      img.src = GENERIC_PLACEHOLDER_IMG;
+                    }}
+                  />
+                </div>
+                <div class="flex flex-col space-y-2">
+                  <button
+                    type="button"
+                    onClick$={() => (store.showGalleryModal = true)}
+                    disabled={store.isSubmitting}
+                    class={`px-4 py-2 border border-[#71717a] rounded-full text-sm font-medium text-[var(--text-secondary)] bg-[var(--bg-input)] hover:border-[#B8B0A4] hover:text-[var(--text-primary)] cursor-pointer transition-all text-left ${
+                      store.isSubmitting ? 'opacity-70 cursor-not-allowed' : ''
+                    }`}
+                  >
+                    <LuImage class="w-4 h-4 inline mr-2" />
+                    Choose from Gallery
+                  </button>
+                  <label
+                    for="thumbnailFile"
+                    class={`px-4 py-2 border border-[#71717a] rounded-full text-sm font-medium text-[var(--text-secondary)] bg-[var(--bg-input)] hover:border-[#B8B0A4] hover:text-[var(--text-primary)] cursor-pointer transition-all ${
+                      store.isSubmitting ? 'opacity-70 cursor-not-allowed' : ''
+                    }`}
+                  >
+                    <LuUploadCloud class="w-4 h-4 inline mr-2" />
+                    Upload Your Own
+                  </label>
+                  <input
+                    type="file"
+                    id="thumbnailFile"
+                    accept="image/png, image/jpeg, image/gif, image/webp"
+                    onChange$={handleFileChange$}
+                    class="sr-only"
+                    disabled={store.isSubmitting}
+                  />
+                  {(thumbnailFile.value ||
+                    (editingAi &&
+                      currentDisplayableThumbnailUrl &&
+                      !store.useArchetypeThumbnail)) && (
+                    <button
+                      type="button"
+                      onClick$={handleClearThumbnail$}
+                      disabled={store.isSubmitting}
+                      title="Remove the chosen image so the thumbnail follows the personality"
+                      class={`px-4 py-2 border border-[#71717a] rounded-full text-sm font-medium text-[var(--text-secondary)] bg-[var(--bg-input)] hover:border-[#B8B0A4] hover:text-[var(--text-primary)] focus:outline-none transition-all text-left ${
                         store.isSubmitting ? 'opacity-70 cursor-not-allowed' : ''
                       }`}
                     >
-                      <LuUploadCloud class="w-4 h-4 inline mr-2" />
-                      {thumbnailFile.value ? 'Change Image' : 'Add Image'}
-                    </label>
-                    <input
-                      type="file"
-                      id="thumbnailFile"
-                      accept="image/png, image/jpeg, image/gif, image/webp"
-                      onChange$={handleFileChange$}
-                      class="sr-only"
-                      disabled={store.isSubmitting}
-                    />
-                    {(thumbnailFile.value ||
-                      (editingAi &&
-                        currentDisplayableThumbnailUrl &&
-                        !store.useArchetypeThumbnail)) && (
-                      <button
-                        type="button"
-                        onClick$={handleClearThumbnail$}
-                        disabled={store.isSubmitting}
-                        class={`px-4 py-2 border border-[#5c2a2a] rounded-full text-sm font-medium text-[#c08080] bg-[#2a1515] hover:border-[#7a3a3a] hover:text-[#d49090] focus:outline-none transition-all ${
-                          store.isSubmitting ? 'opacity-70 cursor-not-allowed' : ''
-                        }`}
-                      >
-                        <LuTrash2 class="w-4 h-4 inline mr-2" /> Clear Custom
-                      </button>
-                    )}
-                  </div>
+                      <LuRefreshCw class="w-4 h-4 inline mr-2" /> Match Personality
+                    </button>
+                  )}
                 </div>
-                {store.formError && thumbnailFile.value && (
-                  <p class="text-xs text-red-500 mt-1">
-                    {store.formError.replace('Thumbnail image', 'Uploaded thumbnail image')}
-                  </p>
-                )}
               </div>
-            )}
+              {store.formError && thumbnailFile.value && (
+                <p class="text-xs text-red-500 mt-1">
+                  {store.formError.replace('Thumbnail image', 'Uploaded thumbnail image')}
+                </p>
+              )}
+            </div>
 
             {/* Form Error */}
             {store.formError && (
@@ -1140,6 +1193,15 @@ const AiFormModal = component$<AiFormModalProps>(
           })}
           imageSrc={store.originalImageSrc}
           onCropComplete$={handleCroppedImage$}
+        />
+        <ThumbnailGalleryModal
+          show={store.showGalleryModal}
+          onHide$={$(() => {
+            store.showGalleryModal = false;
+          })}
+          onSelect$={handleGallerySelect$}
+          selectedPath={store.galleryPath}
+          personalityPath={aiData.archetypeDefaultThumbnailsMap[store.baseArchetypeId] || null}
         />
       </div>
     );
