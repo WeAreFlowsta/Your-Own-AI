@@ -330,9 +330,12 @@ export default component$(() => {
     return "/generic-ai-placeholder.svg";
   };
 
-  const getCategory = (ai: UserDefinedAI): string => {
+  // The personality name (Wizard, Caregiver, ...) — the archetype `category`
+  // field is "General" for nearly every personality, so it read as a stuck
+  // label that never followed personality changes.
+  const getPersonalityName = (ai: UserDefinedAI): string => {
     const archetype = aiData.archetypeTemplates.find((a) => a.id === ai.baseArchetypeId);
-    return archetype?.category || archetype?.name || "Custom";
+    return archetype?.name || "Custom";
   };
 
   return (
@@ -429,7 +432,7 @@ export default component$(() => {
                           {ai.name}
                         </h3>
                         <p class="text-xs text-[var(--text-secondary)] truncate">
-                          {getCategory(ai)} • {ai.status === "active" ? "Active" : "Inactive"}
+                          {getPersonalityName(ai)} • {ai.status === "active" ? "Active" : "Inactive"}
                         </p>
                       </div>
                     </div>
@@ -526,7 +529,7 @@ export default component$(() => {
                       </div>
                       <div class="min-w-0 flex-1">
                         <p class="text-sm font-medium text-[var(--text-primary)] truncate">{ai.name}</p>
-                        <p class="text-xs text-[var(--text-muted)] truncate">{getCategory(ai)} • Archived</p>
+                        <p class="text-xs text-[var(--text-muted)] truncate">{getPersonalityName(ai)} • Archived</p>
                       </div>
                       <LiquidMetalButton
                         variant="secondary"
