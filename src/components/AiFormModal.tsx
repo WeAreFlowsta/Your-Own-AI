@@ -28,27 +28,13 @@ import {
   LuCheck,
 } from '@qwikest/icons/lucide';
 import { invoke } from '@tauri-apps/api/core';
-import { formatModelDisplayName } from '../utils/modelNameFormatter';
-import { modelFamilies } from '../data/recommended-models';
+import { richModelName } from '../utils/modelNameFormatter';
 import { isModelPaused } from '../utils/modelPrefs';
 import { ImageCropModal } from './ImageCropModal';
 import { ThumbnailGalleryModal } from './ThumbnailGalleryModal';
 import type { GalleryThumb } from '../data/thumbnail-gallery';
 import { LiquidMetalBorder } from './LiquidMetalBorder';
 import LiquidMetalButton from './LiquidMetalButton';
-
-/**
- * Display name that includes the size variant, so two models from the same
- * family (e.g. Gemma 4 E2B vs E4B) are distinguishable in the picker. Matches
- * the downloaded file against the catalog; falls back to filename formatting.
- */
-function richModelName(filename: string): string {
-  for (const family of modelFamilies) {
-    const variant = family.variants.find((v) => v.filename === filename);
-    if (variant) return `${family.name} ${variant.parameterCount}`;
-  }
-  return formatModelDisplayName(filename);
-}
 
 interface AiFormModalProps {
   isOpen: boolean;

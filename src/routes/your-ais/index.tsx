@@ -26,6 +26,7 @@ import {
   LuArchive,
   LuRotateCcw,
 } from "@qwikest/icons/lucide";
+import { formatModelForCard } from "../../utils/modelNameFormatter";
 import AppHeader from "../../components/AppHeader";
 import AiFormModal from "../../components/AiFormModal";
 import DeleteAiModal from "../../components/DeleteAiModal";
@@ -433,6 +434,9 @@ export default component$(() => {
                         </h3>
                         <p class="text-xs text-[var(--text-secondary)] truncate">
                           {getPersonalityName(ai)} • {ai.status === "active" ? "Active" : "Inactive"}
+                        </p>
+                        <p class="text-xs text-[var(--text-muted)] truncate" title={ai.model}>
+                          {formatModelForCard(ai.model)}
                         </p>
                       </div>
                     </div>

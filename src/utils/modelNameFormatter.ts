@@ -1,3 +1,5 @@
+import { modelFamilies } from "../data/recommended-models";
+
 /**
  * Utility functions for formatting model names for display
  */
@@ -43,3 +45,29 @@ export function formatModelDisplayName(filename: string): string {
   return name;
 }
 
+
+/**
+ * Display name that includes the size variant, so two models from the same
+ * family (e.g. Gemma 4 E2B vs E4B) are distinguishable in pickers. Matches
+ * the downloaded file against the catalog; falls back to filename formatting.
+ */
+export function richModelName(filename: string): string {
+  for (const family of modelFamilies) {
+    const variant = family.variants.find((v) => v.filename === filename);
+    if (variant) return `${family.name} ${variant.parameterCount}`;
+  }
+  return formatModelDisplayName(filename);
+}
+
+/**
+ * Short label for an AI card: names the Auto mode, or the pinned model
+ * with prefixes and quantization noise stripped.
+ */
+export function formatModelForCard(model: string | undefined | null): string {
+  if (!model || model === 'auto:offline') return 'Auto - Offline Only';
+  if (model === 'auto:my-hardware') return 'Auto - My Hardware';
+  if (model === 'auto:online-offline') return 'Auto - Online and Offline';
+  if (model.startsWith('online:')) return formatModelDisplayName(model.slice(7));
+  if (model.startsWith('external:')) return formatModelDisplayName(model.slice(9));
+  return richModelName(model);
+}
