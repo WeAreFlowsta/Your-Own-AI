@@ -51,6 +51,20 @@ const BsLink45DegIcon = component$(() => (
   </svg>
 ));
 
+const BsCpuIcon = component$(() => (
+  <svg
+    fill="currentColor"
+    stroke="currentColor"
+    stroke-width="0"
+    viewBox="0 0 16 16"
+    height="1em"
+    width="1em"
+    class="md:mr-1.5"
+  >
+    <path d="M5 0a.5.5 0 0 1 .5.5V2h1V.5a.5.5 0 0 1 1 0V2h1V.5a.5.5 0 0 1 1 0V2h1V.5a.5.5 0 0 1 1 0V2A2.5 2.5 0 0 1 14 4.5h1.5a.5.5 0 0 1 0 1H14v1h1.5a.5.5 0 0 1 0 1H14v1h1.5a.5.5 0 0 1 0 1H14v1h1.5a.5.5 0 0 1 0 1H14a2.5 2.5 0 0 1-2.5 2.5v1.5a.5.5 0 0 1-1 0V14h-1v1.5a.5.5 0 0 1-1 0V14h-1v1.5a.5.5 0 0 1-1 0V14h-1v1.5a.5.5 0 0 1-1 0V14A2.5 2.5 0 0 1 2 11.5H.5a.5.5 0 0 1 0-1H2v-1H.5a.5.5 0 0 1 0-1H2v-1H.5a.5.5 0 0 1 0-1H2v-1H.5a.5.5 0 0 1 0-1H2A2.5 2.5 0 0 1 4.5 2V.5A.5.5 0 0 1 5 0zm-.5 3A1.5 1.5 0 0 0 3 4.5v7A1.5 1.5 0 0 0 4.5 13h7a1.5 1.5 0 0 0 1.5-1.5v-7A1.5 1.5 0 0 0 11.5 3h-7zM5 6.5A1.5 1.5 0 0 1 6.5 5h3A1.5 1.5 0 0 1 11 6.5v3A1.5 1.5 0 0 1 9.5 11h-3A1.5 1.5 0 0 1 5 9.5v-3zM6.5 6a.5.5 0 0 0-.5.5v3a.5.5 0 0 0 .5.5h3a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 0-.5-.5h-3z" />
+  </svg>
+));
+
 const BsTerminalIcon = component$(() => (
   <svg
     fill="currentColor"
@@ -171,6 +185,9 @@ interface ActionBarProps {
   aiName: string;
   theme: 'light' | 'dark';
   onGround$?: QRL<() => void>;
+  isLast?: boolean;
+  onRouteRetry$?: QRL<(target: 'online' | 'device') => void>;
+  canRouteOnline?: boolean;
 }
 
 // Minimum reasoning length (trimmed chars) worth surfacing a thinking box for.
@@ -181,17 +198,18 @@ interface ActionBarProps {
 const MIN_THINKING_DISPLAY_CHARS = 100;
 
 const ActionBar = component$<ActionBarProps>((props) => {
-  const openSection = useSignal<'tokens' | 'thoughts' | 'sources' | null>(null);
+  const openSection = useSignal<'tokens' | 'thoughts' | 'sources' | 'model' | null>(null);
 
   const hasTokens = props.message.tokens && (props.message.tokens.total_tokens || 0) > 0;
   const hasThoughts = !!props.message.thinking && props.message.thinking.trim().length >= MIN_THINKING_DISPLAY_CHARS;
   const hasSources = props.message.sources && props.message.sources.length > 0;
   const hasGrounded = !!props.message.grounded && props.message.grounded.length > 0;
   const canGround = !!props.onGround$ && !hasGrounded && !props.message.groundingPending;
-  const hasButtons = hasTokens || hasThoughts || hasSources || hasGrounded || canGround || !!props.message.groundingPending;
+  const hasModelInfo = props.message.role === 'assistant' && !!props.message.servedBy;
+  const hasButtons = hasTokens || hasThoughts || hasSources || hasGrounded || canGround || !!props.message.groundingPending || hasModelInfo;
   const showStatus = props.isLoading && !props.message.error;
 
-  const toggleSection$ = $((section: 'tokens' | 'thoughts' | 'sources') => {
+  const toggleSection$ = $((section: 'tokens' | 'thoughts' | 'sources' | 'model') => {
     openSection.value = openSection.value === section ? null : section;
   });
 
@@ -253,6 +271,17 @@ const ActionBar = component$<ActionBarProps>((props) => {
                 <span class="hidden md:inline">Tokens</span>
               </LiquidMetalButton>
             )}
+            {hasModelInfo && (
+              <LiquidMetalButton
+                onClick$={() => toggleSection$('model')}
+                class="px-3 py-1 text-xs flex items-center"
+                aria-expanded={openSection.value === 'model'}
+                aria-label="Which model answered this and why"
+              >
+                <BsCpuIcon />
+                <span class="hidden md:inline">Model</span>
+              </LiquidMetalButton>
+            )}
             {hasThoughts && (
               <LiquidMetalButton
                 onClick$={() => toggleSection$('thoughts')}
@@ -294,6 +323,52 @@ const ActionBar = component$<ActionBarProps>((props) => {
           </div>
         )}
       </div>
+
+      {openSection.value === 'model' && hasModelInfo && (
+        <div class="px-4 pb-4 -mt-2">
+          <div class="pt-4 text-sm text-[var(--text-secondary)]">
+            <span class="font-medium text-[var(--text-primary)]">
+              {servedByParts(props.message.servedBy!).name}
+            </span>
+            {' · '}
+            {servedByParts(props.message.servedBy!).origin}
+            <p class="text-xs mt-1.5">
+              {props.message.routingReason
+                ? `Auto routing: ${props.message.routingReason}`
+                : 'This model was picked directly, not by Auto routing.'}
+            </p>
+            {props.isLast &&
+              props.onRouteRetry$ &&
+              props.message.servedBy!.startsWith('online:') && (
+                <button
+                  type="button"
+                  onClick$={() => {
+                    openSection.value = null;
+                    props.onRouteRetry$!('device');
+                  }}
+                  class="mt-2.5 px-3 py-1.5 text-xs rounded-lg bg-[var(--bg-button-secondary)] hover:bg-[var(--bg-button-secondary-hover)] border border-[var(--border-secondary)] text-[var(--text-button-secondary)] transition-colors"
+                >
+                  Redo on your device
+                </button>
+              )}
+            {props.isLast &&
+              props.onRouteRetry$ &&
+              props.canRouteOnline &&
+              !props.message.servedBy!.startsWith('online:') && (
+                <button
+                  type="button"
+                  onClick$={() => {
+                    openSection.value = null;
+                    props.onRouteRetry$!('online');
+                  }}
+                  class="mt-2.5 px-3 py-1.5 text-xs rounded-lg bg-[var(--bg-button-secondary)] hover:bg-[var(--bg-button-secondary-hover)] border border-[var(--border-secondary)] text-[var(--text-button-secondary)] transition-colors"
+                >
+                  Try this answer online
+                </button>
+              )}
+          </div>
+        </div>
+      )}
 
       {openSection.value === 'tokens' && hasTokens && (
         <div class="px-4 pb-4 -mt-2 text-[var(--text-primary)] whitespace-pre-wrap text-base leading-relaxed tracking-normal font-light">
@@ -401,7 +476,6 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
   const displayedLineCount = useSignal(0);
   const thinkingPreviewRef = useSignal<HTMLDivElement>();
   const rootRef = useSignal<HTMLDivElement>();
-  const routeInfoOpen = useSignal(false);
   const hasAnchoredStart = useSignal(false);
   const isGenerationPhase = useSignal(false);
   const thinkingBoxVisible = useSignal(false);
@@ -721,7 +795,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
   };
 
   return (
-    <div ref={rootRef} class="relative mb-4 scroll-mt-4 group">
+    <div ref={rootRef} class="relative mb-4 scroll-mt-4">
       {renderAvatarContent()}
       <div class="ml-6">
         <div class="space-y-1 flex-grow max-w-[calc(100%)]">
@@ -777,6 +851,9 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
                   aiName={getSenderName()}
                   theme={props.theme}
                   onGround$={props.onGround$}
+                  isLast={props.isLast}
+                  onRouteRetry$={props.onRouteRetry$}
+                  canRouteOnline={props.canRouteOnline}
                 />
               )}
               {contentToRender && !hasError && (
@@ -880,66 +957,6 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
               )}
           </div>
         )}
-
-        {/* Routing receipt — invisible until the message is hovered. One muted
-            line: which model served this reply and where it ran. Click for the
-            router's reason and (on the last message) a redo-elsewhere action. */}
-        {props.message.role === 'assistant' &&
-          !props.message.isLoading &&
-          props.message.servedBy && (
-            <div class="pl-9 md:pl-10 lg:pl-10 h-5 relative">
-              <button
-                type="button"
-                onClick$={() => { routeInfoOpen.value = !routeInfoOpen.value; }}
-                class={`text-[11px] text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-opacity ${
-                  routeInfoOpen.value ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-                }`}
-              >
-                {servedByParts(props.message.servedBy).name} · {servedByParts(props.message.servedBy).origin}
-              </button>
-              {routeInfoOpen.value && (
-                <>
-                  <div class="fixed inset-0 z-40" onClick$={() => { routeInfoOpen.value = false; }} />
-                  <div class="absolute bottom-full left-9 md:left-10 mb-1 z-50 w-80 max-w-[80vw] rounded-xl bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] shadow-xl p-3">
-                    <p class="text-xs text-[var(--text-secondary)]">
-                      {props.message.routingReason
-                        ? `Auto routing: ${props.message.routingReason}`
-                        : 'This model was picked directly, not by Auto routing.'}
-                    </p>
-                    {props.isLast &&
-                      props.onRouteRetry$ &&
-                      props.message.servedBy.startsWith('online:') && (
-                        <button
-                          type="button"
-                          onClick$={() => {
-                            routeInfoOpen.value = false;
-                            props.onRouteRetry$!('device');
-                          }}
-                          class="mt-2 px-3 py-1.5 text-xs rounded-lg bg-[var(--bg-button-secondary)] hover:bg-[var(--bg-button-secondary-hover)] border border-[var(--border-secondary)] text-[var(--text-button-secondary)] transition-colors"
-                        >
-                          Redo on your device
-                        </button>
-                      )}
-                    {props.isLast &&
-                      props.onRouteRetry$ &&
-                      props.canRouteOnline &&
-                      !props.message.servedBy.startsWith('online:') && (
-                        <button
-                          type="button"
-                          onClick$={() => {
-                            routeInfoOpen.value = false;
-                            props.onRouteRetry$!('online');
-                          }}
-                          class="mt-2 px-3 py-1.5 text-xs rounded-lg bg-[var(--bg-button-secondary)] hover:bg-[var(--bg-button-secondary-hover)] border border-[var(--border-secondary)] text-[var(--text-button-secondary)] transition-colors"
-                        >
-                          Try this answer online
-                        </button>
-                      )}
-                  </div>
-                </>
-              )}
-            </div>
-          )}
 
       </div>
     </div>
