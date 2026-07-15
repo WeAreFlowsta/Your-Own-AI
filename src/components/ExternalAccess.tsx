@@ -14,6 +14,20 @@ function modelId(name: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+/** Self-contained connection snippet for one AI: everything another app
+ *  needs (base URL + model) plus a runnable example. */
+function setupSnippet(model: string): string {
+  return [
+    `Base URL: ${ENDPOINT}`,
+    `Model: ${model}`,
+    "",
+    "Example:",
+    `curl ${ENDPOINT}/chat/completions \\`,
+    `  -H "Content-Type: application/json" \\`,
+    `  -d '{"model": "${model}", "messages": [{"role": "user", "content": "Hello"}]}'`,
+  ].join("\n");
+}
+
 /**
  * Settings → External app access.
  *
@@ -125,18 +139,34 @@ export default component$(() => {
                     <span class="text-[var(--text-primary)] truncate">
                       {ai.name}
                     </span>
-                    <button
-                      onClick$={() => copy(ai.model, ai.model)}
-                      title="Copy model name"
-                      class="flex items-center gap-1.5 shrink-0 font-mono text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
-                    >
-                      {ai.model}
-                      {copiedKey.value === ai.model ? (
-                        <LuCheck class="w-3.5 h-3.5 text-emerald-500" />
-                      ) : (
-                        <LuCopy class="w-3.5 h-3.5 opacity-60" />
-                      )}
-                    </button>
+                    <div class="flex items-center gap-3 shrink-0">
+                      <button
+                        onClick$={() => copy(ai.model, ai.model)}
+                        title="Copy just the model name"
+                        class="flex items-center gap-1.5 font-mono text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+                      >
+                        {ai.model}
+                        {copiedKey.value === ai.model ? (
+                          <LuCheck class="w-3.5 h-3.5 text-emerald-500" />
+                        ) : (
+                          <LuCopy class="w-3.5 h-3.5 opacity-60" />
+                        )}
+                      </button>
+                      <button
+                        onClick$={() => copy(setupSnippet(ai.model), `${ai.model}-setup`)}
+                        title="Copy the base URL, model name, and a runnable example"
+                        class="flex items-center gap-1 text-xs text-[var(--text-link)] hover:underline"
+                      >
+                        {copiedKey.value === `${ai.model}-setup` ? (
+                          <>
+                            <LuCheck class="w-3.5 h-3.5 text-emerald-500" />
+                            Copied
+                          </>
+                        ) : (
+                          "Copy setup"
+                        )}
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
