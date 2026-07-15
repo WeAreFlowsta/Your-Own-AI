@@ -12,6 +12,7 @@ use percent_encoding::percent_decode_str;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use crate::process_ext::CommandExt;
 use std::sync::Arc;
 
 /// Start a lair-keystore process.
@@ -41,7 +42,8 @@ pub fn start_lair_process(
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .spawn()
+            .tie_to_parent()
+            .spawn_hidden()
             .map_err(|e| format!("Failed to spawn lair-keystore init: {}", e))?;
 
         if let Some(mut stdin) = child.stdin.take() {
@@ -78,7 +80,8 @@ pub fn start_lair_process(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
+        .tie_to_parent()
+        .spawn_hidden()
         .map_err(|e| format!("Failed to spawn lair-keystore server: {}", e))?;
 
     if let Some(mut stdin) = child.stdin.take() {

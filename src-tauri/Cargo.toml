@@ -84,3 +84,21 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.ocrs]
 opt-level = 3
+
+# Linux: prctl(PR_SET_PDEATHSIG) so lair/conductor die with the app (process_ext.rs).
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+# Windows: hide spawned lair/holochain/llama-server console windows post-spawn
+# (EnumWindows + ShowWindow) and tie them to a kill-on-close Job Object so they
+# die with the app instead of orphaning and holding the lair pipe / ports.
+# See process_ext.rs (ported from Flowsta Vault).
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
+    "Win32_Security",
+    "Win32_System_Threading",
+] }

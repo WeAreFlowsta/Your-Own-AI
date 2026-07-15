@@ -23,6 +23,7 @@ mod reset;                 // factory reset (wipe local AIs/transcripts/memory, 
 mod vault_escrow;          // transcript-key escrow in the user's Flowsta Vault
 mod vault_restore;         // replay conversations from the Vault backup onto this device
 mod model_caps;            // capability registry (benchmark-informed scores)
+mod process_ext;           // Windows: hide sidecar consoles + kill-on-close job; Linux: PDEATHSIG
 
 use llm::LLMState;
 use holochain::HolochainManager;

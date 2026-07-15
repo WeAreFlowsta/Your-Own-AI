@@ -188,8 +188,29 @@ jobs:
             -DGGML_F16C=ON `
             -DGGML_VULKAN=ON `
             -DLLAMA_CURL=OFF `
+            -DLLAMA_SERVER_SSL=OFF `
+            -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON `
             -DLLAMA_SERVER_WEBUI=OFF
           cmake --build build --config Release --target llama-server
+
+      # The server has no reason to link OpenSSL (we serve plain HTTP on
+      # localhost). Left to its own devices CMake FINDS the runner's OpenSSL
+      # and links libcrypto-3-x64.dll / libssl-3-x64.dll dynamically - which
+      # are present on the runner (so `--version` passes) but ABSENT on a
+      # clean user machine, where llama-server.exe then crashes on launch with
+      # 0xC0000135 (DLL not found). DISABLE_FIND_PACKAGE_OpenSSL above stops
+      # that; this guard FAILS the build if any OpenSSL import survives, so a
+      # broken engine can never ship again. (PE import names are plain ASCII
+      # in the binary, so a byte scan finds them without dumpbin/MSVC env.)
+      - name: Guard - no dynamic OpenSSL dependency
+        shell: pwsh
+        run: |
+          $bytes = [System.IO.File]::ReadAllBytes("build/bin/Release/llama-server.exe")
+          $ascii = [System.Text.Encoding]::ASCII.GetString($bytes)
+          if ($ascii -match "libcrypto-3|libssl-3|libcrypto-1|libssl-1") {
+            throw "llama-server.exe still imports OpenSSL DLLs - it will crash on clean machines. Fix the build flags."
+          }
+          Write-Host "OK: no OpenSSL DLL imports"
 
       - name: Verify binary
         run: |

@@ -1,0 +1,95 @@
+name: Rebuild Windows llama-server (hotfix)
+
+# Targeted rebuild of ONLY the Windows Vulkan llama-server, replacing that one
+# asset on an existing llama-* release. Use for a Windows-only engine fix
+# (e.g. the OpenSSL-DLL crash) without a ~3h full 6-platform rebuild that also
+# churns the verified CUDA zips. The permanent fix lives in
+# build-llama-binaries.yml; this just gets it onto the pinned release fast.
+# Safe to delete once a full build at a new tag supersedes it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      llama_cpp_version:
+        description: 'llama.cpp git tag (must match the release, e.g. b9637)'
+        required: true
+        default: 'b9637'
+      release_tag:
+        description: 'Release to replace the asset on (e.g. llama-b9637)'
+        required: true
+        default: 'llama-b9637'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Setup MSVC
+        uses: microsoft/setup-msbuild@v1.1
+
+      - name: Install Vulkan SDK
+        uses: jakoch/install-vulkan-sdk-action@v1.0.0
+        with:
+          vulkan_version: 1.4.309.0
+          install_runtime: false
+          cache: true
+          stripdown: false
+
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: ${{ github.event.inputs.llama_cpp_version }}
+
+      - name: Provide SPIRV-Headers
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch vulkan-sdk-1.4.309.0 https://github.com/KhronosGroup/SPIRV-Headers.git spirv-headers-src
+          cmake -B spirv-headers-src/build -S spirv-headers-src -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/spirv-prefix"
+          cmake --build spirv-headers-src/build --target install --config Release
+
+      - name: Build binary with Vulkan GPU support
+        run: |
+          cmake -B build `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_PREFIX_PATH="${{ github.workspace }}/spirv-prefix" `
+            -DBUILD_SHARED_LIBS=OFF `
+            -DGGML_STATIC=ON `
+            -DGGML_NATIVE=OFF `
+            -DGGML_AVX=ON `
+            -DGGML_AVX2=ON `
+            -DGGML_FMA=ON `
+            -DGGML_F16C=ON `
+            -DGGML_VULKAN=ON `
+            -DLLAMA_CURL=OFF `
+            -DLLAMA_SERVER_SSL=OFF `
+            -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON `
+            -DLLAMA_SERVER_WEBUI=OFF
+          cmake --build build --config Release --target llama-server
+
+      - name: Guard - no dynamic OpenSSL dependency
+        shell: pwsh
+        run: |
+          $bytes = [System.IO.File]::ReadAllBytes("build/bin/Release/llama-server.exe")
+          $ascii = [System.Text.Encoding]::ASCII.GetString($bytes)
+          if ($ascii -match "libcrypto-3|libssl-3|libcrypto-1|libssl-1") {
+            throw "llama-server.exe still imports OpenSSL DLLs - it will crash on clean machines."
+          }
+          Write-Host "OK: no OpenSSL DLL imports"
+
+      - name: Verify binary
+        run: |
+          .\build\bin\Release\llama-server.exe --version
+
+      - name: Replace the release asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp build/bin/Release/llama-server.exe llama-server-x86_64-pc-windows-msvc.exe
+          gh release upload "${{ github.event.inputs.release_tag }}" \
+            llama-server-x86_64-pc-windows-msvc.exe \
+            --repo "${{ github.repository }}" --clobber
+          echo "Replaced llama-server-x86_64-pc-windows-msvc.exe on ${{ github.event.inputs.release_tag }}"
