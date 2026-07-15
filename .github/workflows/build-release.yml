@@ -265,15 +265,28 @@ jobs:
             src-tauri/resources/pdfium/libpdfium.dylib
           codesign --verify --verbose=2 src-tauri/resources/pdfium/libpdfium.dylib
 
+      # Pre-release detection for the signing skip below (betas don't pay
+      # for eSigner; see sign-windows.ps1). Stable tags sign as always.
+      - name: Detect pre-release
+        id: prerelease
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$VERSION" == *-* ]]; then
+            echo "is_prerelease=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=0" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Setup Java (Windows)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && steps.prerelease.outputs.is_prerelease == '0'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Download CodeSignTool (Windows)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && steps.prerelease.outputs.is_prerelease == '0'
         shell: pwsh
         run: |
           $url = "https://github.com/SSLcom/CodeSignTool/releases/download/v1.3.2/CodeSignTool-v1.3.2.zip"
@@ -323,6 +336,10 @@ jobs:
           ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
           ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
           ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
+          # Betas skip Windows Authenticode (per-signing eSigner cost);
+          # sign-windows.ps1 no-ops when this is set. macOS still signs +
+          # notarizes on every build (free, and Gatekeeper needs it).
+          YOAI_SKIP_WINDOWS_SIGNING: ${{ steps.prerelease.outputs.is_prerelease }}
         with:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: --target ${{ matrix.target }}${{ steps.tauri_args.outputs.extra }}
