@@ -16,7 +16,7 @@ import {
 import { LuHardDriveDownload, LuAlertTriangle, LuZap } from '@qwikest/icons/lucide';
 import LiquidMetalButton from './LiquidMetalButton';
 import type { SystemInfo } from './ModelDownloader';
-import { modelFamilies, getBestFamilyForRAM, getBestVariantForSystem, type ModelVariant } from '../data/recommended-models';
+import { modelFamilies, getBestFamilyForRAM, getBestVariantForSystem, estimateVramGb, type ModelVariant } from '../data/recommended-models';
 import { modelManager, type DownloadProgress } from '../utils/modelManager';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -53,7 +53,9 @@ function getRecommendedModel(systemInfo: SystemInfo | null): RecommendedModel {
     for (const family of modelFamilies) {
       if (family.category === 'specialist') continue;
       for (const variant of family.variants) {
-        if (variant.size <= totalVRAM) {
+        // Same fit math as the models page (weights + KV cache + overhead),
+        // not the raw file size - a "fits entirely on GPU" promise must hold.
+        if (estimateVramGb(variant.size) <= totalVRAM) {
           candidates.push({ family, variant });
         }
       }
@@ -69,11 +71,15 @@ function getRecommendedModel(systemInfo: SystemInfo | null): RecommendedModel {
       });
 
       const best = candidates[0];
+      // Unified memory (Apple Silicon) reads oddly as "VRAM" - name it honestly.
+      const isUnified = gpuName.toLowerCase().includes('apple');
       return {
         familyId: best.family.id,
         familyName: best.family.name,
         variant: best.variant,
-        reason: `Your GPU (${gpuName}) has ${totalVRAM.toFixed(1)}GB VRAM — ${best.family.name} ${best.variant.parameterCount} fits entirely on GPU for maximum speed!`,
+        reason: isUnified
+          ? `Your ${gpuName} runs models in its shared memory — ${best.family.name} ${best.variant.parameterCount} fits comfortably with room for the system.`
+          : `Your GPU (${gpuName}) has ${totalVRAM.toFixed(1)}GB VRAM — ${best.family.name} ${best.variant.parameterCount} fits entirely on GPU for maximum speed!`,
         hasGPU: true,
       };
     }
@@ -96,9 +102,11 @@ function getRecommendedModel(systemInfo: SystemInfo | null): RecommendedModel {
     }
   }
 
-  // Final fallback: smallest available model from a recommended family
+  // Final fallback: smallest available model from a recommended family.
+  // (Sort explicitly - the variants array is NOT size-ordered; taking [0]
+  // handed an 8GB MacBook Air a 16.8GB model.)
   const fallbackFamily = modelFamilies.find((f) => f.recommended) || modelFamilies[0];
-  const fallbackVariant = fallbackFamily.variants[0];
+  const fallbackVariant = [...fallbackFamily.variants].sort((a, b) => a.size - b.size)[0];
 
   return {
     familyId: fallbackFamily.id,

@@ -1142,9 +1142,23 @@ pub async fn utility_chat(
         .to_string())
 }
 
+/// The Apple Silicon chip name ("Apple M2"), for the system-info GPU field.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn mac_chip_name() -> String {
+    std::process::Command::new("sysctl")
+        .args(["-n", "machdep.cpu.brand_string"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "Apple Silicon".to_string())
+}
+
 /**
  * Get GPU information using Vulkan
  */
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
 fn get_gpu_info() -> (Option<String>, Option<f64>) {
     use ash::{vk, Entry};
     use std::ffi::CStr;
@@ -1259,7 +1273,23 @@ pub fn get_system_info() -> Result<SystemInfo, String> {
     let total_memory_gb = total_memory as f64 / (1024_f64.powi(3));
     let used_memory_gb = used_memory as f64 / (1024_f64.powi(3));
     
-    // Get GPU info via Vulkan
+    // Get GPU info via Vulkan. Apple Silicon has NO Vulkan (get_gpu_info
+    // returns nothing there), but its GPU shares unified memory - so report
+    // the chip as the GPU with a conservative slice of RAM as its budget,
+    // mirroring Metal's recommendedMaxWorkingSetSize (~65% of RAM on 8GB
+    // machines, ~75% above). Without this, an M-series Mac looks CPU-only,
+    // the 7GB desktop RAM reserve marks every model too big, and the welcome
+    // screen falls through to a wild fallback pick.
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    let (gpu_name, total_vram_gb) = (
+        Some(mac_chip_name()),
+        Some(if total_memory_gb <= 8.5 {
+            total_memory_gb * 0.65
+        } else {
+            total_memory_gb * 0.75
+        }),
+    );
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     let (gpu_name, total_vram_gb) = get_gpu_info();
     
     Ok(SystemInfo {

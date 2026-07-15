@@ -721,7 +721,13 @@ export function getBestVariantForSystem(
   return pool.sort((a, b) => b.size - a.size)[0];
 }
 
-const SYSTEM_RESERVED_RAM = 7; // GB reserved for OS, app, KV cache, and other processes
+/** RAM to leave for the OS, this app, and everything else when sizing a
+ *  CPU-only run. Scales down on small machines: a flat desktop-sized 7GB
+ *  reserve marked EVERY model "too big" on an 8GB laptop, hiding even the
+ *  2GB ones (found on an 8GB MacBook Air). */
+function reservedRamGb(totalRAM: number): number {
+  return Math.min(7, Math.max(3, totalRAM * 0.4));
+}
 
 /**
  * Where a variant would actually run on this machine — grounded in VRAM, not just
@@ -762,7 +768,7 @@ export function getRunMode(
   if (totalVRAM && totalVRAM > 0) {
     return estimateVramGb(variant.size) <= totalVRAM ? 'gpu' : 'too-big';
   }
-  return totalRAM >= variant.size * 1.2 + SYSTEM_RESERVED_RAM ? 'cpu' : 'too-big';
+  return totalRAM >= variant.size * 1.2 + reservedRamGb(totalRAM) ? 'cpu' : 'too-big';
 }
 
 /**
