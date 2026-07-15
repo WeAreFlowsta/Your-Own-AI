@@ -249,6 +249,21 @@ jobs:
           mkdir -p ~/private_keys
           echo -n "$APPLE_API_KEY_PATH" | base64 --decode -o ~/private_keys/AuthKey_${APPLE_API_KEY}.p8
 
+      # pdfium ships as a prebuilt dylib inside Resources. Tauri deep-signs
+      # the app and its sidecar binaries but not resource dylibs, and Apple's
+      # notarization rejects any unsigned Mach-O in the archive - so sign it
+      # ourselves before the bundler copies it in. (Needs the certificate
+      # imported above.)
+      - name: Sign pdfium dylib (macOS)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          codesign --force --options runtime --timestamp \
+            --sign "$APPLE_SIGNING_IDENTITY" \
+            src-tauri/resources/pdfium/libpdfium.dylib
+          codesign --verify --verbose=2 src-tauri/resources/pdfium/libpdfium.dylib
+
       - name: Setup Java (Windows)
         if: runner.os == 'Windows'
         uses: actions/setup-java@v4
