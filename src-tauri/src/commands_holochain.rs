@@ -78,6 +78,8 @@ pub struct TranscriptEntryInfo {
     pub images: Option<Vec<ImageAttachmentInfo>>,
     pub grounded: Option<Vec<GroundedSource>>,
     pub runtime: Option<RuntimeInfo>,
+    pub routing_reason: Option<String>,
+    pub routing_task: Option<String>,
 }
 
 /// Encrypted entry as stored in the zome (cipher + nonce).
@@ -179,6 +181,14 @@ pub struct Provenance {
     pub grounded: Option<Vec<GroundedSource>>,
     #[serde(default)]
     pub runtime: Option<RuntimeInfo>,
+    /// Why the router picked this turn's model (Auto modes; None = the user
+    /// picked the model). Human-readable, shown in receipts.
+    #[serde(default)]
+    pub routing_reason: Option<String>,
+    /// The classified routing task for this turn ("code" | "math" |
+    /// "reasoning" | "general").
+    #[serde(default)]
+    pub routing_task: Option<String>,
 }
 
 /// Plaintext message payload (lives INSIDE the ciphertext). Provenance fields
@@ -207,6 +217,10 @@ struct MessagePlain {
     pub grounded: Option<Vec<GroundedSource>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<RuntimeInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing_task: Option<String>,
 }
 
 /// Ciphertext payload sent to the zome.
@@ -344,6 +358,8 @@ pub async fn record_transcript_entry(
         images: prov.images,
         grounded: prov.grounded,
         runtime: prov.runtime,
+        routing_reason: prov.routing_reason,
+        routing_task: prov.routing_task,
     };
     let plain_bytes = serde_json::to_vec(&plain)
         .map_err(|e| format!("Failed to serialize: {}", e))?;
@@ -568,6 +584,8 @@ pub async fn get_conversation_transcript(
                     images: e.images,
                     grounded: e.grounded,
                     runtime: e.runtime,
+                    routing_reason: e.routing_reason,
+                    routing_task: e.routing_task,
                 });
             }
         }

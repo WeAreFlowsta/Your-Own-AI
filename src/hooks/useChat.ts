@@ -503,6 +503,10 @@ export function useChat(props: UseChatProps) {
         }
       }
 
+      // Routing receipt for this turn (shown in the hover strip + recorded in
+      // the transcript). Stays undefined when the user picked the model.
+      let routedReason: string | undefined;
+      let routedTask: string | undefined;
       if (!modelOverride && preferredModel?.startsWith("auto:")) {
         const mode =
           preferredModel === "auto:online-offline"
@@ -552,6 +556,8 @@ export function useChat(props: UseChatProps) {
           });
           console.log(`[Router] ${mode} → ${r.model} (${r.reason})`);
           preferredModel = r.model;
+          routedReason = r.reason;
+          routedTask = signals.task;
         } catch (e) {
           console.warn("[Router] resolve failed:", e);
           // Leaves the auto: sentinel → surfaces as NO_MODELS_AVAILABLE below.
@@ -947,6 +953,14 @@ export function useChat(props: UseChatProps) {
         const holochainId = selectedAi.aiConfig?.agentPubKey;
         const modelName = preferredModel || currentModel || "unknown";
 
+        // Stamp the routing receipt on the assistant message (the hover strip
+        // renders it once the reply finishes).
+        state.messages = state.messages.map((m) =>
+          m.id === assistantId
+            ? { ...m, servedBy: modelName, routingReason: routedReason, routingTask: routedTask }
+            : m,
+        );
+
         if (!holochainId) {
           console.warn("[Holochain] No agent pub key, skipping transcript");
         }
@@ -1103,6 +1117,8 @@ export function useChat(props: UseChatProps) {
                   app_version: appVersion,
                   max_tokens: maxTokens,
                 },
+                routing_reason: routedReason,
+                routing_task: routedTask,
               },
             );
             state.messageSequence++;
@@ -1240,15 +1256,44 @@ export function useChat(props: UseChatProps) {
     state.messageSequence = 0;
   });
 
-  const retry = $(async (messageId: string) => {
+  const retry = $(async (messageId: string, target?: "online" | "device") => {
     const messageIndex = state.messages.findIndex((m) => m.id === messageId);
     if (messageIndex === -1 || messageIndex === 0) return;
 
     const userMessage = state.messages[messageIndex - 1];
     if (userMessage.role !== "user") return;
 
+    // "Try online" / "Redo on device": resolve the destination through the
+    // router so the user's per-slot online picks and offline lean apply, then
+    // resend with the concrete model. Falls back to a plain retry if routing
+    // can't deliver the asked-for side.
+    let override: string | undefined;
+    if (target) {
+      const task = state.messages[messageIndex]?.routingTask || "general";
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const r = await invoke<{ model: string; reason: string }>("route_model", {
+          mode: target === "online" ? "online-offline" : "offline",
+          query: userMessage.content,
+          task,
+          // "hard" routes straight to the stronger-model slot; eagerness
+          // privacy keeps freshness from hijacking an explicit request.
+          difficulty: target === "online" ? "hard" : "easy",
+          eagerness: "privacy",
+          lean: localStorage.getItem("routingOfflineLean") || "balanced",
+          onlineFresh: localStorage.getItem("routingOnlineFresh") || undefined,
+          onlineHardCode: localStorage.getItem("routingOnlineHardCode") || undefined,
+          onlineHardGeneral: localStorage.getItem("routingOnlineHardGeneral") || undefined,
+        });
+        const wentOnline = r.model.startsWith("online:");
+        if (target === "online" ? wentOnline : !wentOnline) override = r.model;
+      } catch (e) {
+        console.warn("[Router] retry-with-target resolve failed:", e);
+      }
+    }
+
     state.messages = state.messages.slice(0, messageIndex);
-    await sendMessage(userMessage.content, null, undefined, userMessage.images || []);
+    await sendMessage(userMessage.content, null, undefined, userMessage.images || [], override);
   });
 
   // On-demand source-grounding for a past document answer (the "Verify sources"

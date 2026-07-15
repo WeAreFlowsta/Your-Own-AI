@@ -73,6 +73,8 @@ export async function recordMessage(
       span?: [number, number] | null;
     }[];
     runtime?: { app_version: string; online: boolean; max_tokens?: number };
+    routing_reason?: string;
+    routing_task?: string;
   },
 ): Promise<string | null> {
   try {

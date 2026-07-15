@@ -104,6 +104,7 @@ export function conversationToMarkdown(
 
     if (e.role === "assistant") {
       const meta: string[] = [`model \`${e.model}\``];
+      if (e.routing_reason) meta.push(`routed: ${e.routing_reason}`);
       if (e.runtime) {
         meta.push(e.runtime.online ? "online" : "local");
         meta.push(`app ${e.runtime.app_version}`);

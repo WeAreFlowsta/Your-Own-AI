@@ -5,7 +5,8 @@ import { Message } from '../types';
 interface ConversationViewProps {
   messages: Message[];
   messagesEndRef: Signal<HTMLDivElement | undefined>;
-  retry$: QRL<(id: string) => void>;
+  retry$: QRL<(id: string, target?: 'online' | 'device') => void>;
+  canRouteOnline: boolean;
   onGround$?: QRL<(id: string) => void>;
   scrollToBottom$: QRL<(behavior?: ScrollBehavior) => void>;
   handleUpgradeClick$: QRL<() => void>;
@@ -22,6 +23,7 @@ export default component$<ConversationViewProps>(({
   messages,
   messagesEndRef,
   retry$,
+  canRouteOnline,
   onGround$,
   scrollToBottom$,
   handleUpgradeClick$,
@@ -41,6 +43,8 @@ export default component$<ConversationViewProps>(({
           message={message}
           isLast={index === messages.length - 1}
           onRetry$={message.id ? $(() => retry$(message.id!)) : undefined}
+          onRouteRetry$={message.id ? $((target: 'online' | 'device') => retry$(message.id!, target)) : undefined}
+          canRouteOnline={canRouteOnline}
           onGround$={message.groundingSource && message.id ? $(() => onGround$?.(message.id!)) : undefined}
           onScrollNeeded$={scrollToBottom$}
           onUpgradeClick$={message.showUpgradeButton && message.originalUserQuery && message.id ? $(() => handleUpgradeClick$()) : undefined}

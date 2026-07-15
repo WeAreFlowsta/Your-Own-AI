@@ -140,6 +140,16 @@ export interface Message {
   /** This message's transcript action-hash hex (once recorded), so on-demand
    *  grounding can be persisted as an annotation linked to it. */
   transcriptHash?: string;
+  /** Routing receipt: the model that actually served this assistant turn
+   *  (gguf filename, "online:<id>", or "external:<id>"). Drives the hover
+   *  strip under the reply. */
+  servedBy?: string;
+  /** Why the router picked servedBy (Auto modes only; undefined = the user
+   *  picked the model). */
+  routingReason?: string;
+  /** The classified routing task at send time — reused when the user retries
+   *  this turn online or on device. */
+  routingTask?: string;
   showUpgradeButton?: boolean;
   originalUserQuery?: string;
   originalUserMessageContent?: string;
@@ -215,4 +225,6 @@ export interface HolochainTranscriptEntry {
     span?: [number, number] | null;
   }[] | null;
   runtime?: { app_version: string; online: boolean; max_tokens?: number | null } | null;
+  routing_reason?: string | null;
+  routing_task?: string | null;
 }

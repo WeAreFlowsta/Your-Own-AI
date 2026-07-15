@@ -89,6 +89,10 @@ interface ChatMessageProps {
   onGround$?: QRL<() => void>;
   onScrollNeeded$?: QRL<() => void>;
   onUpgradeClick$?: QRL<(originalQuery: string, triggerMessageId: string) => void>;
+  /** Redo this turn on the other side ("Try online" / "Redo on your device"). */
+  onRouteRetry$?: QRL<(target: 'online' | 'device') => void>;
+  /** Whether this AI may go online at all (auto online-offline mode). */
+  canRouteOnline?: boolean;
   aiLabel?: string;
   aiImageUrl?: string | null;
   setSidePanelContent$: QRL<(content: { messageId: string; codeString: string; language: string } | null) => void>;
@@ -98,6 +102,13 @@ interface ChatMessageProps {
   setIsSidePanelVisible$: QRL<(isVisible: boolean) => void>;
   sidePanelContent: { messageId: string; codeString: string; language: string } | null;
   isModelLoading: boolean;
+}
+
+/** Short human label + origin for the routing receipt strip. */
+function servedByParts(servedBy: string): { name: string; origin: string } {
+  if (servedBy.startsWith('online:')) return { name: servedBy.slice(7), origin: 'online' };
+  if (servedBy.startsWith('external:')) return { name: servedBy.slice(9), origin: 'your server' };
+  return { name: servedBy.replace(/\.gguf$/i, ''), origin: 'on device' };
 }
 
 // Helper function to process citation markers in an HTML string
@@ -390,6 +401,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
   const displayedLineCount = useSignal(0);
   const thinkingPreviewRef = useSignal<HTMLDivElement>();
   const rootRef = useSignal<HTMLDivElement>();
+  const routeInfoOpen = useSignal(false);
   const hasAnchoredStart = useSignal(false);
   const isGenerationPhase = useSignal(false);
   const thinkingBoxVisible = useSignal(false);
@@ -709,7 +721,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
   };
 
   return (
-    <div ref={rootRef} class="relative mb-4 scroll-mt-4">
+    <div ref={rootRef} class="relative mb-4 scroll-mt-4 group">
       {renderAvatarContent()}
       <div class="ml-6">
         <div class="space-y-1 flex-grow max-w-[calc(100%)]">
@@ -868,6 +880,66 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
               )}
           </div>
         )}
+
+        {/* Routing receipt — invisible until the message is hovered. One muted
+            line: which model served this reply and where it ran. Click for the
+            router's reason and (on the last message) a redo-elsewhere action. */}
+        {props.message.role === 'assistant' &&
+          !props.message.isLoading &&
+          props.message.servedBy && (
+            <div class="pl-9 md:pl-10 lg:pl-10 h-5 relative">
+              <button
+                type="button"
+                onClick$={() => { routeInfoOpen.value = !routeInfoOpen.value; }}
+                class={`text-[11px] text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-opacity ${
+                  routeInfoOpen.value ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                }`}
+              >
+                {servedByParts(props.message.servedBy).name} · {servedByParts(props.message.servedBy).origin}
+              </button>
+              {routeInfoOpen.value && (
+                <>
+                  <div class="fixed inset-0 z-40" onClick$={() => { routeInfoOpen.value = false; }} />
+                  <div class="absolute bottom-full left-9 md:left-10 mb-1 z-50 w-80 max-w-[80vw] rounded-xl bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] shadow-xl p-3">
+                    <p class="text-xs text-[var(--text-secondary)]">
+                      {props.message.routingReason
+                        ? `Auto routing: ${props.message.routingReason}`
+                        : 'This model was picked directly, not by Auto routing.'}
+                    </p>
+                    {props.isLast &&
+                      props.onRouteRetry$ &&
+                      props.message.servedBy.startsWith('online:') && (
+                        <button
+                          type="button"
+                          onClick$={() => {
+                            routeInfoOpen.value = false;
+                            props.onRouteRetry$!('device');
+                          }}
+                          class="mt-2 px-3 py-1.5 text-xs rounded-lg bg-[var(--bg-button-secondary)] hover:bg-[var(--bg-button-secondary-hover)] border border-[var(--border-secondary)] text-[var(--text-button-secondary)] transition-colors"
+                        >
+                          Redo on your device
+                        </button>
+                      )}
+                    {props.isLast &&
+                      props.onRouteRetry$ &&
+                      props.canRouteOnline &&
+                      !props.message.servedBy.startsWith('online:') && (
+                        <button
+                          type="button"
+                          onClick$={() => {
+                            routeInfoOpen.value = false;
+                            props.onRouteRetry$!('online');
+                          }}
+                          class="mt-2 px-3 py-1.5 text-xs rounded-lg bg-[var(--bg-button-secondary)] hover:bg-[var(--bg-button-secondary-hover)] border border-[var(--border-secondary)] text-[var(--text-button-secondary)] transition-colors"
+                        >
+                          Try this answer online
+                        </button>
+                      )}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
 
       </div>
     </div>

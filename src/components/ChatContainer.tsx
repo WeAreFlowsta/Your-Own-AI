@@ -9,7 +9,8 @@ type SidePanelContent = { messageId: string; codeString: string; language: strin
 interface ChatContainerProps {
   messages: Message[];
   messagesEndRef: Signal<HTMLDivElement | undefined>;
-  retry$: QRL<(id: string) => void>;
+  retry$: QRL<(id: string, target?: 'online' | 'device') => void>;
+  canRouteOnline: boolean;
   onGround$?: QRL<(id: string) => void>;
   scrollToBottom$: QRL<(behavior?: ScrollBehavior) => void>;
   handleUpgradeClick$: QRL<() => void>;
@@ -86,6 +87,7 @@ export default component$<ChatContainerProps>((props) => {
           messages={props.messages}
           messagesEndRef={props.messagesEndRef}
           retry$={props.retry$}
+          canRouteOnline={props.canRouteOnline}
           onGround$={props.onGround$}
           scrollToBottom$={props.scrollToBottom$}
           handleUpgradeClick$={props.handleUpgradeClick$}

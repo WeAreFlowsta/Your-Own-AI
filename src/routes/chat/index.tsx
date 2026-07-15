@@ -634,6 +634,7 @@ export default component$(() => {
               messages={chatState.messages}
               messagesEndRef={messagesEndRef}
               retry$={retry}
+              canRouteOnline={selectedAi.value.aiConfig?.model === 'auto:online-offline'}
               onGround$={groundMessage$}
               scrollToBottom$={scrollToBottom}
               handleUpgradeClick$={handleUpgradeClick}
