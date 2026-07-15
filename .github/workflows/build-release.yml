@@ -206,9 +206,16 @@ jobs:
             *) echo "No pdfium mapping for ${{ matrix.target }}"; exit 1 ;;
           esac
           ./scripts/fetch-pdfium.sh "$PDFIUM_TARGET"
-          FILE=$(ls src-tauri/resources/pdfium/libpdfium.so \
-                    src-tauri/resources/pdfium/libpdfium.dylib \
-                    src-tauri/resources/pdfium/pdfium.dll 2>/dev/null | head -1)
+          # Look for whichever platform library landed. (Not `ls a b c | head`:
+          # ls exits non-zero for the two names that don't exist on this
+          # platform, and the runner's pipefail turns that into a step failure
+          # even though the file is present.)
+          FILE=""
+          for f in src-tauri/resources/pdfium/libpdfium.so \
+                   src-tauri/resources/pdfium/libpdfium.dylib \
+                   src-tauri/resources/pdfium/pdfium.dll; do
+            if [ -f "$f" ]; then FILE="$f"; break; fi
+          done
           test -n "$FILE" || { echo "pdfium did not download"; exit 1; }
           SIZE=$(wc -c < "$FILE")
           test "$SIZE" -gt 3000000 || { echo "pdfium too small (${SIZE} bytes)"; exit 1; }
