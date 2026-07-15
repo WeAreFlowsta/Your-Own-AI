@@ -41,6 +41,7 @@ export default defineConfig((): UserConfig => ({
       "highlight.js",
       "uuid",
       "marked",
+      "marked-highlight",
       "lottie-web",
       "cropperjs",
     ],
