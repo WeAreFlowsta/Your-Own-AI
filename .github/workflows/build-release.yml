@@ -1,0 +1,405 @@
+name: Build Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create-release.outputs.result }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      # The tag must match the version the bundlers will stamp on the
+      # installers, or the release page and the artifacts disagree.
+      - name: Check tag matches tauri.conf.json version
+        run: |
+          CONF=$(jq -r .version src-tauri/tauri.conf.json)
+          TAG="${{ steps.version.outputs.version }}"
+          if [ "$CONF" != "$TAG" ]; then
+            echo "Tag version ($TAG) != tauri.conf.json version ($CONF) - bump the config and retag"
+            exit 1
+          fi
+
+      - name: Extract changelog entry
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # The block between "## [<version>]" and the next "## [" heading.
+          awk -v ver="$VERSION" '
+            $0 ~ "^## \\["ver"\\]" { flag=1; next }
+            flag && /^## \[/ { exit }
+            flag { print }
+          ' CHANGELOG.md > /tmp/release-body.md
+
+      - name: Create GitHub Release
+        id: create-release
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const version = "${{ steps.version.outputs.version }}";
+            // v0.1.0 is stable; v0.1.0-beta.1 / -rc.1 are pre-releases and
+            // stay out of GitHub's "Latest" slot.
+            const isPrerelease = version.includes('-');
+            const tagline = "Private AI on your own machine - offline by default, online only when you choose.";
+            const changelog = fs.readFileSync('/tmp/release-body.md', 'utf8').trim();
+            const body = [
+              `## Your Own AI v${version}`,
+              '',
+              tagline,
+              '',
+              changelog || '',
+              '',
+              '### Downloads',
+              'See assets below for platform-specific installers. Verify any download against SHA256SUMS.txt.',
+            ].join('\n');
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: context.ref.replace('refs/tags/', ''),
+              name: `Your Own AI v${version}`,
+              body,
+              draft: true,
+              prerelease: isPrerelease,
+            });
+            return data.id;
+
+  build:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+          # Pinned to windows-2022 (VS 2022) - windows-latest rolled to a
+          # VS 2026 image whose newer MSVC headers fail to compile
+          # aws-lc-sys (rides in via the Holochain client). Same pin as
+          # Flowsta Vault and this repo's CUDA engine builds.
+          - platform: windows-2022
+            target: x86_64-pc-windows-msvc
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install system dependencies (Linux)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          cache-on-failure: true
+
+      # The bundled inference engine: a PREBUILT llama-server from this repo's
+      # pinned engine release (Vulkan on Linux/Windows, Metal on macOS - the
+      # small default; the large CUDA builds on the same release are downloaded
+      # by the app only when the user opts in). Nothing is compiled here.
+      - name: Download llama-server binary
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p src-tauri/bin
+          REPO="WeAreFlowsta/Your-Own-AI"
+
+          # PINNED llama.cpp engine version. Bump deliberately: run
+          # build-llama-binaries.yml at a new tag, then update this one line.
+          RELEASE_TAG="llama-b9637"
+
+          # The app bakes this tag (engine.rs LLAMA_ENGINE_TAG) to download
+          # optional engine builds from the same release - fail fast if the
+          # two ever drift. (sed, not grep -P: macOS runners lack -P.)
+          BAKED=$(sed -n 's/.*LLAMA_ENGINE_TAG: &str = "\([^"]*\)".*/\1/p' src-tauri/src/engine.rs)
+          if [ "$BAKED" != "${RELEASE_TAG}" ]; then
+            echo "engine.rs LLAMA_ENGINE_TAG (${BAKED:-missing}) != workflow RELEASE_TAG (${RELEASE_TAG}) - update both together"
+            exit 1
+          fi
+
+          T="${{ matrix.target }}"
+          EXT=""
+          if [ "$T" = "x86_64-pc-windows-msvc" ]; then EXT=".exe"; fi
+          BINARY="llama-server-${T}${EXT}"
+          gh release download "${RELEASE_TAG}" --repo ${REPO} --pattern "${BINARY}" --dir src-tauri/bin/
+          # gh release download can exit 0 with no file when the pattern
+          # doesn't match - that would silently ship an installer with no
+          # inference engine. Smallest real binary is ~11 MB.
+          DEST="src-tauri/bin/${BINARY}"
+          test -f "$DEST" || { echo "${BINARY} did not download"; exit 1; }
+          SIZE=$(wc -c < "$DEST")
+          test "$SIZE" -gt 5000000 || { echo "${BINARY} too small (${SIZE} bytes)"; exit 1; }
+          chmod +x "$DEST" 2>/dev/null || true
+          echo "${BINARY} (${SIZE} bytes)"
+
+      # Official Holochain release binaries, downloaded at build time - the
+      # same pattern as Flowsta Vault (nothing compiled from source). The
+      # binaries get a yourowai- prefix so the installers never collide with
+      # other Holochain apps' bundled conductors.
+      - name: Download Holochain binaries (official release)
+        shell: bash
+        env:
+          HC_RELEASE: holochain-0.6.1
+        run: |
+          mkdir -p src-tauri/binaries
+          BASE="https://github.com/holochain/holochain/releases/download/${HC_RELEASE}"
+          T="${{ matrix.target }}"
+          EXT=""
+          if [ "$T" = "x86_64-pc-windows-msvc" ]; then EXT=".exe"; fi
+          for BIN in holochain lair-keystore; do
+            DEST="src-tauri/binaries/yourowai-${BIN}-${T}${EXT}"
+            curl -fsSL "${BASE}/${BIN}-${T}${EXT}" -o "$DEST"
+            chmod +x "$DEST"
+            test "$(wc -c < "$DEST")" -gt 1000000 || { echo "${BIN} download too small"; exit 1; }
+            echo "yourowai-${BIN}-${T}${EXT} (${HC_RELEASE})"
+          done
+
+      # pdfium renders scanned-PDF pages for OCR. tauri.conf bundles
+      # resources/pdfium/* but the binaries are gitignored - without this
+      # fetch, every installer silently ships without scanned-PDF support.
+      - name: Fetch pdfium (scanned-PDF rendering for OCR)
+        shell: bash
+        run: |
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-gnu) PDFIUM_TARGET="linux-x64" ;;
+            aarch64-apple-darwin)     PDFIUM_TARGET="mac-arm64" ;;
+            x86_64-apple-darwin)      PDFIUM_TARGET="mac-x64" ;;
+            x86_64-pc-windows-msvc)   PDFIUM_TARGET="win-x64" ;;
+            *) echo "No pdfium mapping for ${{ matrix.target }}"; exit 1 ;;
+          esac
+          ./scripts/fetch-pdfium.sh "$PDFIUM_TARGET"
+          FILE=$(ls src-tauri/resources/pdfium/libpdfium.so \
+                    src-tauri/resources/pdfium/libpdfium.dylib \
+                    src-tauri/resources/pdfium/pdfium.dll 2>/dev/null | head -1)
+          test -n "$FILE" || { echo "pdfium did not download"; exit 1; }
+          SIZE=$(wc -c < "$FILE")
+          test "$SIZE" -gt 3000000 || { echo "pdfium too small (${SIZE} bytes)"; exit 1; }
+          echo "$FILE (${SIZE} bytes)"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Import Apple certificate (macOS)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          CERTIFICATE_PATH=$RUNNER_TEMP/certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          echo -n "$APPLE_CERTIFICATE" | base64 --decode -o $CERTIFICATE_PATH
+          security create-keychain -p "" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "" $KEYCHAIN_PATH
+          security import $CERTIFICATE_PATH -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple: -k "" $KEYCHAIN_PATH
+          security list-keychains -d user -s $KEYCHAIN_PATH login.keychain-db
+
+      - name: Set up Apple API key (macOS)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_API_KEY_PATH: ${{ secrets.APPLE_API_KEY_PATH }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          mkdir -p ~/private_keys
+          echo -n "$APPLE_API_KEY_PATH" | base64 --decode -o ~/private_keys/AuthKey_${APPLE_API_KEY}.p8
+
+      - name: Setup Java (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Download CodeSignTool (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $url = "https://github.com/SSLcom/CodeSignTool/releases/download/v1.3.2/CodeSignTool-v1.3.2.zip"
+          $zip = Join-Path $env:RUNNER_TEMP "CodeSignTool.zip"
+          $dest = Join-Path $env:RUNNER_TEMP "CodeSignTool"
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $dest -Force
+          "CODE_SIGN_TOOL_DIR=$dest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      # Pre-release tags (e.g. v0.1.0-beta.1) skip the MSI bundle on Windows:
+      # the MSI bundler requires numeric-only pre-release identifiers and
+      # rejects "beta.1". NSIS has no such restriction and is what end users
+      # install anyway. Stable tags get the full bundle list.
+      - name: Compute Tauri bundle args
+        id: tauri_args
+        shell: bash
+        run: |
+          EXTRA=""
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$RUNNER_OS" == "Windows" ]] && [[ "$VERSION" == *-* ]]; then
+            EXTRA=" --bundles nsis"
+            echo "Pre-release detected ($VERSION) - skipping MSI bundle on Windows"
+          fi
+          echo "extra=$EXTRA" >> "$GITHUB_OUTPUT"
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@action-v0.6.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '-' }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
+          ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
+          ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
+          ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
+        with:
+          releaseId: ${{ needs.create-release.outputs.release_id }}
+          args: --target ${{ matrix.target }}${{ steps.tauri_args.outputs.extra }}
+
+      - name: Dump Windows signing transcript on failure
+        if: failure() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP "sign-windows.log"
+          if (Test-Path $log) {
+            Write-Host "===== sign-windows.log ====="
+            Get-Content $log
+            Write-Host "===== end log ====="
+          } else {
+            Write-Host "No sign-windows.log at $log"
+          }
+
+  publish-release:
+    needs: [create-release, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rename release assets
+        uses: actions/github-script@v8
+        env:
+          release_id: ${{ needs.create-release.outputs.release_id }}
+        with:
+          script: |
+            const releaseId = process.env.release_id;
+            const { data: assets } = await github.rest.repos.listReleaseAssets({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: releaseId,
+            });
+
+            const renames = {
+              '_aarch64.dmg': '-macOS-Apple-Silicon.dmg',
+              '_x64.dmg': '-macOS-Intel.dmg',
+              '_amd64.deb': '-Linux.deb',
+              '_amd64.AppImage': '-Linux.AppImage',
+              '-1.x86_64.rpm': '-Linux.rpm',
+              '_x64-setup.exe': '-Windows-Setup.exe',
+              '_x64_en-US.msi': '-Windows.msi',
+            };
+
+            for (const asset of assets) {
+              for (const [oldSuffix, newSuffix] of Object.entries(renames)) {
+                if (asset.name.endsWith(oldSuffix)) {
+                  const newName = asset.name.replace(oldSuffix, newSuffix);
+                  console.log(`Renaming: ${asset.name} → ${newName}`);
+                  await github.rest.repos.updateReleaseAsset({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    asset_id: asset.id,
+                    name: newName,
+                  });
+                  break;
+                }
+              }
+            }
+
+      # Hash every published asset (after the renames above, so the names in
+      # SHA256SUMS.txt match the final download filenames) and attach the
+      # checksums file to the release.
+      - name: Generate SHA256 checksums
+        uses: actions/github-script@v8
+        env:
+          release_id: ${{ needs.create-release.outputs.release_id }}
+        with:
+          script: |
+            const crypto = require('crypto');
+            const releaseId = Number(process.env.release_id);
+            const { owner, repo } = context.repo;
+
+            const { data: assets } = await github.rest.repos.listReleaseAssets({
+              owner, repo, release_id: releaseId, per_page: 100,
+            });
+
+            for (const a of assets) {
+              if (a.name === 'SHA256SUMS.txt') {
+                await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: a.id });
+              }
+            }
+
+            const lines = [];
+            for (const a of assets) {
+              if (a.name === 'SHA256SUMS.txt') continue;
+              const res = await github.request(
+                'GET /repos/{owner}/{repo}/releases/assets/{asset_id}',
+                { owner, repo, asset_id: a.id, headers: { accept: 'application/octet-stream' } }
+              );
+              const hash = crypto.createHash('sha256').update(Buffer.from(res.data)).digest('hex');
+              lines.push(`${hash}  ${a.name}`);
+              console.log(`${hash}  ${a.name}`);
+            }
+            lines.sort();
+
+            await github.rest.repos.uploadReleaseAsset({
+              owner, repo, release_id: releaseId,
+              name: 'SHA256SUMS.txt',
+              data: lines.join('\n') + '\n',
+            });
+
+      - name: Publish release
+        uses: actions/github-script@v8
+        env:
+          release_id: ${{ needs.create-release.outputs.release_id }}
+        with:
+          script: |
+            github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: process.env.release_id,
+              draft: false,
+            });

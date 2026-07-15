@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Your Own AI",
-  "version": "0.1.0",
+  "version": "0.1.0-beta.1",
   "identifier": "com.solar.yourowai",
   "build": {
     "beforeDevCommand": "rm -rf node_modules/.vite .qwik tmp dist 2>/dev/null; npm run dev",
@@ -85,7 +85,7 @@
     "shortDescription": "Offline-first AI App",
     "longDescription": "A powerful offline-first AI assistant that runs locally on your machine. Chat with AI models without requiring an internet connection.",
     "homepage": "https://yourownai.net",
-    "license": "TBA",
+    "license": "AGPL-3.0-or-later",
     "category": "Productivity",
     "externalBin": [
       "bin/llama-server",
@@ -115,6 +115,10 @@
     "windows": {
       "webviewInstallMode": {
         "type": "embedBootstrapper"
+      },
+      "signCommand": {
+        "cmd": "pwsh",
+        "args": ["-ExecutionPolicy", "Bypass", "-File", "scripts/sign-windows.ps1", "%1"]
       }
     }
   }
