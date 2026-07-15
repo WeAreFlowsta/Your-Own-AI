@@ -3,6 +3,33 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.1.0-beta.2] - 2026-07-16
+
+Fixes from the first day of beta testing on Windows and low-memory Macs.
+
+### Fixed
+- **Windows: the app can actually run models now.** The bundled inference
+  engine linked two OpenSSL libraries that aren't present on a normal
+  Windows machine, so it crashed on launch with missing-DLL errors. The
+  engine is rebuilt with no OpenSSL dependency, and the build now fails if
+  that dependency ever sneaks back in.
+- **Windows: no more stray terminal windows.** The background services the
+  app starts (key store, conversation store, inference engine) had visible
+  console windows; they are now hidden automatically.
+- **Windows: closing and reopening the app works.** Background services are
+  now tied to the app's lifetime, so quitting can't leave orphans behind
+  that block the next launch from recording conversations.
+- **Small-memory machines get honest model recommendations.** On an 8GB
+  MacBook Air the welcome screen recommended a 16.8GB model and the models
+  page showed nothing as runnable. Apple Silicon's shared memory is now
+  detected as the GPU budget, the memory reserve scales with machine size,
+  and the first-run recommendation uses the same fit math as the models
+  page.
+
+### Changed
+- Beta builds are not Windows code-signed (SmartScreen will ask once);
+  release candidates and stable releases are signed as usual.
+
 ## [0.1.0-beta.1] - 2026-07-15
 
 First public beta.
