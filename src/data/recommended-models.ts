@@ -7,7 +7,7 @@
  * engine formats slot in per-variant via `artifacts` (see EngineFormat /
  * artifactFor) without touching this file's structure.
  *
- * Last updated: 2026-07-12
+ * Last updated: 2026-07-15
  */
 
 /**
@@ -450,48 +450,6 @@ export const modelFamilies: ModelFamily[] = [
         minRAM: 16,
         downloadUrl: 'https://huggingface.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF/resolve/main/DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf',
         filename: 'DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf',
-        quantization: 'Q4_K_M'
-      }
-    ]
-  },
-  {
-    id: 'phi-4',
-    contextWindow: 16384,
-    released: '2025-01-08',
-    name: 'Phi-4',
-    description: 'Microsoft\'s mid-size model. Punches above its weight in reasoning and coding benchmarks.',
-    category: 'quality',
-    recommended: false,
-    capabilities: ['reasoning', 'coding', 'analysis', 'writing'],
-    traits: [],
-    variants: [
-      {
-        parameterCount: '14B',
-        size: 8.9,
-        minRAM: 16,
-        downloadUrl: 'https://huggingface.co/unsloth/phi-4-GGUF/resolve/main/phi-4-Q4_K_M.gguf',
-        filename: 'phi-4-Q4_K_M.gguf',
-        quantization: 'Q4_K_M'
-      }
-    ]
-  },
-  {
-    id: 'phi-4-reasoning',
-    contextWindow: 32768,
-    released: '2025-05-01',
-    name: 'Phi-4 Reasoning Plus',
-    description: 'Phi-4 optimized for chain-of-thought reasoning. Better at complex multi-step problems.',
-    category: 'quality',
-    recommended: false,
-    capabilities: ['reasoning', 'math', 'analysis'],
-    traits: ['thinking'],
-    variants: [
-      {
-        parameterCount: '14B',
-        size: 9.1,
-        minRAM: 16,
-        downloadUrl: 'https://huggingface.co/unsloth/Phi-4-reasoning-plus-GGUF/resolve/main/Phi-4-reasoning-plus-Q4_K_M.gguf',
-        filename: 'Phi-4-reasoning-plus-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       }
     ]
