@@ -287,9 +287,10 @@ async fn chat_completions(
         };
         // Offline-pick lean, mirroring the eagerness header. The in-app
         // Settings knobs live in the webview's storage and don't reach this
-        // server; API callers opt in per request. The API's difficulty
-        // escalation stays coupled to its freshness header (that was its
-        // shipped contract; there is no per-request toggle yet).
+        // server; API callers opt in per request. Difficulty escalation is
+        // inherent to online-offline mode (same as in-app); online model
+        // picks use the recommended defaults - there are no per-request
+        // override headers yet.
         let lean = match header_str(&headers, "x-your-own-ai-lean")
             .map(|s| s.trim().to_lowercase())
             .as_deref()
@@ -298,8 +299,8 @@ async fn chat_completions(
             Some("quality") => "quality",
             _ => "balanced",
         };
-        let escalate_hard = eagerness == "freshness";
-        match crate::router::route(&app, mode, &query, eagerness, task, difficulty, lean, escalate_hard).await {
+        let picks = crate::router::OnlinePicks::default();
+        match crate::router::route(&app, mode, &query, eagerness, task, difficulty, lean, &picks).await {
             Ok(r) => {
                 log::info!("[inference] router ({}): {mode} task={task} diff={difficulty} eag={eagerness} -> {} ({})", ai.name, r.model, r.reason);
                 ai.model = r.model;

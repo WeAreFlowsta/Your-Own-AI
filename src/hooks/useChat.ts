@@ -515,17 +515,11 @@ export function useChat(props: UseChatProps) {
           localStorage.getItem("smartRoutingEagerness") || "balanced";
         // Offline model-pick lean (speed / balanced / quality) — Settings → Routing.
         const lean = localStorage.getItem("routingOfflineLean") || "balanced";
-        // Hard-question online escalation — its own independent toggle.
-        // One-time migration: escalation used to be implied by freshness
-        // eagerness, so existing freshness users keep their behavior.
-        if (
-          localStorage.getItem("routingEscalateHard") === null &&
-          eagerness === "freshness"
-        ) {
-          localStorage.setItem("routingEscalateHard", "true");
-        }
-        const escalateHard =
-          localStorage.getItem("routingEscalateHard") === "true";
+        // Per-slot online model choices — Settings → Routing ("" / absent =
+        // the router's recommended default for that slot).
+        const onlineFresh = localStorage.getItem("routingOnlineFresh") || undefined;
+        const onlineHardCode = localStorage.getItem("routingOnlineHardCode") || undefined;
+        const onlineHardGeneral = localStorage.getItem("routingOnlineHardGeneral") || undefined;
         // Routing task: the report/code classifier's CODE signal is a free base
         // hint; the dedicated routing-task classifier upgrades it ONLY when a
         // specialist model is installed (otherwise it's gated off — no cost).
@@ -533,9 +527,10 @@ export function useChat(props: UseChatProps) {
         const baseTask: RoutingTask = turnMode === "code" ? "code" : "general";
         const routeClassifyModel =
           currentModel && !currentModel.startsWith("auto:") ? currentModel : undefined;
-        // Difficulty classification only runs when its result could matter
-        // (escalation possible), so users without the toggle pay nothing.
-        const wantDifficulty = mode === "online-offline" && escalateHard;
+        // Difficulty classification only runs when its result could matter:
+        // escalation is inherent to online-offline mode (the mode IS the
+        // consent to go online when it helps), and only that mode escalates.
+        const wantDifficulty = mode === "online-offline";
         const signals = await resolveRoutingSignals(
           userInput,
           routeClassifyModel,
@@ -551,7 +546,9 @@ export function useChat(props: UseChatProps) {
             difficulty: signals.difficulty,
             eagerness,
             lean,
-            escalateHard,
+            onlineFresh,
+            onlineHardCode,
+            onlineHardGeneral,
           });
           console.log(`[Router] ${mode} → ${r.model} (${r.reason})`);
           preferredModel = r.model;

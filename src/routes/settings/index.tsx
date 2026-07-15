@@ -20,6 +20,84 @@ import ExternalAccess from "../../components/ExternalAccess";
 import ConfirmModal from "../../components/ConfirmModal";
 import LiquidMetalButton from "../../components/LiquidMetalButton";
 import { helpTipsEnabled, setHelpTipsEnabled, resetHelpDismissals } from "../../utils/helpPrefs";
+import { LuChevronDown } from "@qwikest/icons/lucide";
+
+/** One "which online model answers" row: label + recommended-or-override
+    dropdown. Native <select> popups are GTK-themed on webkit (they ignore our
+    light/dark vars), so this uses the same custom-dropdown pattern as the
+    Offline Models sort control. */
+const OnlineModelPicker = component$<{
+  label: string;
+  hint: string;
+  recommended: string;
+  storageKey: string;
+  selected: Signal<string>;
+  models: Signal<{ id: string; display_name: string }[]>;
+}>((props) => {
+  const open = useSignal(false);
+  const currentLabel = props.selected.value
+    ? (props.models.value.find((m) => m.id === props.selected.value)?.display_name ??
+      props.selected.value.replace("online:", ""))
+    : `Recommended (${props.recommended})`;
+  return (
+    <div class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 py-3 border-b border-[var(--border-subtle)] last:border-b-0">
+      <div class="flex-1 min-w-0">
+        <div class="text-sm font-medium text-[var(--text-primary)]">{props.label}</div>
+        <div class="text-xs text-[var(--text-secondary)] mt-0.5">{props.hint}</div>
+      </div>
+      <div class="relative shrink-0">
+        <button
+          type="button"
+          onClick$={() => { open.value = !open.value; }}
+          class="flex items-center justify-between gap-2 min-w-[13rem] px-3 py-2 rounded-xl text-sm bg-[var(--bg-main)] text-[var(--text-primary)] border border-[var(--border-subtle)] hover:opacity-90 focus:outline-none"
+        >
+          <span class="truncate">{currentLabel}</span>
+          <LuChevronDown class="w-4 h-4 text-[var(--text-muted)] flex-shrink-0" />
+        </button>
+        {open.value && (
+          <>
+            <div class="fixed inset-0 z-40" onClick$={() => { open.value = false; }} />
+            <div class="absolute right-0 top-full mt-1 min-w-[13rem] max-h-64 overflow-y-auto z-50 rounded-lg bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] shadow-xl py-1">
+              <button
+                type="button"
+                onClick$={() => {
+                  props.selected.value = "";
+                  localStorage.removeItem(props.storageKey);
+                  open.value = false;
+                }}
+                class={`block w-full text-left px-3 py-1.5 text-sm hover:bg-[var(--bg-card)] transition-colors ${
+                  !props.selected.value
+                    ? "text-[var(--text-primary)] font-medium"
+                    : "text-[var(--text-secondary)]"
+                }`}
+              >
+                Recommended ({props.recommended})
+              </button>
+              {props.models.value.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick$={() => {
+                    props.selected.value = m.id;
+                    localStorage.setItem(props.storageKey, m.id);
+                    open.value = false;
+                  }}
+                  class={`block w-full text-left px-3 py-1.5 text-sm hover:bg-[var(--bg-card)] transition-colors ${
+                    m.id === props.selected.value
+                      ? "text-[var(--text-primary)] font-medium"
+                      : "text-[var(--text-secondary)]"
+                  }`}
+                >
+                  {m.display_name}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+});
 
 /** The page's section order — drives both the layout and the jump nav. */
 const SECTIONS = [
@@ -100,7 +178,11 @@ export default component$(() => {
   const currentModel = useSignal<string | null>(null);
   const routingEagerness = useSignal<"privacy" | "balanced" | "freshness">("balanced");
   const routingLean = useSignal<"speed" | "balanced" | "quality">("balanced");
-  const routingEscalateHard = useSignal(false);
+  // Per-slot online model overrides ("" = the router's recommended default).
+  const onlineFresh = useSignal("");
+  const onlineHardCode = useSignal("");
+  const onlineHardGeneral = useSignal("");
+  const onlineModels = useSignal<{ id: string; display_name: string }[]>([]);
   // May online routing options be OFFERED? (signed in + plan; starts true so
   // a slow check never hides controls from a paying user.)
   const onlineEntitled = useSignal(true);
@@ -128,21 +210,22 @@ export default component$(() => {
     if (savedLean === "speed" || savedLean === "quality") {
       routingLean.value = savedLean;
     }
-    // One-time migration: hard-question escalation used to be implied by
-    // freshness eagerness — existing freshness users keep their behavior
-    // and see the toggle honestly ON.
-    if (
-      localStorage.getItem("routingEscalateHard") === null &&
-      savedEagerness === "freshness"
-    ) {
-      localStorage.setItem("routingEscalateHard", "true");
-    }
-    routingEscalateHard.value =
-      localStorage.getItem("routingEscalateHard") === "true";
+    onlineFresh.value = localStorage.getItem("routingOnlineFresh") || "";
+    onlineHardCode.value = localStorage.getItem("routingOnlineHardCode") || "";
+    onlineHardGeneral.value = localStorage.getItem("routingOnlineHardGeneral") || "";
 
     import("../../utils/entitlement")
       .then(({ getOnlineEntitlement }) => getOnlineEntitlement())
-      .then((e) => (onlineEntitled.value = e.entitled))
+      .then(async (e) => {
+        onlineEntitled.value = e.entitled;
+        if (e.entitled) {
+          // Populate the per-slot model pickers from the live catalog.
+          const { invoke } = await import("@tauri-apps/api/core");
+          const models =
+            await invoke<{ id: string; display_name: string }[]>("list_online_models");
+          onlineModels.value = models.map(({ id, display_name }) => ({ id, display_name }));
+        }
+      })
       .catch(() => { /* keep fail-open default */ });
 
     const handleStorageChange = () => {
@@ -212,14 +295,6 @@ export default component$(() => {
   const setLean = $((value: "speed" | "balanced" | "quality") => {
     routingLean.value = value;
     localStorage.setItem("routingOfflineLean", value);
-  });
-
-  const toggleEscalateHard = $(() => {
-    routingEscalateHard.value = !routingEscalateHard.value;
-    localStorage.setItem(
-      "routingEscalateHard",
-      routingEscalateHard.value.toString()
-    );
   });
 
   // Factory reset — wipe local AIs/conversations/memory and restore defaults.
@@ -353,12 +428,13 @@ export default component$(() => {
                   specific model are never affected.
                 </p>
 
-                {/* Offline model choice — biases the fit-aware offline pick. */}
+                {/* On your device — biases the fit-aware offline pick. */}
                 <h3 class="text-lg font-semibold text-[var(--text-primary)]">
-                  Offline model choice
+                  On your device
                 </h3>
                 <p class="text-sm text-[var(--text-secondary)] mt-1 mb-3">
-                  Which of your downloaded models the Auto modes lean toward.
+                  Applies to every Auto mode: which of your downloaded models the
+                  automatic pick leans toward.
                 </p>
                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2">
                   {[
@@ -392,6 +468,8 @@ export default component$(() => {
                   from the Auto pool.
                 </p>
 
+                <div class="border-t border-[var(--border-subtle)] my-5" />
+
                 {/* Online routing controls are only OFFERED with a plan — a
                     quiet unlock note otherwise (settings already made keep
                     working; billing is enforced per request). */}
@@ -403,14 +481,24 @@ export default component$(() => {
                   </p>
                 ) : (
                 <>
-                {/* Online eagerness — unchanged shipped knob. */}
                 <h3 class="text-lg font-semibold text-[var(--text-primary)]">
-                  Going online for fresh information
+                  Online
                 </h3>
+                <p class="text-sm text-[var(--text-secondary)] mt-1 mb-4">
+                  For AIs set to "Auto — Online and Offline". A question goes
+                  online only when your device can't do it justice: it needs
+                  current information from the web, or it's genuinely hard.
+                  Everything else stays on your device. "Offline Only" AIs
+                  never go online.
+                </p>
+
+                {/* Online eagerness — unchanged shipped knob. */}
+                <h4 class="text-base font-semibold text-[var(--text-primary)]">
+                  Going online for fresh information
+                </h4>
                 <p class="text-sm text-[var(--text-secondary)] mt-1 mb-3">
-                  For AIs set to "Auto — Online and Offline": how eagerly a question
-                  that may need up-to-date information goes to an online model.
-                  "Offline Only" AIs never go online.
+                  How eagerly a question that may need up-to-date information
+                  goes to an online model.
                 </p>
                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-5">
                   {[
@@ -440,20 +528,43 @@ export default component$(() => {
                   ))}
                 </div>
 
-                {/* Hard-question escalation — rides Router V2 difficulty scoring.
-                    Independent of the freshness picker above by design: one
-                    axis = fresh info, this axis = difficulty. */}
-                <SettingToggle
-                  title="Hand hard questions to a stronger model"
-                  checked={routingEscalateHard}
-                  onToggle$={toggleEscalateHard}
-                >
-                  When a question looks genuinely difficult — tricky code, deep
-                  reasoning, complex math — your AI may pass it to a stronger
-                  online model instead of answering with your offline one. Off
-                  means hard questions stay on your device like everything else.
-                  Only affects AIs set to "Auto — Online and Offline".
-                </SettingToggle>
+                {/* Per-slot online model picks. Escalation itself has no
+                    toggle: choosing online-offline mode IS the consent to go
+                    online when it helps (auto:Offline is the never-online
+                    choice). Recommended names must match the router's
+                    DEFAULT_* ids in router.rs. */}
+                <h4 class="text-base font-semibold text-[var(--text-primary)] mt-5">
+                  Which online model answers
+                </h4>
+                <p class="text-sm text-[var(--text-secondary)] mt-1 mb-1">
+                  When a question does go online, these are the models that take
+                  it. Recommended picks are chosen for each job; change them if
+                  you'd rather use a different model.
+                </p>
+                <OnlineModelPicker
+                  label="Needs current information"
+                  hint="Searches the live web and cites sources"
+                  recommended="Grok 4.5 (Web)"
+                  storageKey="routingOnlineFresh"
+                  selected={onlineFresh}
+                  models={onlineModels}
+                />
+                <OnlineModelPicker
+                  label="Hard coding, reasoning, or math"
+                  hint="The toughest technical questions"
+                  recommended="GPT-5.6 Sol"
+                  storageKey="routingOnlineHardCode"
+                  selected={onlineHardCode}
+                  models={onlineModels}
+                />
+                <OnlineModelPicker
+                  label="Other hard questions"
+                  hint="Genuinely difficult questions outside those areas"
+                  recommended="GPT-5.6 Terra"
+                  storageKey="routingOnlineHardGeneral"
+                  selected={onlineHardGeneral}
+                  models={onlineModels}
+                />
                 </>
                 )}
               </section>

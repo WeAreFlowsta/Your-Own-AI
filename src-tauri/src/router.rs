@@ -226,18 +226,48 @@ async fn pick_offline(app: &AppHandle, task: &str, lean: &str) -> Result<String,
     Ok(best.name.clone())
 }
 
-/// Pick an online model. For a FRESH query it must see live web, so prefer a
-/// **web-search-capable** model (Grok-with-search → Sonar → any per-search-fee →
-/// anything). For a difficulty/task escalation (no live web needed) pick the best
-/// online model FOR THE TASK via the online capability registry — a coding model
-/// for code, a reasoning model for a hard question, etc.
-async fn pick_online(task: &str, fresh: bool) -> Option<String> {
-    let models = crate::flowsta::list_online_models().await.ok()?;
+/// The user's per-slot online model choices from Settings. `None` = use the
+/// recommended default. Values are `online:<id>` strings exactly as returned
+/// by `list_online_models`.
+#[derive(Default)]
+pub struct OnlinePicks {
+    pub fresh: Option<String>,
+    pub hard_code: Option<String>,
+    pub hard_general: Option<String>,
+}
+
+/// Recommended defaults per routing slot. Ids match the proxy catalog; if one
+/// is missing (the catalog moved on) selection falls back to the capability
+/// registry, so routing never breaks. The Settings page names these same
+/// models as "Recommended" - keep the two in sync.
+const DEFAULT_FRESH: &str = "online:grok-4.5-search";
+const DEFAULT_HARD_CODE: &str = "online:gpt-5.6-sol";
+const DEFAULT_HARD_GENERAL: &str = "online:gpt-5.6-terra";
+
+/// Pick an online model for one routing decision. Order: the user's explicit
+/// choice for this slot (when still in the catalog) → the recommended default
+/// → a registry fallback. For a FRESH query the fallback must see live web, so
+/// it prefers a **web-search-capable** model (Grok-with-search → Sonar → any
+/// per-search-fee → anything). For a difficulty escalation the fallback is the
+/// best online model FOR THE TASK via the online capability registry.
+fn select_online(
+    models: &[crate::flowsta::OnlineModel],
+    task: &str,
+    fresh: bool,
+    pref: Option<&str>,
+) -> Option<String> {
+    let by_id = |id: &str| models.iter().find(|m| m.id == id).map(|m| m.id.clone());
+    if let Some(hit) = pref.and_then(|p| by_id(p)) {
+        return Some(hit);
+    }
     let text = |m: &crate::flowsta::OnlineModel| {
         format!("{} {} {}", m.id, m.display_name, m.description).to_lowercase()
     };
 
     if fresh {
+        if let Some(hit) = by_id(DEFAULT_FRESH) {
+            return Some(hit);
+        }
         let has_search_fee = |m: &crate::flowsta::OnlineModel| {
             m.pricing.as_ref().and_then(|p| p.search_per_call_usd).is_some()
         };
@@ -257,10 +287,23 @@ async fn pick_online(task: &str, fresh: bool) -> Option<String> {
             .map(|m| m.id.clone());
     }
 
+    let slot_default = if matches!(task, "code" | "math" | "reasoning") {
+        DEFAULT_HARD_CODE
+    } else {
+        DEFAULT_HARD_GENERAL
+    };
+    if let Some(hit) = by_id(slot_default) {
+        return Some(hit);
+    }
     models
         .iter()
         .max_by_key(|m| crate::model_caps::online_caps_for(&text(m)).by_task(task))
         .map(|m| m.id.clone())
+}
+
+async fn pick_online(task: &str, fresh: bool, pref: Option<&str>) -> Option<String> {
+    let models = crate::flowsta::list_online_models().await.ok()?;
+    select_online(&models, task, fresh, pref)
 }
 
 /// Should the connected external server take this query instead of the
@@ -312,10 +355,10 @@ fn best_external(models: &[String], task: &str) -> Option<(String, u8)> {
 /// tunes the online FRESHNESS threshold only: `"privacy"` | `"balanced"` |
 /// `"freshness"`.
 /// `lean` biases the offline pick (`"speed"` | `"balanced"` | `"quality"`).
-/// `escalate_hard` is the single owner of difficulty escalation - a hard
-/// query may use a stronger online model. (The old freshness-implies-
-/// escalation coupling is gone; callers migrate freshness users to
-/// escalate_hard=true so shipped behavior carries over.)
+/// Difficulty escalation is inherent to online-offline mode: choosing the
+/// mode IS the consent to go online when it helps, so a hard query always
+/// may use a stronger online model. `picks` carries the user's per-slot
+/// online model overrides (Settings → Routing).
 pub async fn route(
     app: &AppHandle,
     mode: &str,
@@ -324,16 +367,15 @@ pub async fn route(
     task: &str,
     difficulty: &str,
     lean: &str,
-    escalate_hard: bool,
+    picks: &OnlinePicks,
 ) -> Result<RouteResult, String> {
     if mode == "online-offline" {
         // Stage 0: cheap keyword cues. Stage 1 (only if Stage 0 is negative):
         // bge-small semantic similarity to "needs-current-info" phrases. Stage 2:
-        // difficulty escalation — a HARD query goes to a stronger online model,
-        // opt-in via `escalate_hard` alone (off = privacy over a marginally-
-        // better answer). `is_fresh` = the query needs LIVE WEB (→ a search
-        // model), vs a difficulty escalation (→ the best online model for the
-        // task).
+        // difficulty escalation — a HARD query goes to a stronger online model
+        // (inherent to this mode; auto:offline is the never-online choice).
+        // `is_fresh` = the query needs LIVE WEB (→ a search model), vs a
+        // difficulty escalation (→ the best online model for the task).
         let (why, is_fresh) = if looks_time_sensitive(query) {
             (Some("looks like it needs current info"), true)
         } else if semantic_fresh_score(app, query)
@@ -341,13 +383,20 @@ pub async fn route(
             .is_some_and(|s| s >= threshold_for(eagerness))
         {
             (Some("seems to need up-to-date info"), true)
-        } else if difficulty == "hard" && escalate_hard {
+        } else if difficulty == "hard" {
             (Some("a hard question — using a stronger model"), false)
         } else {
             (None, false)
         };
         if let Some(why) = why {
-            if let Some(model) = pick_online(task, is_fresh).await {
+            let pref = if is_fresh {
+                picks.fresh.as_deref()
+            } else if matches!(task, "code" | "math" | "reasoning") {
+                picks.hard_code.as_deref()
+            } else {
+                picks.hard_general.as_deref()
+            };
+            if let Some(model) = pick_online(task, is_fresh, pref).await {
                 return Ok(RouteResult {
                     model,
                     reason: format!("online — {why}"),
@@ -460,8 +509,15 @@ pub async fn route_model(
     task: Option<String>,
     difficulty: Option<String>,
     lean: Option<String>,
-    escalate_hard: Option<bool>,
+    online_fresh: Option<String>,
+    online_hard_code: Option<String>,
+    online_hard_general: Option<String>,
 ) -> Result<RouteResult, String> {
+    let picks = OnlinePicks {
+        fresh: online_fresh,
+        hard_code: online_hard_code,
+        hard_general: online_hard_general,
+    };
     route(
         &app,
         &mode,
@@ -470,13 +526,83 @@ pub async fn route_model(
         task.as_deref().unwrap_or("general"),
         difficulty.as_deref().unwrap_or("easy"),
         lean.as_deref().unwrap_or("balanced"),
-        escalate_hard.unwrap_or(false),
+        &picks,
     )
     .await
 }
 
 #[cfg(test)]
 mod tests {
+
+    fn om(id: &str, name: &str, desc: &str, search_fee: Option<f64>) -> crate::flowsta::OnlineModel {
+        crate::flowsta::OnlineModel {
+            id: format!("online:{id}"),
+            display_name: name.to_string(),
+            description: desc.to_string(),
+            context_window: 0,
+            vision: false,
+            category: "chat".to_string(),
+            pricing: Some(crate::flowsta::OnlinePricing {
+                input_per_mtok: 1.0,
+                output_per_mtok: 1.0,
+                request_fee_usd: 0.0,
+                search_per_call_usd: search_fee,
+            }),
+        }
+    }
+
+    fn catalog() -> Vec<crate::flowsta::OnlineModel> {
+        vec![
+            om("grok-4.5", "Grok 4.5", "xAI's newest", None),
+            om("grok-4.5-search", "Grok 4.5 (Web)", "live web search", Some(0.005)),
+            om("gpt-5.6-sol", "GPT-5.6 Sol", "OpenAI's flagship", None),
+            om("gpt-5.6-terra", "GPT-5.6 Terra", "balanced flagship", None),
+            om("sonar", "Sonar", "Perplexity search", Some(0.005)),
+        ]
+    }
+
+    #[test]
+    fn select_online_defaults_per_slot() {
+        let models = catalog();
+        // Fresh → the web-search default.
+        assert_eq!(select_online(&models, "general", true, None).unwrap(), "online:grok-4.5-search");
+        // Hard code / math / reasoning → the flagship.
+        for task in ["code", "math", "reasoning"] {
+            assert_eq!(select_online(&models, task, false, None).unwrap(), "online:gpt-5.6-sol");
+        }
+        // Hard general → the balanced tier.
+        assert_eq!(select_online(&models, "general", false, None).unwrap(), "online:gpt-5.6-terra");
+    }
+
+    #[test]
+    fn select_online_user_pref_wins_when_in_catalog() {
+        let models = catalog();
+        // A user who prefers Sonar for hard questions gets Sonar.
+        assert_eq!(
+            select_online(&models, "code", false, Some("online:sonar")).unwrap(),
+            "online:sonar"
+        );
+        // A pref no longer in the catalog is ignored → default applies.
+        assert_eq!(
+            select_online(&models, "code", false, Some("online:retired-model")).unwrap(),
+            "online:gpt-5.6-sol"
+        );
+    }
+
+    #[test]
+    fn select_online_falls_back_when_defaults_absent() {
+        // A future catalog without today's default ids must still route sanely.
+        let models = vec![
+            om("sonar", "Sonar", "Perplexity search", Some(0.005)),
+            om("newgpt-9", "NewGPT 9", "a gpt model", None),
+        ];
+        // Fresh → the search-capable model.
+        assert_eq!(select_online(&models, "general", true, None).unwrap(), "online:sonar");
+        // Hard reasoning → registry ranks the gpt above the search-first model.
+        assert_eq!(select_online(&models, "reasoning", false, None).unwrap(), "online:newgpt-9");
+        // Empty catalog → None (router falls through to offline).
+        assert_eq!(select_online(&[], "code", false, None), None);
+    }
     use super::*;
     use std::cmp::Ordering;
 
