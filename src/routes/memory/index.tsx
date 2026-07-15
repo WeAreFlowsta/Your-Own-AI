@@ -13,8 +13,7 @@ import {
   type Signal,
 } from "@builder.io/qwik";
 import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
-import { invoke } from "@tauri-apps/api/core";
-import { LuArrowLeft, LuMessageSquare, LuChevronDown, LuChevronUp, LuInfo, LuDownload, LuShieldCheck, LuKey, LuBrain, LuUser } from "@qwikest/icons/lucide";
+import { LuArrowLeft, LuMessageSquare, LuChevronDown, LuChevronUp, LuInfo, LuDownload, LuShieldCheck, LuBrain, LuUser } from "@qwikest/icons/lucide";
 import AppHeader from "../../components/AppHeader";
 import { useAiData } from "../../contexts/AiDataContext";
 import {
@@ -211,16 +210,6 @@ export default component$(() => {
     }
   });
 
-  const handleExportRecovery = $(async () => {
-    exportStatus.value = "Exporting recovery key…";
-    try {
-      const path = await invoke<string>("export_transcript_recovery");
-      exportStatus.value = `Recovery key saved to ${path} — keep it safe and private; it is the only way to recover your transcripts after device loss.`;
-    } catch (e) {
-      exportStatus.value = `Export failed: ${e}`;
-    }
-  });
-
   // Tabs: Conversations (the per-AI ledger, default) | Knows (read-only mirror).
   const activeTab = useSignal<"knows" | "conversations">("conversations");
 
@@ -264,15 +253,6 @@ export default component$(() => {
               <MemorySubtitle loading={loading} conversations={conversations} />
             </div>
 
-            <LiquidMetalButton
-              variant="secondary"
-              onClick$={handleExportRecovery}
-              title="Export your encryption key + network seed — the only way to recover transcripts after device loss"
-              class="flex items-center gap-1.5 px-3 py-2 text-xs flex-shrink-0"
-            >
-              <LuKey class="w-3.5 h-3.5" />
-              <span class="hidden sm:inline">Recovery key</span>
-            </LiquidMetalButton>
           </div>
 
           {/* Tabs */}
