@@ -418,6 +418,7 @@ pub struct OnlineModel {
     /// Whether this model accepts image inputs (from the proxy catalog). The app
     /// won't send an attached image to a model where this is false.
     pub vision: bool,
+    pub category: String,
     pub pricing: Option<OnlinePricing>,
 }
 
@@ -441,6 +442,7 @@ pub async fn list_online_models() -> Result<Vec<OnlineModel>, String> {
                     description: m["description"].as_str().unwrap_or_default().to_string(),
                     context_window: m["context_window"].as_u64().unwrap_or(0),
                     vision: m["vision"].as_bool().unwrap_or(false),
+                    category: m["category"].as_str().unwrap_or("chat").to_string(),
                     pricing: m["pricing"].as_object().map(|p| OnlinePricing {
                         input_per_mtok: p.get("input_per_mtok").and_then(|x| x.as_f64()).unwrap_or(0.0),
                         output_per_mtok: p.get("output_per_mtok").and_then(|x| x.as_f64()).unwrap_or(0.0),

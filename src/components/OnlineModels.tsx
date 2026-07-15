@@ -53,7 +53,20 @@ interface OnlineModel {
   display_name: string;
   description: string;
   context_window?: number;
+  category?: string; // "chat" | "web_search" | "coding" — from the catalog
   pricing?: OnlinePricing; // USD, margin applied — what the user pays
+}
+
+const MODEL_GROUPS = [
+  { key: 'chat', label: 'Chat' },
+  { key: 'web_search', label: 'Web search' },
+  { key: 'coding', label: 'Coding' },
+] as const;
+
+// Unknown or missing categories fold into Chat so a new catalog value
+// never hides a model.
+function modelGroupKey(m: OnlineModel): string {
+  return MODEL_GROUPS.some((g) => g.key === m.category) ? m.category! : 'chat';
 }
 
 const VAULT_DOWNLOAD_URL = 'https://flowsta.com/vault';
@@ -392,8 +405,17 @@ export const OnlineModels = component$(() => {
             No online models available right now.
           </p>
         ) : (
-          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {store.models.map((model) => {
+          <div class="space-y-8">
+            {MODEL_GROUPS.map((group) => {
+              const models = store.models.filter((m) => modelGroupKey(m) === group.key);
+              if (models.length === 0) return null;
+              return (
+                <div key={group.key}>
+                  <p class="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)] mb-3">
+                    {group.label}
+                  </p>
+                  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {models.map((model) => {
               const isPaused = store.paused.includes(model.id);
               const ctx = formatContext(model.context_window);
               return (
@@ -474,6 +496,10 @@ export const OnlineModels = component$(() => {
                         {signedIn ? 'Choose a plan to use' : 'Sign in to use'}
                       </div>
                     )}
+                  </div>
+                </div>
+              );
+            })}
                   </div>
                 </div>
               );
