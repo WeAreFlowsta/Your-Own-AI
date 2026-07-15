@@ -17,7 +17,6 @@ import {
   $,
   component$,
   Slot,
-  type QRL,
   type NoSerialize,
   noSerialize,
 } from "@builder.io/qwik";

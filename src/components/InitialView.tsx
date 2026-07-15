@@ -4,7 +4,6 @@ import { SelectedAiModel, ChatAction, AttachedFile, AttachedImage } from '../typ
 
 interface InitialViewProps {
   input: Signal<string>;
-  setInput$: QRL<(value: string) => void>;
   handleSubmit$: QRL<() => void>;
   isLoading: boolean;
   currentPlaceholder: string;
@@ -27,7 +26,6 @@ export default component$<InitialViewProps>((props) => {
     <div class="w-full max-w-4xl mx-auto">
       <ChatInputBar
         input={props.input}
-        setInput$={props.setInput$}
         handleSubmit$={props.handleSubmit$}
         isLoading={props.isLoading}
         currentPlaceholder={props.currentPlaceholder}

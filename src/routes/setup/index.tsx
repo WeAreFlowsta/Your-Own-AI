@@ -8,7 +8,6 @@
 import {
   component$,
   useSignal,
-  useContext,
   useVisibleTask$,
   $,
 } from "@builder.io/qwik";
@@ -16,7 +15,6 @@ import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
 import { ModelDownloader } from "../../components/ModelDownloader";
 import AppHeader from "../../components/AppHeader";
 import { invoke } from "@tauri-apps/api/core";
-import { ThemeContext } from "../layout";
 
 export interface SystemInfo {
   total_memory_gb: number;
@@ -30,7 +28,6 @@ export interface SystemInfo {
 
 export default component$(() => {
   const nav = useNavigate();
-  const { theme } = useContext(ThemeContext);
   const systemInfo = useSignal<SystemInfo | null>(null);
   const loading = useSignal(true);
 

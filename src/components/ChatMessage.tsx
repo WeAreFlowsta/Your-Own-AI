@@ -5,7 +5,6 @@ import {
   useVisibleTask$,
   type QRL,
   $,
-  type Signal,
 } from '@builder.io/qwik';
 import 'highlight.js/styles/vs2015.css';
 import { renderMarkdown } from '../utils/renderMarkdown';
@@ -16,7 +15,6 @@ import {
   LuPanelRightClose,
   LuPanelRightOpen,
 } from '@qwikest/icons/lucide';
-import UserAvatar from './UserAvatar';
 import CodePanel from './CodePanel';
 import ThemeAwareLottie from './ThemeAwareLottie';
 import LiquidMetalButton from './LiquidMetalButton';

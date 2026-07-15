@@ -8,7 +8,6 @@
 import {
   component$,
   useSignal,
-  useContext,
   useVisibleTask$,
   $,
 } from "@builder.io/qwik";
@@ -32,20 +31,17 @@ import AiFormModal from "../../components/AiFormModal";
 import DeleteAiModal from "../../components/DeleteAiModal";
 import ConfirmModal from "../../components/ConfirmModal";
 import LastActiveAiModal from "../../components/LastActiveAiModal";
-import { ThemeContext } from "../layout";
 import LiquidMetalButton from "../../components/LiquidMetalButton";
 import { Callout } from "../../components/Callout";
 
 export default component$(() => {
   const nav = useNavigate();
-  const { theme } = useContext(ThemeContext);
   const aiData = useAiData();
   const {
     archiveCustomAi,
     restoreCustomAi,
     purgeCustomAi,
     updateCustomAiStatus,
-    refreshUserAis,
     reorderAis,
   } = useAiDataActions();
 

@@ -5,18 +5,23 @@
  * Used by ChatMessage, Memory page, and thinking panels.
  */
 import { marked } from "marked";
+import { markedHighlight } from "marked-highlight";
 import hljs from "highlight.js";
 
 // Configure marked with highlight.js (runs once on import)
 marked.use({ gfm: true, breaks: false });
-marked.setOptions({
-  highlight(code: string, lang: string) {
-    if (lang && hljs.getLanguage(lang)) {
-      return hljs.highlight(code, { language: lang }).value;
-    }
-    return hljs.highlightAuto(code).value;
-  },
-});
+marked.use(
+  markedHighlight({
+    emptyLangClass: "hljs",
+    langPrefix: "hljs language-",
+    highlight(code: string, lang: string) {
+      if (lang && hljs.getLanguage(lang)) {
+        return hljs.highlight(code, { language: lang }).value;
+      }
+      return hljs.highlightAuto(code).value;
+    },
+  }),
+);
 
 /**
  * Render markdown text to styled HTML string.

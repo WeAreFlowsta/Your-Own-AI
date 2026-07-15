@@ -6,11 +6,9 @@
 import {
   component$,
   useSignal,
-  useStore,
   useContext,
   useVisibleTask$,
   $,
-  type Signal,
 } from "@builder.io/qwik";
 import { type DocumentHead, useNavigate } from "@builder.io/qwik-city";
 import { invoke } from "@tauri-apps/api/core";
@@ -29,14 +27,9 @@ import CodePanel from "../../components/CodePanel";
 import AppHeader from "../../components/AppHeader";
 import WelcomeModal from "../../components/WelcomeModal";
 
-import type { SelectedAiModel, ChatAction, UserDefinedAI, AttachedFile, AttachedImage } from "../../types";
+import type { SelectedAiModel, ChatAction, AttachedFile, AttachedImage } from "../../types";
 import LiquidMetalButton from "../../components/LiquidMetalButton";
 import veeboThumb from "../../assets/veebo-thumb.jpg";
-import reevesThumb from "../../assets/reeves-thumb.jpg";
-import teresaThumb from "../../assets/teresa-thumb.jpg";
-
-/** Static thumbnails for default AIs by archetype ID — always available, no async loading */
-const archetypeThumbs: Record<string, string> = { veebo: veeboThumb, reeves: reevesThumb, teresa: teresaThumb };
 
 /** Module-level flag — survives Qwik dev-mode re-mounts */
 let needsWelcomeModal = false;
@@ -424,11 +417,6 @@ export default component$(() => {
   });
 
   // --- Callbacks (replace useCallback with $()) ---
-  const getDisplayImageUrl = $((model: SelectedAiModel | undefined) => {
-    if (!model) return undefined;
-    return model.imageUrl || undefined;
-  });
-
   const handleSubmit = $(async () => {
     if (!input.value.trim() || chatState.isLoading) return;
 

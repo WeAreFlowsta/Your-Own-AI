@@ -24,7 +24,6 @@ import type {
 } from "../types";
 import { bundledArchetypes } from "../data/bundled-archetypes";
 import { responseLengthOptions as bundledResponseLengths } from "../data/response-lengths";
-import { useMode } from "./ModeContext";
 import { invoke } from "@tauri-apps/api/core";
 import {
   getLocalCustomAis,
@@ -52,8 +51,6 @@ export interface AiDataState {
 export const AiDataContext = createContextId<AiDataState>("app.aidata");
 
 export const AiDataProvider = component$(() => {
-  const modeState = useMode();
-
   const state = useStore<AiDataState>(
     {
       archetypeTemplates: [],
@@ -278,7 +275,6 @@ export function canDeactivate(
  */
 export function useAiDataActions() {
   const state = useAiData();
-  const modeState = useMode();
 
   const createCustomAi = $(
     async (

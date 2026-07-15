@@ -77,7 +77,7 @@ export const CodePanel = component$<CodePanelProps>(({ codeString, language, onC
       <div class="code-panel-content">
         {isRenderView.value ? (
           <iframe
-            srcDoc={createIframeContent()}
+            srcdoc={createIframeContent()}
             title="Code Preview"
             sandbox={sandboxPermissions}
             class="w-full h-full border-0"

@@ -47,7 +47,6 @@ export default component$<ChatContainerProps>((props) => {
   const { messages } = props;
 
   // Create QRL setters from signals for child components that expect QRL callbacks
-  const setInput$ = $((value: string) => { props.input.value = value; });
   const setSelectedAi$ = $((ai: SelectedAiModel) => { props.selectedAi.value = ai; });
   const setSelectedAction$ = $((action: ChatAction) => { props.selectedAction.value = action; });
   const setSidePanelContent$ = $((content: { messageId: string; codeString: string; language: string; } | null) => { props.sidePanelContent.value = content; });
@@ -60,7 +59,6 @@ export default component$<ChatContainerProps>((props) => {
       <div class="flex-1 flex flex-col justify-center p-4">
         <InitialView
           input={props.input}
-          setInput$={setInput$}
           handleSubmit$={props.handleSubmit$}
           isLoading={props.isLoading}
           currentPlaceholder={props.currentPlaceholder}
@@ -103,7 +101,6 @@ export default component$<ChatContainerProps>((props) => {
       <div class="shrink-0 px-4 py-2 sm:py-4 border-t border-[var(--border-subtle)]">
         <ChatInputBar
           input={props.input}
-          setInput$={setInput$}
           handleSubmit$={props.handleSubmit$}
           isLoading={props.isLoading}
           stopChat$={props.stopChat$}

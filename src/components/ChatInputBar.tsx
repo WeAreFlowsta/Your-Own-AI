@@ -7,7 +7,6 @@ import { LiquidMetalBorder } from './LiquidMetalBorder';
 
 interface ChatInputBarProps {
   input: Signal<string>;
-  setInput$: QRL<(value: string) => void>;
   handleSubmit$: QRL<() => void>;
   isLoading: boolean;
   currentPlaceholder: string;
@@ -29,7 +28,6 @@ interface ChatInputBarProps {
 
 export const ChatInputBar = component$<ChatInputBarProps>(({
   input,
-  setInput$,
   handleSubmit$,
   isLoading,
   currentPlaceholder,
