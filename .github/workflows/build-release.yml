@@ -25,9 +25,10 @@ jobs:
       - name: Check tag matches tauri.conf.json version
         run: |
           CONF=$(jq -r .version src-tauri/tauri.conf.json)
+          PKG=$(jq -r .version package.json)
           TAG="${{ steps.version.outputs.version }}"
-          if [ "$CONF" != "$TAG" ]; then
-            echo "Tag version ($TAG) != tauri.conf.json version ($CONF) - bump the config and retag"
+          if [ "$CONF" != "$TAG" ] || [ "$PKG" != "$TAG" ]; then
+            echo "Tag ($TAG) != tauri.conf.json ($CONF) or package.json ($PKG) - bump both and retag"
             exit 1
           fi
 
@@ -282,20 +283,31 @@ jobs:
           Expand-Archive -Path $zip -DestinationPath $dest -Force
           "CODE_SIGN_TOOL_DIR=$dest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      # Pre-release tags (e.g. v0.1.0-beta.1) skip the MSI bundle on Windows:
-      # the MSI bundler requires numeric-only pre-release identifiers and
-      # rejects "beta.1". NSIS has no such restriction and is what end users
-      # install anyway. Stable tags get the full bundle list.
+      # Per-platform bundle lists:
+      # - macOS: dmg only (the default also produces a bare .app tarball we
+      #   don't ship).
+      # - Linux: deb + rpm only (AppImage never worked well with the bundled
+      #   Holochain conductor).
+      # - Windows: pre-release tags (e.g. v0.1.0-beta.1) skip the MSI - its
+      #   bundler requires numeric-only pre-release identifiers and rejects
+      #   "beta.1". NSIS has no such restriction and is what end users
+      #   install anyway. Stable tags get MSI + NSIS.
       - name: Compute Tauri bundle args
         id: tauri_args
         shell: bash
         run: |
           EXTRA=""
           VERSION="${GITHUB_REF_NAME#v}"
-          if [[ "$RUNNER_OS" == "Windows" ]] && [[ "$VERSION" == *-* ]]; then
-            EXTRA=" --bundles nsis"
-            echo "Pre-release detected ($VERSION) - skipping MSI bundle on Windows"
-          fi
+          case "$RUNNER_OS" in
+            macOS) EXTRA=" --bundles dmg" ;;
+            Linux) EXTRA=" --bundles deb,rpm" ;;
+            Windows)
+              if [[ "$VERSION" == *-* ]]; then
+                EXTRA=" --bundles nsis"
+                echo "Pre-release detected ($VERSION) - skipping MSI bundle"
+              fi
+              ;;
+          esac
           echo "extra=$EXTRA" >> "$GITHUB_OUTPUT"
 
       - name: Build Tauri app
@@ -349,7 +361,6 @@ jobs:
               '_aarch64.dmg': '-macOS-Apple-Silicon.dmg',
               '_x64.dmg': '-macOS-Intel.dmg',
               '_amd64.deb': '-Linux.deb',
-              '_amd64.AppImage': '-Linux.AppImage',
               '-1.x86_64.rpm': '-Linux.rpm',
               '_x64-setup.exe': '-Windows-Setup.exe',
               '_x64_en-US.msi': '-Windows.msi',

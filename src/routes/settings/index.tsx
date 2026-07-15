@@ -186,6 +186,9 @@ export default component$(() => {
   // May online routing options be OFFERED? (signed in + plan; starts true so
   // a slow check never hides controls from a paying user.)
   const onlineEntitled = useSignal(true);
+  // The running build's version (tauri.conf.json, which CI enforces equals
+  // the release tag). package.json is only the pre-hydration fallback.
+  const appVersion = useSignal(packageJson.version);
 
   // Initialise from localStorage
   // eslint-disable-next-line qwik/no-use-visible-task
@@ -213,6 +216,11 @@ export default component$(() => {
     onlineFresh.value = localStorage.getItem("routingOnlineFresh") || "";
     onlineHardCode.value = localStorage.getItem("routingOnlineHardCode") || "";
     onlineHardGeneral.value = localStorage.getItem("routingOnlineHardGeneral") || "";
+
+    import("@tauri-apps/api/app")
+      .then(({ getVersion }) => getVersion())
+      .then((v) => { appVersion.value = v; })
+      .catch(() => { /* keep package.json fallback */ });
 
     import("../../utils/entitlement")
       .then(({ getOnlineEntitlement }) => getOnlineEntitlement())
@@ -658,7 +666,7 @@ export default component$(() => {
 
       {/* Version number in bottom right corner */}
       <div class="fixed bottom-4 right-4 text-xs text-[var(--text-secondary)] opacity-50 hover:opacity-100 transition-opacity">
-        v{packageJson.version}
+        v{appVersion.value}
       </div>
     </div>
   );
