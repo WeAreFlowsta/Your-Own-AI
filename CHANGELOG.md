@@ -26,6 +26,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   and gathers the automatic-learning switch.
 
 ### Fixed
+- Downloading a vision model now says what's happening when it fetches the
+  second file (the small projector that lets the model read images) instead
+  of showing a second unlabeled progress bar.
 - Image questions no longer stall when the preferred vision model is too
   large for your hardware - they fall back to an image-capable model that
   fits.

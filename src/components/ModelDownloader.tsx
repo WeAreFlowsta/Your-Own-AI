@@ -59,7 +59,13 @@ import { useAiData, useAiDataActions } from '../contexts/AiDataContext';
 interface ActiveDownload {
   familyId: string;       // model family id, or 'custom'
   familyName: string;
+  /** The file currently downloading (the model, then its vision projector). */
   filename: string;
+  /** 'vision' while the paired projector downloads after the model itself. */
+  stage?: 'model' | 'vision';
+  /** The chat model to load at finalize - `filename` during the vision stage
+   *  is the projector, which must never be loaded as a model. */
+  modelFilename?: string;
   isFirstModel: boolean;
   startedAt: number;
 }
@@ -118,6 +124,10 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     downloadedModels: [] as LocalModel[],
     downloading: null as string | null,
     downloadProgress: null as DownloadProgress | null,
+    /** Which file of the download is in flight: the model, or the vision
+     *  projector that auto-follows a vision model. Drives the progress label
+     *  so the second file doesn't look like a stalled or repeated download. */
+    downloadStage: 'model' as 'model' | 'vision',
     error: null as string | null,
     modelsDirectory: '',
     successMessage: null as string | null,
@@ -264,6 +274,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
 
     // Re-show downloading state
     store.downloading = active.familyId;
+    store.downloadStage = active.stage === 'vision' ? 'vision' : 'model';
 
     // Listen for progress events for this download
     const unlistenProgress = listen<{ filename: string; downloaded: number; total: number; percent: number }>(
@@ -275,21 +286,25 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
       }
     );
 
-    // Listen for completion
+    // Listen for completion. Finalize with the MODEL file - during the vision
+    // stage `active.filename` is the projector, which must not be loaded as
+    // a chat model.
+    const modelFile = active.modelFilename ?? active.filename;
     const unlistenComplete = listen<{ filename: string }>(
       'model-download-complete',
       (event) => {
         if (event.payload.filename === active.filename) {
-          finalizeDownload(active.filename, active.familyName, active.isFirstModel);
+          finalizeDownload(modelFile, active.familyName, active.isFirstModel);
         }
       }
     );
 
-    // Check if model already appeared on disk (download finished while we were away)
-    modelManager.listModels().then((models) => {
-      const alreadyDone = models.some(m => m.name === active.filename);
+    // Check if the file already appeared on disk (download finished while we
+    // were away). isModelDownloaded, not listModels: projectors are filtered
+    // out of the model list, so a finished vision stage would never match.
+    modelManager.isModelDownloaded(active.filename).then((alreadyDone) => {
       if (alreadyDone) {
-        finalizeDownload(active.filename, active.familyName, active.isFirstModel);
+        finalizeDownload(modelFile, active.familyName, active.isFirstModel);
       }
     });
 
@@ -330,6 +345,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     store.downloading = familyId;
     store.error = null;
     store.downloadProgress = null;
+    store.downloadStage = 'model';
     store.successMessage = null;
 
     const modelsBeforeDownload = await modelManager.listModels();
@@ -361,7 +377,19 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
           return !!key && vlc.startsWith(key);
         });
         if (proj && !(await modelManager.isModelDownloaded(proj.filename))) {
+          // Make the second file visible as its own stage - a fresh 0% bar
+          // under the same name reads as a stalled or repeated download.
+          store.downloadStage = 'vision';
           store.downloadProgress = null;
+          localStorage.setItem(
+            ACTIVE_DOWNLOAD_KEY,
+            JSON.stringify({
+              ...activeDownload,
+              stage: 'vision',
+              filename: proj.filename,
+              modelFilename: variant.filename,
+            } satisfies ActiveDownload),
+          );
           await modelManager.downloadModel(proj.downloadUrl, proj.filename, (progress) => {
             store.downloadProgress = progress;
           });
@@ -807,7 +835,11 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
             <div>
               <div class="flex items-center gap-2 mb-2 justify-center">
                 <div class="w-4 h-4 border-2 border-[var(--text-primary)] border-t-transparent rounded-full animate-spin" />
-                <span class="text-sm text-[var(--text-primary)]">Downloading...</span>
+                <span class="text-sm text-[var(--text-primary)]">
+                  {store.downloadStage === 'vision'
+                    ? 'Downloading vision support...'
+                    : 'Downloading...'}
+                </span>
               </div>
               {store.downloadProgress && (
                 <div>
@@ -822,6 +854,12 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                     {modelManager.formatModelSize(store.downloadProgress.downloaded)}
                   </p>
                 </div>
+              )}
+              {store.downloadStage === 'vision' && (
+                <p class="text-xs text-[var(--text-muted)] text-center mt-1">
+                  Model downloaded - now fetching the second, smaller file that
+                  lets it read images.
+                </p>
               )}
             </div>
           ) : (
