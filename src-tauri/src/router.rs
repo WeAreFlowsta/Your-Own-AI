@@ -91,14 +91,27 @@ async fn fresh_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec<f32>>>
 /// "needs-current-info" reference phrases? `None` if embedding is unavailable
 /// (→ caller treats as not-fresh, i.e. stays offline). Catches paraphrases the
 /// keyword gate misses ("what's the newest phone", "is it raining").
-async fn semantic_fresh_score(app: &AppHandle, query: &str) -> Option<f32> {
+async fn semantic_fresh_score(
+    app: &AppHandle,
+    query: &str,
+    provided_vec: Option<&[f32]>,
+) -> Option<f32> {
     let refs = fresh_reference_vecs(app).await?;
-    let state = app.state::<crate::llm::LLMState>();
-    let qtext = format!("{QUERY_INSTRUCTION}{query}");
-    let qvec = crate::llm::embed_texts(app.clone(), state, vec![qtext], EMBED_MODEL.to_string())
-        .await
-        .ok()?
-        .pop()?;
+    // The frontend embeds the turn's text ONCE (same bge query instruction)
+    // and shares the vector here and with memory retrieval - reuse it rather
+    // than paying a second embed-server round trip. Callers without one
+    // (the inference API) fall back to embedding here.
+    let qvec: Vec<f32> = match provided_vec {
+        Some(v) if !v.is_empty() => v.to_vec(),
+        _ => {
+            let state = app.state::<crate::llm::LLMState>();
+            let qtext = format!("{QUERY_INSTRUCTION}{query}");
+            crate::llm::embed_texts(app.clone(), state, vec![qtext], EMBED_MODEL.to_string())
+                .await
+                .ok()?
+                .pop()?
+        }
+    };
     Some(refs.iter().map(|r| cosine(&qvec, r)).fold(0.0f32, f32::max))
 }
 
@@ -368,6 +381,7 @@ pub async fn route(
     difficulty: &str,
     lean: &str,
     picks: &OnlinePicks,
+    query_vec: Option<&[f32]>,
 ) -> Result<RouteResult, String> {
     if mode == "online-offline" {
         // Stage 0: cheap keyword cues. Stage 1 (only if Stage 0 is negative):
@@ -378,7 +392,7 @@ pub async fn route(
         // difficulty escalation (→ the best online model for the task).
         let (why, is_fresh) = if looks_time_sensitive(query) {
             (Some("looks like it needs current info"), true)
-        } else if semantic_fresh_score(app, query)
+        } else if semantic_fresh_score(app, query, query_vec)
             .await
             .is_some_and(|s| s >= threshold_for(eagerness))
         {
@@ -512,6 +526,7 @@ pub async fn route_model(
     online_fresh: Option<String>,
     online_hard_code: Option<String>,
     online_hard_general: Option<String>,
+    query_vec: Option<Vec<f32>>,
 ) -> Result<RouteResult, String> {
     let picks = OnlinePicks {
         fresh: online_fresh,
@@ -527,6 +542,7 @@ pub async fn route_model(
         difficulty.as_deref().unwrap_or("easy"),
         lean.as_deref().unwrap_or("balanced"),
         &picks,
+        query_vec.as_deref(),
     )
     .await
 }

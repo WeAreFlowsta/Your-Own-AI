@@ -425,6 +425,26 @@ export function useChat(props: UseChatProps) {
       state.isLoading = true;
       state.error = null;
 
+      // Embed this turn's text ONCE, immediately - the router's semantic
+      // freshness gate and memory retrieval both need the same vector, and
+      // each used to compute it separately (two embed-server round trips).
+      // Fails soft to null; both consumers degrade exactly as before.
+      const queryVecPromise: Promise<number[] | null> = import(
+        "../utils/embeddings"
+      )
+        .then(({ embedQuery }) => embedQuery(userInput))
+        .catch(() => null);
+
+      // Memory retrieval is independent of routing - start it NOW so its
+      // latency hides behind classification/routing/model-load instead of
+      // adding to them. Wasted work on the rare aborted turn (vision card,
+      // consent) is fine: it's read-only.
+      const memoryBlockPromise = loadMemoryBlock(userInput, {
+        aiId: selectedAi.id,
+        conversationHash: state.conversationHash,
+        queryVec: queryVecPromise,
+      }).catch(() => "");
+
       // Phase D: NOW that the bubble + action bar are on screen, classify the turn —
       // the classify call no longer makes Enter feel laggy (it's absorbed into the
       // loading state). With no explicit sparkle, it can upgrade chat → report/code
@@ -548,6 +568,10 @@ export function useChat(props: UseChatProps) {
         );
         try {
           const { invoke } = await import("@tauri-apps/api/core");
+          // Only online-offline mode uses the vector (semantic freshness);
+          // it was kicked off at send, so this await is usually instant.
+          const queryVec =
+            mode === "online-offline" ? await queryVecPromise : undefined;
           const r = await invoke<{ model: string; reason: string }>("route_model", {
             mode,
             query: userInput,
@@ -558,6 +582,7 @@ export function useChat(props: UseChatProps) {
             onlineFresh,
             onlineHardCode,
             onlineHardGeneral,
+            queryVec: queryVec ?? undefined,
           });
           console.log(`[Router] ${mode} → ${r.model} (${r.reason})`);
           preferredModel = r.model;
@@ -768,13 +793,9 @@ export function useChat(props: UseChatProps) {
       abortControllerRef.value = noSerialize(controller);
 
       try {
-        // Memory: load the user profile + any saved notes relevant to this
-        // turn (the query drives note retrieval). All local, even for online
-        // models — only the small assembled block ever leaves the device.
-        const userMemory = await loadMemoryBlock(userInput, {
-          aiId: selectedAi.id,
-          conversationHash: state.conversationHash,
-        });
+        // Memory: the block was kicked off in parallel right after the
+        // optimistic UI - by now routing/model-load usually paid for it.
+        const userMemory = await memoryBlockPromise;
         const systemPrompt = buildSystemPrompt(
           selectedAi,
           disposition,

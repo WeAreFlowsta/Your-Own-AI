@@ -300,7 +300,7 @@ async fn chat_completions(
             _ => "balanced",
         };
         let picks = crate::router::OnlinePicks::default();
-        match crate::router::route(&app, mode, &query, eagerness, task, difficulty, lean, &picks).await {
+        match crate::router::route(&app, mode, &query, eagerness, task, difficulty, lean, &picks, None).await {
             Ok(r) => {
                 log::info!("[inference] router ({}): {mode} task={task} diff={difficulty} eag={eagerness} -> {} ({})", ai.name, r.model, r.reason);
                 ai.model = r.model;

@@ -233,7 +233,13 @@ export function isSingleValuedPredicate(predicate: string): boolean {
  */
 export async function loadMemoryBlock(
   query?: string,
-  opts?: { aiId?: string; conversationHash?: string | null },
+  opts?: {
+    aiId?: string;
+    conversationHash?: string | null;
+    /** A shared embedding of `query` (the send path embeds the turn once and
+     *  hands it to both the router and this retrieval). Absent = embed here. */
+    queryVec?: Promise<number[] | null> | number[] | null;
+  },
 ): Promise<string> {
   const all = (await getFacts()).filter(
     (f) => f.valid_to == null || f.valid_to === undefined,
@@ -277,7 +283,9 @@ export async function loadMemoryBlock(
         // Bound on the query embedding so a cold/slow/stuck embed server can
         // never hang the reply (first call after launch may lose the race; fine).
         const qvec = await Promise.race([
-          embedQuery(query),
+          opts?.queryVec !== undefined
+            ? Promise.resolve(opts.queryVec)
+            : embedQuery(query),
           new Promise<null>((r) => setTimeout(() => r(null), 8000)),
         ]);
         if (qvec) {
