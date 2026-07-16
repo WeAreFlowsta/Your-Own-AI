@@ -121,6 +121,19 @@ const AiFormModal = component$<AiFormModalProps>(
       if (except !== 'model') modelDropdownOpen.value = false;
     });
 
+    // The edit dialog's content pane scrolls (max-h). A dropdown opened near
+    // its bottom renders into the hidden overflow and looks like nothing
+    // happened - scroll the menu into view once it's in the DOM.
+    // block:'nearest' moves the pane the minimum needed; menus with room
+    // don't move at all.
+    const revealDropdown = $((menuId: string) => {
+      setTimeout(() => {
+        document
+          .getElementById(menuId)
+          ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }, 60);
+    });
+
     // Get all archetype templates (all personalities available)
     const getArchetypeTemplates = () => {
       const raw = aiData.archetypeTemplates;
@@ -619,6 +632,7 @@ const AiFormModal = component$<AiFormModalProps>(
                     onClick$={() => {
                       closeAllDropdowns('personality');
                       personalityDropdownOpen.value = !personalityDropdownOpen.value;
+                      if (personalityDropdownOpen.value) revealDropdown('ai-dd-personality');
                     }}
                   >
                     <span class="block truncate">
@@ -629,7 +643,7 @@ const AiFormModal = component$<AiFormModalProps>(
                     </span>
                   </button>
                   {personalityDropdownOpen.value && (
-                    <ul class="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-2xl bg-[var(--bg-card)] py-1 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
+                    <ul id="ai-dd-personality" class="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-2xl bg-[var(--bg-card)] py-1 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
                       {archetypeTemplates.map((arch) => (
                         <li
                           key={arch.id}
@@ -677,6 +691,7 @@ const AiFormModal = component$<AiFormModalProps>(
                       onClick$={() => {
                         closeAllDropdowns('responseLength');
                         responseLengthDropdownOpen.value = !responseLengthDropdownOpen.value;
+                      if (responseLengthDropdownOpen.value) revealDropdown('ai-dd-length');
                       }}
                     >
                       <span class="block truncate">
@@ -692,7 +707,7 @@ const AiFormModal = component$<AiFormModalProps>(
                       </span>
                     </button>
                     {responseLengthDropdownOpen.value && (
-                      <ul class="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-2xl bg-[var(--bg-card)] py-1 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
+                      <ul id="ai-dd-length" class="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-2xl bg-[var(--bg-card)] py-1 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
                         {aiData.responseLengthOptions.map((option) => (
                           <li
                             key={option.id}
@@ -740,6 +755,7 @@ const AiFormModal = component$<AiFormModalProps>(
                       onClick$={() => {
                         closeAllDropdowns('defaultMode');
                         defaultModeDropdownOpen.value = !defaultModeDropdownOpen.value;
+                      if (defaultModeDropdownOpen.value) revealDropdown('ai-dd-mode');
                       }}
                     >
                       <span class="block truncate">
@@ -750,7 +766,7 @@ const AiFormModal = component$<AiFormModalProps>(
                       </span>
                     </button>
                     {defaultModeDropdownOpen.value && (
-                      <ul class="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-2xl bg-[var(--bg-card)] py-1 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
+                      <ul id="ai-dd-mode" class="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-2xl bg-[var(--bg-card)] py-1 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
                         {DEFAULT_MODE_OPTIONS.map((option) => (
                           <li
                             key={option.id}
@@ -801,6 +817,7 @@ const AiFormModal = component$<AiFormModalProps>(
                     onClick$={() => {
                       closeAllDropdowns('model');
                       modelDropdownOpen.value = !modelDropdownOpen.value;
+                      if (modelDropdownOpen.value) revealDropdown('ai-dd-model');
                     }}
                   >
                     <span class="flex items-center gap-2 truncate">
@@ -830,7 +847,7 @@ const AiFormModal = component$<AiFormModalProps>(
                     </span>
                   </button>
                   {modelDropdownOpen.value && (
-                    <ul class="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-2xl bg-[var(--bg-card)] py-1 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
+                    <ul id="ai-dd-model" class="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-2xl bg-[var(--bg-card)] py-1 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
                       {/* Smart routing — Auto modes pick the model per question */}
                       <li class="select-none pb-1 pl-4 pr-4 text-xs uppercase tracking-wider text-[var(--text-muted)]">
                         Smart routing
