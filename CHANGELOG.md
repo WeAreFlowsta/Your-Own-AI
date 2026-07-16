@@ -3,6 +3,35 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.1.0-beta.6] - 2026-07-17
+
+### Added
+- **Medical models.** MedGemma 4B and 27B - Google's health-tuned models,
+  both able to read images - join the model catalog, with a GPT-OSS 120B
+  variant for high-memory machines. Medical models download after a short
+  agree-to-the-publisher's-terms step, shown right in the download flow.
+- **Health questions stay on your device.** In the online-and-offline Auto
+  mode, a question about your health never auto-routes to an online model:
+  it stays local and prefers your medical model if you have one - photos of
+  skin, X-rays, and scans included. The "Model" note under the reply tells
+  you when this happened.
+- **"Remember this" everywhere.** Save any reply, highlighted passage, or
+  transcript entry into memory: a Remember button under each reply, a
+  floating chip when you highlight text in a reply, and a button under each
+  entry on the memory page.
+- **Remember is reversible, and you choose where saves go.** Every Remember
+  button is a toggle - click "Remembered" to forget it again, even after a
+  restart. A new Settings - Memory section picks the destination for each
+  kind of save (kept to that AI only, or shared notes every AI can draw on)
+  and gathers the automatic-learning switch.
+
+### Fixed
+- Image questions no longer stall when the preferred vision model is too
+  large for your hardware - they fall back to an image-capable model that
+  fits.
+- Dropdowns opened near the bottom of the edit-AI dialog now scroll into
+  view instead of being clipped.
+
 ## [0.1.0-beta.5] - 2026-07-16
 
 ### Changed
