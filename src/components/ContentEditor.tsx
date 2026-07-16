@@ -1,8 +1,9 @@
 import { component$, useSignal, useVisibleTask$, $, type QRL, type Signal } from '@builder.io/qwik';
 
-import type { ChatAction, AttachedFile } from '../types';
+import type { ChatAction, AttachedFile, AttachedImage } from '../types';
 import LiquidMetalButton from './LiquidMetalButton';
 import { ActionMenu } from './ActionMenu';
+import { AttachmentChips } from './AttachmentChips';
 
 interface ContentEditorProps {
   input: Signal<string>;
@@ -13,6 +14,8 @@ interface ContentEditorProps {
   setSelectedAction$: QRL<(action: ChatAction) => void>;
   stopChat$?: QRL<() => void>;
   attachedFiles: Signal<AttachedFile[]>;
+  attachedImages?: Signal<AttachedImage[]>;
+  contextWindowSize: number;
   onAttachFiles$: QRL<(paths: string[]) => void>;
   /** Id of the currently selected AI — when it changes, the editor takes focus. */
   selectedAiId?: string;
@@ -226,10 +229,20 @@ export const ContentEditor = component$<ContentEditorProps>((props) => {
 
   return (
     <div
-      class={`relative flex ${isMultiLine.value ? 'items-start' : 'items-center'} rounded-3xl gradient-border-target transition-[padding,align-items] duration-200 p-1 bg-[var(--bg-input)]`}
+      class="rounded-3xl gradient-border-target transition-[padding] duration-200 p-1 bg-[var(--bg-input)]"
       onClick$={handleContainerClick}
       preventdefault:dragover
     >
+      {/* Attachment chips - in-field, above the text line. Deliberately a
+          sibling of the editable area, never inside it (caret + Qwik
+          reconciliation hazards; see the action-chip notes below). */}
+      <AttachmentChips
+        files={props.attachedFiles}
+        images={props.attachedImages}
+        contextWindowSize={props.contextWindowSize}
+      />
+
+      <div class={`relative flex ${isMultiLine.value ? 'items-start' : 'items-center'} transition-[align-items] duration-200`}>
       {/* Action menu */}
       <div class={`flex shrink-0 ${isMultiLine.value ? 'items-start mt-1' : 'items-center'}`}>
         <ActionMenu
@@ -310,6 +323,7 @@ export const ContentEditor = component$<ContentEditorProps>((props) => {
         </div>
       </div>
 
+      </div>
     </div>
   );
 });

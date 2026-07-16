@@ -2,7 +2,6 @@ import { component$, type QRL, type Signal } from '@builder.io/qwik';
 import type { SelectedAiModel, ChatAction, AttachedFile, AttachedImage } from '../types';
 import { AiSelector } from './AiSelector';
 import { ContentEditor } from './ContentEditor';
-import { FileContextShelf } from './FileContextShelf';
 import { LiquidMetalBorder } from './LiquidMetalBorder';
 
 interface ChatInputBarProps {
@@ -95,18 +94,14 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
             setSelectedAction$={setSelectedAction$}
             stopChat$={stopChat$}
             attachedFiles={attachedFiles}
+            attachedImages={attachedImages}
+            contextWindowSize={contextWindowSize}
             onAttachFiles$={onAttachFiles$}
             selectedAiId={selectedAi.id}
           />
         </LiquidMetalBorder>
       </form>
 
-      {/* File context shelf — shows attached files with token budget */}
-      <FileContextShelf
-        files={attachedFiles}
-        images={attachedImages}
-        contextWindowSize={contextWindowSize}
-      />
     </div>
   );
 });
