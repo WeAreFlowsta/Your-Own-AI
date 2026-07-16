@@ -3,6 +3,28 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.1.0-beta.4] - 2026-07-16
+
+### Added
+- **Give your AIs documents.** Editing an AI now has a Knowledge tab: add
+  files (PDF, Word, Excel, text, code) and the AI reads and remembers them,
+  drawing on the relevant parts in any conversation. Original files can be
+  moved or deleted afterward - the AI keeps its own copy. A large document
+  costs nothing extra per message: only the pieces that matter are used.
+  Documents also show on the AI's memory page, where they can be added too.
+- **A cleaner edit-AI dialog.** Editing an AI now uses a wider layout with
+  sections - Basics, Behaviour, Details, Knowledge, Appearance - instead of
+  one long scroll. Creating a new AI stays quick and simple.
+- **The NVIDIA engine is offered on the home screen.** If your graphics card
+  qualifies and the high-performance engine isn't installed, a dismissible
+  tip lets you download it right there - no trip to Settings.
+
+### Changed
+- **Attached files now show as chips in the message box** - name, size, and
+  a remove button - instead of a list below it. Images appear as thumbnails
+  in the same row. A context-usage note appears only when attachments start
+  to crowd the model's memory.
+
 ## [0.1.0-beta.3] - 2026-07-16
 
 The inference engine now runs on clean Windows and macOS machines - beta 2's
