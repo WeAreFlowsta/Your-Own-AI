@@ -515,6 +515,7 @@ pub fn run() {
             engine::external_engine_info,
             engine::remove_external_engine,
             router::route_model,
+            router::is_medical_query,
             router::routing_specialist_tasks,
             fit::assess_model_fit,
             reset::reset_to_defaults,

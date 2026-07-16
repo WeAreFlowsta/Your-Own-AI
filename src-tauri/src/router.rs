@@ -27,7 +27,7 @@ const EMBED_MODEL: &str = "bge-small-en-v1.5-f16.gguf";
 /// How much better (on the 0–9 task scale) a candidate must be than the loaded
 /// model to justify a reload. Generous so near-equal models don't thrash; small
 /// enough that a real coder (coding 9) beats a general model (coding 6) on code.
-const SWITCH_MARGIN: u8 = 2;
+pub(crate) const SWITCH_MARGIN: u8 = 2;
 
 /// Freshness threshold (max cosine vs the reference phrases) per eagerness
 /// setting. Calibrated against bge-small on real queries: fresh queries cluster
@@ -172,7 +172,7 @@ fn looks_medical(query: &str) -> bool {
 /// Is this turn about the user's health? Keyword stage first (free), then the
 /// semantic stage against MEDICAL_REFERENCES using the turn's shared
 /// embedding. `false` when embedding is unavailable and no keyword hits.
-async fn is_medical_turn(app: &AppHandle, query: &str, query_vec: Option<&[f32]>) -> bool {
+pub(crate) async fn is_medical_turn(app: &AppHandle, query: &str, query_vec: Option<&[f32]>) -> bool {
     if looks_medical(query) {
         return true;
     }
@@ -615,6 +615,18 @@ pub async fn routing_specialist_tasks(app: AppHandle) -> Result<Vec<String>, Str
 
 /// Resolve an Auto mode for the in-app chat. The frontend calls this when an
 /// AI's model is `auto:offline` / `auto:online-offline`.
+/// Is this turn about the user's own health? Exposed so the frontend's vision
+/// path can keep a health IMAGE local when no offline vision model is
+/// downloaded (rather than offering a cloud model).
+#[tauri::command]
+pub async fn is_medical_query(
+    app: AppHandle,
+    query: String,
+    query_vec: Option<Vec<f32>>,
+) -> Result<bool, String> {
+    Ok(is_medical_turn(&app, &query, query_vec.as_deref()).await)
+}
+
 #[tauri::command]
 pub async fn route_model(
     app: AppHandle,

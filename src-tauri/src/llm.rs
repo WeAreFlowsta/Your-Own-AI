@@ -455,8 +455,15 @@ pub async fn is_vision_ready(state: State<'_, LLMState>) -> Result<bool, String>
 /// projector downloaded too. Used to transparently route an image turn to a vision
 /// model when the AI is in an Auto mode. Returns the model filename, or None.
 #[tauri::command]
-pub async fn find_vision_model(app_handle: AppHandle) -> Result<Option<String>, String> {
+pub async fn find_vision_model(
+    app_handle: AppHandle,
+    query: Option<String>,
+    query_vec: Option<Vec<f32>>,
+) -> Result<Option<VisionPick>, String> {
     let models_dir = get_models_dir(&app_handle)?;
+    // Every downloaded model with a paired projector is a candidate (skip any
+    // already proven too large this session).
+    let mut candidates: Vec<String> = Vec::new();
     for entry in std::fs::read_dir(&models_dir)
         .map_err(|e| e.to_string())?
         .flatten()
@@ -471,12 +478,79 @@ pub async fn find_vision_model(app_handle: AppHandle) -> Result<Option<String>, 
         if name.to_lowercase().contains("mmproj") {
             continue; // it's a projector, not a chat model
         }
-        // Vision-ready = a paired projector is present for this model.
+        if is_model_too_big(name.to_string()) {
+            continue;
+        }
         if find_projector_for(&models_dir, name).is_some() {
-            return Ok(Some(name.to_string()));
+            candidates.push(name.to_string());
         }
     }
-    Ok(None)
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+
+    // Health images (X-rays, skin photos, scans) prefer the medical specialist
+    // - the same keep-local medical gate the router uses, on the same shared
+    // turn embedding.
+    let medical = match query.as_deref() {
+        Some(q) if !q.trim().is_empty() => {
+            crate::router::is_medical_turn(&app_handle, q, query_vec.as_deref()).await
+        }
+        _ => false,
+    };
+
+    // Rank: medical turns by medical capability, others by vision capability
+    // (overall as the tiebreak in both cases).
+    let axis = |name: &str| -> (u8, u8) {
+        let c = crate::model_caps::caps_for(name);
+        if medical {
+            (c.medical, c.overall)
+        } else {
+            (c.vision, c.overall)
+        }
+    };
+    let best = candidates
+        .iter()
+        .max_by_key(|n| axis(n))
+        .cloned()
+        .expect("non-empty");
+
+    // Stickiness: keep the LOADED model unless the best beats it on the
+    // ranking axis by the router's switch margin - same reload discipline as
+    // text routing (an X-ray justifies swapping to MedGemma; a meme doesn't
+    // justify swapping between two equal vision models).
+    let current = app_handle
+        .state::<LLMState>()
+        .current_model
+        .lock()
+        .await
+        .clone();
+    let pick = match current.filter(|c| candidates.contains(c)) {
+        Some(cur) if axis(&cur).0 + crate::router::SWITCH_MARGIN > axis(&best).0 => cur,
+        _ => best,
+    };
+
+    let reason = if medical {
+        if pick.to_lowercase().contains("medgemma") {
+            "a health image — kept on your device, using your medical model"
+        } else {
+            "a health image — kept on your device"
+        }
+    } else {
+        "an image — using your vision model"
+    };
+    Ok(Some(VisionPick {
+        model: pick,
+        reason: reason.to_string(),
+    }))
+}
+
+/// The vision model chosen for an image turn, with the human reason the
+/// routing receipt shows.
+#[derive(serde::Serialize)]
+pub struct VisionPick {
+    pub model: String,
+    pub reason: String,
 }
 
 /**

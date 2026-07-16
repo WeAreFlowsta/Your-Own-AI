@@ -496,6 +496,10 @@ export function useChat(props: UseChatProps) {
       // A modelOverride (the user accepted the "use a vision model for this image"
       // card) pins this turn to that model and skips routing.
       let preferredModel = modelOverride ?? selectedAi.aiConfig.model ?? null;
+      // Routing receipt (shown on the Model button + recorded). Declared here
+      // because the vision path below may set them before the routing block.
+      let routedReason: string | undefined;
+      let routedTask: string | undefined;
       // Auto modes may transparently switch an image turn to a vision model; a
       // pinned model is left as-is (we ask before switching — see vision block).
       const isAutoMode = !modelOverride && !!preferredModel?.startsWith("auto:");
@@ -509,18 +513,39 @@ export function useChat(props: UseChatProps) {
       if (needsVision && isAutoMode) {
         try {
           const { invoke } = await import("@tauri-apps/api/core");
-          const offlineVision = await invoke<string | null>("find_vision_model");
+          // The pick is medical-aware: a health image (X-ray, scan, skin
+          // photo) prefers MedGemma, and the reason carries the receipt line.
+          // Pass the shared turn embedding so its medical gate is free.
+          const qv = await queryVecPromise;
+          const offlineVision = await invoke<{ model: string; reason: string } | null>(
+            "find_vision_model",
+            { query: userInput, queryVec: qv ?? undefined },
+          );
           if (offlineVision) {
-            preferredModel = offlineVision; // offline-first, silent
-            console.log(`[Vision] routing image turn to offline vision ${offlineVision}`);
-          } else if (preferredModel === "auto:online-offline") {
-            const onlineModels = await invoke<{ id: string; vision?: boolean }[]>(
-              "list_online_models",
-            );
-            const visionOnline = onlineModels.find((m) => m.vision === true);
-            if (visionOnline) {
-              preferredModel = visionOnline.id; // "online:…" → consent asked below
-              console.log(`[Vision] no offline vision — routing image to online ${visionOnline.id}`);
+            preferredModel = offlineVision.model; // offline-first, silent
+            routedReason = offlineVision.reason;
+            routedTask = "vision";
+            console.log(`[Vision] offline vision ${offlineVision.model} (${offlineVision.reason})`);
+          } else {
+            // No offline vision downloaded. A HEALTH image must still stay
+            // local (the promise) - fall through to the download card rather
+            // than offering a cloud model. Non-health images may go online in
+            // online-offline mode (consent asked below).
+            const medicalImage = await invoke<boolean>("is_medical_query", {
+              query: userInput,
+              queryVec: qv ?? undefined,
+            }).catch(() => false);
+            if (!medicalImage && preferredModel === "auto:online-offline") {
+              const onlineModels = await invoke<{ id: string; vision?: boolean }[]>(
+                "list_online_models",
+              );
+              const visionOnline = onlineModels.find((m) => m.vision === true);
+              if (visionOnline) {
+                preferredModel = visionOnline.id; // "online:…" → consent asked below
+                console.log(`[Vision] no offline vision — routing image to online ${visionOnline.id}`);
+              }
+            } else if (medicalImage) {
+              console.log("[Vision] health image, no offline vision — staying local (download card)");
             }
           }
         } catch (e) {
@@ -530,8 +555,6 @@ export function useChat(props: UseChatProps) {
 
       // Routing receipt for this turn (shown in the hover strip + recorded in
       // the transcript). Stays undefined when the user picked the model.
-      let routedReason: string | undefined;
-      let routedTask: string | undefined;
       if (!modelOverride && preferredModel?.startsWith("auto:")) {
         const mode =
           preferredModel === "auto:online-offline"
@@ -676,12 +699,18 @@ export function useChat(props: UseChatProps) {
             visionReady = await invoke<boolean>("is_vision_ready");
           }
           if (!visionReady && isAutoMode) {
-            const visionModel = await invoke<string | null>("find_vision_model");
-            console.log(`[Vision] auto-switch candidate: ${visionModel ?? "none"}`);
-            if (visionModel) {
-              await invoke("load_model", { filename: visionModel, withVision: true, reason: "vision-auto-switch" });
-              props.currentModel.value = visionModel;
-              preferredModel = visionModel;
+            const qv = await queryVecPromise;
+            const pick = await invoke<{ model: string; reason: string } | null>(
+              "find_vision_model",
+              { query: userInput, queryVec: qv ?? undefined },
+            );
+            console.log(`[Vision] auto-switch candidate: ${pick?.model ?? "none"}`);
+            if (pick) {
+              await invoke("load_model", { filename: pick.model, withVision: true, reason: "vision-auto-switch" });
+              props.currentModel.value = pick.model;
+              preferredModel = pick.model;
+              routedReason = pick.reason;
+              routedTask = "vision";
               visionReady = await invoke<boolean>("is_vision_ready");
             }
           }
@@ -696,7 +725,12 @@ export function useChat(props: UseChatProps) {
           // resends via state.pendingTurn.
           let visionModel: string | null = null;
           try {
-            visionModel = await invoke<string | null>("find_vision_model");
+            const qv = await queryVecPromise;
+            const pick = await invoke<{ model: string; reason: string } | null>(
+              "find_vision_model",
+              { query: userInput, queryVec: qv ?? undefined },
+            );
+            visionModel = pick?.model ?? null;
           } catch {
             /* old backend / no command — treat as none */
           }
@@ -733,7 +767,12 @@ export function useChat(props: UseChatProps) {
           if (m && m.vision === false) {
             let visionModel: string | null = null;
             try {
-              visionModel = await invoke<string | null>("find_vision_model");
+              const qv = await queryVecPromise;
+              const pick = await invoke<{ model: string; reason: string } | null>(
+                "find_vision_model",
+                { query: userInput, queryVec: qv ?? undefined },
+              );
+              visionModel = pick?.model ?? null;
             } catch {
               /* none */
             }
