@@ -485,14 +485,19 @@ export function useAiDataActions() {
   );
 
   const updateAllAisWithFirstModel = $(async (filename: string) => {
+    // First model downloaded: point every AI at Auto - Offline Only rather
+    // than pinning the starter model. Auto resolves to the only model today
+    // (identical behavior), and automatically upgrades as better models are
+    // downloaded - pinning left AIs stuck on the small welcome model forever.
     console.log(
-      "[AiDataContext] Updating all AIs with first model:",
-      filename
+      "[AiDataContext] First model downloaded (",
+      filename,
+      ") - setting all AIs to auto:offline"
     );
 
     for (const ai of state.userDefinedAis) {
       const updatedAi = await updateLocalCustomAi(ai.id, {
-        model: filename,
+        model: "auto:offline",
       });
       if (updatedAi) {
         state.userDefinedAis = state.userDefinedAis.map((a) =>

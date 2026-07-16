@@ -567,11 +567,12 @@ export default component$(() => {
 
       await new Promise((resolve) => setTimeout(resolve, 100));
 
-      // Update selectedAi to reflect new model
+      // Update selectedAi to reflect the new mode (Auto - Offline Only; the
+      // just-downloaded model is what Auto resolves to right now).
       const prev = selectedAi.value;
       selectedAi.value = {
         ...prev,
-        aiConfig: { ...prev.aiConfig, model: filename },
+        aiConfig: { ...prev.aiConfig, model: "auto:offline" },
       };
 
       currentModel.value = filename;
