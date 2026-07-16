@@ -466,6 +466,19 @@ export const modelFamilies: ModelFamily[] = [
         downloadUrl: 'https://huggingface.co/unsloth/gpt-oss-20b-GGUF/resolve/main/gpt-oss-20b-Q4_K_M.gguf',
         filename: 'gpt-oss-20b-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
+      },
+      {
+        // The big-rig option: OpenAI's 120B MoE (only ~5B active per token, so
+        // it generates at usable speed on high-RAM machines). Single-file
+        // native-MXFP4 GGUF - the split Q4 files aren't supported by our
+        // downloader. Among the strongest open models on health/knowledge
+        // benchmarks; the fit system hides it from machines that can't run it.
+        parameterCount: '120B (5.1B active)',
+        size: 61,
+        minRAM: 80,
+        downloadUrl: 'https://huggingface.co/unsloth/gpt-oss-120b-GGUF/resolve/main/gpt-oss-120b-F16.gguf',
+        filename: 'gpt-oss-120b-F16.gguf',
+        quantization: 'MXFP4',
       }
     ]
   },
