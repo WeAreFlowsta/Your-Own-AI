@@ -56,6 +56,10 @@ pub struct MemoryFact {
     /// the save round-trip (serde would otherwise drop an unknown field).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedding: Option<Vec<f32>>,
+    /// Groups the chunk-notes of one long remembered passage so they can be
+    /// forgotten together. Absent for everything else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }

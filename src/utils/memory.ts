@@ -38,6 +38,9 @@ export interface Fact {
   author_identity?: string | null;
   /** Embedding vector for retrieval (notes/chunks). Absent for plain facts. */
   embedding?: number[] | null;
+  /** Groups the chunk-notes of one long remembered passage so they can be
+   *  forgotten together. Absent for everything else. */
+  group_id?: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -178,7 +181,10 @@ export async function addAuthoredFact(input: {
  * either way, but it can only be recalled once the embedding model is present
  * (re-embed by re-saving). entry_kind "note", provenance "authored".
  */
-export async function addAuthoredNote(text: string): Promise<Fact[]> {
+export async function addAuthoredNote(
+  text: string,
+  opts?: { groupId?: string },
+): Promise<Fact[]> {
   const facts = await getFacts();
   const note = newFact({
     subject: "user",
@@ -188,6 +194,7 @@ export async function addAuthoredNote(text: string): Promise<Fact[]> {
     provenance: "authored",
     entryKind: "note",
   });
+  if (opts?.groupId) note.group_id = opts.groupId;
   try {
     if (await isEmbeddingModelReady()) {
       const [vec] = await embedDocuments([text]);
@@ -362,6 +369,13 @@ export function setMemoryPaused(paused: boolean): void {
 /** Forget a single fact (hard delete from the store). */
 export async function forgetFact(id: string): Promise<Fact[]> {
   const facts = (await getFacts()).filter((f) => f.id !== id);
+  await saveFacts(facts);
+  return facts;
+}
+
+/** Forget every note in a group (the chunks of one long remembered passage). */
+export async function forgetGroup(groupId: string): Promise<Fact[]> {
+  const facts = (await getFacts()).filter((f) => f.group_id !== groupId);
   await saveFacts(facts);
   return facts;
 }

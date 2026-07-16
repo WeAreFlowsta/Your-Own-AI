@@ -301,22 +301,24 @@ export async function getAiKnowledge(aiId: string): Promise<TranscriptEmbedding[
 }
 
 /** Add a piece of authored knowledge to this AI (embedded for retrieval).
- *  Returns false if the embedding model isn't available (can't index it). */
-export async function addKnowledge(aiId: string, text: string): Promise<boolean> {
+ *  Returns the new entry's id, or null if the embedding model isn't
+ *  available (can't index it). */
+export async function addKnowledge(aiId: string, text: string): Promise<string | null> {
   const t = text.trim();
-  if (!aiId || !t) return false;
-  if (!(await isEmbeddingModelReady())) return false;
+  if (!aiId || !t) return null;
+  if (!(await isEmbeddingModelReady())) return null;
   let vec: number[] | undefined;
   try {
     [vec] = await embedDocuments([t]);
   } catch (e) {
     console.warn("[Memory] addKnowledge embed failed:", e);
-    return false;
+    return null;
   }
-  if (!vec || !vec.length) return false;
+  if (!vec || !vec.length) return null;
   const all = await getEmb(aiId);
+  const id = crypto.randomUUID();
   all.push({
-    id: crypto.randomUUID(),
+    id,
     conversation_hash: "authored",
     role: "authored",
     text: t.slice(0, MAX_TEXT),
@@ -325,7 +327,54 @@ export async function addKnowledge(aiId: string, text: string): Promise<boolean>
     created_at: Date.now() * 1000,
   });
   await saveEmb(aiId, all);
-  return true;
+  return id;
+}
+
+/** Index this AI's authored knowledge by text for cheap saved-state lookups:
+ *  loose entries keyed by their text, documents keyed by their FIRST chunk's
+ *  text (chunking is deterministic, so a full reply re-keys to the same
+ *  chunk). One store read builds the whole map - per-message "is this already
+ *  remembered?" checks then cost nothing. */
+export async function authoredTextIndex(
+  aiId: string,
+): Promise<Map<string, { kind: "entry" | "doc"; id: string }>> {
+  const map = new Map<string, { kind: "entry" | "doc"; id: string }>();
+  if (!aiId) return map;
+  const all = await getEmb(aiId);
+  const seenDocs = new Set<string>();
+  for (const e of all) {
+    if (e.kind !== "authored") continue;
+    if (!e.source) {
+      map.set(e.text, { kind: "entry", id: e.id });
+    } else if (!seenDocs.has(e.source.doc_id)) {
+      seenDocs.add(e.source.doc_id);
+      map.set(e.text, { kind: "doc", id: e.source.doc_id });
+    }
+  }
+  return map;
+}
+
+/** Find already-saved authored knowledge by its exact text: a loose entry
+ *  (short remembers) or a document (long remembers, matched on the first
+ *  chunk — chunking is deterministic). Lets "Remember" buttons dedupe and
+ *  reflect saved state across reloads. */
+export async function findAuthoredByText(
+  aiId: string,
+  text: string,
+): Promise<{ kind: "entry" | "doc"; id: string } | null> {
+  const t = text.trim();
+  if (!aiId || !t) return null;
+  const all = await getEmb(aiId);
+  if (t.length <= MAX_TEXT) {
+    const entry = all.find((e) => e.kind === "authored" && !e.source && e.text === t);
+    if (entry) return { kind: "entry", id: entry.id };
+  }
+  const first = chunkDocumentText(t)[0]?.slice(0, MAX_TEXT);
+  if (first) {
+    const chunk = all.find((e) => e.kind === "authored" && e.source && e.text === first);
+    if (chunk?.source) return { kind: "doc", id: chunk.source.doc_id };
+  }
+  return null;
 }
 
 /** Chunk a document's text for retrieval: pack whole paragraphs/sentences into

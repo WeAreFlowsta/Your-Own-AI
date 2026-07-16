@@ -20,6 +20,13 @@ import ExternalAccess from "../../components/ExternalAccess";
 import ConfirmModal from "../../components/ConfirmModal";
 import LiquidMetalButton from "../../components/LiquidMetalButton";
 import { helpTipsEnabled, setHelpTipsEnabled, resetHelpDismissals } from "../../utils/helpPrefs";
+import {
+  getRememberScope,
+  setRememberScope,
+  type RememberScope,
+  type RememberSurface,
+} from "../../utils/rememberText";
+import { isMemoryPaused, setMemoryPaused } from "../../utils/memory";
 import { LuChevronDown } from "@qwikest/icons/lucide";
 
 /** One "which online model answers" row: label + recommended-or-override
@@ -104,6 +111,7 @@ const SECTIONS = [
   { id: "settings-account", label: "Flowsta Account" },
   { id: "settings-backups", label: "Backups & recovery" },
   { id: "settings-behavior", label: "AI behavior" },
+  { id: "settings-memory", label: "Memory" },
   { id: "settings-routing", label: "Routing" },
   { id: "settings-components", label: "Components" },
   { id: "settings-engines", label: "Engines" },
@@ -167,6 +175,60 @@ const SettingToggle = component$<{
   );
 });
 
+/** Where one "Remember this" surface saves to: that AI only, or the shared
+ *  notes every AI can draw on. Same two-option grid as the Routing pickers. */
+const RememberDestinationPicker = component$<{
+  title: string;
+  hint: string;
+  surface: RememberSurface;
+  scope: Signal<RememberScope>;
+}>((props) => {
+  const options: { id: RememberScope; label: string; hint: string }[] = [
+    {
+      id: "per-ai",
+      label: "That AI only",
+      hint: "Stays with the AI you were talking to - never surfaces anywhere else",
+    },
+    {
+      id: "global",
+      label: "All your AIs",
+      hint: "Saved to your shared notes - any AI can draw on it",
+    },
+  ];
+  return (
+    <div>
+      <h4 class="text-base font-semibold text-[var(--text-primary)]">{props.title}</h4>
+      <p class="text-sm text-[var(--text-secondary)] mt-1 mb-3">{props.hint}</p>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {options.map((opt) => (
+          <button
+            key={opt.id}
+            onClick$={() => {
+              props.scope.value = opt.id;
+              setRememberScope(props.surface, opt.id);
+            }}
+            class={`text-left rounded-xl p-3 border transition-colors ${
+              props.scope.value === opt.id
+                ? "bg-[var(--bg-button-primary)] text-[var(--text-button-primary)] border-[var(--border-subtle)]"
+                : "bg-[var(--bg-main)] text-[var(--text-primary)] border-[var(--border-subtle)] hover:opacity-90"
+            }`}
+            aria-pressed={props.scope.value === opt.id}
+          >
+            <div class="font-semibold text-sm">{opt.label}</div>
+            <div
+              class={`text-xs mt-1 ${
+                props.scope.value === opt.id ? "" : "text-[var(--text-secondary)]"
+              }`}
+            >
+              {opt.hint}
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+});
+
 export default component$(() => {
   const nav = useNavigate();
 
@@ -176,6 +238,11 @@ export default component$(() => {
   const groundDocumentsAuto = useSignal(false);
   const smartModeDetection = useSignal(true);
   const currentModel = useSignal<string | null>(null);
+  const rememberScopeSelection = useSignal<RememberScope>("per-ai");
+  const rememberScopeReply = useSignal<RememberScope>("per-ai");
+  // "Automatic learning" = NOT paused (the toggle reads positively; the
+  // stored flag is the pause, shared with the Your Memory page).
+  const memoryLearning = useSignal(true);
   const routingEagerness = useSignal<"privacy" | "balanced" | "freshness">("balanced");
   const routingLean = useSignal<"speed" | "balanced" | "quality">("balanced");
   // Per-slot online model overrides ("" = the router's recommended default).
@@ -204,6 +271,9 @@ export default component$(() => {
       localStorage.getItem("groundDocumentsAuto") === "true";
     smartModeDetection.value =
       localStorage.getItem("smartModeDetection") !== "false"; // default ON
+    rememberScopeSelection.value = getRememberScope("selection");
+    rememberScopeReply.value = getRememberScope("reply");
+    memoryLearning.value = !isMemoryPaused();
     currentModel.value = localStorage.getItem("currentModel");
     const savedEagerness = localStorage.getItem("smartRoutingEagerness");
     if (savedEagerness === "privacy" || savedEagerness === "freshness") {
@@ -274,6 +344,11 @@ export default component$(() => {
       "allowAttachmentsOnline",
       allowAttachmentsOnline.value.toString()
     );
+  });
+
+  const toggleMemoryLearning = $(() => {
+    memoryLearning.value = !memoryLearning.value;
+    setMemoryPaused(!memoryLearning.value);
   });
 
   const toggleSmartMode = $(() => {
@@ -420,6 +495,59 @@ export default component$(() => {
                     asking each time. Off means you're asked first, before anything
                     leaves your device. Offline models always stay local.
                   </SettingToggle>
+                </div>
+              </section>
+
+              {/* Memory — what your AIs remember and where saves go. */}
+              <section
+                id="settings-memory"
+                class="scroll-mt-4 bg-[var(--bg-card)] rounded-2xl p-6 border border-[var(--border-subtle)]"
+              >
+                <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela mb-2">
+                  Memory
+                </h2>
+                <p class="text-sm text-[var(--text-secondary)] mb-4">
+                  Your AIs remember in two places: each AI's own memory (what it
+                  learned and what you gave it), and the shared notes on{" "}
+                  <a href="/your-memory/" class="text-[var(--text-link)] hover:underline">
+                    Your Memory
+                  </a>{" "}
+                  that every AI can draw on. These settings choose where each
+                  "Remember this" action saves to.
+                </p>
+
+                <div class="space-y-5">
+                  <RememberDestinationPicker
+                    title="Remembering highlighted text"
+                    hint='The "Remember" chip that appears when you highlight part of a reply.'
+                    surface="selection"
+                    scope={rememberScopeSelection}
+                  />
+                  <RememberDestinationPicker
+                    title="Remembering whole replies"
+                    hint='The "Remember" button under a reply, and on transcript entries on the memory page.'
+                    surface="reply"
+                    scope={rememberScopeReply}
+                  />
+
+                  <div class="border-t border-[var(--border-subtle)] pt-4">
+                    <SettingToggle
+                      title="Automatic learning"
+                      checked={memoryLearning}
+                      onToggle$={toggleMemoryLearning}
+                    >
+                      Your AIs pick up facts you share in conversation (your
+                      name, preferences, projects) so you don't repeat yourself.
+                      Turn off to remember only what you save yourself - what's
+                      already learned is kept and managed on Your Memory.
+                    </SettingToggle>
+                  </div>
+
+                  <p class="text-xs text-[var(--text-muted)]">
+                    Remembering and recall use the small on-device memory model
+                    - download or remove it under Components below. Everything
+                    here stays on your device.
+                  </p>
                 </div>
               </section>
 

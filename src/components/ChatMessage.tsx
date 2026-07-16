@@ -18,6 +18,7 @@ import {
 import CodePanel from './CodePanel';
 import ThemeAwareLottie from './ThemeAwareLottie';
 import LiquidMetalButton from './LiquidMetalButton';
+import type { RememberHandle } from '../utils/rememberText';
 
 // Markdown rendering imported from shared utility (renderMarkdown)
 
@@ -213,16 +214,49 @@ const MIN_THINKING_DISPLAY_CHARS = 100;
 
 const ActionBar = component$<ActionBarProps>((props) => {
   const openSection = useSignal<'tokens' | 'thoughts' | 'sources' | 'model' | null>(null);
-  /** '' | 'saving' | 'saved' | 'error' - the Remember button's transient state. */
+  /** '' | 'saving' | 'saved' | 'error' - the Remember button's state. Saved is
+   *  a TOGGLE: clicking again forgets the save (via the kept handle). */
   const rememberState = useSignal('');
+  const rememberHandle = useSignal<RememberHandle | null>(null);
+
+  // Reflect an already-saved reply across reloads (cheap: one index per store,
+  // shared by every button on the page).
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async ({ track }) => {
+    track(() => props.isLoading);
+    if (props.isLoading || props.message.role !== 'assistant' || !props.message.content) return;
+    try {
+      const { findRememberedCached } = await import('../utils/rememberText');
+      const h = await findRememberedCached(props.message.model, props.message.content, 'reply');
+      if (h) {
+        rememberHandle.value = h;
+        rememberState.value = 'saved';
+      }
+    } catch {
+      /* display-only check */
+    }
+  });
 
   const rememberReply = $(async () => {
-    if (rememberState.value === 'saving' || rememberState.value === 'saved') return;
+    if (rememberState.value === 'saving') return;
+    if (rememberState.value === 'saved' && rememberHandle.value) {
+      rememberState.value = 'saving';
+      try {
+        const { forgetRemembered } = await import('../utils/rememberText');
+        await forgetRemembered(props.message.model, rememberHandle.value);
+        rememberHandle.value = null;
+        rememberState.value = '';
+      } catch {
+        rememberState.value = 'saved';
+      }
+      return;
+    }
     rememberState.value = 'saving';
     try {
       const { rememberText } = await import('../utils/rememberText');
-      const ok = await rememberText(props.message.model, props.message.content);
-      rememberState.value = ok ? 'saved' : 'error';
+      const handle = await rememberText(props.message.model, props.message.content, 'reply');
+      rememberHandle.value = handle;
+      rememberState.value = handle ? 'saved' : 'error';
     } catch {
       rememberState.value = 'error';
     }
@@ -309,9 +343,11 @@ const ActionBar = component$<ActionBarProps>((props) => {
                 title={
                   rememberState.value === 'error'
                     ? 'Could not save - the memory model may still be downloading (Settings - Components)'
-                    : 'Remember this reply - this AI will draw on it in future conversations'
+                    : rememberState.value === 'saved'
+                      ? 'Remembered - click to forget it again'
+                      : 'Remember this reply - your AI will draw on it in future conversations'
                 }
-                disabled={rememberState.value === 'saving' || rememberState.value === 'saved'}
+                disabled={rememberState.value === 'saving'}
               >
                 <BsBookmarkIcon />
                 <span class="hidden md:inline">

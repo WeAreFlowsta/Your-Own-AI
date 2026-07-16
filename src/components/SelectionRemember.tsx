@@ -1,11 +1,14 @@
 import { component$, useSignal, useVisibleTask$, $ } from '@builder.io/qwik';
+import type { RememberHandle } from '../utils/rememberText';
 
 /**
  * Select-to-remember: highlight text inside any assistant reply and a small
- * floating "Remember" chip appears; click it to save the selection to that
- * AI's memory. Mounted ONCE at the chat page (one document listener, not one
- * per message), so it adds no per-message chrome and nothing renders until
- * the user deliberately selects text.
+ * floating "Remember" chip appears; click it to save the selection (where it
+ * goes - that AI's memory or the shared notes - is the Settings → Memory
+ * destination). An already-remembered selection shows "Remembered": the chip
+ * is a toggle, click again to forget the save. Mounted ONCE at the chat page
+ * (one document listener, not one per message), so it adds no per-message
+ * chrome and nothing renders until the user deliberately selects text.
  *
  * The chip is pure DOM math (native selection rect) - it never re-renders the
  * message list, so it can't slow streaming or scrolling.
@@ -17,12 +20,14 @@ export default component$(() => {
   const aiId = useSignal('');
   const text = useSignal('');
   const state = useSignal(''); // '' | 'saving' | 'saved' | 'error'
+  const handle = useSignal<RememberHandle | null>(null);
 
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(({ cleanup }) => {
     const hide = () => {
       visible.value = false;
       state.value = '';
+      handle.value = null;
     };
 
     // On mouseup (selection settled), decide whether to show the chip.
@@ -56,7 +61,20 @@ export default component$(() => {
         x.value = Math.min(Math.max(rect.left + rect.width / 2, 70), window.innerWidth - 70);
         y.value = Math.max(rect.top - 8, 40);
         state.value = '';
+        handle.value = null;
         visible.value = true;
+        // Already remembered? Flip the chip to its "Remembered" (forget) state.
+        import('../utils/rememberText')
+          .then(({ findRememberedCached }) =>
+            findRememberedCached(aiId.value, selected, 'selection'),
+          )
+          .then((h) => {
+            if (h && visible.value && text.value === selected && state.value === '') {
+              handle.value = h;
+              state.value = 'saved';
+            }
+          })
+          .catch(() => { /* display-only check */ });
       }, 0);
     };
 
@@ -78,17 +96,34 @@ export default component$(() => {
   });
 
   const remember = $(async () => {
-    if (state.value === 'saving' || state.value === 'saved') return;
+    if (state.value === 'saving') return;
+    if (state.value === 'saved' && handle.value) {
+      // Toggle off: forget the save, keep the chip up showing "Remember".
+      state.value = 'saving';
+      try {
+        const { forgetRemembered } = await import('../utils/rememberText');
+        await forgetRemembered(aiId.value, handle.value);
+        handle.value = null;
+        state.value = '';
+      } catch {
+        state.value = 'saved';
+      }
+      return;
+    }
     state.value = 'saving';
     try {
       const { rememberText } = await import('../utils/rememberText');
-      const ok = await rememberText(aiId.value, text.value);
-      state.value = ok ? 'saved' : 'error';
+      const h = await rememberText(aiId.value, text.value, 'selection');
+      handle.value = h;
+      state.value = h ? 'saved' : 'error';
     } catch {
       state.value = 'error';
     }
     if (state.value === 'saved') {
-      setTimeout(() => (visible.value = false), 900);
+      setTimeout(() => {
+        // Unless the user toggled it off again in the meantime.
+        if (state.value === 'saved') visible.value = false;
+      }, 900);
     }
   });
 
