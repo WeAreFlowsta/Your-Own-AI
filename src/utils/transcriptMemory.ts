@@ -25,6 +25,25 @@ export interface TranscriptEmbedding {
   /** "episodic" (learned from chat) | "authored" (knowledge the user gave). */
   kind: string;
   created_at: number;
+  /** Set on authored chunks ingested from a document, so the UI can list and
+   *  remove a document as a unit. Absent for facts/notes/lore/episodic. */
+  source?: KnowledgeSource;
+}
+
+/** A document a set of authored chunks came from. */
+export interface KnowledgeSource {
+  doc_id: string;
+  filename: string;
+  size_bytes: number;
+}
+
+/** One ingested document, grouped from its chunks for the UI. */
+export interface KnowledgeDocument {
+  docId: string;
+  filename: string;
+  sizeBytes: number;
+  chunkCount: number;
+  addedAt: number;
 }
 
 /** Cap entries per AI (drop oldest) so the per-AI blob can't grow unbounded. */
@@ -304,6 +323,124 @@ export async function addKnowledge(aiId: string, text: string): Promise<boolean>
   });
   await saveEmb(aiId, all);
   return true;
+}
+
+/** Chunk a document's text for retrieval: pack whole paragraphs/sentences into
+ *  ~MAX_TEXT-char pieces so each embedded chunk is a coherent passage, with a
+ *  sentence of overlap so a fact split across a boundary is still findable. */
+export function chunkDocumentText(text: string): string[] {
+  const clean = text.replace(/\r\n/g, "\n").replace(/[ \t]+/g, " ").trim();
+  if (!clean) return [];
+  // Split on blank lines first (paragraphs), then oversize paragraphs by sentence.
+  const units: string[] = [];
+  for (const para of clean.split(/\n\s*\n/)) {
+    const p = para.trim();
+    if (!p) continue;
+    if (p.length <= MAX_TEXT) {
+      units.push(p);
+    } else {
+      let buf = "";
+      for (const sentence of p.split(/(?<=[.!?])\s+/)) {
+        if (buf && (buf.length + sentence.length + 1) > MAX_TEXT) {
+          units.push(buf.trim());
+          buf = "";
+        }
+        // A single sentence longer than a chunk: hard-split it.
+        if (sentence.length > MAX_TEXT) {
+          for (let i = 0; i < sentence.length; i += MAX_TEXT) {
+            units.push(sentence.slice(i, i + MAX_TEXT).trim());
+          }
+        } else {
+          buf += (buf ? " " : "") + sentence;
+        }
+      }
+      if (buf.trim()) units.push(buf.trim());
+    }
+  }
+  // Merge tiny trailing fragments into the previous chunk for coherence.
+  const chunks: string[] = [];
+  for (const u of units) {
+    if (chunks.length && (chunks[chunks.length - 1].length + u.length + 1) <= MAX_TEXT) {
+      chunks[chunks.length - 1] += " " + u;
+    } else {
+      chunks.push(u);
+    }
+  }
+  return chunks;
+}
+
+/** Ingest a document as this AI's knowledge: chunk, embed, and store every
+ *  chunk tagged with a shared source so it can be listed/removed as one.
+ *  Returns the docId + chunk count, or null if the embedding model isn't ready
+ *  (the caller should tell the user to finish downloading it). */
+export async function addDocumentKnowledge(
+  aiId: string,
+  filename: string,
+  sizeBytes: number,
+  fullText: string,
+): Promise<{ docId: string; chunkCount: number } | null> {
+  if (!aiId) return null;
+  const chunks = chunkDocumentText(fullText);
+  if (chunks.length === 0) return null;
+  if (!(await isEmbeddingModelReady())) return null;
+
+  let vecs: number[][];
+  try {
+    vecs = await embedInBatches(chunks);
+  } catch (e) {
+    console.warn("[Memory] addDocumentKnowledge embed failed:", e);
+    return null;
+  }
+  if (vecs.length !== chunks.length) return null;
+
+  const docId = crypto.randomUUID();
+  const source: KnowledgeSource = { doc_id: docId, filename, size_bytes: sizeBytes };
+  const now = Date.now() * 1000;
+  const all = await getEmb(aiId);
+  chunks.forEach((text, i) => {
+    if (!vecs[i] || !vecs[i].length) return;
+    all.push({
+      id: crypto.randomUUID(),
+      conversation_hash: "authored",
+      role: "authored",
+      text: text.slice(0, MAX_TEXT),
+      vector: vecs[i],
+      kind: "authored",
+      created_at: now,
+      source,
+    });
+  });
+  await saveEmb(aiId, all);
+  return { docId, chunkCount: chunks.length };
+}
+
+/** The documents this AI has been given, grouped from their chunks. */
+export async function listKnowledgeDocuments(aiId: string): Promise<KnowledgeDocument[]> {
+  const all = await getEmb(aiId);
+  const byDoc = new Map<string, KnowledgeDocument>();
+  for (const e of all) {
+    if (e.kind !== "authored" || !e.source) continue;
+    const existing = byDoc.get(e.source.doc_id);
+    if (existing) {
+      existing.chunkCount += 1;
+    } else {
+      byDoc.set(e.source.doc_id, {
+        docId: e.source.doc_id,
+        filename: e.source.filename,
+        sizeBytes: e.source.size_bytes,
+        chunkCount: 1,
+        addedAt: e.created_at,
+      });
+    }
+  }
+  return [...byDoc.values()].sort((a, b) => b.addedAt - a.addedAt);
+}
+
+/** Remove one ingested document (all its chunks) from this AI's knowledge. */
+export async function removeKnowledgeDocument(aiId: string, docId: string): Promise<void> {
+  const all = await getEmb(aiId);
+  const kept = all.filter((e) => e.source?.doc_id !== docId);
+  await saveEmb(aiId, kept);
 }
 
 // ── Post-restore re-embed walker ─────────────────────────────────────

@@ -27,10 +27,24 @@ pub struct TranscriptEmbedding {
     #[serde(default = "episodic_kind")]
     pub kind: String,
     pub created_at: i64,
+    /// For authored chunks derived from a document the user gave this AI:
+    /// which document they came from, so the UI can list/remove a document as
+    /// a unit and show its chunks grouped. None for facts, notes, lore, and
+    /// episodic turns. Serde-optional both ways so older stores round-trip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<KnowledgeSource>,
 }
 
 fn episodic_kind() -> String {
     "episodic".to_string()
+}
+
+/// The document a set of authored chunks was ingested from.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct KnowledgeSource {
+    pub doc_id: String,
+    pub filename: String,
+    pub size_bytes: u64,
 }
 
 #[derive(Serialize, Deserialize)]

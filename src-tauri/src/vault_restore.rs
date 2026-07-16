@@ -500,6 +500,9 @@ fn merge_knowledge(
             vector: Vec::new(),
             kind: "authored".into(),
             created_at,
+            // Backup stores chunk text only (not the source grouping yet), so
+            // restored document chunks retrieve but regroup as loose knowledge.
+            source: None,
         });
     }
     let added = fresh.len() as u64;
@@ -917,6 +920,7 @@ mod tests {
             vector: vec![0.1, 0.2],
             kind: "authored".into(),
             created_at: 10,
+            source: None,
         }];
         let items = vec![
             serde_json::json!({ "text": "The dragon's name is Ember", "created_at": 10 }),

@@ -131,6 +131,7 @@ pub async fn index_turn(app: &AppHandle, ai_id: &str, conversation_hash: &str, u
         vector,
         kind: "episodic".to_string(),
         created_at: now_micros(),
+        source: None,
     });
     let len = existing.len();
     if len > MAX_PER_AI {
