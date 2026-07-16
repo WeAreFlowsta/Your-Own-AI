@@ -89,6 +89,11 @@ const VISION_REFERENCE_RE =
  * Extract thinking text from response content.
  * Handles <thinking>, <think>, and <|channel|> tags.
  */
+/** Any marker the full parser would act on. One cheap native scan - when
+ *  absent (ordinary chat replies), the streaming loop can skip the whole
+ *  multi-regex parse and use the raw text as-is. */
+const PARSE_MARKERS_RE = /<think|<\|channel\||<\|output\||<\/?report>|<\/?response/i;
+
 function extractThinkingFromContent(content: string): {
   thinking: string;
   contentWithoutThinking: string;
@@ -582,10 +587,11 @@ export function useChat(props: UseChatProps) {
           // Vision-capable models load with their projector already attached (the
           // backend pairs it whenever one exists), so an image turn never triggers a
           // mid-conversation reload. `withVision` is passed for completeness.
+          // load_model blocks until the server reports healthy - no settle
+          // delay needed (and the stream path health-checks again anyway).
           await invoke("load_model", { filename: preferredModel, withVision: needsVision, reason: "chat-switch" });
           props.currentModel.value = preferredModel;
           props.modelTooBig.value = false;
-          await new Promise((resolve) => setTimeout(resolve, 500));
         } catch (error) {
           const errorMessage =
             error instanceof Error ? error.message : String(error);
@@ -642,7 +648,6 @@ export function useChat(props: UseChatProps) {
             props.isModelLoading.value = true;
             await invoke("load_model", { filename: preferredModel, withVision: true, reason: "vision-reload" });
             props.currentModel.value = preferredModel;
-            await new Promise((r) => setTimeout(r, 500));
             visionReady = await invoke<boolean>("is_vision_ready");
           }
           if (!visionReady && isAutoMode) {
@@ -652,7 +657,6 @@ export function useChat(props: UseChatProps) {
               await invoke("load_model", { filename: visionModel, withVision: true, reason: "vision-auto-switch" });
               props.currentModel.value = visionModel;
               preferredModel = visionModel;
-              await new Promise((r) => setTimeout(r, 500));
               visionReady = await invoke<boolean>("is_vision_ready");
             }
           }
@@ -791,6 +795,7 @@ export function useChat(props: UseChatProps) {
 
         let fullResponse = "";
         let updateCount = 0;
+        let lastFlushAt = 0;
         let firstChunkTime: number | null = null;
         let tokenUsage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null = null;
         let sources: { url: string; title: string }[] | null = null;
@@ -843,8 +848,20 @@ export function useChat(props: UseChatProps) {
           fullResponse += chunk.content;
           updateCount++;
 
-          const { thinking, contentWithoutThinking } =
-            extractThinkingFromContent(fullResponse);
+          // Throttle UI flushes to ~20/s. Fast models emit 40-70 chunks/s and
+          // each flush re-parses the whole accumulated reply and replaces the
+          // messages array - per-chunk that's quadratic work the screen can't
+          // even display. The final parse after the loop always runs, so a
+          // trailing partial between flushes is never lost.
+          const now = Date.now();
+          if (now - lastFlushAt < 50) continue;
+          lastFlushAt = now;
+
+          // Skip the multi-regex parse entirely when no marker is present
+          // (the common case - most chat replies have no thinking/wrappers).
+          const { thinking, contentWithoutThinking } = PARSE_MARKERS_RE.test(fullResponse)
+            ? extractThinkingFromContent(fullResponse)
+            : { thinking: "", contentWithoutThinking: fullResponse };
 
           // Always save thinking — models like Qwen 3.5 produce <think> even in chat mode
           state.messages = state.messages.map((m) =>
