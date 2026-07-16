@@ -112,22 +112,8 @@ jobs:
           repository: ggml-org/llama.cpp
           ref: ${{ github.event.inputs.llama_cpp_version || 'master' }}
 
-      - name: Install x86_64 OpenSSL for cross-compilation
-        run: |
-          arch -x86_64 /usr/local/homebrew/bin/brew install openssl@3 2>/dev/null || true
-          # Fallback: install via universal approach
-          if [ ! -d "/usr/local/opt/openssl@3" ]; then
-            arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || true
-            arch -x86_64 /usr/local/bin/brew install openssl@3 || true
-          fi
-
       - name: Build binary for x86_64 (CPU only, no Metal on Intel Macs)
         run: |
-          OPENSSL_X64="/usr/local/opt/openssl@3"
-          CMAKE_EXTRA=""
-          if [ -d "$OPENSSL_X64" ]; then
-            CMAKE_EXTRA="-DOPENSSL_ROOT_DIR=$OPENSSL_X64"
-          fi
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES=x86_64 \
@@ -142,8 +128,7 @@ jobs:
             -DLLAMA_CURL=OFF \
             -DLLAMA_SERVER_SSL=OFF \
             -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON \
-            -DLLAMA_SERVER_WEBUI=OFF \
-            $CMAKE_EXTRA
+            -DLLAMA_SERVER_WEBUI=OFF
           cmake --build build --config Release --target llama-server -j $(sysctl -n hw.ncpu)
 
       - name: Verify binary
