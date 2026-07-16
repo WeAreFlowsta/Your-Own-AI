@@ -281,7 +281,7 @@ export default component$(() => {
           await invoke("load_model", { filename: targetModel, withVision: false, reason: "page-ensure" });
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
-          if (msg.includes("MODEL_TOO_LARGE")) {
+          if (msg.includes("MODEL_TOO_LARGE") || msg.includes("MODEL_LOAD_CRASHED")) {
             // Won't fit this GPU — show it red in the header rather than a stuck
             // spinner. Nothing's loading, so skip the readiness poll.
             console.log("[ChatPage] Preload model too large for GPU:", targetModel);

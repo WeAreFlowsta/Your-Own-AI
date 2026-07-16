@@ -589,7 +589,13 @@ export function useChat(props: UseChatProps) {
         } catch (error) {
           const errorMessage =
             error instanceof Error ? error.message : String(error);
-          if (errorMessage.includes("MODEL_TOO_LARGE")) {
+          if (errorMessage.includes("MODEL_LOAD_CRASHED")) {
+            props.currentModel.value = preferredModel;
+            props.modelTooBig.value = true;
+            abortWith(
+              `The AI engine crashed while loading ${selectedAi.label}'s model. This looks like a problem on our side, not your hardware - restarting the app may help, and the log file helps us fix it.`
+            );
+          } else if (errorMessage.includes("MODEL_TOO_LARGE")) {
             // Show it red in the header (name visible, not loaded) and tell the user.
             props.currentModel.value = preferredModel;
             props.modelTooBig.value = true;

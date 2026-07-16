@@ -486,6 +486,24 @@ pub async fn find_vision_model(app_handle: AppHandle) -> Result<Option<String>, 
 /// fit (out of GPU memory) or otherwise died. `start_llama_server` watches it to
 /// turn a dead server into a clear "too large" error instead of a silent hang.
 static CHAT_LOAD_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Whether the dying server's stderr showed MEMORY exhaustion. Distinguishes a
+/// genuine too-large model from an engine crash (e.g. an access violation) -
+/// beta 1 reported a crashing engine as "model too large", which sent the user
+/// hunting for smaller models that would never help.
+static CHAT_LOAD_OOM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Memory-exhaustion markers in llama.cpp / ggml / driver output.
+fn looks_like_oom(line: &str) -> bool {
+    let l = line.to_ascii_lowercase();
+    l.contains("out of memory")
+        || l.contains("erroroutofdevicememory")
+        || l.contains("erroroutofhostmemory")
+        || l.contains("failed to allocate")
+        || l.contains("cannot allocate")
+        || l.contains("insufficient memory")
+        || l.contains("not enough memory")
+        || l.contains("oom")
+}
 
 async fn chat_server_health_ok() -> bool {
     let client = reqwest::Client::new();
@@ -643,6 +661,7 @@ pub async fn start_llama_server(
         },
     );
     CHAT_LOAD_FAILED.store(false, std::sync::atomic::Ordering::SeqCst);
+    CHAT_LOAD_OOM.store(false, std::sync::atomic::Ordering::SeqCst);
     let (mut rx, child) = chat_server_command(&app_handle)?
         .args(&args)
         .spawn()
@@ -670,7 +689,11 @@ pub async fn start_llama_server(
                 tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
                     // llama.cpp logs most of its useful startup output (incl. the
                     // ggml_vulkan device lines + model load) to stderr.
-                    log::info!("[llama-server] {}", String::from_utf8_lossy(&line).trim_end());
+                    let text = String::from_utf8_lossy(&line);
+                    log::info!("[llama-server] {}", text.trim_end());
+                    if looks_like_oom(&text) {
+                        CHAT_LOAD_OOM.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
                 }
                 tauri_plugin_shell::process::CommandEvent::Error(err) => {
                     log::error!("[llama-server error] {}", err);
@@ -706,15 +729,21 @@ pub async fn start_llama_server(
                 return Ok(());
             }
             if CHAT_LOAD_FAILED.load(Ordering::SeqCst) {
-                // Remember it OOM'd so we don't burn ~30s loading it again this
-                // session — the next attempt rejects instantly. Clears on restart
-                // (in case the user frees VRAM).
+                // Remember the failure so we don't burn ~30s loading it again
+                // this session — the next attempt rejects instantly. Clears on
+                // restart (in case the user frees VRAM).
                 if let Some(ref name) = loading_name {
                     if let Ok(mut set) = too_big_set().lock() {
                         set.insert(name.clone());
                     }
                 }
-                return Err("MODEL_TOO_LARGE".to_string());
+                // Only claim "too large" when the engine's own output showed
+                // memory exhaustion; a silent death is a crash, and telling the
+                // user to pick a smaller model would send them down a dead end.
+                if CHAT_LOAD_OOM.load(Ordering::SeqCst) {
+                    return Err("MODEL_TOO_LARGE".to_string());
+                }
+                return Err("MODEL_LOAD_CRASHED".to_string());
             }
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
