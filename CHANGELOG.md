@@ -3,6 +3,18 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.1.0-beta.5] - 2026-07-16
+
+### Changed
+- **Your first model no longer gets pinned to your AIs.** On a fresh install,
+  AIs are set to "Auto - Offline Only", so they automatically use the best
+  model you have as your collection grows, instead of staying on the starter
+  model forever.
+- **Smoother, lighter streaming.** Replies render with far less overhead
+  while generating - most noticeable on long reports with fast graphics
+  cards - and switching models mid-conversation starts the reply about half
+  a second sooner.
+
 ## [0.1.0-beta.4] - 2026-07-16
 
 ### Added
