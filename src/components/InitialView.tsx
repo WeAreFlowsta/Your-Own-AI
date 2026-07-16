@@ -1,4 +1,5 @@
 import { component$, type QRL, type Signal } from '@builder.io/qwik';
+import CudaOfferCallout from './CudaOfferCallout';
 import { ChatInputBar } from './ChatInputBar';
 import { SelectedAiModel, ChatAction, AttachedFile, AttachedImage } from '../types';
 
@@ -24,6 +25,7 @@ interface InitialViewProps {
 export default component$<InitialViewProps>((props) => {
   return (
     <div class="w-full max-w-4xl mx-auto">
+      <CudaOfferCallout />
       <ChatInputBar
         input={props.input}
         handleSubmit$={props.handleSubmit$}
