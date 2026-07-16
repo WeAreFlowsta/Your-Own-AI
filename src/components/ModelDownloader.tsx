@@ -124,6 +124,8 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     selectedVariants: {} as Record<string, ModelVariant>,
     deleteModalOpen: false,
     modelToDelete: null as { filename: string; displayName: string } | null,
+    /** familyId awaiting license agreement before its download proceeds. */
+    licensePrompt: null as string | null,
     isDeleting: false,
     customModelModalOpen: false,
     openDropdowns: {} as Record<string, boolean>,
@@ -314,6 +316,17 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     const family = modelFamilies.find((f) => f.id === familyId);
     if (!variant || !family) return;
 
+    // Some publishers require accepting their terms before download (the
+    // terms pass through to the user - see the family's `license`). Ask once
+    // per license id; agreement is stored and covers sibling variants.
+    if (
+      family.license &&
+      localStorage.getItem(`licenseAccepted:${family.license.id}`) !== 'true'
+    ) {
+      store.licensePrompt = familyId;
+      return;
+    }
+
     store.downloading = familyId;
     store.error = null;
     store.downloadProgress = null;
@@ -398,6 +411,20 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
       store.downloading = null;
       store.downloadProgress = null;
     }
+  });
+
+  const agreeLicense = $(async () => {
+    const familyId = store.licensePrompt;
+    const family = familyId ? modelFamilies.find((f) => f.id === familyId) : null;
+    if (!familyId || !family?.license) return;
+    localStorage.setItem(`licenseAccepted:${family.license.id}`, 'true');
+    store.licensePrompt = null;
+    await handleDownload$(familyId);
+  });
+
+  const openLicenseUrl = $(async (url: string) => {
+    const { openUrl } = await import('@tauri-apps/plugin-opener');
+    await openUrl(url);
   });
 
   const handleDeleteClick$ = $((filename: string) => {
@@ -1136,6 +1163,59 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
         isDownloading={store.downloading === 'custom'}
         downloadProgress={store.downloading === 'custom' ? store.downloadProgress : null}
       />
+
+      {/* Publisher-terms agreement (required pass-through, e.g. HAI-DEF).
+          Shown once per license id, at the moment of download. */}
+      {store.licensePrompt && (() => {
+        const fam = modelFamilies.find((f) => f.id === store.licensePrompt);
+        if (!fam?.license) return null;
+        const lic = fam.license;
+        return (
+          <div
+            class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60"
+            onClick$={(e, el) => {
+              if (e.target === el) store.licensePrompt = null;
+            }}
+          >
+            <div
+              class="bg-[var(--bg-header-footer)] rounded-xl shadow-2xl w-full max-w-md p-6"
+              onClick$={(e) => e.stopPropagation()}
+            >
+              <h3 class="text-lg font-semibold text-[var(--text-primary)] mb-1">
+                {fam.name} has its own terms
+              </h3>
+              <p class="text-xs text-[var(--text-muted)] mb-3">{lic.notice}</p>
+              <ul class="space-y-2 mb-4">
+                {lic.points.map((pt, i) => (
+                  <li key={i} class="text-sm text-[var(--text-secondary)] flex gap-2">
+                    <span class="text-[var(--text-muted)] shrink-0">•</span>
+                    {pt}
+                  </li>
+                ))}
+              </ul>
+              <button
+                type="button"
+                onClick$={() => openLicenseUrl(lic.url)}
+                class="text-sm text-[var(--text-link)] hover:underline mb-5 block"
+              >
+                Read the full {lic.name}
+              </button>
+              <div class="flex flex-col-reverse sm:flex-row sm:justify-end gap-3">
+                <LiquidMetalButton
+                  variant="secondary"
+                  onClick$={() => (store.licensePrompt = null)}
+                  class="px-4 py-2 text-sm"
+                >
+                  Cancel
+                </LiquidMetalButton>
+                <LiquidMetalButton onClick$={agreeLicense} class="px-4 py-2 text-sm">
+                  Agree and download
+                </LiquidMetalButton>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 });

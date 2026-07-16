@@ -58,6 +58,18 @@ pub fn known_caps(model_name: &str) -> Option<Caps> {
     if n.contains("coder") || n.contains("-code") || n.contains("codestral") || n.contains("devstral") {
         return Some(Caps { overall: 7, coding: 9, reasoning: 6, math: 6, vision: 0 });
     }
+    // Medical specialists (MedGemma). Deliberately MODEST overall so the Auto
+    // modes never prefer them for general chat - they're clinically flavored
+    // and meant to be pinned to a dedicated health AI. Strong vision (their
+    // image encoder is trained on X-rays/derm/path/fundus). Before the gemma
+    // arms: "medgemma" filenames would otherwise match plain "gemma".
+    if n.contains("medgemma") {
+        return Some(if n.contains("27b") {
+            Caps { overall: 6, coding: 3, reasoning: 7, math: 5, vision: 8 }
+        } else {
+            Caps { overall: 5, coding: 3, reasoning: 6, math: 4, vision: 8 }
+        });
+    }
     // Reasoning / chain-of-thought (distills) — strong math/reasoning, high token cost
     if n.contains("deepseek") || n.contains("-r1") || n.contains("qwq") {
         return Some(Caps { overall: 8, coding: 6, reasoning: 9, math: 9, vision: 0 });

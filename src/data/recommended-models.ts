@@ -91,6 +91,7 @@ export type Capability =
   | 'writing'
   | 'analysis'
   | 'math'
+  | 'medical'
   | 'multilingual'
   | 'long-context'
   | 'agentic';
@@ -128,6 +129,19 @@ export interface ModelFamily {
   traits: Trait[];         // Surfaced badges
   modality?: { in: Modality[]; out: Modality[] }; // Defaults to text→text (see getModality)
   role?: ModelRole;        // Defaults to 'chat' (see getRole). Non-chat = a capability component.
+  /** Some model publishers require users to accept terms before download
+   *  (e.g. Google's Health AI Developer Foundations). When set, the download
+   *  button shows an agreement step first; acceptance is stored per license
+   *  id, so sibling variants/models under the same license ask only once.
+   *  The `notice` line is the publisher's REQUIRED redistribution notice -
+   *  show it verbatim. */
+  license?: {
+    id: string;
+    name: string;
+    url: string;
+    notice: string;
+    points: string[];
+  };
   variants: ModelVariant[]; // Size options, sorted small to large
 }
 
@@ -223,6 +237,28 @@ export const VISION_PROJECTORS: CapabilityModel[] = [
     downloadUrl:
       'https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/mmproj-F16.gguf',
     size: 0.99, // ~990 MB
+  },
+  {
+    id: 'medgemma-4b-vision',
+    name: 'MedGemma 4B vision',
+    role: 'vision-projector',
+    description:
+      'Lets MedGemma 4B see medical images you attach - X-rays, skin photos, scans. Needs the MedGemma 4B model downloaded.',
+    filename: 'medgemma-1.5-4b-it-mmproj-F16.gguf',
+    downloadUrl:
+      'https://huggingface.co/unsloth/medgemma-1.5-4b-it-GGUF/resolve/main/mmproj-F16.gguf',
+    size: 0.79,
+  },
+  {
+    id: 'medgemma-27b-vision',
+    name: 'MedGemma 27B vision',
+    role: 'vision-projector',
+    description:
+      'Lets MedGemma 27B see medical images you attach - X-rays, skin photos, scans. Needs the MedGemma 27B model downloaded.',
+    filename: 'medgemma-27b-it-mmproj-F16.gguf',
+    downloadUrl:
+      'https://huggingface.co/unsloth/medgemma-27b-it-GGUF/resolve/main/mmproj-F16.gguf',
+    size: 0.8,
   },
   {
     id: 'qwythos-9b-vision',
@@ -632,6 +668,51 @@ export const modelFamilies: ModelFamily[] = [
     ]
   },
   {
+    id: 'medgemma',
+    contextWindow: 131072,
+    released: '2026-01-14',
+    name: 'MedGemma',
+    description:
+      "Google's open medical models - discuss your own health records, lab results, and medical images (X-rays, skin photos, scans) privately on your device. For understanding and preparing questions, not diagnosis.",
+    category: 'specialist',
+    recommended: false,
+    capabilities: ['medical', 'analysis', 'reasoning'],
+    traits: ['new'],
+    modality: { in: ['text', 'vision'], out: ['text'] },
+    license: {
+      id: 'hai-def',
+      name: 'Health AI Developer Foundations terms',
+      url: 'https://developers.google.com/health-ai-developer-foundations/terms',
+      notice:
+        'HAI-DEF is provided under and subject to the Health AI Developer Foundations Terms of Use.',
+      points: [
+        'Not for clinical use: no diagnosing or treating patients. Use it to understand your own results and prepare questions for your doctor.',
+        'Restricted uses in the Health AI Developer Foundations Prohibited Use Policy apply.',
+        'These same terms pass to anyone you share the model with.',
+      ],
+    },
+    variants: [
+      {
+        parameterCount: '4B (v1.5)',
+        size: 2.4,
+        minRAM: 8,
+        downloadUrl:
+          'https://huggingface.co/unsloth/medgemma-1.5-4b-it-GGUF/resolve/main/medgemma-1.5-4b-it-Q4_K_M.gguf',
+        filename: 'medgemma-1.5-4b-it-Q4_K_M.gguf',
+        quantization: 'Q4_K_M',
+      },
+      {
+        parameterCount: '27B',
+        size: 15.5,
+        minRAM: 32,
+        downloadUrl:
+          'https://huggingface.co/unsloth/medgemma-27b-it-GGUF/resolve/main/medgemma-27b-it-Q4_K_M.gguf',
+        filename: 'medgemma-27b-it-Q4_K_M.gguf',
+        quantization: 'Q4_K_M',
+      },
+    ],
+  },
+  {
     id: 'qwythos-9b',
     contextWindow: 1048576,
     released: '2026-06-19',
@@ -671,6 +752,7 @@ export const capabilityInfo: Record<Capability, { label: string }> = {
   writing:        { label: 'Writing' },
   analysis:       { label: 'Analysis' },
   math:           { label: 'Math' },
+  medical:        { label: 'Medical' },
   multilingual:   { label: 'Multilingual' },
   'long-context': { label: 'Long context' },
   agentic:        { label: 'Agentic' },
