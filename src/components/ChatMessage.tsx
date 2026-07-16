@@ -51,6 +51,20 @@ const BsLink45DegIcon = component$(() => (
   </svg>
 ));
 
+const BsBookmarkIcon = component$(() => (
+  <svg
+    fill="currentColor"
+    stroke="currentColor"
+    stroke-width="0"
+    viewBox="0 0 16 16"
+    height="1em"
+    width="1em"
+    class="md:mr-1.5"
+  >
+    <path d="M2 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13.5a.5.5 0 0 1-.777.416L8 13.101l-5.223 2.815A.5.5 0 0 1 2 15.5V2zm2-1a1 1 0 0 0-1 1v12.566l4.723-2.482a.5.5 0 0 1 .554 0L13 14.566V2a1 1 0 0 0-1-1H4z" />
+  </svg>
+));
+
 const BsCpuIcon = component$(() => (
   <svg
     fill="currentColor"
@@ -199,6 +213,23 @@ const MIN_THINKING_DISPLAY_CHARS = 100;
 
 const ActionBar = component$<ActionBarProps>((props) => {
   const openSection = useSignal<'tokens' | 'thoughts' | 'sources' | 'model' | null>(null);
+  /** '' | 'saving' | 'saved' | 'error' - the Remember button's transient state. */
+  const rememberState = useSignal('');
+
+  const rememberReply = $(async () => {
+    if (rememberState.value === 'saving' || rememberState.value === 'saved') return;
+    rememberState.value = 'saving';
+    try {
+      const { rememberText } = await import('../utils/rememberText');
+      const ok = await rememberText(props.message.model, props.message.content);
+      rememberState.value = ok ? 'saved' : 'error';
+    } catch {
+      rememberState.value = 'error';
+    }
+    if (rememberState.value === 'error') {
+      setTimeout(() => (rememberState.value = ''), 2500);
+    }
+  });
 
   const hasTokens = props.message.tokens && (props.message.tokens.total_tokens || 0) > 0;
   const hasThoughts = !!props.message.thinking && props.message.thinking.trim().length >= MIN_THINKING_DISPLAY_CHARS;
@@ -269,6 +300,29 @@ const ActionBar = component$<ActionBarProps>((props) => {
               >
                 <BsHashIcon />
                 <span class="hidden md:inline">Tokens</span>
+              </LiquidMetalButton>
+            )}
+            {props.message.role === 'assistant' && !!props.message.content && (
+              <LiquidMetalButton
+                onClick$={rememberReply}
+                class="px-3 py-1 text-xs flex items-center"
+                title={
+                  rememberState.value === 'error'
+                    ? 'Could not save - the memory model may still be downloading (Settings - Components)'
+                    : 'Remember this reply - this AI will draw on it in future conversations'
+                }
+                disabled={rememberState.value === 'saving' || rememberState.value === 'saved'}
+              >
+                <BsBookmarkIcon />
+                <span class="hidden md:inline">
+                  {rememberState.value === 'saved'
+                    ? 'Remembered'
+                    : rememberState.value === 'saving'
+                      ? 'Saving...'
+                      : rememberState.value === 'error'
+                        ? 'Try again'
+                        : 'Remember'}
+                </span>
               </LiquidMetalButton>
             )}
             {hasModelInfo && (
@@ -795,7 +849,13 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
   };
 
   return (
-    <div ref={rootRef} class="relative mb-4 scroll-mt-4">
+    <div
+      ref={rootRef}
+      class="relative mb-4 scroll-mt-4"
+      {...(props.message.role === 'assistant' && props.message.content
+        ? { 'data-remember-aiid': props.message.model }
+        : {})}
+    >
       {renderAvatarContent()}
       <div class="ml-6">
         <div class="space-y-1 flex-grow max-w-[calc(100%)]">

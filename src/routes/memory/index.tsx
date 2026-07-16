@@ -31,6 +31,7 @@ import { ExportConversationModal } from "../../components/ExportConversationModa
 import ProfileMemory from "../../components/ProfileMemory";
 import AiEpisodicMemory from "../../components/AiEpisodicMemory";
 import AiKnowledge from "../../components/AiKnowledge";
+import { RememberEntryButton } from "../../components/RememberEntryButton";
 import AiKnowledgeDocuments from "../../components/AiKnowledgeDocuments";
 import { Callout } from "../../components/Callout";
 
@@ -466,6 +467,12 @@ export default component$(() => {
                               class="text-[var(--text-primary)] prose-sm pl-8"
                               dangerouslySetInnerHTML={renderMarkdown(entry.content)}
                             />
+
+                            {entry.content && entry.content.trim() && (
+                              <div class="pl-8 mt-1">
+                                <RememberEntryButton aiId={aiId.value} text={entry.content} />
+                              </div>
+                            )}
 
                             <div class="pl-8">
                               {/* Attached context (user turns) */}

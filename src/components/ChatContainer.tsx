@@ -1,6 +1,7 @@
 import { component$, type Signal, type QRL, $ } from '@builder.io/qwik';
 import InitialView from './InitialView';
 import ConversationView from './ConversationView';
+import SelectionRemember from './SelectionRemember';
 import { ChatInputBar } from './ChatInputBar';
 import { Message, SelectedAiModel, ChatAction, AttachedFile, AttachedImage } from '../types';
 
@@ -82,6 +83,8 @@ export default component$<ChatContainerProps>((props) => {
 
   return (
     <div class="flex-1 flex flex-col min-h-0">
+      {/* Global select-to-remember chip (one listener; no per-message chrome). */}
+      <SelectionRemember />
       <div class="flex-1 overflow-y-auto p-4 scroll-smooth">
         <ConversationView
           messages={props.messages}
