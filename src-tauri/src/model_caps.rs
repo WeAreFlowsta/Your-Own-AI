@@ -14,6 +14,9 @@ pub struct Caps {
     pub reasoning: u8,
     pub math: u8,
     pub vision: u8,
+    /// Medical/clinical knowledge (labs, imaging, medications). Drives the
+    /// "medical" routing task; high only for medical specialists.
+    pub medical: u8,
 }
 
 impl Caps {
@@ -25,6 +28,7 @@ impl Caps {
             "math" => self.math,
             "reasoning" => self.reasoning,
             "vision" => self.vision,
+            "medical" => self.medical,
             _ => self.overall,
         }
     }
@@ -40,23 +44,23 @@ pub fn known_caps(model_name: &str) -> Option<Caps> {
     // Agentic coders built on a reasoning base (coding-first, also strong reasoning).
     // Listed before the generic coder rule so they keep their higher reasoning score.
     if n.contains("ornith") {
-        return Some(Caps { overall: 8, coding: 9, reasoning: 8, math: 7, vision: 0 });
+        return Some(Caps { overall: 8, coding: 9, reasoning: 8, math: 7, vision: 0, medical: 3 });
     }
     // OpenAI open-weight — reasoning + agentic + function-calling (not a pure coder).
     if n.contains("gpt-oss") || n.contains("gpt_oss") || n.contains("gptoss") {
-        return Some(Caps { overall: 8, coding: 7, reasoning: 8, math: 7, vision: 0 });
+        return Some(Caps { overall: 8, coding: 7, reasoning: 8, math: 7, vision: 0, medical: 6 });
     }
     // GLM (Zhipu) — strong all-rounder, agentic coding + reasoning + tool use.
     if n.contains("glm") {
-        return Some(Caps { overall: 8, coding: 8, reasoning: 8, math: 7, vision: 0 });
+        return Some(Caps { overall: 8, coding: 8, reasoning: 8, math: 7, vision: 0, medical: 3 });
     }
     // Qwythos — a Qwen3.5-VL community merge: multimodal + reasoning/agentic (not a coder).
     if n.contains("qwythos") {
-        return Some(Caps { overall: 7, coding: 5, reasoning: 7, math: 5, vision: 7 });
+        return Some(Caps { overall: 7, coding: 5, reasoning: 7, math: 5, vision: 7, medical: 3 });
     }
     // Coding specialists + agentic coders (Qwen-Coder, Codestral, Devstral, …).
     if n.contains("coder") || n.contains("-code") || n.contains("codestral") || n.contains("devstral") {
-        return Some(Caps { overall: 7, coding: 9, reasoning: 6, math: 6, vision: 0 });
+        return Some(Caps { overall: 7, coding: 9, reasoning: 6, math: 6, vision: 0, medical: 3 });
     }
     // Medical specialists (MedGemma). Deliberately MODEST overall so the Auto
     // modes never prefer them for general chat - they're clinically flavored
@@ -65,39 +69,39 @@ pub fn known_caps(model_name: &str) -> Option<Caps> {
     // arms: "medgemma" filenames would otherwise match plain "gemma".
     if n.contains("medgemma") {
         return Some(if n.contains("27b") {
-            Caps { overall: 6, coding: 3, reasoning: 7, math: 5, vision: 8 }
+            Caps { overall: 6, coding: 3, reasoning: 7, math: 5, vision: 8, medical: 10 }
         } else {
-            Caps { overall: 5, coding: 3, reasoning: 6, math: 4, vision: 8 }
+            Caps { overall: 5, coding: 3, reasoning: 6, math: 4, vision: 8, medical: 9 }
         });
     }
     // Reasoning / chain-of-thought (distills) — strong math/reasoning, high token cost
     if n.contains("deepseek") || n.contains("-r1") || n.contains("qwq") {
-        return Some(Caps { overall: 8, coding: 6, reasoning: 9, math: 9, vision: 0 });
+        return Some(Caps { overall: 8, coding: 6, reasoning: 9, math: 9, vision: 0, medical: 3 });
     }
     // Strong all-rounders (current best per-size)
     if n.contains("qwen3") || n.contains("qwen-3") {
-        return Some(Caps { overall: 8, coding: 8, reasoning: 8, math: 8, vision: 0 });
+        return Some(Caps { overall: 8, coding: 8, reasoning: 8, math: 8, vision: 0, medical: 3 });
     }
     if n.contains("phi-4") || n.contains("phi4") {
-        return Some(Caps { overall: 7, coding: 6, reasoning: 7, math: 8, vision: 0 });
+        return Some(Caps { overall: 7, coding: 6, reasoning: 7, math: 8, vision: 0, medical: 3 });
     }
     if n.contains("gemma-4") || n.contains("gemma4") || n.contains("gemma-3") || n.contains("gemma3") {
-        return Some(Caps { overall: 7, coding: 6, reasoning: 6, math: 6, vision: 7 });
+        return Some(Caps { overall: 7, coding: 6, reasoning: 6, math: 6, vision: 7, medical: 3 });
     }
     if n.contains("ministral") || n.contains("mistral") {
-        return Some(Caps { overall: 6, coding: 6, reasoning: 6, math: 5, vision: 0 });
+        return Some(Caps { overall: 6, coding: 6, reasoning: 6, math: 5, vision: 0, medical: 3 });
     }
     if n.contains("llama-3") || n.contains("llama3") || n.contains("llama-4") || n.contains("llama4") {
-        return Some(Caps { overall: 6, coding: 5, reasoning: 6, math: 5, vision: 0 });
+        return Some(Caps { overall: 6, coding: 5, reasoning: 6, math: 5, vision: 0, medical: 3 });
     }
     if n.contains("qwen2") {
-        return Some(Caps { overall: 6, coding: 7, reasoning: 6, math: 6, vision: 0 });
+        return Some(Caps { overall: 6, coding: 7, reasoning: 6, math: 6, vision: 0, medical: 3 });
     }
     if n.contains("gemma") {
-        return Some(Caps { overall: 5, coding: 5, reasoning: 5, math: 5, vision: 3 });
+        return Some(Caps { overall: 5, coding: 5, reasoning: 5, math: 5, vision: 3, medical: 3 });
     }
     if n.contains("phi") {
-        return Some(Caps { overall: 5, coding: 5, reasoning: 6, math: 6, vision: 0 });
+        return Some(Caps { overall: 5, coding: 5, reasoning: 6, math: 6, vision: 0, medical: 3 });
     }
     None
 }
@@ -106,7 +110,7 @@ pub fn known_caps(model_name: &str) -> Option<Caps> {
 /// Unknown family — middling default.
 pub fn caps_for(model_name: &str) -> Caps {
     known_caps(model_name)
-        .unwrap_or(Caps { overall: 4, coding: 4, reasoning: 4, math: 4, vision: 0 })
+        .unwrap_or(Caps { overall: 4, coding: 4, reasoning: 4, math: 4, vision: 0, medical: 3 })
 }
 
 /// Capability scores for an ONLINE (cloud) model, matched by family from its
@@ -120,38 +124,38 @@ pub fn online_caps_for(text: &str) -> Caps {
     let t = text.to_lowercase();
     // Coding specialists
     if t.contains("coder") || t.contains("codestral") {
-        return Caps { overall: 8, coding: 9, reasoning: 7, math: 7, vision: 0 };
+        return Caps { overall: 8, coding: 9, reasoning: 7, math: 7, vision: 0, medical: 3 };
     }
     // Reasoning / math distills (DeepSeek-R1, QwQ, …)
     if t.contains("deepseek") || t.contains("-r1") || t.contains("qwq") {
-        return Caps { overall: 9, coding: 8, reasoning: 9, math: 9, vision: 0 };
+        return Caps { overall: 9, coding: 8, reasoning: 9, math: 9, vision: 0, medical: 3 };
     }
     if t.contains("claude") {
-        return Caps { overall: 9, coding: 9, reasoning: 9, math: 8, vision: 8 };
+        return Caps { overall: 9, coding: 9, reasoning: 9, math: 8, vision: 8, medical: 3 };
     }
     if t.contains("gpt") || t.contains("openai") {
-        return Caps { overall: 9, coding: 8, reasoning: 9, math: 8, vision: 8 };
+        return Caps { overall: 9, coding: 8, reasoning: 9, math: 8, vision: 8, medical: 3 };
     }
     if t.contains("gemini") {
-        return Caps { overall: 8, coding: 7, reasoning: 8, math: 8, vision: 8 };
+        return Caps { overall: 8, coding: 7, reasoning: 8, math: 8, vision: 8, medical: 3 };
     }
     if t.contains("grok") {
-        return Caps { overall: 8, coding: 8, reasoning: 8, math: 8, vision: 7 };
+        return Caps { overall: 8, coding: 8, reasoning: 8, math: 8, vision: 7, medical: 3 };
     }
     if t.contains("qwen") {
-        return Caps { overall: 8, coding: 8, reasoning: 8, math: 8, vision: 0 };
+        return Caps { overall: 8, coding: 8, reasoning: 8, math: 8, vision: 0, medical: 3 };
     }
     if t.contains("mistral") || t.contains("mixtral") {
-        return Caps { overall: 7, coding: 7, reasoning: 7, math: 6, vision: 0 };
+        return Caps { overall: 7, coding: 7, reasoning: 7, math: 6, vision: 0, medical: 3 };
     }
     if t.contains("llama") {
-        return Caps { overall: 7, coding: 6, reasoning: 7, math: 6, vision: 0 };
+        return Caps { overall: 7, coding: 6, reasoning: 7, math: 6, vision: 0, medical: 3 };
     }
     // Search-first models (Sonar/Perplexity) — strong at live web, weaker pure reasoners.
     if t.contains("sonar") || t.contains("perplexity") {
-        return Caps { overall: 6, coding: 5, reasoning: 6, math: 5, vision: 0 };
+        return Caps { overall: 6, coding: 5, reasoning: 6, math: 5, vision: 0, medical: 3 };
     }
-    Caps { overall: 6, coding: 6, reasoning: 6, math: 6, vision: 0 }
+    Caps { overall: 6, coding: 6, reasoning: 6, math: 6, vision: 0, medical: 3 }
 }
 
 #[cfg(test)]

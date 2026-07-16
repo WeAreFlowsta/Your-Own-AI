@@ -115,6 +115,89 @@ async fn semantic_fresh_score(
     Some(refs.iter().map(|r| cosine(&qvec, r)).fold(0.0f32, f32::max))
 }
 
+/// Reference phrasings of health questions - the semantic medical gate scores
+/// the turn against these (same mechanism as the freshness gate). Personal
+/// framing on purpose: "my results", "this scan" - the gate is for someone
+/// discussing THEIR health, not homework about biology.
+const MEDICAL_REFERENCES: &[&str] = &[
+    "what do my blood test results mean",
+    "explain this x-ray image to me",
+    "is it safe to take this medication with my other prescriptions",
+    "I have been having these symptoms lately",
+    "my doctor said I have this condition",
+    "what does this diagnosis mean for me",
+    "what are the side effects of this medicine",
+    "my scan results show something abnormal",
+    "is my blood pressure reading normal",
+    "should I be worried about this mole on my skin",
+    "help me understand my lab report",
+    "what treatment options exist for this illness",
+];
+
+static MEDICAL_REFS: tokio::sync::OnceCell<Vec<Vec<f32>>> = tokio::sync::OnceCell::const_new();
+
+async fn medical_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec<f32>>> {
+    MEDICAL_REFS
+        .get_or_try_init(|| async {
+            let state = app.state::<crate::llm::LLMState>();
+            let texts = MEDICAL_REFERENCES.iter().map(|s| s.to_string()).collect();
+            crate::llm::embed_texts(app.clone(), state, texts, EMBED_MODEL.to_string()).await
+        })
+        .await
+        .ok()
+}
+
+/// Cosine floor for the semantic medical gate. Initial value mirrors the
+/// freshness/notes calibration for bge-small (unrelated ≤ ~0.43, real matches
+/// ≥ ~0.47); the score is logged on every hit for live calibration. Biased
+/// toward OVER-detection: a borderline query wrongly kept local costs a
+/// slightly less fresh answer; a health question wrongly sent to a cloud
+/// breaks a promise.
+const MEDICAL_THRESHOLD: f32 = 0.50;
+
+/// Stage-0 medical gate: unambiguous health terms only. Deliberately excludes
+/// words developers use about software ("symptom", "diagnose") - the semantic
+/// stage catches those phrasings with context.
+fn looks_medical(query: &str) -> bool {
+    let q = query.to_lowercase();
+    const CUES: &[&str] = &[
+        "blood test", "lab result", "x-ray", "xray", " mri", "ct scan",
+        "ultrasound", "biopsy", "medication", "prescription", "blood pressure",
+        "cholesterol", "glucose", "hba1c", "mammogram", "colonoscopy",
+        "pathology", "radiolog", "my doctor", "blood work", "vaccine",
+    ];
+    CUES.iter().any(|c| q.contains(c))
+}
+
+/// Is this turn about the user's health? Keyword stage first (free), then the
+/// semantic stage against MEDICAL_REFERENCES using the turn's shared
+/// embedding. `false` when embedding is unavailable and no keyword hits.
+async fn is_medical_turn(app: &AppHandle, query: &str, query_vec: Option<&[f32]>) -> bool {
+    if looks_medical(query) {
+        return true;
+    }
+    let Some(refs) = medical_reference_vecs(app).await else {
+        return false;
+    };
+    let qvec: Vec<f32> = match query_vec {
+        Some(v) if !v.is_empty() => v.to_vec(),
+        _ => {
+            let state = app.state::<crate::llm::LLMState>();
+            let qtext = format!("{QUERY_INSTRUCTION}{query}");
+            match crate::llm::embed_texts(app.clone(), state, vec![qtext], EMBED_MODEL.to_string()).await {
+                Ok(mut v) if !v.is_empty() => v.remove(0),
+                _ => return false,
+            }
+        }
+    };
+    let score = refs.iter().map(|r| cosine(&qvec, r)).fold(0.0f32, f32::max);
+    if score >= MEDICAL_THRESHOLD {
+        log::info!("[router] medical semantic gate hit (score {score:.3})");
+        return true;
+    }
+    false
+}
+
 /// Stage-0 freshness gate: does the query look like it needs up-to-date info?
 /// Cheap, high-precision keyword/temporal cues — deliberately conservative
 /// (privacy-first: bias toward staying offline). The bge-small *semantic* gate
@@ -383,7 +466,17 @@ pub async fn route(
     picks: &OnlinePicks,
     query_vec: Option<&[f32]>,
 ) -> Result<RouteResult, String> {
-    if mode == "online-offline" {
+    // Health questions stay home. A turn about the user's own health never
+    // auto-routes online (no freshness route, no hard-question escalation),
+    // and the task becomes "medical" so an installed medical specialist
+    // (MedGemma) takes it. Pinned models are untouched - pinning is explicit
+    // consent - and "Try this answer online" on the receipt remains an
+    // explicit user action. Auto - My hardware may still use the user's OWN
+    // server: it's their hardware.
+    let medical = is_medical_turn(app, query, query_vec).await;
+    let task: &str = if medical { "medical" } else { task };
+
+    if mode == "online-offline" && !medical {
         // Stage 0: cheap keyword cues. Stage 1 (only if Stage 0 is negative):
         // bge-small semantic similarity to "needs-current-info" phrases. Stage 2:
         // difficulty escalation — a HARD query goes to a stronger online model
@@ -467,7 +560,15 @@ pub async fn route(
     }
 
     let model = pick_offline(app, task, lean).await?;
-    let reason = if mode == "online-offline" {
+    let reason = if medical {
+        // The visible promise: this is the receipt line users see. Name the
+        // specialist when one took the question.
+        if model.to_lowercase().contains("medgemma") {
+            "a health question — kept on your device, answered by your medical model"
+        } else {
+            "a health question — kept on your device"
+        }
+    } else if mode == "online-offline" {
         "offline — no fresh info needed"
     } else {
         "offline"
@@ -575,6 +676,39 @@ mod tests {
             om("gpt-5.6-terra", "GPT-5.6 Terra", "balanced flagship", None),
             om("sonar", "Sonar", "Perplexity search", Some(0.005)),
         ]
+    }
+
+    #[test]
+    fn medical_keyword_gate_hits_health_not_software() {
+        // Health phrasings hit...
+        for q in [
+            "can you explain my blood test results",
+            "what does this X-ray show",
+            "is this medication ok with ibuprofen",
+            "my doctor mentioned high cholesterol",
+        ] {
+            assert!(looks_medical(q), "should be medical: {q}");
+        }
+        // ...developer-speak does not (the semantic stage owns ambiguity).
+        for q in [
+            "diagnose this bug in my parser",
+            "the symptom is a crash on startup",
+            "what's the latest news today",
+            "write me a poem about the ocean",
+        ] {
+            assert!(!looks_medical(q), "should NOT be medical: {q}");
+        }
+    }
+
+    #[test]
+    fn medical_task_prefers_medgemma_by_switch_margin() {
+        let med = crate::model_caps::caps_for("medgemma-1.5-4b-it-Q4_K_M.gguf");
+        let gen = crate::model_caps::caps_for("gemma-4-E4B-it-Q4_K_M.gguf");
+        // The specialist must clear the stickiness margin so a loaded general
+        // model actually swaps for a medical question...
+        assert!(med.by_task("medical") >= gen.by_task("medical") + 2);
+        // ...while staying modest enough that general chat never prefers it.
+        assert!(gen.by_task("general") > med.by_task("general"));
     }
 
     #[test]
