@@ -3,6 +3,27 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.1.0-beta.3] - 2026-07-16
+
+The inference engine now runs on clean Windows and macOS machines - beta 2's
+"model couldn't be loaded" errors were the engine failing to start at all.
+
+### Fixed
+- **Windows: the engine no longer needs Microsoft's C++ runtime installed.**
+  On machines with an older Visual C++ redistributable the engine crashed
+  instantly and the app misread it as "model too large". The runtime is now
+  built into the engine itself, so nothing on the machine matters.
+- **macOS: the engine no longer depends on Homebrew.** It was linked against
+  a Homebrew OpenSSL library that only exists on build machines, so it died
+  on launch on real Macs. It now has no such dependency.
+- **Honest errors when a model fails to load.** "Too large for your graphics
+  card" is now only shown when the engine actually ran out of memory; an
+  engine crash says so instead of sending you hunting for smaller models.
+
+### Changed
+- **New app icon.** The mark now sits on a dark gradient tile so it reads
+  clearly on any desktop, light or dark, at every size.
+
 ## [0.1.0-beta.2] - 2026-07-16
 
 Fixes from the first day of beta testing on Windows and low-memory Macs.
