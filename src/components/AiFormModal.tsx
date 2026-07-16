@@ -26,11 +26,17 @@ import {
   LuImage,
   LuChevronDown,
   LuCheck,
+  LuUser,
+  LuSlidersHorizontal,
+  LuBookOpen,
+  LuImagePlus,
+  LuFileText,
 } from '@qwikest/icons/lucide';
 import { invoke } from '@tauri-apps/api/core';
 import { richModelName } from '../utils/modelNameFormatter';
 import { isModelPaused } from '../utils/modelPrefs';
 import { ImageCropModal } from './ImageCropModal';
+import { KnowledgeSection } from './KnowledgeSection';
 import { ThumbnailGalleryModal } from './ThumbnailGalleryModal';
 import type { GalleryThumb } from '../data/thumbnail-gallery';
 import { LiquidMetalBorder } from './LiquidMetalBorder';
@@ -87,6 +93,10 @@ const AiFormModal = component$<AiFormModalProps>(
       localPreviewOverride: null as string | null,
       originalImageSrc: null as string | null,
       showCropModal: false,
+      activeSection: 'basics' as 'basics' | 'behaviour' | 'details' | 'knowledge' | 'appearance',
+      knowledgeDocs: [] as import('../utils/transcriptMemory').KnowledgeDocument[],
+      knowledgeBusy: false,
+      knowledgeError: '' as string,
       showGalleryModal: false,
       // Bundled path of the gallery thumb picked this session (selected ring)
       galleryPath: null as string | null,
@@ -503,7 +513,7 @@ const AiFormModal = component$<AiFormModalProps>(
         }}
       >
         <div
-          class="bg-[var(--bg-header-footer)] p-6 md:p-8 rounded-xl shadow-2xl w-full max-w-lg relative my-8"
+          class={`bg-[var(--bg-header-footer)] p-6 md:p-8 rounded-xl shadow-2xl w-full relative my-8 ${editingAi ? 'max-w-4xl' : 'max-w-lg'}`}
           onClick$={(e) => e.stopPropagation()}
         >
           {store.isSubmitting && (
@@ -525,7 +535,42 @@ const AiFormModal = component$<AiFormModalProps>(
             </button>
           </div>
 
-          <form preventdefault:submit onSubmit$={handleSubmit$} class="space-y-4 md:space-y-6">
+          <form preventdefault:submit onSubmit$={handleSubmit$} class={editingAi ? 'flex flex-col gap-5' : 'space-y-4 md:space-y-6'}>
+            <div class={editingAi ? 'flex gap-6' : 'contents'}>
+            {/* Section nav (edit only) - mirrors the Settings page pattern. */}
+            {editingAi && (
+              <nav class="shrink-0 w-44 space-y-1">
+                {[
+                  { id: 'basics', label: 'Basics', icon: LuUser },
+                  { id: 'behaviour', label: 'Behaviour', icon: LuSlidersHorizontal },
+                  { id: 'details', label: 'Details', icon: LuFileText },
+                  { id: 'knowledge', label: 'Knowledge', icon: LuBookOpen },
+                  { id: 'appearance', label: 'Appearance', icon: LuImagePlus },
+                ].map((sec) => {
+                  const Icon = sec.icon;
+                  const active = store.activeSection === sec.id;
+                  return (
+                    <button
+                      key={sec.id}
+                      type="button"
+                      onClick$={() => { store.activeSection = sec.id as typeof store.activeSection; }}
+                      class={`flex items-center gap-2.5 w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                        active
+                          ? 'bg-[var(--bg-button-primary)] text-[var(--text-button-primary)]'
+                          : 'text-[var(--text-secondary)] hover:bg-[var(--bg-dropdown-hover)] hover:text-[var(--text-primary)]'
+                      }`}
+                    >
+                      <Icon class="w-4 h-4 shrink-0" />
+                      {sec.label}
+                    </button>
+                  );
+                })}
+              </nav>
+            )}
+
+            {/* Section content (edit: one active pane; create: all stacked) */}
+            <div class={editingAi ? 'flex-1 min-w-0 space-y-4 md:space-y-6 max-h-[65vh] overflow-y-auto pr-1' : 'contents'}>
+            {(!editingAi || store.activeSection === 'basics') && (<>
             {/* AI Name */}
             <div>
               <div class="flex justify-between items-center mb-1">
@@ -614,6 +659,8 @@ const AiFormModal = component$<AiFormModalProps>(
               </LiquidMetalBorder>
             </div>
 
+            </>)}
+            {(!editingAi || store.activeSection === 'behaviour') && (<>
             {/* Response Length + Default Mode (edit only) */}
             {editingAi && (
               <>
@@ -1000,6 +1047,8 @@ const AiFormModal = component$<AiFormModalProps>(
               </LiquidMetalBorder>
             </div>
 
+            </>)}
+            {(!editingAi || store.activeSection === 'details') && (<>
             {/* Description (edit only) */}
             {editingAi && (
               <div>
@@ -1061,6 +1110,11 @@ const AiFormModal = component$<AiFormModalProps>(
               </div>
             )}
 
+            </>)}
+            {(!editingAi || store.activeSection === 'knowledge') && editingAi && (
+              <KnowledgeSection aiId={editingAi.id} store={store} />
+            )}
+            {(!editingAi || store.activeSection === 'appearance') && (<>
             {/* Thumbnail */}
             <div class="space-y-2">
               <p class="block text-sm font-medium text-[var(--text-secondary)]">Thumbnail</p>
@@ -1134,6 +1188,10 @@ const AiFormModal = component$<AiFormModalProps>(
                   {store.formError.replace('Thumbnail image', 'Uploaded thumbnail image')}
                 </p>
               )}
+            </div>
+
+            </>)}
+            </div>
             </div>
 
             {/* Form Error */}
