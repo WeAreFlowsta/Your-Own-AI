@@ -785,6 +785,8 @@ const AiFormModal = component$<AiFormModalProps>(
               </>
             )}
 
+            </>)}
+            {(!editingAi || store.activeSection === 'basics') && (<>
             {/* Base Model */}
             <div>
               <label class="block text-sm font-medium text-[var(--text-secondary)] mb-1">
@@ -1004,6 +1006,8 @@ const AiFormModal = component$<AiFormModalProps>(
               </LiquidMetalBorder>
             </div>
 
+            </>)}
+            {(!editingAi || store.activeSection === 'behaviour') && (<>
             {/* Use Emojis */}
             <div>
               <label class="block text-sm font-medium text-[var(--text-secondary)] mb-2">

@@ -1,10 +1,10 @@
 import { component$, $, useVisibleTask$, type QRL } from '@builder.io/qwik';
 import { LuBookOpen, LuFileText, LuTrash2, LuLoader2, LuPlus } from '@qwikest/icons/lucide';
 import {
-  addDocumentKnowledge,
   listKnowledgeDocuments,
   removeKnowledgeDocument,
 } from '../utils/transcriptMemory';
+import { pickAndIngestDocuments, ingestFailureMessage } from '../utils/knowledgeIngest';
 
 /** Store slice this section reads/writes (a subset of AiFormModal's store). */
 interface KnowledgeStore {
@@ -38,57 +38,19 @@ export const KnowledgeSection = component$<KnowledgeSectionProps>((props) => {
 
   const addDocuments: QRL<() => void> = $(async () => {
     props.store.knowledgeError = '';
-    let paths: string[] = [];
-    try {
-      const { open } = await import('@tauri-apps/plugin-dialog');
-      const selected = await open({
-        multiple: true,
-        filters: [{
-          name: 'Documents',
-          extensions: [
-            'txt','md','csv','json','xml','yaml','yml','toml','log','ini','cfg','conf',
-            'pdf','docx','doc','xlsx','xls','ods','odt','rtf','html','htm','sql',
-            'py','js','ts','tsx','jsx','rs','go','java','c','cpp','h','cs','rb','php',
-          ],
-        }],
-      });
-      if (!selected) return;
-      paths = Array.isArray(selected) ? selected : [selected];
-    } catch (err) {
-      console.error('[Knowledge] File picker error:', err);
-      return;
-    }
-
+    let picked: { failures: string[] } | null = null;
     props.store.knowledgeBusy = true;
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const failures: string[] = [];
-      for (const filePath of paths) {
-        try {
-          const doc = await invoke<{
-            filename: string;
-            size_bytes: number;
-            content: string;
-          }>('read_file_for_context', { filePath });
-          const result = await addDocumentKnowledge(
-            props.aiId,
-            doc.filename,
-            doc.size_bytes,
-            doc.content,
-          );
-          if (!result) failures.push(doc.filename);
-        } catch (e) {
-          console.warn('[Knowledge] failed to ingest', filePath, e);
-          failures.push(filePath.split(/[/\\]/).pop() || filePath);
-        }
-      }
-      props.store.knowledgeDocs = await listKnowledgeDocuments(props.aiId);
-      if (failures.length > 0) {
-        props.store.knowledgeError =
-          `Couldn't add ${failures.join(', ')}. If you just installed, the knowledge model may still be downloading (Settings - Components).`;
-      }
+      picked = await pickAndIngestDocuments(props.aiId);
+    } catch (err) {
+      console.error('[Knowledge] add documents failed:', err);
     } finally {
       props.store.knowledgeBusy = false;
+    }
+    if (!picked) return; // cancelled
+    props.store.knowledgeDocs = await listKnowledgeDocuments(props.aiId);
+    if (picked.failures.length > 0) {
+      props.store.knowledgeError = ingestFailureMessage(picked.failures);
     }
   });
 

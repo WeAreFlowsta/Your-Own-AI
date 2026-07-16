@@ -1,10 +1,12 @@
 import { component$, $, useSignal, useVisibleTask$ } from '@builder.io/qwik';
-import { LuFileText, LuTrash2 } from '@qwikest/icons/lucide';
+import { LuFileText, LuTrash2, LuPlus, LuLoader2 } from '@qwikest/icons/lucide';
+import LiquidMetalButton from './LiquidMetalButton';
 import {
   listKnowledgeDocuments,
   removeKnowledgeDocument,
   type KnowledgeDocument,
 } from '../utils/transcriptMemory';
+import { pickAndIngestDocuments, ingestFailureMessage } from '../utils/knowledgeIngest';
 
 interface AiKnowledgeDocumentsProps {
   aiId: string;
@@ -18,12 +20,14 @@ function formatSize(bytes: number): string {
 }
 
 /**
- * Documents given to this AI, on the memory page's Knows tab. Read-mostly:
- * lists what the AI has been given (added via the edit-AI dialog's Knowledge
- * section) and lets you remove one. Adding new documents lives in the dialog.
+ * Documents given to this AI, on the memory page's Knows tab. Same data as
+ * the edit-AI dialog's Knowledge tab (both read the one store), and documents
+ * can be added from either place.
  */
 export default component$<AiKnowledgeDocumentsProps>((props) => {
   const docs = useSignal<KnowledgeDocument[]>([]);
+  const busy = useSignal(false);
+  const error = useSignal('');
 
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async ({ track }) => {
@@ -31,44 +35,87 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
     if (props.aiId) docs.value = await listKnowledgeDocuments(props.aiId);
   });
 
+  const addDocuments = $(async () => {
+    error.value = '';
+    let picked: { failures: string[] } | null = null;
+    busy.value = true;
+    try {
+      picked = await pickAndIngestDocuments(props.aiId);
+    } catch (e) {
+      console.error('[Knowledge] add documents failed:', e);
+    } finally {
+      busy.value = false;
+    }
+    if (!picked) return; // cancelled
+    docs.value = await listKnowledgeDocuments(props.aiId);
+    if (picked.failures.length > 0) error.value = ingestFailureMessage(picked.failures);
+  });
+
   const removeDoc = $(async (docId: string) => {
     await removeKnowledgeDocument(props.aiId, docId);
     docs.value = await listKnowledgeDocuments(props.aiId);
   });
 
-  if (docs.value.length === 0) {
-    return (
-      <p class="text-sm text-[var(--text-muted)]">
-        No documents yet. Add them from the "Knowledge" tab when you edit{' '}
-        {props.aiName || 'this AI'}.
-      </p>
-    );
-  }
+  const name = props.aiName || 'this AI';
 
   return (
-    <ul class="space-y-1.5">
-      {docs.value.map((doc) => (
-        <li
-          key={doc.docId}
-          class="flex items-center gap-2.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-2 group"
+    <div>
+      {/* Section header — same shape as the sibling sections on this tab. */}
+      <div class="flex items-center justify-between mb-3">
+        <p class="text-sm text-[var(--text-secondary)] flex items-center gap-1.5">
+          <LuFileText class="w-3.5 h-3.5 text-[var(--text-muted)] flex-shrink-0" />
+          Documents you've given {name} —{' '}
+          <span class="text-[var(--text-muted)]">only this AI</span>
+        </p>
+        <LiquidMetalButton
+          onClick$={addDocuments}
+          disabled={busy.value}
+          class="flex items-center gap-1.5 px-3 py-1.5 text-xs"
         >
-          <LuFileText class="w-4 h-4 text-[var(--text-muted)] shrink-0" />
-          <span class="text-sm text-[var(--text-primary)] truncate flex-1" title={doc.filename}>
-            {doc.filename}
-          </span>
-          <span class="text-[10px] text-[var(--text-muted)] shrink-0">
-            {formatSize(doc.sizeBytes)} · {doc.chunkCount} {doc.chunkCount === 1 ? 'piece' : 'pieces'}
-          </span>
-          <button
-            type="button"
-            onClick$={() => removeDoc(doc.docId)}
-            title="Remove this document"
-            class="text-[var(--text-muted)] hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 shrink-0"
-          >
-            <LuTrash2 class="w-3.5 h-3.5" />
-          </button>
-        </li>
-      ))}
-    </ul>
+          {busy.value ? (
+            <LuLoader2 class="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <LuPlus class="w-3.5 h-3.5" />
+          )}
+          {busy.value ? 'Reading...' : 'Add documents'}
+        </LiquidMetalButton>
+      </div>
+
+      {error.value && (
+        <p class="text-xs text-red-600 dark:text-red-400 mb-2">{error.value}</p>
+      )}
+
+      {docs.value.length === 0 ? (
+        <p class="text-sm text-[var(--text-muted)]">
+          No documents yet. Add files here (or in the Knowledge tab when editing{' '}
+          {name}) and it will draw on them whenever they're relevant.
+        </p>
+      ) : (
+        <ul class="space-y-1.5">
+          {docs.value.map((doc) => (
+            <li
+              key={doc.docId}
+              class="flex items-center gap-2.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-2 group"
+            >
+              <LuFileText class="w-4 h-4 text-[var(--text-muted)] shrink-0" />
+              <span class="text-sm text-[var(--text-primary)] truncate flex-1" title={doc.filename}>
+                {doc.filename}
+              </span>
+              <span class="text-[10px] text-[var(--text-muted)] shrink-0">
+                {formatSize(doc.sizeBytes)} · {doc.chunkCount} {doc.chunkCount === 1 ? 'piece' : 'pieces'}
+              </span>
+              <button
+                type="button"
+                onClick$={() => removeDoc(doc.docId)}
+                title="Remove this document"
+                class="text-[var(--text-muted)] hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 shrink-0"
+              >
+                <LuTrash2 class="w-3.5 h-3.5" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 });
