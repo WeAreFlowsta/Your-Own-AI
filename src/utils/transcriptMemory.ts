@@ -294,7 +294,10 @@ export async function getAiMemories(aiId: string): Promise<TranscriptEmbedding[]
 /** Knowledge the user has given this AI (most recent first) — the pack. */
 export async function getAiKnowledge(aiId: string): Promise<TranscriptEmbedding[]> {
   const all = await getEmb(aiId);
-  return all.filter((e) => e.kind === "authored").reverse();
+  // Loose authored lore only - document chunks (which carry a `source`) are
+  // surfaced grouped-by-document via listKnowledgeDocuments, not as individual
+  // lines here.
+  return all.filter((e) => e.kind === "authored" && !e.source).reverse();
 }
 
 /** Add a piece of authored knowledge to this AI (embedded for retrieval).

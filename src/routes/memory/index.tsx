@@ -31,6 +31,7 @@ import { ExportConversationModal } from "../../components/ExportConversationModa
 import ProfileMemory from "../../components/ProfileMemory";
 import AiEpisodicMemory from "../../components/AiEpisodicMemory";
 import AiKnowledge from "../../components/AiKnowledge";
+import AiKnowledgeDocuments from "../../components/AiKnowledgeDocuments";
 import { Callout } from "../../components/Callout";
 
 /**
@@ -305,6 +306,15 @@ export default component$(() => {
                   relevant, and you can export the set as a shareable pack.
                 </Callout>
                 <AiKnowledge aiId={aiId.value} aiName={aiName.value} />
+              </div>
+              <div class="border-t border-[var(--border-subtle)] pt-6">
+                <Callout intent="info" title="Documents you've given it" id="memory-tip-documents" class="mb-4">
+                  Files you add to {aiName.value || "this AI"} from the Knowledge
+                  tab when editing it. It reads and remembers them, then uses the
+                  relevant parts whenever they fit — the original files can be
+                  moved or deleted after.
+                </Callout>
+                <AiKnowledgeDocuments aiId={aiId.value} aiName={aiName.value} />
               </div>
               <div class="border-t border-[var(--border-subtle)] pt-6">
                 <Callout intent="info" title="What it remembers" id="memory-tip-episodic" class="mb-4">
