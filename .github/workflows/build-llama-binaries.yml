@@ -192,6 +192,8 @@ jobs:
             -DGGML_FMA=ON `
             -DGGML_F16C=ON `
             -DGGML_VULKAN=ON `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
+            -DCMAKE_POLICY_DEFAULT_CMP0091=NEW `
             -DLLAMA_CURL=OFF `
             -DLLAMA_SERVER_SSL=OFF `
             -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON `
@@ -215,7 +217,14 @@ jobs:
           if ($ascii -match "libcrypto-3|libssl-3|libcrypto-1|libssl-1") {
             throw "llama-server.exe still imports OpenSSL DLLs - it will crash on clean machines. Fix the build flags."
           }
-          Write-Host "OK: no OpenSSL DLL imports"
+          # The MSVC C++ runtime is NOT reliably current on user machines: a
+          # 14.29 (VS2019-era) system MSVCP140.dll crashed our VS2022-built
+          # binary with 0xC0000005 before main on a real test box - where even
+          # upstream's release binary died the same way. Static CRT only.
+          if ($ascii -match "MSVCP140.dll|VCRUNTIME140") {
+            throw "llama-server.exe imports the dynamic MSVC runtime - build with static CRT (CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded)."
+          }
+          Write-Host "OK: no OpenSSL or dynamic-CRT imports"
 
       - name: Verify binary
         run: |
@@ -350,6 +359,8 @@ jobs:
             -DGGML_CUDA=ON `
             -DCMAKE_CUDA_FLAGS="-allow-unsupported-compiler" `
             -DCMAKE_CUDA_ARCHITECTURES="61;70;75;80;86;89" `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
+            -DCMAKE_POLICY_DEFAULT_CMP0091=NEW `
             -DLLAMA_CURL=OFF `
             -DLLAMA_SERVER_WEBUI=OFF
           cmake --build build --target llama-server

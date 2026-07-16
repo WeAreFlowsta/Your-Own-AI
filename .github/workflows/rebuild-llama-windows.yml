@@ -63,6 +63,8 @@ jobs:
             -DGGML_FMA=ON `
             -DGGML_F16C=ON `
             -DGGML_VULKAN=ON `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
+            -DCMAKE_POLICY_DEFAULT_CMP0091=NEW `
             -DLLAMA_CURL=OFF `
             -DLLAMA_SERVER_SSL=OFF `
             -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON `
@@ -77,7 +79,10 @@ jobs:
           if ($ascii -match "libcrypto-3|libssl-3|libcrypto-1|libssl-1") {
             throw "llama-server.exe still imports OpenSSL DLLs - it will crash on clean machines."
           }
-          Write-Host "OK: no OpenSSL DLL imports"
+          if ($ascii -match "MSVCP140.dll|VCRUNTIME140") {
+            throw "llama-server.exe imports the dynamic MSVC runtime - build with static CRT."
+          }
+          Write-Host "OK: no OpenSSL or dynamic-CRT imports"
 
       - name: Verify binary
         run: |
