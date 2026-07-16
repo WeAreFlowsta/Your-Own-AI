@@ -489,6 +489,24 @@ pub async fn find_vision_model(
         return Ok(None);
     }
 
+    // Keep only vision models that actually FIT this machine, so we never
+    // pick a stronger medical model that won't load (leaving a smaller one
+    // that would). Same discipline as pick_offline: prefer models the fit
+    // check grades runnable; fall back to the full set only if none fit
+    // (better to try than refuse). A vision model also carries an ~0.8GB
+    // projector the weight-only fit grade doesn't see, so GREEN (full-GPU)
+    // is preferred over YELLOW (partial offload) to leave that headroom.
+    let fits = crate::fit::assess(&app_handle).await;
+    let tier = |name: &str| -> u8 {
+        match fits.iter().find(|f| f.name == name).map(|f| f.fit) {
+            Some(crate::fit::Fit::Green) => 2,
+            Some(crate::fit::Fit::Yellow) => 1,
+            _ => 0, // Red or ungraded
+        }
+    };
+    let runnable: Vec<String> = candidates.iter().filter(|n| tier(n) > 0).cloned().collect();
+    let candidates: Vec<String> = if runnable.is_empty() { candidates } else { runnable };
+
     // Health images (X-rays, skin photos, scans) prefer the medical specialist
     // - the same keep-local medical gate the router uses, on the same shared
     // turn embedding.
@@ -501,13 +519,12 @@ pub async fn find_vision_model(
 
     // Rank: medical turns by medical capability, others by vision capability
     // (overall as the tiebreak in both cases).
-    let axis = |name: &str| -> (u8, u8) {
+    let axis = |name: &str| -> (u8, u8, u8) {
         let c = crate::model_caps::caps_for(name);
-        if medical {
-            (c.medical, c.overall)
-        } else {
-            (c.vision, c.overall)
-        }
+        let capscore = if medical { c.medical } else { c.vision };
+        // tier first: a model that fits always beats one that doesn't; then
+        // capability; then overall as the tiebreak.
+        (tier(name), capscore, c.overall)
     };
     let best = candidates
         .iter()
@@ -525,8 +542,15 @@ pub async fn find_vision_model(
         .lock()
         .await
         .clone();
+    // Keep the loaded model unless the best beats it on the ranking CAPABILITY
+    // (axis.1) by the switch margin AND is at least as runnable (axis.0).
     let pick = match current.filter(|c| candidates.contains(c)) {
-        Some(cur) if axis(&cur).0 + crate::router::SWITCH_MARGIN > axis(&best).0 => cur,
+        Some(cur)
+            if tier(&cur) >= tier(&best)
+                && axis(&cur).1 + crate::router::SWITCH_MARGIN > axis(&best).1 =>
+        {
+            cur
+        }
         _ => best,
     };
 
