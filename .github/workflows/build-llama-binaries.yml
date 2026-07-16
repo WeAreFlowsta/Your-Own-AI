@@ -38,12 +38,20 @@ jobs:
             -DGGML_F16C=ON \
             -DGGML_VULKAN=ON \
             -DLLAMA_CURL=OFF \
+            -DLLAMA_SERVER_SSL=OFF \
+            -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON \
             -DLLAMA_SERVER_WEBUI=OFF
           cmake --build build --config Release --target llama-server -j $(nproc)
 
       - name: Verify binary
         run: |
           ldd build/bin/llama-server || echo "Static binary (expected)"
+          # Runner-only libraries are the classic silent killer: present in CI
+          # (so --version passes) but absent on user machines. Fail the build
+          # if any ssl/crypto/curl dependency sneaks in.
+          if ldd build/bin/llama-server 2>/dev/null | grep -E "libssl|libcrypto|libcurl"; then
+            echo "llama-server links SSL/curl libraries - it will fail on machines without them"; exit 1
+          fi
           ./build/bin/llama-server --version
           strip build/bin/llama-server
 
@@ -72,12 +80,19 @@ jobs:
             -DGGML_NATIVE=OFF \
             -DGGML_METAL=ON \
             -DLLAMA_CURL=OFF \
+            -DLLAMA_SERVER_SSL=OFF \
+            -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON \
             -DLLAMA_SERVER_WEBUI=OFF
           cmake --build build --config Release --target llama-server -j $(sysctl -n hw.ncpu)
 
       - name: Verify binary
         run: |
           otool -L build/bin/llama-server
+          # Homebrew/openssl/curl dylibs exist on CI runners but NOT on user
+          # Macs - a binary linking them dies instantly at spawn there (dyld).
+          if otool -L build/bin/llama-server | grep -E "/opt/homebrew/|/usr/local/opt/|libssl|libcrypto|libcurl"; then
+            echo "llama-server links runner-only dylibs - it will crash on user Macs"; exit 1
+          fi
           ./build/bin/llama-server --version
           strip build/bin/llama-server
 
@@ -125,6 +140,8 @@ jobs:
             -DGGML_F16C=ON \
             -DGGML_METAL=OFF \
             -DLLAMA_CURL=OFF \
+            -DLLAMA_SERVER_SSL=OFF \
+            -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON \
             -DLLAMA_SERVER_WEBUI=OFF \
             $CMAKE_EXTRA
           cmake --build build --config Release --target llama-server -j $(sysctl -n hw.ncpu)
@@ -133,6 +150,9 @@ jobs:
         run: |
           file build/bin/llama-server
           otool -L build/bin/llama-server
+          if otool -L build/bin/llama-server | grep -E "/opt/homebrew/|/usr/local/opt/|libssl|libcrypto|libcurl"; then
+            echo "llama-server links runner-only dylibs - it will crash on user Macs"; exit 1
+          fi
           strip build/bin/llama-server
 
       - name: Upload artifact
@@ -274,6 +294,8 @@ jobs:
             -DCMAKE_INSTALL_RPATH='$ORIGIN' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DLLAMA_CURL=OFF \
+            -DLLAMA_SERVER_SSL=OFF \
+            -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON \
             -DLLAMA_SERVER_WEBUI=OFF
           cmake --build build --config Release --target llama-server -j $(nproc)
 
