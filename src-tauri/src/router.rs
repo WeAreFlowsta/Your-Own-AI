@@ -343,6 +343,23 @@ async fn pick_offline(app: &AppHandle, task: &str, lean: &str) -> Result<String,
         runnable
     };
 
+    // Specialists never compete for general questions - their way into Auto
+    // is their task (the health gate sets task="medical"). Excluding them
+    // here also RELEASES a loaded specialist: the keep-current rule below
+    // only keeps models still in the pool, so the next general turn switches
+    // back to a generalist instead of sticking with e.g. MedGemma forever.
+    // If only specialists are installed, keep them - answering beats refusing.
+    let pool: Vec<&crate::fit::ModelFit> = if task == "medical" {
+        pool
+    } else {
+        let generalists: Vec<&crate::fit::ModelFit> = pool
+            .iter()
+            .copied()
+            .filter(|f| !crate::model_caps::is_specialist(&f.name))
+            .collect();
+        if generalists.is_empty() { pool } else { generalists }
+    };
+
     let rank = |f: &crate::fit::ModelFit| OfflineRank {
         cap: cap(&f.name),
         tier: tier(f),

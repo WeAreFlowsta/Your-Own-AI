@@ -113,6 +113,15 @@ pub fn caps_for(model_name: &str) -> Caps {
         .unwrap_or(Caps { overall: 4, coding: 4, reasoning: 4, math: 4, vision: 0, medical: 3 })
 }
 
+/// A specialist's value is one task, not general chat (today: medical
+/// models). Auto's GENERAL picks exclude them - score tuning alone can't:
+/// on a machine whose generalists are all small, a 4B medical model topped
+/// the general pool and the keep-loaded rule then held it for every turn.
+/// The task router still brings a specialist in when its task fires.
+pub fn is_specialist(model_name: &str) -> bool {
+    caps_for(model_name).medical >= 8
+}
+
 /// Capability scores for an ONLINE (cloud) model, matched by family from its
 /// id/display-name/description. Frontier models cluster high; what matters is the
 /// RELATIVE rank used to pick the best online model for a task. Benchmark-informed
@@ -219,5 +228,21 @@ mod tests {
         // GLM is a strong all-rounder, not 'unknown'.
         let glm = caps_for("GLM-4.7-Flash-Q4_K_M.gguf");
         assert!(glm.overall >= 8 && glm.by_task("code") >= 8);
+    }
+}
+
+#[cfg(test)]
+mod specialist_tests {
+    use super::is_specialist;
+
+    #[test]
+    fn medgemma_is_a_specialist_generalists_are_not() {
+        assert!(is_specialist("medgemma-1.5-4b-it-Q4_K_M.gguf"));
+        assert!(is_specialist("medgemma-27b-it-Q4_K_M.gguf"));
+        assert!(!is_specialist("gemma-4-E2B-it-Q4_K_M.gguf"));
+        assert!(!is_specialist("Phi-4-mini-instruct-Q4_K_M.gguf"));
+        assert!(!is_specialist("Qwythos-9B-Claude-Mythos-5-1M-Q4_K_M.gguf"));
+        assert!(!is_specialist("Ministral-3-3B-Instruct-2512-Q4_K_M.gguf"));
+        assert!(!is_specialist("totally-unknown-model.gguf"));
     }
 }
