@@ -18,7 +18,9 @@ interface ThumbnailGalleryModalProps {
   personalityPath?: string | null;
 }
 
-const GROUP_ORDER: GalleryGroup[] = ['defaults', 'personalities', 'beings'];
+// Colors and Gradients lead: they're safe, neutral picks for any audience.
+// Portrait and character art follows for those who want a face instead.
+const GROUP_ORDER: GalleryGroup[] = ['colors', 'gradients', 'people', 'characters'];
 
 export const ThumbnailGalleryModal = component$<ThumbnailGalleryModalProps>(
   ({ show, onHide$, onSelect$, selectedPath, personalityPath }) => {
@@ -35,7 +37,7 @@ export const ThumbnailGalleryModal = component$<ThumbnailGalleryModalProps>(
         }}
       >
         <div
-          class="bg-[var(--bg-header-footer)] p-6 md:p-8 rounded-xl shadow-2xl w-full max-w-lg transform transition-all duration-300 ease-in-out relative my-8"
+          class="bg-[var(--bg-header-footer)] p-6 md:p-8 rounded-xl shadow-2xl w-full max-w-2xl transform transition-all duration-300 ease-in-out relative my-8"
           onClick$={(e) => e.stopPropagation()}
         >
           <div class="flex justify-between items-center mb-6">
@@ -57,7 +59,7 @@ export const ThumbnailGalleryModal = component$<ThumbnailGalleryModalProps>(
                 <p class="text-sm font-medium text-[var(--text-secondary)] mb-3">
                   {GALLERY_GROUP_LABELS[group]}
                 </p>
-                <div class="grid grid-cols-4 sm:grid-cols-5 gap-3">
+                <div class="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 gap-3">
                   {THUMBNAIL_GALLERY.filter((t) => t.group === group).map((thumb) => {
                     const isSelected = selectedPath === thumb.path;
                     const isPersonality = personalityPath === thumb.path;
