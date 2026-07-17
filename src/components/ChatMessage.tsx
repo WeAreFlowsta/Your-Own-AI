@@ -278,9 +278,13 @@ const ActionBar = component$<ActionBarProps>((props) => {
     openSection.value = openSection.value === section ? null : section;
   });
 
-  // Determine status animation type and text
-  // Use isModelLoading prop (synced with header widget) rather than stale message statusText
-  const isShowingModelLoading = props.isModelLoading;
+  // Determine status animation type and text.
+  // TURN-scoped on purpose: the header widget owns global loading state; the
+  // bubble only reports a load THIS turn is waiting on (message.statusText is
+  // set exactly then and cleared on the first streamed token). Keying off the
+  // global isModelLoading here made background warm-loads (startup
+  // page-ensure) badge unrelated replies with a textless loading icon.
+  const isShowingModelLoading = !!props.statusText;
 
   const statusType = isShowingModelLoading
     ? 'loading' as const

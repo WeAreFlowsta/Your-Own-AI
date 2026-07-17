@@ -625,6 +625,15 @@ export function useChat(props: UseChatProps) {
           preferredModel
         );
         props.isModelLoading.value = true;
+        // This load belongs to THIS turn - say so on the bubble (the action
+        // bar is turn-scoped; without a statusText it shows nothing).
+        {
+          const { formatModelDisplayName } = await import("../utils/modelNameFormatter");
+          const loadingText = `Loading ${formatModelDisplayName(preferredModel)}...`;
+          state.messages = state.messages.map((m) =>
+            m.id === assistantId ? { ...m, statusText: loadingText } : m,
+          );
+        }
         try {
           const { invoke } = await import("@tauri-apps/api/core");
           props.modelLoadTime.value = Date.now();
@@ -687,9 +696,19 @@ export function useChat(props: UseChatProps) {
           console.log(
             `[Vision] image turn — model=${preferredModel} auto=${isAutoMode} ready=${visionReady}`,
           );
+          // Turn-owned loads announce themselves on the bubble (the action
+          // bar is turn-scoped and silent without a statusText).
+          const sayLoading = async (filename: string) => {
+            const { formatModelDisplayName } = await import("../utils/modelNameFormatter");
+            const loadingText = `Loading ${formatModelDisplayName(filename)}...`;
+            state.messages = state.messages.map((m) =>
+              m.id === assistantId ? { ...m, statusText: loadingText } : m,
+            );
+          };
           if (!visionReady) {
             // Reload the resolved model to pair its own projector, if it has one.
             props.isModelLoading.value = true;
+            await sayLoading(preferredModel!);
             await invoke("load_model", { filename: preferredModel, withVision: true, reason: "vision-reload" });
             props.currentModel.value = preferredModel;
             visionReady = await invoke<boolean>("is_vision_ready");
@@ -702,6 +721,7 @@ export function useChat(props: UseChatProps) {
             );
             console.log(`[Vision] auto-switch candidate: ${pick?.model ?? "none"}`);
             if (pick) {
+              await sayLoading(pick.model);
               await invoke("load_model", { filename: pick.model, withVision: true, reason: "vision-auto-switch" });
               props.currentModel.value = pick.model;
               preferredModel = pick.model;
