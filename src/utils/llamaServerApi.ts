@@ -28,7 +28,10 @@ export type StreamChunk =
   | { type: 'text'; content: string }
   | { type: 'usage'; data: StreamUsageData }
   | { type: 'sources'; data: StreamSource[] }
-  | { type: 'status'; content: string };
+  | { type: 'status'; content: string }
+  /** Live web-search progress from a search model ("Searching the web (3)...",
+   *  'Searched "..."') - status-line only, never touches loading state. */
+  | { type: 'search_status'; content: string };
 
 export class LlamaServerAPI {
   /**
@@ -161,6 +164,10 @@ export class LlamaServerAPI {
       chunks.push({ type: 'sources', data: event.payload as StreamSource[] });
     });
 
+    const unlistenSearch = await listen(`chat-stream-search-${requestId}`, (event: any) => {
+      chunks.push({ type: 'search_status', content: event.payload.chunk });
+    });
+
     const unlistenError = await listen(`chat-stream-error-${requestId}`, (event: any) => {
       streamError = event.payload.error;
       streamComplete = true;
@@ -223,6 +230,7 @@ export class LlamaServerAPI {
       unlistenChunk();
       unlistenUsage();
       unlistenSources();
+      unlistenSearch();
       unlistenError();
     }
   }

@@ -932,6 +932,15 @@ export function useChat(props: UseChatProps) {
             continue;
           }
 
+          if (chunk.type === "search_status") {
+            // Live web-search progress - status line only; deliberately does
+            // NOT touch isModelLoading (nothing is loading).
+            state.messages = state.messages.map((m) =>
+              m.id === assistantId ? { ...m, statusText: chunk.content } : m,
+            );
+            continue;
+          }
+
           if (chunk.type === "usage") {
             tokenUsage = chunk.data;
             continue;

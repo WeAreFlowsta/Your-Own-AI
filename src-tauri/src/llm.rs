@@ -2378,6 +2378,16 @@ pub async fn stream_chat_completion(
                                 }
                             }
 
+                            // Live search progress from the proxy's search adapter
+                            // ("Searching the web (3)..." / the executed query) —
+                            // forwarded on its own channel so the frontend can show
+                            // it without touching the model-loading state.
+                            if let Some(status) = parsed.get("search_status").and_then(|v| v.as_str()) {
+                                let _ = app.emit(&format!("chat-stream-search-{}", request_id), StreamChunkData {
+                                    chunk: status.to_string(),
+                                });
+                            }
+
                             // Capture usage data if present (typically in the final chunk)
                             if let Some(usage) = parsed.get("usage") {
                                 if let (Some(prompt), Some(completion), Some(total)) = (

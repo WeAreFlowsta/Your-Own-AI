@@ -284,7 +284,9 @@ const ActionBar = component$<ActionBarProps>((props) => {
   // set exactly then and cleared on the first streamed token). Keying off the
   // global isModelLoading here made background warm-loads (startup
   // page-ensure) badge unrelated replies with a textless loading icon.
-  const isShowingModelLoading = !!props.statusText;
+  // A search turn's statusText is live search progress, not a model load —
+  // it renders with the thinking animation, not the loading one.
+  const isShowingModelLoading = !!props.statusText && !props.message.searchingWeb;
 
   const statusType = isShowingModelLoading
     ? 'loading' as const
@@ -295,8 +297,8 @@ const ActionBar = component$<ActionBarProps>((props) => {
   // A web-search model can research for 30-60s before its first visible
   // text - name that phase honestly rather than showing a generic
   // "thinking" that reads as a hang.
-  const statusText = isShowingModelLoading
-    ? props.statusText!
+  const statusText = props.statusText
+    ? props.statusText
     : props.isWritingCode
       ? 'Writing code..'
       : props.message.searchingWeb && !props.message.content
