@@ -3,6 +3,30 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.1.0-beta.8] - 2026-07-17
+
+### Fixed
+- **Everyday questions no longer route to your medical model.** Health
+  detection is now measured and precise: a question must genuinely read as
+  being about your health, not merely resemble one. Previously questions
+  like "whats the latest news" could be kept off the web and answered by
+  the medical model.
+- **A medical model can't take over general chat.** Specialist models only
+  answer the questions they're for; once a health turn is done, the next
+  ordinary question switches back to your general model instead of
+  sticking with the specialist.
+- **MedGemma's reasoning now shows in the thinking box** instead of
+  printing inside the reply (which used to start with a stray "thought").
+- **Hard questions sent online answer again.** The online service rejected
+  a request setting used with the newest models; fixed on our servers, so
+  this also repairs older betas.
+
+### Added
+- **Colors and gradients in the thumbnail gallery** - ten solid colors and
+  ten soft radial gradients for a clean, professional look. The gallery is
+  now grouped as Colors, Gradients, People, and Characters (the default
+  AIs' portraits live in People and Characters now, not a separate group).
+
 ## [0.1.0-beta.7] - 2026-07-17
 
 ### Added
