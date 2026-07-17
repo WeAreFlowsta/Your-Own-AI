@@ -73,6 +73,16 @@ function modelGroupKeys(m: OnlineModel): string[] {
   return [...new Set(keys)];
 }
 
+// The Auto router's recommended per-slot defaults (must mirror router.rs
+// DEFAULT_FRESH / DEFAULT_HARD_CODE / DEFAULT_HARD_GENERAL - keep in sync).
+// Surfaced as a badge so the page answers "which of these does Auto already
+// use for me?" without the user opening Settings.
+const AUTO_DEFAULTS: Record<string, string> = {
+  'online:grok-4.5-search': 'Auto pick · fresh info',
+  'online:gpt-5.6-sol': 'Auto pick · hard coding',
+  'online:gpt-5.6-terra': 'Auto pick · hard questions',
+};
+
 const VAULT_DOWNLOAD_URL = 'https://flowsta.com/vault';
 
 function formatContext(n?: number): string | null {
@@ -96,6 +106,8 @@ export const OnlineModels = component$(() => {
     session: null as FlowstaSession | null,
     models: [] as OnlineModel[],
     paused: [] as string[],
+    /** Catalog filter tab - same pattern as the Offline Models task tabs. */
+    selectedGroup: 'all' as 'all' | 'chat' | 'web_search' | 'coding',
     busy: false,
     error: '',
     modelsError: false,
@@ -409,17 +421,38 @@ export const OnlineModels = component$(() => {
             No online models available right now.
           </p>
         ) : (
-          <div class="space-y-8">
-            {MODEL_GROUPS.map((group) => {
-              const models = store.models.filter((m) => modelGroupKeys(m).includes(group.key));
-              if (models.length === 0) return null;
-              return (
-                <div key={group.key}>
-                  <p class="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)] mb-3">
-                    {group.label}
-                  </p>
-                  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {models.map((model) => {
+          <>
+            {/* Filter tabs - one grid underneath, a model shows on every tab
+                it belongs to (the categories chips on the card say which). */}
+            <div class="flex gap-1 overflow-x-auto pb-1 mb-5">
+              {[{ key: 'all' as const, label: 'All' }, ...MODEL_GROUPS].map((tab) => {
+                const isActive = store.selectedGroup === tab.key;
+                const count = tab.key === 'all'
+                  ? store.models.length
+                  : store.models.filter((m) => modelGroupKeys(m).includes(tab.key)).length;
+                return (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick$={() => { store.selectedGroup = tab.key; }}
+                    class={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
+                      isActive
+                        ? 'bg-[var(--bg-button-primary)] text-[var(--text-button-primary)] shadow-md'
+                        : 'bg-[var(--bg-card)] text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:bg-[var(--bg-dropdown-hover)] hover:text-[var(--text-primary)]'
+                    }`}
+                  >
+                    {tab.label}
+                    <span class={`ml-1.5 text-xs ${isActive ? 'opacity-80' : 'opacity-50'}`}>
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {store.models
+              .filter((m) => store.selectedGroup === 'all' || modelGroupKeys(m).includes(store.selectedGroup))
+              .map((model) => {
               const isPaused = store.paused.includes(model.id);
               const ctx = formatContext(model.context_window);
               return (
@@ -441,6 +474,14 @@ export const OnlineModels = component$(() => {
                             Paused
                           </span>
                         )}
+                        {modelGroupKeys(model).map((k) => (
+                          <span
+                            key={k}
+                            class="px-2 py-0.5 bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] text-[var(--text-muted)] text-[10px] rounded-full font-medium whitespace-nowrap"
+                          >
+                            {MODEL_GROUPS.find((g) => g.key === k)?.label}
+                          </span>
+                        ))}
                       </div>
                     </div>
 
@@ -449,6 +490,14 @@ export const OnlineModels = component$(() => {
                     </p>
 
                     <div class="space-y-2">
+                      {AUTO_DEFAULTS[model.id] && (
+                        <span
+                          class="inline-block px-2 py-0.5 mr-1.5 rounded-full bg-emerald-900/50 text-emerald-300 text-[10px] font-semibold whitespace-nowrap"
+                          title="When an AI is set to Auto, this is the model the router picks for this kind of question (changeable in Settings - Routing)"
+                        >
+                          {AUTO_DEFAULTS[model.id]}
+                        </span>
+                      )}
                       {ctx && (
                         <span class="inline-block px-2 py-0.5 bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] rounded text-xs text-[var(--text-primary)]">
                           {ctx}
@@ -504,11 +553,8 @@ export const OnlineModels = component$(() => {
                 </div>
               );
             })}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+            </div>
+          </>
         )}
       </div>
     </div>
