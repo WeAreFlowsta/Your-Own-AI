@@ -495,12 +495,15 @@ const ActionBar = component$<ActionBarProps>((props) => {
       )}
 
       {openSection.value === 'thoughts' && hasThoughts && (
+        // No whitespace-pre-wrap here: the markdown already turns blank lines
+        // into paragraphs, and pre-wrap preserved the source newlines ON TOP
+        // of the paragraph margins - every gap doubled.
         <div
-          class="px-4 pb-4 -mt-2 text-[var(--text-secondary)] whitespace-pre-wrap text-xs leading-relaxed font-light opacity-80"
+          class="px-4 pb-4 -mt-2 text-[var(--text-secondary)] text-xs leading-relaxed font-light opacity-80"
           role="region"
           aria-live="polite"
         >
-          <div class="pt-4" dangerouslySetInnerHTML={renderMarkdown(props.message.thinking || '')} />
+          <div class="pt-4 markdown-content" dangerouslySetInnerHTML={renderMarkdown(props.message.thinking || '')} />
         </div>
       )}
 
@@ -934,12 +937,15 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
                       Thinking..
                     </span>
                   </div>
+                  {/* Rendered as markdown so the live box matches the
+                      post-generation Thoughts view (it used to show raw
+                      **markdown** source). Partial markdown mid-stream
+                      renders fine - it just completes as chunks arrive. */}
                   <div
                     ref={thinkingPreviewRef}
-                    class="flex-grow overflow-y-auto whitespace-pre-wrap px-3 pb-3 scrollbar-none leading-relaxed font-light text-[var(--text-secondary)] text-xs opacity-80"
-                  >
-                    {props.message.thinking}
-                  </div>
+                    class="flex-grow overflow-y-auto px-3 pb-3 scrollbar-none leading-relaxed font-light text-[var(--text-secondary)] text-xs opacity-80 markdown-content"
+                    dangerouslySetInnerHTML={renderMarkdown(props.message.thinking || '')}
+                  />
                 </div>
               )}
               {!showThinkingBox && (
