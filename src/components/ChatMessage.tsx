@@ -503,7 +503,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
           role="region"
           aria-live="polite"
         >
-          <div class="pt-4 markdown-content" dangerouslySetInnerHTML={renderMarkdown(props.message.thinking || '')} />
+          <div class="pt-4 markdown-content thinking-markdown" dangerouslySetInnerHTML={renderMarkdown(props.message.thinking || '')} />
         </div>
       )}
 
@@ -602,7 +602,16 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
     if (!styleElement) {
       styleElement = document.createElement('style');
       styleElement.id = styleId;
-      styleElement.innerHTML = `.markdown-content li > p:first-child { display: inline !important; margin-bottom: 0 !important; }`;
+      styleElement.innerHTML = `.markdown-content li > p:first-child { display: inline !important; margin-bottom: 0 !important; }
+/* Thinking views: reasoning often carries markdown headings (plan sections).
+   Render them as small bold lines - full-size h1/h2 inside the muted little
+   thinking box reads as shouting. Paragraph gaps tightened to match. */
+.thinking-markdown h1, .thinking-markdown h2, .thinking-markdown h3,
+.thinking-markdown h4, .thinking-markdown h5, .thinking-markdown h6 {
+  font-size: 1em !important; font-weight: 600 !important; margin: 0.6em 0 0.2em !important;
+}
+.thinking-markdown p { margin: 0.35em 0 !important; }
+.thinking-markdown ul, .thinking-markdown ol { margin: 0.35em 0 !important; }`;
       document.head.appendChild(styleElement);
     }
   });
@@ -943,7 +952,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
                       renders fine - it just completes as chunks arrive. */}
                   <div
                     ref={thinkingPreviewRef}
-                    class="flex-grow overflow-y-auto px-3 pb-3 scrollbar-none leading-relaxed font-light text-[var(--text-secondary)] text-xs opacity-80 markdown-content"
+                    class="flex-grow overflow-y-auto px-3 pb-3 scrollbar-none leading-relaxed font-light text-[var(--text-secondary)] text-xs opacity-80 markdown-content thinking-markdown"
                     dangerouslySetInnerHTML={renderMarkdown(props.message.thinking || '')}
                   />
                 </div>
