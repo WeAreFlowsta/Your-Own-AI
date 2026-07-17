@@ -16,6 +16,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { getButtonUrl } from '@flowsta/login-button';
 import {
+  LuChevronDown,
   LuCloud,
   LuLock,
   LuPauseCircle,
@@ -55,7 +56,25 @@ interface OnlineModel {
   context_window?: number;
   category?: string; // primary shelf — "chat" | "web_search" | "coding"
   categories?: string[]; // every shelf this model belongs to (newer catalogs)
+  released?: string; // ISO date the provider shipped it — drives "Newest"
   pricing?: OnlinePricing; // USD, margin applied — what the user pays
+}
+
+const SORT_OPTIONS = [
+  { key: 'new', label: 'Newest' },
+  { key: 'name-asc', label: 'Name A-Z' },
+  { key: 'name-desc', label: 'Name Z-A' },
+  { key: 'price-asc', label: 'Price: low to high' },
+  { key: 'price-desc', label: 'Price: high to low' },
+] as const;
+type SortKey = (typeof SORT_OPTIONS)[number]['key'];
+
+// One scalar for the price sorts: input + output per 1M. Real cost depends on
+// the in/out mix, but the sum ranks models the way people compare rate cards.
+// Models without pricing sort last either direction.
+function priceKey(m: OnlineModel): number | null {
+  if (!m.pricing) return null;
+  return m.pricing.input_per_mtok + m.pricing.output_per_mtok;
 }
 
 const MODEL_GROUPS = [
@@ -108,6 +127,8 @@ export const OnlineModels = component$(() => {
     paused: [] as string[],
     /** Catalog filter tab - same pattern as the Offline Models task tabs. */
     selectedGroup: 'all' as 'all' | 'chat' | 'web_search' | 'coding',
+    sortBy: 'new' as SortKey,
+    sortOpen: false,
     busy: false,
     error: '',
     modelsError: false,
@@ -422,9 +443,11 @@ export const OnlineModels = component$(() => {
           </p>
         ) : (
           <>
-            {/* Filter tabs - one grid underneath, a model shows on every tab
-                it belongs to (the categories chips on the card say which). */}
-            <div class="flex gap-1 overflow-x-auto pb-1 mb-5">
+            {/* Filter tabs + sort - one grid underneath, a model shows on
+                every tab it belongs to (the categories chips say which).
+                Same row layout as the Offline Models page. */}
+            <div class="flex items-center justify-between gap-4 mb-5">
+              <div class="flex gap-1 overflow-x-auto pb-1">
               {[{ key: 'all' as const, label: 'All' }, ...MODEL_GROUPS].map((tab) => {
                 const isActive = store.selectedGroup === tab.key;
                 const count = tab.key === 'all'
@@ -448,10 +471,70 @@ export const OnlineModels = component$(() => {
                   </button>
                 );
               })}
+              </div>
+
+              {/* Sort — custom dropdown (a native <select> popup is GTK-themed
+                  on webkit and ignores our light/dark vars). */}
+              <div class="flex items-center gap-2 shrink-0">
+                <label class="text-sm text-[var(--text-muted)] whitespace-nowrap">Sort</label>
+                <div class="relative">
+                  <button
+                    type="button"
+                    onClick$={() => { store.sortOpen = !store.sortOpen; }}
+                    class="flex items-center justify-between gap-2 min-w-[7rem] px-3 py-2 rounded-full text-sm font-medium bg-[var(--bg-card)] text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:text-[var(--text-primary)] focus:outline-none"
+                  >
+                    <span>{SORT_OPTIONS.find((o) => o.key === store.sortBy)?.label}</span>
+                    <LuChevronDown class="w-4 h-4 text-[var(--text-muted)] flex-shrink-0" />
+                  </button>
+                  {store.sortOpen && (
+                    <>
+                      <div class="fixed inset-0 z-40" onClick$={() => { store.sortOpen = false; }} />
+                      <div class="absolute right-0 top-full mt-1 min-w-[10rem] z-50 rounded-lg bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] shadow-xl py-1">
+                        {SORT_OPTIONS.map((o) => (
+                          <button
+                            key={o.key}
+                            type="button"
+                            onClick$={() => { store.sortBy = o.key; store.sortOpen = false; }}
+                            class={`block w-full text-left px-3 py-1.5 text-sm whitespace-nowrap hover:bg-[var(--bg-card)] transition-colors ${
+                              o.key === store.sortBy
+                                ? 'text-[var(--text-primary)] font-medium'
+                                : 'text-[var(--text-secondary)]'
+                            }`}
+                          >
+                            {o.label}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             {store.models
               .filter((m) => store.selectedGroup === 'all' || modelGroupKeys(m).includes(store.selectedGroup))
+              .sort((a, b) => {
+                switch (store.sortBy) {
+                  case 'name-asc': return a.display_name.localeCompare(b.display_name);
+                  case 'name-desc': return b.display_name.localeCompare(a.display_name);
+                  case 'price-asc':
+                  case 'price-desc': {
+                    const pa = priceKey(a), pb = priceKey(b);
+                    if (pa == null && pb == null) return a.display_name.localeCompare(b.display_name);
+                    if (pa == null) return 1; // unpriced last, either direction
+                    if (pb == null) return -1;
+                    return store.sortBy === 'price-asc' ? pa - pb : pb - pa;
+                  }
+                  case 'new':
+                  default: {
+                    // Newest release first (ISO dates compare lexically);
+                    // undated last, then A-Z. Mirrors the Offline page.
+                    const ad = a.released ?? '', bd = b.released ?? '';
+                    if (ad !== bd) return ad > bd ? -1 : 1;
+                    return a.display_name.localeCompare(b.display_name);
+                  }
+                }
+              })
               .map((model) => {
               const isPaused = store.paused.includes(model.id);
               const ctx = formatContext(model.context_window);
