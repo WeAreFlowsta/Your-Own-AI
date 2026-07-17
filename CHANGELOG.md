@@ -3,6 +3,23 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.1.0-beta.7] - 2026-07-17
+
+### Added
+- **Kimi models join the online catalog.** Kimi K3 - Moonshot AI's new
+  flagship with deep reasoning, a huge context window, and image
+  understanding - plus the remarkably low-cost Kimi K2.6 and the dedicated
+  Kimi K2.7 Code.
+- **A better Online Models page.** Now matches the Offline Models layout:
+  filter tabs (All, Chat, Web search, Coding) with model counts over a
+  single grid, and a sort control - newest, name, or price. Each card shows
+  which categories the model belongs to, and an "Auto pick" badge marks the
+  models automatic routing already uses on your behalf.
+
+### Changed
+- A model can now appear in more than one category - Kimi K3 and GPT-5.6
+  Sol show under both Chat and Coding, where they belong.
+
 ## [0.1.0-beta.6] - 2026-07-17
 
 ### Added
