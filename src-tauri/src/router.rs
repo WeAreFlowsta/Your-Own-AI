@@ -60,6 +60,11 @@ const FRESH_REFERENCES: &[&str] = &[
     "is it raining now",
     "newest model phone released this year",
     "what time is it currently",
+    // Upcoming-fixture register ("odds of X beating Y in sundays match"
+    // scored 0.557 - under balanced 0.58 - without it; 0.688 with. Chosen
+    // over an "odds"-worded ref, which pulled evergreen betting-education
+    // questions over the line. Measured 2026-07-17.)
+    "who is favored to win this weekends game",
 ];
 
 fn cosine(a: &[f32], b: &[f32]) -> f32 {
@@ -258,6 +263,10 @@ fn looks_time_sensitive(query: &str) -> bool {
         "this week", "this month", "as of ", "up to date", "up-to-date",
         "weather", "forecast", "stock price", "share price", "exchange rate",
         "who won", "headline", "in the news", "recent news", "current price",
+        // Betting-market phrasings (live info by nature). NOT bare "odds of" -
+        // that pulls evergreen probability questions ("odds of getting struck
+        // by lightning") online.
+        "odds on", "betting odds", "favored to win",
         "2025", "2026", "2027",
     ];
     CUES.iter().any(|c| q.contains(c))
