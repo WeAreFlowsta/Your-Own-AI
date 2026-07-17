@@ -160,7 +160,15 @@ jobs:
           EXT=""
           if [ "$T" = "x86_64-pc-windows-msvc" ]; then EXT=".exe"; fi
           BINARY="llama-server-${T}${EXT}"
-          gh release download "${RELEASE_TAG}" --repo ${REPO} --pattern "${BINARY}" --dir src-tauri/bin/
+          # Retry: GitHub's get-release-by-tag endpoint can 503/flap for
+          # stretches (took out two beta-6 runs on 2026-07-16 while the
+          # release itself was fine). The release is pinned and immutable,
+          # so waiting out an API blip is always correct.
+          for i in 1 2 3 4 5 6; do
+            gh release download "${RELEASE_TAG}" --repo ${REPO} --pattern "${BINARY}" --dir src-tauri/bin/ && break
+            echo "release download attempt ${i} failed; retrying in 90s"
+            sleep 90
+          done
           # gh release download can exit 0 with no file when the pattern
           # doesn't match - that would silently ship an installer with no
           # inference engine. Smallest real binary is ~11 MB.
@@ -187,7 +195,7 @@ jobs:
           if [ "$T" = "x86_64-pc-windows-msvc" ]; then EXT=".exe"; fi
           for BIN in holochain lair-keystore; do
             DEST="src-tauri/binaries/yourowai-${BIN}-${T}${EXT}"
-            curl -fsSL "${BASE}/${BIN}-${T}${EXT}" -o "$DEST"
+            curl -fsSL --retry 5 --retry-delay 20 --retry-all-errors "${BASE}/${BIN}-${T}${EXT}" -o "$DEST"
             chmod +x "$DEST"
             test "$(wc -c < "$DEST")" -gt 1000000 || { echo "${BIN} download too small"; exit 1; }
             echo "yourowai-${BIN}-${T}${EXT} (${HC_RELEASE})"
