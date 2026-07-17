@@ -26,7 +26,7 @@ import {
   getModePrompt,
   getTurnModeFromAction,
 } from "../utils/responseLengthPrompts";
-import { classifyTurnMode } from "../utils/turnModeClassifier";
+import { classifyTurnMode, codeKeywordHint } from "../utils/turnModeClassifier";
 import { resolveRoutingSignals, type RoutingTask } from "../utils/routingTaskClassifier";
 import { responseLengthOptions } from "../data/response-lengths";
 import { getArchetypeById } from "../data/bundled-archetypes";
@@ -449,7 +449,12 @@ export function useChat(props: UseChatProps) {
       // the classify call no longer makes Enter feel laggy (it's absorbed into the
       // loading state). With no explicit sparkle, it can upgrade chat → report/code
       // from the message (keyword-gated so casual chat skips it; never throws).
-      let classifierMode: TurnMode | null = null;
+      // Kicked off NOW and joined just before the prompt is built: the
+      // classifier used to gate routing serially, stacking its latency (and
+      // its worst case - waiting on a loading local server) in front of
+      // every turn, online ones included. It runs CONCURRENTLY with
+      // vision/routing instead; nothing before the prompt needs its verdict.
+      let classifyPromise: Promise<'report' | 'code' | null> = Promise.resolve(null);
       const smartMode =
         (typeof localStorage !== "undefined"
           ? localStorage.getItem("smartModeDetection")
@@ -466,18 +471,7 @@ export function useChat(props: UseChatProps) {
           selectedAi.aiConfig.model?.startsWith("external:")
             ? selectedAi.aiConfig.model
             : undefined);
-        classifierMode = await classifyTurnMode(userInput, classifyModel, prevMode);
-      }
-
-      // Precedence: explicit sparkle → classifier → the AI's default mode → chat.
-      const turnMode: TurnMode =
-        actionMode || classifierMode || selectedAi.aiConfig.defaultMode || "chat";
-      const turnModeAuto = !actionMode && !!classifierMode;
-      // Reflect a classifier upgrade on the already-visible bubble.
-      if (turnMode !== provisionalMode || turnModeAuto) {
-        state.messages = state.messages.map((m) =>
-          m.id === assistantId ? { ...m, turnMode, turnModeAuto } : m,
-        );
+        classifyPromise = classifyTurnMode(userInput, classifyModel, prevMode);
       }
 
       // On a fatal pre-generation error (no model / load failed), drop the
@@ -576,7 +570,9 @@ export function useChat(props: UseChatProps) {
         // hint; the dedicated routing-task classifier upgrades it ONLY when a
         // specialist model is installed (otherwise it's gated off — no cost).
         // See ROUTING_TASK_COMPLEXITY.md.
-        const baseTask: RoutingTask = turnMode === "code" ? "code" : "general";
+        // Keyword hint only - the classifier is still in flight (parallel).
+        // The routing-task classifier upgrades/corrects this where it matters.
+        const baseTask: RoutingTask = codeKeywordHint(userInput) ? "code" : "general";
         const routeClassifyModel =
           currentModel && !currentModel.startsWith("auto:") ? currentModel : undefined;
         // Difficulty classification only runs when its result could matter:
@@ -830,6 +826,20 @@ export function useChat(props: UseChatProps) {
       }
       const controller = new AbortController();
       abortControllerRef.value = noSerialize(controller);
+
+      // Join the parallel classifier: the mode first matters HERE (prompt,
+      // max_tokens, thinking capture). Precedence: explicit sparkle →
+      // classifier → the AI's default mode → chat.
+      const classifierMode = await classifyPromise;
+      const turnMode: TurnMode =
+        actionMode || classifierMode || selectedAi.aiConfig.defaultMode || "chat";
+      const turnModeAuto = !actionMode && !!classifierMode;
+      // Reflect a classifier upgrade on the already-visible bubble.
+      if (turnMode !== provisionalMode || turnModeAuto) {
+        state.messages = state.messages.map((m) =>
+          m.id === assistantId ? { ...m, turnMode, turnModeAuto } : m,
+        );
+      }
 
       try {
         // Memory: the block was kicked off in parallel right after the

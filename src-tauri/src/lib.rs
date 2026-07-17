@@ -573,6 +573,9 @@ pub fn run() {
             // override) so it's obvious at a glance in dev logs.
             log::info!("[flowsta] online-model proxy: {}", flowsta::proxy_url());
 
+            // Keep that proxy warm for signed-in users (cold start ≈ 3.5s).
+            flowsta::spawn_proxy_keepalive(app.handle().clone());
+
             // Start the OpenAI-compatible inference server (external apps use
             // the user's custom AIs). Best-effort; logs and continues on bind
             // failure.

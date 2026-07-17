@@ -37,6 +37,35 @@ function looksRelevant(message: string): boolean {
   return REPORT_KW.some((k) => m.includes(k)) || CODE_KW.some((k) => m.includes(k));
 }
 
+/** Free code-ish hint for the ROUTER's base task - lets routing run in
+ *  parallel with the model classification instead of waiting for it. The
+ *  routing-task classifier can still upgrade/correct it. */
+export function codeKeywordHint(message: string): boolean {
+  const m = ` ${message.toLowerCase()} `;
+  return CODE_KW.some((k) => m.includes(k));
+}
+
+// High-precision keyword verdicts for when the local server CANNOT classify
+// (mid-load) without stalling the whole turn behind server health. Upgrade-
+// only philosophy applies double here: these fire only on unambiguous
+// ask-the-assistant phrasings; anything subtler just stays chat.
+const REPORT_STRONG = [
+  'write me a report', 'write a report', 'write up a', 'write a detailed',
+  'put together a report', 'do a deep dive', 'deep dive on', 'in-depth report',
+  'write a comprehensive', 'draft a report',
+];
+const CODE_STRONG = [
+  'write a function', 'write code', 'write a script', 'write me a script',
+  'write a program', 'implement a', 'implement the', 'fix this code',
+  'debug this', 'refactor this',
+];
+function keywordVerdict(message: string): 'report' | 'code' | null {
+  const m = message.toLowerCase();
+  if (REPORT_STRONG.some((k) => m.includes(k))) return 'report';
+  if (CODE_STRONG.some((k) => m.includes(k))) return 'code';
+  return null;
+}
+
 const BASE = `Classify what the user is asking the assistant to DO right now. Output exactly one word: REPORT, CODE, or NEITHER.
 Only answer REPORT or CODE if the user is asking YOU, the assistant, to PRODUCE it for them right now. If they are merely talking about, mentioning, complaining about, or planning a report/code in their own work or life, answer NEITHER.
 REPORT = asking you to WRITE/DRAFT/PUT TOGETHER a report, write-up, analysis, deep-dive, or structured document.
@@ -83,6 +112,22 @@ export async function classifyTurnMode(
   // Pre-gate: plainly-casual message that isn't continuing a report/code session
   // → skip the model call entirely (instant, the common case).
   if (!isFollowUp && !looksRelevant(message)) return null;
+
+  // A LOCAL model that is still loading can't classify without stalling the
+  // whole turn behind server health (the 6s abort burned in full right after
+  // launch - measured 2026-07-17). Use the keyword verdict instead of
+  // waiting; the sparkle menu and the AI's default mode always still win.
+  const isLocal =
+    !model || (!model.startsWith('online:') && !model.startsWith('external:'));
+  if (isLocal) {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const ready = await invoke<boolean>('is_llama_server_ready');
+      if (!ready) return keywordVerdict(message);
+    } catch {
+      /* can't tell - proceed with the normal model call */
+    }
+  }
 
   const sys = BASE + (isFollowUp ? followBlock(previousMode as 'report' | 'code') : '');
   const msgs: ChatMessage[] = [{ role: 'user', content: message } as ChatMessage];

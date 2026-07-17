@@ -378,6 +378,33 @@ pub async fn flowsta_session(app: tauri::AppHandle) -> Result<FlowstaSession, St
     session_from_store(&app).await
 }
 
+/// Keep the online proxy warm while the app is open. It scales to zero and a
+/// cold start adds ~3.5s to the first online request after idle (measured
+/// 2026-07-17); a 10-minute /health ping is effectively free and avoids
+/// paying for an always-on instance. SIGNED-IN users only: an offline-only
+/// install must never emit periodic network beacons.
+pub fn spawn_proxy_keepalive(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let client = reqwest::Client::new();
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+            let signed_in = session_from_store(&app)
+                .await
+                .map(|s| s.signed_in)
+                .unwrap_or(false);
+            if !signed_in {
+                continue;
+            }
+            let url = format!("{}/health", proxy_url());
+            let _ = client
+                .get(&url)
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await;
+        }
+    });
+}
+
 /// URL the frontend opens (system browser) to link this device's plan.
 #[tauri::command]
 pub fn flowsta_link_url(app: tauri::AppHandle) -> Result<String, String> {
