@@ -3,6 +3,37 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.1.0-beta.9] - 2026-07-17
+
+### Added
+- **Live web-search progress.** While an online search model researches,
+  the status line shows each step - "Searching the web (3)..." and the
+  actual queries it ran - instead of a silent wait. Deep research turns
+  used to look frozen for 30-60 seconds while working perfectly.
+
+### Changed
+- **Online questions start much sooner.** The pre-checks that decide how a
+  message is handled now run alongside routing instead of before it, and
+  they no longer wait behind a model that's still loading. The worst case
+  - an online question right after launch - used to stall for many
+  seconds before anything happened.
+- **Honest status lines.** The model-loading indicator only appears when
+  your question is actually waiting on a model load, and it names the
+  model. A background warm-up no longer badges an unrelated reply with a
+  bare loading icon.
+- **Thinking text reads properly.** The thinking box and the Thoughts
+  view both render formatting the same way - no more doubled paragraph
+  gaps in one and raw markdown in the other - and headings inside
+  reasoning render small instead of shouting.
+- Questions about upcoming fixtures and betting odds now count as
+  needing current information and go to the web.
+
+### Fixed
+- A search model's reasoning could print a stray sentence (or more) into
+  the reply when it kept thinking between searches. Reasoning now always
+  lands in the thinking box. (Server-side - this also repairs older
+  betas.)
+
 ## [0.1.0-beta.8] - 2026-07-17
 
 ### Fixed
