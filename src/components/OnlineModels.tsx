@@ -53,7 +53,8 @@ interface OnlineModel {
   display_name: string;
   description: string;
   context_window?: number;
-  category?: string; // "chat" | "web_search" | "coding" — from the catalog
+  category?: string; // primary shelf — "chat" | "web_search" | "coding"
+  categories?: string[]; // every shelf this model belongs to (newer catalogs)
   pricing?: OnlinePricing; // USD, margin applied — what the user pays
 }
 
@@ -63,10 +64,13 @@ const MODEL_GROUPS = [
   { key: 'coding', label: 'Coding' },
 ] as const;
 
-// Unknown or missing categories fold into Chat so a new catalog value
-// never hides a model.
-function modelGroupKey(m: OnlineModel): string {
-  return MODEL_GROUPS.some((g) => g.key === m.category) ? m.category! : 'chat';
+// A model can belong to several shelves (a flagship that's also a top
+// coder). Unknown or missing categories fold into Chat so a new catalog
+// value never hides a model.
+function modelGroupKeys(m: OnlineModel): string[] {
+  const raw = m.categories?.length ? m.categories : [m.category];
+  const keys = raw.map((c) => (MODEL_GROUPS.some((g) => g.key === c) ? c! : 'chat'));
+  return [...new Set(keys)];
 }
 
 const VAULT_DOWNLOAD_URL = 'https://flowsta.com/vault';
@@ -407,7 +411,7 @@ export const OnlineModels = component$(() => {
         ) : (
           <div class="space-y-8">
             {MODEL_GROUPS.map((group) => {
-              const models = store.models.filter((m) => modelGroupKey(m) === group.key);
+              const models = store.models.filter((m) => modelGroupKeys(m).includes(group.key));
               if (models.length === 0) return null;
               return (
                 <div key={group.key}>
