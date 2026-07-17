@@ -714,6 +714,16 @@ pub async fn start_llama_server(
         if model_path.exists() {
             args.push("--model".to_string());
             args.push(model_path.to_string_lossy().to_string());
+            // MedGemma 1.5 reasons in Gemma thought markers that detokenize
+            // to nothing - without --special the reasoning prints as normal
+            // text fused to the answer with no recoverable boundary. With it,
+            // the markers reach the stream loop, which rewrites them to
+            // <think> tags (translate_gemma_thought_markers). MedGemma only:
+            // --special surfaces every special token as text, which other
+            // models neither need nor expect.
+            if filename.to_lowercase().contains("medgemma") {
+                args.push("--special".to_string());
+            }
             log::info!("[LLM] Starting server with model: {}", filename);
 
             // Pair the multimodal projector whenever this model HAS one, so a
@@ -1984,6 +1994,25 @@ struct SourceItem {
     title: String,
 }
 
+/// MedGemma 1.5 reasons in Gemma's thought markers: the reply is
+/// `<unused94>thought\n{reasoning}<unused95>{answer}`. Those markers
+/// detokenize to NOTHING by default, so the reasoning printed as normal
+/// text glued straight onto the answer (visible as a reply starting with
+/// the bare word "thought"). The chat server runs MedGemma with --special
+/// so the markers survive as text; this rewrites them into the
+/// <think>…</think> tags the frontend already renders as the thinking box.
+/// The markers contain no newline, so line-based emission never splits one.
+/// No other model produces these strings - a no-op elsewhere.
+fn translate_gemma_thought_markers(chunk: &str) -> String {
+    if !chunk.contains("<unused9") {
+        return chunk.to_string();
+    }
+    chunk
+        .replace("<unused94>thought\n", "<think>\n")
+        .replace("<unused94>", "<think>\n")
+        .replace("<unused95>", "\n</think>\n")
+}
+
 /// Stream chat completion from llama-server
 /// This bypasses CORS by making the HTTP request from Rust
 /// and forwarding chunks to the frontend via Tauri events
@@ -2266,7 +2295,7 @@ pub async fn stream_chat_completion(
                             // Emit any remaining buffered content
                             if !content_buffer.is_empty() {
                                 let _ = app.emit(&format!("chat-stream-{}", request_id), StreamChunkData {
-                                    chunk: content_buffer.clone(),
+                                    chunk: translate_gemma_thought_markers(&content_buffer),
                                 });
                                 content_buffer.clear();
                             }
@@ -2344,7 +2373,7 @@ pub async fn stream_chat_completion(
 
                                     // Emit complete line to frontend
                                     let _ = app.emit(&format!("chat-stream-{}", request_id), StreamChunkData {
-                                        chunk: complete_line,
+                                        chunk: translate_gemma_thought_markers(&complete_line),
                                     });
                                 }
                             }
@@ -2398,7 +2427,7 @@ pub async fn stream_chat_completion(
     // Emit any remaining buffered content at the end
     if !content_buffer.is_empty() {
         let _ = app.emit(&format!("chat-stream-{}", request_id), StreamChunkData {
-            chunk: content_buffer,
+            chunk: translate_gemma_thought_markers(&content_buffer),
         });
     }
 
@@ -2431,4 +2460,36 @@ pub async fn cancel_chat_completion(
     println!("[LLM] Cancelling active stream");
     state.cancel_stream.store(true, std::sync::atomic::Ordering::Relaxed);
     Ok(())
+}
+
+#[cfg(test)]
+mod gemma_thought_tests {
+    use super::translate_gemma_thought_markers;
+
+    #[test]
+    fn opening_marker_becomes_think_tag() {
+        assert_eq!(translate_gemma_thought_markers("<unused94>thought\n"), "<think>\n");
+    }
+
+    #[test]
+    fn bare_opening_marker_still_translates() {
+        // Some completions omit the literal "thought" word after the marker.
+        assert_eq!(translate_gemma_thought_markers("<unused94>"), "<think>\n");
+    }
+
+    #[test]
+    fn closing_marker_mid_line_splits_reasoning_from_answer() {
+        // The real shape: reasoning's last sentence fused to the answer.
+        let line = "advice aligns with best practices.<unused95>Okay, experiencing pain\n";
+        assert_eq!(
+            translate_gemma_thought_markers(line),
+            "advice aligns with best practices.\n</think>\nOkay, experiencing pain\n"
+        );
+    }
+
+    #[test]
+    fn ordinary_lines_pass_through_untouched() {
+        let line = "1.  **Identify the core symptom:** sharp pain.\n";
+        assert_eq!(translate_gemma_thought_markers(line), line);
+    }
 }
