@@ -827,6 +827,24 @@ export function useChat(props: UseChatProps) {
       const controller = new AbortController();
       abortControllerRef.value = noSerialize(controller);
 
+      // A web-search model researches for a long stretch (often 30-60s)
+      // before its first visible text - mark the turn so the status line can
+      // say what's actually happening instead of a generic "thinking".
+      try {
+        const { getCachedModels } = await import("../utils/modelCache");
+        const searchingWeb =
+          !!preferredModel?.startsWith("online:") &&
+          getCachedModels().online?.find((m) => m.id === preferredModel)?.category ===
+            "web_search";
+        if (searchingWeb) {
+          state.messages = state.messages.map((m) =>
+            m.id === assistantId ? { ...m, searchingWeb: true } : m,
+          );
+        }
+      } catch {
+        /* status nicety only */
+      }
+
       // Join the parallel classifier: the mode first matters HERE (prompt,
       // max_tokens, thinking capture). Precedence: explicit sparkle →
       // classifier → the AI's default mode → chat.

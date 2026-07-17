@@ -288,11 +288,16 @@ const ActionBar = component$<ActionBarProps>((props) => {
       ? 'coding' as const
       : 'thinking' as const;
 
+  // A web-search model can research for 30-60s before its first visible
+  // text - name that phase honestly rather than showing a generic
+  // "thinking" that reads as a hang.
   const statusText = isShowingModelLoading
     ? props.statusText!
     : props.isWritingCode
       ? 'Writing code..'
-      : `${props.aiName} is thinking..`;
+      : props.message.searchingWeb && !props.message.content
+        ? 'Searching the web..'
+        : `${props.aiName} is thinking..`;
 
   return (
     <div class="generic-container my-2 rounded-2xl pl-9 md:pl-10 lg:pl-10">

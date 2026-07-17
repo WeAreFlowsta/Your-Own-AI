@@ -20,6 +20,9 @@ export interface OnlineModel {
   id: string;
   display_name: string;
   description: string;
+  /** Shelf/category from the catalog ("chat" | "web_search" | "coding") —
+   *  web_search drives the "Searching the web" status during streams. */
+  category?: string;
 }
 
 let localCache: LocalModel[] | null = null;

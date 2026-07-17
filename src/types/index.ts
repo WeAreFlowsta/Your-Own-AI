@@ -115,6 +115,10 @@ export interface Message {
   statusText?: string; // Custom status text like "Model loading, please wait..."
   turnMode?: TurnMode; // the mode this message was generated under — drives thinking-window presentation + live-thinking gate
   turnModeAuto?: boolean; // true when turnMode was chosen by the classifier (not a sparkle/default) — for the auto badge
+  /** True when this turn routed to a web-search model: it researches for a
+   *  long stretch (often 30-60s) before any text, so the status line says
+   *  "Searching the web" instead of a generic "thinking". */
+  searchingWeb?: boolean;
   // OwnServer-only properties (unused in Desktop, but needed for TypeScript compatibility)
   tokens?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; tokens_per_second?: number };
   sources?: any[];
