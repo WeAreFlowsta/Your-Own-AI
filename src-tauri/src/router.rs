@@ -132,9 +132,35 @@ const MEDICAL_REFERENCES: &[&str] = &[
     "should I be worried about this mole on my skin",
     "help me understand my lab report",
     "what treatment options exist for this illness",
+    "what should I eat or avoid with my medical condition",
+];
+
+/// Benign anchors: the everyday-question REGISTER (asks, tasks, info-seeking).
+/// bge-small scores any short question 0.4-0.6 against any other short
+/// question, so an absolute floor alone cannot separate "my knee aches after
+/// runs" (0.578 vs the medical refs) from "summarize this article for me"
+/// (0.594) - measured 2026-07-17, where the floor-only gate fired on 7 of 12
+/// benign queries and routed "whats the latest news today" to MedGemma. The
+/// gate now requires the turn to be closer to the medical refs than to these
+/// by a margin. Not topic-exhaustive on purpose: they anchor the register,
+/// not a topic list.
+const BENIGN_REFERENCES: &[&str] = &[
+    "whats the latest news today",
+    "tell me a joke",
+    "summarize this article for me",
+    "help me write an email to my boss",
+    "whats a good recipe for dinner",
+    "explain how this technology works",
+    "help me plan my day",
+    "write some code for me",
+    "how is the weather looking",
+    "my car is making a strange noise",
+    "recommend something to watch",
+    "help me with my resume",
 ];
 
 static MEDICAL_REFS: tokio::sync::OnceCell<Vec<Vec<f32>>> = tokio::sync::OnceCell::const_new();
+static BENIGN_REFS: tokio::sync::OnceCell<Vec<Vec<f32>>> = tokio::sync::OnceCell::const_new();
 
 async fn medical_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec<f32>>> {
     MEDICAL_REFS
@@ -147,13 +173,24 @@ async fn medical_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec<f32>
         .ok()
 }
 
-/// Cosine floor for the semantic medical gate. Initial value mirrors the
-/// freshness/notes calibration for bge-small (unrelated ≤ ~0.43, real matches
-/// ≥ ~0.47); the score is logged on every hit for live calibration. Biased
-/// toward OVER-detection: a borderline query wrongly kept local costs a
-/// slightly less fresh answer; a health question wrongly sent to a cloud
-/// breaks a promise.
+async fn benign_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec<f32>>> {
+    BENIGN_REFS
+        .get_or_try_init(|| async {
+            let state = app.state::<crate::llm::LLMState>();
+            let texts = BENIGN_REFERENCES.iter().map(|s| s.to_string()).collect();
+            crate::llm::embed_texts(app.clone(), state, texts, EMBED_MODEL.to_string()).await
+        })
+        .await
+        .ok()
+}
+
+/// Contrastive gate constants, MEASURED 2026-07-17 against batteries of 26
+/// benign + 16 medical queries (session scratch; rerun the batteries when
+/// changing refs, thresholds, or the embedding model): floor 0.50 + margin
+/// 0.05 = 0/26 benign false fires, 16/16 medical recall. The margin does the
+/// separating; the floor only rejects turns unrelated to everything.
 const MEDICAL_THRESHOLD: f32 = 0.50;
+const MEDICAL_MARGIN: f32 = 0.05;
 
 /// Stage-0 medical gate: unambiguous health terms only. Deliberately excludes
 /// words developers use about software ("symptom", "diagnose") - the semantic
@@ -179,6 +216,9 @@ pub(crate) async fn is_medical_turn(app: &AppHandle, query: &str, query_vec: Opt
     let Some(refs) = medical_reference_vecs(app).await else {
         return false;
     };
+    let Some(benign) = benign_reference_vecs(app).await else {
+        return false;
+    };
     let qvec: Vec<f32> = match query_vec {
         Some(v) if !v.is_empty() => v.to_vec(),
         _ => {
@@ -190,11 +230,20 @@ pub(crate) async fn is_medical_turn(app: &AppHandle, query: &str, query_vec: Opt
             }
         }
     };
-    let score = refs.iter().map(|r| cosine(&qvec, r)).fold(0.0f32, f32::max);
-    if score >= MEDICAL_THRESHOLD {
-        log::info!("[router] medical semantic gate hit (score {score:.3})");
+    let med_score = refs.iter().map(|r| cosine(&qvec, r)).fold(0.0f32, f32::max);
+    let benign_score = benign.iter().map(|r| cosine(&qvec, r)).fold(0.0f32, f32::max);
+    // Contrastive: medical only when the turn is BOTH related to the medical
+    // refs AND meaningfully closer to them than to ordinary-question anchors.
+    if med_score >= MEDICAL_THRESHOLD && med_score - benign_score >= MEDICAL_MARGIN {
+        log::info!(
+            "[router] medical semantic gate hit (med {med_score:.3}, benign {benign_score:.3}, margin {:.3})",
+            med_score - benign_score
+        );
         return true;
     }
+    log::debug!(
+        "[router] medical gate pass-through (med {med_score:.3}, benign {benign_score:.3})"
+    );
     false
 }
 
