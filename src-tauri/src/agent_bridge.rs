@@ -23,6 +23,11 @@ pub struct AgentBridgeState {
     child: Mutex<Option<CommandChild>>,
     session_id: Mutex<Option<String>>,
     next_id: AtomicU64,
+    /// Bumped on every spawn. A previous agent process dying AFTER its
+    /// replacement started must neither clear the new process's state nor
+    /// emit agent-exit - without this, reopening a folder raced the old
+    /// process's death event and the fresh session showed "stopped".
+    generation: AtomicU64,
 }
 
 impl AgentBridgeState {
@@ -31,6 +36,7 @@ impl AgentBridgeState {
             child: Mutex::new(None),
             session_id: Mutex::new(None),
             next_id: AtomicU64::new(1),
+            generation: AtomicU64::new(0),
         }
     }
 }
@@ -92,7 +98,10 @@ pub async fn start_build_agent(
     cwd: String,
     model: Option<String>,
 ) -> Result<(), String> {
-    // One agent at a time: replace any previous instance.
+    // One agent at a time: replace any previous instance. Bumping the
+    // generation FIRST makes the old process's reader stand down - its
+    // termination event must not touch the new session's state.
+    let my_gen = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
     if let Some(old) = state.child.lock().await.take() {
         let _ = old.kill();
     }
@@ -127,8 +136,13 @@ pub async fn start_build_agent(
     tauri::async_runtime::spawn(async move {
         let mut exit_code: Option<i32> = None;
         while let Some(event) = rx.recv().await {
+            let bridge = reader_app.state::<AgentBridgeState>();
+            let stale = bridge.generation.load(Ordering::SeqCst) != my_gen;
             match event {
                 CommandEvent::Stdout(line) => {
+                    if stale {
+                        continue;
+                    }
                     let text = String::from_utf8_lossy(&line);
                     let Ok(msg) = serde_json::from_str::<Value>(&text) else {
                         continue;
@@ -136,8 +150,10 @@ pub async fn start_build_agent(
                     handle_agent_message(&reader_app, &workspace, &session_model, msg).await;
                 }
                 CommandEvent::Stderr(line) => {
-                    let _ = reader_app
-                        .emit("agent-log", String::from_utf8_lossy(&line).trim_end());
+                    if !stale {
+                        let _ = reader_app
+                            .emit("agent-log", String::from_utf8_lossy(&line).trim_end());
+                    }
                 }
                 CommandEvent::Terminated(payload) => {
                     exit_code = payload.code;
@@ -146,10 +162,14 @@ pub async fn start_build_agent(
                 _ => {}
             }
         }
+        // A superseded process dying is nobody's news: only the CURRENT
+        // generation may clear state and report an exit.
         let bridge = reader_app.state::<AgentBridgeState>();
-        *bridge.child.lock().await = None;
-        *bridge.session_id.lock().await = None;
-        let _ = reader_app.emit("agent-exit", json!({ "code": exit_code }));
+        if bridge.generation.load(Ordering::SeqCst) == my_gen {
+            *bridge.child.lock().await = None;
+            *bridge.session_id.lock().await = None;
+            let _ = reader_app.emit("agent-exit", json!({ "code": exit_code }));
+        }
     });
 
     write_line(
