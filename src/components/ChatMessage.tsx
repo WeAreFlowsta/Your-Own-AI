@@ -337,7 +337,9 @@ const ActionBar = component$<ActionBarProps>((props) => {
       ? 'Writing code..'
       : props.message.searchingWeb && !props.message.content
         ? 'Searching the web..'
-        : `${props.aiName} is thinking..`;
+        : props.message.agentTurn
+          ? `${props.aiName} is working..`
+          : `${props.aiName} is thinking..`;
 
   return (
     <div class="generic-container my-2 rounded-2xl pl-9 md:pl-10 lg:pl-10">
@@ -1035,11 +1037,10 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
               {!showThinkingBox && (
                 <ActionBar
                   message={props.message}
-                  // The working box carries the live status during an agent
-                  // turn - a second "is thinking.." line above it is noise.
-                  isLoading={
-                    !!props.message.isLoading && !props.message.agentLog?.length
-                  }
+                  // The bar stays put through the whole turn: status while
+                  // working ("is working.."), buttons when done. The rail's
+                  // pearl carries the SPECIFIC current action below.
+                  isLoading={!!props.message.isLoading}
                   railOpen={agentRailOpen}
                   isModelLoading={props.isModelLoading}
                   isWritingCode={isWritingCode}
