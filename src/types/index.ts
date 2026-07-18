@@ -171,8 +171,12 @@ export interface Message {
   agentPermission?: AgentPermission;
 }
 
-/** One entry in an agent turn's working log. */
-export type AgentLogItem =
+/** One entry in an agent turn's working log.
+ *  `id` is assigned ONCE at creation and preserved through every update -
+ *  it is the render key. Index keys made Qwik re-match elements across
+ *  item types during the turn's rapid inserts, mis-nesting rows into each
+ *  other's flex buttons (labels wrapping word-by-word, text over text). */
+export type AgentLogItem = { id: string } & (
   | { type: 'action'; action: AgentAction }
   /** Text the AI said mid-work, superseded by later activity - shown muted
    *  inside the box, without bubble chrome. */
@@ -182,7 +186,8 @@ export type AgentLogItem =
   | { type: 'thought'; text: string }
   /** A permission ask at its true position in the work. Pending = the full
    *  card; answered = its receipt line. */
-  | { type: 'permission'; permission: AgentPermission };
+  | { type: 'permission'; permission: AgentPermission }
+);
 
 /** One tool action inside an agent turn's working log. */
 export interface AgentAction {

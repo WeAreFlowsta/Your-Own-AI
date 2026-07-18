@@ -170,11 +170,14 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
 
         {expanded.value && (
           <div class="px-3 pb-3 space-y-1.5">
-            {log.map((item, idx) => {
+            {/* Keys are the items' STABLE ids - index keys made Qwik
+                re-match elements across item types during rapid inserts
+                and mis-nest rows into each other (text over text). */}
+            {log.map((item) => {
               if (item.type === "thought") {
                 return showThoughts.value ? (
                   <div
-                    key={idx}
+                    key={item.id}
                     class="text-xs italic text-[var(--text-muted)] opacity-80 leading-relaxed pl-5"
                   >
                     {item.text}
@@ -184,7 +187,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
               if (item.type === "narration") {
                 return (
                   <div
-                    key={idx}
+                    key={item.id}
                     class="markdown-content thinking-markdown text-xs text-[var(--text-secondary)] leading-relaxed pl-5"
                     dangerouslySetInnerHTML={renderMarkdown(item.text)}
                   />
@@ -193,7 +196,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
               if (item.type === "permission") {
                 return (
                   <AgentPermissionCard
-                    key={idx}
+                    key={item.id}
                     permission={item.permission}
                     onRespond$={
                       onPermissionRespond$ &&
@@ -210,7 +213,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
               const hasOutput = !!a.output;
               const open = !!openOutputs.value[a.toolCallId];
               return (
-                <div key={a.toolCallId}>
+                <div key={item.id}>
                   <button
                     disabled={!hasOutput}
                     onClick$={() => {
@@ -226,11 +229,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                     ) : a.status === "failed" ? (
                       <LuX class="h-3.5 w-3.5 shrink-0 text-red-500 dark:text-red-400" />
                     ) : (
-                      // Deliberately static: an animated element in this
-                      // reflowing list gets a stale compositor layer in
-                      // WebKitGTK and paints over neighboring rows. The
-                      // header Lottie + pulse label carry the motion.
-                      <span class="inline-block w-1.5 h-1.5 mx-1 rounded-full bg-[var(--text-link)] shrink-0" />
+                      <span class="inline-block w-1.5 h-1.5 mx-1 rounded-full bg-[var(--text-link)] animate-pulse shrink-0" />
                     )}
                     <Icon class="h-3.5 w-3.5 shrink-0 opacity-70" />
                     <span class="truncate text-xs">

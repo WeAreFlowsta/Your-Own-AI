@@ -403,7 +403,10 @@ export function useAgentSession(props: UseAgentSessionProps) {
       m.content
         ? {
             ...m,
-            agentLog: [...(m.agentLog ?? []), { type: "narration", text: m.content }],
+            agentLog: [
+              ...(m.agentLog ?? []),
+              { id: uuidv4(), type: "narration", text: m.content },
+            ],
             content: "",
           }
         : m;
@@ -441,9 +444,9 @@ export function useAgentSession(props: UseAgentSessionProps) {
           const log = [...(demoted.agentLog ?? [])];
           const last = log[log.length - 1];
           if (last?.type === "thought") {
-            log[log.length - 1] = { type: "thought", text: last.text + text };
+            log[log.length - 1] = { ...last, text: last.text + text };
           } else {
-            log.push({ type: "thought", text });
+            log.push({ id: uuidv4(), type: "thought", text });
           }
           return { ...demoted, agentLog: log };
         });
@@ -469,9 +472,10 @@ export function useAgentSession(props: UseAgentSessionProps) {
             }
           }
           if (idx >= 0) {
-            const prev = (log[idx] as { action: any }).action;
+            const prevItem = log[idx] as { id: string; type: "action"; action: any };
+            const prev = prevItem.action;
             log[idx] = {
-              type: "action",
+              ...prevItem,
               action: {
                 ...prev,
                 status: update.status || prev.status,
@@ -487,6 +491,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
             };
           } else {
             log.push({
+              id: `action-${toolCallId}`,
               type: "action",
               action: {
                 toolCallId,
@@ -538,7 +543,10 @@ export function useAgentSession(props: UseAgentSessionProps) {
         const demoted = demoteContent(m);
         return {
           ...demoted,
-          agentLog: [...(demoted.agentLog ?? []), { type: "permission", permission }],
+          agentLog: [
+            ...(demoted.agentLog ?? []),
+            { id: `perm-${permission.requestId}`, type: "permission", permission },
+          ],
         };
       });
     });
