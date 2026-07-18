@@ -38,6 +38,11 @@ impl AgentBridgeState {
 const INIT_ID: u64 = 1;
 const SESSION_NEW_ID: u64 = 2;
 
+/// Stable identifier the agent uses to key persisted permission grants
+/// (per folder, per client). Changing it would silently reset every
+/// "don't ask again" the user has granted.
+const CLIENT_IDENTIFIER: &str = "your-own-ai";
+
 async fn write_line(state: &AgentBridgeState, value: &Value) -> Result<(), String> {
     let mut guard = state.child.lock().await;
     let child = guard.as_mut().ok_or("agent is not running")?;
@@ -54,6 +59,7 @@ pub async fn start_build_agent(
     state: State<'_, AgentBridgeState>,
     binary: String,
     cwd: String,
+    model: Option<String>,
 ) -> Result<(), String> {
     // One agent at a time: replace any previous instance.
     if let Some(old) = state.child.lock().await.take() {
@@ -75,6 +81,7 @@ pub async fn start_build_agent(
     state.next_id.store(3, Ordering::SeqCst); // 1 = initialize, 2 = session/new
 
     let workspace = cwd.clone();
+    let session_model = model.clone();
     let reader_app = app_handle.clone();
     tauri::async_runtime::spawn(async move {
         let mut exit_code: Option<i32> = None;
@@ -85,7 +92,7 @@ pub async fn start_build_agent(
                     let Ok(msg) = serde_json::from_str::<Value>(&text) else {
                         continue;
                     };
-                    handle_agent_message(&reader_app, &workspace, msg).await;
+                    handle_agent_message(&reader_app, &workspace, &session_model, msg).await;
                 }
                 CommandEvent::Stderr(line) => {
                     let _ = reader_app
@@ -112,17 +119,28 @@ pub async fn start_build_agent(
             "method": "initialize",
             "params": {
                 "protocolVersion": 1,
+                "clientInfo": {
+                    "name": CLIENT_IDENTIFIER,
+                    "title": "Your Own AI",
+                    "version": env!("CARGO_PKG_VERSION")
+                },
                 "clientCapabilities": {
                     "fs": { "readTextFile": false, "writeTextFile": false },
                     "terminal": false
-                }
+                },
+                "_meta": { "clientIdentifier": CLIENT_IDENTIFIER }
             }
         }),
     )
     .await
 }
 
-async fn handle_agent_message(app: &AppHandle, workspace: &str, msg: Value) {
+async fn handle_agent_message(
+    app: &AppHandle,
+    workspace: &str,
+    session_model: &Option<String>,
+    msg: Value,
+) {
     let state = app.state::<AgentBridgeState>();
     let method = msg.get("method").and_then(Value::as_str);
     let id = msg.get("id").and_then(Value::as_u64);
@@ -138,11 +156,15 @@ async fn handle_agent_message(app: &AppHandle, workspace: &str, msg: Value) {
         }
         // Responses to our own requests.
         (None, Some(INIT_ID)) => {
+            let mut meta = json!({ "clientIdentifier": CLIENT_IDENTIFIER });
+            if let Some(model) = session_model {
+                meta["modelId"] = json!(model);
+            }
             let request = json!({
                 "jsonrpc": "2.0",
                 "id": SESSION_NEW_ID,
                 "method": "session/new",
-                "params": { "cwd": workspace, "mcpServers": [] }
+                "params": { "cwd": workspace, "mcpServers": [], "_meta": meta }
             });
             let _ = write_line(&state, &request).await;
         }
@@ -205,6 +227,28 @@ pub async fn send_agent_prompt(
     )
     .await?;
     Ok(id)
+}
+
+/// Cancel the in-flight prompt turn (ACP `session/cancel` notification).
+/// The agent stops its work and still ends the turn with a response whose
+/// stopReason is `cancelled` - the frontend keeps listening for it.
+#[tauri::command]
+pub async fn cancel_agent_turn(state: State<'_, AgentBridgeState>) -> Result<(), String> {
+    let session_id = state
+        .session_id
+        .lock()
+        .await
+        .clone()
+        .ok_or("agent session is not ready")?;
+    write_line(
+        &state,
+        &json!({
+            "jsonrpc": "2.0",
+            "method": "session/cancel",
+            "params": { "sessionId": session_id }
+        }),
+    )
+    .await
 }
 
 #[tauri::command]
