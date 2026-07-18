@@ -134,7 +134,7 @@ export const AgentPermissionCard = component$<AgentPermissionCardProps>(
 
           {/* The exact ask - a command is NEVER truncated. */}
           {permission.command ? (
-            <pre class="text-sm rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)] p-3 whitespace-pre-wrap break-all font-mono">
+            <pre class="text-sm rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)] p-3 whitespace-pre-wrap break-all font-mono text-[var(--text-primary)]">
               {permission.command}
             </pre>
           ) : (
@@ -155,7 +155,7 @@ export const AgentPermissionCard = component$<AgentPermissionCardProps>(
 
           {permission.diff && (
             <div>
-              <pre class="text-xs rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)] p-3 whitespace-pre-wrap break-all font-mono max-h-96 overflow-y-auto">
+              <pre class="text-xs rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)] p-3 whitespace-pre-wrap break-all font-mono max-h-96 overflow-y-auto text-[var(--text-primary)]">
                 {shownDiff}
               </pre>
               {diffTruncated && (
