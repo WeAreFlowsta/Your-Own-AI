@@ -32,6 +32,9 @@ export interface AgentSessionState {
   /** True while the pending permission card is scrolled out of view -
    *  drives the floating jump pill. */
   pendingCardOffscreen: boolean;
+  /** The current activity in a word or two ("Reading config.mjs..") -
+   *  shown on the live pill when the user has scrolled away from the tip. */
+  liveStatus: string;
   /** Every file path the agent touched this session (viewer feed). */
   touchedFiles: string[];
 }
@@ -174,6 +177,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     statusNote: "",
     pendingPermissionId: null,
     pendingCardOffscreen: false,
+    liveStatus: "",
     touchedFiles: [],
   });
 
@@ -214,6 +218,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
   /** Send a prompt into the live session (session must be ready). */
   const dispatchPrompt = $(async (text: string) => {
     state.status = "working";
+    state.liveStatus = "Thinking..";
     props.chatState.isLoading = true;
     try {
       await invokeTauri("send_agent_prompt", { text });
@@ -482,6 +487,11 @@ export function useAgentSession(props: UseAgentSessionProps) {
         const toolCallId = update.toolCallId || uuidv4();
         const human = humanizeAction(update);
         const out = actionOutput(update);
+        if (!update.status || update.status === "in_progress" || update.status === "pending") {
+          state.liveStatus = `${human.label}..`;
+        } else {
+          state.liveStatus = "Thinking..";
+        }
         const locations = (update.locations ?? [])
           .map((l: any) => l?.path)
           .filter(Boolean);
@@ -566,6 +576,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       };
       state.pendingPermissionId = permission.requestId;
       state.pendingCardOffscreen = false;
+      state.liveStatus = "Waiting for you..";
       mutateTurn((m) => {
         // Idempotent by request id: a re-delivered event (seen once in the
         // wild as two identical pending cards) must not add a second card.
@@ -617,6 +628,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
           !(m.id === id && m.content === "" && !(m.agentLog ?? []).length && !m.error),
       );
       props.chatState.isLoading = false;
+      state.liveStatus = "";
       if (state.status === "working") state.status = "ready";
     };
 

@@ -1,4 +1,4 @@
-import { component$, type Signal, type QRL, $ } from '@builder.io/qwik';
+import { component$, useSignal, useVisibleTask$, type Signal, type QRL, $ } from '@builder.io/qwik';
 import InitialView from './InitialView';
 import ConversationView from './ConversationView';
 import SelectionRemember from './SelectionRemember';
@@ -45,6 +45,8 @@ interface ChatContainerProps {
   showPermissionPill?: boolean;
   /** True while a folder-agent turn is streaming (turn-scoped scroll space). */
   agentStreaming?: boolean;
+  /** Current agent activity ("Reading config.mjs..") for the live pill. */
+  liveStatus?: string;
   /** Jump to the pending permission card (pill click). */
   onPermissionJump$?: QRL<() => void>;
   /** Open a folder for this conversation (Build agent). */
@@ -58,6 +60,50 @@ const getDisplayImageUrl$ = $((model: SelectedAiModel | undefined): string | und
 
 export default component$<ChatContainerProps>((props) => {
   const { messages } = props;
+
+  // Follow-the-tip scroll for agent turns. The view tracks the newest
+  // output while the user is "attached"; scrolling up detaches instantly
+  // (the tip leaving the viewport is the signal - no programmatic-scroll
+  // bookkeeping needed); scrolling back until the tip is visible
+  // re-attaches. Normal chat is untouched: everything gates on
+  // agentStreaming.
+  const tipRef = useSignal<HTMLDivElement>();
+  const tipAttached = useSignal(true);
+
+  const tipBelowFold = $((): { below: boolean; el: HTMLDivElement } | null => {
+    const el = tipRef.value;
+    const container = el?.closest('.overflow-y-auto') as HTMLElement | null;
+    if (!el || !container) return null;
+    const below =
+      el.getBoundingClientRect().top > container.getBoundingClientRect().bottom + 4;
+    return { below, el };
+  });
+
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async ({ track }) => {
+    track(() => props.messages);
+    const streaming = track(() => props.agentStreaming);
+    if (!streaming) {
+      tipAttached.value = true; // reset for the next turn
+      return;
+    }
+    if (!tipAttached.value) return;
+    requestAnimationFrame(async () => {
+      const tip = await tipBelowFold();
+      if (tip?.below) tip.el.scrollIntoView({ behavior: 'auto', block: 'end' });
+    });
+  });
+
+  const handleScroll = $(async () => {
+    if (!props.agentStreaming) return;
+    const tip = await tipBelowFold();
+    if (tip) tipAttached.value = !tip.below;
+  });
+
+  const jumpToTip = $(() => {
+    tipAttached.value = true;
+    tipRef.value?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  });
 
   // Create QRL setters from signals for child components that expect QRL callbacks
   const setSelectedAi$ = $((ai: SelectedAiModel) => { props.selectedAi.value = ai; });
@@ -97,13 +143,14 @@ export default component$<ChatContainerProps>((props) => {
     <div class="flex-1 flex flex-col min-h-0">
       {/* Global select-to-remember chip (one listener; no per-message chrome). */}
       <SelectionRemember />
-      <div class="flex-1 overflow-y-auto p-4 scroll-smooth relative">
+      <div class="flex-1 overflow-y-auto p-4 scroll-smooth relative" onScroll$={handleScroll}>
         <ConversationView
           messages={props.messages}
           messagesEndRef={props.messagesEndRef}
           onPermissionRespond$={props.onPermissionRespond$}
           onPermissionOffscreen$={props.onPermissionOffscreen$}
           agentStreaming={props.agentStreaming}
+          tipRef={tipRef}
           retry$={props.retry$}
           canRouteOnline={props.canRouteOnline}
           onGround$={props.onGround$}
@@ -118,15 +165,21 @@ export default component$<ChatContainerProps>((props) => {
           isModelLoading={props.isModelLoading}
         />
       </div>
-      {/* Floating jump pill: the trust surface must never sit unseen. Only
-          appears while a pending permission card is scrolled off-screen. */}
-      {props.showPermissionPill && (
+      {/* Floating live pill. Permission takes precedence (the trust surface
+          must never sit unseen); otherwise, while the user is scrolled away
+          from a working turn's tip, it carries the current action and jumps
+          back on click. */}
+      {(props.showPermissionPill ||
+        (props.agentStreaming && !tipAttached.value)) && (
         <div class="relative">
           <button
-            onClick$={props.onPermissionJump$}
-            class="absolute -top-12 left-1/2 -translate-x-1/2 z-10 px-4 py-1.5 rounded-full border border-[var(--border-primary)] bg-[var(--bg-card)] text-sm text-[var(--text-primary)] shadow-lg hover:bg-[var(--bg-dropdown-hover)]"
+            onClick$={props.showPermissionPill ? props.onPermissionJump$ : jumpToTip}
+            class="absolute -top-12 left-1/2 -translate-x-1/2 z-10 px-4 py-1.5 rounded-full border border-[var(--border-primary)] bg-[var(--bg-card)] text-sm text-[var(--text-primary)] shadow-lg hover:bg-[var(--bg-dropdown-hover)] whitespace-nowrap max-w-[70%] overflow-hidden text-ellipsis"
           >
-            Permission needed &darr;
+            {props.showPermissionPill
+              ? 'Permission needed'
+              : props.liveStatus || 'Working..'}{' '}
+            &darr;
           </button>
         </div>
       )}

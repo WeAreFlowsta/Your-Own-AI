@@ -658,6 +658,29 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
   // Agent work rail: collapsed-stub expansion, shared by the stub itself
   // and the action bar's Steps button.
   const agentRailOpen = useSignal(false);
+  const agentWasLoading = useSignal(false);
+
+  // Settle-on-fold: when an agent turn finishes, its story collapses to the
+  // stub - a large height change no matter what. Use that moment for one
+  // deliberate move: question, stub, and the answer's first lines to the
+  // top, the same resting position every turn. Agent turns only.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    const loading = track(() => props.message.isLoading);
+    if (
+      props.message.agentTurn &&
+      agentWasLoading.value &&
+      !loading &&
+      props.isLast &&
+      rootRef.value
+    ) {
+      requestAnimationFrame(() => {
+        const question = rootRef.value?.previousElementSibling as HTMLElement | null;
+        question?.scrollIntoView({ behavior: 'auto', block: 'start' });
+      });
+    }
+    agentWasLoading.value = !!loading;
+  });
 
   const statusMessages = [
     'Synthesizing information',

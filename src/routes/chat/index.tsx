@@ -758,6 +758,7 @@ export default component$(() => {
               agentStreaming={
                 agentState.folderPath !== null && chatState.isLoading
               }
+              liveStatus={agentState.liveStatus}
               onPermissionJump$={$(() => {
                 messagesEndRef.value?.scrollIntoView({ behavior: "smooth", block: "end" });
               })}

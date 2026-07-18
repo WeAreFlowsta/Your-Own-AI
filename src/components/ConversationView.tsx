@@ -14,6 +14,9 @@ interface ConversationViewProps {
    *  the question can anchor to the top without the view bouncing as
    *  activity cards and text segments arrive. */
   agentStreaming?: boolean;
+  /** Marks the end of real content (before the turn spacer) - the
+   *  follow-the-tip scroll keeps this in view while an agent turn works. */
+  tipRef?: Signal<HTMLDivElement | undefined>;
   retry$: QRL<(id: string, target?: 'online' | 'device') => void>;
   canRouteOnline: boolean;
   onGround$?: QRL<(id: string) => void>;
@@ -34,6 +37,7 @@ export default component$<ConversationViewProps>(({
   onPermissionRespond$,
   onPermissionOffscreen$,
   agentStreaming,
+  tipRef,
   retry$,
   canRouteOnline,
   onGround$,
@@ -73,6 +77,8 @@ export default component$<ConversationViewProps>(({
           isModelLoading={isModelLoading}
         />
       ))}
+      {/* End of real content - the follow-the-tip target. */}
+      <div ref={tipRef} />
       {/* Turn-scoped scroll reservation for agent turns (see agentStreaming). */}
       {agentStreaming && <div style={{ minHeight: '100vh' }} />}
       <div ref={messagesEndRef} />
