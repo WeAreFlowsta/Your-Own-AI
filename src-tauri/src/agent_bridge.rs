@@ -359,6 +359,13 @@ pub fn path_is_dir(path: String) -> bool {
     std::path::Path::new(&path).is_dir()
 }
 
+/// Is the Build agent binary present? Gates the Build-related settings so
+/// they only show once Build is installed (or a dev path is configured).
+#[tauri::command]
+pub fn path_is_file(path: String) -> bool {
+    std::path::Path::new(&path).is_file()
+}
+
 #[tauri::command]
 pub async fn build_agent_status(state: State<'_, AgentBridgeState>) -> Result<Value, String> {
     let running = state.child.lock().await.is_some();

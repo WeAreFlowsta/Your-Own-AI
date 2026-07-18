@@ -46,7 +46,7 @@ export interface UseAgentSessionProps {
 const DEV_BINARY_FALLBACK =
   "/home/solar/Documents/Flowsta/Projects/FlowstaAuth/your-own-ai-build/target/release/your-own-ai-build";
 
-function resolveBinaryPath(): string {
+export function resolveBinaryPath(): string {
   try {
     return localStorage.getItem("build-binary-path") || DEV_BINARY_FALLBACK;
   } catch {

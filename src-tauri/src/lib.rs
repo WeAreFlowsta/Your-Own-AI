@@ -550,6 +550,7 @@ pub fn run() {
             agent_bridge::stop_build_agent,
             agent_bridge::build_agent_status,
             agent_bridge::path_is_dir,
+            agent_bridge::path_is_file,
             llm::stream_chat_completion,
             llm::cancel_chat_completion,
             save_ai_thumbnail,

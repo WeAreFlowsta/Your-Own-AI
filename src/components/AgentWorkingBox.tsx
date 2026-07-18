@@ -45,10 +45,16 @@ const SHOW_THOUGHTS_KEY = "agent-show-thoughts";
  *  full-size style, so every hand-off is invisible. Only the step boxes
  *  change shape: expanded and ticking while the turn works, collapsed to
  *  their summary line when it ends. */
+/** Rows inside a step box: actions and (behind the toggle) the thoughts
+ *  that came between them, in true order. Thinking lives INSIDE the box -
+ *  the header's "Thinking.." is the collapsed face of the same thing. */
+type GroupItem =
+  | { kind: "action"; id: string; action: AgentAction }
+  | { kind: "thought"; id: string; text: string };
+
 type FlowElement =
   | { kind: "text"; id: string; text: string }
-  | { kind: "thought"; id: string; text: string }
-  | { kind: "group"; id: string; actions: AgentAction[] }
+  | { kind: "group"; id: string; items: GroupItem[] }
   | { kind: "permission"; id: string; permission: AgentPermission };
 
 function actionIcon(kind?: string) {
@@ -74,9 +80,13 @@ function actionIcon(kind?: string) {
   }
 }
 
-function groupSummary(actions: AgentAction[]): string {
+function groupSummary(items: GroupItem[]): string {
+  const actions = items.filter((i) => i.kind === "action");
+  if (actions.length === 0) return "Thoughts";
   const files = new Set<string>();
-  for (const a of actions) for (const p of a.locations ?? []) files.add(p);
+  for (const i of actions)
+    for (const p of (i as { action: AgentAction }).action.locations ?? [])
+      files.add(p);
   return files.size > 0
     ? `Worked in ${files.size} file${files.size === 1 ? "" : "s"} - ${actions.length} action${actions.length === 1 ? "" : "s"}`
     : `Did ${actions.length} action${actions.length === 1 ? "" : "s"}`;
@@ -112,16 +122,19 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
       for (const item of items) {
         if (item.type === "narration") {
           out.push({ kind: "text", id: item.id, text: item.text });
-        } else if (item.type === "thought") {
-          out.push({ kind: "thought", id: item.id, text: item.text });
         } else if (item.type === "permission") {
           out.push({ kind: "permission", id: item.id, permission: item.permission });
         } else {
+          // Actions AND thoughts both live inside the step box, in order.
+          const row: GroupItem =
+            item.type === "thought"
+              ? { kind: "thought", id: item.id, text: item.text }
+              : { kind: "action", id: item.id, action: item.action };
           const last = out[out.length - 1];
           if (last?.kind === "group") {
-            last.actions = [...last.actions, item.action];
+            last.items = [...last.items, row];
           } else {
-            out.push({ kind: "group", id: item.id, actions: [item.action] });
+            out.push({ kind: "group", id: item.id, items: [row] });
           }
         }
       }
@@ -161,16 +174,6 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
               />
             );
           }
-          if (el.kind === "thought") {
-            return showThoughts.value ? (
-              <div
-                key={el.id}
-                class="text-xs italic text-[var(--text-muted)] opacity-80 leading-relaxed px-2 break-words overflow-hidden"
-              >
-                {el.text}
-              </div>
-            ) : null;
-          }
           if (el.kind === "permission") {
             return (
               <AgentPermissionCard
@@ -188,6 +191,13 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
           }
           const isActive = working && el.id === lastFlowId.value;
           const expanded = openGroups.value[el.id] ?? working;
+          const actionCount = el.items.filter((i) => i.kind === "action").length;
+          // A thoughts-only stretch: while active it's the "Thinking.." box
+          // (the header IS the collapsed thinking view); once done it only
+          // exists when the thinking view is on.
+          if (actionCount === 0 && !showThoughts.value && !isActive) {
+            return null;
+          }
           return (
             <div
               key={el.id}
@@ -218,7 +228,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                     <LuChevronRight class={`h-3.5 w-3.5 shrink-0 ${expanded ? "hidden" : ""}`} />
                     <LuChevronDown class={`h-3.5 w-3.5 shrink-0 ${expanded ? "" : "hidden"}`} />
                     <span class="min-w-0 truncate whitespace-nowrap">
-                      {groupSummary(el.actions)}
+                      {groupSummary(el.items)}
                     </span>
                   </span>
                 </button>
@@ -245,12 +255,23 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
 
               {expanded && (
                 <div class="px-3 pb-3 space-y-1.5">
-                  {el.actions.map((a) => {
+                  {el.items.map((row) => {
+                    if (row.kind === "thought") {
+                      return showThoughts.value ? (
+                        <div
+                          key={row.id}
+                          class="text-xs italic text-[var(--text-muted)] opacity-80 leading-relaxed pl-5 break-words overflow-hidden"
+                        >
+                          {row.text}
+                        </div>
+                      ) : null;
+                    }
+                    const a = row.action;
                     const Icon = actionIcon(a.kind);
                     const hasOutput = !!a.output;
                     const open = !!openOutputs.value[a.toolCallId];
                     return (
-                      <div key={a.toolCallId} class="overflow-hidden">
+                      <div key={row.id} class="overflow-hidden">
                         <button
                           disabled={!hasOutput}
                           onClick$={() => {

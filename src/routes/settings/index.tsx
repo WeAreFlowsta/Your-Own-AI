@@ -238,7 +238,9 @@ export default component$(() => {
   const groundDocumentsAuto = useSignal(false);
   const smartModeDetection = useSignal(true);
   // Same key the working box's brain icon toggles - one setting, two doors.
+  // Only shown when the Build agent is actually installed.
   const agentShowThoughts = useSignal(false);
+  const buildInstalled = useSignal(false);
   const currentModel = useSignal<string | null>(null);
   const rememberScopeSelection = useSignal<RememberScope>("per-ai");
   const rememberScopeReply = useSignal<RememberScope>("per-ai");
@@ -274,6 +276,16 @@ export default component$(() => {
     smartModeDetection.value =
       localStorage.getItem("smartModeDetection") !== "false"; // default ON
     agentShowThoughts.value = localStorage.getItem("agent-show-thoughts") === "1";
+    // Async: reveal the Build settings once the agent binary is confirmed.
+    Promise.all([
+      import("@tauri-apps/api/core"),
+      import("../../hooks/useAgentSession"),
+    ])
+      .then(([{ invoke }, { resolveBinaryPath }]) =>
+        invoke<boolean>("path_is_file", { path: resolveBinaryPath() }),
+      )
+      .then((present) => (buildInstalled.value = present))
+      .catch(() => (buildInstalled.value = false));
     rememberScopeSelection.value = getRememberScope("selection");
     rememberScopeReply.value = getRememberScope("reply");
     memoryLearning.value = !isMemoryPaused();
@@ -503,16 +515,18 @@ export default component$(() => {
                     asking each time. Off means you're asked first, before anything
                     leaves your device. Offline models always stay local.
                   </SettingToggle>
-                  <SettingToggle
-                    title="Show thinking while working in a folder"
-                    checked={agentShowThoughts}
-                    onToggle$={toggleAgentShowThoughts}
-                  >
-                    When your AI is working in a folder, show its live reasoning
-                    between steps - the running commentary of what it's considering
-                    and why. The status line also carries the tail of its current
-                    thought. Same switch as the brain icon on the working steps box.
-                  </SettingToggle>
+                  {buildInstalled.value && (
+                    <SettingToggle
+                      title="Show thinking while working in a folder"
+                      checked={agentShowThoughts}
+                      onToggle$={toggleAgentShowThoughts}
+                    >
+                      When your AI is working in a folder, show its live reasoning
+                      between steps - the running commentary of what it's considering
+                      and why. The status line also carries the tail of its current
+                      thought. Same switch as the brain icon on the working steps box.
+                    </SettingToggle>
+                  )}
                 </div>
               </section>
 
