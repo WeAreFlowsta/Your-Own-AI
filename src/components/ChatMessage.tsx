@@ -970,7 +970,11 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
               {!showThinkingBox && (
                 <ActionBar
                   message={props.message}
-                  isLoading={!!props.message.isLoading}
+                  // The working box carries the live status during an agent
+                  // turn - a second "is thinking.." line above it is noise.
+                  isLoading={
+                    !!props.message.isLoading && !props.message.agentLog?.length
+                  }
                   isModelLoading={props.isModelLoading}
                   isWritingCode={isWritingCode}
                   isThinking={!!props.message.thinking && !finalText.value}
@@ -993,6 +997,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
                   <AgentWorkingBox
                     log={props.message.agentLog}
                     working={!!props.message.isLoading}
+                    theme={props.theme}
                     onPermissionRespond$={props.onPermissionRespond$}
                     onPermissionOffscreen$={props.onPermissionOffscreen$}
                   />

@@ -21,13 +21,15 @@ import {
   LuBrain,
 } from "@qwikest/icons/lucide";
 import { AgentPermissionCard } from "./AgentPermissionCard";
+import ThemeAwareLottie from "./ThemeAwareLottie";
 import { renderMarkdown } from "../utils/renderMarkdown";
 import type { AgentAction, AgentLogItem } from "../types";
 
 interface AgentWorkingBoxProps {
   log: AgentLogItem[];
-  /** True while the turn is streaming - keeps the box open + shimmering. */
+  /** True while the turn is streaming - keeps the box open + animating. */
   working: boolean;
+  theme: "light" | "dark";
   onPermissionRespond$?: QRL<
     (requestId: number, decision: "allow" | "reject", always: boolean) => void
   >;
@@ -69,7 +71,7 @@ function actionIcon(kind?: string) {
  * live thinking (off by default).
  */
 export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
-  ({ log, working, onPermissionRespond$, onPermissionOffscreen$ }) => {
+  ({ log, working, theme, onPermissionRespond$, onPermissionOffscreen$ }) => {
     const userExpanded = useSignal<boolean | undefined>(undefined);
     const showThoughts = useSignal(false);
     const openOutputs = useSignal<Record<string, boolean>>({});
@@ -133,10 +135,21 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
             ) : (
               <LuChevronRight class="h-3.5 w-3.5 shrink-0" />
             )}
+            {/* Liveness = the app's proven movers (Lottie + pulse gradient).
+                NOT background-clip:text - WebKitGTK leaves stale glyph
+                paints when animated clip-text changes, and the old status
+                words end up painted over the rows below. */}
             {working ? (
-              <span class="truncate text-shimmer">{status.value}</span>
+              <>
+                <span class="shrink-0">
+                  <ThemeAwareLottie type="thinking" theme={theme} size={14} />
+                </span>
+                <span class="flex-1 min-w-0 truncate animate-pulse-text status-text-gradient">
+                  {status.value}
+                </span>
+              </>
             ) : (
-              <span class="truncate">{summary.value}</span>
+              <span class="flex-1 min-w-0 truncate">{summary.value}</span>
             )}
           </button>
           <button

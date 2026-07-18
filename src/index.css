@@ -862,28 +862,10 @@ main {
   animation: metallic-status-pulse-light 2s ease infinite;
 }
 
-/* Agent working shimmer: a highlight sweeps across the words continuously -
-   the "something is happening" signal for as long as the agent works. */
-.text-shimmer {
-  background: linear-gradient(90deg, #8a8a92 0%, #8a8a92 40%, #f4f4f5 50%, #8a8a92 60%, #8a8a92 100%);
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
-  animation: text-shimmer-sweep 2.2s linear infinite;
-}
-.theme-light .text-shimmer {
-  background: linear-gradient(90deg, #52525b 0%, #52525b 40%, #c8c8d0 50%, #52525b 60%, #52525b 100%);
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-@keyframes text-shimmer-sweep {
-  0% { background-position: 200% 0; }
-  100% { background-position: 0% 0; }
-}
+/* NOTE: a background-clip:text sweeping "shimmer" was tried for the agent
+   working box and REMOVED - WebKitGTK leaves stale glyph paints when the
+   clipped text changes under animation (status words painted over the rows
+   below). Liveness comes from ThemeAwareLottie + the pulse gradient above. */
 
 @keyframes metallic-status-pulse-light {
   0%, 100% { color: #606068; }
