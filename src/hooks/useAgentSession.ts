@@ -448,6 +448,36 @@ export function useAgentSession(props: UseAgentSessionProps) {
           }
           return { ...m, agentLog: log };
         });
+      } else if (kind === "turn_completed") {
+        // The agent narrates its own turn stats - stamp them so the action
+        // bar (Tokens, Model) and the collapsed stub can be honest instead
+        // of empty. The actual upstream model comes from modelUsage.
+        const usage = update.usage;
+        if (usage) {
+          const modelKey = usage.modelUsage
+            ? Object.keys(usage.modelUsage)[0]
+            : undefined;
+          const online = props.selectedAi.value.aiConfig?.model?.startsWith("online:");
+          const folder = state.folderPath?.split("/").filter(Boolean).pop();
+          mutateTurn((m) => ({
+            ...m,
+            tokens: {
+              prompt_tokens: usage.inputTokens,
+              completion_tokens: usage.outputTokens,
+              total_tokens: usage.totalTokens,
+            },
+            servedBy: modelKey
+              ? online
+                ? `online:${modelKey}`
+                : modelKey
+              : m.servedBy,
+            routingReason: `Agent session in ${folder ?? "your folder"}`,
+            agentStats: {
+              durationMs: usage.apiDurationMs,
+              modelCalls: usage.modelCalls,
+            },
+          }));
+        }
       } else if (kind === "tool_call" || kind === "tool_call_update") {
         const toolCallId = update.toolCallId || uuidv4();
         const human = humanizeAction(update);
@@ -536,13 +566,24 @@ export function useAgentSession(props: UseAgentSessionProps) {
       };
       state.pendingPermissionId = permission.requestId;
       state.pendingCardOffscreen = false;
-      mutateTurn((m) => ({
-        ...m,
-        agentLog: [
-          ...(m.agentLog ?? []),
-          { id: `perm-${permission.requestId}`, type: "permission", permission },
-        ],
-      }));
+      mutateTurn((m) => {
+        // Idempotent by request id: a re-delivered event (seen once in the
+        // wild as two identical pending cards) must not add a second card.
+        if (
+          (m.agentLog ?? []).some(
+            (i) => i.type === "permission" && i.permission.requestId === permission.requestId,
+          )
+        ) {
+          return m;
+        }
+        return {
+          ...m,
+          agentLog: [
+            ...(m.agentLog ?? []),
+            { id: `perm-${permission.requestId}`, type: "permission", permission },
+          ],
+        };
+      });
     });
 
     const finishTurn = (errorText?: string) => {

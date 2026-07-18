@@ -161,11 +161,14 @@ export interface Message {
    *  ChatMessage's per-bubble min-height reservation - the agent turn
    *  reserves scroll space with one turn-scoped spacer instead. */
   agentTurn?: boolean;
-  /** The agent turn's working log, rendered as a collapsible box inside
-   *  the reply bubble (steps + narration + thoughts + permissions, in true
+  /** The agent turn's working log, rendered as the work rail inside the
+   *  reply bubble (steps + narration + thoughts + permissions, in true
    *  order). `content` holds only the text the AI is currently saying -
    *  which, at turn end, IS the final answer. */
   agentLog?: AgentLogItem[];
+  /** Turn-level stats from the agent's turn_completed usage - drives the
+   *  collapsed stub ("6 steps - 5 files - 40s") and the Tokens panel. */
+  agentStats?: { durationMs?: number; modelCalls?: number };
   /** An agent permission request (folder open). Renders as an inline card;
    *  once answered it collapses to a one-line receipt. */
   agentPermission?: AgentPermission;

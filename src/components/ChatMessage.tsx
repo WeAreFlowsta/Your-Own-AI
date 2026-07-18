@@ -4,6 +4,7 @@ import {
   useTask$,
   useVisibleTask$,
   type QRL,
+  type Signal,
   $,
 } from '@builder.io/qwik';
 import 'highlight.js/styles/vs2015.css';
@@ -35,6 +36,23 @@ const BsHashIcon = component$(() => (
     class="md:mr-1.5"
   >
     <path d="M8.39 12.648a1.32 1.32 0 0 0-.015.18c0 .305.21.508.5.508.266 0 .492-.172.555-.477l.554-2.703h1.204c.421 0 .617-.234.617-.547 0-.312-.188-.53-.617-.53h-.985l.516-2.524h1.265c.43 0 .618-.227.618-.547 0-.313-.188-.524-.618-.524h-1.046l.476-2.304a1.06 1.06 0 0 0 .016-.164.51.51 0 0 0-.516-.516.54.54 0 0 0-.539.43l-.523 2.554H7.617l.477-2.304c.008-.04.015-.118.015-.164a.512.512 0 0 0-.523-.516.539.539 0 0 0-.531.43L6.53 5.484H5.414c-.43 0-.617.22-.617.532 0 .312.187.539.617.539h.906l-.515 2.523H4.609c-.421 0-.609.219-.609.531 0 .313.188.547.61.547h.976l-.516 2.492c-.008.04-.015.125-.015.18 0 .305.21.508.5.508.265 0 .492-.172.554-.477l.555-2.703h2.242l-.515 2.492zm-1-6.109h2.266l-.515 2.563H6.859l.532-2.563z" />
+  </svg>
+));
+
+const BsListUlIcon = component$(() => (
+  <svg
+    fill="currentColor"
+    stroke="currentColor"
+    stroke-width="0"
+    viewBox="0 0 16 16"
+    height="1em"
+    width="1em"
+    class="md:mr-1.5"
+  >
+    <path
+      fill-rule="evenodd"
+      d="M5 11.5a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5zm-3 1a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm0 4a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm0 4a1 1 0 1 0 0-2 1 1 0 0 0 0 2z"
+    />
   </svg>
 ));
 
@@ -208,6 +226,9 @@ interface ActionBarProps {
   isLast?: boolean;
   onRouteRetry$?: QRL<(target: 'online' | 'device') => void>;
   canRouteOnline?: boolean;
+  /** Agent turns: the work rail's expansion state - the Steps button and
+   *  the collapsed stub toggle the same signal. */
+  railOpen?: Signal<boolean>;
 }
 
 // Minimum reasoning length (trimmed chars) worth surfacing a thinking box for.
@@ -276,8 +297,16 @@ const ActionBar = component$<ActionBarProps>((props) => {
   const hasGrounded = !!props.message.grounded && props.message.grounded.length > 0;
   const canGround = !!props.onGround$ && !hasGrounded && !props.message.groundingPending;
   const hasModelInfo = props.message.role === 'assistant' && !!props.message.servedBy;
-  const hasButtons = hasTokens || hasThoughts || hasSources || hasGrounded || canGround || !!props.message.groundingPending || hasModelInfo;
+  const hasSteps =
+    !!props.railOpen && !!props.message.agentLog && props.message.agentLog.length > 0 && !props.message.isLoading;
+  const hasButtons = hasSteps || hasTokens || hasThoughts || hasSources || hasGrounded || canGround || !!props.message.groundingPending || hasModelInfo;
   const showStatus = props.isLoading && !props.message.error;
+
+  // Nothing to say and nothing to offer: render nothing. (The empty bar
+  // container was the "dead strip" above agent turns.)
+  if (!showStatus && !hasButtons) {
+    return null;
+  }
 
   const toggleSection$ = $((section: 'tokens' | 'thoughts' | 'sources' | 'model') => {
     openSection.value = openSection.value === section ? null : section;
@@ -342,6 +371,21 @@ const ActionBar = component$<ActionBarProps>((props) => {
         {/* Action buttons (right-aligned, shown when data available) */}
         {hasButtons && !showStatus && (
           <div class="flex items-center space-x-2">
+            {hasSteps && (
+              <LiquidMetalButton
+                onClick$={() => {
+                  props.railOpen!.value = !props.railOpen!.value;
+                }}
+                class="px-3 py-1 text-xs flex items-center"
+                aria-expanded={props.railOpen!.value}
+                title="The work behind this answer - every step, in order"
+              >
+                <BsListUlIcon />
+                <span class="hidden md:inline">
+                  {props.railOpen!.value ? 'Hide Steps' : 'Steps'}
+                </span>
+              </LiquidMetalButton>
+            )}
             {hasTokens && (
               <LiquidMetalButton
                 onClick$={() => toggleSection$('tokens')}
@@ -443,8 +487,14 @@ const ActionBar = component$<ActionBarProps>((props) => {
                 ? `Auto routing: ${props.message.routingReason}`
                 : 'This model was picked directly, not by Auto routing.'}
             </p>
+            {props.message.agentTurn && (
+              <p class="text-xs mt-1.5 text-[var(--text-muted)]">
+                A folder session stays on its model for the whole conversation.
+              </p>
+            )}
             {props.isLast &&
               props.onRouteRetry$ &&
+              !props.message.agentTurn &&
               props.message.servedBy!.startsWith('online:') && (
                 <button
                   type="button"
@@ -459,6 +509,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
               )}
             {props.isLast &&
               props.onRouteRetry$ &&
+              !props.message.agentTurn &&
               props.canRouteOnline &&
               !props.message.servedBy!.startsWith('online:') && (
                 <button
@@ -498,6 +549,16 @@ const ActionBar = component$<ActionBarProps>((props) => {
               </div>
             )}
           </div>
+          {/* Agent turns are many model calls over real time - say so. */}
+          {props.message.agentStats && (
+            <div class="mt-3 text-center text-xs text-[var(--text-muted)]">
+              {props.message.agentStats.modelCalls ?? '?'} model call
+              {(props.message.agentStats.modelCalls ?? 0) === 1 ? '' : 's'}
+              {props.message.agentStats.durationMs
+                ? ` · ${Math.round(props.message.agentStats.durationMs / 1000)}s of model time`
+                : ''}
+            </div>
+          )}
         </div>
       )}
 
@@ -591,6 +652,10 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
   const dynamicStatus = useSignal('');
   const statusOpacity = useSignal(1);
   const isCodePanelOpen = useSignal(false);
+
+  // Agent work rail: collapsed-stub expansion, shared by the stub itself
+  // and the action bar's Steps button.
+  const agentRailOpen = useSignal(false);
 
   const statusMessages = [
     'Synthesizing information',
@@ -975,6 +1040,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
                   isLoading={
                     !!props.message.isLoading && !props.message.agentLog?.length
                   }
+                  railOpen={agentRailOpen}
                   isModelLoading={props.isModelLoading}
                   isWritingCode={isWritingCode}
                   isThinking={!!props.message.thinking && !finalText.value}
@@ -990,14 +1056,15 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
                   canRouteOnline={props.canRouteOnline}
                 />
               )}
-              {/* Agent working box: the turn's steps/narration/permissions,
-                  inside the bubble, above the final answer. */}
+              {/* Agent work rail: the turn's story (speech, thread, cards),
+                  live while working, folded to a stub when done. */}
               {props.message.agentLog && props.message.agentLog.length > 0 && (
                 <div class="pl-0 md:pl-10 lg:pl-10 mt-1 mb-1">
                   <AgentWorkingBox
                     log={props.message.agentLog}
                     working={!!props.message.isLoading}
-                    theme={props.theme}
+                    railOpen={agentRailOpen}
+                    durationMs={props.message.agentStats?.durationMs}
                     onPermissionRespond$={props.onPermissionRespond$}
                     onPermissionOffscreen$={props.onPermissionOffscreen$}
                   />
@@ -1005,7 +1072,9 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
               )}
               {contentToRender && !hasError && (
                 <div
-                  class={`markdown-content bg-[var(--bg-assistant-message)] p-2 pr-2 pb-2 pt-2 pl-0 md:pl-10 lg:pl-10 rounded-lg text-[var(--text-primary)] text-base leading-relaxed ${props.message.thinking ? 'mt-2' : ''}`}
+                  // Agent turns speak unboxed - the two registers (words vs
+                  // work) carry the hierarchy, not a card background.
+                  class={`markdown-content ${props.message.agentTurn ? '' : 'bg-[var(--bg-assistant-message)]'} p-2 pr-2 pb-2 pt-2 pl-0 md:pl-10 lg:pl-10 rounded-lg text-[var(--text-primary)] text-base leading-relaxed ${props.message.thinking ? 'mt-2' : ''}`}
                   dangerouslySetInnerHTML={renderedHtml}
                 />
               )}
