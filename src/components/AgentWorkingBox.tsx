@@ -241,13 +241,22 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                     }}
                     class={`flex w-full items-center gap-2 text-left text-[var(--text-muted)] ${hasOutput ? "hover:text-[var(--text-secondary)] cursor-pointer" : "cursor-default"}`}
                   >
-                    {a.status === "completed" ? (
-                      <LuCheck class="h-3.5 w-3.5 shrink-0 text-green-600 dark:text-green-400" />
-                    ) : a.status === "failed" ? (
-                      <LuX class="h-3.5 w-3.5 shrink-0 text-red-500 dark:text-red-400" />
-                    ) : (
-                      <span class="inline-block w-1.5 h-1.5 mx-1 rounded-full bg-[var(--text-link)] animate-pulse shrink-0" />
-                    )}
+                    {/* All three glyphs stay in the DOM; status only flips
+                        classes. Swapping ELEMENTS in a ternary here left the
+                        old glyph behind when status changed mid-stream
+                        (gotcha: ternary branch swaps) - every done row wore
+                        both its dot and its check. */}
+                    <span class="shrink-0 w-3.5 h-3.5 flex items-center justify-center">
+                      <LuCheck
+                        class={`h-3.5 w-3.5 text-green-600 dark:text-green-400 ${a.status === "completed" ? "" : "hidden"}`}
+                      />
+                      <LuX
+                        class={`h-3.5 w-3.5 text-red-500 dark:text-red-400 ${a.status === "failed" ? "" : "hidden"}`}
+                      />
+                      <span
+                        class={`w-1.5 h-1.5 rounded-full bg-[var(--text-link)] animate-pulse ${a.status === "completed" || a.status === "failed" ? "hidden" : ""}`}
+                      />
+                    </span>
                     <Icon class="h-3.5 w-3.5 shrink-0 opacity-70" />
                     <span class="min-w-0 truncate whitespace-nowrap text-xs">
                       {a.label}
@@ -278,9 +287,13 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
         )}
       </div>
       )}
+      {/* The words being said right now. Same muted style as box narration
+          so sliding into the box (when work follows) is seamless; the ONE
+          restyle to full-size happens at turn end, when finishTurn promotes
+          this text to the bubble body as the answer. */}
       {trailingNarration.value && (
         <div
-          class="markdown-content bg-[var(--bg-assistant-message)] p-2 rounded-lg text-[var(--text-primary)] text-base leading-relaxed mt-2"
+          class="markdown-content thinking-markdown text-xs text-[var(--text-secondary)] leading-relaxed mt-1 px-3 break-words overflow-hidden"
           dangerouslySetInnerHTML={renderMarkdown(trailingNarration.value.text)}
         />
       )}
