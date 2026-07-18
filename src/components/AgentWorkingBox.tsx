@@ -87,6 +87,21 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
 
     const expanded = useComputed$(() => userExpanded.value ?? working);
 
+    // The CURRENT words render below the box at full size - they are what
+    // the AI is saying right now, and if the turn ends here they ARE the
+    // answer (finishTurn promotes them to the bubble body in place - no
+    // visible move, no reprint). Only when more work follows do they slide
+    // up into the box as muted history. Keeping the streaming text OUT of
+    // the keyed list also matters: innerHTML updating next to keyed rows
+    // made reconciliation duplicate the neighboring row.
+    const trailingNarration = useComputed$(() => {
+      const last = log[log.length - 1];
+      return working && last?.type === "narration" ? last : null;
+    });
+    const boxItems = useComputed$(() =>
+      trailingNarration.value ? log.slice(0, -1) : log,
+    );
+
     const summary = useComputed$(() => {
       const actions = log.filter((i) => i.type === "action");
       const perms = log.filter((i) => i.type === "permission").length;
@@ -124,6 +139,8 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
     });
 
     return (
+      <>
+      {boxItems.value.length > 0 && (
       <div class="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] text-sm overflow-hidden">
         <div class="flex items-center gap-1">
           <button
@@ -173,7 +190,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
             {/* Keys are the items' STABLE ids - index keys made Qwik
                 re-match elements across item types during rapid inserts
                 and mis-nest rows into each other (text over text). */}
-            {log.map((item) => {
+            {boxItems.value.map((item) => {
               if (item.type === "thought") {
                 return showThoughts.value ? (
                   <div
@@ -260,6 +277,14 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
           </div>
         )}
       </div>
+      )}
+      {trailingNarration.value && (
+        <div
+          class="markdown-content bg-[var(--bg-assistant-message)] p-2 rounded-lg text-[var(--text-primary)] text-base leading-relaxed mt-2"
+          dangerouslySetInnerHTML={renderMarkdown(trailingNarration.value.text)}
+        />
+      )}
+      </>
     );
   },
 );
