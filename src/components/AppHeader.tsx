@@ -17,7 +17,7 @@ import {
   LuSun,
   LuMoon,
   LuCheck,
-  LuBot,
+  LuBot, LuHammer,
   LuBrain,
   LuDownload,
   LuCloud,
@@ -248,6 +248,17 @@ export default component$<AppHeaderProps>(
                   >
                     <LuBrain class="mr-2 h-5 w-5" aria-hidden="true" />
                     Your Memory
+                  </button>
+                  <button
+                    onClick$={async () => {
+                      menuOpen.value = false;
+                      await nav("/builder/");
+                    }}
+                    class="group flex w-full items-center pl-3 pr-2 py-2 text-sm text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)]"
+                    role="menuitem"
+                  >
+                    <LuHammer class="mr-2 h-5 w-5" aria-hidden="true" />
+                    Build
                   </button>
                 </div>
                 <div class="py-1">
