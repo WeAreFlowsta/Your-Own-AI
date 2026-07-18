@@ -37,6 +37,11 @@ impl AgentBridgeState {
 
 const INIT_ID: u64 = 1;
 const SESSION_NEW_ID: u64 = 2;
+/// `session/set_model` sent right after the session opens (when a model was
+/// requested). The agent ignores metas on session/new; this request is the
+/// real selection mechanism - ids are the `:11435` catalog's name slugs
+/// (e.g. `kimiveebo:agent`).
+const SET_MODEL_ID: u64 = 3;
 
 /// Stable identifier the agent uses to key persisted permission grants
 /// (per folder, per client). Changing it would silently reset every
@@ -78,7 +83,7 @@ pub async fn start_build_agent(
         .map_err(|e| format!("failed to start agent: {}", e))?;
 
     *state.child.lock().await = Some(child);
-    state.next_id.store(3, Ordering::SeqCst); // 1 = initialize, 2 = session/new
+    state.next_id.store(4, Ordering::SeqCst); // 1..=3 = handshake requests
 
     let workspace = cwd.clone();
     let session_model = model.clone();
@@ -156,15 +161,15 @@ async fn handle_agent_message(
         }
         // Responses to our own requests.
         (None, Some(INIT_ID)) => {
-            let mut meta = json!({ "clientIdentifier": CLIENT_IDENTIFIER });
-            if let Some(model) = session_model {
-                meta["modelId"] = json!(model);
-            }
             let request = json!({
                 "jsonrpc": "2.0",
                 "id": SESSION_NEW_ID,
                 "method": "session/new",
-                "params": { "cwd": workspace, "mcpServers": [], "_meta": meta }
+                "params": {
+                    "cwd": workspace,
+                    "mcpServers": [],
+                    "_meta": { "clientIdentifier": CLIENT_IDENTIFIER }
+                }
             });
             let _ = write_line(&state, &request).await;
         }
@@ -176,11 +181,41 @@ async fn handle_agent_message(
             match session_id {
                 Some(sid) => {
                     *state.session_id.lock().await = Some(sid.clone());
-                    let _ = app.emit("agent-ready", json!({ "sessionId": sid }));
+                    if let Some(model) = session_model {
+                        // Select the conversation's AI; agent-ready follows
+                        // the set_model response so the first prompt can't
+                        // race onto the config-default model.
+                        let request = json!({
+                            "jsonrpc": "2.0",
+                            "id": SET_MODEL_ID,
+                            "method": "session/set_model",
+                            "params": { "sessionId": sid, "modelId": model }
+                        });
+                        let _ = write_line(&state, &request).await;
+                    } else {
+                        let _ = app.emit("agent-ready", json!({ "sessionId": sid }));
+                    }
                 }
                 None => {
                     let _ = app.emit("agent-log", format!("session/new failed: {}", msg));
                 }
+            }
+        }
+        (None, Some(SET_MODEL_ID)) => {
+            // Soft-fail: an unknown model id keeps the agent's default model
+            // rather than killing the session - but say so loudly.
+            if let Some(err) = msg.get("error") {
+                let _ = app.emit(
+                    "agent-log",
+                    format!(
+                        "couldn't set model {:?}: {} - running on the agent's default model",
+                        session_model, err
+                    ),
+                );
+            }
+            let sid = state.session_id.lock().await.clone();
+            if let Some(sid) = sid {
+                let _ = app.emit("agent-ready", json!({ "sessionId": sid }));
             }
         }
         // Prompt-turn completions (and any other response to our requests).

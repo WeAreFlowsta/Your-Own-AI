@@ -50,6 +50,17 @@ function resolveBinaryPath(): string {
   }
 }
 
+/** The agent's model catalog auto-populates from the local server's model
+ *  list, which ids models by NAME SLUG (`kimiveebo:agent`) - the store id
+ *  would not resolve. Mirrors the server's slug rules. */
+function aiAgentModelId(ai: SelectedAiModel): string {
+  const base = (ai.label || ai.id)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `${base}:agent`;
+}
+
 /** Short human handle for a permission receipt: the command if there is
  *  one, else the tool title. Receipts may shorten; the CARD never does. */
 function receiptSubject(p: AgentPermission): string {
@@ -152,7 +163,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       await invokeTauri("start_build_agent", {
         binary: resolveBinaryPath(),
         cwd: path,
-        model: `${props.selectedAi.value.id}:agent`,
+        model: aiAgentModelId(props.selectedAi.value),
       });
     } catch (err) {
       state.status = "idle";
@@ -456,6 +467,28 @@ export function useAgentSession(props: UseAgentSessionProps) {
       }
     });
 
+    // Model-selection failure must be VISIBLE: quietly running the agent on
+    // a different model than the AI's face is the one substitution the trust
+    // story forbids.
+    const unLog = await listen<string>("agent-log", (e) => {
+      if (
+        typeof e.payload === "string" &&
+        e.payload.startsWith("couldn't set model")
+      ) {
+        props.chatState.messages = [
+          ...props.chatState.messages,
+          {
+            id: uuidv4(),
+            role: "assistant",
+            content: "",
+            model: ai().id,
+            aiLabel: ai().label,
+            error: `This folder's agent couldn't switch to ${ai().label}'s model and is running on its default instead. (${e.payload})`,
+          },
+        ];
+      }
+    });
+
     const unExit = await listen<{ code: number | null }>("agent-exit", (e) => {
       const wasOpen = state.folderPath !== null;
       const midTurn = props.chatState.isLoading;
@@ -483,6 +516,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       unUpdate();
       unPermission();
       unTurn();
+      unLog();
       unExit();
     });
   });
