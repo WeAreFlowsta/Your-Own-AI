@@ -23,11 +23,11 @@ import {
 import { AgentPermissionCard } from "./AgentPermissionCard";
 import ThemeAwareLottie from "./ThemeAwareLottie";
 import { renderMarkdown } from "../utils/renderMarkdown";
-import type { AgentAction, AgentLogItem } from "../types";
+import type { AgentAction, AgentLogItem, AgentPermission } from "../types";
 
 interface AgentWorkingBoxProps {
   log: AgentLogItem[];
-  /** True while the turn is streaming - keeps the box open + animating. */
+  /** True while the turn is streaming - keeps the active box animating. */
   working: boolean;
   theme: "light" | "dark";
   onPermissionRespond$?: QRL<
@@ -37,6 +37,19 @@ interface AgentWorkingBoxProps {
 }
 
 const SHOW_THOUGHTS_KEY = "agent-show-thoughts";
+
+/** The working flow: full-size text and quiet step boxes interleaved in
+ *  true order, all inside the turn's single bubble. TEXT NEVER RESIZES OR
+ *  MOVES - the streaming tail, its settled flow position, and the final
+ *  answer (promoted to the bubble body at turn end) all share the same
+ *  full-size style, so every hand-off is invisible. Only the step boxes
+ *  change shape: expanded and ticking while the turn works, collapsed to
+ *  their summary line when it ends. */
+type FlowElement =
+  | { kind: "text"; id: string; text: string }
+  | { kind: "thought"; id: string; text: string }
+  | { kind: "group"; id: string; actions: AgentAction[] }
+  | { kind: "permission"; id: string; permission: AgentPermission };
 
 function actionIcon(kind?: string) {
   switch (kind) {
@@ -61,19 +74,18 @@ function actionIcon(kind?: string) {
   }
 }
 
-/**
- * The agent turn's working box - lives INSIDE the reply bubble, above the
- * final answer. Steps tick with humanized labels and expandable real results,
- * the AI's mid-work narration streams muted between them, permission cards
- * interrupt at their true position, and a shimmer line at the bottom always
- * shows the current activity while the turn runs. Collapses to a one-line
- * summary when the turn ends. The "brain" toggle also streams the model's
- * live thinking (off by default).
- */
+function groupSummary(actions: AgentAction[]): string {
+  const files = new Set<string>();
+  for (const a of actions) for (const p of a.locations ?? []) files.add(p);
+  return files.size > 0
+    ? `Worked in ${files.size} file${files.size === 1 ? "" : "s"} - ${actions.length} action${actions.length === 1 ? "" : "s"}`
+    : `Did ${actions.length} action${actions.length === 1 ? "" : "s"}`;
+}
+
 export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
   ({ log, working, theme, onPermissionRespond$, onPermissionOffscreen$ }) => {
-    const userExpanded = useSignal<boolean | undefined>(undefined);
     const showThoughts = useSignal(false);
+    const openGroups = useSignal<Record<string, boolean>>({});
     const openOutputs = useSignal<Record<string, boolean>>({});
 
     // eslint-disable-next-line qwik/no-use-visible-task
@@ -85,41 +97,38 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
       }
     });
 
-    const expanded = useComputed$(() => userExpanded.value ?? working);
-
-    // The CURRENT words render below the box at full size - they are what
-    // the AI is saying right now, and if the turn ends here they ARE the
-    // answer (finishTurn promotes them to the bubble body in place - no
-    // visible move, no reprint). Only when more work follows do they slide
-    // up into the box as muted history. Keeping the streaming text OUT of
-    // the keyed list also matters: innerHTML updating next to keyed rows
-    // made reconciliation duplicate the neighboring row.
+    // While working, the trailing narration streams in a stable element at
+    // the END of the flow (streaming innerHTML inside the keyed list
+    // duplicates neighbors) - identical styling to a settled text block, so
+    // its later move into the list is invisible.
     const trailingNarration = useComputed$(() => {
       const last = log[log.length - 1];
       return working && last?.type === "narration" ? last : null;
     });
-    const boxItems = useComputed$(() =>
-      trailingNarration.value ? log.slice(0, -1) : log,
-    );
 
-    const summary = useComputed$(() => {
-      const actions = log.filter((i) => i.type === "action");
-      const perms = log.filter((i) => i.type === "permission").length;
-      const files = new Set<string>();
-      for (const i of actions)
-        for (const p of (i as { action: AgentAction }).action.locations ?? [])
-          files.add(p);
-      const parts: string[] = [];
-      parts.push(
-        files.size > 0
-          ? `Worked in ${files.size} file${files.size === 1 ? "" : "s"} - ${actions.length} action${actions.length === 1 ? "" : "s"}`
-          : `Did ${actions.length} action${actions.length === 1 ? "" : "s"}`,
-      );
-      if (perms > 0) parts.push(`${perms} permission${perms === 1 ? "" : "s"}`);
-      return parts.join(" - ");
+    const flow = useComputed$<FlowElement[]>(() => {
+      const items = trailingNarration.value ? log.slice(0, -1) : log;
+      const out: FlowElement[] = [];
+      for (const item of items) {
+        if (item.type === "narration") {
+          out.push({ kind: "text", id: item.id, text: item.text });
+        } else if (item.type === "thought") {
+          out.push({ kind: "thought", id: item.id, text: item.text });
+        } else if (item.type === "permission") {
+          out.push({ kind: "permission", id: item.id, permission: item.permission });
+        } else {
+          const last = out[out.length - 1];
+          if (last?.kind === "group") {
+            last.actions = [...last.actions, item.action];
+          } else {
+            out.push({ kind: "group", id: item.id, actions: [item.action] });
+          }
+        }
+      }
+      return out;
     });
 
-    // The shimmer line: what is happening RIGHT NOW, specifically.
+    // The one live status: the last flow element's group while working.
     const status = useComputed$(() => {
       const last = log[log.length - 1];
       if (last?.type === "permission" && last.permission.state === "pending") {
@@ -138,165 +147,170 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
       return "Thinking..";
     });
 
+    const lastFlowId = useComputed$(() => flow.value[flow.value.length - 1]?.id);
+
     return (
       <>
-      {boxItems.value.length > 0 && (
-      <div class="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] text-sm overflow-hidden">
-        <div class="flex items-center gap-1">
-          <button
-            onClick$={() => (userExpanded.value = !expanded.value)}
-            class="flex flex-1 items-center gap-2 px-3 py-2 text-left text-[var(--text-muted)] hover:text-[var(--text-secondary)] min-w-0"
-          >
-            {expanded.value ? (
-              <LuChevronDown class="h-3.5 w-3.5 shrink-0" />
-            ) : (
-              <LuChevronRight class="h-3.5 w-3.5 shrink-0" />
-            )}
-            {/* Liveness = the app's proven movers (Lottie + pulse gradient).
-                NOT background-clip:text - WebKitGTK leaves stale glyph
-                paints when animated clip-text changes, and the old status
-                words end up painted over the rows below. */}
-            {working ? (
-              <>
-                <span class="shrink-0 w-3.5 h-3.5 overflow-hidden flex items-center justify-center">
-                  <ThemeAwareLottie type="thinking" theme={theme} size={14} />
-                </span>
-                <span class="flex-1 min-w-0 truncate animate-pulse-text status-text-gradient">
-                  {status.value}
-                </span>
-              </>
-            ) : (
-              <span class="flex-1 min-w-0 truncate">{summary.value}</span>
-            )}
-          </button>
-          <button
-            onClick$={() => {
-              showThoughts.value = !showThoughts.value;
-              try {
-                localStorage.setItem(SHOW_THOUGHTS_KEY, showThoughts.value ? "1" : "0");
-              } catch {
-                /* not persisted */
-              }
-            }}
-            title={showThoughts.value ? "Hide thinking" : "Show thinking"}
-            class={`px-3 py-2 shrink-0 ${showThoughts.value ? "text-[var(--text-secondary)]" : "text-[var(--text-muted)] opacity-50 hover:opacity-100"}`}
-          >
-            <LuBrain class="h-3.5 w-3.5" />
-          </button>
-        </div>
-
-        {expanded.value && (
-          <div class="px-3 pb-3 space-y-1.5">
-            {/* Keys are the items' STABLE ids - index keys made Qwik
-                re-match elements across item types during rapid inserts
-                and mis-nest rows into each other (text over text). */}
-            {boxItems.value.map((item) => {
-              if (item.type === "thought") {
-                return showThoughts.value ? (
-                  <div
-                    key={item.id}
-                    class="text-xs italic text-[var(--text-muted)] opacity-80 leading-relaxed pl-5"
+        {flow.value.map((el) => {
+          if (el.kind === "text") {
+            return (
+              <div
+                key={el.id}
+                class="markdown-content bg-[var(--bg-assistant-message)] p-2 pl-0 rounded-lg text-[var(--text-primary)] text-base leading-relaxed break-words overflow-hidden"
+                dangerouslySetInnerHTML={renderMarkdown(el.text)}
+              />
+            );
+          }
+          if (el.kind === "thought") {
+            return showThoughts.value ? (
+              <div
+                key={el.id}
+                class="text-xs italic text-[var(--text-muted)] opacity-80 leading-relaxed px-2 break-words overflow-hidden"
+              >
+                {el.text}
+              </div>
+            ) : null;
+          }
+          if (el.kind === "permission") {
+            return (
+              <AgentPermissionCard
+                key={el.id}
+                permission={el.permission}
+                onRespond$={
+                  onPermissionRespond$ &&
+                  // eslint-disable-next-line qwik/valid-lexical-scope
+                  ((decision: "allow" | "reject", always: boolean) =>
+                    onPermissionRespond$(el.permission.requestId, decision, always))
+                }
+                onOffscreenChange$={onPermissionOffscreen$}
+              />
+            );
+          }
+          const isActive = working && el.id === lastFlowId.value;
+          const expanded = openGroups.value[el.id] ?? working;
+          return (
+            <div
+              key={el.id}
+              class="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] text-sm overflow-hidden my-1"
+            >
+              <div class="flex items-center gap-1">
+                <button
+                  onClick$={() => {
+                    openGroups.value = { ...openGroups.value, [el.id]: !expanded };
+                  }}
+                  class="flex flex-1 items-center gap-2 px-3 py-2 text-left text-[var(--text-muted)] hover:text-[var(--text-secondary)] min-w-0"
+                >
+                  {/* Both header modes stay in the DOM; classes flip.
+                      (Element swaps in streaming UI leave orphans.) */}
+                  <span
+                    class={`flex items-center gap-2 min-w-0 ${isActive ? "" : "hidden"}`}
                   >
-                    {item.text}
-                  </div>
-                ) : null;
-              }
-              if (item.type === "narration") {
-                return (
-                  <div
-                    key={item.id}
-                    class="markdown-content thinking-markdown text-xs text-[var(--text-secondary)] leading-relaxed pl-5 break-words overflow-hidden"
-                    dangerouslySetInnerHTML={renderMarkdown(item.text)}
-                  />
-                );
-              }
-              if (item.type === "permission") {
-                return (
-                  <AgentPermissionCard
-                    key={item.id}
-                    permission={item.permission}
-                    onRespond$={
-                      onPermissionRespond$ &&
-                      // eslint-disable-next-line qwik/valid-lexical-scope
-                      ((decision: "allow" | "reject", always: boolean) =>
-                        onPermissionRespond$(item.permission.requestId, decision, always))
-                    }
-                    onOffscreenChange$={onPermissionOffscreen$}
-                  />
-                );
-              }
-              const a = item.action;
-              const Icon = actionIcon(a.kind);
-              const hasOutput = !!a.output;
-              const open = !!openOutputs.value[a.toolCallId];
-              return (
-                <div key={item.id} class="overflow-hidden">
+                    <span class="shrink-0 w-3.5 h-3.5 overflow-hidden flex items-center justify-center">
+                      <ThemeAwareLottie type="thinking" theme={theme} size={14} />
+                    </span>
+                    <span class="min-w-0 truncate whitespace-nowrap animate-pulse-text status-text-gradient">
+                      {status.value}
+                    </span>
+                  </span>
+                  <span
+                    class={`flex items-center gap-2 min-w-0 ${isActive ? "hidden" : ""}`}
+                  >
+                    <LuChevronRight class={`h-3.5 w-3.5 shrink-0 ${expanded ? "hidden" : ""}`} />
+                    <LuChevronDown class={`h-3.5 w-3.5 shrink-0 ${expanded ? "" : "hidden"}`} />
+                    <span class="min-w-0 truncate whitespace-nowrap">
+                      {groupSummary(el.actions)}
+                    </span>
+                  </span>
+                </button>
+                {isActive && (
                   <button
-                    disabled={!hasOutput}
                     onClick$={() => {
-                      openOutputs.value = {
-                        ...openOutputs.value,
-                        [a.toolCallId]: !openOutputs.value[a.toolCallId],
-                      };
+                      showThoughts.value = !showThoughts.value;
+                      try {
+                        localStorage.setItem(
+                          SHOW_THOUGHTS_KEY,
+                          showThoughts.value ? "1" : "0",
+                        );
+                      } catch {
+                        /* not persisted */
+                      }
                     }}
-                    class={`flex w-full items-center gap-2 text-left text-[var(--text-muted)] ${hasOutput ? "hover:text-[var(--text-secondary)] cursor-pointer" : "cursor-default"}`}
+                    title={showThoughts.value ? "Hide thinking" : "Show thinking"}
+                    class={`px-3 py-2 shrink-0 ${showThoughts.value ? "text-[var(--text-secondary)]" : "text-[var(--text-muted)] opacity-50 hover:opacity-100"}`}
                   >
-                    {/* All three glyphs stay in the DOM; status only flips
-                        classes. Swapping ELEMENTS in a ternary here left the
-                        old glyph behind when status changed mid-stream
-                        (gotcha: ternary branch swaps) - every done row wore
-                        both its dot and its check. */}
-                    <span class="shrink-0 w-3.5 h-3.5 flex items-center justify-center">
-                      <LuCheck
-                        class={`h-3.5 w-3.5 text-green-600 dark:text-green-400 ${a.status === "completed" ? "" : "hidden"}`}
-                      />
-                      <LuX
-                        class={`h-3.5 w-3.5 text-red-500 dark:text-red-400 ${a.status === "failed" ? "" : "hidden"}`}
-                      />
-                      <span
-                        class={`w-1.5 h-1.5 rounded-full bg-[var(--text-link)] animate-pulse ${a.status === "completed" || a.status === "failed" ? "hidden" : ""}`}
-                      />
-                    </span>
-                    <Icon class="h-3.5 w-3.5 shrink-0 opacity-70" />
-                    <span class="min-w-0 truncate whitespace-nowrap text-xs">
-                      {a.label}
-                      {a.outputLines ? (
-                        <span class="opacity-60"> - {a.outputLines} lines</span>
-                      ) : null}
-                    </span>
-                    {hasOutput && (
-                      <span class="ml-auto shrink-0 opacity-50">
-                        {open ? (
-                          <LuChevronDown class="h-3 w-3" />
-                        ) : (
-                          <LuChevronRight class="h-3 w-3" />
-                        )}
-                      </span>
-                    )}
+                    <LuBrain class="h-3.5 w-3.5" />
                   </button>
-                  {open && hasOutput && (
-                    <pre class="mt-1 ml-5 text-[11px] rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)] p-2 whitespace-pre-wrap break-all font-mono text-[var(--text-secondary)] max-h-64 overflow-y-auto">
-                      {a.detail && a.detail !== a.output ? `${a.detail}\n\n` : ""}
-                      {a.output}
-                    </pre>
-                  )}
+                )}
+              </div>
+
+              {expanded && (
+                <div class="px-3 pb-3 space-y-1.5">
+                  {el.actions.map((a) => {
+                    const Icon = actionIcon(a.kind);
+                    const hasOutput = !!a.output;
+                    const open = !!openOutputs.value[a.toolCallId];
+                    return (
+                      <div key={a.toolCallId} class="overflow-hidden">
+                        <button
+                          disabled={!hasOutput}
+                          onClick$={() => {
+                            openOutputs.value = {
+                              ...openOutputs.value,
+                              [a.toolCallId]: !openOutputs.value[a.toolCallId],
+                            };
+                          }}
+                          class={`flex w-full items-center gap-2 text-left text-[var(--text-muted)] ${hasOutput ? "hover:text-[var(--text-secondary)] cursor-pointer" : "cursor-default"}`}
+                        >
+                          {/* Glyphs flip classes only - never swap elements
+                              in a streaming list. */}
+                          <span class="shrink-0 w-3.5 h-3.5 flex items-center justify-center">
+                            <LuCheck
+                              class={`h-3.5 w-3.5 text-green-600 dark:text-green-400 ${a.status === "completed" ? "" : "hidden"}`}
+                            />
+                            <LuX
+                              class={`h-3.5 w-3.5 text-red-500 dark:text-red-400 ${a.status === "failed" ? "" : "hidden"}`}
+                            />
+                            <span
+                              class={`w-1.5 h-1.5 rounded-full bg-[var(--text-link)] animate-pulse ${a.status === "completed" || a.status === "failed" ? "hidden" : ""}`}
+                            />
+                          </span>
+                          <Icon class="h-3.5 w-3.5 shrink-0 opacity-70" />
+                          <span class="min-w-0 truncate whitespace-nowrap text-xs">
+                            {a.label}
+                            {a.outputLines ? (
+                              <span class="opacity-60"> - {a.outputLines} lines</span>
+                            ) : null}
+                          </span>
+                          {hasOutput && (
+                            <span class="ml-auto shrink-0 opacity-50">
+                              <LuChevronRight class={`h-3 w-3 ${open ? "hidden" : ""}`} />
+                              <LuChevronDown class={`h-3 w-3 ${open ? "" : "hidden"}`} />
+                            </span>
+                          )}
+                        </button>
+                        {open && hasOutput && (
+                          <pre class="mt-1 ml-5 text-[11px] rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)] p-2 whitespace-pre-wrap break-all font-mono text-[var(--text-secondary)] max-h-64 overflow-y-auto">
+                            {a.detail && a.detail !== a.output ? `${a.detail}\n\n` : ""}
+                            {a.output}
+                          </pre>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
-              );
-            })}
-          </div>
+              )}
+            </div>
+          );
+        })}
+        {/* The words being said right now - identical style to a settled
+            text block and to the final answer, so nothing ever appears to
+            move or resize. */}
+        {trailingNarration.value && (
+          <div
+            class="markdown-content bg-[var(--bg-assistant-message)] p-2 pl-0 rounded-lg text-[var(--text-primary)] text-base leading-relaxed break-words overflow-hidden"
+            dangerouslySetInnerHTML={renderMarkdown(trailingNarration.value.text)}
+          />
         )}
-      </div>
-      )}
-      {/* The words being said right now. Same muted style as box narration
-          so sliding into the box (when work follows) is seamless; the ONE
-          restyle to full-size happens at turn end, when finishTurn promotes
-          this text to the bubble body as the answer. */}
-      {trailingNarration.value && (
-        <div
-          class="markdown-content thinking-markdown text-xs text-[var(--text-secondary)] leading-relaxed mt-1 px-3 break-words overflow-hidden"
-          dangerouslySetInnerHTML={renderMarkdown(trailingNarration.value.text)}
-        />
-      )}
       </>
     );
   },
