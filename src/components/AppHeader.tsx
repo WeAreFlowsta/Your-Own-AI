@@ -64,6 +64,12 @@ interface AppHeaderProps {
   isModelLoading?: boolean;
   modelTooBig?: boolean;
   showModelWidget?: boolean;
+  /** Open folder (Build agent) for this conversation - null = none. */
+  folderPath?: string | null;
+  /** Agent session status while a folder is open. */
+  folderStatus?: 'starting' | 'ready' | 'working' | 'stopped';
+  /** Close the folder (the route confirms first if the agent is mid-task). */
+  onCloseFolder$?: QRL<() => void>;
 }
 
 export default component$<AppHeaderProps>(
@@ -74,6 +80,9 @@ export default component$<AppHeaderProps>(
     isModelLoading = false,
     modelTooBig = false,
     showModelWidget = false,
+    folderPath = null,
+    folderStatus,
+    onCloseFolder$,
   }) => {
     const nav = useNavigate();
     const { theme } = useContext(ThemeContext);
@@ -114,6 +123,40 @@ export default component$<AppHeaderProps>(
           </div>
 
           <div class="flex items-center gap-4">
+            {/* Folder chip - the durable "this conversation has hands in a
+                folder" state. Same pill family as the model badge. */}
+            {folderPath && (
+              <span class="text-xs text-[var(--text-secondary)] flex items-center gap-2 px-3 py-1 bg-[var(--bg-dropdown)] rounded-full border border-[var(--border-subtle)]">
+                <span
+                  class={`w-2 h-2 rounded-full ${
+                    folderStatus === 'stopped'
+                      ? 'bg-red-500'
+                      : folderStatus === 'starting'
+                        ? 'bg-orange-500 animate-pulse'
+                        : folderStatus === 'working'
+                          ? 'bg-green-500 animate-pulse'
+                          : 'bg-green-500'
+                  }`}
+                />
+                <span class="max-w-[180px] truncate" title={folderPath}>
+                  {folderPath.split('/').filter(Boolean).pop() || folderPath}
+                </span>
+                {folderStatus === 'stopped' && (
+                  <span class="text-red-500 font-medium">· stopped</span>
+                )}
+                {onCloseFolder$ && (
+                  <button
+                    type="button"
+                    onClick$={onCloseFolder$}
+                    title="Close this folder"
+                    class="ml-0.5 text-[var(--text-muted)] hover:text-[var(--text-primary)] leading-none"
+                  >
+                    &times;
+                  </button>
+                )}
+              </span>
+            )}
+
             {/* Current Model Badge with Status Indicator */}
             {showModelWidget && currentModel && (
               <span class="text-xs text-[var(--text-secondary)] hidden md:flex items-center gap-2 px-3 py-1 bg-[var(--bg-dropdown)] rounded-full border border-[var(--border-subtle)]">

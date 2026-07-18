@@ -281,6 +281,13 @@ pub async fn stop_build_agent(state: State<'_, AgentBridgeState>) -> Result<(), 
     Ok(())
 }
 
+/// Dropped-path classifier for the chat's drag-and-drop: a folder drop opens
+/// the folder, a file drop stays an attachment.
+#[tauri::command]
+pub fn path_is_dir(path: String) -> bool {
+    std::path::Path::new(&path).is_dir()
+}
+
 #[tauri::command]
 pub async fn build_agent_status(state: State<'_, AgentBridgeState>) -> Result<Value, String> {
     let running = state.child.lock().await.is_some();

@@ -157,6 +157,47 @@ export interface Message {
   showUpgradeButton?: boolean;
   originalUserQuery?: string;
   originalUserMessageContent?: string;
+  /** A contiguous run of agent tool actions (folder open). A message with
+   *  this set renders as a quiet collapsible activity card, not a bubble. */
+  agentRun?: AgentRun;
+  /** An agent permission request (folder open). Renders as an inline card;
+   *  once answered it collapses to a one-line receipt. */
+  agentPermission?: AgentPermission;
+}
+
+/** One tool action inside an agent activity run. */
+export interface AgentAction {
+  toolCallId: string;
+  title: string;
+  /** ACP tool kind: read | edit | delete | move | search | execute | fetch | ... */
+  kind?: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'failed';
+  /** File paths this action touched (feeds the changed-files viewer). */
+  locations?: string[];
+}
+
+export interface AgentRun {
+  actions: AgentAction[];
+  /** Set when the turn ends; flips the card to its collapsed summary. */
+  done?: boolean;
+}
+
+/** The exact thing the agent asked to do, straight from the ACP toolCall -
+ *  rendered verbatim on the card, never paraphrased. */
+export interface AgentPermission {
+  requestId: number;
+  title: string;
+  /** ACP tool kind (drives the verb header + icon). */
+  kind?: string;
+  /** The exact command for execute asks - shown whole, never truncated. */
+  command?: string;
+  /** Unified-diff text for edit asks (collapsed preview + "show all"). */
+  diff?: string;
+  locations?: string[];
+  options: { optionId: string; name: string; kind?: string }[];
+  state: 'pending' | 'answered' | 'expired';
+  /** One-line receipt after answering, e.g. "Allowed: npm install - once". */
+  receipt?: string;
 }
 
 export type ChatAction = 'Write a report...' | 'Write code...' | null;

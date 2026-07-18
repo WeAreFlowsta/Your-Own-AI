@@ -19,6 +19,8 @@ interface InitialViewProps {
   attachedImages: Signal<AttachedImage[]>;
   contextWindowSize: number;
   onAttachFiles$: QRL<(paths: string[]) => void>;
+  /** Open a folder for this conversation (Build agent). */
+  onOpenFolder$?: QRL<(path: string) => void>;
   theme: 'light' | 'dark';
 }
 
@@ -42,6 +44,7 @@ export default component$<InitialViewProps>((props) => {
         attachedImages={props.attachedImages}
         contextWindowSize={props.contextWindowSize}
         onAttachFiles$={props.onAttachFiles$}
+        onOpenFolder$={props.onOpenFolder$}
         theme={props.theme}
       />
     </div>

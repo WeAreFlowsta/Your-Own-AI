@@ -17,6 +17,8 @@ interface ContentEditorProps {
   attachedImages?: Signal<AttachedImage[]>;
   contextWindowSize: number;
   onAttachFiles$: QRL<(paths: string[]) => void>;
+  /** Open a folder for this conversation (Build agent). */
+  onOpenFolder$?: QRL<(path: string) => void>;
   /** Id of the currently selected AI — when it changes, the editor takes focus. */
   selectedAiId?: string;
 }
@@ -248,6 +250,7 @@ export const ContentEditor = component$<ContentEditorProps>((props) => {
         <ActionMenu
           setSelectedAction$={props.setSelectedAction$}
           onAttachFiles$={props.onAttachFiles$}
+          onOpenFolder$={props.onOpenFolder$}
           isMultiLine={isMultiLine.value}
         />
       </div>

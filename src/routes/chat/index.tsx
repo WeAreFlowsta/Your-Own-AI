@@ -16,6 +16,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { ThemeContext } from "../layout";
 import { useAiData, useAiDataActions } from "../../contexts/AiDataContext";
 import { useChat } from "../../hooks/useChat";
+import { useAgentSession } from "../../hooks/useAgentSession";
+import ConfirmModal from "../../components/ConfirmModal";
 import { drainPendingExtractions, prewarmExtractionModel } from "../../utils/memoryExtraction";
 import GpuSafeModeNotice from "../../components/GpuSafeModeNotice";
 import { VisionDownloadCard } from "../../components/VisionDownloadCard";
@@ -121,6 +123,19 @@ export default component$(() => {
     modelLoadTime,
     modelTooBig,
   });
+
+  // Folder (Build agent) session - while a folder is open, every prompt goes
+  // through the agent instead of the direct model call (one brain).
+  const {
+    agentState,
+    openFolder$,
+    closeFolder$,
+    sendPrompt$: sendAgentPrompt$,
+    cancelTurn$,
+    respondPermission$,
+    answerPermissionByReply$,
+  } = useAgentSession({ chatState, selectedAi });
+  const showCloseFolderConfirm = useSignal(false);
 
   // --- Build dynamic model options from unified AI list ---
   const dynamicModelOptions = useSignal<SelectedAiModel[]>([]);
@@ -418,7 +433,19 @@ export default component$(() => {
 
   // --- Callbacks (replace useCallback with $()) ---
   const handleSubmit = $(async () => {
-    if (!input.value.trim() || chatState.isLoading) return;
+    if (!input.value.trim()) return;
+
+    // Typing while a permission card waits IS the answer: decline with
+    // instructions - the reply shows in place and goes to the agent next.
+    if (agentState.pendingPermissionId) {
+      const text = input.value;
+      input.value = "";
+      selectedAction.value = null;
+      await answerPermissionByReply$(text);
+      return;
+    }
+
+    if (chatState.isLoading) return;
 
     const finalInput = selectedAction.value
       ? `${selectedAction.value.replace(/\.\.\.$/, "")} ${input.value}`
@@ -433,11 +460,44 @@ export default component$(() => {
       fileContext = `[Attached files for context]\n\n${fileContextParts.join('\n\n')}`;
     }
 
+    // Folder open -> the agent session is the one brain for this
+    // conversation. Attached-file text rides along; images are a direct-chat
+    // feature for now.
+    if (agentState.folderPath) {
+      const agentInput = fileContext
+        ? `${fileContext}\n\n${finalInput}`
+        : finalInput;
+      sendAgentPrompt$(agentInput);
+      input.value = "";
+      selectedAction.value = null;
+      attachedImages.value = [];
+      return;
+    }
+
     const images = attachedImages.value.map((i) => i.dataUrl);
     sendMessage(finalInput, selectedAction.value, fileContext, images);
     input.value = "";
     selectedAction.value = null;
     attachedImages.value = []; // image is per-turn — don't silently re-send it
+  });
+
+  // Stop: an agent turn cancels over ACP (the agent still ends the turn);
+  // a direct model turn aborts the stream.
+  const handleStop = $(async () => {
+    if (agentState.folderPath && chatState.isLoading) {
+      await cancelTurn$();
+    } else {
+      await stopGeneration();
+    }
+  });
+
+  // Chip close: instant when idle, one confirm when the agent is mid-task.
+  const handleCloseFolder = $(async () => {
+    if (chatState.isLoading) {
+      showCloseFolderConfirm.value = true;
+    } else {
+      await closeFolder$();
+    }
   });
 
   const scrollToBottom = $((behavior: ScrollBehavior = "smooth") => {
@@ -461,6 +521,9 @@ export default component$(() => {
     sidePanelContent.value = null;
     attachedFiles.value = [];
     attachedImages.value = [];
+    // The folder belongs to the conversation - a new conversation starts
+    // without one.
+    if (agentState.folderPath) closeFolder$();
   });
 
   const handleAttachFiles = $(async (paths: string[]) => {
@@ -469,6 +532,17 @@ export default component$(() => {
     // crashes on more than one image per request, so a new image replaces the last.
     const imageExts = ["png", "jpg", "jpeg", "gif", "bmp"];
     for (const filePath of paths) {
+      // Dropping a FOLDER opens it (like dropping a folder on an editor);
+      // dropping a file stays an attachment.
+      try {
+        if (await invoke<boolean>("path_is_dir", { path: filePath })) {
+          openFolder$(filePath);
+          continue;
+        }
+      } catch {
+        // Classifier unavailable - treat as a file.
+      }
+
       const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
 
       // Images take the vision path: read as a base64 data URL (not text).
@@ -618,6 +692,11 @@ export default component$(() => {
           isModelLoading={isModelLoading.value}
           modelTooBig={modelTooBig.value}
           showModelWidget={showModelWidget.value && currentModel.value !== null}
+          folderPath={agentState.folderPath}
+          folderStatus={
+            agentState.status === "idle" ? undefined : agentState.status
+          }
+          onCloseFolder$={handleCloseFolder}
         />
       </div>
 
@@ -642,7 +721,7 @@ export default component$(() => {
               input={input}
               handleSubmit$={handleSubmit}
               isLoading={chatState.isLoading}
-              stopChat$={stopGeneration}
+              stopChat$={handleStop}
               currentPlaceholder={`Ask ${selectedAi.value.label} ${
                 selectedAi.value.aiConfig?.askBlurb &&
                 selectedAi.value.aiConfig.askBlurb.trim() !== ""
@@ -667,6 +746,18 @@ export default component$(() => {
               attachedImages={attachedImages}
               contextWindowSize={contextWindowSize.value}
               onAttachFiles$={handleAttachFiles}
+              onOpenFolder$={openFolder$}
+              onPermissionRespond$={respondPermission$}
+              onPermissionOffscreen$={$((off: boolean) => {
+                agentState.pendingCardOffscreen = off;
+              })}
+              showPermissionPill={
+                agentState.pendingPermissionId !== null &&
+                agentState.pendingCardOffscreen
+              }
+              onPermissionJump$={$(() => {
+                messagesEndRef.value?.scrollIntoView({ behavior: "smooth", block: "end" });
+              })}
             />
 
             <div class="max-w-4xl mx-auto w-full px-4">
@@ -1011,6 +1102,24 @@ export default component$(() => {
           )}
         </main>
       </div>
+
+      {/* Closing the folder mid-task is the one destructive gesture here -
+          confirm it. Idle closes never see this. */}
+      <ConfirmModal
+        isOpen={showCloseFolderConfirm.value}
+        title="Stop the agent?"
+        message="The agent is still working. Stop it and close the folder? Changes already made stay on disk."
+        confirmLabel="Stop & close"
+        cancelLabel="Keep working"
+        variant="danger"
+        onConfirm$={async () => {
+          showCloseFolderConfirm.value = false;
+          await closeFolder$();
+        }}
+        onCancel$={() => {
+          showCloseFolderConfirm.value = false;
+        }}
+      />
 
       {/* Welcome Modal — first-run model recommendation and download */}
       {showWelcomeModal.value && (
