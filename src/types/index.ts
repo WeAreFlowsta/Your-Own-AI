@@ -157,38 +157,49 @@ export interface Message {
   showUpgradeButton?: boolean;
   originalUserQuery?: string;
   originalUserMessageContent?: string;
-  /** Assistant bubble on the folder-agent path. Skips ChatMessage's
-   *  last-reply min-height reservation - the agent turn reserves scroll
-   *  space with one turn-scoped spacer instead, so interleaved activity
-   *  cards don't grab/release space and bounce the view. */
+  /** The reply bubble of a folder-agent turn (ONE per turn). Skips
+   *  ChatMessage's per-bubble min-height reservation - the agent turn
+   *  reserves scroll space with one turn-scoped spacer instead. */
   agentTurn?: boolean;
-  /** Mid-turn continuation bubble (text after tool activity). Skips the
-   *  question-to-top anchor: only the turn's FIRST bubble anchors, later
-   *  segments print in place. */
-  agentSegment?: boolean;
-  /** A contiguous run of agent tool actions (folder open). A message with
-   *  this set renders as a quiet collapsible activity card, not a bubble. */
-  agentRun?: AgentRun;
+  /** The agent turn's working log, rendered as a collapsible box inside
+   *  the reply bubble (steps + narration + thoughts + permissions, in true
+   *  order). `content` holds only the text the AI is currently saying -
+   *  which, at turn end, IS the final answer. */
+  agentLog?: AgentLogItem[];
   /** An agent permission request (folder open). Renders as an inline card;
    *  once answered it collapses to a one-line receipt. */
   agentPermission?: AgentPermission;
 }
 
-/** One tool action inside an agent activity run. */
+/** One entry in an agent turn's working log. */
+export type AgentLogItem =
+  | { type: 'action'; action: AgentAction }
+  /** Text the AI said mid-work, superseded by later activity - shown muted
+   *  inside the box, without bubble chrome. */
+  | { type: 'narration'; text: string }
+  /** Model reasoning (agent_thought_chunk). Shown only when the user turns
+   *  on the thinking view. */
+  | { type: 'thought'; text: string }
+  /** A permission ask at its true position in the work. Pending = the full
+   *  card; answered = its receipt line. */
+  | { type: 'permission'; permission: AgentPermission };
+
+/** One tool action inside an agent turn's working log. */
 export interface AgentAction {
   toolCallId: string;
-  title: string;
-  /** ACP tool kind: read | edit | delete | move | search | execute | fetch | ... */
+  /** Humanized: "Reading package.json", "Running npm test". */
+  label: string;
+  /** ACP/x.ai tool kind: read | edit | list | search | execute | fetch... */
   kind?: string;
   status: 'pending' | 'in_progress' | 'completed' | 'failed';
   /** File paths this action touched (feeds the changed-files viewer). */
   locations?: string[];
-}
-
-export interface AgentRun {
-  actions: AgentAction[];
-  /** Set when the turn ends; flips the card to its collapsed summary. */
-  done?: boolean;
+  /** The full input (path, command...) for the expanded view. */
+  detail?: string;
+  /** Result preview (directory tree, file text, command output). */
+  output?: string;
+  /** Total line count of the result, for the "· 84 lines" hint. */
+  outputLines?: number;
 }
 
 /** The exact thing the agent asked to do, straight from the ACP toolCall -

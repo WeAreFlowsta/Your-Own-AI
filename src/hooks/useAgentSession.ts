@@ -2,18 +2,22 @@
  * Folder (Build agent) session state for the chat.
  *
  * Owns the open-folder lifecycle and translates the agent bridge's Tauri
- * events (ACP session traffic) into the SAME message list the chat renders:
- * agent text streams into normal assistant bubbles, contiguous tool calls
- * group into one activity-run message, permission requests become inline
- * card messages that the user answers (or answers by simply replying).
+ * events (ACP session traffic) into the chat's message list. ONE reply
+ * bubble per agent turn: the AI's current words stream into the bubble
+ * body; everything along the way - tool steps with their real results,
+ * superseded narration, model thoughts, permission asks - lives in the
+ * bubble's working log (rendered by AgentWorkingBox). Text the AI was
+ * saying gets demoted into the log as narration whenever more activity
+ * follows it, so whatever is in the bubble body when the turn ends IS the
+ * final answer, already streamed in place with full chrome.
  *
- * The conversation is the window: while a folder is open, every prompt goes
- * through the agent session instead of the direct model call.
+ * The conversation is the window: while a folder is open, every prompt
+ * goes through the agent session instead of the direct model call.
  */
 
 import { $, useSignal, useStore, useVisibleTask$, type Signal } from "@builder.io/qwik";
 import { v4 as uuidv4 } from "uuid";
-import type { AgentPermission, AgentRun, Message, SelectedAiModel } from "../types";
+import type { AgentPermission, Message, SelectedAiModel } from "../types";
 import type { UseChatState } from "./useChat";
 
 export interface AgentSessionState {
@@ -23,8 +27,8 @@ export interface AgentSessionState {
    *  stopped = process exited while a folder was open (needs reopen). */
   status: "idle" | "starting" | "ready" | "working" | "stopped";
   statusNote: string;
-  /** Message id of the permission card currently awaiting an answer. */
-  pendingPermissionId: string | null;
+  /** ACP request id of the permission ask currently awaiting an answer. */
+  pendingPermissionId: number | null;
   /** True while the pending permission card is scrolled out of view -
    *  drives the floating jump pill. */
   pendingCardOffscreen: boolean;
@@ -90,6 +94,79 @@ function previewDiff(oldText: string | null, newText: string): string {
   return out.length ? out.join("\n") : "(whitespace-only change)";
 }
 
+const basename = (p: string) => p.split("/").filter(Boolean).pop() || p;
+
+/** Humanized step label + expandable detail from the tool call's real
+ *  input (the `x.ai/tool` meta carries name/kind/label/input; rawInput is
+ *  the fallback). "List `.`" becomes "Looking through the folder". */
+function humanizeAction(update: any): { label: string; kind?: string; detail?: string } {
+  const meta = update?._meta?.["x.ai/tool"] ?? {};
+  const input = { ...(update.rawInput ?? {}), ...(meta.input ?? {}) };
+  const kind: string | undefined = meta.kind || update.kind;
+  const path = input.path || input.target_file || input.file;
+  const dir = input.directory || input.target_directory;
+  const cmd = input.command;
+  const term = input.query || input.pattern || input.regex;
+  switch (kind) {
+    case "list":
+      return {
+        kind,
+        label:
+          dir && dir !== "." ? `Looking through ${basename(dir)}/` : "Looking through the folder",
+        detail: dir,
+      };
+    case "read":
+      return { kind, label: path ? `Reading ${basename(path)}` : "Reading files", detail: path };
+    case "edit":
+    case "write":
+      return { kind, label: path ? `Editing ${basename(path)}` : "Editing files", detail: path };
+    case "delete":
+      return { kind, label: path ? `Deleting ${basename(path)}` : "Deleting files", detail: path };
+    case "search":
+    case "grep":
+      return {
+        kind,
+        label: term ? `Searching for "${term}"` : "Searching the folder",
+        detail: term,
+      };
+    case "execute":
+      return {
+        kind,
+        label: cmd ? `Running ${cmd.length > 48 ? cmd.slice(0, 45) + "..." : cmd}` : "Running a command",
+        detail: cmd,
+      };
+    case "fetch":
+      return { kind, label: input.url ? `Fetching ${input.url}` : "Fetching from the web", detail: input.url };
+    default:
+      return { kind, label: meta.label || update.title || "Working..." };
+  }
+}
+
+/** Pull the step's real result out of a completion update - directory
+ *  trees, file text, command output - for the expandable view. */
+function actionOutput(update: any): { output?: string; outputLines?: number } {
+  let text = "";
+  const ro = update.rawOutput;
+  if (ro && typeof ro === "object") {
+    const c = ro.Content?.content ?? ro.content;
+    if (typeof c === "string") text = c;
+  } else if (typeof ro === "string") {
+    text = ro;
+  }
+  if (!text && Array.isArray(update.content)) {
+    text = update.content
+      .map((c: any) => c?.content?.text ?? "")
+      .filter(Boolean)
+      .join("\n");
+  }
+  if (!text) return {};
+  const outputLines = text.split("\n").length;
+  return {
+    output: text.length > 4000 ? text.slice(0, 4000) + "\n..." : text,
+    outputLines,
+  };
+}
+
 export function useAgentSession(props: UseAgentSessionProps) {
   const state = useStore<AgentSessionState>({
     folderPath: null,
@@ -101,30 +178,37 @@ export function useAgentSession(props: UseAgentSessionProps) {
   });
 
   // A prompt waiting for the session: typed before the handshake finished,
-  // or typed as the answer to a permission card (sent when the turn ends).
-  // `rendered` = the user bubble is already in the transcript.
-  const queued = useSignal<{ text: string; rendered: boolean } | null>(null);
-
-  /** The optimistic assistant bubble pushed at Enter - same trick the direct
-   *  chat path uses: mounting a loading bubble is what anchors the question
-   *  to the top and shows the avatar + action bar instantly, instead of a
-   *  silent gap until the first streamed chunk. */
-  const turnPlaceholder = $(
-    (): Message => ({
-      id: uuidv4(),
-      role: "assistant",
-      content: "",
-      model: props.selectedAi.value.id,
-      aiLabel: props.selectedAi.value.label,
-      aiImageUrl: props.selectedAi.value.imageUrl || undefined,
-      isLoading: true,
-      agentTurn: true,
-    }),
-  );
+  // typed mid-turn, or typed as the answer to a permission card.
+  const queued = useSignal<string | null>(null);
+  // The message id of the current turn's reply bubble.
+  const turnId = useSignal<string | null>(null);
 
   const invokeTauri = $(async (cmd: string, args?: Record<string, unknown>) => {
     const { invoke } = await import("@tauri-apps/api/core");
     return invoke(cmd, args);
+  });
+
+  /** The turn's single reply bubble, pushed at Enter. Mounting it anchors
+   *  the question to the top and shows the avatar + action bar instantly. */
+  const startTurnBubble = $((userText: string) => {
+    const id = uuidv4();
+    turnId.value = id;
+    props.chatState.messages = [
+      ...props.chatState.messages,
+      { id: uuidv4(), role: "user", content: userText, model: "user" },
+      {
+        id,
+        role: "assistant",
+        content: "",
+        model: props.selectedAi.value.id,
+        aiLabel: props.selectedAi.value.label,
+        aiImageUrl: props.selectedAi.value.imageUrl || undefined,
+        isLoading: true,
+        agentTurn: true,
+        agentLog: [],
+      },
+    ];
+    props.chatState.isLoading = true;
   });
 
   /** Send a prompt into the live session (session must be ready). */
@@ -136,12 +220,12 @@ export function useAgentSession(props: UseAgentSessionProps) {
     } catch (err) {
       state.status = "ready";
       props.chatState.isLoading = false;
-      // The optimistic placeholder has no turn to receive - drop it.
-      const msgs = props.chatState.messages;
-      const last = msgs[msgs.length - 1];
-      if (last?.agentTurn && last.isLoading && last.content === "") {
-        props.chatState.messages = msgs.slice(0, -1);
-      }
+      // The turn bubble has no turn to receive - drop it if still empty.
+      const id = turnId.value;
+      props.chatState.messages = props.chatState.messages.filter(
+        (m) => !(m.id === id && m.content === "" && !(m.agentLog ?? []).length),
+      );
+      turnId.value = null;
       props.chatState.error = JSON.stringify({
         code: "AGENT_SEND_FAILED",
         message: String(err),
@@ -159,21 +243,13 @@ export function useAgentSession(props: UseAgentSessionProps) {
       });
       return;
     }
-    // One assignment for question + placeholder, mirroring useChat's
-    // optimistic append. isLoading flips in the same flush so the turn's
-    // scroll spacer is in the layout before the placeholder's anchor runs.
-    props.chatState.messages = [
-      ...props.chatState.messages,
-      { id: uuidv4(), role: "user", content: text, model: "user" },
-      await turnPlaceholder(),
-    ];
-    props.chatState.isLoading = true;
+    await startTurnBubble(text);
     if (state.status === "ready") {
       await dispatchPrompt(text);
     } else {
       // Working: turns are strictly sequential over ACP - hold until the
       // current turn completes. Starting: hold until agent-ready.
-      queued.value = { text, rendered: true };
+      queued.value = text;
     }
   });
 
@@ -220,12 +296,35 @@ export function useAgentSession(props: UseAgentSessionProps) {
     }
   });
 
+  /** Update a permission item (by ACP request id) wherever it lives. */
+  const updatePermission = $(
+    (requestId: number, mutate: (p: AgentPermission) => AgentPermission) => {
+      props.chatState.messages = props.chatState.messages.map((m) => {
+        if (!m.agentLog?.some((i) => i.type === "permission" && i.permission.requestId === requestId)) {
+          return m;
+        }
+        return {
+          ...m,
+          agentLog: m.agentLog.map((i) =>
+            i.type === "permission" && i.permission.requestId === requestId
+              ? { ...i, permission: mutate(i.permission) }
+              : i,
+          ),
+        };
+      });
+    },
+  );
+
   /** Answer the pending permission card with a button. `always` upgrades to
    *  the agent's always-variant option when it offers one. */
   const respondPermission$ = $(
-    async (messageId: string, decision: "allow" | "reject", always: boolean) => {
-      const msg = props.chatState.messages.find((m) => m.id === messageId);
-      const perm = msg?.agentPermission;
+    async (requestId: number, decision: "allow" | "reject", always: boolean) => {
+      let perm: AgentPermission | undefined;
+      for (const m of props.chatState.messages) {
+        for (const i of m.agentLog ?? []) {
+          if (i.type === "permission" && i.permission.requestId === requestId) perm = i.permission;
+        }
+      }
       if (!perm || perm.state !== "pending") return;
 
       const wantKinds =
@@ -250,17 +349,10 @@ export function useAgentSession(props: UseAgentSessionProps) {
           ? `Allowed: ${receiptSubject(perm)} - ${scoped ? alwaysScope(option.name) : "once"}`
           : `Declined: ${receiptSubject(perm)}${scoped ? ` - ${alwaysScope(option.name)}` : ""}`;
 
-      props.chatState.messages = props.chatState.messages.map((m) =>
-        m.id === messageId && m.agentPermission
-          ? {
-              ...m,
-              agentPermission: { ...m.agentPermission, state: "answered" as const, receipt },
-            }
-          : m,
-      );
+      await updatePermission(requestId, (p) => ({ ...p, state: "answered", receipt }));
       state.pendingPermissionId = null;
       await invokeTauri("respond_agent_permission", {
-        requestId: perm.requestId,
+        requestId,
         optionId: option.optionId,
       });
     },
@@ -268,39 +360,33 @@ export function useAgentSession(props: UseAgentSessionProps) {
 
   /** Typing while a card waits = decline with instructions: reject once,
    *  show the reply in place, send the text as the next prompt when the
-   *  turn ends. Reads the same as a native followup answer. */
+   *  turn ends. The rest of the interrupted turn lands in a fresh bubble
+   *  below the user's reply. */
   const answerPermissionByReply$ = $(async (text: string) => {
-    const id = state.pendingPermissionId;
-    if (!id) return;
-    const msg = props.chatState.messages.find((m) => m.id === id);
-    const perm = msg?.agentPermission;
+    const requestId = state.pendingPermissionId;
+    if (requestId === null) return;
+    let perm: AgentPermission | undefined;
+    for (const m of props.chatState.messages) {
+      for (const i of m.agentLog ?? []) {
+        if (i.type === "permission" && i.permission.requestId === requestId) perm = i.permission;
+      }
+    }
     if (!perm || perm.state !== "pending") return;
 
     const option =
       perm.options.find((o) => o.kind === "reject_once") ??
       perm.options.find((o) => o.kind?.startsWith("reject"));
-    props.chatState.messages = props.chatState.messages.map((m) =>
-      m.id === id && m.agentPermission
-        ? {
-            ...m,
-            agentPermission: {
-              ...m.agentPermission,
-              state: "answered" as const,
-              receipt: "Declined - you replied instead",
-            },
-          }
-        : m,
-    );
+    await updatePermission(requestId, (p) => ({
+      ...p,
+      state: "answered",
+      receipt: "Declined - you replied instead",
+    }));
     state.pendingPermissionId = null;
-    props.chatState.messages = [
-      ...props.chatState.messages,
-      { id: uuidv4(), role: "user", content: text, model: "user" },
-      await turnPlaceholder(),
-    ];
-    queued.value = { text, rendered: true };
+    await startTurnBubble(text);
+    queued.value = text;
     if (option) {
       await invokeTauri("respond_agent_permission", {
-        requestId: perm.requestId,
+        requestId,
         optionId: option.optionId,
       });
     }
@@ -309,155 +395,25 @@ export function useAgentSession(props: UseAgentSessionProps) {
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async ({ cleanup }) => {
     const { listen } = await import("@tauri-apps/api/event");
-    const ai = () => props.selectedAi.value;
 
-    /** A bubble that is open for streaming but has no text yet - either the
-     *  turn placeholder or a fresh segment. */
-    const isEmptyPlaceholder = (m: Message | undefined): boolean =>
-      !!m &&
-      m.role === "assistant" &&
-      !!m.isLoading &&
-      !m.agentRun &&
-      !m.agentPermission &&
-      m.content === "";
-
-    const appendAssistantText = (text: string) => {
-      const msgs = props.chatState.messages;
-      const last = msgs[msgs.length - 1];
-      if (last && last.role === "assistant" && last.isLoading && !last.agentRun && !last.agentPermission) {
-        props.chatState.messages = [
-          ...msgs.slice(0, -1),
-          { ...last, content: last.content + text },
-        ];
-      } else {
-        // Text resuming after activity: a new segment bubble. It prints in
-        // place (no re-anchor, no space reservation) so the view stays put.
-        props.chatState.messages = [
-          ...msgs,
-          {
-            id: uuidv4(),
-            role: "assistant",
-            content: text,
-            model: ai().id,
-            aiLabel: ai().label,
-            aiImageUrl: ai().imageUrl || undefined,
-            isLoading: true,
-            agentTurn: true,
-            agentSegment: true,
-          },
-        ];
-      }
-    };
-
-    const upsertToolCall = (update: any) => {
-      const toolCallId = update.toolCallId || uuidv4();
-      const action = {
-        toolCallId,
-        title: update.title || "Working...",
-        kind: update.kind,
-        status: (update.status || "in_progress") as
-          | "pending"
-          | "in_progress"
-          | "completed"
-          | "failed",
-        locations: (update.locations ?? [])
-          .map((l: any) => l?.path)
-          .filter(Boolean),
-      };
-      for (const p of action.locations) {
-        if (!state.touchedFiles.includes(p)) state.touchedFiles = [...state.touchedFiles, p];
-      }
-
-      const withAction = (m: Message): Message => {
-        const run = m.agentRun!;
-        const existing = run.actions.findIndex((a) => a.toolCallId === toolCallId);
-        const actions =
-          existing >= 0
-            ? run.actions.map((a, i) =>
-                i === existing
-                  ? {
-                      ...a,
-                      status: action.status,
-                      title: update.title || a.title,
-                      kind: update.kind ?? a.kind,
-                      locations: action.locations.length ? action.locations : a.locations,
-                    }
-                  : a,
-              )
-            : [...run.actions, action];
-        return { ...m, agentRun: { ...run, actions } };
-      };
-
-      const msgs = props.chatState.messages;
-      const last = msgs[msgs.length - 1];
-      const prev = msgs[msgs.length - 2];
-      if (last?.agentRun && !last.agentRun.done) {
-        props.chatState.messages = [...msgs.slice(0, -1), withAction(last)];
-      } else if (isEmptyPlaceholder(last) && prev?.agentRun && !prev.agentRun.done) {
-        // Still the same contiguous run, waiting bubble after it - keep the
-        // bubble open below and extend the run above it.
-        props.chatState.messages = [...msgs.slice(0, -2), withAction(prev), last];
-      } else if (isEmptyPlaceholder(last)) {
-        // First activity of this stretch: slide the run card in ABOVE the
-        // waiting bubble. The bubble stays open (and keeps its anchor) for
-        // the text that follows - no empty bubble is ever stranded.
-        props.chatState.messages = [
-          ...msgs.slice(0, -1),
-          {
-            id: uuidv4(),
-            role: "assistant",
+    /** Words the AI was saying get tucked into the log as narration the
+     *  moment more activity follows them - so the bubble body only ever
+     *  holds the CURRENT (and ultimately final) text. */
+    const demoteContent = (m: Message): Message =>
+      m.content
+        ? {
+            ...m,
+            agentLog: [...(m.agentLog ?? []), { type: "narration", text: m.content }],
             content: "",
-            model: ai().id,
-            agentRun: { actions: [action] } as AgentRun,
-          },
-          last,
-        ];
-      } else {
-        // A streamed text bubble precedes us: close it so later chunks open
-        // a fresh segment below, and start a new run after it.
-        const closed =
-          last && last.role === "assistant" && last.isLoading && !last.agentRun
-            ? [...msgs.slice(0, -1), { ...last, isLoading: false }]
-            : msgs;
-        props.chatState.messages = [
-          ...closed,
-          {
-            id: uuidv4(),
-            role: "assistant",
-            content: "",
-            model: ai().id,
-            agentRun: { actions: [action] } as AgentRun,
-          },
-        ];
-      }
-    };
+          }
+        : m;
 
-    const finishTurn = (errorText?: string) => {
-      props.chatState.messages = props.chatState.messages
-        .map((m) => {
-          if (m.agentRun && !m.agentRun.done) {
-            return { ...m, agentRun: { ...m.agentRun, done: true } };
-          }
-          if (m.isLoading) {
-            return { ...m, isLoading: false, error: errorText ?? m.error };
-          }
-          return m;
-        })
-        // A placeholder that never received text (turn ended on activity or
-        // was cancelled) would linger as a bare empty bubble - drop it.
-        // Errors stay: an empty bubble WITH an error renders the error.
-        .filter(
-          (m) =>
-            !(
-              m.agentTurn &&
-              m.content === "" &&
-              !m.error &&
-              !m.agentRun &&
-              !m.agentPermission
-            ),
-        );
-      props.chatState.isLoading = false;
-      if (state.status === "working") state.status = "ready";
+    const mutateTurn = (mutate: (m: Message) => Message) => {
+      const id = turnId.value;
+      if (!id) return;
+      props.chatState.messages = props.chatState.messages.map((m) =>
+        m.id === id ? mutate(m) : m,
+      );
     };
 
     const unReady = await listen<{ sessionId: string }>("agent-ready", async () => {
@@ -466,7 +422,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       const q = queued.value;
       if (q) {
         queued.value = null;
-        await dispatchPrompt(q.text);
+        await dispatchPrompt(q);
       }
     });
 
@@ -474,10 +430,77 @@ export function useAgentSession(props: UseAgentSessionProps) {
       const update = e.payload?.params?.update;
       if (!update) return;
       const kind = update.sessionUpdate;
+
       if (kind === "agent_message_chunk") {
-        appendAssistantText(update.content?.text ?? "");
+        const text = update.content?.text ?? "";
+        mutateTurn((m) => ({ ...m, content: m.content + text }));
+      } else if (kind === "agent_thought_chunk") {
+        const text = update.content?.text ?? "";
+        mutateTurn((m) => {
+          const demoted = demoteContent(m);
+          const log = [...(demoted.agentLog ?? [])];
+          const last = log[log.length - 1];
+          if (last?.type === "thought") {
+            log[log.length - 1] = { type: "thought", text: last.text + text };
+          } else {
+            log.push({ type: "thought", text });
+          }
+          return { ...demoted, agentLog: log };
+        });
       } else if (kind === "tool_call" || kind === "tool_call_update") {
-        upsertToolCall(update);
+        const toolCallId = update.toolCallId || uuidv4();
+        const human = humanizeAction(update);
+        const out = actionOutput(update);
+        const locations = (update.locations ?? [])
+          .map((l: any) => l?.path)
+          .filter(Boolean);
+        for (const p of locations) {
+          if (!state.touchedFiles.includes(p)) state.touchedFiles = [...state.touchedFiles, p];
+        }
+        mutateTurn((m) => {
+          const demoted = demoteContent(m);
+          const log = [...(demoted.agentLog ?? [])];
+          let idx = -1;
+          for (let i = log.length - 1; i >= 0; i--) {
+            const item = log[i];
+            if (item.type === "action" && item.action.toolCallId === toolCallId) {
+              idx = i;
+              break;
+            }
+          }
+          if (idx >= 0) {
+            const prev = (log[idx] as { action: any }).action;
+            log[idx] = {
+              type: "action",
+              action: {
+                ...prev,
+                status: update.status || prev.status,
+                kind: human.kind ?? prev.kind,
+                // The first update often has the best label; only upgrade
+                // when the new one is more specific than the fallback.
+                label: human.label !== "Working..." ? human.label : prev.label,
+                detail: human.detail ?? prev.detail,
+                locations: locations.length ? locations : prev.locations,
+                output: out.output ?? prev.output,
+                outputLines: out.outputLines ?? prev.outputLines,
+              },
+            };
+          } else {
+            log.push({
+              type: "action",
+              action: {
+                toolCallId,
+                label: human.label,
+                kind: human.kind,
+                status: update.status || "in_progress",
+                locations,
+                detail: human.detail,
+                ...out,
+              },
+            });
+          }
+          return { ...demoted, agentLog: log };
+        });
       }
     });
 
@@ -509,24 +532,37 @@ export function useAgentSession(props: UseAgentSessionProps) {
         })),
         state: "pending",
       };
-      const id = uuidv4();
-      state.pendingPermissionId = id;
-      const card: Message = {
-        id,
-        role: "assistant",
-        content: "",
-        model: ai().id,
-        aiLabel: ai().label,
-        agentPermission: permission,
-      };
-      const msgs = props.chatState.messages;
-      const last = msgs[msgs.length - 1];
-      // Same placement rule as activity: the card slides in above a waiting
-      // bubble so the bubble stays open for the text that follows.
-      props.chatState.messages = isEmptyPlaceholder(last)
-        ? [...msgs.slice(0, -1), card, last]
-        : [...msgs, card];
+      state.pendingPermissionId = permission.requestId;
+      state.pendingCardOffscreen = false;
+      mutateTurn((m) => {
+        const demoted = demoteContent(m);
+        return {
+          ...demoted,
+          agentLog: [...(demoted.agentLog ?? []), { type: "permission", permission }],
+        };
+      });
     });
+
+    const finishTurn = (errorText?: string) => {
+      mutateTurn((m) => ({
+        ...m,
+        isLoading: false,
+        error: errorText ?? m.error,
+        agentLog: (m.agentLog ?? []).map((i) =>
+          i.type === "action" && (i.action.status === "in_progress" || i.action.status === "pending")
+            ? { ...i, action: { ...i.action, status: errorText ? "failed" : "completed" } }
+            : i,
+        ),
+      }));
+      // A bubble that never got anything (cancelled before output) is noise.
+      const id = turnId.value;
+      props.chatState.messages = props.chatState.messages.filter(
+        (m) =>
+          !(m.id === id && m.content === "" && !(m.agentLog ?? []).length && !m.error),
+      );
+      props.chatState.isLoading = false;
+      if (state.status === "working") state.status = "ready";
+    };
 
     const unTurn = await listen<any>("agent-turn", async (e) => {
       const err = e.payload?.error;
@@ -541,7 +577,34 @@ export function useAgentSession(props: UseAgentSessionProps) {
       const q = queued.value;
       if (q && state.status === "ready") {
         queued.value = null;
-        await dispatchPrompt(q.text);
+        // The queued prompt's bubble already exists (typed mid-turn) - but
+        // if the interrupted turn streamed its tail into it, give the new
+        // prompt a clean one.
+        const id = turnId.value;
+        const bubble = props.chatState.messages.find((m) => m.id === id);
+        if (!bubble || bubble.content !== "" || (bubble.agentLog ?? []).length) {
+          const newId = uuidv4();
+          turnId.value = newId;
+          props.chatState.messages = [
+            ...props.chatState.messages,
+            {
+              id: newId,
+              role: "assistant",
+              content: "",
+              model: props.selectedAi.value.id,
+              aiLabel: props.selectedAi.value.label,
+              aiImageUrl: props.selectedAi.value.imageUrl || undefined,
+              isLoading: true,
+              agentTurn: true,
+              agentLog: [],
+            },
+          ];
+        } else {
+          props.chatState.messages = props.chatState.messages.map((m) =>
+            m.id === id ? { ...m, isLoading: true } : m,
+          );
+        }
+        await dispatchPrompt(q);
       }
     });
 
@@ -559,9 +622,9 @@ export function useAgentSession(props: UseAgentSessionProps) {
             id: uuidv4(),
             role: "assistant",
             content: "",
-            model: ai().id,
-            aiLabel: ai().label,
-            error: `This folder's agent couldn't switch to ${ai().label}'s model and is running on its default instead. (${e.payload})`,
+            model: props.selectedAi.value.id,
+            aiLabel: props.selectedAi.value.label,
+            error: `This folder's agent couldn't switch to ${props.selectedAi.value.label}'s model and is running on its default instead. (${e.payload})`,
           },
         ];
       }
@@ -576,13 +639,21 @@ export function useAgentSession(props: UseAgentSessionProps) {
         : "";
       queued.value = null;
       // A card must never sit there looking answerable after its agent died.
-      if (state.pendingPermissionId) {
+      if (state.pendingPermissionId !== null) {
+        const requestId = state.pendingPermissionId;
+        state.pendingPermissionId = null;
         props.chatState.messages = props.chatState.messages.map((m) =>
-          m.agentPermission?.state === "pending"
-            ? { ...m, agentPermission: { ...m.agentPermission, state: "expired" as const } }
+          m.agentLog?.some((i) => i.type === "permission" && i.permission.requestId === requestId)
+            ? {
+                ...m,
+                agentLog: m.agentLog.map((i) =>
+                  i.type === "permission" && i.permission.requestId === requestId
+                    ? { ...i, permission: { ...i.permission, state: "expired" as const } }
+                    : i,
+                ),
+              }
             : m,
         );
-        state.pendingPermissionId = null;
       }
       if (midTurn) {
         finishTurn(wasOpen ? "The agent stopped before finishing." : undefined);

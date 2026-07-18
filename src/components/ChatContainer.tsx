@@ -39,7 +39,7 @@ interface ChatContainerProps {
   contextWindowSize: number;
   onAttachFiles$: QRL<(paths: string[]) => void>;
   // Folder (Build agent) session
-  onPermissionRespond$?: QRL<(messageId: string, decision: 'allow' | 'reject', always: boolean) => void>;
+  onPermissionRespond$?: QRL<(requestId: number, decision: 'allow' | 'reject', always: boolean) => void>;
   onPermissionOffscreen$?: QRL<(offscreen: boolean) => void>;
   /** True while a permission card is pending AND scrolled out of view. */
   showPermissionPill?: boolean;

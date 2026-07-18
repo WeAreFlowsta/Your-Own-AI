@@ -16,6 +16,7 @@ import {
   LuPanelRightOpen,
 } from '@qwikest/icons/lucide';
 import CodePanel from './CodePanel';
+import { AgentWorkingBox } from './AgentWorkingBox';
 import ThemeAwareLottie from './ThemeAwareLottie';
 import LiquidMetalButton from './LiquidMetalButton';
 import type { RememberHandle } from '../utils/rememberText';
@@ -125,6 +126,10 @@ interface ChatMessageProps {
   aiLabel?: string;
   aiImageUrl?: string | null;
   setSidePanelContent$: QRL<(content: { messageId: string; codeString: string; language: string } | null) => void>;
+  /** Answer a permission ask inside this message's agent working log. */
+  onPermissionRespond$?: QRL<(requestId: number, decision: 'allow' | 'reject', always: boolean) => void>;
+  /** The pending permission card reporting its viewport visibility. */
+  onPermissionOffscreen$?: QRL<(offscreen: boolean) => void>;
   isDesktop: boolean;
   theme: 'light' | 'dark';
   isSidePanelVisible: boolean;
@@ -769,9 +774,6 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
     if (
       props.message.role === 'assistant' &&
       loading &&
-      // Mid-turn agent segments print in place - only the turn's first
-      // bubble anchors the question, or the view jumps between segments.
-      !props.message.agentSegment &&
       !hasAnchoredStart.value &&
       rootRef.value
     ) {
@@ -983,6 +985,18 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
                   onRouteRetry$={props.onRouteRetry$}
                   canRouteOnline={props.canRouteOnline}
                 />
+              )}
+              {/* Agent working box: the turn's steps/narration/permissions,
+                  inside the bubble, above the final answer. */}
+              {props.message.agentLog && props.message.agentLog.length > 0 && (
+                <div class="pl-0 md:pl-10 lg:pl-10 mt-1 mb-1">
+                  <AgentWorkingBox
+                    log={props.message.agentLog}
+                    working={!!props.message.isLoading}
+                    onPermissionRespond$={props.onPermissionRespond$}
+                    onPermissionOffscreen$={props.onPermissionOffscreen$}
+                  />
+                </div>
               )}
               {contentToRender && !hasError && (
                 <div

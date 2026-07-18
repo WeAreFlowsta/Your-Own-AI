@@ -1,14 +1,12 @@
 import { component$, type Signal, type QRL, $ } from '@builder.io/qwik';
 import { ChatMessage as ChatMessageComponent } from './ChatMessage';
-import { AgentPermissionCard } from './AgentPermissionCard';
-import { AgentActivityCard } from './AgentActivityCard';
 import { Message } from '../types';
 
 interface ConversationViewProps {
   messages: Message[];
   messagesEndRef: Signal<HTMLDivElement | undefined>;
-  /** Answer an agent permission card (folder open). */
-  onPermissionRespond$?: QRL<(messageId: string, decision: 'allow' | 'reject', always: boolean) => void>;
+  /** Answer an agent permission ask (folder open, by ACP request id). */
+  onPermissionRespond$?: QRL<(requestId: number, decision: 'allow' | 'reject', always: boolean) => void>;
   /** The pending permission card reporting its viewport visibility. */
   onPermissionOffscreen$?: QRL<(offscreen: boolean) => void>;
   /** True while a folder-agent turn is streaming. Reserves scroll space once
@@ -51,25 +49,13 @@ export default component$<ConversationViewProps>(({
 }) => {
   return (
     <div class="max-w-4xl mx-auto w-full space-y-4">
-      {messages.map((message, index) =>
-        message.agentPermission ? (
-          <AgentPermissionCard
-            key={message.id}
-            permission={message.agentPermission}
-            onRespond$={
-              onPermissionRespond$ &&
-              $((decision: 'allow' | 'reject', always: boolean) =>
-                onPermissionRespond$(message.id, decision, always))
-            }
-            onOffscreenChange$={onPermissionOffscreen$}
-          />
-        ) : message.agentRun ? (
-          <AgentActivityCard key={message.id} run={message.agentRun} />
-        ) : (
+      {messages.map((message, index) => (
         <ChatMessageComponent
           key={message.id}
           message={message}
           isLast={index === messages.length - 1}
+          onPermissionRespond$={onPermissionRespond$}
+          onPermissionOffscreen$={onPermissionOffscreen$}
           onRetry$={message.id ? $(() => retry$(message.id!)) : undefined}
           onRouteRetry$={message.id ? $((target: 'online' | 'device') => retry$(message.id!, target)) : undefined}
           canRouteOnline={canRouteOnline}
@@ -86,8 +72,7 @@ export default component$<ConversationViewProps>(({
           sidePanelContent={sidePanelContent}
           isModelLoading={isModelLoading}
         />
-        ),
-      )}
+      ))}
       {/* Turn-scoped scroll reservation for agent turns (see agentStreaming). */}
       {agentStreaming && <div style={{ minHeight: '100vh' }} />}
       <div ref={messagesEndRef} />
