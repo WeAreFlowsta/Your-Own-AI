@@ -396,21 +396,6 @@ export function useAgentSession(props: UseAgentSessionProps) {
   useVisibleTask$(async ({ cleanup }) => {
     const { listen } = await import("@tauri-apps/api/event");
 
-    /** Words the AI was saying get tucked into the log as narration the
-     *  moment more activity follows them - so the bubble body only ever
-     *  holds the CURRENT (and ultimately final) text. */
-    const demoteContent = (m: Message): Message =>
-      m.content
-        ? {
-            ...m,
-            agentLog: [
-              ...(m.agentLog ?? []),
-              { id: uuidv4(), type: "narration", text: m.content },
-            ],
-            content: "",
-          }
-        : m;
-
     const mutateTurn = (mutate: (m: Message) => Message) => {
       const id = turnId.value;
       if (!id) return;
@@ -435,20 +420,33 @@ export function useAgentSession(props: UseAgentSessionProps) {
       const kind = update.sessionUpdate;
 
       if (kind === "agent_message_chunk") {
+        // ALL text streams as narration in the working box during the turn
+        // (the opening words are part of the work story, Cursor-style). The
+        // bubble body is written ONCE, at turn end - ChatMessage's reveal
+        // machinery is forward-only, so content must never shrink; the
+        // demote-and-clear design duplicated text on screen.
         const text = update.content?.text ?? "";
-        mutateTurn((m) => ({ ...m, content: m.content + text }));
+        mutateTurn((m) => {
+          const log = [...(m.agentLog ?? [])];
+          const last = log[log.length - 1];
+          if (last?.type === "narration") {
+            log[log.length - 1] = { ...last, text: last.text + text };
+          } else {
+            log.push({ id: uuidv4(), type: "narration", text });
+          }
+          return { ...m, agentLog: log };
+        });
       } else if (kind === "agent_thought_chunk") {
         const text = update.content?.text ?? "";
         mutateTurn((m) => {
-          const demoted = demoteContent(m);
-          const log = [...(demoted.agentLog ?? [])];
+          const log = [...(m.agentLog ?? [])];
           const last = log[log.length - 1];
           if (last?.type === "thought") {
             log[log.length - 1] = { ...last, text: last.text + text };
           } else {
             log.push({ id: uuidv4(), type: "thought", text });
           }
-          return { ...demoted, agentLog: log };
+          return { ...m, agentLog: log };
         });
       } else if (kind === "tool_call" || kind === "tool_call_update") {
         const toolCallId = update.toolCallId || uuidv4();
@@ -461,8 +459,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
           if (!state.touchedFiles.includes(p)) state.touchedFiles = [...state.touchedFiles, p];
         }
         mutateTurn((m) => {
-          const demoted = demoteContent(m);
-          const log = [...(demoted.agentLog ?? [])];
+          const log = [...(m.agentLog ?? [])];
           let idx = -1;
           for (let i = log.length - 1; i >= 0; i--) {
             const item = log[i];
@@ -504,7 +501,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
               },
             });
           }
-          return { ...demoted, agentLog: log };
+          return { ...m, agentLog: log };
         });
       }
     });
@@ -539,29 +536,39 @@ export function useAgentSession(props: UseAgentSessionProps) {
       };
       state.pendingPermissionId = permission.requestId;
       state.pendingCardOffscreen = false;
-      mutateTurn((m) => {
-        const demoted = demoteContent(m);
-        return {
-          ...demoted,
-          agentLog: [
-            ...(demoted.agentLog ?? []),
-            { id: `perm-${permission.requestId}`, type: "permission", permission },
-          ],
-        };
-      });
+      mutateTurn((m) => ({
+        ...m,
+        agentLog: [
+          ...(m.agentLog ?? []),
+          { id: `perm-${permission.requestId}`, type: "permission", permission },
+        ],
+      }));
     });
 
     const finishTurn = (errorText?: string) => {
-      mutateTurn((m) => ({
-        ...m,
-        isLoading: false,
-        error: errorText ?? m.error,
-        agentLog: (m.agentLog ?? []).map((i) =>
+      mutateTurn((m) => {
+        let log = (m.agentLog ?? []).map((i) =>
           i.type === "action" && (i.action.status === "in_progress" || i.action.status === "pending")
-            ? { ...i, action: { ...i.action, status: errorText ? "failed" : "completed" } }
+            ? {
+                ...i,
+                action: {
+                  ...i.action,
+                  status: errorText ? ("failed" as const) : ("completed" as const),
+                },
+              }
             : i,
-        ),
-      }));
+        );
+        // The turn's last words ARE the answer: promote the trailing
+        // narration into the bubble body (content goes "" -> answer exactly
+        // once - it must never shrink). Earlier narration stays in the box.
+        let content = m.content;
+        const last = log[log.length - 1];
+        if (content === "" && last?.type === "narration") {
+          content = last.text;
+          log = log.slice(0, -1);
+        }
+        return { ...m, isLoading: false, error: errorText ?? m.error, content, agentLog: log };
+      });
       // A bubble that never got anything (cancelled before output) is noise.
       const id = turnId.value;
       props.chatState.messages = props.chatState.messages.filter(

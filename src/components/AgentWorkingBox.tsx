@@ -141,7 +141,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                 words end up painted over the rows below. */}
             {working ? (
               <>
-                <span class="shrink-0">
+                <span class="shrink-0 w-3.5 h-3.5 overflow-hidden flex items-center justify-center">
                   <ThemeAwareLottie type="thinking" theme={theme} size={14} />
                 </span>
                 <span class="flex-1 min-w-0 truncate animate-pulse-text status-text-gradient">
@@ -188,7 +188,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                 return (
                   <div
                     key={item.id}
-                    class="markdown-content thinking-markdown text-xs text-[var(--text-secondary)] leading-relaxed pl-5"
+                    class="markdown-content thinking-markdown text-xs text-[var(--text-secondary)] leading-relaxed pl-5 break-words overflow-hidden"
                     dangerouslySetInnerHTML={renderMarkdown(item.text)}
                   />
                 );
@@ -213,7 +213,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
               const hasOutput = !!a.output;
               const open = !!openOutputs.value[a.toolCallId];
               return (
-                <div key={item.id}>
+                <div key={item.id} class="overflow-hidden">
                   <button
                     disabled={!hasOutput}
                     onClick$={() => {
@@ -232,7 +232,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                       <span class="inline-block w-1.5 h-1.5 mx-1 rounded-full bg-[var(--text-link)] animate-pulse shrink-0" />
                     )}
                     <Icon class="h-3.5 w-3.5 shrink-0 opacity-70" />
-                    <span class="truncate text-xs">
+                    <span class="min-w-0 truncate whitespace-nowrap text-xs">
                       {a.label}
                       {a.outputLines ? (
                         <span class="opacity-60"> - {a.outputLines} lines</span>
