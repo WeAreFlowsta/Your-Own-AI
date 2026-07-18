@@ -43,6 +43,8 @@ interface ChatContainerProps {
   onPermissionOffscreen$?: QRL<(offscreen: boolean) => void>;
   /** True while a permission card is pending AND scrolled out of view. */
   showPermissionPill?: boolean;
+  /** True while a folder-agent turn is streaming (turn-scoped scroll space). */
+  agentStreaming?: boolean;
   /** Jump to the pending permission card (pill click). */
   onPermissionJump$?: QRL<() => void>;
   /** Open a folder for this conversation (Build agent). */
@@ -101,6 +103,7 @@ export default component$<ChatContainerProps>((props) => {
           messagesEndRef={props.messagesEndRef}
           onPermissionRespond$={props.onPermissionRespond$}
           onPermissionOffscreen$={props.onPermissionOffscreen$}
+          agentStreaming={props.agentStreaming}
           retry$={props.retry$}
           canRouteOnline={props.canRouteOnline}
           onGround$={props.onGround$}

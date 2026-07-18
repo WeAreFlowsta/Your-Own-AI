@@ -157,6 +157,15 @@ export interface Message {
   showUpgradeButton?: boolean;
   originalUserQuery?: string;
   originalUserMessageContent?: string;
+  /** Assistant bubble on the folder-agent path. Skips ChatMessage's
+   *  last-reply min-height reservation - the agent turn reserves scroll
+   *  space with one turn-scoped spacer instead, so interleaved activity
+   *  cards don't grab/release space and bounce the view. */
+  agentTurn?: boolean;
+  /** Mid-turn continuation bubble (text after tool activity). Skips the
+   *  question-to-top anchor: only the turn's FIRST bubble anchors, later
+   *  segments print in place. */
+  agentSegment?: boolean;
   /** A contiguous run of agent tool actions (folder open). A message with
    *  this set renders as a quiet collapsible activity card, not a bubble. */
   agentRun?: AgentRun;

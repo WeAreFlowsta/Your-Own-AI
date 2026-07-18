@@ -105,9 +105,22 @@ export function useAgentSession(props: UseAgentSessionProps) {
   // `rendered` = the user bubble is already in the transcript.
   const queued = useSignal<{ text: string; rendered: boolean } | null>(null);
 
-  const pushMessage = $((msg: Message) => {
-    props.chatState.messages = [...props.chatState.messages, msg];
-  });
+  /** The optimistic assistant bubble pushed at Enter - same trick the direct
+   *  chat path uses: mounting a loading bubble is what anchors the question
+   *  to the top and shows the avatar + action bar instantly, instead of a
+   *  silent gap until the first streamed chunk. */
+  const turnPlaceholder = $(
+    (): Message => ({
+      id: uuidv4(),
+      role: "assistant",
+      content: "",
+      model: props.selectedAi.value.id,
+      aiLabel: props.selectedAi.value.label,
+      aiImageUrl: props.selectedAi.value.imageUrl || undefined,
+      isLoading: true,
+      agentTurn: true,
+    }),
+  );
 
   const invokeTauri = $(async (cmd: string, args?: Record<string, unknown>) => {
     const { invoke } = await import("@tauri-apps/api/core");
@@ -123,6 +136,12 @@ export function useAgentSession(props: UseAgentSessionProps) {
     } catch (err) {
       state.status = "ready";
       props.chatState.isLoading = false;
+      // The optimistic placeholder has no turn to receive - drop it.
+      const msgs = props.chatState.messages;
+      const last = msgs[msgs.length - 1];
+      if (last?.agentTurn && last.isLoading && last.content === "") {
+        props.chatState.messages = msgs.slice(0, -1);
+      }
       props.chatState.error = JSON.stringify({
         code: "AGENT_SEND_FAILED",
         message: String(err),
@@ -133,24 +152,28 @@ export function useAgentSession(props: UseAgentSessionProps) {
   /** User prompt entry point while a folder is open. */
   const sendPrompt$ = $(async (text: string) => {
     if (!text.trim()) return;
-    await pushMessage({
-      id: uuidv4(),
-      role: "user",
-      content: text,
-      model: "user",
-    });
-    if (state.status === "ready") {
-      await dispatchPrompt(text);
-    } else if (state.status === "starting" || state.status === "working") {
-      // Working: turns are strictly sequential over ACP - hold until the
-      // current turn completes. Starting: hold until agent-ready.
-      queued.value = { text, rendered: true };
-      props.chatState.isLoading = true;
-    } else {
+    if (state.status !== "ready" && state.status !== "starting" && state.status !== "working") {
       props.chatState.error = JSON.stringify({
         code: "AGENT_NOT_RUNNING",
         message: "The folder's agent is not running. Reopen the folder.",
       });
+      return;
+    }
+    // One assignment for question + placeholder, mirroring useChat's
+    // optimistic append. isLoading flips in the same flush so the turn's
+    // scroll spacer is in the layout before the placeholder's anchor runs.
+    props.chatState.messages = [
+      ...props.chatState.messages,
+      { id: uuidv4(), role: "user", content: text, model: "user" },
+      await turnPlaceholder(),
+    ];
+    props.chatState.isLoading = true;
+    if (state.status === "ready") {
+      await dispatchPrompt(text);
+    } else {
+      // Working: turns are strictly sequential over ACP - hold until the
+      // current turn completes. Starting: hold until agent-ready.
+      queued.value = { text, rendered: true };
     }
   });
 
@@ -269,7 +292,11 @@ export function useAgentSession(props: UseAgentSessionProps) {
         : m,
     );
     state.pendingPermissionId = null;
-    await pushMessage({ id: uuidv4(), role: "user", content: text, model: "user" });
+    props.chatState.messages = [
+      ...props.chatState.messages,
+      { id: uuidv4(), role: "user", content: text, model: "user" },
+      await turnPlaceholder(),
+    ];
     queued.value = { text, rendered: true };
     if (option) {
       await invokeTauri("respond_agent_permission", {
@@ -284,6 +311,16 @@ export function useAgentSession(props: UseAgentSessionProps) {
     const { listen } = await import("@tauri-apps/api/event");
     const ai = () => props.selectedAi.value;
 
+    /** A bubble that is open for streaming but has no text yet - either the
+     *  turn placeholder or a fresh segment. */
+    const isEmptyPlaceholder = (m: Message | undefined): boolean =>
+      !!m &&
+      m.role === "assistant" &&
+      !!m.isLoading &&
+      !m.agentRun &&
+      !m.agentPermission &&
+      m.content === "";
+
     const appendAssistantText = (text: string) => {
       const msgs = props.chatState.messages;
       const last = msgs[msgs.length - 1];
@@ -293,6 +330,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
           { ...last, content: last.content + text },
         ];
       } else {
+        // Text resuming after activity: a new segment bubble. It prints in
+        // place (no re-anchor, no space reservation) so the view stays put.
         props.chatState.messages = [
           ...msgs,
           {
@@ -303,6 +342,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
             aiLabel: ai().label,
             aiImageUrl: ai().imageUrl || undefined,
             isLoading: true,
+            agentTurn: true,
+            agentSegment: true,
           },
         ];
       }
@@ -327,15 +368,12 @@ export function useAgentSession(props: UseAgentSessionProps) {
         if (!state.touchedFiles.includes(p)) state.touchedFiles = [...state.touchedFiles, p];
       }
 
-      const msgs = props.chatState.messages;
-      const last = msgs[msgs.length - 1];
-      if (last?.agentRun && !last.agentRun.done) {
-        const existing = last.agentRun.actions.findIndex(
-          (a) => a.toolCallId === toolCallId,
-        );
+      const withAction = (m: Message): Message => {
+        const run = m.agentRun!;
+        const existing = run.actions.findIndex((a) => a.toolCallId === toolCallId);
         const actions =
           existing >= 0
-            ? last.agentRun.actions.map((a, i) =>
+            ? run.actions.map((a, i) =>
                 i === existing
                   ? {
                       ...a,
@@ -346,15 +384,37 @@ export function useAgentSession(props: UseAgentSessionProps) {
                     }
                   : a,
               )
-            : [...last.agentRun.actions, action];
+            : [...run.actions, action];
+        return { ...m, agentRun: { ...run, actions } };
+      };
+
+      const msgs = props.chatState.messages;
+      const last = msgs[msgs.length - 1];
+      const prev = msgs[msgs.length - 2];
+      if (last?.agentRun && !last.agentRun.done) {
+        props.chatState.messages = [...msgs.slice(0, -1), withAction(last)];
+      } else if (isEmptyPlaceholder(last) && prev?.agentRun && !prev.agentRun.done) {
+        // Still the same contiguous run, waiting bubble after it - keep the
+        // bubble open below and extend the run above it.
+        props.chatState.messages = [...msgs.slice(0, -2), withAction(prev), last];
+      } else if (isEmptyPlaceholder(last)) {
+        // First activity of this stretch: slide the run card in ABOVE the
+        // waiting bubble. The bubble stays open (and keeps its anchor) for
+        // the text that follows - no empty bubble is ever stranded.
         props.chatState.messages = [
           ...msgs.slice(0, -1),
-          { ...last, agentRun: { ...last.agentRun, actions } },
+          {
+            id: uuidv4(),
+            role: "assistant",
+            content: "",
+            model: ai().id,
+            agentRun: { actions: [action] } as AgentRun,
+          },
+          last,
         ];
       } else {
-        // A text bubble (or nothing) precedes us: start a new contiguous run.
-        // Close the streaming flag on a preceding text bubble so later text
-        // chunks open a fresh bubble below the run instead of editing it.
+        // A streamed text bubble precedes us: close it so later chunks open
+        // a fresh segment below, and start a new run after it.
         const closed =
           last && last.role === "assistant" && last.isLoading && !last.agentRun
             ? [...msgs.slice(0, -1), { ...last, isLoading: false }]
@@ -373,15 +433,29 @@ export function useAgentSession(props: UseAgentSessionProps) {
     };
 
     const finishTurn = (errorText?: string) => {
-      props.chatState.messages = props.chatState.messages.map((m) => {
-        if (m.agentRun && !m.agentRun.done) {
-          return { ...m, agentRun: { ...m.agentRun, done: true } };
-        }
-        if (m.isLoading) {
-          return { ...m, isLoading: false, error: errorText ?? m.error };
-        }
-        return m;
-      });
+      props.chatState.messages = props.chatState.messages
+        .map((m) => {
+          if (m.agentRun && !m.agentRun.done) {
+            return { ...m, agentRun: { ...m.agentRun, done: true } };
+          }
+          if (m.isLoading) {
+            return { ...m, isLoading: false, error: errorText ?? m.error };
+          }
+          return m;
+        })
+        // A placeholder that never received text (turn ended on activity or
+        // was cancelled) would linger as a bare empty bubble - drop it.
+        // Errors stay: an empty bubble WITH an error renders the error.
+        .filter(
+          (m) =>
+            !(
+              m.agentTurn &&
+              m.content === "" &&
+              !m.error &&
+              !m.agentRun &&
+              !m.agentPermission
+            ),
+        );
       props.chatState.isLoading = false;
       if (state.status === "working") state.status = "ready";
     };
@@ -437,17 +511,21 @@ export function useAgentSession(props: UseAgentSessionProps) {
       };
       const id = uuidv4();
       state.pendingPermissionId = id;
-      props.chatState.messages = [
-        ...props.chatState.messages,
-        {
-          id,
-          role: "assistant",
-          content: "",
-          model: ai().id,
-          aiLabel: ai().label,
-          agentPermission: permission,
-        },
-      ];
+      const card: Message = {
+        id,
+        role: "assistant",
+        content: "",
+        model: ai().id,
+        aiLabel: ai().label,
+        agentPermission: permission,
+      };
+      const msgs = props.chatState.messages;
+      const last = msgs[msgs.length - 1];
+      // Same placement rule as activity: the card slides in above a waiting
+      // bubble so the bubble stays open for the text that follows.
+      props.chatState.messages = isEmptyPlaceholder(last)
+        ? [...msgs.slice(0, -1), card, last]
+        : [...msgs, card];
     });
 
     const unTurn = await listen<any>("agent-turn", async (e) => {

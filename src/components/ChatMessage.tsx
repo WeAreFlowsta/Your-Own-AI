@@ -747,7 +747,10 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
   useVisibleTask$(({ track }) => {
     const isLast = track(() => props.isLast);
     if (!rootRef.value) return;
-    if (isLast && props.message.role === 'assistant') {
+    // Agent-turn bubbles opt out: activity/permission cards arrive between
+    // segments, so a per-bubble reservation would grab and release space all
+    // turn long. The agent turn reserves once via a spacer in the view.
+    if (isLast && props.message.role === 'assistant' && !props.message.agentTurn) {
       const container = rootRef.value.closest('.overflow-y-auto') as HTMLElement | null;
       rootRef.value.style.minHeight = container ? `${container.clientHeight}px` : '';
     } else {
@@ -766,6 +769,9 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
     if (
       props.message.role === 'assistant' &&
       loading &&
+      // Mid-turn agent segments print in place - only the turn's first
+      // bubble anchors the question, or the view jumps between segments.
+      !props.message.agentSegment &&
       !hasAnchoredStart.value &&
       rootRef.value
     ) {

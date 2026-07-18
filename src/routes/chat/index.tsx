@@ -755,6 +755,9 @@ export default component$(() => {
                 agentState.pendingPermissionId !== null &&
                 agentState.pendingCardOffscreen
               }
+              agentStreaming={
+                agentState.folderPath !== null && chatState.isLoading
+              }
               onPermissionJump$={$(() => {
                 messagesEndRef.value?.scrollIntoView({ behavior: "smooth", block: "end" });
               })}

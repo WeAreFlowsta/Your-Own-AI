@@ -11,6 +11,11 @@ interface ConversationViewProps {
   onPermissionRespond$?: QRL<(messageId: string, decision: 'allow' | 'reject', always: boolean) => void>;
   /** The pending permission card reporting its viewport visibility. */
   onPermissionOffscreen$?: QRL<(offscreen: boolean) => void>;
+  /** True while a folder-agent turn is streaming. Reserves scroll space once
+   *  for the whole turn (agent bubbles skip the per-bubble reservation), so
+   *  the question can anchor to the top without the view bouncing as
+   *  activity cards and text segments arrive. */
+  agentStreaming?: boolean;
   retry$: QRL<(id: string, target?: 'online' | 'device') => void>;
   canRouteOnline: boolean;
   onGround$?: QRL<(id: string) => void>;
@@ -30,6 +35,7 @@ export default component$<ConversationViewProps>(({
   messagesEndRef,
   onPermissionRespond$,
   onPermissionOffscreen$,
+  agentStreaming,
   retry$,
   canRouteOnline,
   onGround$,
@@ -82,6 +88,8 @@ export default component$<ConversationViewProps>(({
         />
         ),
       )}
+      {/* Turn-scoped scroll reservation for agent turns (see agentStreaming). */}
+      {agentStreaming && <div style={{ minHeight: '100vh' }} />}
       <div ref={messagesEndRef} />
     </div>
   );
