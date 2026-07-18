@@ -226,7 +226,11 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                     ) : a.status === "failed" ? (
                       <LuX class="h-3.5 w-3.5 shrink-0 text-red-500 dark:text-red-400" />
                     ) : (
-                      <span class="inline-block w-1.5 h-1.5 mx-1 rounded-full bg-[var(--text-link)] animate-pulse shrink-0" />
+                      // Deliberately static: an animated element in this
+                      // reflowing list gets a stale compositor layer in
+                      // WebKitGTK and paints over neighboring rows. The
+                      // header Lottie + pulse label carry the motion.
+                      <span class="inline-block w-1.5 h-1.5 mx-1 rounded-full bg-[var(--text-link)] shrink-0" />
                     )}
                     <Icon class="h-3.5 w-3.5 shrink-0 opacity-70" />
                     <span class="truncate text-xs">
