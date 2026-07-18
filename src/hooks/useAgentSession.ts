@@ -50,15 +50,15 @@ function resolveBinaryPath(): string {
   }
 }
 
-/** The agent's model catalog auto-populates from the local server's model
- *  list, which ids models by NAME SLUG (`kimiveebo:agent`) - the store id
- *  would not resolve. Mirrors the server's slug rules. */
-function aiAgentModelId(ai: SelectedAiModel): string {
-  const base = (ai.label || ai.id)
+/** Name slug for the AI, matching the local server's slug rules. The bridge
+ *  writes a `[model.<slug>]` entry into the agent's config (its catalog is
+ *  config-defined - nothing is discovered from the server) and selects it
+ *  with session/set_model; the entry's model string is `<slug>:agent`. */
+function aiModelSlug(ai: SelectedAiModel): string {
+  return (ai.label || ai.id)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  return `${base}:agent`;
 }
 
 /** Short human handle for a permission receipt: the command if there is
@@ -163,7 +163,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       await invokeTauri("start_build_agent", {
         binary: resolveBinaryPath(),
         cwd: path,
-        model: aiAgentModelId(props.selectedAi.value),
+        model: aiModelSlug(props.selectedAi.value),
       });
     } catch (err) {
       state.status = "idle";

@@ -48,6 +48,32 @@ const SET_MODEL_ID: u64 = 3;
 /// "don't ask again" the user has granted.
 const CLIENT_IDENTIFIER: &str = "your-own-ai";
 
+/// The agent's selectable model catalog is CONFIG-DEFINED: `session/set_model`
+/// only resolves ids that exist in `~/.your-own-ai-build/config.toml` (by
+/// `[model.*]` section key, or by an entry's `model` string). Nothing is
+/// discovered from the local server's model list. So before starting the
+/// agent, make sure the conversation's AI has an entry - appending a new
+/// `[model.<slug>]` table is valid TOML and leaves the user's file intact.
+fn ensure_agent_model_entry(home: &std::path::Path, slug: &str) -> Result<(), String> {
+    let config_path = home.join(".your-own-ai-build").join("config.toml");
+    let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
+    let header = format!("[model.{}]", slug);
+    if existing.contains(&header) {
+        return Ok(());
+    }
+    let entry = format!(
+        "\n{header}\nmodel = \"{slug}:agent\"\nbase_url = \"http://localhost:11435/v1\"\nname = \"{slug}\"\napi_key = \"local\"\napi_backend = \"chat_completions\"\ncontext_window = 32768\n",
+    );
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("cannot create agent config dir: {}", e))?;
+    }
+    let mut content = existing;
+    content.push_str(&entry);
+    std::fs::write(&config_path, content)
+        .map_err(|e| format!("cannot write agent config: {}", e))
+}
+
 async fn write_line(state: &AgentBridgeState, value: &Value) -> Result<(), String> {
     let mut guard = state.child.lock().await;
     let child = guard.as_mut().ok_or("agent is not running")?;
@@ -73,6 +99,16 @@ pub async fn start_build_agent(
     *state.session_id.lock().await = None;
 
     std::fs::create_dir_all(&cwd).map_err(|e| format!("cannot create workspace dir: {}", e))?;
+
+    // The model must exist in the agent's config catalog before the process
+    // starts, or session/set_model has nothing to resolve.
+    if let Some(slug) = &model {
+        let home = app_handle
+            .path()
+            .home_dir()
+            .map_err(|e| format!("cannot resolve home dir: {}", e))?;
+        ensure_agent_model_entry(&home, slug)?;
+    }
 
     let (mut rx, child) = app_handle
         .shell()
