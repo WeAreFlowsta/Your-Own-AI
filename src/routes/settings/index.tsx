@@ -237,6 +237,8 @@ export default component$(() => {
   const allowAttachmentsOnline = useSignal(false);
   const groundDocumentsAuto = useSignal(false);
   const smartModeDetection = useSignal(true);
+  // Same key the working box's brain icon toggles - one setting, two doors.
+  const agentShowThoughts = useSignal(false);
   const currentModel = useSignal<string | null>(null);
   const rememberScopeSelection = useSignal<RememberScope>("per-ai");
   const rememberScopeReply = useSignal<RememberScope>("per-ai");
@@ -271,6 +273,7 @@ export default component$(() => {
       localStorage.getItem("groundDocumentsAuto") === "true";
     smartModeDetection.value =
       localStorage.getItem("smartModeDetection") !== "false"; // default ON
+    agentShowThoughts.value = localStorage.getItem("agent-show-thoughts") === "1";
     rememberScopeSelection.value = getRememberScope("selection");
     rememberScopeReply.value = getRememberScope("reply");
     memoryLearning.value = !isMemoryPaused();
@@ -354,6 +357,11 @@ export default component$(() => {
   const toggleSmartMode = $(() => {
     smartModeDetection.value = !smartModeDetection.value;
     localStorage.setItem("smartModeDetection", smartModeDetection.value.toString());
+  });
+
+  const toggleAgentShowThoughts = $(() => {
+    agentShowThoughts.value = !agentShowThoughts.value;
+    localStorage.setItem("agent-show-thoughts", agentShowThoughts.value ? "1" : "0");
   });
 
   const toggleGroundDocuments = $(() => {
@@ -494,6 +502,16 @@ export default component$(() => {
                     When on, images and files go to online (cloud) models without
                     asking each time. Off means you're asked first, before anything
                     leaves your device. Offline models always stay local.
+                  </SettingToggle>
+                  <SettingToggle
+                    title="Show thinking while working in a folder"
+                    checked={agentShowThoughts}
+                    onToggle$={toggleAgentShowThoughts}
+                  >
+                    When your AI is working in a folder, show its live reasoning
+                    between steps - the running commentary of what it's considering
+                    and why. The status line also carries the tail of its current
+                    thought. Same switch as the brain icon on the working steps box.
                   </SettingToggle>
                 </div>
               </section>
