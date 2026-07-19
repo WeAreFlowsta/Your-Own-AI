@@ -1129,6 +1129,12 @@ export default component$(() => {
                   codeString={sidePanelContent.value.codeString}
                   language={sidePanelContent.value.language}
                   theme={theme.value}
+                  // The panel's own X - same effect as the message's Hide
+                  // Code button, so either door closes it and Show Code
+                  // reopens it.
+                  onClose$={() => {
+                    isSidePanelVisible.value = false;
+                  }}
                 />
               </div>
             </>
