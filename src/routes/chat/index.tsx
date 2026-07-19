@@ -16,7 +16,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ThemeContext } from "../layout";
 import { useAiData, useAiDataActions } from "../../contexts/AiDataContext";
 import { useChat } from "../../hooks/useChat";
-import { useAgentSession } from "../../hooks/useAgentSession";
+import { useAgentSession, readRecentFolders, resolveBinaryPath } from "../../hooks/useAgentSession";
 import ConfirmModal from "../../components/ConfirmModal";
 import { drainPendingExtractions, prewarmExtractionModel } from "../../utils/memoryExtraction";
 import GpuSafeModeNotice from "../../components/GpuSafeModeNotice";
@@ -136,6 +136,20 @@ export default component$(() => {
     answerPermissionByReply$,
   } = useAgentSession({ chatState, selectedAi });
   const showCloseFolderConfirm = useSignal(false);
+  // The header workspace slot: exists only when Build is installed.
+  const buildInstalled = useSignal(false);
+  const recentFolders = useSignal<string[]>([]);
+
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    track(() => agentState.folderPath);
+    recentFolders.value = readRecentFolders();
+    if (!buildInstalled.value) {
+      invoke<boolean>("path_is_file", { path: resolveBinaryPath() })
+        .then((present) => (buildInstalled.value = present))
+        .catch(() => (buildInstalled.value = false));
+    }
+  });
 
   // --- Build dynamic model options from unified AI list ---
   const dynamicModelOptions = useSignal<SelectedAiModel[]>([]);
@@ -521,9 +535,20 @@ export default component$(() => {
     sidePanelContent.value = null;
     attachedFiles.value = [];
     attachedImages.value = [];
-    // The folder belongs to the conversation - a new conversation starts
-    // without one.
-    if (agentState.folderPath) closeFolder$();
+    // The workspace is app-wide: a new conversation starts IN it, with a
+    // fresh agent session in the same folder. (Process restart for now -
+    // the generation guard makes it safe; session-in-place later.)
+    if (agentState.folderPath) openFolder$(agentState.folderPath);
+  });
+
+  const handleBrowseFolder = $(async () => {
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({ directory: true });
+      if (typeof selected === "string" && selected) openFolder$(selected);
+    } catch (err) {
+      console.error("[ChatPage] Folder picker error:", err);
+    }
   });
 
   const handleAttachFiles = $(async (paths: string[]) => {
@@ -697,6 +722,10 @@ export default component$(() => {
             agentState.status === "idle" ? undefined : agentState.status
           }
           onCloseFolder$={handleCloseFolder}
+          buildInstalled={buildInstalled.value}
+          recentFolders={recentFolders.value}
+          onOpenFolder$={openFolder$}
+          onBrowseFolder$={handleBrowseFolder}
         />
       </div>
 

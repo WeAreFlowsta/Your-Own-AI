@@ -57,6 +57,31 @@ export function resolveBinaryPath(): string {
   }
 }
 
+const RECENT_FOLDERS_KEY = "build-recent-folders";
+const RECENT_FOLDERS_MAX = 6;
+
+/** Recent workspaces, most-recent-first - feeds the header slot's menu. */
+export function readRecentFolders(): string[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(RECENT_FOLDERS_KEY) || "[]");
+    return Array.isArray(raw) ? raw.filter((p) => typeof p === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function recordRecentFolder(path: string) {
+  try {
+    const next = [path, ...readRecentFolders().filter((p) => p !== path)].slice(
+      0,
+      RECENT_FOLDERS_MAX,
+    );
+    localStorage.setItem(RECENT_FOLDERS_KEY, JSON.stringify(next));
+  } catch {
+    /* recents are a convenience */
+  }
+}
+
 /** Name slug for the AI, matching the local server's slug rules. The bridge
  *  writes a `[model.<slug>]` entry into the agent's config (its catalog is
  *  config-defined - nothing is discovered from the server) and selects it
@@ -263,6 +288,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.status = "starting";
     state.statusNote = "Starting the agent...";
     state.touchedFiles = [];
+    recordRecentFolder(path);
     try {
       await invokeTauri("start_build_agent", {
         binary: resolveBinaryPath(),

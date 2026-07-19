@@ -18,6 +18,7 @@ import {
   LuMoon,
   LuCheck,
   LuBot,
+  LuFolderOpen,
   LuBrain,
   LuDownload,
   LuCloud,
@@ -64,12 +65,25 @@ interface AppHeaderProps {
   isModelLoading?: boolean;
   modelTooBig?: boolean;
   showModelWidget?: boolean;
-  /** Open folder (Build agent) for this conversation - null = none. */
+  /** The app-wide workspace folder - null = none open. */
   folderPath?: string | null;
   /** Agent session status while a folder is open. */
   folderStatus?: 'starting' | 'ready' | 'working' | 'stopped';
-  /** Close the folder (the route confirms first if the agent is mid-task). */
+  /** Close the workspace (the route confirms first if the agent is mid-task). */
   onCloseFolder$?: QRL<() => void>;
+  /** Build is installed - the workspace slot only exists then. */
+  buildInstalled?: boolean;
+  /** Recent workspaces, most-recent-first, for the slot's menu. */
+  recentFolders?: string[];
+  /** Open a workspace (from the recents menu). */
+  onOpenFolder$?: QRL<(path: string) => void>;
+  /** Open the folder picker. */
+  onBrowseFolder$?: QRL<() => void>;
+}
+
+/** Home-shortened path for the slot ("~/Projects/Website"). */
+function displayPath(p: string): string {
+  return p.replace(/^\/(home|Users)\/[^/]+/, '~');
 }
 
 export default component$<AppHeaderProps>(
@@ -83,12 +97,18 @@ export default component$<AppHeaderProps>(
     folderPath = null,
     folderStatus,
     onCloseFolder$,
+    buildInstalled = false,
+    recentFolders = [],
+    onOpenFolder$,
+    onBrowseFolder$,
   }) => {
     const nav = useNavigate();
     const { theme } = useContext(ThemeContext);
 
     // Controls visibility of the custom dropdown menu
     const menuOpen = useSignal(false);
+    // The workspace slot's recents menu.
+    const folderMenuOpen = useSignal(false);
 
     const setTheme = $((t: AppTheme) => {
       theme.value = t;
@@ -123,12 +143,17 @@ export default component$<AppHeaderProps>(
           </div>
 
           <div class="flex items-center gap-4">
-            {/* Folder chip - the durable "this conversation has hands in a
-                folder" state. Same pill family as the model badge. */}
-            {folderPath && (
-              <span class="text-xs text-[var(--text-secondary)] flex items-center gap-2 px-3 py-1 bg-[var(--bg-dropdown)] rounded-full border border-[var(--border-subtle)]">
+            {/* THE WORKSPACE SLOT - always present once Build is installed.
+                Open: status dot + path (the mode is unmistakable).
+                Closed: "Open a folder" with recents. Chatters (no Build)
+                never see this. */}
+            {buildInstalled && folderPath && (
+              <span
+                class="text-xs text-[var(--text-secondary)] flex items-center gap-2 px-3 py-1.5 bg-[var(--bg-dropdown)] rounded-full border border-[var(--border-subtle)]"
+                title={folderPath}
+              >
                 <span
-                  class={`w-2 h-2 rounded-full ${
+                  class={`w-2 h-2 rounded-full shrink-0 ${
                     folderStatus === 'stopped'
                       ? 'bg-red-500'
                       : folderStatus === 'starting'
@@ -138,21 +163,79 @@ export default component$<AppHeaderProps>(
                           : 'bg-green-500'
                   }`}
                 />
-                <span class="max-w-[180px] truncate" title={folderPath}>
-                  {folderPath.split('/').filter(Boolean).pop() || folderPath}
+                {/* Full path when there's room, keeping the leaf end when
+                    there isn't (rtl clip = ellipsis at the start). */}
+                <span
+                  dir="rtl"
+                  class="truncate max-w-[130px] sm:max-w-[240px] xl:max-w-[420px]"
+                >
+                  {'‎' + displayPath(folderPath)}
                 </span>
                 {folderStatus === 'stopped' && (
-                  <span class="text-red-500 font-medium">· stopped</span>
+                  <span class="text-red-500 font-medium shrink-0">stopped</span>
                 )}
                 {onCloseFolder$ && (
                   <button
                     type="button"
                     onClick$={onCloseFolder$}
-                    title="Close this folder"
-                    class="ml-0.5 text-[var(--text-muted)] hover:text-[var(--text-primary)] leading-none"
+                    title="Close this workspace"
+                    class="ml-0.5 shrink-0 text-[var(--text-muted)] hover:text-[var(--text-primary)] leading-none"
                   >
                     &times;
                   </button>
+                )}
+              </span>
+            )}
+            {buildInstalled && !folderPath && (
+              <span class="relative">
+                <button
+                  type="button"
+                  onClick$={() => (folderMenuOpen.value = !folderMenuOpen.value)}
+                  class="text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center gap-2 px-3 py-1.5 bg-[var(--bg-dropdown)] rounded-full border border-[var(--border-subtle)]"
+                >
+                  <LuFolderOpen class="h-3.5 w-3.5" />
+                  <span class="hidden sm:inline">Open a folder</span>
+                </button>
+                {folderMenuOpen.value && (
+                  <>
+                    <span
+                      class="fixed inset-0 z-[45]"
+                      onClick$={() => (folderMenuOpen.value = false)}
+                    />
+                    <span class="absolute right-0 top-full mt-2 w-64 rounded-2xl bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] py-1 shadow-lg z-50 overflow-hidden block">
+                      {recentFolders.map((p) => (
+                        <button
+                          key={p}
+                          type="button"
+                          onClick$={() => {
+                            folderMenuOpen.value = false;
+                            onOpenFolder$?.(p);
+                          }}
+                          title={p}
+                          class="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)]"
+                        >
+                          <LuFolderOpen class="h-4 w-4 shrink-0 opacity-60" />
+                          <span dir="rtl" class="truncate">
+                            {'‎' + displayPath(p)}
+                          </span>
+                        </button>
+                      ))}
+                      {recentFolders.length > 0 && (
+                        <span class="block border-t border-[var(--border-subtle)] my-1" />
+                      )}
+                      <button
+                        type="button"
+                        onClick$={() => {
+                          folderMenuOpen.value = false;
+                          onBrowseFolder$?.();
+                        }}
+                        class="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)]"
+                      >
+                        <LuFolderOpen class="h-4 w-4 shrink-0" />
+                        Browse..
+                      </button>
+                    </span>
+                  </>
                 )}
               </span>
             )}
