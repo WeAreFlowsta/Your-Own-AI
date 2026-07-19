@@ -541,13 +541,22 @@ export default component$(() => {
     if (agentState.folderPath) openFolder$(agentState.folderPath);
   });
 
-  // Run a suggested command in the user's own terminal - visible,
-  // interruptible, theirs. Opens in the workspace folder when one is open.
+  // Send a suggested command to the user's own terminal - visible,
+  // interruptible, theirs. Default: pre-filled on the prompt, Enter to run
+  // (the final look stays with the user); the setting flips to immediate.
+  // Opens in the workspace folder when one is open.
   const handleOpenTerminal = $(async (command: string) => {
+    const immediate = localStorage.getItem("terminal-run-immediately") === "true";
     try {
+      if (!immediate) {
+        // Belt and braces for the press-Enter flow (and cmd on Windows,
+        // which cannot pre-fill): the command is also on the clipboard.
+        await navigator.clipboard.writeText(command).catch(() => {});
+      }
       await invoke("open_in_terminal", {
         command,
         cwd: agentState.folderPath ?? null,
+        immediate,
       });
     } catch (err) {
       console.error("[ChatPage] Could not open a terminal:", err);

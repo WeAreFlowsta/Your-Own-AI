@@ -241,6 +241,8 @@ export default component$(() => {
   // Only shown when the Build agent is actually installed.
   const agentShowThoughts = useSignal(false);
   const buildInstalled = useSignal(false);
+  // "Run in your terminal" behavior: default = pre-filled, Enter to run.
+  const terminalRunImmediately = useSignal(false);
   const currentModel = useSignal<string | null>(null);
   const rememberScopeSelection = useSignal<RememberScope>("per-ai");
   const rememberScopeReply = useSignal<RememberScope>("per-ai");
@@ -276,6 +278,8 @@ export default component$(() => {
     smartModeDetection.value =
       localStorage.getItem("smartModeDetection") !== "false"; // default ON
     agentShowThoughts.value = localStorage.getItem("agent-show-thoughts") === "1";
+    terminalRunImmediately.value =
+      localStorage.getItem("terminal-run-immediately") === "true";
     // Async: reveal the Build settings once the agent binary is confirmed.
     Promise.all([
       import("@tauri-apps/api/core"),
@@ -369,6 +373,14 @@ export default component$(() => {
   const toggleSmartMode = $(() => {
     smartModeDetection.value = !smartModeDetection.value;
     localStorage.setItem("smartModeDetection", smartModeDetection.value.toString());
+  });
+
+  const toggleTerminalImmediate = $(() => {
+    terminalRunImmediately.value = !terminalRunImmediately.value;
+    localStorage.setItem(
+      "terminal-run-immediately",
+      terminalRunImmediately.value.toString(),
+    );
   });
 
   const toggleAgentShowThoughts = $(() => {
@@ -514,6 +526,16 @@ export default component$(() => {
                     When on, images and files go to online (cloud) models without
                     asking each time. Off means you're asked first, before anything
                     leaves your device. Offline models always stay local.
+                  </SettingToggle>
+                  <SettingToggle
+                    title="Run commands immediately"
+                    checked={terminalRunImmediately}
+                    onToggle$={toggleTerminalImmediate}
+                  >
+                    "Run in your terminal" on a suggested command normally
+                    types it onto your prompt, ready to edit and run with
+                    Enter - the final look stays with you. Turn this on to
+                    execute the moment you click instead.
                   </SettingToggle>
                   {buildInstalled.value && (
                     <SettingToggle
