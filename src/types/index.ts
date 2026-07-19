@@ -214,6 +214,9 @@ export interface AgentAction {
  *  rendered verbatim on the card, never paraphrased. */
 export interface AgentPermission {
   requestId: number;
+  /** The tool call this ask belongs to - on Allow, the rail grows the
+   *  step immediately (the agent stays silent while executing). */
+  toolCallId?: string;
   title: string;
   /** ACP tool kind (drives the verb header + icon). */
   kind?: string;

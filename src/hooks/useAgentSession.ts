@@ -100,6 +100,20 @@ function receiptSubject(p: AgentPermission): string {
   return s.length > 48 ? s.slice(0, 45) + "..." : s;
 }
 
+/** Step label for a just-allowed ask - the agent stays silent while it
+ *  executes, so the rail grows the step itself the moment Allow is clicked. */
+function permissionActionLabel(p: AgentPermission): string {
+  const base = (s: string) => s.split("/").filter(Boolean).pop() || s;
+  if (p.command) {
+    const c = p.command.length > 48 ? p.command.slice(0, 45) + "..." : p.command;
+    return `Running ${c}`;
+  }
+  if (p.kind === "edit" && p.locations?.length) return `Editing ${base(p.locations[0])}`;
+  if (p.kind === "delete" && p.locations?.length) return `Deleting ${base(p.locations[0])}`;
+  if (p.kind === "fetch") return "Fetching from the web";
+  return p.title;
+}
+
 /** Honest scope wording for an "always" grant, derived from the agent's own
  *  option name - edits persist per session, commands/domains per folder. */
 function alwaysScope(optionName: string): string {
@@ -382,6 +396,45 @@ export function useAgentSession(props: UseAgentSessionProps) {
 
       await updatePermission(requestId, (p) => ({ ...p, state: "answered", receipt }));
       state.pendingPermissionId = null;
+
+      if (decision === "allow") {
+        // The agent executes silently after a grant - grow the step on the
+        // rail NOW so Allow is visibly consequential. The agent's eventual
+        // completion update merges into this node by tool call id.
+        const label = permissionActionLabel(perm);
+        state.liveStatus = `${label}..`;
+        const tcId = perm.toolCallId ?? `perm-${requestId}`;
+        props.chatState.messages = props.chatState.messages.map((m) => {
+          const log = m.agentLog;
+          if (!log?.some((i) => i.type === "permission" && i.permission.requestId === requestId)) {
+            return m;
+          }
+          if (log.some((i) => i.type === "action" && i.action.toolCallId === tcId)) {
+            return m;
+          }
+          return {
+            ...m,
+            agentLog: [
+              ...log,
+              {
+                id: `action-${tcId}`,
+                type: "action" as const,
+                action: {
+                  toolCallId: tcId,
+                  label,
+                  kind: perm.kind,
+                  status: "in_progress" as const,
+                  locations: perm.locations,
+                  detail: perm.command ?? perm.locations?.[0],
+                },
+              },
+            ],
+          };
+        });
+      } else {
+        state.liveStatus = "Thinking..";
+      }
+
       await invokeTauri("respond_agent_permission", {
         requestId,
         optionId: option.optionId,
@@ -413,6 +466,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       receipt: "Declined - you replied instead",
     }));
     state.pendingPermissionId = null;
+    state.liveStatus = "Thinking..";
     await startTurnBubble(text);
     queued.value = text;
     if (option) {
@@ -587,6 +641,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         );
       const permission: AgentPermission = {
         requestId: e.payload?.id,
+        toolCallId: typeof tc.toolCallId === "string" ? tc.toolCallId : undefined,
         title: tc.title || "The agent asks for permission",
         kind: tc.kind,
         command:
