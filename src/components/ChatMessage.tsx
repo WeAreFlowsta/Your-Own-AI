@@ -16,7 +16,7 @@ import {
   LuPanelRightClose,
   LuPanelRightOpen,
 } from '@qwikest/icons/lucide';
-import CodePanel from './CodePanel';
+import CodePanel, { SHELL_LANGUAGES, commandText } from './CodePanel';
 import { AgentWorkingBox } from './AgentWorkingBox';
 import ThemeAwareLottie from './ThemeAwareLottie';
 import LiquidMetalButton from './LiquidMetalButton';
@@ -148,6 +148,8 @@ interface ChatMessageProps {
   onPermissionRespond$?: QRL<(requestId: number, decision: 'allow' | 'reject', always: boolean) => void>;
   /** The pending permission card reporting its viewport visibility. */
   onPermissionOffscreen$?: QRL<(offscreen: boolean) => void>;
+  /** Run a suggested command in the user's own terminal. */
+  onOpenTerminal$?: QRL<(command: string) => void>;
   isDesktop: boolean;
   theme: 'light' | 'dark';
   isSidePanelVisible: boolean;
@@ -877,6 +879,69 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
         question?.scrollIntoView({ behavior: 'auto', block: 'start' });
       });
     }
+  });
+
+  // Give every finished code block a Copy button, and shell blocks a
+  // "run in your terminal" button. Injected post-render (the markdown is
+  // innerHTML; injecting during streaming would fight the reconciler),
+  // native listeners so the first click works, re-injected whenever the
+  // content re-renders (the data flag dies with the old DOM).
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    track(() => props.message.isLoading);
+    track(() => props.message.content);
+    if (props.message.role !== 'assistant' || props.message.isLoading) return;
+    const root = rootRef.value;
+    if (!root) return;
+    const openTerminal$ = props.onOpenTerminal$;
+    requestAnimationFrame(() => {
+      const COPY_SVG =
+        '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+      const CHECK_SVG =
+        '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+      const TERM_SVG =
+        '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>';
+      root.querySelectorAll('.markdown-content pre').forEach((preEl) => {
+        const pre = preEl as HTMLElement;
+        if (pre.dataset.codeActions) return;
+        const code = pre.querySelector('code');
+        if (!code) return;
+        pre.dataset.codeActions = '1';
+        pre.style.position = 'relative';
+        const lang = Array.from(code.classList)
+          .find((c) => c.startsWith('language-'))
+          ?.slice(9)
+          .toLowerCase();
+        const isShell = !!lang && SHELL_LANGUAGES.includes(lang);
+        const bar = document.createElement('div');
+        bar.className = 'code-block-actions';
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.title = 'Copy';
+        copyBtn.innerHTML = COPY_SVG;
+        copyBtn.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(commandText(code.innerText));
+            copyBtn.innerHTML = CHECK_SVG;
+            setTimeout(() => (copyBtn.innerHTML = COPY_SVG), 1500);
+          } catch {
+            /* clipboard unavailable */
+          }
+        });
+        bar.appendChild(copyBtn);
+        if (isShell && openTerminal$) {
+          const termBtn = document.createElement('button');
+          termBtn.type = 'button';
+          termBtn.title = 'Run in your terminal';
+          termBtn.innerHTML = TERM_SVG;
+          termBtn.addEventListener('click', () => {
+            openTerminal$(commandText(code.innerText));
+          });
+          bar.appendChild(termBtn);
+        }
+        pre.appendChild(bar);
+      });
+    });
   });
 
   // Auto-scroll thinking preview

@@ -9,6 +9,8 @@ interface ConversationViewProps {
   onPermissionRespond$?: QRL<(requestId: number, decision: 'allow' | 'reject', always: boolean) => void>;
   /** The pending permission card reporting its viewport visibility. */
   onPermissionOffscreen$?: QRL<(offscreen: boolean) => void>;
+  /** Run a suggested command in the user's own terminal. */
+  onOpenTerminal$?: QRL<(command: string) => void>;
   /** True while a folder-agent turn is streaming. Reserves scroll space once
    *  for the whole turn (agent bubbles skip the per-bubble reservation), so
    *  the question can anchor to the top without the view bouncing as
@@ -36,6 +38,7 @@ export default component$<ConversationViewProps>(({
   messagesEndRef,
   onPermissionRespond$,
   onPermissionOffscreen$,
+  onOpenTerminal$,
   agentStreaming,
   tipRef,
   retry$,
@@ -60,6 +63,7 @@ export default component$<ConversationViewProps>(({
           isLast={index === messages.length - 1}
           onPermissionRespond$={onPermissionRespond$}
           onPermissionOffscreen$={onPermissionOffscreen$}
+          onOpenTerminal$={onOpenTerminal$}
           onRetry$={message.id ? $(() => retry$(message.id!)) : undefined}
           onRouteRetry$={message.id ? $((target: 'online' | 'device') => retry$(message.id!, target)) : undefined}
           canRouteOnline={canRouteOnline}

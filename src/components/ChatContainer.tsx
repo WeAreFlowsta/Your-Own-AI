@@ -51,6 +51,8 @@ interface ChatContainerProps {
   onPermissionJump$?: QRL<() => void>;
   /** Open a folder for this conversation (Build agent). */
   onOpenFolder$?: QRL<(path: string) => void>;
+  /** Run a suggested command in the user's own terminal. */
+  onOpenTerminal$?: QRL<(command: string) => void>;
 }
 
 // QRL helper: get display image URL from model (inlined, not passed as prop)
@@ -149,6 +151,7 @@ export default component$<ChatContainerProps>((props) => {
           messagesEndRef={props.messagesEndRef}
           onPermissionRespond$={props.onPermissionRespond$}
           onPermissionOffscreen$={props.onPermissionOffscreen$}
+          onOpenTerminal$={props.onOpenTerminal$}
           agentStreaming={props.agentStreaming}
           tipRef={tipRef}
           retry$={props.retry$}

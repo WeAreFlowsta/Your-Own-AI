@@ -15,6 +15,7 @@ mod memory;               // Phase A persistent memory (encrypted profile facts)
 mod transcript_memory;    // Per-AI episodic memory (embedded conversation turns)
 mod gpu_safety;           // GPU crash-loop → CPU fallback (safe mode)
 mod agent_bridge;         // Your Own AI Build coding agent over ACP (stdio JSON-RPC)
+mod terminal;             // open a suggested command in the user's own terminal
 mod inference_server;     // OpenAI-compatible local server (external apps use custom AIs)
 mod inference_memory;     // backend memory assembly for the inference server
 mod router;               // Auto-mode model routing (offline / online+offline)
@@ -551,6 +552,7 @@ pub fn run() {
             agent_bridge::build_agent_status,
             agent_bridge::path_is_dir,
             agent_bridge::path_is_file,
+            terminal::open_in_terminal,
             llm::stream_chat_completion,
             llm::cancel_chat_completion,
             save_ai_thumbnail,

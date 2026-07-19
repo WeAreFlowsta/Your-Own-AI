@@ -1,6 +1,21 @@
-import { component$, useSignal, useVisibleTask$ } from '@builder.io/qwik';
+import { component$, useSignal, useVisibleTask$, $, type QRL } from '@builder.io/qwik';
 import hljs from 'highlight.js';
-import { LuX, LuEye, LuCode } from '@qwikest/icons/lucide';
+import { LuX, LuEye, LuCode, LuCopy, LuCheck, LuTerminal } from '@qwikest/icons/lucide';
+
+/** Languages whose blocks are commands, not code - they earn the
+ *  open-in-terminal button. */
+export const SHELL_LANGUAGES = ['bash', 'sh', 'shell', 'zsh', 'console', 'terminal', 'cmd', 'bat', 'powershell'];
+
+/** Copyable text of a command block: strip "$ "/"> " prompts when every
+ *  non-empty line carries one - pasting prompts breaks the command. */
+export function commandText(code: string): string {
+  const lines = code.split('\n');
+  const prompted = lines.filter((l) => l.trim() !== '');
+  if (prompted.length > 0 && prompted.every((l) => /^\s*[$>]\s/.test(l))) {
+    return lines.map((l) => l.replace(/^\s*[$>]\s?/, '')).join('\n');
+  }
+  return code;
+}
 
 interface CodePanelProps {
   codeString: string;
@@ -8,13 +23,27 @@ interface CodePanelProps {
   onClose$?: () => void;
   isOverlay?: boolean;
   theme: 'light' | 'dark';
+  /** Run this block in the user's own terminal (shell languages only). */
+  onOpenTerminal$?: QRL<(command: string) => void>;
 }
 
-export const CodePanel = component$<CodePanelProps>(({ codeString, language, onClose$, isOverlay, theme }) => {
+export const CodePanel = component$<CodePanelProps>(({ codeString, language, onClose$, isOverlay, theme, onOpenTerminal$ }) => {
   const isRenderView = useSignal(false);
   const codeRef = useSignal<HTMLElement>();
+  const copied = useSignal(false);
+
+  const copyCode = $(async () => {
+    try {
+      await navigator.clipboard.writeText(commandText(codeString));
+      copied.value = true;
+      setTimeout(() => (copied.value = false), 1500);
+    } catch {
+      /* clipboard unavailable */
+    }
+  });
 
   const canRender = language && ['html', 'javascript', 'css', 'svg', 'xml', 'markup'].includes(language.toLowerCase());
+  const isShell = !!language && SHELL_LANGUAGES.includes(language.toLowerCase());
 
   // SNYK SEC-FIX: Ensure the sandbox attribute is comprehensive to prevent exploits.
   const sandboxPermissions = "allow-scripts";
@@ -49,6 +78,23 @@ export const CodePanel = component$<CodePanelProps>(({ codeString, language, onC
       <div class="code-panel-header">
         <span class="code-panel-language">{language || 'code'}</span>
         <div class="code-panel-actions">
+          <button
+            onClick$={copyCode}
+            class="code-panel-toggle"
+            title={copied.value ? 'Copied' : 'Copy'}
+          >
+            <LuCheck style={{ width: '18px', height: '18px', display: copied.value ? undefined : 'none' }} />
+            <LuCopy style={{ width: '18px', height: '18px', display: copied.value ? 'none' : undefined }} />
+          </button>
+          {isShell && onOpenTerminal$ && (
+            <button
+              onClick$={() => onOpenTerminal$(commandText(codeString))}
+              class="code-panel-toggle"
+              title="Run in your terminal"
+            >
+              <LuTerminal style={{ width: '18px', height: '18px' }} />
+            </button>
+          )}
           {canRender && (
             <div class="code-panel-toggle-group">
               <button

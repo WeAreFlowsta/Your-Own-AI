@@ -541,6 +541,19 @@ export default component$(() => {
     if (agentState.folderPath) openFolder$(agentState.folderPath);
   });
 
+  // Run a suggested command in the user's own terminal - visible,
+  // interruptible, theirs. Opens in the workspace folder when one is open.
+  const handleOpenTerminal = $(async (command: string) => {
+    try {
+      await invoke("open_in_terminal", {
+        command,
+        cwd: agentState.folderPath ?? null,
+      });
+    } catch (err) {
+      console.error("[ChatPage] Could not open a terminal:", err);
+    }
+  });
+
   const handleBrowseFolder = $(async () => {
     try {
       const { open } = await import("@tauri-apps/plugin-dialog");
@@ -776,6 +789,7 @@ export default component$(() => {
               contextWindowSize={contextWindowSize.value}
               onAttachFiles$={handleAttachFiles}
               onOpenFolder$={openFolder$}
+              onOpenTerminal$={handleOpenTerminal}
               onPermissionRespond$={respondPermission$}
               onPermissionOffscreen$={$((off: boolean) => {
                 agentState.pendingCardOffscreen = off;
@@ -1135,6 +1149,7 @@ export default component$(() => {
                   onClose$={() => {
                     isSidePanelVisible.value = false;
                   }}
+                  onOpenTerminal$={handleOpenTerminal}
                 />
               </div>
             </>
