@@ -113,6 +113,22 @@ export async function loadConversationMessages(
   });
   const nextSequence =
     entries.length > 0 ? Math.max(...entries.map((e) => e.sequence)) + 1 : 0;
+  // A conversation can honestly end on an unanswered question (the turn was
+  // stopped, or died before producing anything - only what really happened
+  // is recorded). Say so, or the resume looks broken.
+  const last = messages[messages.length - 1];
+  if (last?.role === "user") {
+    messages.push({
+      id: uuidv4(),
+      role: "assistant",
+      content: "",
+      model: ai.id,
+      aiLabel: ai.label,
+      aiImageUrl: ai.imageUrl || undefined,
+      error:
+        "This question never got an answer - the turn was stopped or failed. Ask again to continue.",
+    });
+  }
   return { messages, nextSequence, folderPath };
 }
 
