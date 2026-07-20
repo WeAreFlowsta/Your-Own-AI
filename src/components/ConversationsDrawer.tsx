@@ -1,5 +1,5 @@
-import { component$, type QRL } from "@builder.io/qwik";
-import { LuFolderOpen, LuX } from "@qwikest/icons/lucide";
+import { component$, useSignal, type QRL } from "@builder.io/qwik";
+import { LuFolderOpen, LuPencil, LuX } from "@qwikest/icons/lucide";
 import type { ConversationListItem } from "../utils/conversationResume";
 
 interface ConversationsDrawerProps {
@@ -8,6 +8,7 @@ interface ConversationsDrawerProps {
   loading: boolean;
   onClose$: QRL<() => void>;
   onResume$: QRL<(item: ConversationListItem) => void>;
+  onRename$: QRL<(hash: string, title: string) => void>;
 }
 
 function timeAgo(startedAtUs: number): string {
@@ -28,7 +29,9 @@ function timeAgo(startedAtUs: number): string {
  * data.)
  */
 export const ConversationsDrawer = component$<ConversationsDrawerProps>(
-  ({ open, items, loading, onClose$, onResume$ }) => {
+  ({ open, items, loading, onClose$, onResume$, onRename$ }) => {
+    const renamingHash = useSignal<string | null>(null);
+    const renameDraft = useSignal("");
     if (!open) return null;
     return (
       <div class="fixed inset-0 z-50">
@@ -59,10 +62,9 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
               </p>
             )}
             {items.map((item) => (
-              <button
+              <div
                 key={item.conversation.hash}
-                onClick$={() => onResume$(item)}
-                class="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-[var(--bg-dropdown-hover)]"
+                class="group flex w-full items-center gap-3 px-4 py-2.5 hover:bg-[var(--bg-dropdown-hover)]"
               >
                 {item.aiImageUrl ? (
                   <img
@@ -75,23 +77,62 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
                 ) : (
                   <span class="w-7 h-7 rounded-full bg-[var(--bg-card)] border border-[var(--border-subtle)] shrink-0" />
                 )}
-                <span class="min-w-0 flex-1">
-                  <span class="block truncate text-sm text-[var(--text-primary)]">
-                    {item.conversation.title || "Conversation"}
-                  </span>
-                  <span class="block truncate text-xs text-[var(--text-muted)]">
-                    {item.aiLabel}
-                    {item.folderPath &&
-                      ` · ${item.folderPath.split("/").filter(Boolean).pop()}`}
-                  </span>
-                </span>
+                {renamingHash.value === item.conversation.hash ? (
+                  <input
+                    type="text"
+                    value={renameDraft.value}
+                    autoFocus
+                    onInput$={(_, el) => (renameDraft.value = el.value)}
+                    onKeyDown$={(e) => {
+                      if (e.key === "Enter") {
+                        if (renameDraft.value.trim()) {
+                          onRename$(item.conversation.hash, renameDraft.value.trim());
+                        }
+                        renamingHash.value = null;
+                      } else if (e.key === "Escape") {
+                        renamingHash.value = null;
+                      }
+                    }}
+                    onBlur$={() => {
+                      if (renameDraft.value.trim()) {
+                        onRename$(item.conversation.hash, renameDraft.value.trim());
+                      }
+                      renamingHash.value = null;
+                    }}
+                    class="min-w-0 flex-1 bg-[var(--bg-input)] border border-[var(--border-input)] rounded-lg px-2 py-1 text-sm text-[var(--text-primary)]"
+                  />
+                ) : (
+                  <button
+                    onClick$={() => onResume$(item)}
+                    class="min-w-0 flex-1 text-left bg-transparent border-none cursor-pointer"
+                  >
+                    <span class="block truncate text-sm text-[var(--text-primary)]">
+                      {item.title}
+                    </span>
+                    <span class="block truncate text-xs text-[var(--text-muted)]">
+                      {item.aiLabel}
+                      {item.folderPath &&
+                        ` · ${item.folderPath.split("/").filter(Boolean).pop()}`}
+                    </span>
+                  </button>
+                )}
+                <button
+                  onClick$={() => {
+                    renameDraft.value = item.title;
+                    renamingHash.value = item.conversation.hash;
+                  }}
+                  title="Rename"
+                  class="shrink-0 opacity-0 group-hover:opacity-60 hover:!opacity-100 text-[var(--text-muted)] hover:text-[var(--text-primary)] bg-transparent border-none cursor-pointer"
+                >
+                  <LuPencil class="h-3.5 w-3.5" />
+                </button>
                 {item.folderPath && (
                   <LuFolderOpen class="h-3.5 w-3.5 shrink-0 text-[var(--text-muted)]" />
                 )}
                 <span class="shrink-0 text-xs text-[var(--text-muted)]">
                   {timeAgo(item.conversation.started_at)}
                 </span>
-              </button>
+              </div>
             ))}
           </div>
         </aside>

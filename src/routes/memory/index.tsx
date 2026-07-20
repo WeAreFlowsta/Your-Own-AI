@@ -13,13 +13,18 @@ import {
   type Signal,
 } from "@builder.io/qwik";
 import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
-import { LuArrowLeft, LuMessageSquare, LuChevronDown, LuChevronUp, LuInfo, LuDownload, LuShieldCheck, LuBrain, LuUser } from "@qwikest/icons/lucide";
+import { LuArrowLeft, LuMessageSquare, LuChevronDown, LuChevronUp, LuInfo, LuDownload, LuPencil, LuShieldCheck, LuBrain, LuUser } from "@qwikest/icons/lucide";
 import AppHeader from "../../components/AppHeader";
 import { useAiData } from "../../contexts/AiDataContext";
 import {
   getConversations,
   getTranscript,
 } from "../../utils/holochainTranscripts";
+import {
+  sanitizeTitle,
+  setConversationTitleOverride,
+  getConversationTitleOverride,
+} from "../../utils/conversationResume";
 import type {
   HolochainConversation,
   HolochainTranscriptEntry,
@@ -66,6 +71,11 @@ export default component$(() => {
   const loading = useSignal(true);
   const expandedHash = useSignal<string | null>(null);
   const transcriptEntries = useSignal<HolochainTranscriptEntry[]>([]);
+  // Rename (client-side override until the zome gains a rename fn).
+  const renamingHash = useSignal<string | null>(null);
+  const renameDraft = useSignal("");
+  // Bumped after a rename so the title expressions re-read the override.
+  const titleBump = useSignal(0);
   const transcriptLoading = useSignal(false);
   const transcriptError = useSignal(false);
 
@@ -379,7 +389,39 @@ export default component$(() => {
                       </div>
                       <div class="min-w-0">
                         <div class="font-medium text-[var(--text-primary)] truncate">
-                          {conv.title || "Conversation"}
+                          {renamingHash.value === conv.hash ? (
+                            <input
+                              type="text"
+                              value={renameDraft.value}
+                              autoFocus
+                              onClick$={(e) => e.stopPropagation()}
+                              onInput$={(_, el) => (renameDraft.value = el.value)}
+                              onKeyDown$={(e) => {
+                                if (e.key === "Enter" || e.key === "Escape") {
+                                  if (e.key === "Enter" && renameDraft.value.trim()) {
+                                    setConversationTitleOverride(conv.hash, renameDraft.value.trim());
+                                    titleBump.value++;
+                                  }
+                                  renamingHash.value = null;
+                                }
+                              }}
+                              onBlur$={() => {
+                                if (renameDraft.value.trim()) {
+                                  setConversationTitleOverride(conv.hash, renameDraft.value.trim());
+                                  titleBump.value++;
+                                }
+                                renamingHash.value = null;
+                              }}
+                              class="w-full bg-[var(--bg-input)] border border-[var(--border-input)] rounded-lg px-2 py-1 text-sm"
+                            />
+                          ) : (
+                            <>
+                              {titleBump.value >= 0
+                                ? getConversationTitleOverride(conv.hash) ??
+                                  sanitizeTitle(conv.title)
+                                : ""}
+                            </>
+                          )}
                         </div>
                         <div class="mt-0.5 flex items-center gap-2 flex-wrap text-[11px] text-[var(--text-muted)]">
                           <span>{formatDate(conv.started_at)}</span>
@@ -394,6 +436,18 @@ export default component$(() => {
                           )}
                         </div>
                       </div>
+                    </button>
+                    <button
+                      onClick$={() => {
+                        renameDraft.value =
+                          getConversationTitleOverride(conv.hash) ??
+                          sanitizeTitle(conv.title);
+                        renamingHash.value = conv.hash;
+                      }}
+                      title="Rename this conversation"
+                      class="flex-shrink-0 p-2 rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-main)] hover:text-[var(--text-primary)] transition-colors"
+                    >
+                      <LuPencil class="w-4 h-4" />
                     </button>
                     <button
                       onClick$={() => (exportModalConv.value = conv)}

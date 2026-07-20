@@ -15,12 +15,24 @@ import type {
 
 export interface ConversationListItem {
   conversation: HolochainConversation;
+  /** Display title: rename override, else the stored title, tag-stripped. */
+  title: string;
   /** The local AI this conversation belongs to (matched by agent key). */
   aiId: string;
   aiLabel: string;
   aiImageUrl?: string | null;
   /** Workspace folder this conversation worked in (client map for now). */
   folderPath?: string;
+}
+
+/** Titles come from raw first messages - agent-formatted ones carry tags
+ *  like <user_query>. Strip markup, collapse whitespace. */
+export function sanitizeTitle(raw?: string | null): string {
+  const clean = (raw ?? "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return clean.length > 80 ? clean.slice(0, 80) + "..." : clean || "Conversation";
 }
 
 /** All conversations across every provisioned AI, newest first. */
@@ -34,8 +46,15 @@ export async function listAllConversations(
       .map(async (ai) => {
         const conversations = await getConversations(ai.aiConfig.agentPubKey!);
         for (const conversation of conversations) {
+          // External-API conversations (source set - e.g. the Build agent's
+          // own model calls through the local server) are records, not
+          // places - they live on the Memory page, not here.
+          if (conversation.source) continue;
           out.push({
             conversation,
+            title:
+              getConversationTitleOverride(conversation.hash) ??
+              sanitizeTitle(conversation.title),
             aiId: ai.id,
             aiLabel: ai.label,
             aiImageUrl: ai.imageUrl,
@@ -101,6 +120,31 @@ export async function loadConversationMessages(
 
 const FOLDER_MAP_KEY = "conversation-folders";
 const LAST_CONVERSATION_KEY = "last-conversation";
+const TITLE_MAP_KEY = "conversation-titles";
+
+/** Rename is a client-side override for now: on-chain rename needs a small
+ *  zome addition (conversation titles are zome-side metadata, unlike the
+ *  encrypted entries) - queued for the next DNA window. */
+export function setConversationTitleOverride(hash: string, title: string) {
+  try {
+    const map = JSON.parse(localStorage.getItem(TITLE_MAP_KEY) || "{}");
+    map[hash] = title;
+    localStorage.setItem(TITLE_MAP_KEY, JSON.stringify(map));
+  } catch {
+    /* convenience metadata */
+  }
+}
+
+export function getConversationTitleOverride(hash: string): string | undefined {
+  try {
+    const map = JSON.parse(localStorage.getItem(TITLE_MAP_KEY) || "{}");
+    return typeof map[hash] === "string" && map[hash].trim()
+      ? map[hash]
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export function rememberConversationFolder(hash: string, folderPath: string) {
   try {

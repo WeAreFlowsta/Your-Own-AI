@@ -24,6 +24,9 @@ import {
   getConversationFolder,
   rememberLastConversation,
   readLastConversation,
+  sanitizeTitle,
+  setConversationTitleOverride,
+  getConversationTitleOverride,
   type ConversationListItem,
   type LastConversationPointer,
 } from "../../utils/conversationResume";
@@ -912,7 +915,12 @@ export default component$(() => {
               onAttachFiles$={handleAttachFiles}
               onOpenFolder$={openFolder$}
               onOpenTerminal$={handleOpenTerminal}
-              lastConversationTitle={lastConversation.value?.title}
+              lastConversationTitle={
+                lastConversation.value
+                  ? getConversationTitleOverride(lastConversation.value.hash) ??
+                    sanitizeTitle(lastConversation.value.title)
+                  : undefined
+              }
               onContinueLast$={$(() => {
                 const last = lastConversation.value;
                 if (last) resumeConversation(last);
@@ -1299,6 +1307,13 @@ export default component$(() => {
             aiId: item.aiId,
           }),
         )}
+        onRename$={$((hash: string, title: string) => {
+          setConversationTitleOverride(hash, title);
+          conversationItems.value = conversationItems.value.map((i) =>
+            i.conversation.hash === hash ? { ...i, title } : i,
+          );
+          lastConversation.value = readLastConversation();
+        })}
       />
 
       {/* Resumed a conversation that worked in a folder: ask before
