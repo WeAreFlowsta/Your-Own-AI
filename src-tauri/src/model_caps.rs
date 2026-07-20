@@ -106,6 +106,104 @@ pub fn known_caps(model_name: &str) -> Option<Caps> {
     None
 }
 
+/// Agent/tool-use capability (0-9): can this family DRIVE tools reliably
+/// in an agent loop - function calling plus multi-step discipline? Kept
+/// separate from `Caps` so the router's task scoring is untouched; the
+/// folder guard is the consumer. Formalizes what the registry comments
+/// above already know. Same maintenance discipline: re-check on family
+/// updates, and PROMOTE a family only after a live folder test.
+pub fn agent_caps(model_name: &str) -> u8 {
+    let n = model_name.to_lowercase();
+    if n.contains("ornith") {
+        return 9;
+    }
+    if n.contains("gpt-oss") || n.contains("gpt_oss") || n.contains("gptoss") {
+        return 8;
+    }
+    if n.contains("glm") {
+        return 8;
+    }
+    if n.contains("coder") || n.contains("-code") || n.contains("codestral") || n.contains("devstral") {
+        return 8;
+    }
+    if n.contains("qwen3") || n.contains("qwen-3") {
+        return 7;
+    }
+    if n.contains("qwythos") {
+        return 6;
+    }
+    if n.contains("deepseek") || n.contains("-r1") || n.contains("qwq") {
+        return 5;
+    }
+    if n.contains("ministral") || n.contains("mistral") {
+        return 5;
+    }
+    if n.contains("medgemma") {
+        return 1;
+    }
+    if n.contains("gemma-4") || n.contains("gemma4") {
+        return 5;
+    }
+    if n.contains("llama") {
+        return 4;
+    }
+    3
+}
+
+/// Online agent capability: what the PROXY PATH delivers today, not the
+/// raw model - Sol's Responses adapter drops the tools array, so Sol is 0
+/// until tool passthrough ships. Checked before the gpt arm ("gpt-5.6-sol"
+/// contains both).
+pub fn online_agent_caps(text: &str) -> u8 {
+    let t = text.to_lowercase();
+    if t.contains("sol") {
+        return 0;
+    }
+    if t.contains("claude") {
+        return 9;
+    }
+    if t.contains("kimi") {
+        return 8;
+    }
+    if t.contains("coder") || t.contains("codestral") {
+        return 8;
+    }
+    if t.contains("gpt") || t.contains("openai") {
+        return 8;
+    }
+    if t.contains("grok") {
+        return 8;
+    }
+    if t.contains("gemini") {
+        return 7;
+    }
+    if t.contains("qwen") {
+        return 7;
+    }
+    if t.contains("sonar") || t.contains("perplexity") {
+        return 1;
+    }
+    5
+}
+
+/// The folder guard's one question: can this AI's configured model drive
+/// agent work? `model` is UserDefinedAI.model - a gguf filename,
+/// "online:<id>", "external:<id>", or "auto:*" (router decides per turn,
+/// returns -1: the caller treats auto as "depends, do not block").
+#[tauri::command]
+pub fn agent_capability(model: String) -> i32 {
+    if model.starts_with("auto:") {
+        return -1;
+    }
+    if let Some(id) = model.strip_prefix("online:") {
+        return online_agent_caps(id) as i32;
+    }
+    if let Some(id) = model.strip_prefix("external:") {
+        return agent_caps(id) as i32;
+    }
+    agent_caps(&model) as i32
+}
+
 /// Capability scores for a model, matched by family from its filename.
 /// Unknown family — middling default.
 pub fn caps_for(model_name: &str) -> Caps {

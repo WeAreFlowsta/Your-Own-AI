@@ -177,6 +177,45 @@ export default component$(() => {
   // A folder the resumed conversation worked in (ask before switching).
   const resumeFolderAsk = useSignal<string | null>(null);
 
+  // Folder guard: opening a workspace with an AI whose model can't drive
+  // agent work offers a switch - the folder still opens (workspace is
+  // app-wide), and there is NEVER a silent model substitution. Auto-routing
+  // AIs (score -1) pass: the router decides per turn.
+  const folderGuard = useSignal<{
+    path: string;
+    currentLabel: string;
+    suggestion?: SelectedAiModel;
+  } | null>(null);
+
+  const openFolderGuarded = $(async (path: string) => {
+    openFolder$(path);
+    try {
+      const score = await invoke<number>("agent_capability", {
+        model: selectedAi.value.aiConfig?.model || "",
+      });
+      if (score >= 0 && score < 6) {
+        let suggestion: SelectedAiModel | undefined;
+        for (const option of dynamicModelOptions.value) {
+          if (option.id === selectedAi.value.id) continue;
+          const s = await invoke<number>("agent_capability", {
+            model: option.aiConfig?.model || "",
+          });
+          if (s >= 6) {
+            suggestion = option;
+            break;
+          }
+        }
+        folderGuard.value = {
+          path,
+          currentLabel: selectedAi.value.label,
+          suggestion,
+        };
+      }
+    } catch {
+      /* the guard is advisory - never block the folder on it */
+    }
+  });
+
   /** Re-enter a conversation: rebuild the messages from its transcript and
    *  keep appending to the same hash. */
   const resumeConversation = $(
@@ -682,7 +721,7 @@ export default component$(() => {
     try {
       const { open } = await import("@tauri-apps/plugin-dialog");
       const selected = await open({ directory: true });
-      if (typeof selected === "string" && selected) openFolder$(selected);
+      if (typeof selected === "string" && selected) openFolderGuarded(selected);
     } catch (err) {
       console.error("[ChatPage] Folder picker error:", err);
     }
@@ -698,7 +737,7 @@ export default component$(() => {
       // dropping a file stays an attachment.
       try {
         if (await invoke<boolean>("path_is_dir", { path: filePath })) {
-          openFolder$(filePath);
+          openFolderGuarded(filePath);
           continue;
         }
       } catch {
@@ -861,7 +900,7 @@ export default component$(() => {
           onCloseFolder$={handleCloseFolder}
           buildInstalled={buildInstalled.value}
           recentFolders={recentFolders.value}
-          onOpenFolder$={openFolder$}
+          onOpenFolder$={openFolderGuarded}
           onBrowseFolder$={handleBrowseFolder}
           onOpenConversations$={openConversations}
         />
@@ -1315,6 +1354,39 @@ export default component$(() => {
           );
           lastConversation.value = readLastConversation();
         })}
+      />
+
+      {/* Folder guard: the workspace opened, but this AI's model is a poor
+          fit for agent work - offer the switch, never substitute quietly. */}
+      <ConfirmModal
+        isOpen={folderGuard.value !== null}
+        title={`${folderGuard.value?.currentLabel ?? "This AI"} may struggle in folders`}
+        message={
+          folderGuard.value?.suggestion
+            ? `${folderGuard.value.currentLabel}'s model isn't built for tool work, so folder tasks may stall or fail. ${folderGuard.value.suggestion.label} can drive them properly - switch this workspace to ${folderGuard.value.suggestion.label}?`
+            : `${folderGuard.value?.currentLabel ?? "This AI"}'s model isn't built for tool work, so folder tasks may stall or fail. None of your other AIs are set up for it yet either - an online model like Kimi, or an agentic coder from the model library, works best.`
+        }
+        confirmLabel={
+          folderGuard.value?.suggestion
+            ? `Use ${folderGuard.value.suggestion.label}`
+            : "OK"
+        }
+        cancelLabel={
+          folderGuard.value?.suggestion
+            ? `Keep ${folderGuard.value.currentLabel}`
+            : "Keep going"
+        }
+        onConfirm$={async () => {
+          const guard = folderGuard.value;
+          folderGuard.value = null;
+          if (guard?.suggestion) {
+            selectedAi.value = guard.suggestion;
+            await openFolder$(guard.path);
+          }
+        }}
+        onCancel$={() => {
+          folderGuard.value = null;
+        }}
       />
 
       {/* Resumed a conversation that worked in a folder: ask before
