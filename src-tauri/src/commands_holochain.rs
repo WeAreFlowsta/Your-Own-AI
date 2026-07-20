@@ -582,7 +582,19 @@ pub async fn get_conversation_transcript(
                         continue;
                     }
                 }
-                let Ok(e) = serde_json::from_slice::<MessagePlain>(&plain_bytes) else { continue };
+                let e = match serde_json::from_slice::<MessagePlain>(&plain_bytes) {
+                    Ok(e) => e,
+                    Err(err) => {
+                        // NEVER drop entries silently - a parse failure here
+                        // reads as "the answer vanished" in the app.
+                        log::warn!(
+                            "Transcript entry failed to parse (dropped): {} - first 120 bytes: {}",
+                            err,
+                            String::from_utf8_lossy(&plain_bytes[..plain_bytes.len().min(120)])
+                        );
+                        continue;
+                    }
+                };
                 entries.push(TranscriptEntryInfo {
                     hash: hex::encode(record.action_address().get_raw_39()),
                     role: e.role,
