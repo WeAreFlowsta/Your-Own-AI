@@ -17,6 +17,16 @@ import { ThemeContext } from "../layout";
 import { useAiData, useAiDataActions } from "../../contexts/AiDataContext";
 import { useChat } from "../../hooks/useChat";
 import { useAgentSession, readRecentFolders, resolveBinaryPath } from "../../hooks/useAgentSession";
+import { ConversationsDrawer } from "../../components/ConversationsDrawer";
+import {
+  listAllConversations,
+  loadConversationMessages,
+  getConversationFolder,
+  rememberLastConversation,
+  readLastConversation,
+  type ConversationListItem,
+  type LastConversationPointer,
+} from "../../utils/conversationResume";
 import ConfirmModal from "../../components/ConfirmModal";
 import { drainPendingExtractions, prewarmExtractionModel } from "../../utils/memoryExtraction";
 import GpuSafeModeNotice from "../../components/GpuSafeModeNotice";
@@ -139,6 +149,106 @@ export default component$(() => {
   // The header workspace slot: exists only when Build is installed.
   const buildInstalled = useSignal(false);
   const recentFolders = useSignal<string[]>([]);
+
+  // Conversations: the temporal lens - every conversation is a place.
+  const conversationsOpen = useSignal(false);
+  const conversationsLoading = useSignal(false);
+  const conversationItems = useSignal<ConversationListItem[]>([]);
+  const lastConversation = useSignal<LastConversationPointer | null>(null);
+  // A folder the resumed conversation worked in (ask before switching).
+  const resumeFolderAsk = useSignal<string | null>(null);
+
+  /** Re-enter a conversation: rebuild the messages from its transcript and
+   *  keep appending to the same hash. */
+  const resumeConversation = $(
+    async (target: { hash: string; agentKey: string; aiId?: string }) => {
+      if (chatState.isLoading) return;
+      conversationsOpen.value = false;
+      // Match the AI by agent key first (robust), then by id.
+      const ai =
+        dynamicModelOptions.value.find(
+          (o) => o.aiConfig?.agentPubKey === target.agentKey,
+        ) ??
+        dynamicModelOptions.value.find((o) => o.id === target.aiId) ??
+        selectedAi.value;
+      selectedAi.value = ai;
+      resetChat();
+      const { messages, nextSequence } = await loadConversationMessages(
+        target.agentKey,
+        target.hash,
+        ai,
+      );
+      if (messages.length === 0) return;
+      chatState.messages = messages;
+      chatState.conversationHash = target.hash;
+      chatState.messageSequence = nextSequence;
+      const firstUser = messages.find((m) => m.role === "user");
+      rememberLastConversation({
+        hash: target.hash,
+        agentKey: target.agentKey,
+        aiId: ai.id,
+        title: firstUser?.content.slice(0, 80) ?? "Conversation",
+      });
+      // Worked in a folder? Ask before switching the workspace - never
+      // silently swap it.
+      const folder = getConversationFolder(target.hash);
+      if (folder && folder !== agentState.folderPath) {
+        resumeFolderAsk.value = folder;
+      }
+    },
+  );
+
+  const openConversations = $(async () => {
+    conversationsOpen.value = true;
+    conversationsLoading.value = true;
+    try {
+      conversationItems.value = await listAllConversations(
+        dynamicModelOptions.value,
+      );
+    } finally {
+      conversationsLoading.value = false;
+    }
+  });
+
+  // Last-conversation pointer: written whenever a chat-path conversation
+  // starts (the agent path writes its own), read for the hero line. Also
+  // honor a resume handoff from the Memory page (sessionStorage - query
+  // params are unreliable in the packaged app).
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    const hash = track(() => chatState.conversationHash);
+    lastConversation.value = readLastConversation();
+    if (hash) {
+      const firstUser = chatState.messages.find((m) => m.role === "user");
+      const agentKey = selectedAi.value.aiConfig?.agentPubKey;
+      if (agentKey) {
+        rememberLastConversation({
+          hash,
+          agentKey,
+          aiId: selectedAi.value.id,
+          title: firstUser?.content.slice(0, 80) ?? "Conversation",
+        });
+        lastConversation.value = readLastConversation();
+      }
+    }
+  });
+
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(() => {
+    try {
+      const raw = sessionStorage.getItem("resume-conversation");
+      if (raw) {
+        sessionStorage.removeItem("resume-conversation");
+        const target = JSON.parse(raw);
+        if (target?.hash && target?.agentKey) {
+          // Model options hydrate async - give them a beat.
+          setTimeout(() => resumeConversation(target), 400);
+        }
+      }
+    } catch {
+      /* no handoff */
+    }
+  });
 
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(({ track }) => {
@@ -748,6 +858,7 @@ export default component$(() => {
           recentFolders={recentFolders.value}
           onOpenFolder$={openFolder$}
           onBrowseFolder$={handleBrowseFolder}
+          onOpenConversations$={openConversations}
         />
       </div>
 
@@ -799,6 +910,11 @@ export default component$(() => {
               onAttachFiles$={handleAttachFiles}
               onOpenFolder$={openFolder$}
               onOpenTerminal$={handleOpenTerminal}
+              lastConversationTitle={lastConversation.value?.title}
+              onContinueLast$={$(() => {
+                const last = lastConversation.value;
+                if (last) resumeConversation(last);
+              })}
               onPermissionRespond$={respondPermission$}
               onPermissionOffscreen$={$((off: boolean) => {
                 agentState.pendingCardOffscreen = off;
@@ -1165,6 +1281,43 @@ export default component$(() => {
           )}
         </main>
       </div>
+
+      {/* Conversations drawer - every conversation is a place. */}
+      <ConversationsDrawer
+        open={conversationsOpen.value}
+        items={conversationItems.value}
+        loading={conversationsLoading.value}
+        onClose$={$(() => {
+          conversationsOpen.value = false;
+        })}
+        onResume$={$((item: ConversationListItem) =>
+          resumeConversation({
+            hash: item.conversation.hash,
+            agentKey: item.conversation.agent_key,
+            aiId: item.aiId,
+          }),
+        )}
+      />
+
+      {/* Resumed a conversation that worked in a folder: ask before
+          switching the workspace - never silently swap it. */}
+      <ConfirmModal
+        isOpen={resumeFolderAsk.value !== null}
+        title="Open this conversation's folder?"
+        message={`This conversation worked in ${
+          resumeFolderAsk.value?.split("/").filter(Boolean).pop() ?? "a folder"
+        }. Open that folder to keep building?`}
+        confirmLabel="Open folder"
+        cancelLabel="Just read"
+        onConfirm$={async () => {
+          const folder = resumeFolderAsk.value;
+          resumeFolderAsk.value = null;
+          if (folder) await openFolder$(folder);
+        }}
+        onCancel$={() => {
+          resumeFolderAsk.value = null;
+        }}
+      />
 
       {/* Closing the folder mid-task is the one destructive gesture here -
           confirm it. Idle closes never see this. */}

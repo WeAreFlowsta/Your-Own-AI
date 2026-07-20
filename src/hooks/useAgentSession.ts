@@ -17,6 +17,11 @@
 
 import { $, useSignal, useStore, useVisibleTask$, type Signal } from "@builder.io/qwik";
 import { v4 as uuidv4 } from "uuid";
+import { startConversation, recordMessage } from "../utils/holochainTranscripts";
+import {
+  rememberConversationFolder,
+  rememberLastConversation,
+} from "../utils/conversationResume";
 import type { AgentPermission, Message, SelectedAiModel } from "../types";
 import type { UseChatState } from "./useChat";
 
@@ -231,6 +236,63 @@ export function useAgentSession(props: UseAgentSessionProps) {
     return invoke(cmd, args);
   });
 
+  /** Record a user turn to the Holochain transcript (starting the
+   *  conversation if needed) - the agent path bypasses useChat's recording,
+   *  and "Holochain holds everything" is a headline feature. Text turns
+   *  now; the rail/cards on-chain are the launch release gate. */
+  const recordUserTurn = $(async (text: string) => {
+    const ai = props.selectedAi.value;
+    const agentKey = ai.aiConfig?.agentPubKey;
+    if (!agentKey) return;
+    const model = ai.aiConfig?.model || "agent";
+    if (!props.chatState.conversationHash) {
+      const title = text.length > 80 ? text.slice(0, 80) + "..." : text;
+      const hash = await startConversation(agentKey, ai.label, model, title);
+      if (!hash) return;
+      props.chatState.conversationHash = hash;
+      props.chatState.messageSequence = 0;
+      if (state.folderPath) rememberConversationFolder(hash, state.folderPath);
+      rememberLastConversation({ hash, agentKey, aiId: ai.id, title });
+    }
+    const seq = props.chatState.messageSequence;
+    props.chatState.messageSequence = seq + 1;
+    await recordMessage(
+      agentKey,
+      props.chatState.conversationHash!,
+      "user",
+      text,
+      seq,
+      model,
+    );
+  });
+
+  const recordAssistantTurn = $(
+    async (content: string, servedBy?: string, tokens?: Message["tokens"]) => {
+      const ai = props.selectedAi.value;
+      const agentKey = ai.aiConfig?.agentPubKey;
+      const hash = props.chatState.conversationHash;
+      if (!agentKey || !hash || !content) return;
+      const seq = props.chatState.messageSequence;
+      props.chatState.messageSequence = seq + 1;
+      await recordMessage(
+        agentKey,
+        hash,
+        "assistant",
+        content,
+        seq,
+        servedBy || ai.aiConfig?.model || "agent",
+        undefined,
+        tokens && tokens.total_tokens
+          ? {
+              prompt_tokens: tokens.prompt_tokens ?? 0,
+              completion_tokens: tokens.completion_tokens ?? 0,
+              total_tokens: tokens.total_tokens,
+            }
+          : undefined,
+      );
+    },
+  );
+
   /** The turn's single reply bubble, pushed at Enter. Mounting it anchors
    *  the question to the top and shows the avatar + action bar instantly. */
   const startTurnBubble = $((userText: string) => {
@@ -252,6 +314,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
       },
     ];
     props.chatState.isLoading = true;
+    // Fire-and-forget - chat always works even if the conductor is down.
+    recordUserTurn(userText).catch(() => {});
   });
 
   /** Send a prompt into the live session (session must be ready). */
@@ -708,6 +772,13 @@ export function useAgentSession(props: UseAgentSessionProps) {
         (m) =>
           !(m.id === id && m.content === "" && !(m.agentLog ?? []).length && !m.error),
       );
+      // Record the answer to the transcript (fire-and-forget).
+      const bubble = props.chatState.messages.find((m) => m.id === id);
+      if (bubble?.content) {
+        recordAssistantTurn(bubble.content, bubble.servedBy, bubble.tokens).catch(
+          () => {},
+        );
+      }
       props.chatState.isLoading = false;
       state.liveStatus = "";
       if (state.status === "working") state.status = "ready";

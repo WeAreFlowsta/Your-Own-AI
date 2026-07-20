@@ -19,6 +19,7 @@ import {
   LuCheck,
   LuBot,
   LuFolderOpen,
+  LuMessagesSquare,
   LuBrain,
   LuDownload,
   LuCloud,
@@ -79,6 +80,8 @@ interface AppHeaderProps {
   onOpenFolder$?: QRL<(path: string) => void>;
   /** Open the folder picker. */
   onBrowseFolder$?: QRL<() => void>;
+  /** Open the Conversations drawer (pick a conversation back up). */
+  onOpenConversations$?: QRL<() => void>;
 }
 
 /** Home-shortened path for the slot ("~/Projects/Website"). */
@@ -101,6 +104,7 @@ export default component$<AppHeaderProps>(
     recentFolders = [],
     onOpenFolder$,
     onBrowseFolder$,
+    onOpenConversations$,
   }) => {
     const nav = useNavigate();
     const { theme } = useContext(ThemeContext);
@@ -257,6 +261,18 @@ export default component$<AppHeaderProps>(
                   <span class="text-red-500 font-medium">· too big</span>
                 )}
               </span>
+            )}
+
+            {/* Conversations - pick any conversation back up. */}
+            {onOpenConversations$ && (
+              <LiquidMetalButton
+                onClick$={onOpenConversations$}
+                variant="secondary"
+                class="flex items-center justify-center w-9 h-9 cursor-pointer"
+                title="Conversations"
+              >
+                <LuMessagesSquare class="h-[18px] w-[18px]" />
+              </LiquidMetalButton>
             )}
 
             {/* New Chat Button — Liquid Metal shader */}

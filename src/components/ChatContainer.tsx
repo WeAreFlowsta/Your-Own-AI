@@ -53,6 +53,9 @@ interface ChatContainerProps {
   onOpenFolder$?: QRL<(path: string) => void>;
   /** Run a suggested command in the user's own terminal. */
   onOpenTerminal$?: QRL<(command: string) => void>;
+  /** Hero continuity line: the last conversation, one click to re-enter. */
+  lastConversationTitle?: string;
+  onContinueLast$?: QRL<() => void>;
 }
 
 // QRL helper: get display image URL from model (inlined, not passed as prop)
@@ -135,6 +138,8 @@ export default component$<ChatContainerProps>((props) => {
           contextWindowSize={props.contextWindowSize}
           onAttachFiles$={props.onAttachFiles$}
           onOpenFolder$={props.onOpenFolder$}
+          lastConversationTitle={props.lastConversationTitle}
+          onContinueLast$={props.onContinueLast$}
           theme={props.theme}
         />
       </div>

@@ -417,6 +417,30 @@ export default component$(() => {
                   {/* Expanded transcript */}
                   {expandedHash.value === conv.hash && (
                     <div class="border-t border-[var(--border-subtle)] px-4 py-4 space-y-5">
+                      {/* Every view offers re-entry - a conversation is a
+                          place, not a document. Handoff via sessionStorage
+                          (query params are unreliable in the packaged app). */}
+                      <div class="flex justify-end">
+                        <button
+                          onClick$={() => {
+                            try {
+                              sessionStorage.setItem(
+                                "resume-conversation",
+                                JSON.stringify({
+                                  hash: conv.hash,
+                                  agentKey: conv.agent_key,
+                                }),
+                              );
+                            } catch {
+                              /* handoff unavailable */
+                            }
+                            nav("/chat/");
+                          }}
+                          class="px-3 py-1.5 rounded-lg text-xs text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] transition-colors"
+                        >
+                          Continue this conversation
+                        </button>
+                      </div>
                       {transcriptLoading.value ? (
                         <div class="flex justify-center py-4">
                           <div class="w-5 h-5 border-2 border-[var(--bg-button-primary)] border-t-transparent rounded-full animate-spin" />

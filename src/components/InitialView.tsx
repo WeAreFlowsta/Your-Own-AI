@@ -21,6 +21,9 @@ interface InitialViewProps {
   onAttachFiles$: QRL<(paths: string[]) => void>;
   /** Open a folder for this conversation (Build agent). */
   onOpenFolder$?: QRL<(path: string) => void>;
+  /** Quiet continuity line: the last conversation, one click to re-enter. */
+  lastConversationTitle?: string;
+  onContinueLast$?: QRL<() => void>;
   theme: 'light' | 'dark';
 }
 
@@ -47,6 +50,16 @@ export default component$<InitialViewProps>((props) => {
         onOpenFolder$={props.onOpenFolder$}
         theme={props.theme}
       />
+      {props.lastConversationTitle && props.onContinueLast$ && (
+        <div class="mt-3 text-center">
+          <button
+            onClick$={props.onContinueLast$}
+            class="text-sm text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+          >
+            &#8635; Continue: {props.lastConversationTitle}
+          </button>
+        </div>
+      )}
     </div>
   );
 });
