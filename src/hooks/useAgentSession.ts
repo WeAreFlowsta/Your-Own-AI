@@ -40,6 +40,10 @@ export interface AgentSessionState {
   /** The current activity in a word or two ("Reading config.mjs..") -
    *  shown on the live pill when the user has scrolled away from the tip. */
   liveStatus: string;
+  /** Set while the agent is retrying a failed model call ("Retrying (7/15)
+   *  - context size exceeded..") - the rail's pearl shows this instead of a
+   *  stale action label, so a retry loop never looks like a hang. */
+  retryStatus: string;
   /** Every file path the agent touched this session (viewer feed). */
   touchedFiles: string[];
 }
@@ -222,6 +226,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     pendingPermissionId: null,
     pendingCardOffscreen: false,
     liveStatus: "",
+    retryStatus: "",
     touchedFiles: [],
   });
 
@@ -587,6 +592,25 @@ export function useAgentSession(props: UseAgentSessionProps) {
       if (!update) return;
       const kind = update.sessionUpdate;
 
+      if (kind === "retry_state") {
+        // The agent retries failed model calls with backoff (up to 15x) -
+        // without surfacing it, a retry loop is indistinguishable from a
+        // hang. Show attempt count + the reason's meat on the pearl/pill.
+        if (update.type === "retrying") {
+          const raw = String(update.reason ?? "model call failed");
+          const reason = (raw.split(": ").pop() ?? raw).replace(/\.$/, "");
+          const text = `Retrying (${update.attempt}/${update.max_retries}) - ${reason.slice(0, 80)}..`;
+          state.retryStatus = text;
+          state.liveStatus = text;
+        } else {
+          state.retryStatus = "";
+          state.liveStatus = "Thinking..";
+        }
+        return;
+      }
+      // Any real progress means the retry resolved.
+      if (state.retryStatus) state.retryStatus = "";
+
       if (kind === "agent_message_chunk") {
         // ALL text streams as narration in the working box during the turn
         // (the opening words are part of the work story, Cursor-style). The
@@ -798,6 +822,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       }
       props.chatState.isLoading = false;
       state.liveStatus = "";
+      state.retryStatus = "";
       if (state.status === "working") state.status = "ready";
     };
 

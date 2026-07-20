@@ -25,6 +25,10 @@ interface AgentWorkingBoxProps {
   railOpen: Signal<boolean>;
   /** apiDurationMs from the turn's usage - shown on the stub. */
   durationMs?: number;
+  /** Live retry text ("Retrying (7/15) - context size exceeded..") - wins
+   *  over everything on the pearl: a retry loop must never look like a
+   *  hang behind a stale action label. */
+  retryStatus?: string;
   onPermissionRespond$?: QRL<
     (requestId: number, decision: "allow" | "reject", always: boolean) => void
   >;
@@ -66,7 +70,7 @@ function formatDuration(ms?: number): string | null {
 }
 
 export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
-  ({ log, working, railOpen, durationMs, onPermissionRespond$, onPermissionOffscreen$ }) => {
+  ({ log, working, railOpen, durationMs, retryStatus, onPermissionRespond$, onPermissionOffscreen$ }) => {
     const showThoughts = useSignal(false);
     const openOutputs = useSignal<Record<string, boolean>>({});
 
@@ -112,6 +116,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
     });
 
     const status = useComputed$(() => {
+      if (retryStatus) return retryStatus;
       const last = log[log.length - 1];
       if (last?.type === "permission" && last.permission.state === "pending") {
         return "Waiting for you..";

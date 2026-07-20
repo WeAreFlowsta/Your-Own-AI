@@ -937,6 +937,7 @@ export default component$(() => {
                 agentState.folderPath !== null && chatState.isLoading
               }
               liveStatus={agentState.liveStatus}
+              agentRetryStatus={agentState.retryStatus || undefined}
               onPermissionJump$={$(() => {
                 messagesEndRef.value?.scrollIntoView({ behavior: "smooth", block: "end" });
               })}

@@ -150,6 +150,8 @@ interface ChatMessageProps {
   onPermissionOffscreen$?: QRL<(offscreen: boolean) => void>;
   /** Run a suggested command in the user's own terminal. */
   onOpenTerminal$?: QRL<(command: string) => void>;
+  /** Live retry text for the active agent turn's pearl. */
+  agentRetryStatus?: string;
   isDesktop: boolean;
   theme: 'light' | 'dark';
   isSidePanelVisible: boolean;
@@ -1153,6 +1155,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
                     log={props.message.agentLog}
                     working={!!props.message.isLoading}
                     railOpen={agentRailOpen}
+                    retryStatus={props.isLast ? props.agentRetryStatus : undefined}
                     durationMs={props.message.agentStats?.durationMs}
                     onPermissionRespond$={props.onPermissionRespond$}
                     onPermissionOffscreen$={props.onPermissionOffscreen$}

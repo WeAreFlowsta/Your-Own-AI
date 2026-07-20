@@ -53,6 +53,8 @@ interface ChatContainerProps {
   onOpenFolder$?: QRL<(path: string) => void>;
   /** Run a suggested command in the user's own terminal. */
   onOpenTerminal$?: QRL<(command: string) => void>;
+  /** Live retry text for the active agent turn. */
+  agentRetryStatus?: string;
   /** Hero continuity line: the last conversation, one click to re-enter. */
   lastConversationTitle?: string;
   onContinueLast$?: QRL<() => void>;
@@ -157,6 +159,7 @@ export default component$<ChatContainerProps>((props) => {
           onPermissionRespond$={props.onPermissionRespond$}
           onPermissionOffscreen$={props.onPermissionOffscreen$}
           onOpenTerminal$={props.onOpenTerminal$}
+          agentRetryStatus={props.agentRetryStatus}
           agentStreaming={props.agentStreaming}
           tipRef={tipRef}
           retry$={props.retry$}
