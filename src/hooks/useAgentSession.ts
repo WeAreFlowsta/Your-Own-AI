@@ -266,32 +266,51 @@ export function useAgentSession(props: UseAgentSessionProps) {
     );
   });
 
-  const recordAssistantTurn = $(
-    async (content: string, servedBy?: string, tokens?: Message["tokens"]) => {
-      const ai = props.selectedAi.value;
-      const agentKey = ai.aiConfig?.agentPubKey;
-      const hash = props.chatState.conversationHash;
-      if (!agentKey || !hash || !content) return;
-      const seq = props.chatState.messageSequence;
-      props.chatState.messageSequence = seq + 1;
-      await recordMessage(
-        agentKey,
-        hash,
-        "assistant",
-        content,
-        seq,
-        servedBy || ai.aiConfig?.model || "agent",
-        undefined,
-        tokens && tokens.total_tokens
-          ? {
-              prompt_tokens: tokens.prompt_tokens ?? 0,
-              completion_tokens: tokens.completion_tokens ?? 0,
-              total_tokens: tokens.total_tokens,
-            }
+  const recordAssistantTurn = $(async (bubble: Message) => {
+    const ai = props.selectedAi.value;
+    const agentKey = ai.aiConfig?.agentPubKey;
+    const hash = props.chatState.conversationHash;
+    if (!agentKey || !hash || !bubble.content) return;
+    const seq = props.chatState.messageSequence;
+    props.chatState.messageSequence = seq + 1;
+    const tokens = bubble.tokens;
+    // Persist the working log WITHOUT step outputs (labels, statuses,
+    // receipts, thoughts, counts are the audit trail; raw outputs are
+    // heavy and reproducible). Old entries read back with no log at all.
+    const items = (bubble.agentLog ?? []).map((i) => {
+      if (i.type === "action") {
+        const { output: _output, ...action } = i.action;
+        return { ...i, action };
+      }
+      if (i.type === "thought" && i.text.length > 2000) {
+        return { ...i, text: i.text.slice(0, 2000) + ".." };
+      }
+      return i;
+    });
+    await recordMessage(
+      agentKey,
+      hash,
+      "assistant",
+      bubble.content,
+      seq,
+      bubble.servedBy || ai.aiConfig?.model || "agent",
+      undefined,
+      tokens && tokens.total_tokens
+        ? {
+            prompt_tokens: tokens.prompt_tokens ?? 0,
+            completion_tokens: tokens.completion_tokens ?? 0,
+            total_tokens: tokens.total_tokens,
+          }
+        : undefined,
+      undefined,
+      {
+        agentLog: items.length
+          ? { items, stats: bubble.agentStats }
           : undefined,
-      );
-    },
-  );
+        folderPath: state.folderPath ?? undefined,
+      },
+    );
+  });
 
   /** The turn's single reply bubble, pushed at Enter. Mounting it anchors
    *  the question to the top and shows the avatar + action bar instantly. */
@@ -772,12 +791,10 @@ export function useAgentSession(props: UseAgentSessionProps) {
         (m) =>
           !(m.id === id && m.content === "" && !(m.agentLog ?? []).length && !m.error),
       );
-      // Record the answer to the transcript (fire-and-forget).
+      // Record the answer + working log to the transcript (fire-and-forget).
       const bubble = props.chatState.messages.find((m) => m.id === id);
       if (bubble?.content) {
-        recordAssistantTurn(bubble.content, bubble.servedBy, bubble.tokens).catch(
-          () => {},
-        );
+        recordAssistantTurn(bubble).catch(() => {});
       }
       props.chatState.isLoading = false;
       state.liveStatus = "";

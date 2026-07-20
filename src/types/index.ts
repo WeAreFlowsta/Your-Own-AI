@@ -303,4 +303,9 @@ export interface HolochainTranscriptEntry {
   runtime?: { app_version: string; online: boolean; max_tokens?: number | null } | null;
   routing_reason?: string | null;
   routing_task?: string | null;
+  /** Agent turn: the working log ({ items, stats }) - restores the rail on
+   *  resume. Client-side schema; old entries read back null. */
+  agent_log?: { items?: AgentLogItem[]; stats?: Message['agentStats'] } | null;
+  /** Workspace folder the turn worked in. */
+  folder_path?: string | null;
 }

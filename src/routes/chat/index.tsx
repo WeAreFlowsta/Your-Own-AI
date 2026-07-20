@@ -150,6 +150,22 @@ export default component$(() => {
   const buildInstalled = useSignal(false);
   const recentFolders = useSignal<string[]>([]);
 
+
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    track(() => agentState.folderPath);
+    recentFolders.value = readRecentFolders();
+    if (!buildInstalled.value) {
+      invoke<boolean>("path_is_file", { path: resolveBinaryPath() })
+        .then((present) => (buildInstalled.value = present))
+        .catch(() => (buildInstalled.value = false));
+    }
+  });
+
+  // --- Build dynamic model options from unified AI list ---
+  const dynamicModelOptions = useSignal<SelectedAiModel[]>([]);
+  const currentSelectedOptionInListbox = useSignal<SelectedAiModel | undefined>(undefined);
+
   // Conversations: the temporal lens - every conversation is a place.
   const conversationsOpen = useSignal(false);
   const conversationsLoading = useSignal(false);
@@ -173,7 +189,7 @@ export default component$(() => {
         selectedAi.value;
       selectedAi.value = ai;
       resetChat();
-      const { messages, nextSequence } = await loadConversationMessages(
+      const { messages, nextSequence, folderPath } = await loadConversationMessages(
         target.agentKey,
         target.hash,
         ai,
@@ -190,8 +206,9 @@ export default component$(() => {
         title: firstUser?.content.slice(0, 80) ?? "Conversation",
       });
       // Worked in a folder? Ask before switching the workspace - never
-      // silently swap it.
-      const folder = getConversationFolder(target.hash);
+      // silently swap it. The transcript's own record wins; the client map
+      // covers conversations from before the transcript carried it.
+      const folder = folderPath ?? getConversationFolder(target.hash);
       if (folder && folder !== agentState.folderPath) {
         resumeFolderAsk.value = folder;
       }
@@ -249,21 +266,6 @@ export default component$(() => {
       /* no handoff */
     }
   });
-
-  // eslint-disable-next-line qwik/no-use-visible-task
-  useVisibleTask$(({ track }) => {
-    track(() => agentState.folderPath);
-    recentFolders.value = readRecentFolders();
-    if (!buildInstalled.value) {
-      invoke<boolean>("path_is_file", { path: resolveBinaryPath() })
-        .then((present) => (buildInstalled.value = present))
-        .catch(() => (buildInstalled.value = false));
-    }
-  });
-
-  // --- Build dynamic model options from unified AI list ---
-  const dynamicModelOptions = useSignal<SelectedAiModel[]>([]);
-  const currentSelectedOptionInListbox = useSignal<SelectedAiModel | undefined>(undefined);
 
   // Auto-resume a message that was waiting on a vision-model download, once the
   // app-level manager reports it finished for this AI (fires on completion or when

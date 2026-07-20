@@ -53,10 +53,12 @@ export async function loadConversationMessages(
   agentKey: string,
   conversationHash: string,
   ai: SelectedAiModel,
-): Promise<{ messages: Message[]; nextSequence: number }> {
+): Promise<{ messages: Message[]; nextSequence: number; folderPath?: string }> {
   const entries = await getTranscript(agentKey, conversationHash);
   entries.sort((a, b) => a.sequence - b.sequence);
+  let folderPath: string | undefined;
   const messages = entries.map((e: HolochainTranscriptEntry): Message => {
+    if (e.folder_path) folderPath = e.folder_path;
     if (e.role === "user") {
       return {
         id: uuidv4(),
@@ -82,11 +84,17 @@ export async function loadConversationMessages(
           }
         : undefined,
       transcriptHash: e.hash,
+      // Agent turns come back whole: the rail's stub renders from the
+      // stored working log, expandable to the full story (step outputs
+      // are not persisted - those rows simply are not expandable).
+      agentTurn: e.agent_log?.items?.length ? true : undefined,
+      agentLog: e.agent_log?.items?.length ? e.agent_log.items : undefined,
+      agentStats: e.agent_log?.stats ?? undefined,
     };
   });
   const nextSequence =
     entries.length > 0 ? Math.max(...entries.map((e) => e.sequence)) + 1 : 0;
-  return { messages, nextSequence };
+  return { messages, nextSequence, folderPath };
 }
 
 /* ---- client-side conversation metadata (until the DNA work lands) ---- */

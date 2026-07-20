@@ -777,7 +777,8 @@ fn spawn_record(rec: RecordCtx, assistant: String) {
             let hc = hc_state.clone();
             async move {
                 crate::commands_holochain::record_transcript_entry(
-                    app, agent, conv, role, content, sequence, model, thinking, None, None, hc,
+                    app, agent, conv, role, content, sequence, model, thinking, None, None, None,
+                    None, hc,
                 )
                 .await
             }

@@ -76,6 +76,9 @@ export async function recordMessage(
     routing_reason?: string;
     routing_task?: string;
   },
+  /** Agent turn extras: the working log (sanitized) + workspace folder.
+   *  Client-side schema, encrypted before the zome sees it - no DNA change. */
+  agentExtras?: { agentLog?: unknown; folderPath?: string },
 ): Promise<string | null> {
   try {
     // Returns the entry's Holochain action hash (hex) — used as the
@@ -95,6 +98,8 @@ export async function recordMessage(
         tokens_per_second: tokens.tokens_per_second ?? null,
       } : null,
       provenance: provenance ?? null,
+      agentLog: agentExtras?.agentLog ?? null,
+      folderPath: agentExtras?.folderPath ?? null,
     });
     return actionHash;
   } catch (e) {

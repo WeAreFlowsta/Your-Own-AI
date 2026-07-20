@@ -80,6 +80,8 @@ pub struct TranscriptEntryInfo {
     pub runtime: Option<RuntimeInfo>,
     pub routing_reason: Option<String>,
     pub routing_task: Option<String>,
+    pub agent_log: Option<serde_json::Value>,
+    pub folder_path: Option<String>,
 }
 
 /// Encrypted entry as stored in the zome (cipher + nonce).
@@ -221,6 +223,15 @@ struct MessagePlain {
     pub routing_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing_task: Option<String>,
+    /// The agent turn's working log (steps/narration/thoughts/permission
+    /// receipts + stats), opaque JSON owned by the frontend. The plaintext
+    /// schema is client-side and encrypted before the zome sees it, so this
+    /// needs NO DNA change and old entries read back as None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_log: Option<serde_json::Value>,
+    /// Workspace folder the turn worked in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder_path: Option<String>,
 }
 
 /// Ciphertext payload sent to the zome.
@@ -332,6 +343,8 @@ pub async fn record_transcript_entry(
     thinking: Option<String>,
     tokens: Option<TokenUsage>,
     provenance: Option<Provenance>,
+    agent_log: Option<serde_json::Value>,
+    folder_path: Option<String>,
     hc_state: State<'_, Arc<HolochainState>>,
 ) -> Result<String, String> {
     // Decode the conversation hash from raw hex (39 bytes)
@@ -360,6 +373,8 @@ pub async fn record_transcript_entry(
         runtime: prov.runtime,
         routing_reason: prov.routing_reason,
         routing_task: prov.routing_task,
+        agent_log,
+        folder_path,
     };
     let plain_bytes = serde_json::to_vec(&plain)
         .map_err(|e| format!("Failed to serialize: {}", e))?;
@@ -586,6 +601,8 @@ pub async fn get_conversation_transcript(
                     runtime: e.runtime,
                     routing_reason: e.routing_reason,
                     routing_task: e.routing_task,
+                    agent_log: e.agent_log,
+                    folder_path: e.folder_path,
                 });
             }
         }
