@@ -903,6 +903,33 @@ export function useAgentSession(props: UseAgentSessionProps) {
       });
     });
 
+    // Turn ids whose transcript entry has been written. Recording dedupes
+    // HERE, independent of the UI's once-per-turn guard - a stray event
+    // that flips the loading flag early must never cost the chain its
+    // entry ("Holochain holds everything" - a lost answer reads as "this
+    // question never got an answer" on resume).
+    const recordedTurnIds = new Set<string>();
+
+    const recordTurnOnce = (id: string | null) => {
+      if (!id || recordedTurnIds.has(id)) return;
+      // An early finish (or a late-arriving trailing chunk) can leave the
+      // answer stuck in the log as narration - promote it first.
+      mutateTurn((m) => {
+        const log = m.agentLog ?? [];
+        const last = log[log.length - 1];
+        if (m.content === "" && last?.type === "narration") {
+          return { ...m, content: last.text, agentLog: log.slice(0, -1) };
+        }
+        return m;
+      });
+      const bubble = props.chatState.messages.find((m) => m.id === id);
+      if (!bubble || (!bubble.content && !(bubble.agentLog ?? []).length)) return;
+      recordedTurnIds.add(id);
+      recordAssistantTurn(bubble).catch((e) =>
+        console.error("[Agent] Transcript record failed:", e),
+      );
+    };
+
     const finishTurn = (errorText?: string) => {
       // Once per turn: turn_completed (with the informative error) and the
       // RPC response (with a generic "Internal error") both land here.
@@ -936,15 +963,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         (m) =>
           !(m.id === id && m.content === "" && !(m.agentLog ?? []).length && !m.error),
       );
-      // Record the answer + working log to the transcript (fire-and-forget,
-      // but a failure is loud in the console - a silently missing entry
-      // reads as "this question never got an answer" on resume).
-      const bubble = props.chatState.messages.find((m) => m.id === id);
-      if (bubble && (bubble.content || (bubble.agentLog ?? []).length)) {
-        recordAssistantTurn(bubble).catch((e) =>
-          console.error("[Agent] Transcript record failed:", e),
-        );
-      }
+      recordTurnOnce(id);
       props.chatState.isLoading = false;
       state.liveStatus = "";
       state.retryStatus = "";
@@ -981,6 +1000,9 @@ export function useAgentSession(props: UseAgentSessionProps) {
       } else {
         finishTurn();
       }
+      // The net: even when finishTurn short-circuited (loading flag already
+      // cleared by a stray event), turn end still records the turn.
+      recordTurnOnce(turnId.value);
       const q = queued.value;
       if (q && state.status === "ready") {
         queued.value = null;
