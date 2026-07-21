@@ -103,6 +103,12 @@ export async function loadConversationMessages(
           }
         : undefined,
       transcriptHash: e.hash,
+      // The routing receipt comes back too: the entry's model field IS the
+      // served model, and the reason rides provenance - so the Model button
+      // works on resumed conversations exactly as it did live.
+      servedBy: e.model || undefined,
+      routingReason: e.routing_reason || undefined,
+      routingTask: e.routing_task || undefined,
       // Agent turns come back whole: the rail's stub renders from the
       // stored working log, expandable to the full story (step outputs
       // are not persisted - those rows simply are not expandable).
