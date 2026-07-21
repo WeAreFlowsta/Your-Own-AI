@@ -687,7 +687,16 @@ export function useAgentSession(props: UseAgentSessionProps) {
           const modelKey = usage.modelUsage
             ? Object.keys(usage.modelUsage)[0]
             : undefined;
-          const online = props.selectedAi.value.aiConfig?.model?.startsWith("online:");
+          // Origin comes from what actually served the turn, not the AI's
+          // setting: local models are always .gguf files, so a non-gguf
+          // server on a pinned-online OR Auto AI is an online pick (Auto
+          // routing kimi showed "on device" when this read the setting).
+          const aiModel = props.selectedAi.value.aiConfig?.model || "";
+          const servedOnline =
+            aiModel.startsWith("online:") ||
+            (aiModel.startsWith("auto:") &&
+              !!modelKey &&
+              !modelKey.toLowerCase().endsWith(".gguf"));
           const folder = state.folderPath?.split("/").filter(Boolean).pop();
           mutateTurn((m) => ({
             ...m,
@@ -697,7 +706,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
               total_tokens: usage.totalTokens,
             },
             servedBy: modelKey
-              ? online
+              ? servedOnline
                 ? `online:${modelKey}`
                 : modelKey
               : m.servedBy,
