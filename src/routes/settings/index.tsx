@@ -265,6 +265,7 @@ export default component$(() => {
   const routingLean = useSignal<"speed" | "balanced" | "quality">("balanced");
   // Per-slot online model overrides ("" = the router's recommended default).
   const onlineAgent = useSignal("");
+  const onlinePlanning = useSignal("");
   const routingExplainerOpen = useSignal(false);
   const routingDecisions = useSignal<{ at_ms: number; model: string; reason: string }[]>([]);
   const onlineFresh = useSignal("");
@@ -322,6 +323,7 @@ export default component$(() => {
     }
     onlineFresh.value = localStorage.getItem("routingOnlineFresh") || "";
     onlineAgent.value = localStorage.getItem("routingOnlineAgent") || "";
+    onlinePlanning.value = localStorage.getItem("routingOnlinePlanning") || "";
     import("@tauri-apps/api/core")
       .then(({ invoke }) =>
         invoke<{ at_ms: number; model: string; reason: string }[]>(
@@ -862,10 +864,14 @@ export default component$(() => {
                       selected={onlineAgent}
                       models={onlineAgentModels}
                     />
-                    <p class="text-xs text-[var(--text-muted)] mt-2">
-                      A separate planning model preference is coming - planning
-                      currently uses the same model as the session.
-                    </p>
+                    <OnlineModelPicker
+                      label="Planning and helper agents"
+                      hint="The subagents that explore and plan the approach - reasoning-lean, still tool-capable"
+                      recommended="GPT-5.6 Terra"
+                      storageKey="routingOnlinePlanning"
+                      selected={onlinePlanning}
+                      models={onlineAgentModels}
+                    />
                   </>
                 )}
                 </>

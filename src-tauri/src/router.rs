@@ -411,6 +411,8 @@ pub struct OnlinePicks {
     pub hard_general: Option<String>,
     /// Agent (folder) turns' online model - the tool-driver slot.
     pub agent: Option<String>,
+    /// Planning/helper subagents' online model (reasoning-lean tool-driver).
+    pub plan: Option<String>,
 }
 
 /// Recommended defaults per routing slot. Ids match the proxy catalog; if one
@@ -423,6 +425,8 @@ const DEFAULT_HARD_GENERAL: &str = "online:gpt-5.6-terra";
 /// The agent slot: must be a PROVEN tool-driver through the proxy (kimi -
 /// verified end to end; Sol drops tools until Responses passthrough).
 const DEFAULT_AGENT: &str = "online:kimi-k2.6";
+/// Planning leans reasoning; must still drive tools (planners read files).
+const DEFAULT_PLAN: &str = "online:gpt-5.6-terra";
 
 /// Pick an online model for one routing decision. Order: the user's explicit
 /// choice for this slot (when still in the catalog) → the recommended default
@@ -622,8 +626,9 @@ pub async fn route(
     picks: &OnlinePicks,
     query_vec: Option<&[f32]>,
     agent: bool,
+    plan: bool,
 ) -> Result<RouteResult, String> {
-    let result = route_inner(app, mode, query, eagerness, task, difficulty, lean, picks, query_vec, agent).await;
+    let result = route_inner(app, mode, query, eagerness, task, difficulty, lean, picks, query_vec, agent, plan).await;
     if let Ok(r) = &result {
         remember_decision(&r.model, &r.reason);
     }
@@ -641,6 +646,7 @@ async fn route_inner(
     picks: &OnlinePicks,
     query_vec: Option<&[f32]>,
     agent: bool,
+    plan: bool,
 ) -> Result<RouteResult, String> {
     // Slot preferences: explicit params (the in-app chat path reads
     // localStorage) fall back to the Rust-readable settings store, so API
@@ -657,6 +663,7 @@ async fn route_inner(
             .clone()
             .or_else(|| store_pref(app, "routingOnlineHardGeneral")),
         agent: picks.agent.clone().or_else(|| store_pref(app, "routingOnlineAgent")),
+        plan: picks.plan.clone().or_else(|| store_pref(app, "routingOnlinePlanning")),
     };
     let picks = &picks;
     // Agent (folder) turns: deterministic and session-stable. The per-query
@@ -676,8 +683,18 @@ async fn route_inner(
             .hard_code
             .clone()
             .filter(|id| crate::model_caps::online_agent_caps(id) >= 6);
-        let agent_pref = picks.agent.clone().or(type_pref);
-        let offline = pick_offline(app, "code", lean, true).await.ok();
+        let agent_pref = if plan {
+            // Planning subagents: the Planning slot, else the Agent slot's
+            // chain - a planner is still a tool-driver, just reasoning-lean.
+            picks
+                .plan
+                .clone()
+                .or_else(|| Some(DEFAULT_PLAN.to_string()))
+        } else {
+            picks.agent.clone().or(type_pref)
+        };
+        let offline_task = if plan { "reasoning" } else { "code" };
+        let offline = pick_offline(app, offline_task, lean, true).await.ok();
         if mode != "online-offline" {
             return offline
                 .map(|m| RouteResult {
@@ -887,14 +904,17 @@ pub async fn route_model(
     online_hard_code: Option<String>,
     online_hard_general: Option<String>,
     online_agent: Option<String>,
+    online_planning: Option<String>,
     query_vec: Option<Vec<f32>>,
     agent: Option<bool>,
+    plan: Option<bool>,
 ) -> Result<RouteResult, String> {
     let picks = OnlinePicks {
         fresh: online_fresh,
         hard_code: online_hard_code,
         hard_general: online_hard_general,
         agent: online_agent,
+        plan: online_planning,
     };
     route(
         &app,
@@ -907,6 +927,7 @@ pub async fn route_model(
         &picks,
         query_vec.as_deref(),
         agent.unwrap_or(false),
+        plan.unwrap_or(false),
     )
     .await
 }

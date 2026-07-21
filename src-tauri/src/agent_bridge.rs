@@ -84,6 +84,37 @@ fn ensure_agent_model_entry(home: &std::path::Path, slug: &str) -> Result<(), St
     } else {
         format!("{}\n{}", existing, entry)
     };
+    // Planning/helper subagents get their own catalog entry: model
+    // "<slug>:plan" routes through the provider's Planning slot (reasoning-
+    // lean tool-driver), and [subagents.models] points the built-in
+    // subagent type at it. No harness changes - these are its own hooks.
+    let plan_header = "[model.planning]";
+    let plan_entry = format!(
+        "{plan_header}\nmodel = \"{slug}:plan\"\nbase_url = \"http://localhost:11435/v1\"\nname = \"planning\"\napi_key = \"local\"\napi_backend = \"chat_completions\"\ncontext_window = {ctx}\n",
+    );
+    let content = if let Some(start) = content.find(plan_header) {
+        let after = &content[start + plan_header.len()..];
+        let end = after
+            .find("\n[")
+            .map(|i| start + plan_header.len() + i + 1)
+            .unwrap_or(content.len());
+        format!("{}{}{}", &content[..start], plan_entry, &content[end..])
+    } else {
+        format!("{}\n{}", content, plan_entry)
+    };
+    let sub_header = "[subagents.models]";
+    let sub_entry = format!("{sub_header}\n\"general-purpose\" = \"planning\"\n");
+    let content = if let Some(start) = content.find(sub_header) {
+        let after = &content[start + sub_header.len()..];
+        let end = after
+            .find("\n[")
+            .map(|i| start + sub_header.len() + i + 1)
+            .unwrap_or(content.len());
+        format!("{}{}{}", &content[..start], sub_entry, &content[end..])
+    } else {
+        format!("{}\n{}", content, sub_entry)
+    };
+
     // The agent's ROLE models (compaction summaries etc.) follow the current
     // AI, so those calls ride normal routing - for an auto AI the router
     // picks something small and local (free, private). A stale alias here

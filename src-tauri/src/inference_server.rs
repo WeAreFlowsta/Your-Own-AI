@@ -124,7 +124,11 @@ fn load_ais(app: &AppHandle) -> Vec<Value> {
 /// name (case-insensitive), then slug. A trailing `:agent` suffix is stripped
 /// (agent mode lands in a later phase; treated as persona for now).
 fn resolve_ai(app: &AppHandle, model: &str) -> Option<ResolvedAi> {
-    let base = model.strip_suffix(":agent").unwrap_or(model).trim();
+    let base = model
+        .strip_suffix(":agent")
+        .or_else(|| model.strip_suffix(":plan"))
+        .unwrap_or(model)
+        .trim();
     let want = slug(base);
     let ais = load_ais(app);
 
@@ -302,9 +306,11 @@ async fn chat_completions(
         let picks = crate::router::OnlinePicks::default();
         // Agent sessions route deterministically to a tool-capable model
         // (the flag is computed again below for prompt handling - cheap).
-        let agent_routing = model.trim().ends_with(":agent")
+        let plan_routing = model.trim().ends_with(":plan");
+        let agent_routing = plan_routing
+            || model.trim().ends_with(":agent")
             || header_str(&headers, "x-your-own-ai-mode").as_deref() == Some("agent");
-        match crate::router::route(&app, mode, &query, eagerness, task, difficulty, lean, &picks, None, agent_routing).await {
+        match crate::router::route(&app, mode, &query, eagerness, task, difficulty, lean, &picks, None, agent_routing, plan_routing).await {
             Ok(r) => {
                 log::info!("[inference] router ({}): {mode} task={task} diff={difficulty} eag={eagerness} -> {} ({})", ai.name, r.model, r.reason);
                 ai.model = r.model;
@@ -360,6 +366,7 @@ async fn chat_completions(
     // memory + transcript + identity), not its persona. Persona mode (default):
     // we drive the system prompt.
     let agent_mode = model.trim().ends_with(":agent")
+        || model.trim().ends_with(":plan")
         || header_str(&headers, "x-your-own-ai-mode").as_deref() == Some("agent");
 
     // Agent mode injects memory by DEFAULT; a caller can opt out — e.g. to keep
