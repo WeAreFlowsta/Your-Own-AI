@@ -163,6 +163,18 @@ export default component$(() => {
         .then((present) => (buildInstalled.value = present))
         .catch(() => (buildInstalled.value = false));
     }
+    // The bridge owns the workspace: after navigating away and back (the
+    // route remounts), pick the open folder back up from its status.
+    if (!agentState.folderPath) {
+      invoke<{ running: boolean; folder: string | null }>("build_agent_status")
+        .then((status) => {
+          if (status.folder && !agentState.folderPath) {
+            agentState.folderPath = status.folder;
+            agentState.status = status.running ? "ready" : "stopped";
+          }
+        })
+        .catch(() => {});
+    }
   });
 
   // --- Build dynamic model options from unified AI list ---
@@ -295,6 +307,15 @@ export default component$(() => {
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(() => {
     try {
+      if (sessionStorage.getItem("open-conversations")) {
+        sessionStorage.removeItem("open-conversations");
+        setTimeout(() => openConversations(), 300);
+      }
+      const pendingFolder = sessionStorage.getItem("pending-open-folder");
+      if (pendingFolder) {
+        sessionStorage.removeItem("pending-open-folder");
+        setTimeout(() => openFolderGuarded(pendingFolder), 300);
+      }
       const raw = sessionStorage.getItem("resume-conversation");
       if (raw) {
         sessionStorage.removeItem("resume-conversation");

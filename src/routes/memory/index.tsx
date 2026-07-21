@@ -15,6 +15,7 @@ import {
 import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
 import { LuArrowLeft, LuMessageSquare, LuChevronDown, LuChevronUp, LuInfo, LuDownload, LuPencil, LuShieldCheck, LuBrain, LuUser } from "@qwikest/icons/lucide";
 import AppHeader from "../../components/AppHeader";
+import { useHeaderWorkspace } from "../../hooks/useHeaderWorkspace";
 import { useAiData } from "../../contexts/AiDataContext";
 import {
   getConversations,
@@ -63,6 +64,7 @@ const MemorySubtitle = component$<{
 
 export default component$(() => {
   const nav = useNavigate();
+  const headerWs = useHeaderWorkspace();
   const aiData = useAiData();
 
   const aiId = useSignal("");
@@ -231,6 +233,14 @@ export default component$(() => {
         currentModel={null}
         handleNewQuestion$={$(() => nav("/chat/"))}
         handleModelsClick$={$(() => nav("/setup/"))}
+        folderPath={headerWs.folderPath.value}
+        folderStatus={headerWs.folderStatus.value}
+        onCloseFolder$={headerWs.closeFolder$}
+        buildInstalled={headerWs.buildInstalled.value}
+        recentFolders={headerWs.recentFolders.value}
+        onOpenFolder$={headerWs.openFolder$}
+        onBrowseFolder$={headerWs.browseFolder$}
+        onOpenConversations$={headerWs.openConversations$}
       />
 
       <div class="flex-1 overflow-y-auto">

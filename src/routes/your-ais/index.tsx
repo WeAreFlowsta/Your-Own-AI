@@ -27,6 +27,7 @@ import {
 } from "@qwikest/icons/lucide";
 import { formatModelForCard } from "../../utils/modelNameFormatter";
 import AppHeader from "../../components/AppHeader";
+import { useHeaderWorkspace } from "../../hooks/useHeaderWorkspace";
 import AiFormModal from "../../components/AiFormModal";
 import DeleteAiModal from "../../components/DeleteAiModal";
 import ConfirmModal from "../../components/ConfirmModal";
@@ -36,6 +37,7 @@ import { Callout } from "../../components/Callout";
 
 export default component$(() => {
   const nav = useNavigate();
+  const headerWs = useHeaderWorkspace();
   const aiData = useAiData();
   const {
     archiveCustomAi,
@@ -343,6 +345,14 @@ export default component$(() => {
           handleNewQuestion$={handleNewQuestion}
           handleModelsClick$={handleModelsClick}
           currentModel={currentModel.value}
+          folderPath={headerWs.folderPath.value}
+          folderStatus={headerWs.folderStatus.value}
+          onCloseFolder$={headerWs.closeFolder$}
+          buildInstalled={headerWs.buildInstalled.value}
+          recentFolders={headerWs.recentFolders.value}
+          onOpenFolder$={headerWs.openFolder$}
+          onBrowseFolder$={headerWs.browseFolder$}
+          onOpenConversations$={headerWs.openConversations$}
           showModelWidget={showModelWidget.value && currentModel.value !== null}
         />
       </div>

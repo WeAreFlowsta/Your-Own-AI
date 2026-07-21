@@ -10,6 +10,7 @@ import {
 } from "@builder.io/qwik";
 import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
 import AppHeader from "../../components/AppHeader";
+import { useHeaderWorkspace } from "../../hooks/useHeaderWorkspace";
 import packageJson from "../../../package.json";
 import { ThemeContext } from "../layout";
 import { LiquidMetalBorder } from "../../components/LiquidMetalBorder";
@@ -246,6 +247,7 @@ const RememberDestinationPicker = component$<{
 
 export default component$(() => {
   const nav = useNavigate();
+  const headerWs = useHeaderWorkspace();
 
   const showModelWidget = useSignal(false);
   const showHelpTips = useSignal(true);
@@ -493,6 +495,14 @@ export default component$(() => {
         handleNewQuestion$={handleNewQuestion}
         handleModelsClick$={handleModelsClick}
         currentModel={currentModel.value}
+        folderPath={headerWs.folderPath.value}
+        folderStatus={headerWs.folderStatus.value}
+        onCloseFolder$={headerWs.closeFolder$}
+        buildInstalled={headerWs.buildInstalled.value}
+        recentFolders={headerWs.recentFolders.value}
+        onOpenFolder$={headerWs.openFolder$}
+        onBrowseFolder$={headerWs.browseFolder$}
+        onOpenConversations$={headerWs.openConversations$}
         showModelWidget={showModelWidget.value && currentModel.value !== null}
       />
 

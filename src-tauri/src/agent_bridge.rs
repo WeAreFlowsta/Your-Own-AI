@@ -22,6 +22,9 @@ use tokio::sync::Mutex;
 pub struct AgentBridgeState {
     child: Mutex<Option<CommandChild>>,
     session_id: Mutex<Option<String>>,
+    /// The open workspace folder - the single source of truth, so every
+    /// page (not just the chat route) can render the workspace slot.
+    folder: Mutex<Option<String>>,
     next_id: AtomicU64,
     /// Bumped on every spawn. A previous agent process dying AFTER its
     /// replacement started must neither clear the new process's state nor
@@ -35,6 +38,7 @@ impl AgentBridgeState {
         Self {
             child: Mutex::new(None),
             session_id: Mutex::new(None),
+            folder: Mutex::new(None),
             next_id: AtomicU64::new(1),
             generation: AtomicU64::new(0),
         }
@@ -189,6 +193,7 @@ pub async fn start_build_agent(
         .map_err(|e| format!("failed to start agent: {}", e))?;
 
     *state.child.lock().await = Some(child);
+    *state.folder.lock().await = Some(cwd.clone());
     state.next_id.store(4, Ordering::SeqCst); // 1..=3 = handshake requests
 
     let workspace = cwd.clone();
@@ -229,6 +234,8 @@ pub async fn start_build_agent(
         if bridge.generation.load(Ordering::SeqCst) == my_gen {
             *bridge.child.lock().await = None;
             *bridge.session_id.lock().await = None;
+            // Keep `folder` - a crashed agent leaves the workspace open in
+            // "stopped" state rather than silently closing it.
             let _ = reader_app.emit("agent-exit", json!({ "code": exit_code }));
         }
     });
@@ -427,6 +434,7 @@ pub async fn respond_agent_permission(
 #[tauri::command]
 pub async fn stop_build_agent(state: State<'_, AgentBridgeState>) -> Result<(), String> {
     *state.session_id.lock().await = None;
+    *state.folder.lock().await = None;
     if let Some(child) = state.child.lock().await.take() {
         child.kill().map_err(|e| format!("failed to stop agent: {}", e))?;
     }
@@ -451,7 +459,8 @@ pub fn path_is_file(path: String) -> bool {
 pub async fn build_agent_status(state: State<'_, AgentBridgeState>) -> Result<Value, String> {
     let running = state.child.lock().await.is_some();
     let session = state.session_id.lock().await.clone();
-    Ok(json!({ "running": running, "sessionId": session }))
+    let folder = state.folder.lock().await.clone();
+    Ok(json!({ "running": running, "sessionId": session, "folder": folder }))
 }
 
 /// Kill the agent on app exit (called from the RunEvent::ExitRequested handler).
