@@ -615,6 +615,69 @@ pub fn recent_routing_decisions() -> Vec<RoutingDecision> {
         .unwrap_or_default()
 }
 
+/// Session-scoped online-agent override: set when the user accepts the
+/// overload offer card ("<model>'s provider is overloaded - use <alt> for
+/// this session?"). It wins over the Agent slot for non-planning agent
+/// turns, so the user's explicit pick holds for the rest of the workspace
+/// session - an accepted card, never a silent switch. Cleared when the
+/// workspace closes (and naturally on app restart).
+static AGENT_ONLINE_OVERRIDE: std::sync::OnceLock<std::sync::Mutex<Option<String>>> =
+    std::sync::OnceLock::new();
+
+fn agent_online_override() -> Option<String> {
+    AGENT_ONLINE_OVERRIDE
+        .get()
+        .and_then(|l| l.lock().ok().and_then(|v| v.clone()))
+}
+
+pub fn clear_agent_online_override() {
+    set_agent_online_override(None);
+}
+
+#[tauri::command]
+pub fn set_agent_online_override(model: Option<String>) {
+    let cell = AGENT_ONLINE_OVERRIDE.get_or_init(|| std::sync::Mutex::new(None));
+    if let Ok(mut v) = cell.lock() {
+        *v = model.filter(|m| !m.is_empty());
+    }
+}
+
+#[derive(serde::Serialize)]
+pub struct AgentAlternate {
+    /// What agent routing picks right now (the model that just failed).
+    pub failed: String,
+    pub failed_name: String,
+    /// The best agent-capable model that isn't the failing one.
+    pub alt: String,
+    pub alt_name: String,
+}
+
+/// The overload offer's substance: what agent routing WOULD pick right now,
+/// and the next agent-capable online model to offer instead. None when the
+/// catalog has no capable alternative - then there is nothing to offer.
+#[tauri::command]
+pub async fn alternate_online_agent(app: AppHandle) -> Option<AgentAlternate> {
+    let models = crate::flowsta::list_online_models().await.ok()?;
+    let pref = agent_online_override().or_else(|| store_pref(&app, "routingOnlineAgent"));
+    let failed = select_online_agent(&models, pref.as_deref())?;
+    let rest: Vec<crate::flowsta::OnlineModel> =
+        models.iter().filter(|m| m.id != failed).cloned().collect();
+    let alt = select_online_agent(&rest, None)?;
+    let name = |id: &str| {
+        models
+            .iter()
+            .find(|m| m.id == id)
+            .map(|m| m.display_name.clone())
+            .unwrap_or_else(|| id.trim_start_matches("online:").to_string())
+    };
+    Some(AgentAlternate {
+        failed_name: name(&failed),
+        alt_name: name(&alt),
+        failed,
+        alt,
+    })
+}
+
 pub async fn route(
     app: &AppHandle,
     mode: &str,
@@ -691,7 +754,9 @@ async fn route_inner(
                 .clone()
                 .or_else(|| Some(DEFAULT_PLAN.to_string()))
         } else {
-            picks.agent.clone().or(type_pref)
+            // An accepted overload offer holds for the whole workspace
+            // session - the user's explicit pick outranks the slots.
+            agent_online_override().or_else(|| picks.agent.clone().or(type_pref))
         };
         let offline_task = if plan { "reasoning" } else { "code" };
         let offline = pick_offline(app, offline_task, lean, true).await.ok();
@@ -715,9 +780,16 @@ async fn route_inner(
         }
         if let Ok(models) = crate::flowsta::list_online_models().await {
             if let Some(id) = select_online_agent(&models, agent_pref.as_deref()) {
+                // The ledger and on-chain provenance must say WHY this model:
+                // an accepted overload offer is the user's call, not routing's.
+                let reason = if !plan && agent_online_override().as_deref() == Some(id.as_str()) {
+                    "agent work on your session pick (accepted after an overloaded model)"
+                } else {
+                    "agent work on a stronger online model"
+                };
                 return Ok(RouteResult {
                     model: id,
-                    reason: "agent work on a stronger online model".to_string(),
+                    reason: reason.to_string(),
                 });
             }
         }
@@ -1067,6 +1139,23 @@ mod tests {
             select_online_agent(&agent_catalog(), Some("online:retired")).unwrap(),
             "online:kimi-k2.6"
         );
+    }
+
+    #[test]
+    fn agent_override_set_get_clear() {
+        // The overload offer's session pick: set wins, empty = clear, and
+        // select_online_agent honors it only while it exists in the catalog.
+        set_agent_online_override(Some("online:gpt-5.6-sol".into()));
+        assert_eq!(agent_online_override().as_deref(), Some("online:gpt-5.6-sol"));
+        assert_eq!(
+            select_online_agent(&agent_catalog(), agent_online_override().as_deref()).unwrap(),
+            "online:gpt-5.6-sol"
+        );
+        set_agent_online_override(Some(String::new()));
+        assert_eq!(agent_online_override(), None);
+        set_agent_online_override(Some("online:gpt-5.6-sol".into()));
+        clear_agent_online_override();
+        assert_eq!(agent_online_override(), None);
     }
 
     #[test]

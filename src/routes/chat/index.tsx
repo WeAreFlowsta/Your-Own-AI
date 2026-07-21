@@ -147,6 +147,8 @@ export default component$(() => {
     cancelTurn$,
     respondPermission$,
     answerPermissionByReply$,
+    acceptOverloadOffer$,
+    dismissOverloadOffer$,
   } = useAgentSession({ chatState, selectedAi });
   const showCloseFolderConfirm = useSignal(false);
   // The header workspace slot: exists only when Build is installed.
@@ -1407,6 +1409,24 @@ export default component$(() => {
         }}
         onCancel$={() => {
           folderGuard.value = null;
+        }}
+      />
+
+      {/* An agent turn died on an overloaded online model: offer the next
+          capable model for this session - an explicit switch, never a silent
+          reroute. Accepting re-asks the failed question on the new model;
+          the Agent setting itself stays unchanged. */}
+      <ConfirmModal
+        isOpen={agentState.overloadOffer !== null}
+        title={`${agentState.overloadOffer?.failedName ?? "The model"} is overloaded right now`}
+        message={`${agentState.overloadOffer?.failedName ?? "The model"}'s provider is refusing requests at the moment. Use ${agentState.overloadOffer?.altName ?? "another capable model"} for the rest of this session and ask again? Your Agent model setting stays as it is.`}
+        confirmLabel={`Use ${agentState.overloadOffer?.altName ?? "the alternative"}`}
+        cancelLabel="Not now"
+        onConfirm$={async () => {
+          await acceptOverloadOffer$();
+        }}
+        onCancel$={async () => {
+          await dismissOverloadOffer$();
         }}
       />
 

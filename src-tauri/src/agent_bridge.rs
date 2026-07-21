@@ -435,6 +435,9 @@ pub async fn respond_agent_permission(
 pub async fn stop_build_agent(state: State<'_, AgentBridgeState>) -> Result<(), String> {
     *state.session_id.lock().await = None;
     *state.folder.lock().await = None;
+    // The workspace is the override's scope - closing it ends the session
+    // pick a user accepted from an overload offer.
+    crate::router::clear_agent_online_override();
     if let Some(child) = state.child.lock().await.take() {
         child.kill().map_err(|e| format!("failed to stop agent: {}", e))?;
     }

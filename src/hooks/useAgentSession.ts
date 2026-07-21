@@ -46,7 +46,14 @@ export interface AgentSessionState {
   retryStatus: string;
   /** Every file path the agent touched this session (viewer feed). */
   touchedFiles: string[];
+  /** Set when a turn died on an overloaded upstream model: the explicit
+   *  switch offer ("use <alt> for this session?"). Never a silent reroute. */
+  overloadOffer: { failedName: string; alt: string; altName: string } | null;
 }
+
+/** Upstream-refusal signatures worth an offer: provider overload / rate
+ *  limits, surfaced through the proxy as 429s. */
+const OVERLOAD_RE = /overload|429|too many requests|rate.?limit/i;
 
 export interface UseAgentSessionProps {
   chatState: UseChatState;
@@ -228,11 +235,15 @@ export function useAgentSession(props: UseAgentSessionProps) {
     liveStatus: "",
     retryStatus: "",
     touchedFiles: [],
+    overloadOffer: null,
   });
 
   // A prompt waiting for the session: typed before the handshake finished,
   // typed mid-turn, or typed as the answer to a permission card.
   const queued = useSignal<string | null>(null);
+  // The most recent user prompt - the overload offer resends it after the
+  // user accepts a model switch, so the failed question gets its answer.
+  const lastPrompt = useSignal<string>("");
   // The message id of the current turn's reply bubble.
   const turnId = useSignal<string | null>(null);
 
@@ -372,6 +383,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
   /** User prompt entry point while a folder is open. */
   const sendPrompt$ = $(async (text: string) => {
     if (!text.trim()) return;
+    lastPrompt.value = text;
+    state.overloadOffer = null;
     if (state.status !== "ready" && state.status !== "starting" && state.status !== "working") {
       props.chatState.error = JSON.stringify({
         code: "AGENT_NOT_RUNNING",
@@ -387,6 +400,25 @@ export function useAgentSession(props: UseAgentSessionProps) {
       // current turn completes. Starting: hold until agent-ready.
       queued.value = text;
     }
+  });
+
+  /** Overload offer answers: accept = pin the alternative for the rest of
+   *  this workspace session (router-side override, cleared on close), then
+   *  re-ask the failed question. The Agent slot setting stays untouched. */
+  const acceptOverloadOffer$ = $(async () => {
+    const offer = state.overloadOffer;
+    if (!offer) return;
+    state.overloadOffer = null;
+    try {
+      await invokeTauri("set_agent_online_override", { model: offer.alt });
+    } catch {
+      return;
+    }
+    if (lastPrompt.value) await sendPrompt$(lastPrompt.value);
+  });
+
+  const dismissOverloadOffer$ = $(() => {
+    state.overloadOffer = null;
   });
 
   const openFolder$ = $(async (path: string) => {
@@ -416,6 +448,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.status = "idle";
     state.statusNote = "";
     state.pendingPermissionId = null;
+    state.overloadOffer = null;
     queued.value = null;
     props.chatState.isLoading = false;
     try {
@@ -842,6 +875,26 @@ export function useAgentSession(props: UseAgentSessionProps) {
       state.liveStatus = "";
       state.retryStatus = "";
       if (state.status === "working") state.status = "ready";
+      // A turn killed by an overloaded upstream model earns the explicit
+      // switch offer - only for Auto AIs (routing owns the pick there; a
+      // pinned AI's model is the user's own setting, not ours to swap).
+      if (
+        errorText &&
+        OVERLOAD_RE.test(errorText) &&
+        (props.selectedAi.value.aiConfig?.model || "").startsWith("auto:")
+      ) {
+        invokeTauri("alternate_online_agent")
+          .then((r: any) => {
+            if (r?.alt) {
+              state.overloadOffer = {
+                failedName: r.failed_name,
+                alt: r.alt,
+                altName: r.alt_name,
+              };
+            }
+          })
+          .catch(() => {});
+      }
     };
 
     const unTurn = await listen<any>("agent-turn", async (e) => {
@@ -958,5 +1011,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     cancelTurn$,
     respondPermission$,
     answerPermissionByReply$,
+    acceptOverloadOffer$,
+    dismissOverloadOffer$,
   };
 }
