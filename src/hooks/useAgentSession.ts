@@ -732,6 +732,31 @@ export function useAgentSession(props: UseAgentSessionProps) {
               : "The agent hit an error.",
           );
         }
+      } else if (kind === "plan") {
+        // The agent's live task plan. Protocol: every update carries the
+        // complete list - replace the plan item's entries in place so the
+        // checklist keeps its position in the story and just ticks along.
+        const entries = (update.entries ?? [])
+          .map((en: any) => ({
+            content: String(en?.content ?? ""),
+            priority: en?.priority,
+            status: en?.status ?? "pending",
+          }))
+          .filter((en: any) => en.content);
+        if (entries.length) {
+          const active = entries.find((en: any) => en.status === "in_progress");
+          state.liveStatus = active ? `${active.content}..` : "Planning..";
+          mutateTurn((m) => {
+            const log = [...(m.agentLog ?? [])];
+            const idx = log.findIndex((i) => i.type === "plan");
+            if (idx >= 0) {
+              log[idx] = { ...log[idx], type: "plan", entries };
+            } else {
+              log.push({ id: `plan-${uuidv4()}`, type: "plan", entries });
+            }
+            return { ...m, agentLog: log };
+          });
+        }
       } else if (kind === "tool_call" || kind === "tool_call_update") {
         const toolCallId = update.toolCallId || uuidv4();
         const human = humanizeAction(update);

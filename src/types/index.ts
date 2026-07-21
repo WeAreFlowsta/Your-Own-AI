@@ -190,7 +190,17 @@ export type AgentLogItem = { id: string } & (
   /** A permission ask at its true position in the work. Pending = the full
    *  card; answered = its receipt line. */
   | { type: 'permission'; permission: AgentPermission }
+  /** The agent's live task plan (ACP plan updates). Each update replaces
+   *  the entries wholesale; the item keeps its place in the log. */
+  | { type: 'plan'; entries: AgentPlanEntry[] }
 );
+
+/** One task in the agent's plan checklist. */
+export interface AgentPlanEntry {
+  content: string;
+  priority?: 'high' | 'medium' | 'low';
+  status: 'pending' | 'in_progress' | 'completed';
+}
 
 /** One tool action inside an agent turn's working log. */
 export interface AgentAction {

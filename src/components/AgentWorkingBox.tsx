@@ -14,7 +14,12 @@ import {
 } from "@qwikest/icons/lucide";
 import { AgentPermissionCard } from "./AgentPermissionCard";
 import { renderMarkdown } from "../utils/renderMarkdown";
-import type { AgentAction, AgentLogItem, AgentPermission } from "../types";
+import type {
+  AgentAction,
+  AgentLogItem,
+  AgentPermission,
+  AgentPlanEntry,
+} from "../types";
 
 interface AgentWorkingBoxProps {
   log: AgentLogItem[];
@@ -55,7 +60,8 @@ const METAL_H = "linear-gradient(90deg, #cfd8dc 0%, #59c9ff 45%, #7e99a6 100%)";
  */
 type GroupItem =
   | { kind: "action"; id: string; action: AgentAction }
-  | { kind: "thought"; id: string; text: string };
+  | { kind: "thought"; id: string; text: string }
+  | { kind: "plan"; id: string; entries: AgentPlanEntry[] };
 
 type FlowElement =
   | { kind: "text"; id: string; text: string }
@@ -103,7 +109,9 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
           const row: GroupItem =
             item.type === "thought"
               ? { kind: "thought", id: item.id, text: item.text }
-              : { kind: "action", id: item.id, action: item.action };
+              : item.type === "plan"
+                ? { kind: "plan", id: item.id, entries: item.entries }
+                : { kind: "action", id: item.id, action: item.action };
           const last = out[out.length - 1];
           if (last?.kind === "group") {
             last.items = [...last.items, row];
@@ -212,6 +220,43 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                   style={{ background: METAL }}
                 />
                 {el.items.map((row) => {
+                  if (row.kind === "plan") {
+                    // The agent's live checklist on the thread: entries tick
+                    // pending -> in progress -> done via class flips (the
+                    // whole list is replaced each update - keys are the
+                    // entry text, which is stable while statuses change).
+                    return (
+                      <div key={row.id} class="py-0.5">
+                        {row.entries.map((en) => (
+                          <div
+                            key={en.content}
+                            class="relative flex items-baseline gap-2 py-0.5 font-mono text-xs"
+                          >
+                            <span
+                              class={`absolute -left-[22.5px] top-[5px] w-[7px] h-[7px] rounded-full border-2 border-[var(--bg-main)] ${
+                                en.status === "completed"
+                                  ? "bg-green-600 dark:bg-green-400"
+                                  : en.status === "in_progress"
+                                    ? "bg-[var(--text-link)] animate-pulse"
+                                    : "bg-[var(--border-subtle)]"
+                              }`}
+                            />
+                            <span
+                              class={`min-w-0 truncate whitespace-nowrap ${
+                                en.status === "in_progress"
+                                  ? "text-[var(--text-secondary)]"
+                                  : en.status === "completed"
+                                    ? "text-[var(--text-muted)]"
+                                    : "text-[var(--text-muted)] opacity-60"
+                              }`}
+                            >
+                              {en.content}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  }
                   if (row.kind === "thought") {
                     return showThoughts.value ? (
                       <div
