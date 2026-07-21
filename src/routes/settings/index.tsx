@@ -265,6 +265,8 @@ export default component$(() => {
   const routingLean = useSignal<"speed" | "balanced" | "quality">("balanced");
   // Per-slot online model overrides ("" = the router's recommended default).
   const onlineAgent = useSignal("");
+  const routingExplainerOpen = useSignal(false);
+  const routingDecisions = useSignal<{ at_ms: number; model: string; reason: string }[]>([]);
   const onlineFresh = useSignal("");
   const onlineHardCode = useSignal("");
   const onlineHardGeneral = useSignal("");
@@ -320,6 +322,14 @@ export default component$(() => {
     }
     onlineFresh.value = localStorage.getItem("routingOnlineFresh") || "";
     onlineAgent.value = localStorage.getItem("routingOnlineAgent") || "";
+    import("@tauri-apps/api/core")
+      .then(({ invoke }) =>
+        invoke<{ at_ms: number; model: string; reason: string }[]>(
+          "recent_routing_decisions",
+        ),
+      )
+      .then((d) => (routingDecisions.value = d))
+      .catch(() => {});
     onlineHardCode.value = localStorage.getItem("routingOnlineHardCode") || "";
     onlineHardGeneral.value = localStorage.getItem("routingOnlineHardGeneral") || "";
 
@@ -339,10 +349,13 @@ export default component$(() => {
             await invoke<{ id: string; display_name: string }[]>("list_online_models");
           onlineModels.value = models.map(({ id, display_name }) => ({ id, display_name }));
           Promise.all(
-            onlineModels.value.map(async (m) => ({
-              m,
-              cap: await invoke<number>("agent_capability", { model: m.id }).catch(() => 0),
-            })),
+            onlineModels.value.map(async (m) => {
+              const { invoke } = await import("@tauri-apps/api/core");
+              return {
+                m,
+                cap: await invoke<number>("agent_capability", { model: m.id }).catch(() => 0),
+              };
+            }),
           ).then((scored) => {
             onlineAgentModels.value = scored.filter((x) => x.cap >= 6).map((x) => x.m);
           });
@@ -643,13 +656,62 @@ export default component$(() => {
                   specific model are never affected.
                 </p>
 
+                {/* Transparency, not controls: the knobless smarts described
+                    plainly. Permanent reference (no "Got it" dismissal - this
+                    is not a one-time tip), collapsible to stay quiet. */}
+                <div class="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-main)] mb-5">
+                  <button
+                    onClick$={() => (routingExplainerOpen.value = !routingExplainerOpen.value)}
+                    class="flex w-full items-center justify-between px-4 py-3 text-left"
+                  >
+                    <span class="text-sm font-semibold text-[var(--text-primary)]">
+                      What routing does automatically
+                    </span>
+                    <LuChevronDown
+                      class={`w-4 h-4 text-[var(--text-muted)] transition-transform ${routingExplainerOpen.value ? "rotate-180" : ""}`}
+                    />
+                  </button>
+                  {routingExplainerOpen.value && (
+                    <div class="px-4 pb-4 text-sm text-[var(--text-secondary)] space-y-2">
+                      <p>Health questions never leave your device.</p>
+                      <p>Questions that need current information go to a live-web model, at the eagerness you set below.</p>
+                      <p>Genuinely hard questions can be passed to a stronger online model (Auto - Online and Offline only).</p>
+                      <p>Folder work only ever uses models that can drive tools, and never switches models mid-session.</p>
+                      <p>Picks are fit-aware: a model that runs well on your hardware beats a stronger one that struggles.</p>
+                      <p class="text-[var(--text-muted)]">
+                        Every answer's Model button shows what happened and why, and each
+                        decision is stored in the conversation's tamper-proof record.
+                      </p>
+                      {routingDecisions.value.length > 0 && (
+                        <div class="pt-2 border-t border-[var(--border-subtle)]">
+                          <div class="text-xs font-semibold text-[var(--text-primary)] mb-1.5">
+                            Recent decisions
+                          </div>
+                          <div class="space-y-1">
+                            {routingDecisions.value.slice(0, 8).map((d, i) => (
+                              <div key={i} class="text-xs text-[var(--text-muted)] truncate">
+                                <span class="text-[var(--text-secondary)]">
+                                  {d.model.replace("online:", "").replace(/\.gguf$/i, "")}
+                                </span>
+                                {" - "}
+                                {d.reason}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
                 {/* On your device — biases the fit-aware offline pick. */}
                 <h3 class="text-lg font-semibold text-[var(--text-primary)]">
-                  On your device
+                  Choosing a model on this device
                 </h3>
                 <p class="text-sm text-[var(--text-secondary)] mt-1 mb-3">
-                  Applies to every Auto mode: which of your downloaded models the
-                  automatic pick leans toward.
+                  Both Auto modes pick from the models you've downloaded (the
+                  Offline Models page is their library). This sets what the
+                  pick leans toward.
                 </p>
                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2">
                   {[
@@ -697,10 +759,10 @@ export default component$(() => {
                 ) : (
                 <>
                 <h3 class="text-lg font-semibold text-[var(--text-primary)]">
-                  Online
+                  Going online (Auto — Online and Offline)
                 </h3>
                 <p class="text-sm text-[var(--text-secondary)] mt-1 mb-4">
-                  For AIs set to "Auto — Online and Offline". A question goes
+                  Only for AIs set to "Auto — Online and Offline". A question goes
                   online only when your device can't do it justice: it needs
                   current information from the web, or it's genuinely hard.
                   Everything else stays on your device. "Offline Only" AIs
@@ -780,14 +842,32 @@ export default component$(() => {
                   selected={onlineHardGeneral}
                   models={onlineModels}
                 />
-                <OnlineModelPicker
-                  label="Agent work in folders"
-                  hint="Drives tools while your AI works in a folder - only models that can are listed"
-                  recommended="Kimi K2.6"
-                  storageKey="routingOnlineAgent"
-                  selected={onlineAgent}
-                  models={onlineAgentModels}
-                />
+                {buildInstalled.value && (
+                  <>
+                    <div class="border-t border-[var(--border-subtle)] my-5" />
+                    <h4 class="text-base font-semibold text-[var(--text-primary)]">
+                      Working in folders
+                    </h4>
+                    <p class="text-sm text-[var(--text-secondary)] mt-1 mb-3">
+                      Folder work routes differently: only models that can drive
+                      tools are ever used, and the model never changes
+                      mid-session. Offline, the most capable tool-driving model
+                      you've downloaded takes it. Online, this one does:
+                    </p>
+                    <OnlineModelPicker
+                      label="Agent work in folders"
+                      hint="Drives tools while your AI works in a folder - only capable models are listed"
+                      recommended="Kimi K2.6"
+                      storageKey="routingOnlineAgent"
+                      selected={onlineAgent}
+                      models={onlineAgentModels}
+                    />
+                    <p class="text-xs text-[var(--text-muted)] mt-2">
+                      A separate planning model preference is coming - planning
+                      currently uses the same model as the session.
+                    </p>
+                  </>
+                )}
                 </>
                 )}
               </section>

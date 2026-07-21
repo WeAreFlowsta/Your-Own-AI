@@ -554,6 +554,7 @@ pub fn run() {
             agent_bridge::path_is_file,
             terminal::open_in_terminal,
             model_caps::agent_capability,
+            router::recent_routing_decisions,
             llm::stream_chat_completion,
             llm::cancel_chat_completion,
             save_ai_thumbnail,

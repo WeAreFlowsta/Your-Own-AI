@@ -574,7 +574,63 @@ fn best_external(models: &[String], task: &str) -> Option<(String, u8)> {
 /// mode IS the consent to go online when it helps, so a hard query always
 /// may use a stronger online model. `picks` carries the user's per-slot
 /// online model overrides (Settings → Routing).
+/// The live routing ledger: the last decisions with reasons, for the
+/// Settings transparency view. The DURABLE audit is per answer in the
+/// Holochain transcript (routing_reason/routing_task in provenance) - this
+/// is just a fast window onto recent activity.
+#[derive(serde::Serialize, Clone)]
+pub struct RoutingDecision {
+    pub at_ms: i64,
+    pub model: String,
+    pub reason: String,
+}
+
+static RECENT_DECISIONS: std::sync::OnceLock<std::sync::Mutex<std::collections::VecDeque<RoutingDecision>>> =
+    std::sync::OnceLock::new();
+
+fn remember_decision(model: &str, reason: &str) {
+    let ledger = RECENT_DECISIONS.get_or_init(|| std::sync::Mutex::new(std::collections::VecDeque::new()));
+    if let Ok(mut d) = ledger.lock() {
+        d.push_front(RoutingDecision {
+            at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|t| t.as_millis() as i64)
+                .unwrap_or(0),
+            model: model.to_string(),
+            reason: reason.to_string(),
+        });
+        d.truncate(20);
+    }
+}
+
+#[tauri::command]
+pub fn recent_routing_decisions() -> Vec<RoutingDecision> {
+    RECENT_DECISIONS
+        .get()
+        .and_then(|l| l.lock().ok().map(|d| d.iter().cloned().collect()))
+        .unwrap_or_default()
+}
+
 pub async fn route(
+    app: &AppHandle,
+    mode: &str,
+    query: &str,
+    eagerness: &str,
+    task: &str,
+    difficulty: &str,
+    lean: &str,
+    picks: &OnlinePicks,
+    query_vec: Option<&[f32]>,
+    agent: bool,
+) -> Result<RouteResult, String> {
+    let result = route_inner(app, mode, query, eagerness, task, difficulty, lean, picks, query_vec, agent).await;
+    if let Ok(r) = &result {
+        remember_decision(&r.model, &r.reason);
+    }
+    result
+}
+
+async fn route_inner(
     app: &AppHandle,
     mode: &str,
     query: &str,

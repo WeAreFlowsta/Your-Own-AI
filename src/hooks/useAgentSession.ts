@@ -307,7 +307,11 @@ export function useAgentSession(props: UseAgentSessionProps) {
             total_tokens: tokens.total_tokens,
           }
         : undefined,
-      undefined,
+      // Routing provenance: folder decisions belong in the on-chain audit
+      // exactly like chat turns (the Settings ledger is only a live window).
+      bubble.routingReason
+        ? { routing_reason: bubble.routingReason, routing_task: "agent" }
+        : undefined,
       {
         agentLog: items.length
           ? { items, stats: bubble.agentStats }
