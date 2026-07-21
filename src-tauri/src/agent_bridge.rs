@@ -64,18 +64,30 @@ fn ensure_agent_model_entry(home: &std::path::Path, slug: &str) -> Result<(), St
     let config_path = home.join(".your-own-ai-build").join("config.toml");
     let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
     let header = format!("[model.{}]", slug);
-    if existing.contains(&header) {
-        return Ok(());
-    }
+    // context_window must be the TRUE loaded context: the agent compacts
+    // its own session as it approaches this number - an inflated value
+    // means it sails straight into truncation instead ("Internal error"
+    // after eight good calls on a 16k window it believed was 32k).
+    let ctx = crate::llm::current_ctx_size();
     let entry = format!(
-        "\n{header}\nmodel = \"{slug}:agent\"\nbase_url = \"http://localhost:11435/v1\"\nname = \"{slug}\"\napi_key = \"local\"\napi_backend = \"chat_completions\"\ncontext_window = 32768\n",
+        "{header}\nmodel = \"{slug}:agent\"\nbase_url = \"http://localhost:11435/v1\"\nname = \"{slug}\"\napi_key = \"local\"\napi_backend = \"chat_completions\"\ncontext_window = {ctx}\n",
     );
+    let content = if let Some(start) = existing.find(&header) {
+        // Replace our managed section in place (up to the next section or
+        // EOF) so a changed context size takes effect on the next open.
+        let after = &existing[start + header.len()..];
+        let end = after
+            .find("\n[")
+            .map(|i| start + header.len() + i + 1)
+            .unwrap_or(existing.len());
+        format!("{}{}{}", &existing[..start], entry, &existing[end..])
+    } else {
+        format!("{}\n{}", existing, entry)
+    };
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create agent config dir: {}", e))?;
     }
-    let mut content = existing;
-    content.push_str(&entry);
     std::fs::write(&config_path, content)
         .map_err(|e| format!("cannot write agent config: {}", e))
 }

@@ -644,6 +644,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         // The agent narrates its own turn stats - stamp them so the action
         // bar (Tokens, Model) and the collapsed stub can be honest instead
         // of empty. The actual upstream model comes from modelUsage.
+        // (Stats first: a failed turn's finish below records the message.)
         const usage = update.usage;
         if (usage) {
           const modelKey = usage.modelUsage
@@ -669,6 +670,16 @@ export function useAgentSession(props: UseAgentSessionProps) {
               modelCalls: usage.modelCalls,
             },
           }));
+        }
+        // A failed turn's REAL reason lives here (agent_result), not in
+        // the RPC response's generic "Internal error" - finish with it
+        // now; the later response is a no-op (finishTurn runs once).
+        if (update.stop_reason === "error") {
+          finishTurn(
+            typeof update.agent_result === "string" && update.agent_result
+              ? `The agent hit a problem: ${update.agent_result}`
+              : "The agent hit an error.",
+          );
         }
       } else if (kind === "tool_call" || kind === "tool_call_update") {
         const toolCallId = update.toolCallId || uuidv4();
@@ -786,6 +797,9 @@ export function useAgentSession(props: UseAgentSessionProps) {
     });
 
     const finishTurn = (errorText?: string) => {
+      // Once per turn: turn_completed (with the informative error) and the
+      // RPC response (with a generic "Internal error") both land here.
+      if (!props.chatState.isLoading) return;
       mutateTurn((m) => {
         let log = (m.agentLog ?? []).map((i) =>
           i.type === "action" && (i.action.status === "in_progress" || i.action.status === "pending")
