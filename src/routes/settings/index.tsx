@@ -67,10 +67,16 @@ const OnlineModelPicker = component$<{
             <div class="absolute right-0 top-full mt-1 min-w-[13rem] max-h-64 overflow-y-auto z-50 rounded-lg bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] shadow-xl py-1">
               <button
                 type="button"
-                onClick$={() => {
+                onClick$={async () => {
                   props.selected.value = "";
                   localStorage.removeItem(props.storageKey);
                   open.value = false;
+                  try {
+                    const { Store } = await import("@tauri-apps/plugin-store");
+                    const store = await Store.load("settings.json");
+                    await store.set(props.storageKey, "");
+                    await store.save();
+                  } catch { /* store mirror is best-effort */ }
                 }}
                 class={`block w-full text-left px-3 py-1.5 text-sm hover:bg-[var(--bg-card)] transition-colors ${
                   !props.selected.value
@@ -84,10 +90,16 @@ const OnlineModelPicker = component$<{
                 <button
                   key={m.id}
                   type="button"
-                  onClick$={() => {
+                  onClick$={async () => {
                     props.selected.value = m.id;
                     localStorage.setItem(props.storageKey, m.id);
                     open.value = false;
+                    try {
+                      const { Store } = await import("@tauri-apps/plugin-store");
+                      const store = await Store.load("settings.json");
+                      await store.set(props.storageKey, m.id);
+                      await store.save();
+                    } catch { /* store mirror is best-effort */ }
                   }}
                   class={`block w-full text-left px-3 py-1.5 text-sm hover:bg-[var(--bg-card)] transition-colors ${
                     m.id === props.selected.value
@@ -252,10 +264,14 @@ export default component$(() => {
   const routingEagerness = useSignal<"privacy" | "balanced" | "freshness">("balanced");
   const routingLean = useSignal<"speed" | "balanced" | "quality">("balanced");
   // Per-slot online model overrides ("" = the router's recommended default).
+  const onlineAgent = useSignal("");
   const onlineFresh = useSignal("");
   const onlineHardCode = useSignal("");
   const onlineHardGeneral = useSignal("");
   const onlineModels = useSignal<{ id: string; display_name: string }[]>([]);
+  // Tool-capable subset for the Agent slot (a tools-blind pick would mean
+  // broken folder sessions - the picker only offers models that can drive).
+  const onlineAgentModels = useSignal<{ id: string; display_name: string }[]>([]);
   // May online routing options be OFFERED? (signed in + plan; starts true so
   // a slow check never hides controls from a paying user.)
   const onlineEntitled = useSignal(true);
@@ -303,6 +319,7 @@ export default component$(() => {
       routingLean.value = savedLean;
     }
     onlineFresh.value = localStorage.getItem("routingOnlineFresh") || "";
+    onlineAgent.value = localStorage.getItem("routingOnlineAgent") || "";
     onlineHardCode.value = localStorage.getItem("routingOnlineHardCode") || "";
     onlineHardGeneral.value = localStorage.getItem("routingOnlineHardGeneral") || "";
 
@@ -321,6 +338,14 @@ export default component$(() => {
           const models =
             await invoke<{ id: string; display_name: string }[]>("list_online_models");
           onlineModels.value = models.map(({ id, display_name }) => ({ id, display_name }));
+          Promise.all(
+            onlineModels.value.map(async (m) => ({
+              m,
+              cap: await invoke<number>("agent_capability", { model: m.id }).catch(() => 0),
+            })),
+          ).then((scored) => {
+            onlineAgentModels.value = scored.filter((x) => x.cap >= 6).map((x) => x.m);
+          });
         }
       })
       .catch(() => { /* keep fail-open default */ });
@@ -754,6 +779,14 @@ export default component$(() => {
                   storageKey="routingOnlineHardGeneral"
                   selected={onlineHardGeneral}
                   models={onlineModels}
+                />
+                <OnlineModelPicker
+                  label="Agent work in folders"
+                  hint="Drives tools while your AI works in a folder - only models that can are listed"
+                  recommended="Kimi K2.6"
+                  storageKey="routingOnlineAgent"
+                  selected={onlineAgent}
+                  models={onlineAgentModels}
                 />
                 </>
                 )}

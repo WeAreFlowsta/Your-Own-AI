@@ -505,6 +505,17 @@ fn select_online_agent(
         .map(|m| m.id.clone())
 }
 
+/// A slot preference from the Rust-readable settings store (mirrored there
+/// by the Settings page so non-webview callers see user choices).
+fn store_pref(app: &AppHandle, key: &str) -> Option<String> {
+    use tauri_plugin_store::StoreExt;
+    let store = app.store("settings.json").ok()?;
+    store
+        .get(key)
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .filter(|s| !s.is_empty())
+}
+
 async fn pick_online(task: &str, fresh: bool, pref: Option<&str>) -> Option<String> {
     let models = crate::flowsta::list_online_models().await.ok()?;
     select_online(&models, task, fresh, pref)
@@ -575,6 +586,23 @@ pub async fn route(
     query_vec: Option<&[f32]>,
     agent: bool,
 ) -> Result<RouteResult, String> {
+    // Slot preferences: explicit params (the in-app chat path reads
+    // localStorage) fall back to the Rust-readable settings store, so API
+    // and agent callers see the user's choices too - Settings mirrors every
+    // slot pick into settings.json.
+    let picks = OnlinePicks {
+        fresh: picks.fresh.clone().or_else(|| store_pref(app, "routingOnlineFresh")),
+        hard_code: picks
+            .hard_code
+            .clone()
+            .or_else(|| store_pref(app, "routingOnlineHardCode")),
+        hard_general: picks
+            .hard_general
+            .clone()
+            .or_else(|| store_pref(app, "routingOnlineHardGeneral")),
+        agent: picks.agent.clone().or_else(|| store_pref(app, "routingOnlineAgent")),
+    };
+    let picks = &picks;
     // Agent (folder) turns: deterministic and session-stable. The per-query
     // gates (freshness, difficulty, medical) don't apply to tool calls, so
     // the same installed models + settings give the same pick every call -
@@ -583,6 +611,16 @@ pub async fn route(
     // (the mode is the consent; agent work is where a stronger model earns
     // its keep); privacy eagerness prefers a capable local model.
     if agent {
+        // The user's preference order for the online side: the Agent slot,
+        // else their hard-code TYPE preference IF it can drive tools (when
+        // Sol gains passthrough, a Sol hard-code preference starts applying
+        // here automatically - nothing is built for one vendor), else the
+        // default tool-driver, else the registry's best capable model.
+        let type_pref = picks
+            .hard_code
+            .clone()
+            .filter(|id| crate::model_caps::online_agent_caps(id) >= 6);
+        let agent_pref = picks.agent.clone().or(type_pref);
         let offline = pick_offline(app, "code", lean, true).await.ok();
         if mode != "online-offline" {
             return offline
@@ -603,7 +641,7 @@ pub async fn route(
             }
         }
         if let Ok(models) = crate::flowsta::list_online_models().await {
-            if let Some(id) = select_online_agent(&models, picks.agent.as_deref()) {
+            if let Some(id) = select_online_agent(&models, agent_pref.as_deref()) {
                 return Ok(RouteResult {
                     model: id,
                     reason: "agent work on a stronger online model".to_string(),
