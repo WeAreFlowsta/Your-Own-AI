@@ -22,7 +22,13 @@ import {
   rememberConversationFolder,
   rememberLastConversation,
 } from "../utils/conversationResume";
-import type { AgentPermission, Message, SelectedAiModel } from "../types";
+import type {
+  AgentActionDiff,
+  AgentPermission,
+  Message,
+  SelectedAiModel,
+} from "../types";
+import { computeLineDiff } from "../utils/lineDiff";
 import type { UseChatState } from "./useChat";
 
 export interface AgentSessionState {
@@ -138,18 +144,28 @@ function alwaysScope(optionName: string): string {
     : "always in this folder";
 }
 
-/** Naive preview diff for edit asks: line add/remove markers by set
- *  membership. Good enough to see WHAT changes; not a real patch view. */
-function previewDiff(oldText: string | null, newText: string): string {
-  const oldLines = (oldText ?? "").split("\n");
-  const newLines = newText.split("\n");
-  if (!oldText) return newLines.map((l) => `+ ${l}`).join("\n");
-  const oldSet = new Set(oldLines);
-  const newSet = new Set(newLines);
-  const out: string[] = [];
-  for (const l of oldLines) if (!newSet.has(l)) out.push(`- ${l}`);
-  for (const l of newLines) if (!oldSet.has(l)) out.push(`+ ${l}`);
-  return out.length ? out.join("\n") : "(whitespace-only change)";
+/** First ACP diff content item on a tool call → a real rendered diff
+ *  (permission cards and completed rail steps share this). */
+function extractDiff(content: unknown): AgentActionDiff | undefined {
+  if (!Array.isArray(content)) return undefined;
+  const d = content.find((c: any) => c?.type === "diff");
+  if (!d || typeof d.newText !== "string") return undefined;
+  const { lines, added, removed } = computeLineDiff(
+    typeof d.oldText === "string" ? d.oldText : null,
+    d.newText,
+  );
+  // A no-op edit (identical text) has nothing to show - skip the block
+  // rather than render a lone fold marker.
+  if (added === 0 && removed === 0) {
+    return { path: typeof d.path === "string" ? d.path : "", added, removed, lines: [] };
+  }
+  return {
+    path: typeof d.path === "string" ? d.path : "",
+    added,
+    removed,
+    // Rendering cap - a full-file rewrite should not flood the DOM.
+    lines: lines.length > 1200 ? [...lines.slice(0, 1200), { sign: "…" as const, text: "" }] : lines,
+  };
 }
 
 const basename = (p: string) => p.split("/").filter(Boolean).pop() || p;
@@ -300,8 +316,14 @@ export function useAgentSession(props: UseAgentSessionProps) {
     // heavy and reproducible). Old entries read back with no log at all.
     const items = (bubble.agentLog ?? []).map((i) => {
       if (i.type === "action") {
-        const { output: _output, ...action } = i.action;
-        return { ...i, action };
+        const { output: _output, diff, ...action } = i.action;
+        return {
+          ...i,
+          action: diff
+            ? // Keep the receipt (path + counts), drop the heavy lines.
+              { ...action, diff: { path: diff.path, added: diff.added, removed: diff.removed } }
+            : action,
+        };
       }
       if (i.type === "thought" && i.text.length > 2000) {
         return { ...i, text: i.text.slice(0, 2000) + ".." };
@@ -761,6 +783,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         const toolCallId = update.toolCallId || uuidv4();
         const human = humanizeAction(update);
         const out = actionOutput(update);
+        const diff = extractDiff(update.content);
         if (!update.status || update.status === "in_progress" || update.status === "pending") {
           state.liveStatus = `${human.label}..`;
         } else {
@@ -798,6 +821,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
                 locations: locations.length ? locations : prev.locations,
                 output: out.output ?? prev.output,
                 outputLines: out.outputLines ?? prev.outputLines,
+                diff: diff ?? prev.diff,
               },
             };
           } else {
@@ -811,6 +835,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
                 status: update.status || "in_progress",
                 locations,
                 detail: human.detail,
+                diff,
                 ...out,
               },
             });
@@ -826,13 +851,6 @@ export function useAgentSession(props: UseAgentSessionProps) {
       const locations = (tc.locations ?? [])
         .map((l: any) => l?.path)
         .filter(Boolean);
-      const diffs = (tc.content ?? [])
-        .filter((c: any) => c?.type === "diff")
-        .map((c: any) =>
-          [c.path, previewDiff(c.oldText ?? null, c.newText ?? "")]
-            .filter(Boolean)
-            .join("\n"),
-        );
       const permission: AgentPermission = {
         requestId: e.payload?.id,
         toolCallId: typeof tc.toolCallId === "string" ? tc.toolCallId : undefined,
@@ -840,7 +858,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         kind: tc.kind,
         command:
           typeof tc.rawInput?.command === "string" ? tc.rawInput.command : undefined,
-        diff: diffs.length ? diffs.join("\n\n") : undefined,
+        diff: extractDiff(tc.content),
         locations,
         options: (params.options ?? []).map((o: any) => ({
           optionId: o.optionId,

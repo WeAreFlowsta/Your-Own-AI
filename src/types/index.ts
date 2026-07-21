@@ -218,6 +218,16 @@ export interface AgentAction {
   output?: string;
   /** Total line count of the result, for the "· 84 lines" hint. */
   outputLines?: number;
+  /** Edit result as a real diff (ACP diff content). `lines` render the
+   *  colored view live; only the counts survive into the transcript. */
+  diff?: AgentActionDiff;
+}
+
+export interface AgentActionDiff {
+  path: string;
+  added: number;
+  removed: number;
+  lines?: import('../utils/lineDiff').DiffLine[];
 }
 
 /** The exact thing the agent asked to do, straight from the ACP toolCall -
@@ -232,8 +242,8 @@ export interface AgentPermission {
   kind?: string;
   /** The exact command for execute asks - shown whole, never truncated. */
   command?: string;
-  /** Unified-diff text for edit asks (collapsed preview + "show all"). */
-  diff?: string;
+  /** The edit shown as a real diff (collapsed preview + "show all"). */
+  diff?: AgentActionDiff;
   locations?: string[];
   options: { optionId: string; name: string; kind?: string }[];
   state: 'pending' | 'answered' | 'expired';

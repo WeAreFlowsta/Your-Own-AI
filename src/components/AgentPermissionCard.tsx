@@ -15,6 +15,7 @@ import {
   LuX,
 } from "@qwikest/icons/lucide";
 import LiquidMetalButton from "./LiquidMetalButton";
+import { AgentDiffBlock } from "./AgentDiffBlock";
 import type { AgentPermission } from "../types";
 
 interface AgentPermissionCardProps {
@@ -97,12 +98,12 @@ export const AgentPermissionCard = component$<AgentPermissionCardProps>(
 
     const expired = permission.state === "expired";
     const allowed = permission.receipt?.startsWith("Allowed");
-    const diffLines = permission.diff?.split("\n") ?? [];
+    const diffLines = permission.diff?.lines ?? [];
     const diffTruncated =
       !showFullDiff.value && diffLines.length > DIFF_PREVIEW_LINES;
     const shownDiff = diffTruncated
-      ? diffLines.slice(0, DIFF_PREVIEW_LINES).join("\n")
-      : permission.diff;
+      ? diffLines.slice(0, DIFF_PREVIEW_LINES)
+      : diffLines;
 
     // Single return, ternary on state (Qwik early-return + changing state =
     // branch may never visually switch). Answered/expired = the one-line
@@ -153,11 +154,22 @@ export const AgentPermissionCard = component$<AgentPermissionCardProps>(
             </div>
           )}
 
-          {permission.diff && (
+          {permission.diff && diffLines.length > 0 && (
             <div>
-              <pre class="text-xs rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)] p-3 whitespace-pre-wrap break-all font-mono max-h-96 overflow-y-auto text-[var(--text-primary)]">
-                {shownDiff}
-              </pre>
+              <div class="flex items-center gap-2 mb-1 font-mono text-xs text-[var(--text-muted)]">
+                <span class="truncate">{permission.diff.path.split("/").pop()}</span>
+                <span class="shrink-0 text-green-600 dark:text-green-400">
+                  +{permission.diff.added}
+                </span>
+                {permission.diff.removed > 0 && (
+                  <span class="shrink-0 text-red-500 dark:text-red-400">
+                    -{permission.diff.removed}
+                  </span>
+                )}
+              </div>
+              <div class="max-h-96 overflow-y-auto">
+                <AgentDiffBlock lines={shownDiff} />
+              </div>
               {diffTruncated && (
                 <button
                   onClick$={() => (showFullDiff.value = true)}

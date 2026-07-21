@@ -13,6 +13,7 @@ import {
   LuBrain,
 } from "@qwikest/icons/lucide";
 import { AgentPermissionCard } from "./AgentPermissionCard";
+import { AgentDiffBlock } from "./AgentDiffBlock";
 import { renderMarkdown } from "../utils/renderMarkdown";
 import type {
   AgentAction,
@@ -268,7 +269,8 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                     ) : null;
                   }
                   const a = row.action;
-                  const hasOutput = !!a.output;
+                  const hasDiff = !!a.diff?.lines?.length;
+                  const hasOutput = !!a.output || hasDiff;
                   const open = !!openOutputs.value[a.toolCallId];
                   return (
                     <div key={row.id} class="overflow-hidden">
@@ -296,7 +298,14 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                         <span class="min-w-0 truncate whitespace-nowrap">
                           {a.label}
                         </span>
-                        {a.outputLines ? (
+                        {a.diff ? (
+                          <span class="shrink-0">
+                            <span class="text-green-600 dark:text-green-400">+{a.diff.added}</span>
+                            {a.diff.removed > 0 && (
+                              <span class="text-red-500 dark:text-red-400"> -{a.diff.removed}</span>
+                            )}
+                          </span>
+                        ) : a.outputLines ? (
                           <span class="shrink-0 opacity-50">{a.outputLines} lines</span>
                         ) : null}
                         {hasOutput && (
@@ -306,7 +315,12 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                           </span>
                         )}
                       </button>
-                      {open && hasOutput && (
+                      {open && hasDiff && (
+                        <div class="mt-1 mb-1.5 max-h-64 overflow-y-auto">
+                          <AgentDiffBlock lines={a.diff!.lines!} />
+                        </div>
+                      )}
+                      {open && !hasDiff && a.output && (
                         <pre class="mt-1 mb-1.5 text-[11px] rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)] p-2 whitespace-pre-wrap break-all font-mono text-[var(--text-secondary)] max-h-64 overflow-y-auto">
                           {a.detail && a.detail !== a.output ? `${a.detail}\n\n` : ""}
                           {a.output}
