@@ -151,14 +151,9 @@ pub fn agent_caps(model_name: &str) -> u8 {
 }
 
 /// Online agent capability: what the PROXY PATH delivers today, not the
-/// raw model - Sol's Responses adapter drops the tools array, so Sol is 0
-/// until tool passthrough ships. Checked before the gpt arm ("gpt-5.6-sol"
-/// contains both).
+/// raw model.
 pub fn online_agent_caps(text: &str) -> u8 {
     let t = text.to_lowercase();
-    if t.contains("sol") {
-        return 0;
-    }
     if t.contains("claude") {
         return 9;
     }
