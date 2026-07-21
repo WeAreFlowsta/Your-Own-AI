@@ -286,7 +286,12 @@ export function useAgentSession(props: UseAgentSessionProps) {
     const ai = props.selectedAi.value;
     const agentKey = ai.aiConfig?.agentPubKey;
     const hash = props.chatState.conversationHash;
-    if (!agentKey || !hash || !bubble.content) return;
+    // A turn can honestly end on an action with no closing words - the
+    // working log is still the answer's substance and must reach the
+    // transcript ("Holochain holds everything"). Only a turn with neither
+    // words nor work has nothing to record.
+    if (!agentKey || !hash) return;
+    if (!bubble.content && !(bubble.agentLog ?? []).length) return;
     const seq = props.chatState.messageSequence;
     props.chatState.messageSequence = seq + 1;
     const tokens = bubble.tokens;
@@ -875,10 +880,14 @@ export function useAgentSession(props: UseAgentSessionProps) {
         (m) =>
           !(m.id === id && m.content === "" && !(m.agentLog ?? []).length && !m.error),
       );
-      // Record the answer + working log to the transcript (fire-and-forget).
+      // Record the answer + working log to the transcript (fire-and-forget,
+      // but a failure is loud in the console - a silently missing entry
+      // reads as "this question never got an answer" on resume).
       const bubble = props.chatState.messages.find((m) => m.id === id);
-      if (bubble?.content) {
-        recordAssistantTurn(bubble).catch(() => {});
+      if (bubble && (bubble.content || (bubble.agentLog ?? []).length)) {
+        recordAssistantTurn(bubble).catch((e) =>
+          console.error("[Agent] Transcript record failed:", e),
+        );
       }
       props.chatState.isLoading = false;
       state.liveStatus = "";
