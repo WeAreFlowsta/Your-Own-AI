@@ -84,6 +84,24 @@ fn ensure_agent_model_entry(home: &std::path::Path, slug: &str) -> Result<(), St
     } else {
         format!("{}\n{}", existing, entry)
     };
+    // The agent's ROLE models (compaction summaries etc.) follow the current
+    // AI, so those calls ride normal routing - for an auto AI the router
+    // picks something small and local (free, private). A stale alias here
+    // once pointed compaction at an online model silently.
+    let roles_header = "[models]";
+    let roles = format!(
+        "{roles_header}\ndefault = \"{slug}\"\nsession_summary = \"{slug}\"\nimage_description = \"{slug}\"\nweb_search = \"{slug}\"\n",
+    );
+    let content = if let Some(start) = content.find(roles_header) {
+        let after = &content[start + roles_header.len()..];
+        let end = after
+            .find("\n[")
+            .map(|i| start + roles_header.len() + i + 1)
+            .unwrap_or(content.len());
+        format!("{}{}{}", &content[..start], roles, &content[end..])
+    } else {
+        format!("{}\n{}", content, roles)
+    };
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create agent config dir: {}", e))?;

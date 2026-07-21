@@ -300,7 +300,11 @@ async fn chat_completions(
             _ => "balanced",
         };
         let picks = crate::router::OnlinePicks::default();
-        match crate::router::route(&app, mode, &query, eagerness, task, difficulty, lean, &picks, None).await {
+        // Agent sessions route deterministically to a tool-capable model
+        // (the flag is computed again below for prompt handling - cheap).
+        let agent_routing = model.trim().ends_with(":agent")
+            || header_str(&headers, "x-your-own-ai-mode").as_deref() == Some("agent");
+        match crate::router::route(&app, mode, &query, eagerness, task, difficulty, lean, &picks, None, agent_routing).await {
             Ok(r) => {
                 log::info!("[inference] router ({}): {mode} task={task} diff={difficulty} eag={eagerness} -> {} ({})", ai.name, r.model, r.reason);
                 ai.model = r.model;

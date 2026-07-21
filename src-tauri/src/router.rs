@@ -319,8 +319,12 @@ fn offline_ordering(lean: &str, a: OfflineRank, b: OfflineRank) -> std::cmp::Ord
 /// a candidate beats it on THIS task by at least `SWITCH_MARGIN` (so a real
 /// specialist for a real task is worth the reload, but near-equal models
 /// don't thrash).
-async fn pick_offline(app: &AppHandle, task: &str, lean: &str) -> Result<String, String> {
-    let all = crate::fit::assess(app).await;
+async fn pick_offline(app: &AppHandle, task: &str, lean: &str, agent_only: bool) -> Result<String, String> {
+    let mut all = crate::fit::assess(app).await;
+    // Agent sessions: tool-driving is a hard filter, not a preference.
+    if agent_only {
+        all.retain(|f| crate::model_caps::agent_caps(&f.name) >= 6);
+    }
     if all.is_empty() {
         return Err("No offline models downloaded".to_string());
     }
@@ -405,6 +409,8 @@ pub struct OnlinePicks {
     pub fresh: Option<String>,
     pub hard_code: Option<String>,
     pub hard_general: Option<String>,
+    /// Agent (folder) turns' online model - the tool-driver slot.
+    pub agent: Option<String>,
 }
 
 /// Recommended defaults per routing slot. Ids match the proxy catalog; if one
@@ -414,6 +420,9 @@ pub struct OnlinePicks {
 const DEFAULT_FRESH: &str = "online:grok-4.5-search";
 const DEFAULT_HARD_CODE: &str = "online:gpt-5.6-sol";
 const DEFAULT_HARD_GENERAL: &str = "online:gpt-5.6-terra";
+/// The agent slot: must be a PROVEN tool-driver through the proxy (kimi -
+/// verified end to end; Sol drops tools until Responses passthrough).
+const DEFAULT_AGENT: &str = "online:kimi-k2.6";
 
 /// Pick an online model for one routing decision. Order: the user's explicit
 /// choice for this slot (when still in the catalog) → the recommended default
@@ -469,6 +478,30 @@ fn select_online(
     models
         .iter()
         .max_by_key(|m| crate::model_caps::online_caps_for(&text(m)).by_task(task))
+        .map(|m| m.id.clone())
+}
+
+/// Online model for an agent session: the user's slot pick -> the default
+/// tool-driver -> the best agent-capable model by the online registry. A
+/// tools-blind model is never returned - a broken session is worse than none.
+fn select_online_agent(
+    models: &[crate::flowsta::OnlineModel],
+    pref: Option<&str>,
+) -> Option<String> {
+    let by_id = |id: &str| models.iter().find(|m| m.id == id).map(|m| m.id.clone());
+    if let Some(hit) = pref.and_then(|p| by_id(p)) {
+        return Some(hit);
+    }
+    if let Some(hit) = by_id(DEFAULT_AGENT) {
+        return Some(hit);
+    }
+    let text = |m: &crate::flowsta::OnlineModel| {
+        format!("{} {} {}", m.id, m.display_name, m.description).to_lowercase()
+    };
+    models
+        .iter()
+        .filter(|m| crate::model_caps::online_agent_caps(&text(m)) >= 6)
+        .max_by_key(|m| crate::model_caps::online_agent_caps(&text(m)))
         .map(|m| m.id.clone())
 }
 
@@ -540,7 +573,52 @@ pub async fn route(
     lean: &str,
     picks: &OnlinePicks,
     query_vec: Option<&[f32]>,
+    agent: bool,
 ) -> Result<RouteResult, String> {
+    // Agent (folder) turns: deterministic and session-stable. The per-query
+    // gates (freshness, difficulty, medical) don't apply to tool calls, so
+    // the same installed models + settings give the same pick every call -
+    // no mid-session switches, KV caches stay warm. Tool capability is a
+    // HARD FILTER. Online-offline mode routes agent work ONLINE by default
+    // (the mode is the consent; agent work is where a stronger model earns
+    // its keep); privacy eagerness prefers a capable local model.
+    if agent {
+        let offline = pick_offline(app, "code", lean, true).await.ok();
+        if mode != "online-offline" {
+            return offline
+                .map(|m| RouteResult {
+                    model: m,
+                    reason: "agent work on your device".to_string(),
+                })
+                .ok_or_else(|| {
+                    "No installed model can drive agent work - download an agentic model (Qwen 3.5, GLM, a coder) or use an online-capable AI".to_string()
+                });
+        }
+        if eagerness == "privacy" {
+            if let Some(m) = offline.clone() {
+                return Ok(RouteResult {
+                    model: m,
+                    reason: "agent work kept on your device (privacy-first)".to_string(),
+                });
+            }
+        }
+        if let Ok(models) = crate::flowsta::list_online_models().await {
+            if let Some(id) = select_online_agent(&models, picks.agent.as_deref()) {
+                return Ok(RouteResult {
+                    model: id,
+                    reason: "agent work on a stronger online model".to_string(),
+                });
+            }
+        }
+        return offline
+            .map(|m| RouteResult {
+                model: m,
+                reason: "agent work on your device (no online tool-driver available)".to_string(),
+            })
+            .ok_or_else(|| {
+                "No model available for agent work - download an agentic model or sign in for online models".to_string()
+            });
+    }
     // Health questions stay home. A turn about the user's own health never
     // auto-routes online (no freshness route, no hard-question escalation),
     // and the task becomes "medical" so an installed medical specialist
@@ -594,7 +672,7 @@ pub async fn route(
     if mode == "my-hardware" {
         let (ext_models, ext_tps) = crate::engine::external_models_cached(app);
         if !ext_models.is_empty() {
-            let local = pick_offline(app, task, lean).await.ok();
+            let local = pick_offline(app, task, lean, false).await.ok();
             let local_cap = local
                 .as_deref()
                 .map(|m| crate::model_caps::caps_for(m).by_task(task));
@@ -634,7 +712,7 @@ pub async fn route(
         // No server connected (or nothing usable) — behave like offline-only.
     }
 
-    let model = pick_offline(app, task, lean).await?;
+    let model = pick_offline(app, task, lean, false).await?;
     let reason = if medical {
         // The visible promise: this is the receipt line users see. Name the
         // specialist when one took the question.
@@ -714,12 +792,15 @@ pub async fn route_model(
     online_fresh: Option<String>,
     online_hard_code: Option<String>,
     online_hard_general: Option<String>,
+    online_agent: Option<String>,
     query_vec: Option<Vec<f32>>,
+    agent: Option<bool>,
 ) -> Result<RouteResult, String> {
     let picks = OnlinePicks {
         fresh: online_fresh,
         hard_code: online_hard_code,
         hard_general: online_hard_general,
+        agent: online_agent,
     };
     route(
         &app,
@@ -731,6 +812,7 @@ pub async fn route_model(
         lean.as_deref().unwrap_or("balanced"),
         &picks,
         query_vec.as_deref(),
+        agent.unwrap_or(false),
     )
     .await
 }
