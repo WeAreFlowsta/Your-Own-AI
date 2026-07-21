@@ -109,6 +109,24 @@ export async function recordMessage(
 }
 
 /**
+ * Wait for the conductor to come up (app launch takes a few seconds).
+ * Reads during startup return empty, which looks exactly like "no
+ * conversations" - callers wait here first so their spinner stays honest.
+ */
+export async function waitForHolochainReady(timeoutMs = 20000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      if (await invoke<boolean>("holochain_ready")) return true;
+    } catch {
+      /* command missing (old build) - fall through to the timeout */
+    }
+    if (Date.now() >= deadline) return false;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
+
+/**
  * Get all conversations for an AI agent.
  */
 export async function getConversations(

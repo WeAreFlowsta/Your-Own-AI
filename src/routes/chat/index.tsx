@@ -30,6 +30,7 @@ import {
   type ConversationListItem,
   type LastConversationPointer,
 } from "../../utils/conversationResume";
+import { waitForHolochainReady } from "../../utils/holochainTranscripts";
 import ConfirmModal from "../../components/ConfirmModal";
 import { drainPendingExtractions, prewarmExtractionModel } from "../../utils/memoryExtraction";
 import GpuSafeModeNotice from "../../components/GpuSafeModeNotice";
@@ -245,6 +246,10 @@ export default component$(() => {
         selectedAi.value;
       selectedAi.value = ai;
       resetChat();
+      // A resume fired right after launch (the Memory-page handoff or the
+      // hero Continue line) can outrun the conductor - reads would come
+      // back empty and the conversation would look blank or unanswered.
+      await waitForHolochainReady();
       const { messages, nextSequence, folderPath } = await loadConversationMessages(
         target.agentKey,
         target.hash,
@@ -275,6 +280,10 @@ export default component$(() => {
     conversationsOpen.value = true;
     conversationsLoading.value = true;
     try {
+      // Right after app launch the conductor is still starting and reads
+      // come back empty - hold the spinner until it's actually up, so the
+      // drawer never shows "nothing yet" about records that exist.
+      await waitForHolochainReady();
       conversationItems.value = await listAllConversations(
         dynamicModelOptions.value,
       );

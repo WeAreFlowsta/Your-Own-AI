@@ -461,6 +461,14 @@ pub async fn record_grounding_annotation(
     Ok(hex::encode(hash.get_raw_39()))
 }
 
+/// Is the conductor up? The transcript surface reads empty during startup,
+/// which is indistinguishable from "no conversations" - callers that would
+/// show an empty state poll this first and keep their spinner up instead.
+#[tauri::command]
+pub fn holochain_ready(hc_state: State<'_, Arc<HolochainState>>) -> bool {
+    hc_state.manager.get().is_some()
+}
+
 /// Get all conversations for an AI agent.
 /// `agent_key` is the hex-encoded agent pub key.
 #[tauri::command]
