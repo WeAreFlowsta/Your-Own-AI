@@ -779,9 +779,22 @@ export function useAgentSession(props: UseAgentSessionProps) {
             return { ...m, agentLog: log };
           });
         }
+      } else if (kind === "auto_compact_started") {
+        // Mid-turn context compaction is a real model call that can run a
+        // minute - name it or it reads as a hang.
+        state.liveStatus = "Tidying the conversation memory..";
+      } else if (kind === "auto_compact_completed") {
+        state.liveStatus = "Thinking..";
       } else if (kind === "tool_call" || kind === "tool_call_update") {
         const toolCallId = update.toolCallId || uuidv4();
         const human = humanizeAction(update);
+        // The agent's plan tool call (todo_write, kind "plan") is the same
+        // information as the ACP plan update that renders the checklist -
+        // a bare "Plan" action row on top of it is noise.
+        if (human.kind === "plan") {
+          state.liveStatus = "Planning..";
+          return;
+        }
         const out = actionOutput(update);
         const diff = extractDiff(update.content);
         if (!update.status || update.status === "in_progress" || update.status === "pending") {
