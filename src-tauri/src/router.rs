@@ -1037,6 +1037,54 @@ mod tests {
         // Empty catalog → None (router falls through to offline).
         assert_eq!(select_online(&[], "code", false, None), None);
     }
+
+    fn agent_catalog() -> Vec<crate::flowsta::OnlineModel> {
+        vec![
+            om("kimi-k2.6", "Kimi K2.6", "tool-driving flagship", None),
+            om("gpt-5.6-sol", "GPT-5.6 Sol", "OpenAI's flagship", None),
+            om("sonar", "Sonar", "Perplexity search", Some(0.005)),
+        ]
+    }
+
+    #[test]
+    fn select_agent_default_is_the_tool_driver() {
+        assert_eq!(
+            select_online_agent(&agent_catalog(), None).unwrap(),
+            "online:kimi-k2.6"
+        );
+    }
+
+    #[test]
+    fn select_agent_pref_wins_including_sol() {
+        // Sol is agent-eligible now that the proxy passes tools through -
+        // an existing Sol preference applies with no other changes.
+        assert_eq!(
+            select_online_agent(&agent_catalog(), Some("online:gpt-5.6-sol")).unwrap(),
+            "online:gpt-5.6-sol"
+        );
+        // A pref no longer in the catalog is ignored → default applies.
+        assert_eq!(
+            select_online_agent(&agent_catalog(), Some("online:retired")).unwrap(),
+            "online:kimi-k2.6"
+        );
+    }
+
+    #[test]
+    fn select_agent_registry_fallback_skips_tools_blind_models() {
+        // No default in the catalog → best agent-capable model wins...
+        let models = vec![
+            om("sonar", "Sonar", "Perplexity search", Some(0.005)),
+            om("gpt-5.6-sol", "GPT-5.6 Sol", "OpenAI's flagship", None),
+        ];
+        assert_eq!(
+            select_online_agent(&models, None).unwrap(),
+            "online:gpt-5.6-sol"
+        );
+        // ...and a search-only catalog yields None rather than a broken
+        // session (sonar is below the tool-capability floor).
+        let searchers = vec![om("sonar", "Sonar", "Perplexity search", Some(0.005))];
+        assert_eq!(select_online_agent(&searchers, None), None);
+    }
     use super::*;
     use std::cmp::Ordering;
 
