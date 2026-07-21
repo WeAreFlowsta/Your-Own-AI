@@ -670,14 +670,28 @@ pub async fn start_llama_server(
         sysinfo::RefreshKind::nothing().with_memory(sysinfo::MemoryRefreshKind::everything()),
     );
     let total_ram_gb = sys.total_memory() as f64 / (1024.0 * 1024.0 * 1024.0);
+    // A small model's KV cache is cheap: give it the large context even on
+    // moderate-RAM machines. This is what lets a 4B drive agent sessions
+    // (the agent's system prompt alone is ~9k tokens - an 8k context walls
+    // into a retry loop before the first file is read).
+    let model_size_gb = model_filename
+        .as_ref()
+        .and_then(|f| std::fs::metadata(models_dir.join(f)).ok())
+        .map(|m| m.len() as f64 / (1024.0 * 1024.0 * 1024.0));
+    let small_model = model_size_gb.map(|s| s < 6.0).unwrap_or(false);
     let ctx_size = if total_ram_gb >= 32.0 {
         "16384"  // 32GB+ — large context
     } else if total_ram_gb >= 12.0 {
-        "8192"   // 12-32GB — moderate context
+        if small_model { "16384" } else { "8192" }
     } else {
-        "4096"   // <12GB — minimum usable context
+        if small_model { "8192" } else { "4096" }
     };
-    println!("[LLM] System RAM: {:.1}GB, using context size: {}", total_ram_gb, ctx_size);
+    println!(
+        "[LLM] System RAM: {:.1}GB, model size: {}, using context size: {}",
+        total_ram_gb,
+        model_size_gb.map(|s| format!("{:.1}GB", s)).unwrap_or_else(|| "?".into()),
+        ctx_size
+    );
 
     // Build args
     // --reasoning off: disables native thinking by default for all models.
