@@ -153,8 +153,8 @@ export default component$<AppHeaderProps>(
                 never see this. */}
             {buildInstalled && folderPath && (
               <span
-                class="text-xs text-[var(--text-secondary)] flex items-center gap-2 px-3 py-1.5 bg-[var(--bg-dropdown)] rounded-full border border-[var(--border-subtle)]"
-                title={folderPath}
+                class="text-xs text-[var(--text-secondary)] flex items-center gap-2 px-3 h-9 bg-[var(--bg-dropdown)] rounded-full border border-[var(--border-subtle)]"
+                title={`Your AI is working in ${folderPath}`}
               >
                 <span
                   class={`w-2 h-2 rounded-full shrink-0 ${
@@ -192,14 +192,14 @@ export default component$<AppHeaderProps>(
             )}
             {buildInstalled && !folderPath && (
               <span class="relative">
-                <button
-                  type="button"
+                <LiquidMetalButton
                   onClick$={() => (folderMenuOpen.value = !folderMenuOpen.value)}
-                  class="text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)] flex items-center gap-2 px-3 py-1.5 bg-[var(--bg-dropdown)] rounded-full border border-[var(--border-subtle)]"
+                  variant="secondary"
+                  class="flex items-center justify-center w-9 h-9 cursor-pointer"
+                  title="Open a folder - your AI can work inside it"
                 >
-                  <LuFolderOpen class="h-3.5 w-3.5" />
-                  <span class="hidden sm:inline">Open a folder</span>
-                </button>
+                  <LuFolderOpen class="h-[18px] w-[18px]" />
+                </LiquidMetalButton>
                 {folderMenuOpen.value && (
                   <>
                     <span
@@ -246,7 +246,10 @@ export default component$<AppHeaderProps>(
 
             {/* Current Model Badge with Status Indicator */}
             {showModelWidget && currentModel && (
-              <span class="text-xs text-[var(--text-secondary)] hidden md:flex items-center gap-2 px-3 py-1 bg-[var(--bg-dropdown)] rounded-full border border-[var(--border-subtle)]">
+              <span
+                class="text-xs text-[var(--text-secondary)] hidden md:flex items-center gap-2 px-3 h-9 bg-[var(--bg-dropdown)] rounded-full border border-[var(--border-subtle)]"
+                title="The model loaded on this device right now"
+              >
                 <span
                   class={`w-2 h-2 rounded-full ${
                     modelTooBig
@@ -269,7 +272,7 @@ export default component$<AppHeaderProps>(
                 onClick$={onOpenConversations$}
                 variant="secondary"
                 class="flex items-center justify-center w-9 h-9 cursor-pointer"
-                title="Conversations"
+                title="Conversations - pick up any conversation where you left off"
               >
                 <LuMessagesSquare class="h-[18px] w-[18px]" />
               </LiquidMetalButton>
@@ -279,6 +282,7 @@ export default component$<AppHeaderProps>(
             <LiquidMetalButton
               onClick$={handleClick}
               class="flex items-center gap-2.5 px-4 sm:px-5 h-9 text-[0.9375rem] cursor-pointer"
+              title="Start a fresh conversation"
             >
               <svg
                 width="18"
@@ -297,6 +301,7 @@ export default component$<AppHeaderProps>(
               <LiquidMetalButton
                 onClick$={toggleMenu}
                 class="flex items-center justify-center h-9 w-9 cursor-pointer"
+                title="Menu - Your AIs, memory, settings, and theme"
               >
                 <LuSettings2 class="w-[18px] h-[18px]" />
               </LiquidMetalButton>
