@@ -65,6 +65,9 @@ const OnlineModelPicker = component$<{
           <>
             <div class="fixed inset-0 z-40" onClick$={() => { open.value = false; }} />
             <div class="absolute right-0 top-full mt-1 min-w-[13rem] max-h-64 overflow-y-auto z-50 rounded-lg bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] shadow-xl py-1">
+              <div class="px-3 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                Online models
+              </div>
               <button
                 type="button"
                 onClick$={async () => {
@@ -816,9 +819,12 @@ export default component$(() => {
                   Which online model answers
                 </h4>
                 <p class="text-sm text-[var(--text-secondary)] mt-1 mb-1">
-                  When a question does go online, these are the models that take
-                  it. Recommended picks are chosen for each job; change them if
-                  you'd rather use a different model.
+                  When a question does go online, these are the online models
+                  that take it. Recommended picks are chosen for each job;
+                  change them if you'd rather use a different one. Your
+                  downloaded models aren't listed here - they're picked
+                  automatically, tuned under "Choosing a model on this
+                  device".
                 </p>
                 <OnlineModelPicker
                   label="Needs current information"
@@ -858,7 +864,7 @@ export default component$(() => {
                     </p>
                     <OnlineModelPicker
                       label="Agent work in folders"
-                      hint="Drives tools while your AI works in a folder - only capable models are listed"
+                      hint="The online model that drives tools in folder work - only capable ones are listed"
                       recommended="Kimi K2.6"
                       storageKey="routingOnlineAgent"
                       selected={onlineAgent}
@@ -866,7 +872,7 @@ export default component$(() => {
                     />
                     <OnlineModelPicker
                       label="Planning and helper agents"
-                      hint="The subagents that explore and plan the approach - reasoning-lean, still tool-capable"
+                      hint="The online model for the subagents that explore and plan - reasoning-lean, still tool-capable"
                       recommended="GPT-5.6 Terra"
                       storageKey="routingOnlinePlanning"
                       selected={onlinePlanning}
