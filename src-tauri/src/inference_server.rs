@@ -593,9 +593,13 @@ fn find_sub(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
-/// Stateful `<think>…</think>` remover for the streamed content (the tags can
-/// span SSE chunks). Strips reasoning from what the CALLER sees; the recorded
-/// transcript keeps it (recorded from the raw body, separated into `thinking`).
+/// Stateful `<think>…</think>` splitter for the streamed content (the tags can
+/// span SSE chunks). The caller's `content` stays clean, and the reasoning is
+/// re-emitted as `delta.reasoning_content` - the OpenAI-compatible field agent
+/// clients already turn into visible thoughts. Models whose reasoning arrives
+/// inline as <think> (Sol through the proxy's Responses adapter) used to lose
+/// it here entirely: agent sessions sat frozen through every reasoning
+/// stretch. The recorded transcript still keeps the raw body.
 #[derive(Default)]
 struct ThinkStripper {
     in_think: bool,
@@ -603,20 +607,26 @@ struct ThinkStripper {
 }
 
 impl ThinkStripper {
-    fn feed(&mut self, s: &str) -> String {
+    /// Returns (visible content, reasoning) extracted from this chunk.
+    fn feed(&mut self, s: &str) -> (String, String) {
         let mut work = std::mem::take(&mut self.pending);
         work.push_str(s);
         let mut out = String::new();
+        let mut thought = String::new();
         loop {
             if self.in_think {
                 match work.find("</think>") {
                     Some(i) => {
+                        thought.push_str(&work[..i]);
                         work = work.split_off(i + "</think>".len());
                         self.in_think = false;
                     }
                     None => {
-                        self.pending = keep_partial_tail(&work, "</think>");
-                        return out;
+                        let tail = keep_partial_tail(&work, "</think>");
+                        let keep = work.len() - tail.len();
+                        thought.push_str(&work[..keep]);
+                        self.pending = tail;
+                        return (out, thought);
                     }
                 }
             } else {
@@ -631,7 +641,7 @@ impl ThinkStripper {
                         let keep = work.len() - tail.len();
                         out.push_str(&work[..keep]);
                         self.pending = tail;
-                        return out;
+                        return (out, thought);
                     }
                 }
             }
@@ -649,9 +659,9 @@ fn keep_partial_tail(s: &str, tag: &str) -> String {
     String::new()
 }
 
-/// Transform one SSE event for the caller: strip `<think>` from `delta.content`,
-/// pass everything else through. Returns the event to emit (with framing), or
-/// None to drop it.
+/// Transform one SSE event for the caller: split `<think>` out of
+/// `delta.content` into `delta.reasoning_content`, pass everything else
+/// through. Returns the event to emit (with framing), or None to drop it.
 fn process_event(event: &str, stripper: &mut ThinkStripper) -> Option<String> {
     let line = event.lines().find(|l| l.starts_with("data:"))?;
     let payload = line["data:".len()..].trim();
@@ -672,8 +682,11 @@ fn process_event(event: &str, stripper: &mut ThinkStripper) -> Option<String> {
         .and_then(|d| d.get("content"))
         .and_then(Value::as_str)
     {
-        let visible = stripper.feed(content);
+        let (visible, thought) = stripper.feed(content);
         v["choices"][0]["delta"]["content"] = Value::String(visible);
+        if !thought.is_empty() {
+            v["choices"][0]["delta"]["reasoning_content"] = Value::String(thought);
+        }
     }
     Some(format!("data: {v}\n\n"))
 }
@@ -833,23 +846,41 @@ fn conv_key_lookup(key: &Option<String>) -> Option<(String, u32)> {
 mod think_tests {
     use super::ThinkStripper;
 
-    /// Feed `pieces` one at a time; return the concatenated visible output.
-    fn run(pieces: &[&str]) -> String {
+    /// Feed `pieces` one at a time; return (visible, reasoning) concatenated.
+    fn run(pieces: &[&str]) -> (String, String) {
         let mut s = ThinkStripper::default();
-        pieces.iter().map(|p| s.feed(p)).collect()
+        let mut visible = String::new();
+        let mut thought = String::new();
+        for p in pieces {
+            let (v, t) = s.feed(p);
+            visible.push_str(&v);
+            thought.push_str(&t);
+        }
+        (visible, thought)
     }
 
     #[test]
     fn strips_think_blocks_across_chunks() {
-        assert_eq!(run(&["hello"]), "hello");
-        assert_eq!(run(&["<think>reasoning</think>answer"]), "answer");
+        assert_eq!(run(&["hello"]).0, "hello");
+        assert_eq!(run(&["<think>reasoning</think>answer"]).0, "answer");
         // tag split across chunks
-        assert_eq!(run(&["a<thi", "nk>secret</thi", "nk>visible"]), "avisible");
+        assert_eq!(run(&["a<thi", "nk>secret</thi", "nk>visible"]).0, "avisible");
         // think in the middle
-        assert_eq!(run(&["pre", "<think>", "hidden", "</think>", "post"]), "prepost");
+        assert_eq!(run(&["pre", "<think>", "hidden", "</think>", "post"]).0, "prepost");
         // a lone '<' that isn't a think tag is held then released
-        assert_eq!(run(&["hi <", "br> there"]), "hi <br> there");
-        // unclosed think → everything after is dropped
-        assert_eq!(run(&["ok <think> never closes"]), "ok ");
+        assert_eq!(run(&["hi <", "br> there"]).0, "hi <br> there");
+        // unclosed think → everything after leaves content (it is reasoning)
+        assert_eq!(run(&["ok <think> never closes"]).0, "ok ");
+    }
+
+    #[test]
+    fn reasoning_is_kept_not_dropped() {
+        // The stripped text streams on as reasoning_content - Sol's thinking
+        // must stay visible to agent clients, not vanish.
+        assert_eq!(run(&["<think>reasoning</think>answer"]).1, "reasoning");
+        assert_eq!(run(&["a<thi", "nk>sec", "ret</thi", "nk>b"]).1, "secret");
+        // reasoning streams live even before the close tag arrives
+        assert_eq!(run(&["<think>partial thought"]).1, "partial thought");
+        assert_eq!(run(&["plain text only"]).1, "");
     }
 }
