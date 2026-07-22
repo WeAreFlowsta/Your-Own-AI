@@ -64,15 +64,21 @@ const CLIENT_IDENTIFIER: &str = "your-own-ai";
 /// discovered from the local server's model list. So before starting the
 /// agent, make sure the conversation's AI has an entry - appending a new
 /// `[model.<slug>]` table is valid TOML and leaves the user's file intact.
-fn ensure_agent_model_entry(home: &std::path::Path, slug: &str) -> Result<(), String> {
+fn ensure_agent_model_entry(
+    home: &std::path::Path,
+    slug: &str,
+    agent_ctx: u64,
+    plan_ctx: u64,
+) -> Result<(), String> {
     let config_path = home.join(".your-own-ai-build").join("config.toml");
     let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
     let header = format!("[model.{}]", slug);
-    // context_window must be the TRUE loaded context: the agent compacts
-    // its own session as it approaches this number - an inflated value
-    // means it sails straight into truncation instead ("Internal error"
-    // after eight good calls on a 16k window it believed was 32k).
-    let ctx = crate::llm::current_ctx_size();
+    // context_window must be the SERVING model's true window (resolved by
+    // router::agent_serving_context): the agent compacts as it approaches
+    // this number. Too big for a local model = truncation ("Internal
+    // error" after eight good calls); the local number for an online model
+    // = compacting constantly inside a million-token window.
+    let ctx = agent_ctx;
     let entry = format!(
         "{header}\nmodel = \"{slug}:agent\"\nbase_url = \"http://localhost:11435/v1\"\nname = \"{slug}\"\napi_key = \"local\"\napi_backend = \"chat_completions\"\ncontext_window = {ctx}\n",
     );
@@ -93,6 +99,7 @@ fn ensure_agent_model_entry(home: &std::path::Path, slug: &str) -> Result<(), St
     // lean tool-driver), and [subagents.models] points the built-in
     // subagent type at it. No harness changes - these are its own hooks.
     let plan_header = "[model.planning]";
+    let ctx = plan_ctx;
     let plan_entry = format!(
         "{plan_header}\nmodel = \"{slug}:plan\"\nbase_url = \"http://localhost:11435/v1\"\nname = \"planning\"\napi_key = \"local\"\napi_backend = \"chat_completions\"\ncontext_window = {ctx}\n",
     );
@@ -162,6 +169,8 @@ pub async fn start_build_agent(
     binary: String,
     cwd: String,
     model: Option<String>,
+    ai_model: Option<String>,
+    eagerness: Option<String>,
 ) -> Result<(), String> {
     // One agent at a time: replace any previous instance. Bumping the
     // generation FIRST makes the old process's reader stand down - its
@@ -181,7 +190,27 @@ pub async fn start_build_agent(
             .path()
             .home_dir()
             .map_err(|e| format!("cannot resolve home dir: {}", e))?;
-        ensure_agent_model_entry(&home, slug)?;
+        // context_window = the SERVING model's window per slot (an online
+        // Sol session has a million-token window; a local one has the
+        // loaded size - the agent's compaction must believe the truth).
+        let eag = eagerness.as_deref().unwrap_or("balanced");
+        let (agent_ctx, plan_ctx) = match ai_model.as_deref() {
+            Some(m) => (
+                crate::router::agent_serving_context(&app_handle, m, eag, false).await,
+                crate::router::agent_serving_context(&app_handle, m, eag, true).await,
+            ),
+            None => {
+                let l = crate::llm::current_ctx_size() as u64;
+                (l, l)
+            }
+        };
+        log::info!(
+            "[agent] model entries for {}: agent ctx {} / planning ctx {}",
+            slug,
+            agent_ctx,
+            plan_ctx
+        );
+        ensure_agent_model_entry(&home, slug, agent_ctx, plan_ctx)?;
     }
 
     let (mut rx, child) = app_handle

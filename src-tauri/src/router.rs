@@ -509,6 +509,67 @@ fn select_online_agent(
         .map(|m| m.id.clone())
 }
 
+/// The context window the agent should believe for a folder session on
+/// this AI: the SERVING model's window, resolved the same deterministic
+/// way agent turns route. Local serving keeps the true loaded size
+/// (compaction must fire before a real 16k window overflows); online
+/// serving takes the catalog's number - Sol is a million-token model, and
+/// believing a local 16k there compacted constantly for nothing.
+pub async fn agent_serving_context(
+    app: &AppHandle,
+    ai_model: &str,
+    eagerness: &str,
+    plan: bool,
+) -> u64 {
+    let local = crate::llm::current_ctx_size() as u64;
+    let catalog_ctx = |models: &[crate::flowsta::OnlineModel], id: &str| -> Option<u64> {
+        models
+            .iter()
+            .find(|m| m.id == id)
+            .map(|m| m.context_window)
+            .filter(|c| *c > 0)
+    };
+    if ai_model.starts_with("online:") {
+        if let Ok(models) = crate::flowsta::list_online_models().await {
+            if let Some(c) = catalog_ctx(&models, ai_model) {
+                return c;
+            }
+        }
+        return local;
+    }
+    let Some(mode) = ai_model.strip_prefix("auto:") else {
+        return local; // pinned local model (or external server): local truth
+    };
+    if mode != "online-offline" {
+        return local;
+    }
+    // Mirror route_inner's agent branch: privacy with a capable local model
+    // serves locally; otherwise the Agent/Planning slot chain decides.
+    let offline_task = if plan { "reasoning" } else { "code" };
+    let offline_ok = pick_offline(app, offline_task, "balanced", true).await.is_ok();
+    if eagerness == "privacy" && offline_ok {
+        return local;
+    }
+    if let Ok(models) = crate::flowsta::list_online_models().await {
+        let pref = if plan {
+            store_pref(app, "routingOnlinePlanning").or_else(|| Some(DEFAULT_PLAN.to_string()))
+        } else {
+            agent_online_override()
+                .or_else(|| store_pref(app, "routingOnlineAgent"))
+                .or_else(|| {
+                    store_pref(app, "routingOnlineHardCode")
+                        .filter(|id| crate::model_caps::online_agent_caps(id) >= 6)
+                })
+        };
+        if let Some(id) = select_online_agent(&models, pref.as_deref()) {
+            if let Some(c) = catalog_ctx(&models, &id) {
+                return c;
+            }
+        }
+    }
+    local
+}
+
 /// A slot preference from the Rust-readable settings store (mirrored there
 /// by the Settings page so non-webview callers see user choices).
 fn store_pref(app: &AppHandle, key: &str) -> Option<String> {

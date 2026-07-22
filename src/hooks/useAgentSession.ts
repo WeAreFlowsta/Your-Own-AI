@@ -474,6 +474,11 @@ export function useAgentSession(props: UseAgentSessionProps) {
         binary: resolveBinaryPath(),
         cwd: path,
         model: aiModelSlug(props.selectedAi.value),
+        // The raw model setting + eagerness let the bridge resolve which
+        // model will actually SERVE agent turns, and write that model's
+        // true context window into the agent's config.
+        aiModel: props.selectedAi.value.aiConfig?.model ?? null,
+        eagerness: localStorage.getItem("smartRoutingEagerness") || "balanced",
       });
     } catch (err) {
       state.status = "idle";
