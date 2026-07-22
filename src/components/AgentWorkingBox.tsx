@@ -179,7 +179,6 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
       return { steps, files: files.size };
     });
 
-    const lastFlowId = useComputed$(() => flow.value[flow.value.length - 1]?.id);
     const expanded = working || railOpen.value;
 
     return (
@@ -236,7 +235,6 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                 />
               );
             }
-            const isTip = working && el.id === lastFlowId.value;
             return (
               <div key={el.id} class="relative pl-7 my-1.5">
                 {/* The thread. */}
@@ -353,39 +351,51 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                     </div>
                   );
                 })}
-                {/* The pearl - the turn's one point of life, at the tip. */}
-                {isTip && (
-                  <div class="relative flex items-center gap-2 py-1">
-                    <span
-                      class="absolute -left-[23.5px] top-[7px] w-[9px] h-[9px] rounded-full bg-[var(--text-link)] animate-pulse"
-                      style={{ boxShadow: "0 0 10px 1px rgba(89,201,255,0.55)" }}
-                    />
-                    <span class="min-w-0 truncate whitespace-nowrap font-mono text-xs font-semibold animate-pulse-text status-text-gradient">
-                      {status.value}
-                      {stillSecs.value > 0 ? ` ${stillSecs.value}s` : ""}
-                    </span>
-                    <button
-                      onClick$={() => {
-                        showThoughts.value = !showThoughts.value;
-                        try {
-                          localStorage.setItem(
-                            SHOW_THOUGHTS_KEY,
-                            showThoughts.value ? "1" : "0",
-                          );
-                        } catch {
-                          /* not persisted */
-                        }
-                      }}
-                      title={showThoughts.value ? "Hide thinking" : "Show thinking"}
-                      class={`ml-1 shrink-0 bg-transparent border-none cursor-pointer ${showThoughts.value ? "text-[var(--text-secondary)]" : "text-[var(--text-muted)] opacity-40 hover:opacity-100"}`}
-                    >
-                      <LuBrain class="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                )}
               </div>
             );
           })}
+
+        {/* The pearl - the turn's one point of life. Its OWN element after
+            the flow, so it exists no matter what the rail ends with: a step
+            group, an answered permission receipt, or spoken text. It used to
+            live inside the last group only - a turn whose tail was a
+            permission receipt had NO live indicator at all, which made every
+            Allow before a long reasoning stretch look dead. */}
+        {working && (
+          <div class="relative pl-7 my-1.5">
+            <div
+              class="absolute left-[8px] top-0 bottom-1 w-[2px] rounded-full opacity-50"
+              style={{ background: METAL }}
+            />
+            <div class="relative flex items-center gap-2 py-1">
+              <span
+                class="absolute -left-[23.5px] top-[7px] w-[9px] h-[9px] rounded-full bg-[var(--text-link)] animate-pulse"
+                style={{ boxShadow: "0 0 10px 1px rgba(89,201,255,0.55)" }}
+              />
+              <span class="min-w-0 truncate whitespace-nowrap font-mono text-xs font-semibold animate-pulse-text status-text-gradient">
+                {status.value}
+                {stillSecs.value > 0 ? ` ${stillSecs.value}s` : ""}
+              </span>
+              <button
+                onClick$={() => {
+                  showThoughts.value = !showThoughts.value;
+                  try {
+                    localStorage.setItem(
+                      SHOW_THOUGHTS_KEY,
+                      showThoughts.value ? "1" : "0",
+                    );
+                  } catch {
+                    /* not persisted */
+                  }
+                }}
+                title={showThoughts.value ? "Hide thinking" : "Show thinking"}
+                class={`ml-1 shrink-0 bg-transparent border-none cursor-pointer ${showThoughts.value ? "text-[var(--text-secondary)]" : "text-[var(--text-muted)] opacity-40 hover:opacity-100"}`}
+              >
+                <LuBrain class="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* The words being said right now - same register as settled text
             and the final answer, streaming outside the keyed list. */}
