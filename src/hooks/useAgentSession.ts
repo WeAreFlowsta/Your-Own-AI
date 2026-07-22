@@ -306,7 +306,14 @@ export function useAgentSession(props: UseAgentSessionProps) {
     // working log is still the answer's substance and must reach the
     // transcript ("Holochain holds everything"). Only a turn with neither
     // words nor work has nothing to record.
-    if (!agentKey || !hash) return;
+    if (!agentKey || !hash) {
+      // This is a LOST TURN - say so loudly instead of skipping in silence
+      // (a missing conversation hash here has already cost two answers).
+      console.error(
+        `[Agent] Turn NOT recorded - missing ${agentKey ? "conversation hash" : "agent key"}`,
+      );
+      return;
+    }
     if (!bubble.content && !(bubble.agentLog ?? []).length) return;
     const seq = props.chatState.messageSequence;
     props.chatState.messageSequence = seq + 1;
@@ -330,7 +337,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       }
       return i;
     });
-    await recordMessage(
+    const actionHash = await recordMessage(
       agentKey,
       hash,
       "assistant",
@@ -357,6 +364,14 @@ export function useAgentSession(props: UseAgentSessionProps) {
         folderPath: state.folderPath ?? undefined,
       },
     );
+    // recordMessage returns the entry's action hash, or null after logging
+    // the failure - one line either way, so the console always answers
+    // "did this turn reach the chain?".
+    if (actionHash) {
+      console.log(`[Agent] Turn recorded on-chain (seq ${seq})`);
+    } else {
+      console.error(`[Agent] Turn record FAILED (seq ${seq}) - see warning above`);
+    }
   });
 
   /** The turn's single reply bubble, pushed at Enter. Mounting it anchors
