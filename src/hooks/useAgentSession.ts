@@ -321,7 +321,11 @@ export function useAgentSession(props: UseAgentSessionProps) {
     // Persist the working log WITHOUT step outputs (labels, statuses,
     // receipts, thoughts, counts are the audit trail; raw outputs are
     // heavy and reproducible). Old entries read back with no log at all.
-    const items = (bubble.agentLog ?? []).map((i) => {
+    // ⚠️ The transcript DNA rejects entries over 1 MiB of ciphertext - a
+    // 99-tool session's un-slimmed log crossed it and the WHOLE turn was
+    // lost. Permission items get the same treatment as steps (receipt,
+    // not bulk), and a size ladder below guarantees the write fits.
+    let items = (bubble.agentLog ?? []).map((i) => {
       if (i.type === "action") {
         const { output: _output, diff, ...action } = i.action;
         return {
@@ -335,8 +339,51 @@ export function useAgentSession(props: UseAgentSessionProps) {
       if (i.type === "thought" && i.text.length > 2000) {
         return { ...i, text: i.text.slice(0, 2000) + ".." };
       }
+      if (i.type === "permission") {
+        const p = i.permission;
+        return {
+          ...i,
+          permission: {
+            ...p,
+            command:
+              p.command && p.command.length > 500
+                ? p.command.slice(0, 500) + ".."
+                : p.command,
+            diff: p.diff
+              ? { path: p.diff.path, added: p.diff.added, removed: p.diff.removed }
+              : undefined,
+            options: [],
+          },
+        };
+      }
       return i;
     });
+    // Size ladder: never lose a whole turn to an oversized log. Each rung
+    // trades detail for fit; the last keeps the story's ends with an
+    // honest gap marker.
+    const jsonSize = (x: unknown) => JSON.stringify(x).length;
+    const LOG_BUDGET = 700_000;
+    if (jsonSize(items) > LOG_BUDGET) {
+      items = items.filter((i) => i.type !== "thought");
+    }
+    if (jsonSize(items) > LOG_BUDGET) {
+      items = items.map((i) =>
+        i.type === "action" && i.action.detail && i.action.detail.length > 200
+          ? { ...i, action: { ...i.action, detail: i.action.detail.slice(0, 200) + ".." } }
+          : i,
+      );
+    }
+    if (jsonSize(items) > LOG_BUDGET && items.length > 80) {
+      items = [
+        ...items.slice(0, 40),
+        {
+          id: "log-trimmed",
+          type: "narration" as const,
+          text: `.. ${items.length - 80} steps trimmed to fit the transcript ..`,
+        },
+        ...items.slice(-40),
+      ];
+    }
     const actionHash = await recordMessage(
       agentKey,
       hash,
