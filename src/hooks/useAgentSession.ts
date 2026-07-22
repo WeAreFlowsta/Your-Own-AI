@@ -781,10 +781,36 @@ export function useAgentSession(props: UseAgentSessionProps) {
         }
       } else if (kind === "auto_compact_started") {
         // Mid-turn context compaction is a real model call that can run a
-        // minute - name it or it reads as a hang.
+        // minute - it goes ON THE RAIL as a step, because the pearl derives
+        // its label from in-progress steps (a status field alone never
+        // reaches the tip) and the transcript should hold it too.
         state.liveStatus = "Tidying the conversation memory..";
+        mutateTurn((m) => ({
+          ...m,
+          agentLog: [
+            ...(m.agentLog ?? []),
+            {
+              id: `compact-${uuidv4()}`,
+              type: "action",
+              action: {
+                toolCallId: `compact-${(m.agentLog ?? []).length}`,
+                label: "Tidying the conversation memory",
+                kind: "compact",
+                status: "in_progress",
+              },
+            },
+          ],
+        }));
       } else if (kind === "auto_compact_completed") {
         state.liveStatus = "Thinking..";
+        mutateTurn((m) => ({
+          ...m,
+          agentLog: (m.agentLog ?? []).map((i) =>
+            i.type === "action" && i.action.kind === "compact" && i.action.status === "in_progress"
+              ? { ...i, action: { ...i.action, status: "completed" as const } }
+              : i,
+          ),
+        }));
       } else if (kind === "tool_call" || kind === "tool_call_update") {
         const toolCallId = update.toolCallId || uuidv4();
         const human = humanizeAction(update);

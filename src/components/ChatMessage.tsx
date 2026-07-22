@@ -846,10 +846,11 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
   useVisibleTask$(({ track }) => {
     const isLast = track(() => props.isLast);
     if (!rootRef.value) return;
-    // Agent-turn bubbles opt out: activity/permission cards arrive between
-    // segments, so a per-bubble reservation would grab and release space all
-    // turn long. The agent turn reserves once via a spacer in the view.
-    if (isLast && props.message.role === 'assistant' && !props.message.agentTurn) {
+    // Agent turns are ONE bubble too (the rail lives inside it), so the
+    // same reservation applies - without it the question only reaches the
+    // top once enough rail content happens to have streamed, which made
+    // follow-up anchoring a coin flip.
+    if (isLast && props.message.role === 'assistant') {
       const container = rootRef.value.closest('.overflow-y-auto') as HTMLElement | null;
       rootRef.value.style.minHeight = container ? `${container.clientHeight}px` : '';
     } else {

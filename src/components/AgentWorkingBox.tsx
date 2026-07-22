@@ -2,6 +2,7 @@ import {
   component$,
   useComputed$,
   useSignal,
+  useTask$,
   useVisibleTask$,
   type QRL,
   type Signal,
@@ -141,6 +142,29 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
         return `Thinking.. ${tail}`;
       }
       return "Thinking..";
+    });
+
+    // Silent stretches are real (a reasoning model can think 30-50s before
+    // its summary lands) - the pearl counts them up so stillness reads as
+    // work, not a hang. Resets whenever anything new arrives.
+    const lastChangeAt = useSignal(0);
+    const nowTick = useSignal(0);
+    useTask$(({ track }) => {
+      track(() => status.value);
+      track(() => log.length);
+      lastChangeAt.value = Date.now();
+    });
+    // eslint-disable-next-line qwik/no-use-visible-task
+    useVisibleTask$(({ track, cleanup }) => {
+      const active = track(() => working);
+      if (!active) return;
+      const t = setInterval(() => (nowTick.value = Date.now()), 1000);
+      cleanup(() => clearInterval(t));
+    });
+    const stillSecs = useComputed$(() => {
+      if (!working || !lastChangeAt.value) return 0;
+      const s = Math.floor((nowTick.value - lastChangeAt.value) / 1000);
+      return s >= 6 ? s : 0;
     });
 
     const stats = useComputed$(() => {
@@ -338,6 +362,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                     />
                     <span class="min-w-0 truncate whitespace-nowrap font-mono text-xs font-semibold animate-pulse-text status-text-gradient">
                       {status.value}
+                      {stillSecs.value > 0 ? ` ${stillSecs.value}s` : ""}
                     </span>
                     <button
                       onClick$={() => {
