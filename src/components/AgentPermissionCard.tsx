@@ -60,6 +60,11 @@ export const AgentPermissionCard = component$<AgentPermissionCardProps>(
     const always = useSignal(false);
     const showFullDiff = useSignal(false);
     const rootRef = useSignal<HTMLDivElement>();
+    // Optimistic answer: the card collapses to its receipt the INSTANT the
+    // button is pressed - the async respond path (chunk load + event round
+    // trip) must never be what the user's click waits on. The authoritative
+    // receipt from the hook replaces the provisional wording moments later.
+    const localAnswer = useSignal<"allow" | "reject" | null>(null);
 
     // Jump-pill feed: watch our own visibility while pending.
     // eslint-disable-next-line qwik/no-use-visible-task
@@ -97,7 +102,13 @@ export const AgentPermissionCard = component$<AgentPermissionCardProps>(
                 : LuWrench;
 
     const expired = permission.state === "expired";
-    const allowed = permission.receipt?.startsWith("Allowed");
+    const allowed =
+      permission.receipt?.startsWith("Allowed") ??
+      (localAnswer.value === "allow" || undefined);
+    const settled = permission.state !== "pending" || localAnswer.value !== null;
+    const provisionalReceipt = `${localAnswer.value === "allow" ? "Allowed" : "Declined"}: ${
+      permission.command || permission.title
+    }`;
     const diffLines = permission.diff?.lines ?? [];
     const diffTruncated =
       !showFullDiff.value && diffLines.length > DIFF_PREVIEW_LINES;
@@ -108,7 +119,7 @@ export const AgentPermissionCard = component$<AgentPermissionCardProps>(
     // Single return, ternary on state (Qwik early-return + changing state =
     // branch may never visually switch). Answered/expired = the one-line
     // receipt in place, so the transcript stays an audit log of every grant.
-    return permission.state !== "pending" ? (
+    return settled ? (
       <div class="max-w-4xl mx-auto w-full">
         <div class="flex items-center gap-2 px-4 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] text-sm text-[var(--text-muted)]">
           {expired ? (
@@ -121,7 +132,7 @@ export const AgentPermissionCard = component$<AgentPermissionCardProps>(
           <span class="truncate">
             {expired
               ? `This request expired - the agent stopped. (${permission.command || permission.title})`
-              : permission.receipt}
+              : permission.receipt || provisionalReceipt}
           </span>
         </div>
       </div>
@@ -197,13 +208,21 @@ export const AgentPermissionCard = component$<AgentPermissionCardProps>(
             <LiquidMetalButton
               variant="secondary"
               class="px-4 py-2 text-sm"
-              onClick$={() => onRespond$?.("reject", always.value)}
+              onClick$={() => {
+                if (localAnswer.value) return;
+                localAnswer.value = "reject";
+                onRespond$?.("reject", always.value);
+              }}
             >
               Don't allow
             </LiquidMetalButton>
             <LiquidMetalButton
               class="px-4 py-2 text-sm"
-              onClick$={() => onRespond$?.("allow", always.value)}
+              onClick$={() => {
+                if (localAnswer.value) return;
+                localAnswer.value = "allow";
+                onRespond$?.("allow", always.value);
+              }}
             >
               Allow
             </LiquidMetalButton>
