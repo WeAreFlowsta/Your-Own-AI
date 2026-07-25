@@ -101,10 +101,14 @@ export interface UseAgentSessionProps {
   selectedAi: Signal<SelectedAiModel>;
 }
 
-/** Dev-phase binary resolution: a saved override, else the dev build path.
- *  Replaced by install-gated download resolution when install gating lands. */
-const DEV_BINARY_FALLBACK =
-  "/home/solar/Documents/Flowsta/Projects/FlowstaAuth/your-own-ai-build/target/release/your-own-ai-build";
+/** Where the agent lives: the recorded install path (written when the
+ *  download completes, self-healed from the installer's record), with a
+ *  repo-local fallback in DEV BUILDS ONLY so development never needs the
+ *  download flow. Production has no fallback - no path recorded means not
+ *  installed, and the install surfaces take over. */
+const DEV_BINARY_FALLBACK = import.meta.env.DEV
+  ? "/home/solar/Documents/Flowsta/Projects/FlowstaAuth/your-own-ai-build/target/release/your-own-ai-build"
+  : "";
 
 export function resolveBinaryPath(): string {
   try {
