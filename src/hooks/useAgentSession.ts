@@ -29,6 +29,12 @@ import type {
   SelectedAiModel,
 } from "../types";
 import { computeLineDiff } from "../utils/lineDiff";
+import {
+  getWorkspaceMemory,
+  memoryPromptBlock,
+  reviseWorkspaceMemory,
+  saveWorkspaceMemory,
+} from "../utils/workspaceMemory";
 import type { UseChatState } from "./useChat";
 
 export interface AgentSessionState {
@@ -293,6 +299,39 @@ export function useAgentSession(props: UseAgentSessionProps) {
   // screen (a resume, or a folder reopen mid-conversation): the next
   // prompt carries the restored-context digest.
   const digestPending = useSignal(false);
+  // Workspace memory: loaded from the chain at agent-ready, injected ahead
+  // of the session's FIRST prompt, revised at session end when real work
+  // happened.
+  const workspaceMemory = useSignal("");
+  const memoryPending = useSignal(false);
+  const sessionTurns = useSignal(0);
+  // Rolling digest refreshed at every turn end - session-end paths (New,
+  // close, folder switch) fire AFTER the chat may already be reset, so the
+  // reviser can never rebuild it from live messages.
+  const sessionDigest = useSignal("");
+
+  /** Session end housekeeping: when the session did real work, ask a cheap
+   *  routed model for the updated workspace memory and write the revision
+   *  to the chain (fire-and-forget - never blocks the UI). */
+  const reviseMemory$ = $(async (folderPath: string) => {
+    if (sessionTurns.value === 0) return;
+    sessionTurns.value = 0;
+    const ai = props.selectedAi.value;
+    if (!ai.aiConfig?.agentPubKey) return;
+    const digest = sessionDigest.value;
+    if (!digest) return;
+    const revised = await reviseWorkspaceMemory(ai.id, workspaceMemory.value, digest);
+    if (!revised || revised === workspaceMemory.value.trim()) return;
+    const ok = await saveWorkspaceMemory(
+      { agentPubKey: ai.aiConfig.agentPubKey, label: ai.label },
+      folderPath,
+      revised,
+    );
+    if (ok) {
+      workspaceMemory.value = revised;
+      console.log("[WorkspaceMemory] Revision written for", folderPath);
+    }
+  });
   // The message id of the current turn's reply bubble.
   const turnId = useSignal<string | null>(null);
 
@@ -507,6 +546,13 @@ export function useAgentSession(props: UseAgentSessionProps) {
       const digest = buildResumeDigest(props.chatState.messages.slice(0, -2));
       if (digest) wire = digest + text;
     }
+    if (memoryPending.value) {
+      memoryPending.value = false;
+      // Workspace memory leads (durable folder truths), then any restored
+      // conversation context, then the question.
+      const block = memoryPromptBlock(workspaceMemory.value);
+      if (block) wire = block + wire;
+    }
     try {
       await invokeTauri("send_agent_prompt", { text: wire });
     } catch (err) {
@@ -567,6 +613,12 @@ export function useAgentSession(props: UseAgentSessionProps) {
   });
 
   const openFolder$ = $(async (path: string) => {
+    // Replacing a live session? The outgoing folder's memory revision
+    // happens first (fire-and-forget on ITS folder path).
+    const outgoing = state.folderPath;
+    if (outgoing && sessionTurns.value > 0) {
+      reviseMemory$(outgoing).catch(() => {});
+    }
     state.folderPath = path;
     state.status = "starting";
     state.statusNote = "Starting the agent...";
@@ -594,6 +646,10 @@ export function useAgentSession(props: UseAgentSessionProps) {
   });
 
   const closeFolder$ = $(async () => {
+    const closing = state.folderPath;
+    if (closing && sessionTurns.value > 0) {
+      reviseMemory$(closing).catch(() => {});
+    }
     state.folderPath = null;
     state.status = "idle";
     state.statusNote = "";
@@ -773,6 +829,22 @@ export function useAgentSession(props: UseAgentSessionProps) {
       digestPending.value = props.chatState.messages.some(
         (m) => m.role === "assistant" && !!m.content,
       );
+      sessionTurns.value = 0;
+      sessionDigest.value = "";
+      // Load this folder's workspace memory; the first prompt carries it.
+      // Fire-and-forget - a slow chain read must not delay readiness, and
+      // a prompt sent before it lands simply goes without (next session
+      // catches up).
+      memoryPending.value = false;
+      const folder = state.folderPath;
+      if (folder) {
+        getWorkspaceMemory(folder)
+          .then((m) => {
+            workspaceMemory.value = m.content;
+            memoryPending.value = !!m.content;
+          })
+          .catch(() => {});
+      }
       const q = queued.value;
       if (q) {
         queued.value = null;
@@ -1123,6 +1195,10 @@ export function useAgentSession(props: UseAgentSessionProps) {
       state.liveStatus = "";
       state.retryStatus = "";
       if (state.status === "working") state.status = "ready";
+      if (!errorText) {
+        sessionTurns.value++;
+        sessionDigest.value = buildResumeDigest(props.chatState.messages);
+      }
       // A turn killed by an overloaded upstream model earns the explicit
       // switch offer - only for Auto AIs (routing owns the pick there; a
       // pinned AI's model is the user's own setting, not ours to swap).

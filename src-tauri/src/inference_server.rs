@@ -378,6 +378,16 @@ async fn chat_completions(
             .as_deref(),
         Some("off" | "false" | "0" | "no")
     );
+    // `X-Your-Own-AI-Record: off` skips transcript recording for this
+    // exchange - for internal calls whose output is stored elsewhere (the
+    // workspace-memory updater writes its own revision entry; recording the
+    // exchange too would double-store it as a provider conversation).
+    let record_exchange = !matches!(
+        header_str(&headers, "x-your-own-ai-record")
+            .map(|s| s.to_ascii_lowercase())
+            .as_deref(),
+        Some("off" | "false" | "0" | "no")
+    );
 
     let messages = if agent_mode {
         // Caller owns the system prompt (no persona). Memory is injected as a
@@ -422,7 +432,7 @@ async fn chat_completions(
     // conversation key; tagged with the calling app).
     let rec = RecordCtx {
         app: app.clone(),
-        agent_key: ai.agent_pub_key.clone(),
+        agent_key: if record_exchange { ai.agent_pub_key.clone() } else { String::new() },
         ai_id: ai.id.clone(),
         ai_name: ai.name.clone(),
         model: ai.model.clone(),

@@ -28,6 +28,7 @@ import {
 import { ThemeContext, type AppTheme } from "../routes/layout";
 
 import LiquidMetalButton from "./LiquidMetalButton";
+import { WorkspaceMemoryModal } from "./WorkspaceMemoryModal";
 import logoLight from "../assets/logo-light.svg";
 import logo from "../assets/logo.svg";
 import logoSymbolLight from "../assets/logo-symbol-light.svg";
@@ -113,6 +114,9 @@ export default component$<AppHeaderProps>(
     const menuOpen = useSignal(false);
     // The workspace slot's recents menu.
     const folderMenuOpen = useSignal(false);
+    const workspaceMenuOpen = useSignal(false);
+    // Non-null = the workspace-memory modal is open for this folder.
+    const memoryFolder = useSignal<string | null>(null);
 
     const setTheme = $((t: AppTheme) => {
       theme.value = t;
@@ -153,7 +157,8 @@ export default component$<AppHeaderProps>(
                 never see this. */}
             {buildInstalled && folderPath && (
               <span
-                class="text-xs text-[var(--text-secondary)] flex items-center gap-2 px-3 h-9 bg-[var(--bg-dropdown)] rounded-full border border-[var(--border-subtle)]"
+                class="relative text-xs text-[var(--text-secondary)] flex items-center gap-2 px-3 h-9 bg-[var(--bg-dropdown)] rounded-full border border-[var(--border-subtle)] cursor-pointer"
+                onClick$={() => (workspaceMenuOpen.value = !workspaceMenuOpen.value)}
                 title={
                   folderStatus === 'starting'
                     ? `Getting this folder ready - your AI is connecting to ${folderPath}. Ready in a few seconds.`
@@ -189,12 +194,57 @@ export default component$<AppHeaderProps>(
                 {onCloseFolder$ && (
                   <button
                     type="button"
-                    onClick$={onCloseFolder$}
+                    onClick$={(e) => {
+                      e.stopPropagation();
+                      onCloseFolder$();
+                    }}
                     title="Close this workspace"
                     class="ml-0.5 shrink-0 text-[var(--text-muted)] hover:text-[var(--text-primary)] leading-none"
                   >
                     &times;
                   </button>
+                )}
+                {workspaceMenuOpen.value && (
+                  <>
+                    <span
+                      class="fixed inset-0 z-[45] cursor-default"
+                      onClick$={(e) => {
+                        e.stopPropagation();
+                        workspaceMenuOpen.value = false;
+                      }}
+                    />
+                    <span class="absolute right-0 top-full mt-2 w-72 rounded-2xl bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] py-1 shadow-lg z-50 overflow-hidden block cursor-default text-left">
+                      <span class="block px-3 py-2 text-xs text-[var(--text-muted)] break-all border-b border-[var(--border-subtle)]">
+                        {folderPath}
+                      </span>
+                      <button
+                        type="button"
+                        onClick$={(e) => {
+                          e.stopPropagation();
+                          workspaceMenuOpen.value = false;
+                          memoryFolder.value = folderPath;
+                        }}
+                        class="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)]"
+                      >
+                        <LuBrain class="h-4 w-4 shrink-0 opacity-70" />
+                        Workspace memory
+                      </button>
+                      {onCloseFolder$ && (
+                        <button
+                          type="button"
+                          onClick$={(e) => {
+                            e.stopPropagation();
+                            workspaceMenuOpen.value = false;
+                            onCloseFolder$();
+                          }}
+                          class="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)]"
+                        >
+                          <span class="w-4 text-center leading-none">&times;</span>
+                          Close folder
+                        </button>
+                      )}
+                    </span>
+                  </>
                 )}
               </span>
             )}
@@ -453,6 +503,7 @@ export default component$<AppHeaderProps>(
           </div>
         </div>
 
+        <WorkspaceMemoryModal folderPath={memoryFolder} />
       </section>
     );
   }

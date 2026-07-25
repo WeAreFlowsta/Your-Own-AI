@@ -8,10 +8,17 @@
 import {
   component$,
   useSignal,
+  useTask$,
   useVisibleTask$,
   $,
   type Signal,
 } from "@builder.io/qwik";
+import { LuFolderOpen } from "@qwikest/icons/lucide";
+import { WorkspaceMemoryModal } from "../../components/WorkspaceMemoryModal";
+import {
+  listWorkspaceMemories,
+  type WorkspaceMemory,
+} from "../../utils/workspaceMemory";
 import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
 import { LuArrowLeft, LuMessageSquare, LuChevronDown, LuChevronUp, LuInfo, LuDownload, LuPencil, LuShieldCheck, LuBrain, LuUser } from "@qwikest/icons/lucide";
 import AppHeader from "../../components/AppHeader";
@@ -224,8 +231,24 @@ export default component$(() => {
     }
   });
 
-  // Tabs: Conversations (the per-AI ledger, default) | Knows (read-only mirror).
-  const activeTab = useSignal<"knows" | "conversations">("conversations");
+  // Tabs: Conversations (the per-AI ledger, default) | Knows (read-only
+  // mirror) | Workspaces (per-folder memory, shared by all AIs).
+  const activeTab = useSignal<"knows" | "conversations" | "workspaces">("conversations");
+  const workspaceMemories = useSignal<WorkspaceMemory[]>([]);
+  const workspacesLoading = useSignal(false);
+  const memoryFolder = useSignal<string | null>(null);
+
+  useTask$(async ({ track }) => {
+    const tab = track(() => activeTab.value);
+    const reopened = track(() => memoryFolder.value);
+    if (tab !== "workspaces" || reopened) return;
+    workspacesLoading.value = true;
+    try {
+      workspaceMemories.value = await listWorkspaceMemories();
+    } finally {
+      workspacesLoading.value = false;
+    }
+  });
 
   return (
     <div class="flex flex-col h-screen bg-[var(--bg-main)]">
@@ -291,6 +314,17 @@ export default component$(() => {
               Conversations
             </button>
             <button
+              onClick$={() => (activeTab.value = "workspaces")}
+              class={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                activeTab.value === "workspaces"
+                  ? "border-[var(--bg-button-primary)] text-[var(--text-primary)]"
+                  : "border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              }`}
+            >
+              <LuFolderOpen class="w-4 h-4" />
+              Workspaces
+            </button>
+            <button
               onClick$={() => (activeTab.value = "knows")}
               class={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
                 activeTab.value === "knows"
@@ -317,6 +351,47 @@ export default component$(() => {
           )}
 
           {/* Knows tab — the shared profile, read-only here; managed on Your Memory */}
+          {/* Workspaces tab - per-folder memory shared by every AI. */}
+          {activeTab.value === "workspaces" && (
+            <div>
+              <p class="text-sm text-[var(--text-secondary)] mb-4">
+                What your AIs remember about each folder they have worked in -
+                commands, conventions, decisions. Kept on your chain, shared
+                by all your AIs, yours to edit.
+              </p>
+              {workspacesLoading.value && (
+                <p class="text-sm text-[var(--text-muted)]">Loading from your records..</p>
+              )}
+              {!workspacesLoading.value && workspaceMemories.value.length === 0 && (
+                <p class="text-sm text-[var(--text-muted)]">
+                  Nothing yet - workspace memory grows as your AIs work in
+                  folders.
+                </p>
+              )}
+              {workspaceMemories.value.map((w) => (
+                <button
+                  key={w.folderPath}
+                  onClick$={() => (memoryFolder.value = w.folderPath)}
+                  class="flex w-full items-center gap-3 px-4 py-3 mb-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] hover:bg-[var(--bg-dropdown-hover)] text-left"
+                >
+                  <LuFolderOpen class="h-4 w-4 shrink-0 opacity-60" />
+                  <span class="min-w-0 flex-1">
+                    <span class="block text-sm text-[var(--text-primary)] truncate">
+                      {w.folderPath.split("/").filter(Boolean).pop()}
+                    </span>
+                    <span class="block text-xs text-[var(--text-muted)] truncate">
+                      {w.folderPath}
+                    </span>
+                  </span>
+                  <span class="shrink-0 text-xs text-[var(--text-muted)]">
+                    {w.revisions} revision{w.revisions === 1 ? "" : "s"}
+                  </span>
+                </button>
+              ))}
+              <WorkspaceMemoryModal folderPath={memoryFolder} />
+            </div>
+          )}
+
           {activeTab.value === "knows" && (
             <div class="space-y-8">
               <div>
