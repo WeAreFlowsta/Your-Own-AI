@@ -154,6 +154,19 @@ function aiModelSlug(ai: SelectedAiModel): string {
     .replace(/^-+|-+$/g, "");
 }
 
+/** MCP tool names arrive as "<server>__<tool>" - never show that raw.
+ *  Known tools get proper labels; unknown ones become readable words. */
+function humanizeMcpName(name: string): string {
+  const known: Record<string, string> = {
+    "project-memory__remember_for_project": "Remember something for this project",
+    "project-memory__read_project_memory": "Read the project's memory",
+  };
+  if (known[name]) return known[name];
+  const tool = name.includes("__") ? name.split("__").pop()! : name;
+  const words = tool.replace(/[_-]+/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 /** Short human handle for a permission receipt: the command if there is
  *  one, else the tool title. Receipts may shorten; the CARD never does. */
 function receiptSubject(p: AgentPermission): string {
@@ -250,8 +263,10 @@ function humanizeAction(update: any): { label: string; kind?: string; detail?: s
       };
     case "fetch":
       return { kind, label: input.url ? `Fetching ${input.url}` : "Fetching from the web", detail: input.url };
-    default:
-      return { kind, label: meta.label || update.title || "Working..." };
+    default: {
+      const raw = meta.label || update.title || "Working...";
+      return { kind, label: raw.includes("__") ? humanizeMcpName(raw) : raw };
+    }
   }
 }
 
@@ -1182,7 +1197,11 @@ export function useAgentSession(props: UseAgentSessionProps) {
       const permission: AgentPermission = {
         requestId: e.payload?.id,
         toolCallId: typeof tc.toolCallId === "string" ? tc.toolCallId : undefined,
-        title: tc.title || "The agent asks for permission",
+        title: tc.title
+          ? tc.title.includes("__")
+            ? humanizeMcpName(tc.title)
+            : tc.title
+          : "The agent asks for permission",
         kind: tc.kind,
         command:
           typeof tc.rawInput?.command === "string" ? tc.rawInput.command : undefined,

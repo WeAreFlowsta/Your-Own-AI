@@ -27,6 +27,10 @@ interface AgentWorkingBoxProps {
   log: AgentLogItem[];
   /** True while the turn is streaming - the rail is open with a live pearl. */
   working: boolean;
+  /** Only the LAST bubble carries the pearl - one point of life. A queued
+   *  follow-up mounts loading while the previous turn still streams; two
+   *  pearls (and two brain toggles) is one too many. */
+  tipHere?: boolean;
   /** Collapsed-stub expansion, owned by ChatMessage so the action bar's
    *  Steps button and the stub itself toggle the same state. */
   railOpen: Signal<boolean>;
@@ -78,7 +82,7 @@ function formatDuration(ms?: number): string | null {
 }
 
 export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
-  ({ log, working, railOpen, durationMs, retryStatus, onPermissionRespond$, onPermissionOffscreen$ }) => {
+  ({ log, working, tipHere = true, railOpen, durationMs, retryStatus, onPermissionRespond$, onPermissionOffscreen$ }) => {
     const showThoughts = useSignal(true);
     const openOutputs = useSignal<Record<string, boolean>>({});
 
@@ -387,7 +391,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
             live inside the last group only - a turn whose tail was a
             permission receipt had NO live indicator at all, which made every
             Allow before a long reasoning stretch look dead. */}
-        {working && (
+        {working && tipHere && (
           <div class="relative pl-7 my-1.5">
             <div
               class="absolute left-[8px] top-0 bottom-1 w-[2px] rounded-full opacity-50"

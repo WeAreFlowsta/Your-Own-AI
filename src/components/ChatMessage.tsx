@@ -1245,6 +1245,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
                   <AgentWorkingBox
                     log={props.message.agentLog}
                     working={!!props.message.isLoading}
+                    tipHere={props.isLast !== false}
                     railOpen={agentRailOpen}
                     retryStatus={props.isLast ? props.agentRetryStatus : undefined}
                     durationMs={props.message.agentStats?.durationMs}
