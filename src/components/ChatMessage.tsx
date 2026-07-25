@@ -295,6 +295,54 @@ const ActionBar = component$<ActionBarProps>((props) => {
     }
   });
 
+  // Folder sessions have TWO honest destinations for a remembered reply:
+  // the folder's shared memory (likelier mid-work) or this AI's own memory.
+  // The little menu makes the choice explicit - never a silent default.
+  const rememberMenuOpen = useSignal(false);
+  const rememberFolder = useSignal<string | null>(null);
+
+  const rememberClick = $(async () => {
+    if (rememberState.value === 'saving') return;
+    // Saved-toggle (per-AI) keeps its forget-on-click behavior.
+    if (rememberState.value === 'saved' && rememberHandle.value) {
+      await rememberReply();
+      return;
+    }
+    if (props.message.agentTurn) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const status = await invoke<{ folder: string | null }>('build_agent_status');
+        if (status.folder) {
+          rememberFolder.value = status.folder;
+          rememberMenuOpen.value = true;
+          return;
+        }
+      } catch {
+        /* no bridge - plain per-AI save */
+      }
+    }
+    await rememberReply();
+  });
+
+  const rememberToFolder = $(async () => {
+    const folder = rememberFolder.value;
+    rememberMenuOpen.value = false;
+    if (!folder) return;
+    rememberState.value = 'saving';
+    try {
+      const { appendWorkspaceNote } = await import('../utils/workspaceMemory');
+      const ok = await appendWorkspaceNote(folder, props.message.content);
+      rememberState.value = ok ? 'saved-folder' : 'error';
+    } catch {
+      rememberState.value = 'error';
+    }
+    setTimeout(() => {
+      if (rememberState.value === 'saved-folder' || rememberState.value === 'error') {
+        rememberState.value = '';
+      }
+    }, 2500);
+  });
+
   const hasTokens = props.message.tokens && (props.message.tokens.total_tokens || 0) > 0;
   const hasThoughts = !!props.message.thinking && props.message.thinking.trim().length >= MIN_THINKING_DISPLAY_CHARS;
   const hasSources = props.message.sources && props.message.sources.length > 0;
@@ -403,29 +451,62 @@ const ActionBar = component$<ActionBarProps>((props) => {
               </LiquidMetalButton>
             )}
             {props.message.role === 'assistant' && !!props.message.content && (
-              <LiquidMetalButton
-                onClick$={rememberReply}
-                class="px-3 py-1 text-xs flex items-center"
-                title={
-                  rememberState.value === 'error'
-                    ? 'Could not save - the memory model may still be downloading (Settings - Components)'
-                    : rememberState.value === 'saved'
-                      ? 'Remembered - click to forget it again'
-                      : 'Remember this reply - your AI will draw on it in future conversations'
-                }
-                disabled={rememberState.value === 'saving'}
-              >
-                <BsBookmarkIcon />
-                <span class="hidden md:inline">
-                  {rememberState.value === 'saved'
-                    ? 'Remembered'
-                    : rememberState.value === 'saving'
-                      ? 'Saving...'
-                      : rememberState.value === 'error'
-                        ? 'Try again'
-                        : 'Remember'}
-                </span>
-              </LiquidMetalButton>
+              <span class="relative inline-flex">
+                <LiquidMetalButton
+                  onClick$={rememberClick}
+                  class="px-3 py-1 text-xs flex items-center"
+                  title={
+                    rememberState.value === 'error'
+                      ? 'Could not save - the memory model may still be downloading (Settings - Components)'
+                      : rememberState.value === 'saved'
+                        ? 'Remembered - click to forget it again'
+                        : rememberState.value === 'saved-folder'
+                          ? 'Saved to this folder’s memory'
+                          : 'Remember this reply - your AI will draw on it in future conversations'
+                  }
+                  disabled={rememberState.value === 'saving'}
+                >
+                  <BsBookmarkIcon />
+                  <span class="hidden md:inline">
+                    {rememberState.value === 'saved'
+                      ? 'Remembered'
+                      : rememberState.value === 'saved-folder'
+                        ? 'Saved to folder'
+                        : rememberState.value === 'saving'
+                          ? 'Saving...'
+                          : rememberState.value === 'error'
+                            ? 'Try again'
+                            : 'Remember'}
+                  </span>
+                </LiquidMetalButton>
+                {rememberMenuOpen.value && (
+                  <>
+                    <span
+                      class="fixed inset-0 z-[45]"
+                      onClick$={() => (rememberMenuOpen.value = false)}
+                    />
+                    <span class="absolute left-0 bottom-full mb-2 w-56 rounded-2xl bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] py-1 shadow-lg z-50 overflow-hidden block">
+                      <button
+                        type="button"
+                        onClick$={rememberToFolder}
+                        class="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)] text-left"
+                      >
+                        Remember for this folder
+                      </button>
+                      <button
+                        type="button"
+                        onClick$={() => {
+                          rememberMenuOpen.value = false;
+                          rememberReply();
+                        }}
+                        class="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)] text-left"
+                      >
+                        Remember for {props.message.aiLabel || 'this AI'}
+                      </button>
+                    </span>
+                  </>
+                )}
+              </span>
             )}
             {hasModelInfo && (
               <LiquidMetalButton

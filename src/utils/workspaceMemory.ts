@@ -145,6 +145,37 @@ export async function saveWorkspaceMemory(
   return true;
 }
 
+/** A user-saved note from the Remember button: appended as its own row,
+ *  marked as the user's, trimmed oldest-first when the cap would drop it
+ *  (the next automatic revision curates it into shape). */
+export async function appendWorkspaceNote(folderPath: string, note: string): Promise<boolean> {
+  const capped = note
+    .split("\n")
+    .slice(0, 12)
+    .join("\n")
+    .slice(0, 1000)
+    .trim();
+  if (!capped) return false;
+  const current = await getWorkspaceMemory(folderPath);
+  const row = `- [saved by you] ${capped.replace(/\n/g, " / ")}`;
+  let lines = (current.content ? current.content.split("\n") : []).filter(
+    (l) => l.trim() !== "",
+  );
+  lines.push(row);
+  if (lines.length > MEMORY_MAX_LINES) lines = lines.slice(lines.length - MEMORY_MAX_LINES);
+  const ais = await getLocalCustomAis();
+  const writer = ais.find((a) => a.agentPubKey);
+  if (!writer) {
+    console.error("[WorkspaceMemory] No provisioned AI to write the note");
+    return false;
+  }
+  return saveWorkspaceMemory(
+    { agentPubKey: writer.agentPubKey!, label: writer.name },
+    folderPath,
+    lines.join("\n"),
+  );
+}
+
 /** Enforce the line cap + tidy blank runs. */
 export function clampMemory(content: string): string {
   const lines = content
