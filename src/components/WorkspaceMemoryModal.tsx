@@ -84,7 +84,7 @@ export const WorkspaceMemoryModal = component$<{
   const folderLeaf = folderPath.value.split("/").filter(Boolean).pop();
 
   return (
-    <div class="fixed inset-0 z-50">
+    <div class="fixed inset-0 z-[70]">
       <div class="absolute inset-0 bg-black/40" onClick$={() => (folderPath.value = null)} />
       <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[560px] max-w-[92vw] max-h-[80vh] flex flex-col rounded-xl border border-[var(--border-primary)] bg-[var(--bg-card)] shadow-2xl">
         <div class="flex items-center justify-between px-5 py-3 border-b border-[var(--border-subtle)]">

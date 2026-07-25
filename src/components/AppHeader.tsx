@@ -136,6 +136,7 @@ export default component$<AppHeaderProps>(
     });
 
     return (
+      <>
       <section
         class="relative z-30 bg-[var(--bg-header-footer)]"
       >
@@ -503,8 +504,11 @@ export default component$<AppHeaderProps>(
           </div>
         </div>
 
-        <WorkspaceMemoryModal folderPath={memoryFolder} />
       </section>
+      {/* Outside the header's stacking context (relative z-30) - inside it,
+          the modal could never rise above page dropdowns. */}
+      <WorkspaceMemoryModal folderPath={memoryFolder} />
+      </>
     );
   }
 );
