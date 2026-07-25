@@ -69,6 +69,7 @@ fn ensure_agent_model_entry(
     slug: &str,
     agent_ctx: u64,
     plan_ctx: u64,
+    device_workers: bool,
 ) -> Result<(), String> {
     let config_path = home.join(".your-own-ai-build").join("config.toml");
     let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
@@ -113,8 +114,31 @@ fn ensure_agent_model_entry(
     } else {
         format!("{}\n{}", content, plan_entry)
     };
+    // Explore subagents (read-only fan-out searching) are high-volume,
+    // low-reasoning work - when a capable local model fits, they run on the
+    // device: free, private, and the leader stays in charge. The
+    // "device-worker" entry forces the offline pick via ":agent-device".
+    let dw_header = "[model.device-worker]";
+    let dw_ctx = crate::llm::current_ctx_size();
+    let dw_entry = format!(
+        "{dw_header}\nmodel = \"{slug}:agent-device\"\nbase_url = \"http://localhost:11435/v1\"\nname = \"device-worker\"\napi_key = \"local\"\napi_backend = \"chat_completions\"\ncontext_window = {dw_ctx}\n",
+    );
+    let content = if let Some(start) = content.find(dw_header) {
+        let after = &content[start + dw_header.len()..];
+        let end = after
+            .find("\n[")
+            .map(|i| start + dw_header.len() + i + 1)
+            .unwrap_or(content.len());
+        format!("{}{}{}", &content[..start], dw_entry, &content[end..])
+    } else {
+        format!("{}\n{}", content, dw_entry)
+    };
     let sub_header = "[subagents.models]";
-    let sub_entry = format!("{sub_header}\n\"general-purpose\" = \"planning\"\n");
+    let sub_entry = if device_workers {
+        format!("{sub_header}\n\"general-purpose\" = \"planning\"\n\"explore\" = \"device-worker\"\n")
+    } else {
+        format!("{sub_header}\n\"general-purpose\" = \"planning\"\n")
+    };
     let content = if let Some(start) = content.find(sub_header) {
         let after = &content[start + sub_header.len()..];
         let end = after
@@ -204,13 +228,15 @@ pub async fn start_build_agent(
                 (l, l)
             }
         };
+        let device_workers = crate::router::device_subagents_enabled(&app_handle).await;
         log::info!(
-            "[agent] model entries for {}: agent ctx {} / planning ctx {}",
+            "[agent] model entries for {}: agent ctx {} / planning ctx {} / device workers {}",
             slug,
             agent_ctx,
-            plan_ctx
+            plan_ctx,
+            device_workers
         );
-        ensure_agent_model_entry(&home, slug, agent_ctx, plan_ctx)?;
+        ensure_agent_model_entry(&home, slug, agent_ctx, plan_ctx, device_workers)?;
     }
 
     let (mut rx, child) = app_handle

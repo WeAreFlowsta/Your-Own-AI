@@ -125,7 +125,8 @@ fn load_ais(app: &AppHandle) -> Vec<Value> {
 /// (agent mode lands in a later phase; treated as persona for now).
 fn resolve_ai(app: &AppHandle, model: &str) -> Option<ResolvedAi> {
     let base = model
-        .strip_suffix(":agent")
+        .strip_suffix(":agent-device")
+        .or_else(|| model.strip_suffix(":agent"))
         .or_else(|| model.strip_suffix(":plan"))
         .unwrap_or(model)
         .trim();
@@ -307,10 +308,16 @@ async fn chat_completions(
         // Agent sessions route deterministically to a tool-capable model
         // (the flag is computed again below for prompt handling - cheap).
         let plan_routing = model.trim().ends_with(":plan");
+        // ":agent-device" = the subagent-offload variant: simple side-work
+        // (explore fan-outs) forced onto a capable DEVICE model - free and
+        // private - while the leader stays wherever it routes.
+        let device_only = model.trim().ends_with(":agent-device");
         let agent_routing = plan_routing
+            || device_only
             || model.trim().ends_with(":agent")
             || header_str(&headers, "x-your-own-ai-mode").as_deref() == Some("agent");
-        match crate::router::route(&app, mode, &query, eagerness, task, difficulty, lean, &picks, None, agent_routing, plan_routing).await {
+        let route_mode = if device_only { "offline" } else { mode };
+        match crate::router::route(&app, route_mode, &query, eagerness, task, difficulty, lean, &picks, None, agent_routing, plan_routing).await {
             Ok(r) => {
                 log::info!("[inference] router ({}): {mode} task={task} diff={difficulty} eag={eagerness} -> {} ({})", ai.name, r.model, r.reason);
                 ai.model = r.model;
@@ -367,6 +374,7 @@ async fn chat_completions(
     // we drive the system prompt.
     let agent_mode = model.trim().ends_with(":agent")
         || model.trim().ends_with(":plan")
+        || model.trim().ends_with(":agent-device")
         || header_str(&headers, "x-your-own-ai-mode").as_deref() == Some("agent");
 
     // Agent mode injects memory by DEFAULT; a caller can opt out — e.g. to keep

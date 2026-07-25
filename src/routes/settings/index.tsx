@@ -271,6 +271,9 @@ export default component$(() => {
   // Per-slot online model overrides ("" = the router's recommended default).
   const onlineAgent = useSignal("");
   const onlinePlanning = useSignal("");
+  // Project cost levers (router reads the store mirror at session start).
+  const projectDeviceSubagents = useSignal(true);
+  const projectThrifty = useSignal(false);
   const routingExplainerOpen = useSignal(false);
   const routingDecisions = useSignal<{ at_ms: number; model: string; reason: string }[]>([]);
   const onlineFresh = useSignal("");
@@ -328,6 +331,9 @@ export default component$(() => {
     }
     onlineFresh.value = localStorage.getItem("routingOnlineFresh") || "";
     onlineAgent.value = localStorage.getItem("routingOnlineAgent") || "";
+    projectDeviceSubagents.value =
+      localStorage.getItem("routingProjectDeviceSubagents") !== "0";
+    projectThrifty.value = localStorage.getItem("routingProjectThrifty") === "1";
     onlinePlanning.value = localStorage.getItem("routingOnlinePlanning") || "";
     import("@tauri-apps/api/core")
       .then(({ invoke }) =>
@@ -692,6 +698,9 @@ export default component$(() => {
                       <p>Questions that need current information go to a live-web model, at the eagerness you set below.</p>
                       <p>Genuinely hard questions can be passed to a stronger online model (Auto - Online and Offline only).</p>
                       <p>Project work only ever uses models that can drive tools, and never switches models mid-session.</p>
+                      <p>Project sessions default to the recommended tool-driver online - a capable model that costs a fraction of the flagship.</p>
+                      <p>Simple project side-work (searching and reading fan-outs) runs on your device when a capable model fits - free and private. You can turn this off below.</p>
+                      <p>The small jobs inside project work - summaries, tidying the conversation memory - always run on your device.</p>
                       <p>Picks are fit-aware: a model that runs well on your hardware beats a stronger one that struggles.</p>
                       <p class="text-[var(--text-muted)]">
                         Every answer's Model button shows what happened and why, and each
@@ -884,10 +893,66 @@ export default component$(() => {
                       label="Planning and helper agents"
                       hint="The online model for the subagents that explore and plan - reasoning-lean, still tool-capable"
                       recommended="GPT-5.6 Terra"
-                      storageKey="routingOnlinePlanning"
                       selected={onlinePlanning}
+                      storageKey="routingOnlinePlanning"
                       models={onlineAgentModels}
                     />
+                    {/* Cost levers - both mirrored to the Rust-readable
+                        store; the router reads them at session start. */}
+                    <label class="flex items-start gap-3 mt-4 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={projectDeviceSubagents.value}
+                        onChange$={async (_, el) => {
+                          projectDeviceSubagents.value = el.checked;
+                          localStorage.setItem("routingProjectDeviceSubagents", el.checked ? "1" : "0");
+                          try {
+                            const { Store } = await import("@tauri-apps/plugin-store");
+                            const store = await Store.load("settings.json");
+                            await store.set("routingProjectDeviceSubagents", el.checked ? "1" : "0");
+                            await store.save();
+                          } catch { /* store mirror is best-effort */ }
+                        }}
+                        class="rounded mt-0.5"
+                      />
+                      <span>
+                        <span class="block text-sm text-[var(--text-primary)]">
+                          Do simple project side-work on this device
+                        </span>
+                        <span class="block text-xs text-[var(--text-muted)]">
+                          Searching and reading fan-outs run on a capable device
+                          model when one fits - free and private. The main model
+                          stays in charge. Takes effect next project open.
+                        </span>
+                      </span>
+                    </label>
+                    <label class="flex items-start gap-3 mt-3 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={projectThrifty.value}
+                        onChange$={async (_, el) => {
+                          projectThrifty.value = el.checked;
+                          localStorage.setItem("routingProjectThrifty", el.checked ? "1" : "0");
+                          try {
+                            const { Store } = await import("@tauri-apps/plugin-store");
+                            const store = await Store.load("settings.json");
+                            await store.set("routingProjectThrifty", el.checked ? "1" : "0");
+                            await store.save();
+                          } catch { /* store mirror is best-effort */ }
+                        }}
+                        class="rounded mt-0.5"
+                      />
+                      <span>
+                        <span class="block text-sm text-[var(--text-primary)]">
+                          Keep whole project sessions on this device when possible
+                        </span>
+                        <span class="block text-xs text-[var(--text-muted)]">
+                          When a capable model fits your hardware, project
+                          sessions stay fully on-device - slower, but free and
+                          private. Otherwise they go online as usual.
+                        </span>
+                      </span>
+                    </label>
                   </>
                 )}
                 </>

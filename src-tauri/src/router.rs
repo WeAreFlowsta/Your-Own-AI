@@ -547,7 +547,9 @@ pub async fn agent_serving_context(
     // serves locally; otherwise the Agent/Planning slot chain decides.
     let offline_task = if plan { "reasoning" } else { "code" };
     let offline_ok = pick_offline(app, offline_task, "balanced", true).await.is_ok();
-    if eagerness == "privacy" && offline_ok {
+    if (eagerness == "privacy" || store_pref(app, "routingProjectThrifty").as_deref() == Some("1"))
+        && offline_ok
+    {
         return local;
     }
     if let Ok(models) = crate::flowsta::list_online_models().await {
@@ -568,6 +570,17 @@ pub async fn agent_serving_context(
         }
     }
     local
+}
+
+/// Should simple project side-work (explore subagents) run on the device?
+/// Defaults ON - but only takes effect when a capable local model actually
+/// fits. Free and private; the leader model stays in charge. Documented in
+/// the routing explainer ("what routing does automatically").
+pub async fn device_subagents_enabled(app: &AppHandle) -> bool {
+    if store_pref(app, "routingProjectDeviceSubagents").as_deref() == Some("0") {
+        return false;
+    }
+    pick_offline(app, "code", "balanced", true).await.is_ok()
 }
 
 /// A slot preference from the Rust-readable settings store (mirrored there
@@ -836,6 +849,17 @@ async fn route_inner(
                 return Ok(RouteResult {
                     model: m,
                     reason: "agent work kept on your device (privacy-first)".to_string(),
+                });
+            }
+        }
+        // The cost-saver setting: whole project sessions stay on the device
+        // whenever a capable model fits - slower, free, private. A setting,
+        // not a default; documented in the routing explainer.
+        if store_pref(app, "routingProjectThrifty").as_deref() == Some("1") {
+            if let Some(m) = offline.clone() {
+                return Ok(RouteResult {
+                    model: m,
+                    reason: "project work on your device (your cost-saver setting)".to_string(),
                 });
             }
         }
