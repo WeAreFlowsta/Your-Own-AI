@@ -1285,21 +1285,18 @@ export function useAgentSession(props: UseAgentSessionProps) {
       // RPC response (with a generic "Internal error") both land here.
       if (!props.chatState.isLoading) return;
       mutateTurn((m) => {
-        let log = (m.agentLog ?? []).map((i) => {
-          if (i.type !== "action") return i;
-          // Live log lines are turn-time chrome; the finished rail keeps
-          // only the settled output.
-          const { liveLine: _live, ...action } = i.action;
-          return i.action.status === "in_progress" || i.action.status === "pending"
+        let log = (m.agentLog ?? []).map((i) =>
+          i.type === "action" &&
+          (i.action.status === "in_progress" || i.action.status === "pending")
             ? {
                 ...i,
                 action: {
-                  ...action,
+                  ...i.action,
                   status: errorText ? ("failed" as const) : ("completed" as const),
                 },
               }
-            : { ...i, action };
-        });
+            : i,
+        );
         // The turn's last words ARE the answer: promote the trailing
         // narration into the bubble body (content goes "" -> answer exactly
         // once - it must never shrink). Earlier narration stays in the box.

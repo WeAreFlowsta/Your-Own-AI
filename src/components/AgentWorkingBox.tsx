@@ -81,6 +81,34 @@ function formatDuration(ms?: number): string | null {
   return `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
+/** A task log that follows its own tail: full scrollback, pinned to the
+ *  bottom while streaming - scrolling up unpins (read history in peace),
+ *  scrolling back down re-pins. */
+const LiveLogPanel = component$<{ text: string; live: boolean }>(({ text, live }) => {
+  const ref = useSignal<HTMLElement>();
+  const pinned = useSignal(true);
+
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    track(() => text);
+    const el = ref.value;
+    if (el && (pinned.value || !live)) el.scrollTop = el.scrollHeight;
+  });
+
+  return (
+    <pre
+      ref={ref}
+      onScroll$={() => {
+        const el = ref.value;
+        if (el) pinned.value = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+      }}
+      class="mt-1 mb-1.5 text-[11px] rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)] p-2 whitespace-pre-wrap break-all font-mono text-[var(--text-secondary)] max-h-64 overflow-y-auto"
+    >
+      {text}
+    </pre>
+  );
+});
+
 export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
   ({ log, working, tipHere = true, railOpen, durationMs, retryStatus, onPermissionRespond$, onPermissionOffscreen$ }) => {
     const showThoughts = useSignal(true);
@@ -319,9 +347,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                     explicit !== undefined
                       ? explicit
                       : showThoughts.value && (hasDiff || a.liveLine !== undefined);
-                  const liveLog = a.liveLine !== undefined && a.output
-                    ? a.output.split("\n").slice(-15).join("\n")
-                    : null;
+                  const isLiveLog = a.liveLine !== undefined;
                   return (
                     <div key={row.id} class="overflow-hidden">
                       <button
@@ -371,12 +397,15 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                         </div>
                       )}
                       {open && !hasDiff && a.output && (
-                        <pre class="mt-1 mb-1.5 text-[11px] rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)] p-2 whitespace-pre-wrap break-all font-mono text-[var(--text-secondary)] max-h-64 overflow-y-auto">
-                          {liveLog !== null
-                            ? liveLog
-                            : (a.detail && a.detail !== a.output ? `${a.detail}\n\n` : "") +
-                              a.output}
-                        </pre>
+                        <LiveLogPanel
+                          text={
+                            isLiveLog
+                              ? a.output
+                              : (a.detail && a.detail !== a.output ? `${a.detail}\n\n` : "") +
+                                a.output
+                          }
+                          live={isLiveLog && working}
+                        />
                       )}
                     </div>
                   );

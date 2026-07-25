@@ -581,7 +581,7 @@ pub async fn read_agent_task_logs(
         }
         let path = dir.join(format!("{}.log", id));
         let Ok(bytes) = std::fs::read(&path) else { continue };
-        let tail_start = bytes.len().saturating_sub(4096);
+        let tail_start = bytes.len().saturating_sub(32768);
         let mut tail = String::from_utf8_lossy(&bytes[tail_start..]).to_string();
         // Strip ANSI color codes - these are raw process logs.
         while let Some(s) = tail.find('\u{1b}') {
