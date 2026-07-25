@@ -256,7 +256,7 @@ export default component$(() => {
   const smartModeDetection = useSignal(true);
   // Same key the working box's brain icon toggles - one setting, two doors.
   // Only shown when the Build agent is actually installed.
-  const agentShowThoughts = useSignal(false);
+  const agentSimpleView = useSignal(false);
   const buildInstalled = useSignal(false);
   // "Run in your terminal" behavior: default = pre-filled, Enter to run.
   const terminalRunImmediately = useSignal(false);
@@ -304,7 +304,9 @@ export default component$(() => {
       localStorage.getItem("groundDocumentsAuto") === "true";
     smartModeDetection.value =
       localStorage.getItem("smartModeDetection") !== "false"; // default ON
-    agentShowThoughts.value = localStorage.getItem("agent-show-thoughts") === "1";
+    // "Simple project view" INVERTS the stored key: absent/"1" = full
+    // detail (the default - the living rail is the product); "0" = simple.
+    agentSimpleView.value = localStorage.getItem("agent-show-thoughts") === "0";
     terminalRunImmediately.value =
       localStorage.getItem("terminal-run-immediately") === "true";
     // Async: reveal the Build settings once the agent binary is confirmed.
@@ -434,9 +436,9 @@ export default component$(() => {
     );
   });
 
-  const toggleAgentShowThoughts = $(() => {
-    agentShowThoughts.value = !agentShowThoughts.value;
-    localStorage.setItem("agent-show-thoughts", agentShowThoughts.value ? "1" : "0");
+  const toggleAgentSimpleView = $(() => {
+    agentSimpleView.value = !agentSimpleView.value;
+    localStorage.setItem("agent-show-thoughts", agentSimpleView.value ? "0" : "1");
   });
 
   const toggleGroundDocuments = $(() => {
@@ -598,14 +600,14 @@ export default component$(() => {
                   </SettingToggle>
                   {buildInstalled.value && (
                     <SettingToggle
-                      title="Show thinking while working on a project"
-                      checked={agentShowThoughts}
-                      onToggle$={toggleAgentShowThoughts}
+                      title="Simple project view"
+                      checked={agentSimpleView}
+                      onToggle$={toggleAgentSimpleView}
                     >
-                      When your AI is working on a project, show its live reasoning
-                      between steps - the running commentary of what it's considering
-                      and why. The status line also carries the tail of its current
-                      thought. Same switch as the brain icon on the working steps box.
+                      Show just the steps, asks, and plan while your AI works -
+                      without the running thoughts and live task logs (expanding
+                      a step still shows its log). Everything keeps moving either
+                      way. Same switch as the brain icon on the working steps.
                     </SettingToggle>
                   )}
                 </div>

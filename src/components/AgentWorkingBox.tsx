@@ -79,15 +79,17 @@ function formatDuration(ms?: number): string | null {
 
 export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
   ({ log, working, railOpen, durationMs, retryStatus, onPermissionRespond$, onPermissionOffscreen$ }) => {
-    const showThoughts = useSignal(false);
+    const showThoughts = useSignal(true);
     const openOutputs = useSignal<Record<string, boolean>>({});
 
     // eslint-disable-next-line qwik/no-use-visible-task
     useVisibleTask$(() => {
       try {
-        showThoughts.value = localStorage.getItem(SHOW_THOUGHTS_KEY) === "1";
+        // Full detail is the DEFAULT (absent = on): the living rail is the
+        // product. "0" = the simple view - same liveness, less verbosity.
+        showThoughts.value = localStorage.getItem(SHOW_THOUGHTS_KEY) !== "0";
       } catch {
-        /* default off */
+        showThoughts.value = true;
       }
     });
 
@@ -139,10 +141,13 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
       }
       // A background task's live log line beats a bare "Thinking.." - the
       // step completed instantly (backgrounded) but the work is right here.
-      for (let i = log.length - 1; i >= 0; i--) {
-        const item = log[i];
-        if (item.type === "action" && item.action.liveLine) {
-          return item.action.liveLine.slice(0, 120);
+      // Full-detail ambience; the simple view keeps labels + ticker only.
+      if (showThoughts.value) {
+        for (let i = log.length - 1; i >= 0; i--) {
+          const item = log[i];
+          if (item.type === "action" && item.action.liveLine) {
+            return item.action.liveLine.slice(0, 120);
+          }
         }
       }
       if (showThoughts.value && last?.type === "thought") {
@@ -396,7 +401,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                     /* not persisted */
                   }
                 }}
-                title={showThoughts.value ? "Hide thinking" : "Show thinking"}
+                title={showThoughts.value ? "Simple view - just the steps and asks" : "Full detail - thoughts and live logs"}
                 class={`ml-1 shrink-0 bg-transparent border-none cursor-pointer ${showThoughts.value ? "text-[var(--text-secondary)]" : "text-[var(--text-muted)] opacity-40 hover:opacity-100"}`}
               >
                 <LuBrain class="h-3.5 w-3.5" />
