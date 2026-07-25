@@ -154,7 +154,15 @@ export default component$<AppHeaderProps>(
             {buildInstalled && folderPath && (
               <span
                 class="text-xs text-[var(--text-secondary)] flex items-center gap-2 px-3 h-9 bg-[var(--bg-dropdown)] rounded-full border border-[var(--border-subtle)]"
-                title={`Your AI is working in ${folderPath}`}
+                title={
+                  folderStatus === 'starting'
+                    ? `Getting this folder ready - your AI is connecting to ${folderPath}. Ready in a few seconds.`
+                    : folderStatus === 'stopped'
+                      ? `The folder helper stopped - reopen ${folderPath} to keep working.`
+                      : folderStatus === 'working'
+                        ? `Your AI is working in ${folderPath} right now.`
+                        : `Your AI is working in ${folderPath}. Ask anything about this folder.`
+                }
               >
                 <span
                   class={`w-2 h-2 rounded-full shrink-0 ${
