@@ -325,7 +325,7 @@ export default component$(() => {
               }`}
             >
               <LuFolderOpen class="w-4 h-4" />
-              Workspaces
+              Projects
             </button>
             <button
               onClick$={() => (activeTab.value = "knows")}
