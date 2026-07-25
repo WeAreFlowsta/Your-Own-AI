@@ -7,6 +7,7 @@
 
 import {
   component$,
+  useContext,
   useSignal,
   useTask$,
   useVisibleTask$,
@@ -14,7 +15,6 @@ import {
   type Signal,
 } from "@builder.io/qwik";
 import { LuFolderOpen } from "@qwikest/icons/lucide";
-import { WorkspaceMemoryModal } from "../../components/WorkspaceMemoryModal";
 import {
   listWorkspaceMemories,
   type WorkspaceMemory,
@@ -23,6 +23,7 @@ import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
 import { LuArrowLeft, LuMessageSquare, LuChevronDown, LuChevronUp, LuInfo, LuDownload, LuPencil, LuShieldCheck, LuBrain, LuUser } from "@qwikest/icons/lucide";
 import AppHeader from "../../components/AppHeader";
 import { useHeaderWorkspace } from "../../hooks/useHeaderWorkspace";
+import { ProjectMemoryContext } from "../layout";
 import { useAiData } from "../../contexts/AiDataContext";
 import {
   getConversations,
@@ -236,7 +237,9 @@ export default component$(() => {
   const activeTab = useSignal<"knows" | "conversations" | "workspaces">("conversations");
   const workspaceMemories = useSignal<WorkspaceMemory[]>([]);
   const workspacesLoading = useSignal(false);
-  const memoryFolder = useSignal<string | null>(null);
+  // The modal renders at the layout root (route stacking contexts
+  // would bury it) - this shared signal opens it.
+  const memoryFolder = useContext(ProjectMemoryContext);
 
   useTask$(async ({ track }) => {
     const tab = track(() => activeTab.value);
@@ -388,7 +391,6 @@ export default component$(() => {
                   </span>
                 </button>
               ))}
-              <WorkspaceMemoryModal folderPath={memoryFolder} />
             </div>
           )}
 

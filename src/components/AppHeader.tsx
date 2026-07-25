@@ -25,10 +25,9 @@ import {
   LuCloud,
 } from "@qwikest/icons/lucide";
 
-import { ThemeContext, type AppTheme } from "../routes/layout";
+import { ThemeContext, ProjectMemoryContext, type AppTheme } from "../routes/layout";
 
 import LiquidMetalButton from "./LiquidMetalButton";
-import { WorkspaceMemoryModal } from "./WorkspaceMemoryModal";
 import logoLight from "../assets/logo-light.svg";
 import logo from "../assets/logo.svg";
 import logoSymbolLight from "../assets/logo-symbol-light.svg";
@@ -115,8 +114,9 @@ export default component$<AppHeaderProps>(
     // The workspace slot's recents menu.
     const folderMenuOpen = useSignal(false);
     const workspaceMenuOpen = useSignal(false);
-    // Non-null = the workspace-memory modal is open for this folder.
-    const memoryFolder = useSignal<string | null>(null);
+    // The project-memory modal lives at the layout root (route stacking
+    // contexts would bury it here) - this signal opens it.
+    const memoryFolder = useContext(ProjectMemoryContext);
 
     const setTheme = $((t: AppTheme) => {
       theme.value = t;
@@ -505,9 +505,6 @@ export default component$<AppHeaderProps>(
         </div>
 
       </section>
-      {/* Outside the header's stacking context (relative z-30) - inside it,
-          the modal could never rise above page dropdowns. */}
-      <WorkspaceMemoryModal folderPath={memoryFolder} />
       </>
     );
   }
