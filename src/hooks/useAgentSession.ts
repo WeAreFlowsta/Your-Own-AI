@@ -310,18 +310,24 @@ export function useAgentSession(props: UseAgentSessionProps) {
   // reviser can never rebuild it from live messages.
   const sessionDigest = useSignal("");
 
-  /** Session end housekeeping: when the session did real work, ask a cheap
-   *  routed model for the updated workspace memory and write the revision
-   *  to the chain (fire-and-forget - never blocks the UI). */
-  const reviseMemory$ = $(async (folderPath: string) => {
-    if (sessionTurns.value === 0) return;
-    sessionTurns.value = 0;
+  /** Distill a session digest into the project's memory (cheap routed
+   *  model call, fire-and-forget - never blocks the UI). Clears the
+   *  project's pending-digest safety copy on success or no-change. */
+  const distillMemory$ = $(async (folderPath: string, digest: string) => {
     const ai = props.selectedAi.value;
-    if (!ai.aiConfig?.agentPubKey) return;
-    const digest = sessionDigest.value;
-    if (!digest) return;
+    if (!ai.aiConfig?.agentPubKey || !digest) return;
+    const clearPending = () => {
+      try {
+        localStorage.removeItem(`project-pending-digest:${folderPath}`);
+      } catch {
+        /* safety copy only */
+      }
+    };
     const revised = await reviseWorkspaceMemory(ai.id, workspaceMemory.value, digest);
-    if (!revised || revised === workspaceMemory.value.trim()) return;
+    if (!revised || revised === workspaceMemory.value.trim()) {
+      clearPending();
+      return;
+    }
     const ok = await saveWorkspaceMemory(
       { agentPubKey: ai.aiConfig.agentPubKey, label: ai.label },
       folderPath,
@@ -329,8 +335,16 @@ export function useAgentSession(props: UseAgentSessionProps) {
     );
     if (ok) {
       workspaceMemory.value = revised;
+      clearPending();
       console.log("[WorkspaceMemory] Revision written for", folderPath);
     }
+  });
+
+  /** Session end housekeeping: when the session did real work, distill it. */
+  const reviseMemory$ = $(async (folderPath: string) => {
+    if (sessionTurns.value === 0) return;
+    sessionTurns.value = 0;
+    await distillMemory$(folderPath, sessionDigest.value);
   });
   // The message id of the current turn's reply bubble.
   const turnId = useSignal<string | null>(null);
@@ -894,6 +908,18 @@ export function useAgentSession(props: UseAgentSessionProps) {
           .then((m) => {
             workspaceMemory.value = m.content;
             memoryPending.value = !!m.content;
+            // A leftover pending digest means an earlier session ended
+            // without its memory distillation (cancel, quit, crash) -
+            // catch up now, with the memory freshly loaded.
+            try {
+              const leftover = localStorage.getItem(`project-pending-digest:${folder}`);
+              if (leftover) {
+                console.log("[WorkspaceMemory] Catching up an undistilled session for", folder);
+                distillMemory$(folder, leftover).catch(() => {});
+              }
+            } catch {
+              /* safety copy only */
+            }
           })
           .catch(() => {});
       }
@@ -1254,6 +1280,19 @@ export function useAgentSession(props: UseAgentSessionProps) {
       if (!errorText) {
         sessionTurns.value++;
         sessionDigest.value = buildResumeDigest(props.chatState.messages);
+        // Quit-proof: keep the digest on disk as we go. A cancel or app
+        // quit never distills - the NEXT open of this project notices the
+        // leftover and catches up.
+        if (state.folderPath) {
+          try {
+            localStorage.setItem(
+              `project-pending-digest:${state.folderPath}`,
+              sessionDigest.value,
+            );
+          } catch {
+            /* safety copy only */
+          }
+        }
       }
       // A turn killed by an overloaded upstream model earns the explicit
       // switch offer - only for Auto AIs (routing owns the pick there; a
