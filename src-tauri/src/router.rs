@@ -573,14 +573,20 @@ pub async fn agent_serving_context(
 }
 
 /// Should simple project side-work (explore subagents) run on the device?
-/// Defaults ON - but only takes effect when a capable local model actually
-/// fits. Free and private; the leader model stays in charge. Documented in
-/// the routing explainer ("what routing does automatically").
+/// Defaults ON - but only takes effect when a capable local model runs
+/// COMFORTABLY: green fit (fully on GPU). "Capable and loads" is not
+/// enough - a partial-offload model turns every explore fan-out into
+/// minutes of critical-path crawl, worse than the cheap online driver it
+/// replaces. Free and private when it engages; the leader stays in charge.
+/// Documented in the routing explainer.
 pub async fn device_subagents_enabled(app: &AppHandle) -> bool {
     if store_pref(app, "routingProjectDeviceSubagents").as_deref() == Some("0") {
         return false;
     }
-    pick_offline(app, "code", "balanced", true).await.is_ok()
+    crate::fit::assess(app)
+        .await
+        .iter()
+        .any(|f| crate::model_caps::agent_caps(&f.name) >= 6 && f.fit == crate::fit::Fit::Green)
 }
 
 /// A slot preference from the Rust-readable settings store (mirrored there
