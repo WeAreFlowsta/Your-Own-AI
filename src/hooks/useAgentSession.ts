@@ -176,7 +176,7 @@ function permissionActionLabel(p: AgentPermission): string {
 function alwaysScope(optionName: string): string {
   return optionName.toLowerCase().includes("session")
     ? "this session"
-    : "always in this folder";
+    : "always in this project";
 }
 
 /** First ACP diff content item on a tool call → a real rendered diff
@@ -221,7 +221,7 @@ function humanizeAction(update: any): { label: string; kind?: string; detail?: s
       return {
         kind,
         label:
-          dir && dir !== "." ? `Looking through ${basename(dir)}/` : "Looking through the folder",
+          dir && dir !== "." ? `Looking through ${basename(dir)}/` : "Looking through the project",
         detail: dir,
       };
     case "read":
@@ -235,7 +235,7 @@ function humanizeAction(update: any): { label: string; kind?: string; detail?: s
     case "grep":
       return {
         kind,
-        label: term ? `Searching for "${term}"` : "Searching the folder",
+        label: term ? `Searching for "${term}"` : "Searching the project",
         detail: term,
       };
     case "execute":
@@ -579,7 +579,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     if (state.status !== "ready" && state.status !== "starting" && state.status !== "working") {
       props.chatState.error = JSON.stringify({
         code: "AGENT_NOT_RUNNING",
-        message: "The folder's agent is not running. Reopen the folder.",
+        message: "The project's agent is not running. Reopen the project.",
       });
       return;
     }
@@ -938,7 +938,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
                 ? `online:${modelKey}`
                 : modelKey
               : m.servedBy,
-            routingReason: `Agent session in ${folder ?? "your folder"}`,
+            routingReason: `Agent session in ${folder ?? "your project"}`,
             agentStats: {
               durationMs: usage.apiDurationMs,
               modelCalls: usage.modelCalls,
@@ -1284,7 +1284,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
             content: "",
             model: props.selectedAi.value.id,
             aiLabel: props.selectedAi.value.label,
-            error: `This folder's agent couldn't switch to ${props.selectedAi.value.label}'s model and is running on its default instead. (${e.payload})`,
+            error: `This project's agent couldn't switch to ${props.selectedAi.value.label}'s model and is running on its default instead. (${e.payload})`,
           },
         ];
       }

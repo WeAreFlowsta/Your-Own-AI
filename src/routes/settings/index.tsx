@@ -592,11 +592,11 @@ export default component$(() => {
                   </SettingToggle>
                   {buildInstalled.value && (
                     <SettingToggle
-                      title="Show thinking while working in a folder"
+                      title="Show thinking while working on a project"
                       checked={agentShowThoughts}
                       onToggle$={toggleAgentShowThoughts}
                     >
-                      When your AI is working in a folder, show its live reasoning
+                      When your AI is working on a project, show its live reasoning
                       between steps - the running commentary of what it's considering
                       and why. The status line also carries the tail of its current
                       thought. Same switch as the brain icon on the working steps box.
@@ -691,7 +691,7 @@ export default component$(() => {
                       <p>Health questions never leave your device.</p>
                       <p>Questions that need current information go to a live-web model, at the eagerness you set below.</p>
                       <p>Genuinely hard questions can be passed to a stronger online model (Auto - Online and Offline only).</p>
-                      <p>Folder work only ever uses models that can drive tools, and never switches models mid-session.</p>
+                      <p>Project work only ever uses models that can drive tools, and never switches models mid-session.</p>
                       <p>Picks are fit-aware: a model that runs well on your hardware beats a stronger one that struggles.</p>
                       <p class="text-[var(--text-muted)]">
                         Every answer's Model button shows what happened and why, and each
@@ -864,17 +864,17 @@ export default component$(() => {
                   <>
                     <div class="border-t border-[var(--border-subtle)] my-5" />
                     <h4 class="text-base font-semibold text-[var(--text-primary)]">
-                      Working in folders
+                      Working on projects
                     </h4>
                     <p class="text-sm text-[var(--text-secondary)] mt-1 mb-3">
-                      Folder work routes differently: only models that can drive
+                      Project work routes differently: only models that can drive
                       tools are ever used, and the model never changes
                       mid-session. Offline, the most capable tool-driving model
                       you've downloaded takes it. Online, this one does:
                     </p>
                     <OnlineModelPicker
-                      label="Agent work in folders"
-                      hint="The online model that drives tools in folder work - only capable ones are listed"
+                      label="Agent work on projects"
+                      hint="The online model that drives tools in project work - only capable ones are listed"
                       recommended="Kimi K2.6"
                       storageKey="routingOnlineAgent"
                       selected={onlineAgent}

@@ -60,7 +60,7 @@ export function useHeaderWorkspace() {
   const browseFolder$ = $(async () => {
     try {
       const { open } = await import("@tauri-apps/plugin-dialog");
-      const selected = await open({ directory: true });
+      const selected = await open({ directory: true, title: "Choose the project's folder" });
       if (typeof selected === "string" && selected) await openFolder$(selected);
     } catch (err) {
       console.error("[Header] Folder picker error:", err);

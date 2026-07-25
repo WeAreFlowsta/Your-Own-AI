@@ -752,7 +752,7 @@ export default component$(() => {
   const handleBrowseFolder = $(async () => {
     try {
       const { open } = await import("@tauri-apps/plugin-dialog");
-      const selected = await open({ directory: true });
+      const selected = await open({ directory: true, title: "Choose the project's folder" });
       if (typeof selected === "string" && selected) openFolderGuarded(selected);
     } catch (err) {
       console.error("[ChatPage] Folder picker error:", err);
@@ -1392,11 +1392,11 @@ export default component$(() => {
           fit for agent work - offer the switch, never substitute quietly. */}
       <ConfirmModal
         isOpen={folderGuard.value !== null}
-        title={`${folderGuard.value?.currentLabel ?? "This AI"} may struggle in folders`}
+        title={`${folderGuard.value?.currentLabel ?? "This AI"} may struggle with project work`}
         message={
           folderGuard.value?.suggestion
-            ? `${folderGuard.value.currentLabel}'s model isn't built for tool work, so folder tasks may stall or fail. ${folderGuard.value.suggestion.label} can drive them properly - switch this workspace to ${folderGuard.value.suggestion.label}?`
-            : `${folderGuard.value?.currentLabel ?? "This AI"}'s model isn't built for tool work, so folder tasks may stall or fail. None of your other AIs are set up for it yet either - an online model like Kimi, or an agentic coder from the model library, works best.`
+            ? `${folderGuard.value.currentLabel}'s model isn't built for tool work, so project tasks may stall or fail. ${folderGuard.value.suggestion.label} can drive them properly - switch this project to ${folderGuard.value.suggestion.label}?`
+            : `${folderGuard.value?.currentLabel ?? "This AI"}'s model isn't built for tool work, so project tasks may stall or fail. None of your other AIs are set up for it yet either - an online model like Kimi, or an agentic coder from the model library, works best.`
         }
         confirmLabel={
           folderGuard.value?.suggestion
@@ -1443,11 +1443,11 @@ export default component$(() => {
           switching the workspace - never silently swap it. */}
       <ConfirmModal
         isOpen={resumeFolderAsk.value !== null}
-        title="Open this conversation's folder?"
+        title="Open this conversation's project?"
         message={`This conversation worked in ${
           resumeFolderAsk.value?.split("/").filter(Boolean).pop() ?? "a folder"
-        }. Open that folder to keep building?`}
-        confirmLabel="Open folder"
+        }. Open that project to keep building?`}
+        confirmLabel="Open project"
         cancelLabel="Just read"
         onConfirm$={async () => {
           const folder = resumeFolderAsk.value;
@@ -1464,7 +1464,7 @@ export default component$(() => {
       <ConfirmModal
         isOpen={showCloseFolderConfirm.value}
         title="Stop the agent?"
-        message="The agent is still working. Stop it and close the folder? Changes already made stay on disk."
+        message="The agent is still working. Stop it and close the project? Changes already made stay on disk."
         confirmLabel="Stop & close"
         cancelLabel="Keep working"
         variant="danger"

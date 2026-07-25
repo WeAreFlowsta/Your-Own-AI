@@ -355,7 +355,7 @@ export default component$(() => {
           {activeTab.value === "workspaces" && (
             <div>
               <p class="text-sm text-[var(--text-secondary)] mb-4">
-                What your AIs remember about each folder they have worked in -
+                What your AIs remember about each project they have worked on -
                 commands, conventions, decisions. Kept in your records, shared
                 by all your AIs, yours to edit.
               </p>
@@ -364,8 +364,8 @@ export default component$(() => {
               )}
               {!workspacesLoading.value && workspaceMemories.value.length === 0 && (
                 <p class="text-sm text-[var(--text-muted)]">
-                  Nothing yet - workspace memory grows as your AIs work in
-                  folders.
+                  Nothing yet - project memory grows as your AIs work on
+                  projects.
                 </p>
               )}
               {workspaceMemories.value.map((w) => (

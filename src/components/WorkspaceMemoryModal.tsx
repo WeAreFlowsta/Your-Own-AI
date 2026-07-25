@@ -90,7 +90,7 @@ export const WorkspaceMemoryModal = component$<{
         <div class="flex items-center justify-between px-5 py-3 border-b border-[var(--border-subtle)]">
           <div class="min-w-0">
             <h2 class="text-base font-semibold text-[var(--text-primary)] font-varela truncate">
-              Workspace memory - {folderLeaf}
+              Project memory - {folderLeaf}
             </h2>
             <p class="text-xs text-[var(--text-muted)] truncate">
               {revisions.value > 0
@@ -185,7 +185,7 @@ export const WorkspaceMemoryModal = component$<{
                   if (e.key === "Escape") (adding.value = false);
                 }}
                 rows={2}
-                placeholder="A durable note about this folder (Enter to add)"
+                placeholder="A durable note about this project (Enter to add)"
                 class="flex-1 text-sm rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)] p-2 font-mono text-[var(--text-primary)] resize-y"
               />
             </div>

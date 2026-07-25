@@ -116,7 +116,7 @@ export const ActionMenu = component$<ActionMenuProps>((props) => {
                   class="text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)] hover:text-[var(--text-dropdown-active)] group flex w-full items-center px-2 py-2 text-sm"
                 >
                   <LuFolderOpen class="h-4 w-4 mr-3" />
-                  Open a folder...
+                  Open a project...
                 </button>
               )}
             </div>

@@ -161,12 +161,12 @@ export default component$<AppHeaderProps>(
                 onClick$={() => (workspaceMenuOpen.value = !workspaceMenuOpen.value)}
                 title={
                   folderStatus === 'starting'
-                    ? `Getting this folder ready - your AI is connecting to ${folderPath}. Ready in a few seconds.`
+                    ? `Getting this project ready - your AI is connecting to ${folderPath}. Ready in a few seconds.`
                     : folderStatus === 'stopped'
-                      ? `The folder helper stopped - reopen ${folderPath} to keep working.`
+                      ? `The project's helper stopped - reopen ${folderPath} to keep working.`
                       : folderStatus === 'working'
                         ? `Your AI is working in ${folderPath} right now.`
-                        : `This conversation's workspace: ${folderPath}. Your AI can read and change files here.`
+                        : `This conversation's project: ${folderPath}. Your AI can read and change files here.`
                 }
               >
                 <span
@@ -198,7 +198,7 @@ export default component$<AppHeaderProps>(
                       e.stopPropagation();
                       onCloseFolder$();
                     }}
-                    title="Close this workspace"
+                    title="Close this project"
                     class="ml-0.5 shrink-0 text-[var(--text-muted)] hover:text-[var(--text-primary)] leading-none"
                   >
                     &times;
@@ -227,7 +227,7 @@ export default component$<AppHeaderProps>(
                         class="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)]"
                       >
                         <LuBrain class="h-4 w-4 shrink-0 opacity-70" />
-                        Workspace memory
+                        Project memory
                       </button>
                       {onCloseFolder$ && (
                         <button
@@ -240,7 +240,7 @@ export default component$<AppHeaderProps>(
                           class="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)]"
                         >
                           <span class="w-4 text-center leading-none">&times;</span>
-                          Close folder
+                          Close project
                         </button>
                       )}
                     </span>
@@ -254,7 +254,7 @@ export default component$<AppHeaderProps>(
                   onClick$={() => (folderMenuOpen.value = !folderMenuOpen.value)}
                   variant="secondary"
                   class="flex items-center justify-center w-9 h-9 cursor-pointer"
-                  title="Open a folder - your AI can work inside it"
+                  title="Open a project - your AI can work inside it"
                 >
                   <LuFolderOpen class="h-[18px] w-[18px]" />
                 </LiquidMetalButton>
@@ -294,7 +294,7 @@ export default component$<AppHeaderProps>(
                         class="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)]"
                       >
                         <LuFolderOpen class="h-4 w-4 shrink-0" />
-                        Browse..
+                        Choose the project's folder..
                       </button>
                     </span>
                   </>

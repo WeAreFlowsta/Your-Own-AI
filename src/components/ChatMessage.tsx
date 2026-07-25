@@ -461,7 +461,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
                       : rememberState.value === 'saved'
                         ? 'Remembered - click to forget it again'
                         : rememberState.value === 'saved-folder'
-                          ? 'Saved to this folder’s memory'
+                          ? 'Saved to this project’s memory'
                           : 'Remember this reply - your AI will draw on it in future conversations'
                   }
                   disabled={rememberState.value === 'saving'}
@@ -471,7 +471,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
                     {rememberState.value === 'saved'
                       ? 'Remembered'
                       : rememberState.value === 'saved-folder'
-                        ? 'Saved to folder'
+                        ? 'Saved to project'
                         : rememberState.value === 'saving'
                           ? 'Saving...'
                           : rememberState.value === 'error'
@@ -491,7 +491,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
                         onClick$={rememberToFolder}
                         class="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)] text-left"
                       >
-                        Remember for this folder
+                        Remember for this project
                       </button>
                       <button
                         type="button"
