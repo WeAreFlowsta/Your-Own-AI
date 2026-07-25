@@ -275,12 +275,20 @@ export function useAgentSession(props: UseAgentSessionProps) {
   const recordUserTurn = $(async (text: string) => {
     const ai = props.selectedAi.value;
     const agentKey = ai.aiConfig?.agentPubKey;
-    if (!agentKey) return;
+    if (!agentKey) {
+      // No agent key = this AI never provisioned - NOTHING in this
+      // conversation will record. Same loudness as the assistant side.
+      console.error("[Agent] User turn NOT recorded - AI has no agent key (provisioning failed?)");
+      return;
+    }
     const model = ai.aiConfig?.model || "agent";
     if (!props.chatState.conversationHash) {
       const title = text.length > 80 ? text.slice(0, 80) + "..." : text;
       const hash = await startConversation(agentKey, ai.label, model, title);
-      if (!hash) return;
+      if (!hash) {
+        console.error("[Agent] User turn NOT recorded - starting the conversation failed (see warning above)");
+        return;
+      }
       props.chatState.conversationHash = hash;
       props.chatState.messageSequence = 0;
       if (state.folderPath) rememberConversationFolder(hash, state.folderPath);
@@ -288,7 +296,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     }
     const seq = props.chatState.messageSequence;
     props.chatState.messageSequence = seq + 1;
-    await recordMessage(
+    const actionHash = await recordMessage(
       agentKey,
       props.chatState.conversationHash!,
       "user",
@@ -296,6 +304,9 @@ export function useAgentSession(props: UseAgentSessionProps) {
       seq,
       model,
     );
+    if (!actionHash) {
+      console.error(`[Agent] User turn record FAILED (seq ${seq}) - see warning above`);
+    }
   });
 
   const recordAssistantTurn = $(async (bubble: Message) => {
