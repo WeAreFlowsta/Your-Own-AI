@@ -356,7 +356,7 @@ export default component$(() => {
             <div>
               <p class="text-sm text-[var(--text-secondary)] mb-4">
                 What your AIs remember about each folder they have worked in -
-                commands, conventions, decisions. Kept on your chain, shared
+                commands, conventions, decisions. Kept in your records, shared
                 by all your AIs, yours to edit.
               </p>
               {workspacesLoading.value && (

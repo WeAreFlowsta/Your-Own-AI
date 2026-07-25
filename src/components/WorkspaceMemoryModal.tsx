@@ -94,7 +94,7 @@ export const WorkspaceMemoryModal = component$<{
             </h2>
             <p class="text-xs text-[var(--text-muted)] truncate">
               {revisions.value > 0
-                ? `${revisions.value} revision${revisions.value === 1 ? "" : "s"} on your chain - shared by all your AIs`
+                ? `${revisions.value} revision${revisions.value === 1 ? "" : "s"} in your records - shared by all your AIs`
                 : "Nothing remembered yet - it grows as your AIs work here"}
             </p>
           </div>
@@ -216,7 +216,7 @@ export const WorkspaceMemoryModal = component$<{
             disabled={!dirty.value || saving.value}
             onClick$={save}
           >
-            {saving.value ? "Saving.." : "Save to your chain"}
+            {saving.value ? "Saving.." : "Save changes"}
           </LiquidMetalButton>
         </div>
       </div>
