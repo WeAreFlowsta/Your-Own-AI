@@ -499,6 +499,75 @@ pub async fn stop_build_agent(state: State<'_, AgentBridgeState>) -> Result<(), 
     Ok(())
 }
 
+/// Percent-encode a path the way the agent names its session directories
+/// (everything except unreserved characters - observed on disk:
+/// "%2Fhome%2Fsolar%2FDocuments%2FThe%20NOW%20Times%2F..").
+fn session_dir_encode(path: &str) -> String {
+    let mut out = String::with_capacity(path.len() * 3);
+    for b in path.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
+}
+
+/// Live tails of background-task logs. The agent streams each backgrounded
+/// command's (and subagent's) output to
+/// `~/.your-own-ai-build/sessions/<cwd>/<session>/terminal/call_<id>.log`
+/// while the rail shows an opaque row - this reads the tails so the UI can
+/// show the work as it happens. Returns only ids whose log exists.
+#[tauri::command]
+pub async fn read_agent_task_logs(
+    app_handle: AppHandle,
+    state: State<'_, AgentBridgeState>,
+    tool_call_ids: Vec<String>,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let folder = state.folder.lock().await.clone();
+    let session = state.session_id.lock().await.clone();
+    let (Some(folder), Some(session)) = (folder, session) else {
+        return Ok(Default::default());
+    };
+    let home = app_handle
+        .path()
+        .home_dir()
+        .map_err(|e| format!("cannot resolve home dir: {}", e))?;
+    let dir = home
+        .join(".your-own-ai-build")
+        .join("sessions")
+        .join(session_dir_encode(&folder))
+        .join(&session)
+        .join("terminal");
+    let mut out = std::collections::HashMap::new();
+    for id in tool_call_ids {
+        // Ids come from ACP tool calls - keep the path strictly inside the
+        // terminal dir.
+        if id.contains('/') || id.contains("..") {
+            continue;
+        }
+        let path = dir.join(format!("{}.log", id));
+        let Ok(bytes) = std::fs::read(&path) else { continue };
+        let tail_start = bytes.len().saturating_sub(4096);
+        let mut tail = String::from_utf8_lossy(&bytes[tail_start..]).to_string();
+        // Strip ANSI color codes - these are raw process logs.
+        while let Some(s) = tail.find('\u{1b}') {
+            let rest = &tail[s..];
+            let end = rest
+                .char_indices()
+                .skip(1)
+                .find(|(_, c)| c.is_ascii_alphabetic())
+                .map(|(i, _)| s + i + 1)
+                .unwrap_or(tail.len());
+            tail.replace_range(s..end, "");
+        }
+        out.insert(id, tail);
+    }
+    Ok(out)
+}
+
 /// Dropped-path classifier for the chat's drag-and-drop: a folder drop opens
 /// the folder, a file drop stays an attachment.
 #[tauri::command]

@@ -137,6 +137,14 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
           return `${item.action.label}..`;
         }
       }
+      // A background task's live log line beats a bare "Thinking.." - the
+      // step completed instantly (backgrounded) but the work is right here.
+      for (let i = log.length - 1; i >= 0; i--) {
+        const item = log[i];
+        if (item.type === "action" && item.action.liveLine) {
+          return item.action.liveLine.slice(0, 120);
+        }
+      }
       if (showThoughts.value && last?.type === "thought") {
         const tail = last.text.trim().slice(-140);
         return `Thinking.. ${tail}`;

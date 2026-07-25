@@ -550,6 +550,7 @@ pub fn run() {
             agent_bridge::respond_agent_permission,
             agent_bridge::stop_build_agent,
             agent_bridge::build_agent_status,
+            agent_bridge::read_agent_task_logs,
             agent_bridge::path_is_dir,
             agent_bridge::path_is_file,
             terminal::open_in_terminal,

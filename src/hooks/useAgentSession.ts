@@ -410,7 +410,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     // not bulk), and a size ladder below guarantees the write fits.
     let items = (bubble.agentLog ?? []).map((i) => {
       if (i.type === "action") {
-        const { output: _output, diff, ...action } = i.action;
+        const { output: _output, diff, liveLine: _live, ...action } = i.action;
         return {
           ...i,
           action: diff
@@ -610,6 +610,58 @@ export function useAgentSession(props: UseAgentSessionProps) {
 
   const dismissOverloadOffer$ = $(() => {
     state.overloadOffer = null;
+  });
+
+  // Live background-task visibility: while a turn runs, tail the agent's
+  // terminal logs for recent command steps every couple of seconds. The
+  // step's expandable panel streams the log as it grows; its latest line
+  // rides the pearl. (Backgrounded commands complete their step instantly
+  // and keep writing - the log, not the step status, is the truth.)
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track, cleanup }) => {
+    const working = track(() => props.chatState.isLoading);
+    if (!working || !state.folderPath) return;
+    const timer = setInterval(async () => {
+      const id = turnId.value;
+      if (!id) return;
+      const bubble = props.chatState.messages.find((m) => m.id === id);
+      const ids = (bubble?.agentLog ?? [])
+        .filter((i) => i.type === "action" && i.action.kind === "execute")
+        .map((i) => (i.type === "action" ? i.action.toolCallId : ""))
+        .filter(Boolean)
+        .slice(-5);
+      if (!ids.length) return;
+      try {
+        const logs = (await invokeTauri("read_agent_task_logs", {
+          toolCallIds: ids,
+        })) as Record<string, string>;
+        if (!Object.keys(logs).length) return;
+        props.chatState.messages = props.chatState.messages.map((m) => {
+          if (m.id !== id) return m;
+          return {
+            ...m,
+            agentLog: (m.agentLog ?? []).map((i) => {
+              if (i.type !== "action") return i;
+              const tail = logs[i.action.toolCallId];
+              if (tail === undefined) return i;
+              const lines = tail.split("\n").map((l) => l.trim()).filter(Boolean);
+              return {
+                ...i,
+                action: {
+                  ...i.action,
+                  output: tail.trim(),
+                  outputLines: lines.length,
+                  liveLine: lines[lines.length - 1],
+                },
+              };
+            }),
+          };
+        });
+      } catch {
+        /* logs are a live convenience */
+      }
+    }, 2000);
+    cleanup(() => clearInterval(timer));
   });
 
   const openFolder$ = $(async (path: string) => {
@@ -1162,17 +1214,21 @@ export function useAgentSession(props: UseAgentSessionProps) {
       // RPC response (with a generic "Internal error") both land here.
       if (!props.chatState.isLoading) return;
       mutateTurn((m) => {
-        let log = (m.agentLog ?? []).map((i) =>
-          i.type === "action" && (i.action.status === "in_progress" || i.action.status === "pending")
+        let log = (m.agentLog ?? []).map((i) => {
+          if (i.type !== "action") return i;
+          // Live log lines are turn-time chrome; the finished rail keeps
+          // only the settled output.
+          const { liveLine: _live, ...action } = i.action;
+          return i.action.status === "in_progress" || i.action.status === "pending"
             ? {
                 ...i,
                 action: {
-                  ...i.action,
+                  ...action,
                   status: errorText ? ("failed" as const) : ("completed" as const),
                 },
               }
-            : i,
-        );
+            : { ...i, action };
+        });
         // The turn's last words ARE the answer: promote the trailing
         // narration into the bubble body (content goes "" -> answer exactly
         // once - it must never shrink). Earlier narration stays in the box.

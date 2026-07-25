@@ -221,6 +221,10 @@ export interface AgentAction {
   /** Edit result as a real diff (ACP diff content). `lines` render the
    *  colored view live; only the counts survive into the transcript. */
   diff?: AgentActionDiff;
+  /** The latest line of a background task's live log (tailed from the
+   *  agent's terminal logs while the turn runs). Display-only - never
+   *  persisted. */
+  liveLine?: string;
 }
 
 export interface AgentActionDiff {
