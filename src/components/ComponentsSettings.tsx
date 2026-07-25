@@ -8,7 +8,7 @@
 import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { LuBrain, LuEye, LuFileText, LuSparkles, LuCheck, LuDownload, LuTrash2 } from "@qwikest/icons/lucide";
+import { LuBrain, LuEye, LuFileText, LuSparkles, LuCheck, LuDownload, LuTrash2, LuFolderOpen } from "@qwikest/icons/lucide";
 import { modelManager, type DownloadProgress } from "../utils/modelManager";
 import LiquidMetalButton from "./LiquidMetalButton";
 import {
@@ -228,6 +228,154 @@ const ComponentCard = component$<CardProps>((props) => {
   );
 });
 
+/** Your Own AI Build - the project agent. Not a model: its own install
+ *  machinery (pinned release, atomic install, nav-proof background
+ *  download), but the same card language as every other component. */
+const BuildComponentCard = component$(() => {
+  const installed = useSignal(false);
+  const downloading = useSignal(false);
+  const percent = useSignal(0);
+  const error = useSignal<string | null>(null);
+  const busy = useSignal(false);
+
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async ({ cleanup }) => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const st = (await invoke("build_install_status")) as {
+        installed: boolean;
+        downloading: boolean;
+        error: string | null;
+      };
+      installed.value = st.installed;
+      downloading.value = st.downloading;
+      error.value = st.error;
+    } catch {
+      /* card stays in its defaults */
+    }
+    const { listen } = await import("@tauri-apps/api/event");
+    const unp = await listen<any>("model-download-progress", (e) => {
+      const f = e.payload?.filename;
+      if (typeof f === "string" && f.startsWith("your-own-ai-build-")) {
+        downloading.value = true;
+        percent.value = Math.round(e.payload?.percent ?? 0);
+      }
+    });
+    const und = await listen<any>("build-install-done", (e) => {
+      downloading.value = false;
+      installed.value = true;
+      error.value = null;
+      const path = e.payload?.path;
+      if (typeof path === "string" && path) {
+        try {
+          localStorage.setItem("build-binary-path", path);
+        } catch { /* resolver falls back */ }
+      }
+    });
+    const unf = await listen<any>("build-install-failed", (e) => {
+      downloading.value = false;
+      error.value = String(e.payload?.error ?? "download failed");
+    });
+    cleanup(() => {
+      unp();
+      und();
+      unf();
+    });
+  });
+
+  const doDownload = $(async () => {
+    error.value = null;
+    downloading.value = true;
+    percent.value = 0;
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      invoke("download_build_agent").catch(() => {
+        /* failure arrives via its event */
+      });
+    } catch {
+      downloading.value = false;
+    }
+  });
+
+  const doUninstall = $(async () => {
+    if (busy.value) return;
+    busy.value = true;
+    error.value = null;
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("uninstall_build_agent");
+      installed.value = false;
+      try {
+        localStorage.removeItem("build-binary-path");
+      } catch { /* fine */ }
+    } catch (e) {
+      error.value = String(e);
+    } finally {
+      busy.value = false;
+    }
+  });
+
+  return (
+    <div class="flex items-start gap-4 p-4 rounded-xl bg-[var(--bg-main)] border border-[var(--border-subtle)]">
+      <div class="w-10 h-10 rounded-lg bg-[var(--bg-dropdown)] flex items-center justify-center flex-shrink-0">
+        <LuFolderOpen class="w-5 h-5 text-[var(--text-secondary)]" />
+      </div>
+      <div class="min-w-0 flex-1">
+        <h3 class="text-base font-semibold text-[var(--text-primary)] flex items-center gap-2">
+          Your Own AI Build
+          <span class="text-xs font-normal text-[var(--text-muted)]">~50 MB</span>
+        </h3>
+        <p class="text-sm text-[var(--text-secondary)] mt-0.5">
+          Lets your AIs work in project folders with you - reading files,
+          making edits, and running commands, always with your permission.
+        </p>
+        {downloading.value && (
+          <div class="mt-2">
+            <div class="h-1.5 w-full rounded-full bg-[var(--border-subtle)] overflow-hidden">
+              <div
+                class="h-full bg-[var(--bg-button-primary)] transition-all"
+                style={{ width: `${percent.value}%` }}
+              />
+            </div>
+            <p class="text-[11px] text-[var(--text-muted)] mt-1">
+              Downloading… {percent.value}% - keeps going if you leave this page.
+            </p>
+          </div>
+        )}
+        {error.value && <p class="text-xs text-red-400 mt-1">{error.value}</p>}
+        {installed.value && !downloading.value && (
+          <p class="mt-2 text-[11px] text-emerald-400/80 flex items-center gap-1">
+            <LuCheck class="w-3 h-3" /> Installed — projects are ready.
+          </p>
+        )}
+      </div>
+
+      <div class="flex-shrink-0">
+        {installed.value ? (
+          <LiquidMetalButton
+            variant="danger"
+            onClick$={doUninstall}
+            class="flex items-center gap-1.5 px-3 py-1.5 text-xs"
+          >
+            <LuTrash2 class="w-3.5 h-3.5" /> Remove
+          </LiquidMetalButton>
+        ) : downloading.value ? (
+          <span class="flex items-center gap-1.5 px-3 py-1.5 text-xs text-[var(--text-muted)]">
+            {percent.value}%
+          </span>
+        ) : (
+          <LiquidMetalButton
+            onClick$={doDownload}
+            class="flex items-center gap-1.5 px-3 py-1.5 text-xs"
+          >
+            <LuDownload class="w-3.5 h-3.5" /> Download
+          </LiquidMetalButton>
+        )}
+      </div>
+    </div>
+  );
+});
+
 export default component$(() => {
   return (
     <section class="bg-[var(--bg-card)] rounded-2xl p-6 border border-[var(--border-subtle)]">
@@ -240,6 +388,7 @@ export default component$(() => {
       </p>
 
       <div class="flex flex-col gap-3">
+        <BuildComponentCard />
         <ComponentCard
           model={EMBEDDING_MODEL}
           icon="brain"

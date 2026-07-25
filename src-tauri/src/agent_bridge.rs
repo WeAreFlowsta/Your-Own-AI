@@ -34,6 +34,12 @@ pub struct AgentBridgeState {
 }
 
 impl AgentBridgeState {
+    /// Is a project session open (or stopped-but-open)? Used by the
+    /// uninstaller to refuse pulling the binary from under a live session.
+    pub async fn has_open_folder(&self) -> bool {
+        self.folder.lock().await.is_some()
+    }
+
     pub fn new() -> Self {
         Self {
             child: Mutex::new(None),

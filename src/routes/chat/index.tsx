@@ -185,10 +185,11 @@ export default component$(() => {
         })
         .catch(() => (buildInstalled.value = false));
     }
-    // Install completion can land while any page is open - flip the gate.
-    import("@tauri-apps/api/event").then(({ listen }) =>
-      listen("build-install-done", () => (buildInstalled.value = true)),
-    );
+    // Install/uninstall can land while any page is open - flip the gate.
+    import("@tauri-apps/api/event").then(({ listen }) => {
+      listen("build-install-done", () => (buildInstalled.value = true));
+      listen("build-uninstalled", () => (buildInstalled.value = false));
+    });
     // The bridge owns the workspace: after navigating away and back (the
     // route remounts), pick the open folder back up from its status.
     if (!agentState.folderPath) {

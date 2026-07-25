@@ -186,3 +186,25 @@ fn extract_archive(archive: &std::path::Path, dest: &std::path::Path) -> Result<
         Ok(())
     }
 }
+
+/// Remove the installed agent. Refused while a project is open (closing it
+/// is one click; yanking the binary from a live session is not).
+#[tauri::command]
+pub async fn uninstall_build_agent(
+    app: AppHandle,
+    bridge: tauri::State<'_, crate::agent_bridge::AgentBridgeState>,
+) -> Result<(), String> {
+    if bridge.has_open_folder().await {
+        return Err("Close the open project first, then uninstall.".to_string());
+    }
+    if DOWNLOADING.load(Ordering::SeqCst) {
+        return Err("The download is still running - let it finish first.".to_string());
+    }
+    let dir = install_dir(&app)?;
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).map_err(|e| format!("could not remove: {}", e))?;
+    }
+    let _ = app.emit("build-uninstalled", serde_json::json!({}));
+    log::info!("[build] uninstalled Your Own AI Build");
+    Ok(())
+}

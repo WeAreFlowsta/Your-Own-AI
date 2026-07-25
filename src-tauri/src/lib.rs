@@ -554,6 +554,7 @@ pub fn run() {
             agent_bridge::read_agent_task_logs,
             build_install::build_install_status,
             build_install::download_build_agent,
+            build_install::uninstall_build_agent,
             agent_bridge::path_is_dir,
             agent_bridge::path_is_file,
             terminal::open_in_terminal,
