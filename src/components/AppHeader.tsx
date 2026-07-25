@@ -338,6 +338,11 @@ export default component$<AppHeaderProps>(
                         <button
                           type="button"
                           disabled={!buildReady.value}
+                          title={
+                            buildReady.value
+                              ? "Pick any folder on your computer"
+                              : "Download Your Own AI Build below to activate projects"
+                          }
                           onClick$={() => {
                             folderMenuOpen.value = false;
                             onBrowseFolder$?.();
