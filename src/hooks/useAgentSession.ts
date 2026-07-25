@@ -61,6 +61,35 @@ export interface AgentSessionState {
  *  limits, surfaced through the proxy as 429s. */
 const OVERLOAD_RE = /overload|429|too many requests|rate.?limit/i;
 
+/** A resumed conversation restores the transcript for the USER's eyes, but
+ *  the agent process starts blank - it never saw those turns, so it forgets
+ *  commands it gave ten minutes ago. This digest (built from the chain's
+ *  own record) rides invisibly ahead of the first prompt of a session that
+ *  opened onto existing history. Plain text = model-agnostic: whichever
+ *  model serves the session reads the same past. */
+function buildResumeDigest(messages: Message[]): string {
+  const turns = messages.filter(
+    (m) => (m.role === "user" || m.role === "assistant") && m.content && !m.error,
+  );
+  const recent = turns.slice(-12);
+  const parts: string[] = [];
+  let budget = 5000;
+  for (const m of recent) {
+    const cap = m.role === "user" ? 300 : 600;
+    let text = m.content.replace(/\s+/g, " ").trim();
+    if (text.length > cap) text = text.slice(0, cap) + " ..";
+    if (text.length > budget) break;
+    budget -= text.length;
+    parts.push(`${m.role === "user" ? "User" : "You"}: ${text}`);
+  }
+  if (!parts.length) return "";
+  return (
+    "[Restored context - this conversation continued across a session restart. What happened earlier:]\n" +
+    parts.join("\n") +
+    "\n[End of restored context. Continue naturally - you can rely on the above, including any commands or plans you already worked out.]\n\n"
+  );
+}
+
 export interface UseAgentSessionProps {
   chatState: UseChatState;
   selectedAi: Signal<SelectedAiModel>;
@@ -260,6 +289,10 @@ export function useAgentSession(props: UseAgentSessionProps) {
   // The most recent user prompt - the overload offer resends it after the
   // user accepts a model switch, so the failed question gets its answer.
   const lastPrompt = useSignal<string>("");
+  // Set when a session comes up with conversation history already on
+  // screen (a resume, or a folder reopen mid-conversation): the next
+  // prompt carries the restored-context digest.
+  const digestPending = useSignal(false);
   // The message id of the current turn's reply bubble.
   const turnId = useSignal<string | null>(null);
 
@@ -462,8 +495,20 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.status = "working";
     state.liveStatus = "Thinking..";
     props.chatState.isLoading = true;
+    // First prompt after a resume: the restored-context digest rides ahead
+    // of the question ON THE WIRE only - the bubble and the transcript keep
+    // the clean question (the digest is derived from the chain; recording
+    // it again would just duplicate history).
+    let wire = text;
+    if (digestPending.value) {
+      digestPending.value = false;
+      // Exclude the just-asked question + its loading bubble (appended by
+      // startTurnBubble before dispatch on every path).
+      const digest = buildResumeDigest(props.chatState.messages.slice(0, -2));
+      if (digest) wire = digest + text;
+    }
     try {
-      await invokeTauri("send_agent_prompt", { text });
+      await invokeTauri("send_agent_prompt", { text: wire });
     } catch (err) {
       state.status = "ready";
       props.chatState.isLoading = false;
@@ -722,6 +767,12 @@ export function useAgentSession(props: UseAgentSessionProps) {
     const unReady = await listen<{ sessionId: string }>("agent-ready", async () => {
       state.status = "ready";
       state.statusNote = "";
+      // A session that comes up with history already on screen is a resume
+      // (or a mid-conversation reopen) - the agent itself starts blank, so
+      // the next prompt must carry the restored-context digest.
+      digestPending.value = props.chatState.messages.some(
+        (m) => m.role === "assistant" && !!m.content,
+      );
       const q = queued.value;
       if (q) {
         queued.value = null;
