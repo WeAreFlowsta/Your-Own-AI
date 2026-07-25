@@ -391,11 +391,11 @@ export default component$<AppHeaderProps>(
                       {!buildReady.value && (
                         <span class="block mt-3">
                           <Callout intent="info" title="Projects">
-                            Open a folder and your AI works in it with you -
-                            reading files, making edits, and running commands,
-                            always with your permission. Everything it does is
-                            kept in your records. Projects need Your Own AI
-                            Build, a free add-on.
+                            Open a project folder for agentic coding - Read
+                            files, make edits, and run commands, always with
+                            your permission. Every step recorded in your
+                            private transcripts. Projects need Your Own AI
+                            Build, a free add-on. Download below.
                           </Callout>
                           {buildDownloading.value ? (
                             <span class="block mt-2 px-1">
