@@ -15,7 +15,7 @@ export function useHeaderWorkspace() {
   const buildInstalled = useSignal(false);
   const recentFolders = useSignal<string[]>([]);
   const folderPath = useSignal<string | null>(null);
-  const folderStatus = useSignal<"ready" | "stopped" | undefined>(undefined);
+  const folderStatus = useSignal<"starting" | "ready" | "stopped" | undefined>(undefined);
 
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async ({ cleanup }) => {
@@ -25,13 +25,19 @@ export function useHeaderWorkspace() {
       buildInstalled.value = await invoke<boolean>("path_is_file", {
         path: resolveBinaryPath(),
       });
-      const status = await invoke<{ running: boolean; folder: string | null }>(
-        "build_agent_status",
-      );
+      const status = await invoke<{
+        running: boolean;
+        sessionId: string | null;
+        folder: string | null;
+      }>("build_agent_status");
       folderPath.value = status.folder;
+      // Running without a session id = still starting (the orange state
+      // must survive navigation - the session lives in Rust, not the page).
       folderStatus.value = status.folder
         ? status.running
-          ? "ready"
+          ? status.sessionId
+            ? "ready"
+            : "starting"
           : "stopped"
         : undefined;
     } catch {
@@ -42,7 +48,19 @@ export function useHeaderWorkspace() {
     const un = await listen("build-install-done", () => {
       buildInstalled.value = true;
     });
-    cleanup(un);
+    // The session's lifecycle continues while this page is open - keep the
+    // slot honest through startup, readiness, and death.
+    const unReady = await listen("agent-ready", () => {
+      if (folderPath.value) folderStatus.value = "ready";
+    });
+    const unExit = await listen("agent-exit", () => {
+      if (folderPath.value) folderStatus.value = "stopped";
+    });
+    cleanup(() => {
+      un();
+      unReady();
+      unExit();
+    });
   });
 
   const openConversations$ = $(async () => {

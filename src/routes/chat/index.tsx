@@ -193,11 +193,19 @@ export default component$(() => {
     // The bridge owns the workspace: after navigating away and back (the
     // route remounts), pick the open folder back up from its status.
     if (!agentState.folderPath) {
-      invoke<{ running: boolean; folder: string | null }>("build_agent_status")
+      invoke<{ running: boolean; sessionId: string | null; folder: string | null }>(
+        "build_agent_status",
+      )
         .then((status) => {
           if (status.folder && !agentState.folderPath) {
             agentState.folderPath = status.folder;
-            agentState.status = status.running ? "ready" : "stopped";
+            // Mid-startup remount keeps the starting state; the hook's own
+            // agent-ready listener flips it live.
+            agentState.status = status.running
+              ? status.sessionId
+                ? "ready"
+                : "starting"
+              : "stopped";
           }
         })
         .catch(() => {});
