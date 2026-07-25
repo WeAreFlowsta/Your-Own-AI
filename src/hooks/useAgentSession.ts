@@ -170,7 +170,7 @@ function humanizeMcpName(name: string): string {
 /** Short human handle for a permission receipt: the command if there is
  *  one, else the tool title. Receipts may shorten; the CARD never does. */
 function receiptSubject(p: AgentPermission): string {
-  const s = p.command || p.title;
+  const s = p.command || p.detail || p.title;
   return s.length > 48 ? s.slice(0, 45) + "..." : s;
 }
 
@@ -1205,6 +1205,22 @@ export function useAgentSession(props: UseAgentSessionProps) {
         kind: tc.kind,
         command:
           typeof tc.rawInput?.command === "string" ? tc.rawInput.command : undefined,
+        // The exact payload of a tool ask (the note being remembered, the
+        // query being run..) - the card must show what is actually asked.
+        detail: (() => {
+          const input = tc.rawInput;
+          if (!input || typeof input !== "object" || typeof input.command === "string") {
+            return undefined;
+          }
+          if (typeof input.note === "string") return input.note;
+          const strings = Object.entries(input).filter(
+            ([, v]) => typeof v === "string" && (v as string).trim(),
+          );
+          if (strings.length === 1) return strings[0][1] as string;
+          return strings.length
+            ? strings.map(([k, v]) => `${k}: ${v}`).join("\n")
+            : undefined;
+        })(),
         diff: extractDiff(tc.content),
         locations,
         options: (params.options ?? []).map((o: any) => ({

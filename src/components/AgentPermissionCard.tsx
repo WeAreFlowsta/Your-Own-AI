@@ -144,11 +144,21 @@ export const AgentPermissionCard = component$<AgentPermissionCardProps>(
             {verbFor(permission.kind)}
           </div>
 
-          {/* The exact ask - a command is NEVER truncated. */}
+          {/* The exact ask - a command (or tool payload) is NEVER
+              truncated. The title alone is only for asks with no payload. */}
           {permission.command ? (
             <pre class="text-sm rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)] p-3 whitespace-pre-wrap break-all font-mono text-[var(--text-primary)]">
               {permission.command}
             </pre>
+          ) : permission.detail ? (
+            <>
+              {permission.title && (
+                <p class="text-sm text-[var(--text-secondary)]">{permission.title}</p>
+              )}
+              <pre class="text-sm rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)] p-3 whitespace-pre-wrap break-words font-mono text-[var(--text-primary)]">
+                {permission.detail}
+              </pre>
+            </>
           ) : (
             permission.title && (
               <p class="text-sm text-[var(--text-secondary)]">{permission.title}</p>

@@ -246,6 +246,9 @@ export interface AgentPermission {
   kind?: string;
   /** The exact command for execute asks - shown whole, never truncated. */
   command?: string;
+  /** The exact payload for tool asks with no command - e.g. the NOTE the
+   *  agent wants to remember. Shown verbatim on the card. */
+  detail?: string;
   /** The edit shown as a real diff (collapsed preview + "show all"). */
   diff?: AgentActionDiff;
   locations?: string[];
