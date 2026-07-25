@@ -874,12 +874,21 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
     ) {
       hasAnchoredStart.value = true;
       // Defer a frame so the user-question sibling is in the DOM + laid out, then
-      // jump (instant — nothing races it) to put the QUESTION at the top, with the
-      // new bubble + action bar right below it. Only scroll if the question node is
-      // present — anchoring the assistant itself would push the question off the top.
+      // jump to put the QUESTION at the top, with the new bubble + action bar
+      // right below it. Two hard-won details: the height reservation must be in
+      // the layout BEFORE the jump measures (the sibling task can lose that race
+      // on smaller/slower screens, landing the question shy of the top), and the
+      // jump must be literally 'instant' — 'auto' obeys the container's
+      // scroll-smooth CSS and animates, which mid-stream scroll work cuts short.
       requestAnimationFrame(() => {
-        const question = rootRef.value?.previousElementSibling as HTMLElement | null;
-        question?.scrollIntoView({ behavior: 'auto', block: 'start' });
+        const root = rootRef.value;
+        if (!root) return;
+        const container = root.closest('.overflow-y-auto') as HTMLElement | null;
+        if (container && props.isLast && props.message.role === 'assistant') {
+          root.style.minHeight = `${container.clientHeight}px`;
+        }
+        const question = root.previousElementSibling as HTMLElement | null;
+        question?.scrollIntoView({ behavior: 'instant', block: 'start' });
       });
     }
   });
