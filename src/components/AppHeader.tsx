@@ -161,7 +161,7 @@ export default component$<AppHeaderProps>(
                       ? `The folder helper stopped - reopen ${folderPath} to keep working.`
                       : folderStatus === 'working'
                         ? `Your AI is working in ${folderPath} right now.`
-                        : `Your AI is working in ${folderPath}. Ask anything about this folder.`
+                        : `This conversation's workspace: ${folderPath}. Your AI can read and change files here.`
                 }
               >
                 <span
