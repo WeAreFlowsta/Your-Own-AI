@@ -7,6 +7,7 @@ import {
   component$,
   useContext,
   useSignal,
+  useVisibleTask$,
   $,
   type QRL,
 } from "@builder.io/qwik";
@@ -28,6 +29,7 @@ import {
 import { ThemeContext, ProjectMemoryContext, type AppTheme } from "../routes/layout";
 
 import LiquidMetalButton from "./LiquidMetalButton";
+import { Callout } from "./Callout";
 import logoLight from "../assets/logo-light.svg";
 import logo from "../assets/logo.svg";
 import logoSymbolLight from "../assets/logo-symbol-light.svg";
@@ -117,6 +119,47 @@ export default component$<AppHeaderProps>(
     // The project-memory modal lives at the layout root (route stacking
     // contexts would bury it here) - this signal opens it.
     const memoryFolder = useContext(ProjectMemoryContext);
+    // Install-on-demand: the projects surface shows for EVERYONE; the
+    // agent add-on downloads from here. The download runs in the Rust
+    // runtime - navigating away never interrupts it.
+    const buildReady = useSignal(buildInstalled);
+    const buildDownloading = useSignal(false);
+    const buildProgress = useSignal(0);
+    const buildError = useSignal<string | null>(null);
+
+    // eslint-disable-next-line qwik/no-use-visible-task
+    useVisibleTask$(async ({ cleanup }) => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const unProgress = await listen<any>("model-download-progress", (e) => {
+        const f = e.payload?.filename;
+        if (typeof f === "string" && f.startsWith("your-own-ai-build-")) {
+          buildDownloading.value = true;
+          buildProgress.value = Math.round(e.payload?.percent ?? 0);
+        }
+      });
+      const unDone = await listen<any>("build-install-done", (e) => {
+        buildDownloading.value = false;
+        buildReady.value = true;
+        buildError.value = null;
+        const path = e.payload?.path;
+        if (typeof path === "string" && path) {
+          try {
+            localStorage.setItem("build-binary-path", path);
+          } catch {
+            /* resolver falls back */
+          }
+        }
+      });
+      const unFail = await listen<any>("build-install-failed", (e) => {
+        buildDownloading.value = false;
+        buildError.value = String(e.payload?.error ?? "download failed");
+      });
+      cleanup(() => {
+        unProgress();
+        unDone();
+        unFail();
+      });
+    });
 
     const setTheme = $((t: AppTheme) => {
       theme.value = t;
@@ -249,15 +292,39 @@ export default component$<AppHeaderProps>(
                 )}
               </span>
             )}
-            {buildInstalled && !folderPath && (
+            {!folderPath && (
               <span class="relative">
                 <LiquidMetalButton
-                  onClick$={() => (folderMenuOpen.value = !folderMenuOpen.value)}
+                  onClick$={async () => {
+                    folderMenuOpen.value = !folderMenuOpen.value;
+                    if (folderMenuOpen.value) {
+                      try {
+                        const { invoke } = await import("@tauri-apps/api/core");
+                        const s = (await invoke("build_install_status")) as {
+                          installed: boolean;
+                          downloading: boolean;
+                          error: string | null;
+                        };
+                        buildReady.value = s.installed || buildInstalled;
+                        buildDownloading.value = s.downloading;
+                        buildError.value = s.error;
+                      } catch {
+                        buildReady.value = buildInstalled;
+                      }
+                    }
+                  }}
                   variant="secondary"
-                  class="flex items-center justify-center w-9 h-9 cursor-pointer"
-                  title="Open a project - your AI can work inside it"
+                  class="flex items-center justify-center w-9 h-9 cursor-pointer relative"
+                  title={
+                    buildDownloading.value
+                      ? `Downloading Your Own AI Build - ${buildProgress.value}%`
+                      : "Projects - your AI working in a folder with you"
+                  }
                 >
                   <LuFolderOpen class="h-[18px] w-[18px]" />
+                  {buildDownloading.value && (
+                    <span class="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-orange-500 animate-pulse" />
+                  )}
                 </LiquidMetalButton>
                 {folderMenuOpen.value && (
                   <>
@@ -265,38 +332,119 @@ export default component$<AppHeaderProps>(
                       class="fixed inset-0 z-[45]"
                       onClick$={() => (folderMenuOpen.value = false)}
                     />
-                    <span class="absolute right-0 top-full mt-2 w-64 rounded-2xl bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] py-1 shadow-lg z-50 overflow-hidden block">
-                      {recentFolders.map((p) => (
+                    <span class="absolute right-0 top-full mt-2 w-[26rem] max-w-[92vw] rounded-2xl bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] p-3 shadow-lg z-50 block">
+                      {/* The picker: one big deliberate act, recents beside it. */}
+                      <span class="grid grid-cols-2 gap-3 block">
                         <button
-                          key={p}
                           type="button"
+                          disabled={!buildReady.value}
                           onClick$={() => {
                             folderMenuOpen.value = false;
-                            onOpenFolder$?.(p);
+                            onBrowseFolder$?.();
                           }}
-                          title={p}
-                          class="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)]"
+                          class={`flex flex-col items-center justify-center gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-6 text-sm text-[var(--text-dropdown)] ${
+                            buildReady.value
+                              ? "hover:bg-[var(--bg-dropdown-hover)] cursor-pointer"
+                              : "opacity-40 cursor-default"
+                          }`}
                         >
-                          <LuFolderOpen class="h-4 w-4 shrink-0 opacity-60" />
-                          <span dir="rtl" class="truncate">
-                            {'‎' + displayPath(p)}
+                          <LuFolderOpen class="h-8 w-8 opacity-80" />
+                          <span class="text-center leading-snug">
+                            Choose the
+                            <br />
+                            project's folder
                           </span>
                         </button>
-                      ))}
-                      {recentFolders.length > 0 && (
-                        <span class="block border-t border-[var(--border-subtle)] my-1" />
+                        <span class="flex flex-col min-w-0 block">
+                          <span class="block px-1 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                            Recent projects
+                          </span>
+                          {buildReady.value && recentFolders.length > 0 ? (
+                            recentFolders.slice(0, 5).map((p) => (
+                              <button
+                                key={p}
+                                type="button"
+                                onClick$={() => {
+                                  folderMenuOpen.value = false;
+                                  onOpenFolder$?.(p);
+                                }}
+                                title={p}
+                                class="flex w-full items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)] min-w-0"
+                              >
+                                <LuFolderOpen class="h-3.5 w-3.5 shrink-0 opacity-50" />
+                                <span dir="rtl" class="truncate">
+                                  {'‎' + displayPath(p)}
+                                </span>
+                              </button>
+                            ))
+                          ) : (
+                            <span class="block px-2 py-1.5 text-xs text-[var(--text-muted)]">
+                              {buildReady.value
+                                ? "Projects you open will gather here."
+                                : "Your recent projects will appear here."}
+                            </span>
+                          )}
+                        </span>
+                      </span>
+
+                      {/* Not installed yet: what projects are + the one step. */}
+                      {!buildReady.value && (
+                        <span class="block mt-3">
+                          <Callout intent="info" title="Projects">
+                            Open a folder and your AI works in it with you -
+                            reading files, making edits, and running commands,
+                            always with your permission. Everything it does is
+                            kept in your records. Projects need Your Own AI
+                            Build, a free add-on.
+                          </Callout>
+                          {buildDownloading.value ? (
+                            <span class="block mt-2 px-1">
+                              <span class="flex items-center justify-between text-xs text-[var(--text-secondary)] mb-1">
+                                <span>Downloading Your Own AI Build..</span>
+                                <span>{buildProgress.value}%</span>
+                              </span>
+                              <span class="block h-1.5 rounded-full bg-[var(--border-subtle)] overflow-hidden">
+                                <span
+                                  class="block h-full rounded-full bg-[var(--text-link)] transition-all"
+                                  style={{ width: `${buildProgress.value}%` }}
+                                />
+                              </span>
+                              <span class="block mt-1 text-[11px] text-[var(--text-muted)]">
+                                Keep using the app - this continues in the
+                                background.
+                              </span>
+                            </span>
+                          ) : (
+                            <span class="block mt-2">
+                              {buildError.value && (
+                                <span class="block px-1 pb-1 text-xs text-red-500 dark:text-red-400">
+                                  The download hit a problem: {buildError.value}
+                                </span>
+                              )}
+                              <LiquidMetalButton
+                                class="w-full px-4 py-2 text-sm"
+                                onClick$={async () => {
+                                  buildError.value = null;
+                                  buildDownloading.value = true;
+                                  buildProgress.value = 0;
+                                  try {
+                                    const { invoke } = await import("@tauri-apps/api/core");
+                                    invoke("download_build_agent").catch(() => {
+                                      /* failure arrives via its event */
+                                    });
+                                  } catch {
+                                    buildDownloading.value = false;
+                                  }
+                                }}
+                              >
+                                {buildError.value
+                                  ? "Try the download again"
+                                  : "Download Your Own AI Build (about 50 MB)"}
+                              </LiquidMetalButton>
+                            </span>
+                          )}
+                        </span>
                       )}
-                      <button
-                        type="button"
-                        onClick$={() => {
-                          folderMenuOpen.value = false;
-                          onBrowseFolder$?.();
-                        }}
-                        class="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)]"
-                      >
-                        <LuFolderOpen class="h-4 w-4 shrink-0" />
-                        Choose the project's folder..
-                      </button>
                     </span>
                   </>
                 )}

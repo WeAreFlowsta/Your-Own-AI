@@ -163,9 +163,32 @@ export default component$(() => {
     recentFolders.value = readRecentFolders();
     if (!buildInstalled.value) {
       invoke<boolean>("path_is_file", { path: resolveBinaryPath() })
-        .then((present) => (buildInstalled.value = present))
+        .then(async (present) => {
+          if (present) {
+            buildInstalled.value = true;
+            return;
+          }
+          // The saved path can go stale (cleared storage, moved data dir) -
+          // the installer's own record is the fallback truth.
+          try {
+            const s = (await invoke("build_install_status")) as {
+              installed: boolean;
+              path: string | null;
+            };
+            if (s.installed && s.path) {
+              localStorage.setItem("build-binary-path", s.path);
+              buildInstalled.value = true;
+            }
+          } catch {
+            buildInstalled.value = false;
+          }
+        })
         .catch(() => (buildInstalled.value = false));
     }
+    // Install completion can land while any page is open - flip the gate.
+    import("@tauri-apps/api/event").then(({ listen }) =>
+      listen("build-install-done", () => (buildInstalled.value = true)),
+    );
     // The bridge owns the workspace: after navigating away and back (the
     // route remounts), pick the open folder back up from its status.
     if (!agentState.folderPath) {
@@ -201,8 +224,15 @@ export default component$(() => {
     currentLabel: string;
     suggestion?: SelectedAiModel;
   } | null>(null);
+  // Any attempt to open a project without the Build add-on funnels here -
+  // one modal, one download, installs in the background.
+  const installAsk = useSignal(false);
 
   const openFolderGuarded = $(async (path: string) => {
+    if (!buildInstalled.value) {
+      installAsk.value = true;
+      return;
+    }
     openFolder$(path);
     try {
       const score = await invoke<number>("agent_capability", {
@@ -750,6 +780,10 @@ export default component$(() => {
   });
 
   const handleBrowseFolder = $(async () => {
+    if (!buildInstalled.value) {
+      installAsk.value = true;
+      return;
+    }
     try {
       const { open } = await import("@tauri-apps/plugin-dialog");
       const selected = await open({ directory: true, title: "Choose the project's folder" });
@@ -1388,6 +1422,27 @@ export default component$(() => {
         })}
       />
 
+      {/* Opening a project without the Build add-on: one modal, one
+          download, background install - the header icon shows progress. */}
+      <ConfirmModal
+        isOpen={installAsk.value}
+        title="Projects need Your Own AI Build"
+        message="Your AI can work in project folders once Your Own AI Build is installed - a free add-on, about 50 MB. It downloads in the background while you keep chatting; the project icon in the header shows progress."
+        confirmLabel="Download now"
+        cancelLabel="Not now"
+        onConfirm$={async () => {
+          installAsk.value = false;
+          try {
+            invoke("download_build_agent").catch(() => {});
+          } catch {
+            /* the header surfaces failures */
+          }
+        }}
+        onCancel$={() => {
+          installAsk.value = false;
+        }}
+      />
+
       {/* Folder guard: the workspace opened, but this AI's model is a poor
           fit for agent work - offer the switch, never substitute quietly. */}
       <ConfirmModal
@@ -1452,7 +1507,12 @@ export default component$(() => {
         onConfirm$={async () => {
           const folder = resumeFolderAsk.value;
           resumeFolderAsk.value = null;
-          if (folder) await openFolder$(folder);
+          if (!folder) return;
+          if (!buildInstalled.value) {
+            installAsk.value = true;
+            return;
+          }
+          await openFolder$(folder);
         }}
         onCancel$={() => {
           resumeFolderAsk.value = null;

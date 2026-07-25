@@ -18,7 +18,7 @@ export function useHeaderWorkspace() {
   const folderStatus = useSignal<"ready" | "stopped" | undefined>(undefined);
 
   // eslint-disable-next-line qwik/no-use-visible-task
-  useVisibleTask$(async () => {
+  useVisibleTask$(async ({ cleanup }) => {
     recentFolders.value = readRecentFolders();
     try {
       const { invoke } = await import("@tauri-apps/api/core");
@@ -37,6 +37,12 @@ export function useHeaderWorkspace() {
     } catch {
       /* header extras are best-effort */
     }
+    // A background install finishing flips the gate on every page.
+    const { listen } = await import("@tauri-apps/api/event");
+    const un = await listen("build-install-done", () => {
+      buildInstalled.value = true;
+    });
+    cleanup(un);
   });
 
   const openConversations$ = $(async () => {

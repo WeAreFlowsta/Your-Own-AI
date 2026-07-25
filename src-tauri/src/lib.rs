@@ -15,6 +15,7 @@ mod memory;               // Phase A persistent memory (encrypted profile facts)
 mod transcript_memory;    // Per-AI episodic memory (embedded conversation turns)
 mod gpu_safety;           // GPU crash-loop → CPU fallback (safe mode)
 mod agent_bridge;         // Your Own AI Build coding agent over ACP (stdio JSON-RPC)
+mod build_install;       // Your Own AI Build install-on-demand
 mod terminal;             // open a suggested command in the user's own terminal
 mod inference_server;     // OpenAI-compatible local server (external apps use custom AIs)
 mod inference_memory;     // backend memory assembly for the inference server
@@ -551,6 +552,8 @@ pub fn run() {
             agent_bridge::stop_build_agent,
             agent_bridge::build_agent_status,
             agent_bridge::read_agent_task_logs,
+            build_install::build_install_status,
+            build_install::download_build_agent,
             agent_bridge::path_is_dir,
             agent_bridge::path_is_file,
             terminal::open_in_terminal,
