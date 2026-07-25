@@ -94,7 +94,11 @@ export const WorkspaceMemoryModal = component$<{
             </h2>
             <p class="text-xs text-[var(--text-muted)] truncate">
               {revisions.value > 0
-                ? `${revisions.value} revision${revisions.value === 1 ? "" : "s"} in your records - shared by all your AIs`
+                ? `${rows.value.length} note${rows.value.length === 1 ? "" : "s"}${
+                    rows.value.length >= MEMORY_MAX_LINES * 0.8
+                      ? ` (of ${MEMORY_MAX_LINES} - older notes make room for new ones)`
+                      : ""
+                  } - ${revisions.value} revision${revisions.value === 1 ? "" : "s"} in your records, shared by all your AIs`
                 : "Nothing remembered yet - it grows as your AIs work here"}
             </p>
           </div>
