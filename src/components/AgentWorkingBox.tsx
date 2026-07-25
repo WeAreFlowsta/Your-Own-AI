@@ -306,7 +306,18 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                   const a = row.action;
                   const hasDiff = !!a.diff?.lines?.length;
                   const hasOutput = !!a.output || hasDiff;
-                  const open = !!openOutputs.value[a.toolCallId];
+                  // Full view shows the substance UNASKED: edit diffs and
+                  // running background logs open by default; a click still
+                  // collapses (the explicit choice wins). Simple view keeps
+                  // everything behind the click.
+                  const explicit = openOutputs.value[a.toolCallId];
+                  const open =
+                    explicit !== undefined
+                      ? explicit
+                      : showThoughts.value && (hasDiff || a.liveLine !== undefined);
+                  const liveLog = a.liveLine !== undefined && a.output
+                    ? a.output.split("\n").slice(-15).join("\n")
+                    : null;
                   return (
                     <div key={row.id} class="overflow-hidden">
                       <button
@@ -314,7 +325,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                         onClick$={() => {
                           openOutputs.value = {
                             ...openOutputs.value,
-                            [a.toolCallId]: !openOutputs.value[a.toolCallId],
+                            [a.toolCallId]: !open,
                           };
                         }}
                         class={`relative flex w-full items-baseline gap-2 py-0.5 text-left font-mono text-xs text-[var(--text-muted)] bg-transparent border-none ${hasOutput ? "hover:text-[var(--text-secondary)] cursor-pointer" : "cursor-default"}`}
@@ -357,8 +368,10 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                       )}
                       {open && !hasDiff && a.output && (
                         <pre class="mt-1 mb-1.5 text-[11px] rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)] p-2 whitespace-pre-wrap break-all font-mono text-[var(--text-secondary)] max-h-64 overflow-y-auto">
-                          {a.detail && a.detail !== a.output ? `${a.detail}\n\n` : ""}
-                          {a.output}
+                          {liveLog !== null
+                            ? liveLog
+                            : (a.detail && a.detail !== a.output ? `${a.detail}\n\n` : "") +
+                              a.output}
                         </pre>
                       )}
                     </div>
