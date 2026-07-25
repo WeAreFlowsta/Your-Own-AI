@@ -95,6 +95,13 @@ export default component$<ChatContainerProps>((props) => {
       return;
     }
     if (!tipAttached.value) return;
+    // A turn that JUST started has nothing to follow - the pearl idles right
+    // under the question, and the send anchor owns the view. On narrow
+    // screens the wrapped question pushes the pearl below the fold, and
+    // following it here yanked the question straight back off the top.
+    // Follow only once there is real progress to track.
+    const last = props.messages[props.messages.length - 1];
+    if (last?.agentTurn && !(last.agentLog ?? []).length && !last.content) return;
     requestAnimationFrame(async () => {
       const tip = await tipBelowFold();
       if (tip?.below) tip.el.scrollIntoView({ behavior: 'auto', block: 'end' });
