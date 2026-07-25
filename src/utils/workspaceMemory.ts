@@ -190,13 +190,19 @@ export function memoryRows(content: string): string[] {
   return content.split("\n").filter((l) => l.trim() !== "");
 }
 
-/** The block that rides ahead of a folder session's first prompt. */
+/** The block that rides ahead of a project session's first prompt. The
+ *  tool hint teaches the agent its deliberate-memory habit - saved notes
+ *  land on the chain the moment they are learned, not just at session end. */
 export function memoryPromptBlock(memory: string): string {
-  if (!memory.trim()) return "";
+  const hint =
+    "[This project has a shared memory. When you learn something durable - a command that works, a key file location, a convention, a decision - save it immediately with the remember_for_project tool.]\n";
+  if (!memory.trim()) return hint + "\n";
   return (
-    "[Workspace memory - durable notes about this folder from earlier work. Trust them, but verify anything that looks stale:]\n" +
+    "[Project memory - durable notes from earlier work. Trust them, but verify anything that looks stale:]\n" +
     memory.trim() +
-    "\n[End of workspace memory.]\n\n"
+    "\n[End of project memory.]\n" +
+    hint +
+    "\n"
   );
 }
 

@@ -700,6 +700,10 @@ export function useAgentSession(props: UseAgentSessionProps) {
         // true context window into the agent's config.
         aiModel: props.selectedAi.value.aiConfig?.model ?? null,
         eagerness: localStorage.getItem("smartRoutingEagerness") || "balanced",
+        // Identity for the project-memory MCP server: notes the agent
+        // saves deliberately are written to THIS AI's chain, labeled.
+        agentKey: props.selectedAi.value.aiConfig?.agentPubKey ?? null,
+        aiLabel: props.selectedAi.value.label ?? null,
       });
     } catch (err) {
       state.status = "idle";
@@ -904,10 +908,12 @@ export function useAgentSession(props: UseAgentSessionProps) {
       memoryPending.value = false;
       const folder = state.folderPath;
       if (folder) {
+        // The first prompt always carries at least the tool hint; the
+        // memory content joins it when the chain read lands in time.
+        memoryPending.value = true;
         getWorkspaceMemory(folder)
           .then((m) => {
             workspaceMemory.value = m.content;
-            memoryPending.value = !!m.content;
             // A leftover pending digest means an earlier session ended
             // without its memory distillation (cancel, quit, crash) -
             // catch up now, with the memory freshly loaded.

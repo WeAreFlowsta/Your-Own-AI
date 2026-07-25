@@ -76,6 +76,7 @@ pub fn spawn(app: AppHandle) {
             .route("/health", get(|| async { Json(json!({ "status": "ok" })) }))
             .route("/v1/models", get(list_models))
             .route("/v1/chat/completions", post(chat_completions))
+            .route("/mcp", post(mcp_post).get(mcp_get))
             .with_state(app);
 
         let addr = format!("127.0.0.1:{PORT}");
@@ -858,6 +859,128 @@ fn spawn_record(rec: RecordCtx, assistant: String) {
 fn conv_key_lookup(key: &Option<String>) -> Option<(String, u32)> {
     let key = key.as_ref()?;
     conv_map().lock().unwrap().get(key).cloned()
+}
+
+// ── project-memory MCP endpoint ─────────────────────────────────────────────
+//
+// The Build agent's deliberate-memory tools, served over MCP Streamable
+// HTTP. The bridge declares this server in `session/new` with headers
+// naming the project and the writing AI; the agent then saves durable
+// notes THE MOMENT it learns them (`remember_for_project`) and can check
+// what is already known (`read_project_memory`). Responses mirror the
+// minimal shape the agent's own client tests accept: plain JSON bodies,
+// an mcp-session-id on initialize, bare 202 for notifications, and a
+// hang-open SSE stream on GET.
+
+fn mcp_result(id: &Value, result: Value) -> Response {
+    Json(json!({ "jsonrpc": "2.0", "id": id, "result": result })).into_response()
+}
+
+fn mcp_tool_text(id: &Value, text: String, is_error: bool) -> Response {
+    mcp_result(
+        id,
+        json!({ "content": [{ "type": "text", "text": text }], "isError": is_error }),
+    )
+}
+
+async fn mcp_post(
+    State(app): State<AppHandle>,
+    headers: HeaderMap,
+    Json(req): Json<Value>,
+) -> Response {
+    let id = req["id"].clone();
+    let folder = header_str(&headers, "x-project").unwrap_or_default();
+    let agent_key = header_str(&headers, "x-agent-key").unwrap_or_default();
+    let agent_label = header_str(&headers, "x-agent-label").unwrap_or_else(|| "your AI".into());
+    match req["method"].as_str() {
+        Some("initialize") => {
+            let mut resp = mcp_result(
+                &id,
+                json!({
+                    "protocolVersion": req["params"]["protocolVersion"].clone(),
+                    "capabilities": { "tools": {} },
+                    "serverInfo": { "name": "project-memory", "version": env!("CARGO_PKG_VERSION") },
+                }),
+            );
+            resp.headers_mut()
+                .insert("mcp-session-id", header::HeaderValue::from_static("project-memory"));
+            resp
+        }
+        Some("tools/list") => mcp_result(
+            &id,
+            json!({ "tools": [
+                {
+                    "name": "remember_for_project",
+                    "description": "Save one durable note to this project's shared memory - a command that works, a key file location, a convention, a decision. Use it the moment you learn something future sessions will need. Keep each note to one line.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "note": { "type": "string", "description": "The durable note, one line." }
+                        },
+                        "required": ["note"]
+                    }
+                },
+                {
+                    "name": "read_project_memory",
+                    "description": "Read this project's current shared memory notes.",
+                    "inputSchema": { "type": "object", "properties": {} }
+                }
+            ] }),
+        ),
+        Some("tools/call") => {
+            if folder.is_empty() {
+                return mcp_tool_text(&id, "No project is open.".to_string(), true);
+            }
+            match req["params"]["name"].as_str() {
+                Some("remember_for_project") => {
+                    let note = req["params"]["arguments"]["note"].as_str().unwrap_or("");
+                    if agent_key.is_empty() {
+                        return mcp_tool_text(&id, "No writer identity for this session.".to_string(), true);
+                    }
+                    match crate::commands_holochain::project_memory_append_note(
+                        &app, &agent_key, &agent_label, &folder, note,
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            log::info!("[mcp] {} remembered a note for {}", agent_label, folder);
+                            mcp_tool_text(&id, "Remembered for this project.".to_string(), false)
+                        }
+                        Err(e) => {
+                            log::warn!("[mcp] remember_for_project failed: {e}");
+                            mcp_tool_text(&id, format!("Could not save the note: {e}"), true)
+                        }
+                    }
+                }
+                Some("read_project_memory") => {
+                    match crate::commands_holochain::project_memory_read(&app, &folder).await {
+                        Ok(content) if !content.trim().is_empty() => {
+                            mcp_tool_text(&id, content, false)
+                        }
+                        Ok(_) => mcp_tool_text(&id, "(no project memory yet)".to_string(), false),
+                        Err(e) => mcp_tool_text(&id, format!("Could not read memory: {e}"), true),
+                    }
+                }
+                other => mcp_tool_text(&id, format!("Unknown tool: {:?}", other), true),
+            }
+        }
+        // notifications/initialized and anything else: acknowledge quietly.
+        _ => StatusCode::ACCEPTED.into_response(),
+    }
+}
+
+async fn mcp_get() -> Response {
+    // A hang-open SSE stream (the client keeps it for server-initiated
+    // messages; we never send any).
+    let stream = async_stream::stream! {
+        let () = std::future::pending().await;
+        yield Ok::<_, std::io::Error>(String::new());
+    };
+    (
+        [(header::CONTENT_TYPE, "text/event-stream")],
+        Body::from_stream(stream),
+    )
+        .into_response()
 }
 
 #[cfg(test)]

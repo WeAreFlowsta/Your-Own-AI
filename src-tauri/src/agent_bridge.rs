@@ -195,6 +195,8 @@ pub async fn start_build_agent(
     model: Option<String>,
     ai_model: Option<String>,
     eagerness: Option<String>,
+    agent_key: Option<String>,
+    ai_label: Option<String>,
 ) -> Result<(), String> {
     // One agent at a time: replace any previous instance. Bumping the
     // generation FIRST makes the old process's reader stand down - its
@@ -253,6 +255,10 @@ pub async fn start_build_agent(
 
     let workspace = cwd.clone();
     let session_model = model.clone();
+    let memory_identity = (
+        agent_key.clone().unwrap_or_default(),
+        ai_label.clone().unwrap_or_default(),
+    );
     let reader_app = app_handle.clone();
     tauri::async_runtime::spawn(async move {
         let mut exit_code: Option<i32> = None;
@@ -268,7 +274,7 @@ pub async fn start_build_agent(
                     let Ok(msg) = serde_json::from_str::<Value>(&text) else {
                         continue;
                     };
-                    handle_agent_message(&reader_app, &workspace, &session_model, msg).await;
+                    handle_agent_message(&reader_app, &workspace, &session_model, &memory_identity, msg).await;
                 }
                 CommandEvent::Stderr(line) => {
                     if !stale {
@@ -323,6 +329,7 @@ async fn handle_agent_message(
     app: &AppHandle,
     workspace: &str,
     session_model: &Option<String>,
+    memory_identity: &(String, String),
     msg: Value,
 ) {
     let state = app.state::<AgentBridgeState>();
@@ -340,13 +347,31 @@ async fn handle_agent_message(
         }
         // Responses to our own requests.
         (None, Some(INIT_ID)) => {
+            // The project-memory MCP server: the agent saves durable notes
+            // the moment it learns them (remember_for_project) and can read
+            // what's already known. Served by our own :11435; the headers
+            // carry the project + the writing AI's identity.
+            let mcp_servers = if memory_identity.0.is_empty() {
+                json!([])
+            } else {
+                json!([{
+                    "type": "http",
+                    "name": "project-memory",
+                    "url": "http://127.0.0.1:11435/mcp",
+                    "headers": [
+                        { "name": "x-project", "value": workspace },
+                        { "name": "x-agent-key", "value": memory_identity.0 },
+                        { "name": "x-agent-label", "value": memory_identity.1 }
+                    ]
+                }])
+            };
             let request = json!({
                 "jsonrpc": "2.0",
                 "id": SESSION_NEW_ID,
                 "method": "session/new",
                 "params": {
                     "cwd": workspace,
-                    "mcpServers": [],
+                    "mcpServers": mcp_servers,
                     "_meta": { "clientIdentifier": CLIENT_IDENTIFIER }
                 }
             });

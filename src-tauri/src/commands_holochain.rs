@@ -540,6 +540,136 @@ pub async fn record_grounding_annotation(
     Ok(hex::encode(hash.get_raw_39()))
 }
 
+/// Project memory, Rust side - the agent's deliberate-memory MCP tools
+/// write through the SAME chain paths as the UI. Mirrors the frontend's
+/// merge-on-read rule: the newest revision across every provisioned
+/// agent's chain wins; notes append to the writer's own conversation.
+pub const WORKSPACE_MEMORY_SOURCE: &str = "workspace-memory";
+pub const WORKSPACE_MEMORY_MAX_LINES: usize = 60;
+
+/// The current memory for a folder: newest revision across all agents.
+/// Returns (content, writer_hint) where writer_hint is the conversation
+/// owner of the newest revision (unused by callers today, kept for parity).
+pub async fn project_memory_read(
+    app: &tauri::AppHandle,
+    folder: &str,
+) -> Result<String, String> {
+    use tauri::Manager;
+    let hc_state = app.state::<Arc<HolochainState>>();
+    let manager = hc_state.get()?;
+    let agent_keys: Vec<String> = {
+        let agents = manager.agents.lock().await;
+        agents.keys().cloned().collect()
+    };
+    let mut best_ts = 0i64;
+    let mut best = String::new();
+    for key in agent_keys {
+        let Ok(conversations) = get_conversations(key.clone(), app.state()).await else {
+            continue;
+        };
+        for c in conversations {
+            if c.source.as_deref() != Some(WORKSPACE_MEMORY_SOURCE) {
+                continue;
+            }
+            if c.title.as_deref() != Some(folder) {
+                continue;
+            }
+            let Ok(entries) = get_conversation_transcript(c.agent_key.clone(), c.hash.clone(), app.state()).await
+            else {
+                continue;
+            };
+            for e in entries {
+                if e.timestamp > best_ts {
+                    best_ts = e.timestamp;
+                    best = e.content;
+                }
+            }
+        }
+    }
+    Ok(best)
+}
+
+/// Append a note row to the folder's memory as a new revision on the
+/// writer's chain (trimmed oldest-first under the cap - the next automatic
+/// distillation curates it into shape).
+pub async fn project_memory_append_note(
+    app: &tauri::AppHandle,
+    writer_key: &str,
+    writer_label: &str,
+    folder: &str,
+    note: &str,
+) -> Result<(), String> {
+    use tauri::Manager;
+    let capped: String = note
+        .lines()
+        .take(12)
+        .collect::<Vec<_>>()
+        .join(" / ")
+        .chars()
+        .take(1000)
+        .collect();
+    let capped = capped.trim();
+    if capped.is_empty() {
+        return Err("empty note".to_string());
+    }
+    let current = project_memory_read(app, folder).await?;
+    let row = format!("- [saved by {}] {}", writer_label, capped);
+    let mut lines: Vec<String> = current
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(str::to_string)
+        .collect();
+    lines.push(row);
+    if lines.len() > WORKSPACE_MEMORY_MAX_LINES {
+        let cut = lines.len() - WORKSPACE_MEMORY_MAX_LINES;
+        lines.drain(0..cut);
+    }
+    let content = lines.join("\n");
+
+    // Reuse the writer's memory conversation for this folder, else start one.
+    let conversations = get_conversations(writer_key.to_string(), app.state()).await?;
+    let existing = conversations.into_iter().find(|c| {
+        c.source.as_deref() == Some(WORKSPACE_MEMORY_SOURCE) && c.title.as_deref() == Some(folder)
+    });
+    let (conv_key, hash, seq) = match existing {
+        Some(c) => {
+            let entries = get_conversation_transcript(c.agent_key.clone(), c.hash.clone(), app.state()).await?;
+            let seq = entries.iter().map(|e| e.sequence).max().map(|s| s + 1).unwrap_or(0);
+            (c.agent_key, c.hash, seq)
+        }
+        None => {
+            let hash = start_conversation(
+                app.clone(),
+                writer_key.to_string(),
+                writer_label.to_string(),
+                "workspace-memory".to_string(),
+                Some(folder.to_string()),
+                Some(WORKSPACE_MEMORY_SOURCE.to_string()),
+                app.state(),
+            )
+            .await?;
+            (writer_key.to_string(), hash, 0)
+        }
+    };
+    record_transcript_entry(
+        app.clone(),
+        conv_key,
+        hash,
+        "assistant".to_string(),
+        content,
+        seq,
+        "workspace-memory".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        app.state(),
+    )
+    .await?;
+    Ok(())
+}
+
 /// Is the conductor up? The transcript surface reads empty during startup,
 /// which is indistinguishable from "no conversations" - callers that would
 /// show an empty state poll this first and keep their spinner up instead.
