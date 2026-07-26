@@ -73,7 +73,7 @@ export default component$(() => {
       intent="premium"
       title="Your NVIDIA graphics card can go faster"
       id="home-tip-cuda-engine"
-      class="mb-4 text-left"
+      class="mt-10 text-left"
     >
       {done.value ? (
         <p>

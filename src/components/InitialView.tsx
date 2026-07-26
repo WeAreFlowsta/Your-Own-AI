@@ -30,7 +30,6 @@ interface InitialViewProps {
 export default component$<InitialViewProps>((props) => {
   return (
     <div class="w-full max-w-4xl mx-auto">
-      <CudaOfferCallout />
       <ChatInputBar
         input={props.input}
         handleSubmit$={props.handleSubmit$}
@@ -60,6 +59,7 @@ export default component$<InitialViewProps>((props) => {
           </button>
         </div>
       )}
+      <CudaOfferCallout />
     </div>
   );
 });
