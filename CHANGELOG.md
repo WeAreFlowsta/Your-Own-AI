@@ -3,6 +3,40 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.1.0-beta.10] - 2026-07-27
+
+### Added
+- **Projects: agentic coding in chat.** Open a project folder and your AI
+  works in it - reads files, makes edits, and runs commands, always with
+  your permission. Every step is recorded in your private transcripts.
+  Projects need Your Own AI Build, a free add-on downloaded with one
+  click from inside the app (the project menu or the Components page).
+- **See the work as it happens.** A working turn shows its whole story
+  live: each step with a readable label and its real result, the model's
+  thinking, file edits as colored diffs, and long-running commands
+  streaming their output - full scrollback while they run, following the
+  newest line until you scroll up. When the turn ends it folds into a
+  single summary line you can reopen any time. A "Simple project view"
+  setting trims the verbosity, never the liveness.
+- **Project memory.** Each project keeps a memory all your AIs share:
+  an AI can deliberately save a note while it works (you see exactly
+  what it wants to save before allowing it), each session's takeaways
+  are distilled when you finish, and you can edit every line yourself.
+  Remember something "for this project" or "for this AI" - your choice.
+- **Conversations pick up where they left off.** Reopening a project
+  conversation restores what the AI knew, so it remembers the plans and
+  commands from earlier instead of starting blank.
+- **Cost-aware routing for projects.** Side tasks run on your device when
+  your hardware is comfortably up to it, and a thrifty setting keeps
+  whole project sessions on-device when they fit. The routing settings
+  explain exactly what happens and when.
+
+### Fixed
+- A reply could occasionally go missing from your records when two
+  saves landed at the same moment. Saving is now serialized per
+  identity and retried, and long results are trimmed to fit instead of
+  failing silently.
+
 ## [0.1.0-beta.9] - 2026-07-17
 
 ### Added
