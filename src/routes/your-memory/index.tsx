@@ -9,11 +9,13 @@ import { component$ } from "@builder.io/qwik";
 import { type DocumentHead, useNavigate } from "@builder.io/qwik-city";
 import { LuArrowLeft, LuBrain } from "@qwikest/icons/lucide";
 import AppHeader from "../../components/AppHeader";
+import { useHeaderWorkspace } from "../../hooks/useHeaderWorkspace";
 import LiquidMetalButton from "../../components/LiquidMetalButton";
 import ProfileMemory from "../../components/ProfileMemory";
 
 export default component$(() => {
   const nav = useNavigate();
+  const headerWs = useHeaderWorkspace();
 
   return (
     <div class="flex flex-col h-screen bg-[var(--bg-main)]">
@@ -21,6 +23,14 @@ export default component$(() => {
         currentModel={null}
         handleNewQuestion$={() => nav("/chat/")}
         handleModelsClick$={() => nav("/setup/")}
+        folderPath={headerWs.folderPath.value}
+        folderStatus={headerWs.folderStatus.value}
+        onCloseFolder$={headerWs.closeFolder$}
+        buildInstalled={headerWs.buildInstalled.value}
+        recentFolders={headerWs.recentFolders.value}
+        onOpenFolder$={headerWs.openFolder$}
+        onBrowseFolder$={headerWs.browseFolder$}
+        onOpenConversations$={headerWs.openConversations$}
       />
 
       <div class="flex-1 overflow-y-auto">

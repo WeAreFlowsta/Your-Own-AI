@@ -16,6 +16,22 @@ import { invoke } from "@tauri-apps/api/core";
 import { ThemeContext } from "../layout";
 import { useAiData, useAiDataActions } from "../../contexts/AiDataContext";
 import { useChat } from "../../hooks/useChat";
+import { useAgentSession, readRecentFolders, resolveBinaryPath } from "../../hooks/useAgentSession";
+import { ConversationsDrawer } from "../../components/ConversationsDrawer";
+import {
+  listAllConversations,
+  loadConversationMessages,
+  getConversationFolder,
+  rememberLastConversation,
+  readLastConversation,
+  sanitizeTitle,
+  setConversationTitleOverride,
+  getConversationTitleOverride,
+  type ConversationListItem,
+  type LastConversationPointer,
+} from "../../utils/conversationResume";
+import { waitForHolochainReady } from "../../utils/holochainTranscripts";
+import ConfirmModal from "../../components/ConfirmModal";
 import { drainPendingExtractions, prewarmExtractionModel } from "../../utils/memoryExtraction";
 import GpuSafeModeNotice from "../../components/GpuSafeModeNotice";
 import { VisionDownloadCard } from "../../components/VisionDownloadCard";
@@ -122,9 +138,247 @@ export default component$(() => {
     modelTooBig,
   });
 
+  // Folder (Build agent) session - while a folder is open, every prompt goes
+  // through the agent instead of the direct model call (one brain).
+  const {
+    agentState,
+    openFolder$,
+    closeFolder$,
+    sendPrompt$: sendAgentPrompt$,
+    cancelTurn$,
+    respondPermission$,
+    answerPermissionByReply$,
+    acceptOverloadOffer$,
+    dismissOverloadOffer$,
+  } = useAgentSession({ chatState, selectedAi });
+  const showCloseFolderConfirm = useSignal(false);
+  // The header workspace slot: exists only when Build is installed.
+  const buildInstalled = useSignal(false);
+  const recentFolders = useSignal<string[]>([]);
+
+
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    track(() => agentState.folderPath);
+    recentFolders.value = readRecentFolders();
+    if (!buildInstalled.value) {
+      invoke<boolean>("path_is_file", { path: resolveBinaryPath() })
+        .then(async (present) => {
+          if (present) {
+            buildInstalled.value = true;
+            return;
+          }
+          // The saved path can go stale (cleared storage, moved data dir) -
+          // the installer's own record is the fallback truth.
+          try {
+            const s = (await invoke("build_install_status")) as {
+              installed: boolean;
+              path: string | null;
+            };
+            if (s.installed && s.path) {
+              localStorage.setItem("build-binary-path", s.path);
+              buildInstalled.value = true;
+            }
+          } catch {
+            buildInstalled.value = false;
+          }
+        })
+        .catch(() => (buildInstalled.value = false));
+    }
+    // Install/uninstall can land while any page is open - flip the gate.
+    import("@tauri-apps/api/event").then(({ listen }) => {
+      listen("build-install-done", () => (buildInstalled.value = true));
+      listen("build-uninstalled", () => (buildInstalled.value = false));
+    });
+    // The bridge owns the workspace: after navigating away and back (the
+    // route remounts), pick the open folder back up from its status.
+    if (!agentState.folderPath) {
+      invoke<{ running: boolean; sessionId: string | null; folder: string | null }>(
+        "build_agent_status",
+      )
+        .then((status) => {
+          if (status.folder && !agentState.folderPath) {
+            agentState.folderPath = status.folder;
+            // Mid-startup remount keeps the starting state; the hook's own
+            // agent-ready listener flips it live.
+            agentState.status = status.running
+              ? status.sessionId
+                ? "ready"
+                : "starting"
+              : "stopped";
+          }
+        })
+        .catch(() => {});
+    }
+  });
+
   // --- Build dynamic model options from unified AI list ---
   const dynamicModelOptions = useSignal<SelectedAiModel[]>([]);
   const currentSelectedOptionInListbox = useSignal<SelectedAiModel | undefined>(undefined);
+
+  // Conversations: the temporal lens - every conversation is a place.
+  const conversationsOpen = useSignal(false);
+  const conversationsLoading = useSignal(false);
+  const conversationItems = useSignal<ConversationListItem[]>([]);
+  const lastConversation = useSignal<LastConversationPointer | null>(null);
+  // A folder the resumed conversation worked in (ask before switching).
+  const resumeFolderAsk = useSignal<string | null>(null);
+
+  // Folder guard: opening a workspace with an AI whose model can't drive
+  // agent work offers a switch - the folder still opens (workspace is
+  // app-wide), and there is NEVER a silent model substitution. Auto-routing
+  // AIs (score -1) pass: the router decides per turn.
+  const folderGuard = useSignal<{
+    path: string;
+    currentLabel: string;
+    suggestion?: SelectedAiModel;
+  } | null>(null);
+  // Any attempt to open a project without the Build add-on funnels here -
+  // one modal, one download, installs in the background.
+  const installAsk = useSignal(false);
+
+  const openFolderGuarded = $(async (path: string) => {
+    if (!buildInstalled.value) {
+      installAsk.value = true;
+      return;
+    }
+    openFolder$(path);
+    try {
+      const score = await invoke<number>("agent_capability", {
+        model: selectedAi.value.aiConfig?.model || "",
+      });
+      if (score >= 0 && score < 6) {
+        let suggestion: SelectedAiModel | undefined;
+        for (const option of dynamicModelOptions.value) {
+          if (option.id === selectedAi.value.id) continue;
+          const s = await invoke<number>("agent_capability", {
+            model: option.aiConfig?.model || "",
+          });
+          if (s >= 6) {
+            suggestion = option;
+            break;
+          }
+        }
+        folderGuard.value = {
+          path,
+          currentLabel: selectedAi.value.label,
+          suggestion,
+        };
+      }
+    } catch {
+      /* the guard is advisory - never block the folder on it */
+    }
+  });
+
+  /** Re-enter a conversation: rebuild the messages from its transcript and
+   *  keep appending to the same hash. */
+  const resumeConversation = $(
+    async (target: { hash: string; agentKey: string; aiId?: string }) => {
+      if (chatState.isLoading) return;
+      conversationsOpen.value = false;
+      // Match the AI by agent key first (robust), then by id.
+      const ai =
+        dynamicModelOptions.value.find(
+          (o) => o.aiConfig?.agentPubKey === target.agentKey,
+        ) ??
+        dynamicModelOptions.value.find((o) => o.id === target.aiId) ??
+        selectedAi.value;
+      selectedAi.value = ai;
+      resetChat();
+      // A resume fired right after launch (the Memory-page handoff or the
+      // hero Continue line) can outrun the conductor - reads would come
+      // back empty and the conversation would look blank or unanswered.
+      await waitForHolochainReady();
+      const { messages, nextSequence, folderPath } = await loadConversationMessages(
+        target.agentKey,
+        target.hash,
+        ai,
+      );
+      if (messages.length === 0) return;
+      chatState.messages = messages;
+      chatState.conversationHash = target.hash;
+      chatState.messageSequence = nextSequence;
+      const firstUser = messages.find((m) => m.role === "user");
+      rememberLastConversation({
+        hash: target.hash,
+        agentKey: target.agentKey,
+        aiId: ai.id,
+        title: firstUser?.content.slice(0, 80) ?? "Conversation",
+      });
+      // Worked in a folder? Ask before switching the workspace - never
+      // silently swap it. The transcript's own record wins; the client map
+      // covers conversations from before the transcript carried it.
+      const folder = folderPath ?? getConversationFolder(target.hash);
+      if (folder && folder !== agentState.folderPath) {
+        resumeFolderAsk.value = folder;
+      }
+    },
+  );
+
+  const openConversations = $(async () => {
+    conversationsOpen.value = true;
+    conversationsLoading.value = true;
+    try {
+      // Right after app launch the conductor is still starting and reads
+      // come back empty - hold the spinner until it's actually up, so the
+      // drawer never shows "nothing yet" about records that exist.
+      await waitForHolochainReady();
+      conversationItems.value = await listAllConversations(
+        dynamicModelOptions.value,
+      );
+    } finally {
+      conversationsLoading.value = false;
+    }
+  });
+
+  // Last-conversation pointer: written whenever a chat-path conversation
+  // starts (the agent path writes its own), read for the hero line. Also
+  // honor a resume handoff from the Memory page (sessionStorage - query
+  // params are unreliable in the packaged app).
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    const hash = track(() => chatState.conversationHash);
+    lastConversation.value = readLastConversation();
+    if (hash) {
+      const firstUser = chatState.messages.find((m) => m.role === "user");
+      const agentKey = selectedAi.value.aiConfig?.agentPubKey;
+      if (agentKey) {
+        rememberLastConversation({
+          hash,
+          agentKey,
+          aiId: selectedAi.value.id,
+          title: firstUser?.content.slice(0, 80) ?? "Conversation",
+        });
+        lastConversation.value = readLastConversation();
+      }
+    }
+  });
+
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(() => {
+    try {
+      if (sessionStorage.getItem("open-conversations")) {
+        sessionStorage.removeItem("open-conversations");
+        setTimeout(() => openConversations(), 300);
+      }
+      const pendingFolder = sessionStorage.getItem("pending-open-folder");
+      if (pendingFolder) {
+        sessionStorage.removeItem("pending-open-folder");
+        setTimeout(() => openFolderGuarded(pendingFolder), 300);
+      }
+      const raw = sessionStorage.getItem("resume-conversation");
+      if (raw) {
+        sessionStorage.removeItem("resume-conversation");
+        const target = JSON.parse(raw);
+        if (target?.hash && target?.agentKey) {
+          // Model options hydrate async - give them a beat.
+          setTimeout(() => resumeConversation(target), 400);
+        }
+      }
+    } catch {
+      /* no handoff */
+    }
+  });
 
   // Auto-resume a message that was waiting on a vision-model download, once the
   // app-level manager reports it finished for this AI (fires on completion or when
@@ -418,7 +672,19 @@ export default component$(() => {
 
   // --- Callbacks (replace useCallback with $()) ---
   const handleSubmit = $(async () => {
-    if (!input.value.trim() || chatState.isLoading) return;
+    if (!input.value.trim()) return;
+
+    // Typing while a permission card waits IS the answer: decline with
+    // instructions - the reply shows in place and goes to the agent next.
+    if (agentState.pendingPermissionId) {
+      const text = input.value;
+      input.value = "";
+      selectedAction.value = null;
+      await answerPermissionByReply$(text);
+      return;
+    }
+
+    if (chatState.isLoading) return;
 
     const finalInput = selectedAction.value
       ? `${selectedAction.value.replace(/\.\.\.$/, "")} ${input.value}`
@@ -433,11 +699,44 @@ export default component$(() => {
       fileContext = `[Attached files for context]\n\n${fileContextParts.join('\n\n')}`;
     }
 
+    // Folder open -> the agent session is the one brain for this
+    // conversation. Attached-file text rides along; images are a direct-chat
+    // feature for now.
+    if (agentState.folderPath) {
+      const agentInput = fileContext
+        ? `${fileContext}\n\n${finalInput}`
+        : finalInput;
+      sendAgentPrompt$(agentInput);
+      input.value = "";
+      selectedAction.value = null;
+      attachedImages.value = [];
+      return;
+    }
+
     const images = attachedImages.value.map((i) => i.dataUrl);
     sendMessage(finalInput, selectedAction.value, fileContext, images);
     input.value = "";
     selectedAction.value = null;
     attachedImages.value = []; // image is per-turn — don't silently re-send it
+  });
+
+  // Stop: an agent turn cancels over ACP (the agent still ends the turn);
+  // a direct model turn aborts the stream.
+  const handleStop = $(async () => {
+    if (agentState.folderPath && chatState.isLoading) {
+      await cancelTurn$();
+    } else {
+      await stopGeneration();
+    }
+  });
+
+  // Chip close: instant when idle, one confirm when the agent is mid-task.
+  const handleCloseFolder = $(async () => {
+    if (chatState.isLoading) {
+      showCloseFolderConfirm.value = true;
+    } else {
+      await closeFolder$();
+    }
   });
 
   const scrollToBottom = $((behavior: ScrollBehavior = "smooth") => {
@@ -461,6 +760,46 @@ export default component$(() => {
     sidePanelContent.value = null;
     attachedFiles.value = [];
     attachedImages.value = [];
+    // The workspace is app-wide: a new conversation starts IN it, with a
+    // fresh agent session in the same folder. (Process restart for now -
+    // the generation guard makes it safe; session-in-place later.)
+    if (agentState.folderPath) openFolder$(agentState.folderPath);
+  });
+
+  // Send a suggested command to the user's own terminal - visible,
+  // interruptible, theirs. Default: pre-filled on the prompt, Enter to run
+  // (the final look stays with the user); the setting flips to immediate.
+  // Opens in the workspace folder when one is open.
+  const handleOpenTerminal = $(async (command: string) => {
+    const immediate = localStorage.getItem("terminal-run-immediately") === "true";
+    try {
+      if (!immediate) {
+        // Belt and braces for the press-Enter flow (and cmd on Windows,
+        // which cannot pre-fill): the command is also on the clipboard.
+        await navigator.clipboard.writeText(command).catch(() => {});
+      }
+      await invoke("open_in_terminal", {
+        command,
+        cwd: agentState.folderPath ?? null,
+        immediate,
+      });
+    } catch (err) {
+      console.error("[ChatPage] Could not open a terminal:", err);
+    }
+  });
+
+  const handleBrowseFolder = $(async () => {
+    if (!buildInstalled.value) {
+      installAsk.value = true;
+      return;
+    }
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({ directory: true, title: "Choose the project's folder" });
+      if (typeof selected === "string" && selected) openFolderGuarded(selected);
+    } catch (err) {
+      console.error("[ChatPage] Folder picker error:", err);
+    }
   });
 
   const handleAttachFiles = $(async (paths: string[]) => {
@@ -469,6 +808,17 @@ export default component$(() => {
     // crashes on more than one image per request, so a new image replaces the last.
     const imageExts = ["png", "jpg", "jpeg", "gif", "bmp"];
     for (const filePath of paths) {
+      // Dropping a FOLDER opens it (like dropping a folder on an editor);
+      // dropping a file stays an attachment.
+      try {
+        if (await invoke<boolean>("path_is_dir", { path: filePath })) {
+          openFolderGuarded(filePath);
+          continue;
+        }
+      } catch {
+        // Classifier unavailable - treat as a file.
+      }
+
       const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
 
       // Images take the vision path: read as a base64 data URL (not text).
@@ -618,6 +968,16 @@ export default component$(() => {
           isModelLoading={isModelLoading.value}
           modelTooBig={modelTooBig.value}
           showModelWidget={showModelWidget.value && currentModel.value !== null}
+          folderPath={agentState.folderPath}
+          folderStatus={
+            agentState.status === "idle" ? undefined : agentState.status
+          }
+          onCloseFolder$={handleCloseFolder}
+          buildInstalled={buildInstalled.value}
+          recentFolders={recentFolders.value}
+          onOpenFolder$={openFolderGuarded}
+          onBrowseFolder$={handleBrowseFolder}
+          onOpenConversations$={openConversations}
         />
       </div>
 
@@ -642,7 +1002,7 @@ export default component$(() => {
               input={input}
               handleSubmit$={handleSubmit}
               isLoading={chatState.isLoading}
-              stopChat$={stopGeneration}
+              stopChat$={handleStop}
               currentPlaceholder={`Ask ${selectedAi.value.label} ${
                 selectedAi.value.aiConfig?.askBlurb &&
                 selectedAi.value.aiConfig.askBlurb.trim() !== ""
@@ -667,6 +1027,34 @@ export default component$(() => {
               attachedImages={attachedImages}
               contextWindowSize={contextWindowSize.value}
               onAttachFiles$={handleAttachFiles}
+              onOpenFolder$={openFolder$}
+              onOpenTerminal$={handleOpenTerminal}
+              lastConversationTitle={
+                lastConversation.value
+                  ? getConversationTitleOverride(lastConversation.value.hash) ??
+                    sanitizeTitle(lastConversation.value.title)
+                  : undefined
+              }
+              onContinueLast$={$(() => {
+                const last = lastConversation.value;
+                if (last) resumeConversation(last);
+              })}
+              onPermissionRespond$={respondPermission$}
+              onPermissionOffscreen$={$((off: boolean) => {
+                agentState.pendingCardOffscreen = off;
+              })}
+              showPermissionPill={
+                agentState.pendingPermissionId !== null &&
+                agentState.pendingCardOffscreen
+              }
+              agentStreaming={
+                agentState.folderPath !== null && chatState.isLoading
+              }
+              liveStatus={agentState.liveStatus}
+              agentRetryStatus={agentState.retryStatus || undefined}
+              onPermissionJump$={$(() => {
+                messagesEndRef.value?.scrollIntoView({ behavior: "smooth", block: "end" });
+              })}
             />
 
             <div class="max-w-4xl mx-auto w-full px-4">
@@ -1005,12 +1393,158 @@ export default component$(() => {
                   codeString={sidePanelContent.value.codeString}
                   language={sidePanelContent.value.language}
                   theme={theme.value}
+                  // The panel's own X - same effect as the message's Hide
+                  // Code button, so either door closes it and Show Code
+                  // reopens it.
+                  onClose$={() => {
+                    isSidePanelVisible.value = false;
+                  }}
+                  onOpenTerminal$={handleOpenTerminal}
                 />
               </div>
             </>
           )}
         </main>
       </div>
+
+      {/* Conversations drawer - every conversation is a place. */}
+      <ConversationsDrawer
+        open={conversationsOpen.value}
+        items={conversationItems.value}
+        loading={conversationsLoading.value}
+        onClose$={$(() => {
+          conversationsOpen.value = false;
+        })}
+        onResume$={$((item: ConversationListItem) =>
+          resumeConversation({
+            hash: item.conversation.hash,
+            agentKey: item.conversation.agent_key,
+            aiId: item.aiId,
+          }),
+        )}
+        onRename$={$((hash: string, title: string) => {
+          setConversationTitleOverride(hash, title);
+          conversationItems.value = conversationItems.value.map((i) =>
+            i.conversation.hash === hash ? { ...i, title } : i,
+          );
+          lastConversation.value = readLastConversation();
+        })}
+      />
+
+      {/* Opening a project without the Build add-on: one modal, one
+          download, background install - the header icon shows progress. */}
+      <ConfirmModal
+        isOpen={installAsk.value}
+        title="Projects need Your Own AI Build"
+        message="Your AI can work in project folders once Your Own AI Build is installed - a free add-on, about 50 MB. It downloads in the background while you keep chatting; the project icon in the header shows progress."
+        confirmLabel="Download now"
+        cancelLabel="Not now"
+        onConfirm$={async () => {
+          installAsk.value = false;
+          try {
+            invoke("download_build_agent").catch(() => {});
+          } catch {
+            /* the header surfaces failures */
+          }
+        }}
+        onCancel$={() => {
+          installAsk.value = false;
+        }}
+      />
+
+      {/* Folder guard: the workspace opened, but this AI's model is a poor
+          fit for agent work - offer the switch, never substitute quietly. */}
+      <ConfirmModal
+        isOpen={folderGuard.value !== null}
+        title={`${folderGuard.value?.currentLabel ?? "This AI"} may struggle with project work`}
+        message={
+          folderGuard.value?.suggestion
+            ? `${folderGuard.value.currentLabel}'s model isn't built for tool work, so project tasks may stall or fail. ${folderGuard.value.suggestion.label} can drive them properly - switch this project to ${folderGuard.value.suggestion.label}?`
+            : `${folderGuard.value?.currentLabel ?? "This AI"}'s model isn't built for tool work, so project tasks may stall or fail. None of your other AIs are set up for it yet either - an online model like Kimi, or an agentic coder from the model library, works best.`
+        }
+        confirmLabel={
+          folderGuard.value?.suggestion
+            ? `Use ${folderGuard.value.suggestion.label}`
+            : "OK"
+        }
+        cancelLabel={
+          folderGuard.value?.suggestion
+            ? `Keep ${folderGuard.value.currentLabel}`
+            : "Keep going"
+        }
+        onConfirm$={async () => {
+          const guard = folderGuard.value;
+          folderGuard.value = null;
+          if (guard?.suggestion) {
+            selectedAi.value = guard.suggestion;
+            await openFolder$(guard.path);
+          }
+        }}
+        onCancel$={() => {
+          folderGuard.value = null;
+        }}
+      />
+
+      {/* An agent turn died on an overloaded online model: offer the next
+          capable model for this session - an explicit switch, never a silent
+          reroute. Accepting re-asks the failed question on the new model;
+          the Agent setting itself stays unchanged. */}
+      <ConfirmModal
+        isOpen={agentState.overloadOffer !== null}
+        title={`${agentState.overloadOffer?.failedName ?? "The model"} is overloaded right now`}
+        message={`${agentState.overloadOffer?.failedName ?? "The model"}'s provider is refusing requests at the moment. Use ${agentState.overloadOffer?.altName ?? "another capable model"} for the rest of this session and ask again? Your Agent model setting stays as it is.`}
+        confirmLabel={`Use ${agentState.overloadOffer?.altName ?? "the alternative"}`}
+        cancelLabel="Not now"
+        onConfirm$={async () => {
+          await acceptOverloadOffer$();
+        }}
+        onCancel$={async () => {
+          await dismissOverloadOffer$();
+        }}
+      />
+
+      {/* Resumed a conversation that worked in a folder: ask before
+          switching the workspace - never silently swap it. */}
+      <ConfirmModal
+        isOpen={resumeFolderAsk.value !== null}
+        title="Open this conversation's project?"
+        message={`This conversation worked in ${
+          resumeFolderAsk.value?.split("/").filter(Boolean).pop() ?? "a folder"
+        }. Open that project to keep building?`}
+        confirmLabel="Open project"
+        cancelLabel="Just read"
+        onConfirm$={async () => {
+          const folder = resumeFolderAsk.value;
+          resumeFolderAsk.value = null;
+          if (!folder) return;
+          if (!buildInstalled.value) {
+            installAsk.value = true;
+            return;
+          }
+          await openFolder$(folder);
+        }}
+        onCancel$={() => {
+          resumeFolderAsk.value = null;
+        }}
+      />
+
+      {/* Closing the folder mid-task is the one destructive gesture here -
+          confirm it. Idle closes never see this. */}
+      <ConfirmModal
+        isOpen={showCloseFolderConfirm.value}
+        title="Stop the agent?"
+        message="The agent is still working. Stop it and close the project? Changes already made stay on disk."
+        confirmLabel="Stop & close"
+        cancelLabel="Keep working"
+        variant="danger"
+        onConfirm$={async () => {
+          showCloseFolderConfirm.value = false;
+          await closeFolder$();
+        }}
+        onCancel$={() => {
+          showCloseFolderConfirm.value = false;
+        }}
+      />
 
       {/* Welcome Modal — first-run model recommendation and download */}
       {showWelcomeModal.value && (

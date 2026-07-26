@@ -7,19 +7,33 @@
 
 import {
   component$,
+  useContext,
   useSignal,
+  useTask$,
   useVisibleTask$,
   $,
   type Signal,
 } from "@builder.io/qwik";
+import { LuFolderOpen } from "@qwikest/icons/lucide";
+import {
+  listWorkspaceMemories,
+  type WorkspaceMemory,
+} from "../../utils/workspaceMemory";
 import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
-import { LuArrowLeft, LuMessageSquare, LuChevronDown, LuChevronUp, LuInfo, LuDownload, LuShieldCheck, LuBrain, LuUser } from "@qwikest/icons/lucide";
+import { LuArrowLeft, LuMessageSquare, LuChevronDown, LuChevronUp, LuInfo, LuDownload, LuPencil, LuShieldCheck, LuBrain, LuUser } from "@qwikest/icons/lucide";
 import AppHeader from "../../components/AppHeader";
+import { useHeaderWorkspace } from "../../hooks/useHeaderWorkspace";
+import { ProjectMemoryContext } from "../layout";
 import { useAiData } from "../../contexts/AiDataContext";
 import {
   getConversations,
   getTranscript,
 } from "../../utils/holochainTranscripts";
+import {
+  sanitizeTitle,
+  setConversationTitleOverride,
+  getConversationTitleOverride,
+} from "../../utils/conversationResume";
 import type {
   HolochainConversation,
   HolochainTranscriptEntry,
@@ -58,6 +72,7 @@ const MemorySubtitle = component$<{
 
 export default component$(() => {
   const nav = useNavigate();
+  const headerWs = useHeaderWorkspace();
   const aiData = useAiData();
 
   const aiId = useSignal("");
@@ -66,6 +81,11 @@ export default component$(() => {
   const loading = useSignal(true);
   const expandedHash = useSignal<string | null>(null);
   const transcriptEntries = useSignal<HolochainTranscriptEntry[]>([]);
+  // Rename (client-side override until the zome gains a rename fn).
+  const renamingHash = useSignal<string | null>(null);
+  const renameDraft = useSignal("");
+  // Bumped after a rename so the title expressions re-read the override.
+  const titleBump = useSignal(0);
   const transcriptLoading = useSignal(false);
   const transcriptError = useSignal(false);
 
@@ -212,8 +232,26 @@ export default component$(() => {
     }
   });
 
-  // Tabs: Conversations (the per-AI ledger, default) | Knows (read-only mirror).
-  const activeTab = useSignal<"knows" | "conversations">("conversations");
+  // Tabs: Conversations (the per-AI ledger, default) | Knows (read-only
+  // mirror) | Workspaces (per-folder memory, shared by all AIs).
+  const activeTab = useSignal<"knows" | "conversations" | "workspaces">("conversations");
+  const workspaceMemories = useSignal<WorkspaceMemory[]>([]);
+  const workspacesLoading = useSignal(false);
+  // The modal renders at the layout root (route stacking contexts
+  // would bury it) - this shared signal opens it.
+  const memoryFolder = useContext(ProjectMemoryContext);
+
+  useTask$(async ({ track }) => {
+    const tab = track(() => activeTab.value);
+    const reopened = track(() => memoryFolder.value);
+    if (tab !== "workspaces" || reopened) return;
+    workspacesLoading.value = true;
+    try {
+      workspaceMemories.value = await listWorkspaceMemories();
+    } finally {
+      workspacesLoading.value = false;
+    }
+  });
 
   return (
     <div class="flex flex-col h-screen bg-[var(--bg-main)]">
@@ -221,6 +259,14 @@ export default component$(() => {
         currentModel={null}
         handleNewQuestion$={$(() => nav("/chat/"))}
         handleModelsClick$={$(() => nav("/setup/"))}
+        folderPath={headerWs.folderPath.value}
+        folderStatus={headerWs.folderStatus.value}
+        onCloseFolder$={headerWs.closeFolder$}
+        buildInstalled={headerWs.buildInstalled.value}
+        recentFolders={headerWs.recentFolders.value}
+        onOpenFolder$={headerWs.openFolder$}
+        onBrowseFolder$={headerWs.browseFolder$}
+        onOpenConversations$={headerWs.openConversations$}
       />
 
       <div class="flex-1 overflow-y-auto">
@@ -271,6 +317,17 @@ export default component$(() => {
               Conversations
             </button>
             <button
+              onClick$={() => (activeTab.value = "workspaces")}
+              class={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                activeTab.value === "workspaces"
+                  ? "border-[var(--bg-button-primary)] text-[var(--text-primary)]"
+                  : "border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              }`}
+            >
+              <LuFolderOpen class="w-4 h-4" />
+              Projects
+            </button>
+            <button
               onClick$={() => (activeTab.value = "knows")}
               class={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
                 activeTab.value === "knows"
@@ -297,6 +354,46 @@ export default component$(() => {
           )}
 
           {/* Knows tab — the shared profile, read-only here; managed on Your Memory */}
+          {/* Workspaces tab - per-folder memory shared by every AI. */}
+          {activeTab.value === "workspaces" && (
+            <div>
+              <p class="text-sm text-[var(--text-secondary)] mb-4">
+                What your AIs remember about each project they have worked on -
+                commands, conventions, decisions. Kept in your records, shared
+                by all your AIs, yours to edit.
+              </p>
+              {workspacesLoading.value && (
+                <p class="text-sm text-[var(--text-muted)]">Loading from your records..</p>
+              )}
+              {!workspacesLoading.value && workspaceMemories.value.length === 0 && (
+                <p class="text-sm text-[var(--text-muted)]">
+                  Nothing yet - project memory grows as your AIs work on
+                  projects.
+                </p>
+              )}
+              {workspaceMemories.value.map((w) => (
+                <button
+                  key={w.folderPath}
+                  onClick$={() => (memoryFolder.value = w.folderPath)}
+                  class="flex w-full items-center gap-3 px-4 py-3 mb-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] hover:bg-[var(--bg-dropdown-hover)] text-left"
+                >
+                  <LuFolderOpen class="h-4 w-4 shrink-0 opacity-60" />
+                  <span class="min-w-0 flex-1">
+                    <span class="block text-sm text-[var(--text-primary)] truncate">
+                      {w.folderPath.split("/").filter(Boolean).pop()}
+                    </span>
+                    <span class="block text-xs text-[var(--text-muted)] truncate">
+                      {w.folderPath}
+                    </span>
+                  </span>
+                  <span class="shrink-0 text-xs text-[var(--text-muted)]">
+                    {w.revisions} revision{w.revisions === 1 ? "" : "s"}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+
           {activeTab.value === "knows" && (
             <div class="space-y-8">
               <div>
@@ -379,7 +476,39 @@ export default component$(() => {
                       </div>
                       <div class="min-w-0">
                         <div class="font-medium text-[var(--text-primary)] truncate">
-                          {conv.title || "Conversation"}
+                          {renamingHash.value === conv.hash ? (
+                            <input
+                              type="text"
+                              value={renameDraft.value}
+                              autoFocus
+                              onClick$={(e) => e.stopPropagation()}
+                              onInput$={(_, el) => (renameDraft.value = el.value)}
+                              onKeyDown$={(e) => {
+                                if (e.key === "Enter" || e.key === "Escape") {
+                                  if (e.key === "Enter" && renameDraft.value.trim()) {
+                                    setConversationTitleOverride(conv.hash, renameDraft.value.trim());
+                                    titleBump.value++;
+                                  }
+                                  renamingHash.value = null;
+                                }
+                              }}
+                              onBlur$={() => {
+                                if (renameDraft.value.trim()) {
+                                  setConversationTitleOverride(conv.hash, renameDraft.value.trim());
+                                  titleBump.value++;
+                                }
+                                renamingHash.value = null;
+                              }}
+                              class="w-full bg-[var(--bg-input)] border border-[var(--border-input)] rounded-lg px-2 py-1 text-sm"
+                            />
+                          ) : (
+                            <>
+                              {titleBump.value >= 0
+                                ? getConversationTitleOverride(conv.hash) ??
+                                  sanitizeTitle(conv.title)
+                                : ""}
+                            </>
+                          )}
                         </div>
                         <div class="mt-0.5 flex items-center gap-2 flex-wrap text-[11px] text-[var(--text-muted)]">
                           <span>{formatDate(conv.started_at)}</span>
@@ -394,6 +523,18 @@ export default component$(() => {
                           )}
                         </div>
                       </div>
+                    </button>
+                    <button
+                      onClick$={() => {
+                        renameDraft.value =
+                          getConversationTitleOverride(conv.hash) ??
+                          sanitizeTitle(conv.title);
+                        renamingHash.value = conv.hash;
+                      }}
+                      title="Rename this conversation"
+                      class="flex-shrink-0 p-2 rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-main)] hover:text-[var(--text-primary)] transition-colors"
+                    >
+                      <LuPencil class="w-4 h-4" />
                     </button>
                     <button
                       onClick$={() => (exportModalConv.value = conv)}
@@ -417,6 +558,30 @@ export default component$(() => {
                   {/* Expanded transcript */}
                   {expandedHash.value === conv.hash && (
                     <div class="border-t border-[var(--border-subtle)] px-4 py-4 space-y-5">
+                      {/* Every view offers re-entry - a conversation is a
+                          place, not a document. Handoff via sessionStorage
+                          (query params are unreliable in the packaged app). */}
+                      <div class="flex justify-end">
+                        <button
+                          onClick$={() => {
+                            try {
+                              sessionStorage.setItem(
+                                "resume-conversation",
+                                JSON.stringify({
+                                  hash: conv.hash,
+                                  agentKey: conv.agent_key,
+                                }),
+                              );
+                            } catch {
+                              /* handoff unavailable */
+                            }
+                            nav("/chat/");
+                          }}
+                          class="px-3 py-1.5 rounded-lg text-xs text-[var(--text-secondary)] border border-[var(--border-subtle)] hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] transition-colors"
+                        >
+                          Continue this conversation
+                        </button>
+                      </div>
                       {transcriptLoading.value ? (
                         <div class="flex justify-center py-4">
                           <div class="w-5 h-5 border-2 border-[var(--bg-button-primary)] border-t-transparent rounded-full animate-spin" />

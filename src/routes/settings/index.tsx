@@ -10,6 +10,7 @@ import {
 } from "@builder.io/qwik";
 import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
 import AppHeader from "../../components/AppHeader";
+import { useHeaderWorkspace } from "../../hooks/useHeaderWorkspace";
 import packageJson from "../../../package.json";
 import { ThemeContext } from "../layout";
 import { LiquidMetalBorder } from "../../components/LiquidMetalBorder";
@@ -65,12 +66,21 @@ const OnlineModelPicker = component$<{
           <>
             <div class="fixed inset-0 z-40" onClick$={() => { open.value = false; }} />
             <div class="absolute right-0 top-full mt-1 min-w-[13rem] max-h-64 overflow-y-auto z-50 rounded-lg bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] shadow-xl py-1">
+              <div class="px-3 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                Online models
+              </div>
               <button
                 type="button"
-                onClick$={() => {
+                onClick$={async () => {
                   props.selected.value = "";
                   localStorage.removeItem(props.storageKey);
                   open.value = false;
+                  try {
+                    const { Store } = await import("@tauri-apps/plugin-store");
+                    const store = await Store.load("settings.json");
+                    await store.set(props.storageKey, "");
+                    await store.save();
+                  } catch { /* store mirror is best-effort */ }
                 }}
                 class={`block w-full text-left px-3 py-1.5 text-sm hover:bg-[var(--bg-card)] transition-colors ${
                   !props.selected.value
@@ -84,10 +94,16 @@ const OnlineModelPicker = component$<{
                 <button
                   key={m.id}
                   type="button"
-                  onClick$={() => {
+                  onClick$={async () => {
                     props.selected.value = m.id;
                     localStorage.setItem(props.storageKey, m.id);
                     open.value = false;
+                    try {
+                      const { Store } = await import("@tauri-apps/plugin-store");
+                      const store = await Store.load("settings.json");
+                      await store.set(props.storageKey, m.id);
+                      await store.save();
+                    } catch { /* store mirror is best-effort */ }
                   }}
                   class={`block w-full text-left px-3 py-1.5 text-sm hover:bg-[var(--bg-card)] transition-colors ${
                     m.id === props.selected.value
@@ -231,12 +247,19 @@ const RememberDestinationPicker = component$<{
 
 export default component$(() => {
   const nav = useNavigate();
+  const headerWs = useHeaderWorkspace();
 
   const showModelWidget = useSignal(false);
   const showHelpTips = useSignal(true);
   const allowAttachmentsOnline = useSignal(false);
   const groundDocumentsAuto = useSignal(false);
   const smartModeDetection = useSignal(true);
+  // Same key the working box's brain icon toggles - one setting, two doors.
+  // Only shown when the Build agent is actually installed.
+  const agentSimpleView = useSignal(false);
+  const buildInstalled = useSignal(false);
+  // "Run in your terminal" behavior: default = pre-filled, Enter to run.
+  const terminalRunImmediately = useSignal(false);
   const currentModel = useSignal<string | null>(null);
   const rememberScopeSelection = useSignal<RememberScope>("per-ai");
   const rememberScopeReply = useSignal<RememberScope>("per-ai");
@@ -246,10 +269,20 @@ export default component$(() => {
   const routingEagerness = useSignal<"privacy" | "balanced" | "freshness">("balanced");
   const routingLean = useSignal<"speed" | "balanced" | "quality">("balanced");
   // Per-slot online model overrides ("" = the router's recommended default).
+  const onlineAgent = useSignal("");
+  const onlinePlanning = useSignal("");
+  // Project cost levers (router reads the store mirror at session start).
+  const projectDeviceSubagents = useSignal(true);
+  const projectThrifty = useSignal(false);
+  const routingExplainerOpen = useSignal(false);
+  const routingDecisions = useSignal<{ at_ms: number; model: string; reason: string }[]>([]);
   const onlineFresh = useSignal("");
   const onlineHardCode = useSignal("");
   const onlineHardGeneral = useSignal("");
   const onlineModels = useSignal<{ id: string; display_name: string }[]>([]);
+  // Tool-capable subset for the Agent slot (a tools-blind pick would mean
+  // broken folder sessions - the picker only offers models that can drive).
+  const onlineAgentModels = useSignal<{ id: string; display_name: string }[]>([]);
   // May online routing options be OFFERED? (signed in + plan; starts true so
   // a slow check never hides controls from a paying user.)
   const onlineEntitled = useSignal(true);
@@ -271,6 +304,21 @@ export default component$(() => {
       localStorage.getItem("groundDocumentsAuto") === "true";
     smartModeDetection.value =
       localStorage.getItem("smartModeDetection") !== "false"; // default ON
+    // "Simple project view" INVERTS the stored key: absent/"1" = full
+    // detail (the default - the living rail is the product); "0" = simple.
+    agentSimpleView.value = localStorage.getItem("agent-show-thoughts") === "0";
+    terminalRunImmediately.value =
+      localStorage.getItem("terminal-run-immediately") === "true";
+    // Async: reveal the Build settings once the agent binary is confirmed.
+    Promise.all([
+      import("@tauri-apps/api/core"),
+      import("../../hooks/useAgentSession"),
+    ])
+      .then(([{ invoke }, { resolveBinaryPath }]) =>
+        invoke<boolean>("path_is_file", { path: resolveBinaryPath() }),
+      )
+      .then((present) => (buildInstalled.value = present))
+      .catch(() => (buildInstalled.value = false));
     rememberScopeSelection.value = getRememberScope("selection");
     rememberScopeReply.value = getRememberScope("reply");
     memoryLearning.value = !isMemoryPaused();
@@ -284,6 +332,19 @@ export default component$(() => {
       routingLean.value = savedLean;
     }
     onlineFresh.value = localStorage.getItem("routingOnlineFresh") || "";
+    onlineAgent.value = localStorage.getItem("routingOnlineAgent") || "";
+    projectDeviceSubagents.value =
+      localStorage.getItem("routingProjectDeviceSubagents") !== "0";
+    projectThrifty.value = localStorage.getItem("routingProjectThrifty") === "1";
+    onlinePlanning.value = localStorage.getItem("routingOnlinePlanning") || "";
+    import("@tauri-apps/api/core")
+      .then(({ invoke }) =>
+        invoke<{ at_ms: number; model: string; reason: string }[]>(
+          "recent_routing_decisions",
+        ),
+      )
+      .then((d) => (routingDecisions.value = d))
+      .catch(() => {});
     onlineHardCode.value = localStorage.getItem("routingOnlineHardCode") || "";
     onlineHardGeneral.value = localStorage.getItem("routingOnlineHardGeneral") || "";
 
@@ -302,6 +363,17 @@ export default component$(() => {
           const models =
             await invoke<{ id: string; display_name: string }[]>("list_online_models");
           onlineModels.value = models.map(({ id, display_name }) => ({ id, display_name }));
+          Promise.all(
+            onlineModels.value.map(async (m) => {
+              const { invoke } = await import("@tauri-apps/api/core");
+              return {
+                m,
+                cap: await invoke<number>("agent_capability", { model: m.id }).catch(() => 0),
+              };
+            }),
+          ).then((scored) => {
+            onlineAgentModels.value = scored.filter((x) => x.cap >= 6).map((x) => x.m);
+          });
         }
       })
       .catch(() => { /* keep fail-open default */ });
@@ -354,6 +426,19 @@ export default component$(() => {
   const toggleSmartMode = $(() => {
     smartModeDetection.value = !smartModeDetection.value;
     localStorage.setItem("smartModeDetection", smartModeDetection.value.toString());
+  });
+
+  const toggleTerminalImmediate = $(() => {
+    terminalRunImmediately.value = !terminalRunImmediately.value;
+    localStorage.setItem(
+      "terminal-run-immediately",
+      terminalRunImmediately.value.toString(),
+    );
+  });
+
+  const toggleAgentSimpleView = $(() => {
+    agentSimpleView.value = !agentSimpleView.value;
+    localStorage.setItem("agent-show-thoughts", agentSimpleView.value ? "0" : "1");
   });
 
   const toggleGroundDocuments = $(() => {
@@ -418,6 +503,14 @@ export default component$(() => {
         handleNewQuestion$={handleNewQuestion}
         handleModelsClick$={handleModelsClick}
         currentModel={currentModel.value}
+        folderPath={headerWs.folderPath.value}
+        folderStatus={headerWs.folderStatus.value}
+        onCloseFolder$={headerWs.closeFolder$}
+        buildInstalled={headerWs.buildInstalled.value}
+        recentFolders={headerWs.recentFolders.value}
+        onOpenFolder$={headerWs.openFolder$}
+        onBrowseFolder$={headerWs.browseFolder$}
+        onOpenConversations$={headerWs.openConversations$}
         showModelWidget={showModelWidget.value && currentModel.value !== null}
       />
 
@@ -495,6 +588,28 @@ export default component$(() => {
                     asking each time. Off means you're asked first, before anything
                     leaves your device. Offline models always stay local.
                   </SettingToggle>
+                  <SettingToggle
+                    title="Run commands immediately"
+                    checked={terminalRunImmediately}
+                    onToggle$={toggleTerminalImmediate}
+                  >
+                    "Run in your terminal" on a suggested command normally
+                    types it onto your prompt, ready to edit and run with
+                    Enter - the final look stays with you. Turn this on to
+                    execute the moment you click instead.
+                  </SettingToggle>
+                  {buildInstalled.value && (
+                    <SettingToggle
+                      title="Simple project view"
+                      checked={agentSimpleView}
+                      onToggle$={toggleAgentSimpleView}
+                    >
+                      Show just the steps, asks, and plan while your AI works -
+                      without the running thoughts and live task logs (expanding
+                      a step still shows its log). Everything keeps moving either
+                      way. Same switch as the brain icon on the working steps.
+                    </SettingToggle>
+                  )}
                 </div>
               </section>
 
@@ -564,13 +679,65 @@ export default component$(() => {
                   specific model are never affected.
                 </p>
 
+                {/* Transparency, not controls: the knobless smarts described
+                    plainly. Permanent reference (no "Got it" dismissal - this
+                    is not a one-time tip), collapsible to stay quiet. */}
+                <div class="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-main)] mb-5">
+                  <button
+                    onClick$={() => (routingExplainerOpen.value = !routingExplainerOpen.value)}
+                    class="flex w-full items-center justify-between px-4 py-3 text-left"
+                  >
+                    <span class="text-sm font-semibold text-[var(--text-primary)]">
+                      What routing does automatically
+                    </span>
+                    <LuChevronDown
+                      class={`w-4 h-4 text-[var(--text-muted)] transition-transform ${routingExplainerOpen.value ? "rotate-180" : ""}`}
+                    />
+                  </button>
+                  {routingExplainerOpen.value && (
+                    <div class="px-4 pb-4 text-sm text-[var(--text-secondary)] space-y-2">
+                      <p>Health questions never leave your device.</p>
+                      <p>Questions that need current information go to a live-web model, at the eagerness you set below.</p>
+                      <p>Genuinely hard questions can be passed to a stronger online model (Auto - Online and Offline only).</p>
+                      <p>Project work only ever uses models that can drive tools, and never switches models mid-session.</p>
+                      <p>Project sessions default to the recommended tool-driver online - a capable model that costs a fraction of the flagship.</p>
+                      <p>Simple project side-work (searching and reading fan-outs) runs on your device when a capable model runs comfortably on your hardware - free and private. You can turn this off below.</p>
+                      <p>The small jobs inside project work - summaries, tidying the conversation memory - always run on your device.</p>
+                      <p>Picks are fit-aware: a model that runs well on your hardware beats a stronger one that struggles.</p>
+                      <p class="text-[var(--text-muted)]">
+                        Every answer's Model button shows what happened and why, and each
+                        decision is stored in the conversation's tamper-proof record.
+                      </p>
+                      {routingDecisions.value.length > 0 && (
+                        <div class="pt-2 border-t border-[var(--border-subtle)]">
+                          <div class="text-xs font-semibold text-[var(--text-primary)] mb-1.5">
+                            Recent decisions
+                          </div>
+                          <div class="space-y-1">
+                            {routingDecisions.value.slice(0, 8).map((d, i) => (
+                              <div key={i} class="text-xs text-[var(--text-muted)] truncate">
+                                <span class="text-[var(--text-secondary)]">
+                                  {d.model.replace("online:", "").replace(/\.gguf$/i, "")}
+                                </span>
+                                {" - "}
+                                {d.reason}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
                 {/* On your device — biases the fit-aware offline pick. */}
                 <h3 class="text-lg font-semibold text-[var(--text-primary)]">
-                  On your device
+                  Choosing a model on this device
                 </h3>
                 <p class="text-sm text-[var(--text-secondary)] mt-1 mb-3">
-                  Applies to every Auto mode: which of your downloaded models the
-                  automatic pick leans toward.
+                  Both Auto modes pick from the models you've downloaded (the
+                  Offline Models page is their library). This sets what the
+                  pick leans toward.
                 </p>
                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2">
                   {[
@@ -618,10 +785,10 @@ export default component$(() => {
                 ) : (
                 <>
                 <h3 class="text-lg font-semibold text-[var(--text-primary)]">
-                  Online
+                  Going online (Auto — Online and Offline)
                 </h3>
                 <p class="text-sm text-[var(--text-secondary)] mt-1 mb-4">
-                  For AIs set to "Auto — Online and Offline". A question goes
+                  Only for AIs set to "Auto — Online and Offline". A question goes
                   online only when your device can't do it justice: it needs
                   current information from the web, or it's genuinely hard.
                   Everything else stays on your device. "Offline Only" AIs
@@ -673,9 +840,12 @@ export default component$(() => {
                   Which online model answers
                 </h4>
                 <p class="text-sm text-[var(--text-secondary)] mt-1 mb-1">
-                  When a question does go online, these are the models that take
-                  it. Recommended picks are chosen for each job; change them if
-                  you'd rather use a different model.
+                  When a question does go online, these are the online models
+                  that take it. Recommended picks are chosen for each job;
+                  change them if you'd rather use a different one. Your
+                  downloaded models aren't listed here - they're picked
+                  automatically, tuned under "Choosing a model on this
+                  device".
                 </p>
                 <OnlineModelPicker
                   label="Needs current information"
@@ -701,6 +871,93 @@ export default component$(() => {
                   selected={onlineHardGeneral}
                   models={onlineModels}
                 />
+                {buildInstalled.value && (
+                  <>
+                    <div class="border-t border-[var(--border-subtle)] my-5" />
+                    <h4 class="text-base font-semibold text-[var(--text-primary)]">
+                      Working on projects
+                    </h4>
+                    <p class="text-sm text-[var(--text-secondary)] mt-1 mb-3">
+                      Project work routes differently: only models that can drive
+                      tools are ever used, and the model never changes
+                      mid-session. Offline, the most capable tool-driving model
+                      you've downloaded takes it. Online, this one does:
+                    </p>
+                    <OnlineModelPicker
+                      label="Agent work on projects"
+                      hint="The online model that drives tools in project work - only capable ones are listed"
+                      recommended="Kimi K2.6"
+                      storageKey="routingOnlineAgent"
+                      selected={onlineAgent}
+                      models={onlineAgentModels}
+                    />
+                    <OnlineModelPicker
+                      label="Planning and helper agents"
+                      hint="The online model for the subagents that explore and plan - reasoning-lean, still tool-capable"
+                      recommended="GPT-5.6 Terra"
+                      selected={onlinePlanning}
+                      storageKey="routingOnlinePlanning"
+                      models={onlineAgentModels}
+                    />
+                    {/* Cost levers - both mirrored to the Rust-readable
+                        store; the router reads them at session start. */}
+                    <label class="flex items-start gap-3 mt-4 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={projectDeviceSubagents.value}
+                        onChange$={async (_, el) => {
+                          projectDeviceSubagents.value = el.checked;
+                          localStorage.setItem("routingProjectDeviceSubagents", el.checked ? "1" : "0");
+                          try {
+                            const { Store } = await import("@tauri-apps/plugin-store");
+                            const store = await Store.load("settings.json");
+                            await store.set("routingProjectDeviceSubagents", el.checked ? "1" : "0");
+                            await store.save();
+                          } catch { /* store mirror is best-effort */ }
+                        }}
+                        class="rounded mt-0.5"
+                      />
+                      <span>
+                        <span class="block text-sm text-[var(--text-primary)]">
+                          Do simple project side-work on this device
+                        </span>
+                        <span class="block text-xs text-[var(--text-muted)]">
+                          Searching and reading fan-outs run on your device when a
+                          capable model runs comfortably on your hardware - free
+                          and private. Otherwise they use the session's online
+                          model. Takes effect next project open.
+                        </span>
+                      </span>
+                    </label>
+                    <label class="flex items-start gap-3 mt-3 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={projectThrifty.value}
+                        onChange$={async (_, el) => {
+                          projectThrifty.value = el.checked;
+                          localStorage.setItem("routingProjectThrifty", el.checked ? "1" : "0");
+                          try {
+                            const { Store } = await import("@tauri-apps/plugin-store");
+                            const store = await Store.load("settings.json");
+                            await store.set("routingProjectThrifty", el.checked ? "1" : "0");
+                            await store.save();
+                          } catch { /* store mirror is best-effort */ }
+                        }}
+                        class="rounded mt-0.5"
+                      />
+                      <span>
+                        <span class="block text-sm text-[var(--text-primary)]">
+                          Keep whole project sessions on this device when possible
+                        </span>
+                        <span class="block text-xs text-[var(--text-muted)]">
+                          When a capable model fits your hardware, project
+                          sessions stay fully on-device - slower, but free and
+                          private. Otherwise they go online as usual.
+                        </span>
+                      </span>
+                    </label>
+                  </>
+                )}
                 </>
                 )}
               </section>

@@ -14,6 +14,9 @@ mod commands_holochain;   // Tauri commands for transcript operations
 mod memory;               // Phase A persistent memory (encrypted profile facts)
 mod transcript_memory;    // Per-AI episodic memory (embedded conversation turns)
 mod gpu_safety;           // GPU crash-loop → CPU fallback (safe mode)
+mod agent_bridge;         // Your Own AI Build coding agent over ACP (stdio JSON-RPC)
+mod build_install;       // Your Own AI Build install-on-demand
+mod terminal;             // open a suggested command in the user's own terminal
 mod inference_server;     // OpenAI-compatible local server (external apps use custom AIs)
 mod inference_memory;     // backend memory assembly for the inference server
 mod router;               // Auto-mode model routing (offline / online+offline)
@@ -487,6 +490,7 @@ pub fn run() {
             .level(log::LevelFilter::Info)
             .build())
         .manage(LLMState::new())
+        .manage(agent_bridge::AgentBridgeState::new())
         .invoke_handler(tauri::generate_handler![
             flowsta::flowsta_vault_status,
             flowsta::vault_sign,
@@ -541,6 +545,23 @@ pub fn run() {
             llm::utility_chat,
             llm::stop_utility_server,
             llm::kill_port_8080,
+            agent_bridge::start_build_agent,
+            agent_bridge::send_agent_prompt,
+            agent_bridge::cancel_agent_turn,
+            agent_bridge::respond_agent_permission,
+            agent_bridge::stop_build_agent,
+            agent_bridge::build_agent_status,
+            agent_bridge::read_agent_task_logs,
+            build_install::build_install_status,
+            build_install::download_build_agent,
+            build_install::uninstall_build_agent,
+            agent_bridge::path_is_dir,
+            agent_bridge::path_is_file,
+            terminal::open_in_terminal,
+            model_caps::agent_capability,
+            router::recent_routing_decisions,
+            router::set_agent_online_override,
+            router::alternate_online_agent,
             llm::stream_chat_completion,
             llm::cancel_chat_completion,
             save_ai_thumbnail,
@@ -555,6 +576,7 @@ pub fn run() {
             commands_holochain::start_conversation,
             commands_holochain::record_transcript_entry,
             commands_holochain::record_grounding_annotation,
+            commands_holochain::holochain_ready,
             commands_holochain::get_conversations,
             commands_holochain::get_conversation_transcript,
             commands_holochain::get_ai_holochain_status,
@@ -704,6 +726,7 @@ pub fn run() {
                 // counted as a hard crash by safe mode.
                 gpu_safety::mark_clean_exit(app_handle);
                 println!("[Exit] Stopping llama-server...");
+                agent_bridge::kill_on_exit(app_handle);
                 let llm_state = app_handle.state::<LLMState>();
                 
                 // Use blocking lock since we're in sync context

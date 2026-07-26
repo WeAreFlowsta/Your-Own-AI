@@ -319,8 +319,12 @@ fn offline_ordering(lean: &str, a: OfflineRank, b: OfflineRank) -> std::cmp::Ord
 /// a candidate beats it on THIS task by at least `SWITCH_MARGIN` (so a real
 /// specialist for a real task is worth the reload, but near-equal models
 /// don't thrash).
-async fn pick_offline(app: &AppHandle, task: &str, lean: &str) -> Result<String, String> {
-    let all = crate::fit::assess(app).await;
+async fn pick_offline(app: &AppHandle, task: &str, lean: &str, agent_only: bool) -> Result<String, String> {
+    let mut all = crate::fit::assess(app).await;
+    // Agent sessions: tool-driving is a hard filter, not a preference.
+    if agent_only {
+        all.retain(|f| crate::model_caps::agent_caps(&f.name) >= 6);
+    }
     if all.is_empty() {
         return Err("No offline models downloaded".to_string());
     }
@@ -405,6 +409,10 @@ pub struct OnlinePicks {
     pub fresh: Option<String>,
     pub hard_code: Option<String>,
     pub hard_general: Option<String>,
+    /// Agent (folder) turns' online model - the tool-driver slot.
+    pub agent: Option<String>,
+    /// Planning/helper subagents' online model (reasoning-lean tool-driver).
+    pub plan: Option<String>,
 }
 
 /// Recommended defaults per routing slot. Ids match the proxy catalog; if one
@@ -414,6 +422,11 @@ pub struct OnlinePicks {
 const DEFAULT_FRESH: &str = "online:grok-4.5-search";
 const DEFAULT_HARD_CODE: &str = "online:gpt-5.6-sol";
 const DEFAULT_HARD_GENERAL: &str = "online:gpt-5.6-terra";
+/// The agent slot: must be a PROVEN tool-driver through the proxy (kimi -
+/// verified end to end; Sol drops tools until Responses passthrough).
+const DEFAULT_AGENT: &str = "online:kimi-k2.6";
+/// Planning leans reasoning; must still drive tools (planners read files).
+const DEFAULT_PLAN: &str = "online:gpt-5.6-terra";
 
 /// Pick an online model for one routing decision. Order: the user's explicit
 /// choice for this slot (when still in the catalog) → the recommended default
@@ -470,6 +483,121 @@ fn select_online(
         .iter()
         .max_by_key(|m| crate::model_caps::online_caps_for(&text(m)).by_task(task))
         .map(|m| m.id.clone())
+}
+
+/// Online model for an agent session: the user's slot pick -> the default
+/// tool-driver -> the best agent-capable model by the online registry. A
+/// tools-blind model is never returned - a broken session is worse than none.
+fn select_online_agent(
+    models: &[crate::flowsta::OnlineModel],
+    pref: Option<&str>,
+) -> Option<String> {
+    let by_id = |id: &str| models.iter().find(|m| m.id == id).map(|m| m.id.clone());
+    if let Some(hit) = pref.and_then(|p| by_id(p)) {
+        return Some(hit);
+    }
+    if let Some(hit) = by_id(DEFAULT_AGENT) {
+        return Some(hit);
+    }
+    let text = |m: &crate::flowsta::OnlineModel| {
+        format!("{} {} {}", m.id, m.display_name, m.description).to_lowercase()
+    };
+    models
+        .iter()
+        .filter(|m| crate::model_caps::online_agent_caps(&text(m)) >= 6)
+        .max_by_key(|m| crate::model_caps::online_agent_caps(&text(m)))
+        .map(|m| m.id.clone())
+}
+
+/// The context window the agent should believe for a folder session on
+/// this AI: the SERVING model's window, resolved the same deterministic
+/// way agent turns route. Local serving keeps the true loaded size
+/// (compaction must fire before a real 16k window overflows); online
+/// serving takes the catalog's number - Sol is a million-token model, and
+/// believing a local 16k there compacted constantly for nothing.
+pub async fn agent_serving_context(
+    app: &AppHandle,
+    ai_model: &str,
+    eagerness: &str,
+    plan: bool,
+) -> u64 {
+    let local = crate::llm::current_ctx_size() as u64;
+    let catalog_ctx = |models: &[crate::flowsta::OnlineModel], id: &str| -> Option<u64> {
+        models
+            .iter()
+            .find(|m| m.id == id)
+            .map(|m| m.context_window)
+            .filter(|c| *c > 0)
+    };
+    if ai_model.starts_with("online:") {
+        if let Ok(models) = crate::flowsta::list_online_models().await {
+            if let Some(c) = catalog_ctx(&models, ai_model) {
+                return c;
+            }
+        }
+        return local;
+    }
+    let Some(mode) = ai_model.strip_prefix("auto:") else {
+        return local; // pinned local model (or external server): local truth
+    };
+    if mode != "online-offline" {
+        return local;
+    }
+    // Mirror route_inner's agent branch: privacy with a capable local model
+    // serves locally; otherwise the Agent/Planning slot chain decides.
+    let offline_task = if plan { "reasoning" } else { "code" };
+    let offline_ok = pick_offline(app, offline_task, "balanced", true).await.is_ok();
+    if (eagerness == "privacy" || store_pref(app, "routingProjectThrifty").as_deref() == Some("1"))
+        && offline_ok
+    {
+        return local;
+    }
+    if let Ok(models) = crate::flowsta::list_online_models().await {
+        let pref = if plan {
+            store_pref(app, "routingOnlinePlanning").or_else(|| Some(DEFAULT_PLAN.to_string()))
+        } else {
+            agent_online_override()
+                .or_else(|| store_pref(app, "routingOnlineAgent"))
+                .or_else(|| {
+                    store_pref(app, "routingOnlineHardCode")
+                        .filter(|id| crate::model_caps::online_agent_caps(id) >= 6)
+                })
+        };
+        if let Some(id) = select_online_agent(&models, pref.as_deref()) {
+            if let Some(c) = catalog_ctx(&models, &id) {
+                return c;
+            }
+        }
+    }
+    local
+}
+
+/// Should simple project side-work (explore subagents) run on the device?
+/// Defaults ON - but only takes effect when a capable local model runs
+/// COMFORTABLY: green fit (fully on GPU). "Capable and loads" is not
+/// enough - a partial-offload model turns every explore fan-out into
+/// minutes of critical-path crawl, worse than the cheap online driver it
+/// replaces. Free and private when it engages; the leader stays in charge.
+/// Documented in the routing explainer.
+pub async fn device_subagents_enabled(app: &AppHandle) -> bool {
+    if store_pref(app, "routingProjectDeviceSubagents").as_deref() == Some("0") {
+        return false;
+    }
+    crate::fit::assess(app)
+        .await
+        .iter()
+        .any(|f| crate::model_caps::agent_caps(&f.name) >= 6 && f.fit == crate::fit::Fit::Green)
+}
+
+/// A slot preference from the Rust-readable settings store (mirrored there
+/// by the Settings page so non-webview callers see user choices).
+fn store_pref(app: &AppHandle, key: &str) -> Option<String> {
+    use tauri_plugin_store::StoreExt;
+    let store = app.store("settings.json").ok()?;
+    store
+        .get(key)
+        .and_then(|v| v.as_str().map(|s| s.to_string()))
+        .filter(|s| !s.is_empty())
 }
 
 async fn pick_online(task: &str, fresh: bool, pref: Option<&str>) -> Option<String> {
@@ -530,6 +658,106 @@ fn best_external(models: &[String], task: &str) -> Option<(String, u8)> {
 /// mode IS the consent to go online when it helps, so a hard query always
 /// may use a stronger online model. `picks` carries the user's per-slot
 /// online model overrides (Settings → Routing).
+/// The live routing ledger: the last decisions with reasons, for the
+/// Settings transparency view. The DURABLE audit is per answer in the
+/// Holochain transcript (routing_reason/routing_task in provenance) - this
+/// is just a fast window onto recent activity.
+#[derive(serde::Serialize, Clone)]
+pub struct RoutingDecision {
+    pub at_ms: i64,
+    pub model: String,
+    pub reason: String,
+}
+
+static RECENT_DECISIONS: std::sync::OnceLock<std::sync::Mutex<std::collections::VecDeque<RoutingDecision>>> =
+    std::sync::OnceLock::new();
+
+fn remember_decision(model: &str, reason: &str) {
+    let ledger = RECENT_DECISIONS.get_or_init(|| std::sync::Mutex::new(std::collections::VecDeque::new()));
+    if let Ok(mut d) = ledger.lock() {
+        d.push_front(RoutingDecision {
+            at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|t| t.as_millis() as i64)
+                .unwrap_or(0),
+            model: model.to_string(),
+            reason: reason.to_string(),
+        });
+        d.truncate(20);
+    }
+}
+
+#[tauri::command]
+pub fn recent_routing_decisions() -> Vec<RoutingDecision> {
+    RECENT_DECISIONS
+        .get()
+        .and_then(|l| l.lock().ok().map(|d| d.iter().cloned().collect()))
+        .unwrap_or_default()
+}
+
+/// Session-scoped online-agent override: set when the user accepts the
+/// overload offer card ("<model>'s provider is overloaded - use <alt> for
+/// this session?"). It wins over the Agent slot for non-planning agent
+/// turns, so the user's explicit pick holds for the rest of the workspace
+/// session - an accepted card, never a silent switch. Cleared when the
+/// workspace closes (and naturally on app restart).
+static AGENT_ONLINE_OVERRIDE: std::sync::OnceLock<std::sync::Mutex<Option<String>>> =
+    std::sync::OnceLock::new();
+
+fn agent_online_override() -> Option<String> {
+    AGENT_ONLINE_OVERRIDE
+        .get()
+        .and_then(|l| l.lock().ok().and_then(|v| v.clone()))
+}
+
+pub fn clear_agent_online_override() {
+    set_agent_online_override(None);
+}
+
+#[tauri::command]
+pub fn set_agent_online_override(model: Option<String>) {
+    let cell = AGENT_ONLINE_OVERRIDE.get_or_init(|| std::sync::Mutex::new(None));
+    if let Ok(mut v) = cell.lock() {
+        *v = model.filter(|m| !m.is_empty());
+    }
+}
+
+#[derive(serde::Serialize)]
+pub struct AgentAlternate {
+    /// What agent routing picks right now (the model that just failed).
+    pub failed: String,
+    pub failed_name: String,
+    /// The best agent-capable model that isn't the failing one.
+    pub alt: String,
+    pub alt_name: String,
+}
+
+/// The overload offer's substance: what agent routing WOULD pick right now,
+/// and the next agent-capable online model to offer instead. None when the
+/// catalog has no capable alternative - then there is nothing to offer.
+#[tauri::command]
+pub async fn alternate_online_agent(app: AppHandle) -> Option<AgentAlternate> {
+    let models = crate::flowsta::list_online_models().await.ok()?;
+    let pref = agent_online_override().or_else(|| store_pref(&app, "routingOnlineAgent"));
+    let failed = select_online_agent(&models, pref.as_deref())?;
+    let rest: Vec<crate::flowsta::OnlineModel> =
+        models.iter().filter(|m| m.id != failed).cloned().collect();
+    let alt = select_online_agent(&rest, None)?;
+    let name = |id: &str| {
+        models
+            .iter()
+            .find(|m| m.id == id)
+            .map(|m| m.display_name.clone())
+            .unwrap_or_else(|| id.trim_start_matches("online:").to_string())
+    };
+    Some(AgentAlternate {
+        failed_name: name(&failed),
+        alt_name: name(&alt),
+        failed,
+        alt,
+    })
+}
+
 pub async fn route(
     app: &AppHandle,
     mode: &str,
@@ -540,7 +768,131 @@ pub async fn route(
     lean: &str,
     picks: &OnlinePicks,
     query_vec: Option<&[f32]>,
+    agent: bool,
+    plan: bool,
 ) -> Result<RouteResult, String> {
+    let result = route_inner(app, mode, query, eagerness, task, difficulty, lean, picks, query_vec, agent, plan).await;
+    if let Ok(r) = &result {
+        remember_decision(&r.model, &r.reason);
+    }
+    result
+}
+
+async fn route_inner(
+    app: &AppHandle,
+    mode: &str,
+    query: &str,
+    eagerness: &str,
+    task: &str,
+    difficulty: &str,
+    lean: &str,
+    picks: &OnlinePicks,
+    query_vec: Option<&[f32]>,
+    agent: bool,
+    plan: bool,
+) -> Result<RouteResult, String> {
+    // Slot preferences: explicit params (the in-app chat path reads
+    // localStorage) fall back to the Rust-readable settings store, so API
+    // and agent callers see the user's choices too - Settings mirrors every
+    // slot pick into settings.json.
+    let picks = OnlinePicks {
+        fresh: picks.fresh.clone().or_else(|| store_pref(app, "routingOnlineFresh")),
+        hard_code: picks
+            .hard_code
+            .clone()
+            .or_else(|| store_pref(app, "routingOnlineHardCode")),
+        hard_general: picks
+            .hard_general
+            .clone()
+            .or_else(|| store_pref(app, "routingOnlineHardGeneral")),
+        agent: picks.agent.clone().or_else(|| store_pref(app, "routingOnlineAgent")),
+        plan: picks.plan.clone().or_else(|| store_pref(app, "routingOnlinePlanning")),
+    };
+    let picks = &picks;
+    // Agent (folder) turns: deterministic and session-stable. The per-query
+    // gates (freshness, difficulty, medical) don't apply to tool calls, so
+    // the same installed models + settings give the same pick every call -
+    // no mid-session switches, KV caches stay warm. Tool capability is a
+    // HARD FILTER. Online-offline mode routes agent work ONLINE by default
+    // (the mode is the consent; agent work is where a stronger model earns
+    // its keep); privacy eagerness prefers a capable local model.
+    if agent {
+        // The user's preference order for the online side: the Agent slot,
+        // else their hard-code TYPE preference IF it can drive tools (when
+        // Sol gains passthrough, a Sol hard-code preference starts applying
+        // here automatically - nothing is built for one vendor), else the
+        // default tool-driver, else the registry's best capable model.
+        let type_pref = picks
+            .hard_code
+            .clone()
+            .filter(|id| crate::model_caps::online_agent_caps(id) >= 6);
+        let agent_pref = if plan {
+            // Planning subagents: the Planning slot, else the Agent slot's
+            // chain - a planner is still a tool-driver, just reasoning-lean.
+            picks
+                .plan
+                .clone()
+                .or_else(|| Some(DEFAULT_PLAN.to_string()))
+        } else {
+            // An accepted overload offer holds for the whole workspace
+            // session - the user's explicit pick outranks the slots.
+            agent_online_override().or_else(|| picks.agent.clone().or(type_pref))
+        };
+        let offline_task = if plan { "reasoning" } else { "code" };
+        let offline = pick_offline(app, offline_task, lean, true).await.ok();
+        if mode != "online-offline" {
+            return offline
+                .map(|m| RouteResult {
+                    model: m,
+                    reason: "agent work on your device".to_string(),
+                })
+                .ok_or_else(|| {
+                    "No installed model can drive agent work - download an agentic model (Qwen 3.5, GLM, a coder) or use an online-capable AI".to_string()
+                });
+        }
+        if eagerness == "privacy" {
+            if let Some(m) = offline.clone() {
+                return Ok(RouteResult {
+                    model: m,
+                    reason: "agent work kept on your device (privacy-first)".to_string(),
+                });
+            }
+        }
+        // The cost-saver setting: whole project sessions stay on the device
+        // whenever a capable model fits - slower, free, private. A setting,
+        // not a default; documented in the routing explainer.
+        if store_pref(app, "routingProjectThrifty").as_deref() == Some("1") {
+            if let Some(m) = offline.clone() {
+                return Ok(RouteResult {
+                    model: m,
+                    reason: "project work on your device (your cost-saver setting)".to_string(),
+                });
+            }
+        }
+        if let Ok(models) = crate::flowsta::list_online_models().await {
+            if let Some(id) = select_online_agent(&models, agent_pref.as_deref()) {
+                // The ledger and on-chain provenance must say WHY this model:
+                // an accepted overload offer is the user's call, not routing's.
+                let reason = if !plan && agent_online_override().as_deref() == Some(id.as_str()) {
+                    "agent work on your session pick (accepted after an overloaded model)"
+                } else {
+                    "agent work on a stronger online model"
+                };
+                return Ok(RouteResult {
+                    model: id,
+                    reason: reason.to_string(),
+                });
+            }
+        }
+        return offline
+            .map(|m| RouteResult {
+                model: m,
+                reason: "agent work on your device (no online tool-driver available)".to_string(),
+            })
+            .ok_or_else(|| {
+                "No model available for agent work - download an agentic model or sign in for online models".to_string()
+            });
+    }
     // Health questions stay home. A turn about the user's own health never
     // auto-routes online (no freshness route, no hard-question escalation),
     // and the task becomes "medical" so an installed medical specialist
@@ -594,7 +946,7 @@ pub async fn route(
     if mode == "my-hardware" {
         let (ext_models, ext_tps) = crate::engine::external_models_cached(app);
         if !ext_models.is_empty() {
-            let local = pick_offline(app, task, lean).await.ok();
+            let local = pick_offline(app, task, lean, false).await.ok();
             let local_cap = local
                 .as_deref()
                 .map(|m| crate::model_caps::caps_for(m).by_task(task));
@@ -634,7 +986,7 @@ pub async fn route(
         // No server connected (or nothing usable) — behave like offline-only.
     }
 
-    let model = pick_offline(app, task, lean).await?;
+    let model = pick_offline(app, task, lean, false).await?;
     let reason = if medical {
         // The visible promise: this is the receipt line users see. Name the
         // specialist when one took the question.
@@ -714,12 +1066,18 @@ pub async fn route_model(
     online_fresh: Option<String>,
     online_hard_code: Option<String>,
     online_hard_general: Option<String>,
+    online_agent: Option<String>,
+    online_planning: Option<String>,
     query_vec: Option<Vec<f32>>,
+    agent: Option<bool>,
+    plan: Option<bool>,
 ) -> Result<RouteResult, String> {
     let picks = OnlinePicks {
         fresh: online_fresh,
         hard_code: online_hard_code,
         hard_general: online_hard_general,
+        agent: online_agent,
+        plan: online_planning,
     };
     route(
         &app,
@@ -731,6 +1089,8 @@ pub async fn route_model(
         lean.as_deref().unwrap_or("balanced"),
         &picks,
         query_vec.as_deref(),
+        agent.unwrap_or(false),
+        plan.unwrap_or(false),
     )
     .await
 }
@@ -839,6 +1199,71 @@ mod tests {
         assert_eq!(select_online(&models, "reasoning", false, None).unwrap(), "online:newgpt-9");
         // Empty catalog → None (router falls through to offline).
         assert_eq!(select_online(&[], "code", false, None), None);
+    }
+
+    fn agent_catalog() -> Vec<crate::flowsta::OnlineModel> {
+        vec![
+            om("kimi-k2.6", "Kimi K2.6", "tool-driving flagship", None),
+            om("gpt-5.6-sol", "GPT-5.6 Sol", "OpenAI's flagship", None),
+            om("sonar", "Sonar", "Perplexity search", Some(0.005)),
+        ]
+    }
+
+    #[test]
+    fn select_agent_default_is_the_tool_driver() {
+        assert_eq!(
+            select_online_agent(&agent_catalog(), None).unwrap(),
+            "online:kimi-k2.6"
+        );
+    }
+
+    #[test]
+    fn select_agent_pref_wins_including_sol() {
+        // Sol is agent-eligible now that the proxy passes tools through -
+        // an existing Sol preference applies with no other changes.
+        assert_eq!(
+            select_online_agent(&agent_catalog(), Some("online:gpt-5.6-sol")).unwrap(),
+            "online:gpt-5.6-sol"
+        );
+        // A pref no longer in the catalog is ignored → default applies.
+        assert_eq!(
+            select_online_agent(&agent_catalog(), Some("online:retired")).unwrap(),
+            "online:kimi-k2.6"
+        );
+    }
+
+    #[test]
+    fn agent_override_set_get_clear() {
+        // The overload offer's session pick: set wins, empty = clear, and
+        // select_online_agent honors it only while it exists in the catalog.
+        set_agent_online_override(Some("online:gpt-5.6-sol".into()));
+        assert_eq!(agent_online_override().as_deref(), Some("online:gpt-5.6-sol"));
+        assert_eq!(
+            select_online_agent(&agent_catalog(), agent_online_override().as_deref()).unwrap(),
+            "online:gpt-5.6-sol"
+        );
+        set_agent_online_override(Some(String::new()));
+        assert_eq!(agent_online_override(), None);
+        set_agent_online_override(Some("online:gpt-5.6-sol".into()));
+        clear_agent_online_override();
+        assert_eq!(agent_online_override(), None);
+    }
+
+    #[test]
+    fn select_agent_registry_fallback_skips_tools_blind_models() {
+        // No default in the catalog → best agent-capable model wins...
+        let models = vec![
+            om("sonar", "Sonar", "Perplexity search", Some(0.005)),
+            om("gpt-5.6-sol", "GPT-5.6 Sol", "OpenAI's flagship", None),
+        ];
+        assert_eq!(
+            select_online_agent(&models, None).unwrap(),
+            "online:gpt-5.6-sol"
+        );
+        // ...and a search-only catalog yields None rather than a broken
+        // session (sonar is below the tool-capability floor).
+        let searchers = vec![om("sonar", "Sonar", "Perplexity search", Some(0.005))];
+        assert_eq!(select_online_agent(&searchers, None), None);
     }
     use super::*;
     use std::cmp::Ordering;

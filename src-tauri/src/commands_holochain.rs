@@ -80,6 +80,8 @@ pub struct TranscriptEntryInfo {
     pub runtime: Option<RuntimeInfo>,
     pub routing_reason: Option<String>,
     pub routing_task: Option<String>,
+    pub agent_log: Option<serde_json::Value>,
+    pub folder_path: Option<String>,
 }
 
 /// Encrypted entry as stored in the zome (cipher + nonce).
@@ -221,6 +223,15 @@ struct MessagePlain {
     pub routing_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing_task: Option<String>,
+    /// The agent turn's working log (steps/narration/thoughts/permission
+    /// receipts + stats), opaque JSON owned by the frontend. The plaintext
+    /// schema is client-side and encrypted before the zome sees it, so this
+    /// needs NO DNA change and old entries read back as None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_log: Option<serde_json::Value>,
+    /// Workspace folder the turn worked in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder_path: Option<String>,
 }
 
 /// Ciphertext payload sent to the zome.
@@ -318,6 +329,79 @@ pub async fn start_conversation(
     Ok(hex::encode(raw))
 }
 
+/// Serialized-plaintext budget: the zome caps CIPHERTEXT at 1 MiB
+/// (`MAX_CIPHER_BYTES` in the integrity zome) and encryption adds only a
+/// small constant, so staying under 1,000,000 plaintext bytes is safe.
+const PLAIN_BUDGET: usize = 1_000_000;
+
+/// Shrink an oversized entry until it fits the zome's size cap - losing
+/// detail beats losing the turn. Rungs mirror the frontend ladder: drop
+/// thoughts, cap step details, keep the log's ends with a gap marker, drop
+/// the log, and as a last resort truncate the content itself.
+fn shrink_to_budget(plain: &mut MessagePlain) {
+    fn size(p: &MessagePlain) -> usize {
+        serde_json::to_vec(p).map(|v| v.len()).unwrap_or(usize::MAX)
+    }
+    fn items(p: &mut MessagePlain) -> Option<&mut Vec<serde_json::Value>> {
+        p.agent_log.as_mut()?.get_mut("items")?.as_array_mut()
+    }
+    if size(plain) <= PLAIN_BUDGET {
+        return;
+    }
+    // Rung 1: thoughts are the bulkiest optional detail.
+    if let Some(list) = items(plain) {
+        list.retain(|i| i["type"] != "thought");
+    }
+    if size(plain) <= PLAIN_BUDGET {
+        return;
+    }
+    // Rung 2: cap per-step detail text.
+    if let Some(list) = items(plain) {
+        for i in list.iter_mut() {
+            if let Some(d) = i["action"]["detail"].as_str() {
+                if d.len() > 200 {
+                    let capped = format!("{}..", d.chars().take(200).collect::<String>());
+                    i["action"]["detail"] = serde_json::Value::String(capped);
+                }
+            }
+        }
+    }
+    if size(plain) <= PLAIN_BUDGET {
+        return;
+    }
+    // Rung 3: keep the story's ends with an honest gap marker.
+    if let Some(list) = items(plain) {
+        if list.len() > 80 {
+            let trimmed = list.len() - 80;
+            let mut kept: Vec<serde_json::Value> = list[..40].to_vec();
+            kept.push(serde_json::json!({
+                "id": "log-trimmed",
+                "type": "narration",
+                "text": format!(".. {} steps trimmed to fit the transcript ..", trimmed),
+            }));
+            kept.extend_from_slice(&list[list.len() - 40..]);
+            *list = kept;
+        }
+    }
+    if size(plain) <= PLAIN_BUDGET {
+        return;
+    }
+    // Rung 4: the log goes entirely before the words do.
+    plain.agent_log = None;
+    if size(plain) <= PLAIN_BUDGET {
+        return;
+    }
+    // Rung 5: truncate the content itself (safe on a char boundary).
+    let over = size(plain).saturating_sub(PLAIN_BUDGET) + 64;
+    let keep = plain.content.len().saturating_sub(over);
+    let mut cut = keep;
+    while cut > 0 && !plain.content.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    plain.content.truncate(cut);
+    plain.content.push_str(" ..[trimmed to fit the transcript]");
+}
+
 /// Record a message in a conversation.
 /// `agent_key` is the hex-encoded agent pub key.
 #[tauri::command]
@@ -332,6 +416,8 @@ pub async fn record_transcript_entry(
     thinking: Option<String>,
     tokens: Option<TokenUsage>,
     provenance: Option<Provenance>,
+    agent_log: Option<serde_json::Value>,
+    folder_path: Option<String>,
     hc_state: State<'_, Arc<HolochainState>>,
 ) -> Result<String, String> {
     // Decode the conversation hash from raw hex (39 bytes)
@@ -360,7 +446,15 @@ pub async fn record_transcript_entry(
         runtime: prov.runtime,
         routing_reason: prov.routing_reason,
         routing_task: prov.routing_task,
+        agent_log,
+        folder_path,
     };
+    // Final size guard: the integrity zome rejects entries over 1 MiB of
+    // ciphertext, and a rejected write means a LOST turn. The frontend
+    // slims agent logs first; this backstop makes overflow impossible for
+    // every caller.
+    let mut plain = plain;
+    shrink_to_budget(&mut plain);
     let plain_bytes = serde_json::to_vec(&plain)
         .map_err(|e| format!("Failed to serialize: {}", e))?;
     let key = manager.data_key()?;
@@ -444,6 +538,144 @@ pub async fn record_grounding_annotation(
 
     crate::vault_escrow::schedule_full_backup(&app);
     Ok(hex::encode(hash.get_raw_39()))
+}
+
+/// Project memory, Rust side - the agent's deliberate-memory MCP tools
+/// write through the SAME chain paths as the UI. Mirrors the frontend's
+/// merge-on-read rule: the newest revision across every provisioned
+/// agent's chain wins; notes append to the writer's own conversation.
+pub const WORKSPACE_MEMORY_SOURCE: &str = "workspace-memory";
+pub const WORKSPACE_MEMORY_MAX_LINES: usize = 60;
+
+/// The current memory for a folder: newest revision across all agents.
+/// Returns (content, writer_hint) where writer_hint is the conversation
+/// owner of the newest revision (unused by callers today, kept for parity).
+pub async fn project_memory_read(
+    app: &tauri::AppHandle,
+    folder: &str,
+) -> Result<String, String> {
+    use tauri::Manager;
+    let hc_state = app.state::<Arc<HolochainState>>();
+    let manager = hc_state.get()?;
+    let agent_keys: Vec<String> = {
+        let agents = manager.agents.lock().await;
+        agents.keys().cloned().collect()
+    };
+    let mut best_ts = 0i64;
+    let mut best = String::new();
+    for key in agent_keys {
+        let Ok(conversations) = get_conversations(key.clone(), app.state()).await else {
+            continue;
+        };
+        for c in conversations {
+            if c.source.as_deref() != Some(WORKSPACE_MEMORY_SOURCE) {
+                continue;
+            }
+            if c.title.as_deref() != Some(folder) {
+                continue;
+            }
+            let Ok(entries) = get_conversation_transcript(c.agent_key.clone(), c.hash.clone(), app.state()).await
+            else {
+                continue;
+            };
+            for e in entries {
+                if e.timestamp > best_ts {
+                    best_ts = e.timestamp;
+                    best = e.content;
+                }
+            }
+        }
+    }
+    Ok(best)
+}
+
+/// Append a note row to the folder's memory as a new revision on the
+/// writer's chain (trimmed oldest-first under the cap - the next automatic
+/// distillation curates it into shape).
+pub async fn project_memory_append_note(
+    app: &tauri::AppHandle,
+    writer_key: &str,
+    writer_label: &str,
+    folder: &str,
+    note: &str,
+) -> Result<(), String> {
+    use tauri::Manager;
+    let capped: String = note
+        .lines()
+        .take(12)
+        .collect::<Vec<_>>()
+        .join(" / ")
+        .chars()
+        .take(1000)
+        .collect();
+    let capped = capped.trim();
+    if capped.is_empty() {
+        return Err("empty note".to_string());
+    }
+    let current = project_memory_read(app, folder).await?;
+    let row = format!("- [saved by {}] {}", writer_label, capped);
+    let mut lines: Vec<String> = current
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(str::to_string)
+        .collect();
+    lines.push(row);
+    if lines.len() > WORKSPACE_MEMORY_MAX_LINES {
+        let cut = lines.len() - WORKSPACE_MEMORY_MAX_LINES;
+        lines.drain(0..cut);
+    }
+    let content = lines.join("\n");
+
+    // Reuse the writer's memory conversation for this folder, else start one.
+    let conversations = get_conversations(writer_key.to_string(), app.state()).await?;
+    let existing = conversations.into_iter().find(|c| {
+        c.source.as_deref() == Some(WORKSPACE_MEMORY_SOURCE) && c.title.as_deref() == Some(folder)
+    });
+    let (conv_key, hash, seq) = match existing {
+        Some(c) => {
+            let entries = get_conversation_transcript(c.agent_key.clone(), c.hash.clone(), app.state()).await?;
+            let seq = entries.iter().map(|e| e.sequence).max().map(|s| s + 1).unwrap_or(0);
+            (c.agent_key, c.hash, seq)
+        }
+        None => {
+            let hash = start_conversation(
+                app.clone(),
+                writer_key.to_string(),
+                writer_label.to_string(),
+                "workspace-memory".to_string(),
+                Some(folder.to_string()),
+                Some(WORKSPACE_MEMORY_SOURCE.to_string()),
+                app.state(),
+            )
+            .await?;
+            (writer_key.to_string(), hash, 0)
+        }
+    };
+    record_transcript_entry(
+        app.clone(),
+        conv_key,
+        hash,
+        "assistant".to_string(),
+        content,
+        seq,
+        "workspace-memory".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        app.state(),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Is the conductor up? The transcript surface reads empty during startup,
+/// which is indistinguishable from "no conversations" - callers that would
+/// show an empty state poll this first and keep their spinner up instead.
+#[tauri::command]
+pub fn holochain_ready(hc_state: State<'_, Arc<HolochainState>>) -> bool {
+    hc_state.manager.get().is_some()
 }
 
 /// Get all conversations for an AI agent.
@@ -567,7 +799,19 @@ pub async fn get_conversation_transcript(
                         continue;
                     }
                 }
-                let Ok(e) = serde_json::from_slice::<MessagePlain>(&plain_bytes) else { continue };
+                let e = match serde_json::from_slice::<MessagePlain>(&plain_bytes) {
+                    Ok(e) => e,
+                    Err(err) => {
+                        // NEVER drop entries silently - a parse failure here
+                        // reads as "the answer vanished" in the app.
+                        log::warn!(
+                            "Transcript entry failed to parse (dropped): {} - first 120 bytes: {}",
+                            err,
+                            String::from_utf8_lossy(&plain_bytes[..plain_bytes.len().min(120)])
+                        );
+                        continue;
+                    }
+                };
                 entries.push(TranscriptEntryInfo {
                     hash: hex::encode(record.action_address().get_raw_39()),
                     role: e.role,
@@ -586,6 +830,8 @@ pub async fn get_conversation_transcript(
                     runtime: e.runtime,
                     routing_reason: e.routing_reason,
                     routing_task: e.routing_task,
+                    agent_log: e.agent_log,
+                    folder_path: e.folder_path,
                 });
             }
         }
@@ -698,4 +944,87 @@ pub fn save_text_download(
     let path = dir.join(safe);
     std::fs::write(&path, content).map_err(|e| format!("Failed to write: {}", e))?;
     Ok(path.display().to_string())
+}
+
+#[cfg(test)]
+mod size_guard_tests {
+    use super::*;
+
+    fn plain_with(content: &str, log: Option<serde_json::Value>) -> MessagePlain {
+        MessagePlain {
+            role: "assistant".into(),
+            content: content.into(),
+            sequence: 1,
+            timestamp: 0,
+            model: "gpt-5.6-sol".into(),
+            thinking: None,
+            tokens: None,
+            sources: None,
+            system_prompt: None,
+            mode: None,
+            attachments: None,
+            images: None,
+            grounded: None,
+            runtime: None,
+            routing_reason: None,
+            routing_task: None,
+            agent_log: log,
+            folder_path: None,
+        }
+    }
+
+    fn size(p: &MessagePlain) -> usize {
+        serde_json::to_vec(p).unwrap().len()
+    }
+
+    #[test]
+    fn small_entries_pass_untouched() {
+        let mut p = plain_with(
+            "a normal answer",
+            Some(serde_json::json!({"items": [{"type": "thought", "text": "hi"}]})),
+        );
+        let before = serde_json::to_vec(&p).unwrap();
+        shrink_to_budget(&mut p);
+        assert_eq!(serde_json::to_vec(&p).unwrap(), before);
+    }
+
+    #[test]
+    fn huge_log_fits_and_keeps_the_words() {
+        // 99-tool-session shape: many bulky items. Must end under budget
+        // with content intact.
+        let big_text = "x".repeat(8_000);
+        let items: Vec<serde_json::Value> = (0..300)
+            .map(|i| {
+                serde_json::json!({
+                    "id": format!("a{i}"),
+                    "type": if i % 3 == 0 { "thought" } else { "action" },
+                    "text": big_text,
+                    "action": {"label": "Running a command", "detail": big_text, "status": "completed"},
+                })
+            })
+            .collect();
+        let mut p = plain_with("the real answer", Some(serde_json::json!({"items": items})));
+        assert!(size(&p) > PLAIN_BUDGET);
+        shrink_to_budget(&mut p);
+        assert!(size(&p) <= PLAIN_BUDGET);
+        assert_eq!(p.content, "the real answer");
+        // Thoughts went first.
+        let items = p.agent_log.as_ref().unwrap()["items"].as_array().unwrap();
+        assert!(items.iter().all(|i| i["type"] != "thought"));
+    }
+
+    #[test]
+    fn giant_content_truncates_with_marker() {
+        let mut p = plain_with(&"y".repeat(2_000_000), None);
+        shrink_to_budget(&mut p);
+        assert!(size(&p) <= PLAIN_BUDGET);
+        assert!(p.content.ends_with("..[trimmed to fit the transcript]"));
+    }
+
+    #[test]
+    fn budget_stays_under_the_zome_cap() {
+        // The zome rejects cipher over 1 MiB; encryption overhead is a small
+        // constant, so the plaintext budget must sit safely below it.
+        assert!(PLAIN_BUDGET + 1024 < 1_048_576);
+    }
 }

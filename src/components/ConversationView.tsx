@@ -5,6 +5,22 @@ import { Message } from '../types';
 interface ConversationViewProps {
   messages: Message[];
   messagesEndRef: Signal<HTMLDivElement | undefined>;
+  /** Answer an agent permission ask (folder open, by ACP request id). */
+  onPermissionRespond$?: QRL<(requestId: number, decision: 'allow' | 'reject', always: boolean) => void>;
+  /** The pending permission card reporting its viewport visibility. */
+  onPermissionOffscreen$?: QRL<(offscreen: boolean) => void>;
+  /** Run a suggested command in the user's own terminal. */
+  onOpenTerminal$?: QRL<(command: string) => void>;
+  /** Live retry text for the active agent turn. */
+  agentRetryStatus?: string;
+  /** True while a folder-agent turn is streaming. Reserves scroll space once
+   *  for the whole turn (agent bubbles skip the per-bubble reservation), so
+   *  the question can anchor to the top without the view bouncing as
+   *  activity cards and text segments arrive. */
+  agentStreaming?: boolean;
+  /** Marks the end of real content (before the turn spacer) - the
+   *  follow-the-tip scroll keeps this in view while an agent turn works. */
+  tipRef?: Signal<HTMLDivElement | undefined>;
   retry$: QRL<(id: string, target?: 'online' | 'device') => void>;
   canRouteOnline: boolean;
   onGround$?: QRL<(id: string) => void>;
@@ -22,6 +38,12 @@ interface ConversationViewProps {
 export default component$<ConversationViewProps>(({
   messages,
   messagesEndRef,
+  onPermissionRespond$,
+  onPermissionOffscreen$,
+  onOpenTerminal$,
+  agentRetryStatus,
+  agentStreaming,
+  tipRef,
   retry$,
   canRouteOnline,
   onGround$,
@@ -42,6 +64,10 @@ export default component$<ConversationViewProps>(({
           key={message.id}
           message={message}
           isLast={index === messages.length - 1}
+          onPermissionRespond$={onPermissionRespond$}
+          onPermissionOffscreen$={onPermissionOffscreen$}
+          onOpenTerminal$={onOpenTerminal$}
+          agentRetryStatus={agentRetryStatus}
           onRetry$={message.id ? $(() => retry$(message.id!)) : undefined}
           onRouteRetry$={message.id ? $((target: 'online' | 'device') => retry$(message.id!, target)) : undefined}
           canRouteOnline={canRouteOnline}
@@ -59,6 +85,10 @@ export default component$<ConversationViewProps>(({
           isModelLoading={isModelLoading}
         />
       ))}
+      {/* End of real content - the follow-the-tip target. */}
+      <div ref={tipRef} />
+      {/* Turn-scoped scroll reservation for agent turns (see agentStreaming). */}
+      {agentStreaming && <div style={{ minHeight: '100vh' }} />}
       <div ref={messagesEndRef} />
     </div>
   );

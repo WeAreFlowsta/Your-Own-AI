@@ -76,6 +76,9 @@ export async function recordMessage(
     routing_reason?: string;
     routing_task?: string;
   },
+  /** Agent turn extras: the working log (sanitized) + workspace folder.
+   *  Client-side schema, encrypted before the zome sees it - no DNA change. */
+  agentExtras?: { agentLog?: unknown; folderPath?: string },
 ): Promise<string | null> {
   try {
     // Returns the entry's Holochain action hash (hex) — used as the
@@ -95,11 +98,31 @@ export async function recordMessage(
         tokens_per_second: tokens.tokens_per_second ?? null,
       } : null,
       provenance: provenance ?? null,
+      agentLog: agentExtras?.agentLog ?? null,
+      folderPath: agentExtras?.folderPath ?? null,
     });
     return actionHash;
   } catch (e) {
     console.warn("[Holochain] Failed to record message:", e);
     return null;
+  }
+}
+
+/**
+ * Wait for the conductor to come up (app launch takes a few seconds).
+ * Reads during startup return empty, which looks exactly like "no
+ * conversations" - callers wait here first so their spinner stays honest.
+ */
+export async function waitForHolochainReady(timeoutMs = 20000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      if (await invoke<boolean>("holochain_ready")) return true;
+    } catch {
+      /* command missing (old build) - fall through to the timeout */
+    }
+    if (Date.now() >= deadline) return false;
+    await new Promise((r) => setTimeout(r, 500));
   }
 }
 

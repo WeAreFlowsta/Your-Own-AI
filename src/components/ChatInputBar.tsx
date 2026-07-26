@@ -22,6 +22,8 @@ interface ChatInputBarProps {
   attachedImages: Signal<AttachedImage[]>;
   contextWindowSize: number;
   onAttachFiles$: QRL<(paths: string[]) => void>;
+  /** Open a folder for this conversation (Build agent). */
+  onOpenFolder$?: QRL<(path: string) => void>;
   theme: 'light' | 'dark';
 }
 
@@ -43,6 +45,7 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
   attachedImages,
   contextWindowSize,
   onAttachFiles$,
+  onOpenFolder$,
   theme,
 }) => {
   const askBlurbText = (selectedAi.aiConfig?.askBlurb && selectedAi.aiConfig.askBlurb.trim() !== '')
@@ -97,6 +100,7 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
             attachedImages={attachedImages}
             contextWindowSize={contextWindowSize}
             onAttachFiles$={onAttachFiles$}
+            onOpenFolder$={onOpenFolder$}
             selectedAiId={selectedAi.id}
           />
         </LiquidMetalBorder>

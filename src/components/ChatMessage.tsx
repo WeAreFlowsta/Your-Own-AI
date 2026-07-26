@@ -4,6 +4,7 @@ import {
   useTask$,
   useVisibleTask$,
   type QRL,
+  type Signal,
   $,
 } from '@builder.io/qwik';
 import 'highlight.js/styles/vs2015.css';
@@ -15,7 +16,8 @@ import {
   LuPanelRightClose,
   LuPanelRightOpen,
 } from '@qwikest/icons/lucide';
-import CodePanel from './CodePanel';
+import CodePanel, { SHELL_LANGUAGES, commandText } from './CodePanel';
+import { AgentWorkingBox } from './AgentWorkingBox';
 import ThemeAwareLottie from './ThemeAwareLottie';
 import LiquidMetalButton from './LiquidMetalButton';
 import type { RememberHandle } from '../utils/rememberText';
@@ -34,6 +36,23 @@ const BsHashIcon = component$(() => (
     class="md:mr-1.5"
   >
     <path d="M8.39 12.648a1.32 1.32 0 0 0-.015.18c0 .305.21.508.5.508.266 0 .492-.172.555-.477l.554-2.703h1.204c.421 0 .617-.234.617-.547 0-.312-.188-.53-.617-.53h-.985l.516-2.524h1.265c.43 0 .618-.227.618-.547 0-.313-.188-.524-.618-.524h-1.046l.476-2.304a1.06 1.06 0 0 0 .016-.164.51.51 0 0 0-.516-.516.54.54 0 0 0-.539.43l-.523 2.554H7.617l.477-2.304c.008-.04.015-.118.015-.164a.512.512 0 0 0-.523-.516.539.539 0 0 0-.531.43L6.53 5.484H5.414c-.43 0-.617.22-.617.532 0 .312.187.539.617.539h.906l-.515 2.523H4.609c-.421 0-.609.219-.609.531 0 .313.188.547.61.547h.976l-.516 2.492c-.008.04-.015.125-.015.18 0 .305.21.508.5.508.265 0 .492-.172.554-.477l.555-2.703h2.242l-.515 2.492zm-1-6.109h2.266l-.515 2.563H6.859l.532-2.563z" />
+  </svg>
+));
+
+const BsListUlIcon = component$(() => (
+  <svg
+    fill="currentColor"
+    stroke="currentColor"
+    stroke-width="0"
+    viewBox="0 0 16 16"
+    height="1em"
+    width="1em"
+    class="md:mr-1.5"
+  >
+    <path
+      fill-rule="evenodd"
+      d="M5 11.5a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5zm-3 1a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm0 4a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm0 4a1 1 0 1 0 0-2 1 1 0 0 0 0 2z"
+    />
   </svg>
 ));
 
@@ -125,6 +144,14 @@ interface ChatMessageProps {
   aiLabel?: string;
   aiImageUrl?: string | null;
   setSidePanelContent$: QRL<(content: { messageId: string; codeString: string; language: string } | null) => void>;
+  /** Answer a permission ask inside this message's agent working log. */
+  onPermissionRespond$?: QRL<(requestId: number, decision: 'allow' | 'reject', always: boolean) => void>;
+  /** The pending permission card reporting its viewport visibility. */
+  onPermissionOffscreen$?: QRL<(offscreen: boolean) => void>;
+  /** Run a suggested command in the user's own terminal. */
+  onOpenTerminal$?: QRL<(command: string) => void>;
+  /** Live retry text for the active agent turn's pearl. */
+  agentRetryStatus?: string;
   isDesktop: boolean;
   theme: 'light' | 'dark';
   isSidePanelVisible: boolean;
@@ -203,6 +230,9 @@ interface ActionBarProps {
   isLast?: boolean;
   onRouteRetry$?: QRL<(target: 'online' | 'device') => void>;
   canRouteOnline?: boolean;
+  /** Agent turns: the work rail's expansion state - the Steps button and
+   *  the collapsed stub toggle the same signal. */
+  railOpen?: Signal<boolean>;
 }
 
 // Minimum reasoning length (trimmed chars) worth surfacing a thinking box for.
@@ -265,14 +295,70 @@ const ActionBar = component$<ActionBarProps>((props) => {
     }
   });
 
+  // Folder sessions have TWO honest destinations for a remembered reply:
+  // the folder's shared memory (likelier mid-work) or this AI's own memory.
+  // The little menu makes the choice explicit - never a silent default.
+  const rememberMenuOpen = useSignal(false);
+  const rememberFolder = useSignal<string | null>(null);
+
+  const rememberClick = $(async () => {
+    if (rememberState.value === 'saving') return;
+    // Saved-toggle (per-AI) keeps its forget-on-click behavior.
+    if (rememberState.value === 'saved' && rememberHandle.value) {
+      await rememberReply();
+      return;
+    }
+    if (props.message.agentTurn) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const status = await invoke<{ folder: string | null }>('build_agent_status');
+        if (status.folder) {
+          rememberFolder.value = status.folder;
+          rememberMenuOpen.value = true;
+          return;
+        }
+      } catch {
+        /* no bridge - plain per-AI save */
+      }
+    }
+    await rememberReply();
+  });
+
+  const rememberToFolder = $(async () => {
+    const folder = rememberFolder.value;
+    rememberMenuOpen.value = false;
+    if (!folder) return;
+    rememberState.value = 'saving';
+    try {
+      const { appendWorkspaceNote } = await import('../utils/workspaceMemory');
+      const ok = await appendWorkspaceNote(folder, props.message.content);
+      rememberState.value = ok ? 'saved-folder' : 'error';
+    } catch {
+      rememberState.value = 'error';
+    }
+    setTimeout(() => {
+      if (rememberState.value === 'saved-folder' || rememberState.value === 'error') {
+        rememberState.value = '';
+      }
+    }, 2500);
+  });
+
   const hasTokens = props.message.tokens && (props.message.tokens.total_tokens || 0) > 0;
   const hasThoughts = !!props.message.thinking && props.message.thinking.trim().length >= MIN_THINKING_DISPLAY_CHARS;
   const hasSources = props.message.sources && props.message.sources.length > 0;
   const hasGrounded = !!props.message.grounded && props.message.grounded.length > 0;
   const canGround = !!props.onGround$ && !hasGrounded && !props.message.groundingPending;
   const hasModelInfo = props.message.role === 'assistant' && !!props.message.servedBy;
-  const hasButtons = hasTokens || hasThoughts || hasSources || hasGrounded || canGround || !!props.message.groundingPending || hasModelInfo;
+  const hasSteps =
+    !!props.railOpen && !!props.message.agentLog && props.message.agentLog.length > 0 && !props.message.isLoading;
+  const hasButtons = hasSteps || hasTokens || hasThoughts || hasSources || hasGrounded || canGround || !!props.message.groundingPending || hasModelInfo;
   const showStatus = props.isLoading && !props.message.error;
+
+  // Nothing to say and nothing to offer: render nothing. (The empty bar
+  // container was the "dead strip" above agent turns.)
+  if (!showStatus && !hasButtons) {
+    return null;
+  }
 
   const toggleSection$ = $((section: 'tokens' | 'thoughts' | 'sources' | 'model') => {
     openSection.value = openSection.value === section ? null : section;
@@ -303,7 +389,9 @@ const ActionBar = component$<ActionBarProps>((props) => {
       ? 'Writing code..'
       : props.message.searchingWeb && !props.message.content
         ? 'Searching the web..'
-        : `${props.aiName} is thinking..`;
+        : props.message.agentTurn
+          ? `${props.aiName} is working..`
+          : `${props.aiName} is thinking..`;
 
   return (
     <div class="generic-container my-2 rounded-2xl pl-9 md:pl-10 lg:pl-10">
@@ -337,6 +425,21 @@ const ActionBar = component$<ActionBarProps>((props) => {
         {/* Action buttons (right-aligned, shown when data available) */}
         {hasButtons && !showStatus && (
           <div class="flex items-center space-x-2">
+            {hasSteps && (
+              <LiquidMetalButton
+                onClick$={() => {
+                  props.railOpen!.value = !props.railOpen!.value;
+                }}
+                class="px-3 py-1 text-xs flex items-center"
+                aria-expanded={props.railOpen!.value}
+                title="The work behind this answer - every step, in order"
+              >
+                <BsListUlIcon />
+                <span class="hidden md:inline">
+                  {props.railOpen!.value ? 'Hide Steps' : 'Steps'}
+                </span>
+              </LiquidMetalButton>
+            )}
             {hasTokens && (
               <LiquidMetalButton
                 onClick$={() => toggleSection$('tokens')}
@@ -348,29 +451,62 @@ const ActionBar = component$<ActionBarProps>((props) => {
               </LiquidMetalButton>
             )}
             {props.message.role === 'assistant' && !!props.message.content && (
-              <LiquidMetalButton
-                onClick$={rememberReply}
-                class="px-3 py-1 text-xs flex items-center"
-                title={
-                  rememberState.value === 'error'
-                    ? 'Could not save - the memory model may still be downloading (Settings - Components)'
-                    : rememberState.value === 'saved'
-                      ? 'Remembered - click to forget it again'
-                      : 'Remember this reply - your AI will draw on it in future conversations'
-                }
-                disabled={rememberState.value === 'saving'}
-              >
-                <BsBookmarkIcon />
-                <span class="hidden md:inline">
-                  {rememberState.value === 'saved'
-                    ? 'Remembered'
-                    : rememberState.value === 'saving'
-                      ? 'Saving...'
-                      : rememberState.value === 'error'
-                        ? 'Try again'
-                        : 'Remember'}
-                </span>
-              </LiquidMetalButton>
+              <span class="relative inline-flex">
+                <LiquidMetalButton
+                  onClick$={rememberClick}
+                  class="px-3 py-1 text-xs flex items-center"
+                  title={
+                    rememberState.value === 'error'
+                      ? 'Could not save - the memory model may still be downloading (Settings - Components)'
+                      : rememberState.value === 'saved'
+                        ? 'Remembered - click to forget it again'
+                        : rememberState.value === 'saved-folder'
+                          ? 'Saved to this project’s memory'
+                          : 'Remember this reply - your AI will draw on it in future conversations'
+                  }
+                  disabled={rememberState.value === 'saving'}
+                >
+                  <BsBookmarkIcon />
+                  <span class="hidden md:inline">
+                    {rememberState.value === 'saved'
+                      ? 'Remembered'
+                      : rememberState.value === 'saved-folder'
+                        ? 'Saved to project'
+                        : rememberState.value === 'saving'
+                          ? 'Saving...'
+                          : rememberState.value === 'error'
+                            ? 'Try again'
+                            : 'Remember'}
+                  </span>
+                </LiquidMetalButton>
+                {rememberMenuOpen.value && (
+                  <>
+                    <span
+                      class="fixed inset-0 z-[45]"
+                      onClick$={() => (rememberMenuOpen.value = false)}
+                    />
+                    <span class="absolute left-0 bottom-full mb-2 w-56 rounded-2xl bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] py-1 shadow-lg z-50 overflow-hidden block">
+                      <button
+                        type="button"
+                        onClick$={rememberToFolder}
+                        class="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)] text-left"
+                      >
+                        Remember for this project
+                      </button>
+                      <button
+                        type="button"
+                        onClick$={() => {
+                          rememberMenuOpen.value = false;
+                          rememberReply();
+                        }}
+                        class="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)] text-left"
+                      >
+                        Remember for {props.message.aiLabel || 'this AI'}
+                      </button>
+                    </span>
+                  </>
+                )}
+              </span>
             )}
             {hasModelInfo && (
               <LiquidMetalButton
@@ -438,8 +574,14 @@ const ActionBar = component$<ActionBarProps>((props) => {
                 ? `Auto routing: ${props.message.routingReason}`
                 : 'This model was picked directly, not by Auto routing.'}
             </p>
+            {props.message.agentTurn && (
+              <p class="text-xs mt-1.5 text-[var(--text-muted)]">
+                A folder session stays on its model for the whole conversation.
+              </p>
+            )}
             {props.isLast &&
               props.onRouteRetry$ &&
+              !props.message.agentTurn &&
               props.message.servedBy!.startsWith('online:') && (
                 <button
                   type="button"
@@ -454,6 +596,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
               )}
             {props.isLast &&
               props.onRouteRetry$ &&
+              !props.message.agentTurn &&
               props.canRouteOnline &&
               !props.message.servedBy!.startsWith('online:') && (
                 <button
@@ -493,6 +636,16 @@ const ActionBar = component$<ActionBarProps>((props) => {
               </div>
             )}
           </div>
+          {/* Agent turns are many model calls over real time - say so. */}
+          {props.message.agentStats && (
+            <div class="mt-3 text-center text-xs text-[var(--text-muted)]">
+              {props.message.agentStats.modelCalls ?? '?'} model call
+              {(props.message.agentStats.modelCalls ?? 0) === 1 ? '' : 's'}
+              {props.message.agentStats.durationMs
+                ? ` · ${Math.round(props.message.agentStats.durationMs / 1000)}s of model time`
+                : ''}
+            </div>
+          )}
         </div>
       )}
 
@@ -586,6 +739,33 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
   const dynamicStatus = useSignal('');
   const statusOpacity = useSignal(1);
   const isCodePanelOpen = useSignal(false);
+
+  // Agent work rail: collapsed-stub expansion, shared by the stub itself
+  // and the action bar's Steps button.
+  const agentRailOpen = useSignal(false);
+  const agentWasLoading = useSignal(false);
+
+  // Settle-on-fold: when an agent turn finishes, its story collapses to the
+  // stub - a large height change no matter what. Use that moment for one
+  // deliberate move: question, stub, and the answer's first lines to the
+  // top, the same resting position every turn. Agent turns only.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    const loading = track(() => props.message.isLoading);
+    if (
+      props.message.agentTurn &&
+      agentWasLoading.value &&
+      !loading &&
+      props.isLast &&
+      rootRef.value
+    ) {
+      requestAnimationFrame(() => {
+        const question = rootRef.value?.previousElementSibling as HTMLElement | null;
+        question?.scrollIntoView({ behavior: 'auto', block: 'start' });
+      });
+    }
+    agentWasLoading.value = !!loading;
+  });
 
   const statusMessages = [
     'Synthesizing information',
@@ -747,6 +927,10 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
   useVisibleTask$(({ track }) => {
     const isLast = track(() => props.isLast);
     if (!rootRef.value) return;
+    // Agent turns are ONE bubble too (the rail lives inside it), so the
+    // same reservation applies - without it the question only reaches the
+    // top once enough rail content happens to have streamed, which made
+    // follow-up anchoring a coin flip.
     if (isLast && props.message.role === 'assistant') {
       const container = rootRef.value.closest('.overflow-y-auto') as HTMLElement | null;
       rootRef.value.style.minHeight = container ? `${container.clientHeight}px` : '';
@@ -771,14 +955,86 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
     ) {
       hasAnchoredStart.value = true;
       // Defer a frame so the user-question sibling is in the DOM + laid out, then
-      // jump (instant — nothing races it) to put the QUESTION at the top, with the
-      // new bubble + action bar right below it. Only scroll if the question node is
-      // present — anchoring the assistant itself would push the question off the top.
+      // jump to put the QUESTION at the top, with the new bubble + action bar
+      // right below it. Two hard-won details: the height reservation must be in
+      // the layout BEFORE the jump measures (the sibling task can lose that race
+      // on smaller/slower screens, landing the question shy of the top), and the
+      // jump must be literally 'instant' — 'auto' obeys the container's
+      // scroll-smooth CSS and animates, which mid-stream scroll work cuts short.
       requestAnimationFrame(() => {
-        const question = rootRef.value?.previousElementSibling as HTMLElement | null;
-        question?.scrollIntoView({ behavior: 'auto', block: 'start' });
+        const root = rootRef.value;
+        if (!root) return;
+        const container = root.closest('.overflow-y-auto') as HTMLElement | null;
+        if (container && props.isLast && props.message.role === 'assistant') {
+          root.style.minHeight = `${container.clientHeight}px`;
+        }
+        const question = root.previousElementSibling as HTMLElement | null;
+        question?.scrollIntoView({ behavior: 'instant', block: 'start' });
       });
     }
+  });
+
+  // Give every finished code block a Copy button, and shell blocks a
+  // "run in your terminal" button. Injected post-render (the markdown is
+  // innerHTML; injecting during streaming would fight the reconciler),
+  // native listeners so the first click works, re-injected whenever the
+  // content re-renders (the data flag dies with the old DOM).
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    track(() => props.message.isLoading);
+    track(() => props.message.content);
+    if (props.message.role !== 'assistant' || props.message.isLoading) return;
+    const root = rootRef.value;
+    if (!root) return;
+    const openTerminal$ = props.onOpenTerminal$;
+    requestAnimationFrame(() => {
+      const COPY_SVG =
+        '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+      const CHECK_SVG =
+        '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+      const TERM_SVG =
+        '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>';
+      root.querySelectorAll('.markdown-content pre').forEach((preEl) => {
+        const pre = preEl as HTMLElement;
+        if (pre.dataset.codeActions) return;
+        const code = pre.querySelector('code');
+        if (!code) return;
+        pre.dataset.codeActions = '1';
+        pre.style.position = 'relative';
+        const lang = Array.from(code.classList)
+          .find((c) => c.startsWith('language-'))
+          ?.slice(9)
+          .toLowerCase();
+        const isShell = !!lang && SHELL_LANGUAGES.includes(lang);
+        const bar = document.createElement('div');
+        bar.className = 'code-block-actions';
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.title = 'Copy';
+        copyBtn.innerHTML = COPY_SVG;
+        copyBtn.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(commandText(code.innerText));
+            copyBtn.innerHTML = CHECK_SVG;
+            setTimeout(() => (copyBtn.innerHTML = COPY_SVG), 1500);
+          } catch {
+            /* clipboard unavailable */
+          }
+        });
+        bar.appendChild(copyBtn);
+        if (isShell && openTerminal$) {
+          const termBtn = document.createElement('button');
+          termBtn.type = 'button';
+          termBtn.title = 'Run in your terminal';
+          termBtn.innerHTML = TERM_SVG;
+          termBtn.addEventListener('click', () => {
+            openTerminal$(commandText(code.innerText));
+          });
+          bar.appendChild(termBtn);
+        }
+        pre.appendChild(bar);
+      });
+    });
   });
 
   // Auto-scroll thinking preview
@@ -962,7 +1218,11 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
               {!showThinkingBox && (
                 <ActionBar
                   message={props.message}
+                  // The bar stays put through the whole turn: status while
+                  // working ("is working.."), buttons when done. The rail's
+                  // pearl carries the SPECIFIC current action below.
                   isLoading={!!props.message.isLoading}
+                  railOpen={agentRailOpen}
                   isModelLoading={props.isModelLoading}
                   isWritingCode={isWritingCode}
                   isThinking={!!props.message.thinking && !finalText.value}
@@ -978,9 +1238,27 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
                   canRouteOnline={props.canRouteOnline}
                 />
               )}
+              {/* Agent work rail: the turn's story (speech, thread, cards),
+                  live while working, folded to a stub when done. */}
+              {props.message.agentLog && props.message.agentLog.length > 0 && (
+                <div class="pl-0 md:pl-10 lg:pl-10 mt-1 mb-1">
+                  <AgentWorkingBox
+                    log={props.message.agentLog}
+                    working={!!props.message.isLoading}
+                    tipHere={props.isLast !== false}
+                    railOpen={agentRailOpen}
+                    retryStatus={props.isLast ? props.agentRetryStatus : undefined}
+                    durationMs={props.message.agentStats?.durationMs}
+                    onPermissionRespond$={props.onPermissionRespond$}
+                    onPermissionOffscreen$={props.onPermissionOffscreen$}
+                  />
+                </div>
+              )}
               {contentToRender && !hasError && (
                 <div
-                  class={`markdown-content bg-[var(--bg-assistant-message)] p-2 pr-2 pb-2 pt-2 pl-0 md:pl-10 lg:pl-10 rounded-lg text-[var(--text-primary)] text-base leading-relaxed ${props.message.thinking ? 'mt-2' : ''}`}
+                  // Agent turns speak unboxed - the two registers (words vs
+                  // work) carry the hierarchy, not a card background.
+                  class={`markdown-content ${props.message.agentTurn ? '' : 'bg-[var(--bg-assistant-message)]'} p-2 pr-2 pb-2 pt-2 pl-0 md:pl-10 lg:pl-10 rounded-lg text-[var(--text-primary)] text-base leading-relaxed ${props.message.thinking ? 'mt-2' : ''}`}
                   dangerouslySetInnerHTML={renderedHtml}
                 />
               )}

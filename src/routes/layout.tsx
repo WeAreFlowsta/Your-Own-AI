@@ -11,6 +11,7 @@ import { ModeProvider } from "../contexts/ModeContext";
 import { AiDataProvider } from "../contexts/AiDataContext";
 import { VisionDownloadProvider } from "../contexts/VisionDownloadContext";
 import { VisionDownloadIndicator } from "../components/VisionDownloadIndicator";
+import { WorkspaceMemoryModal } from "../components/WorkspaceMemoryModal";
 import { prefetchModels } from "../utils/modelCache";
 
 export type AppTheme = "light" | "dark";
@@ -18,6 +19,14 @@ export type AppTheme = "light" | "dark";
 export const ThemeContext = createContextId<{
   theme: Signal<AppTheme>;
 }>("app.theme");
+
+/** The project-memory modal's control: set a folder path to open it. The
+ *  modal itself renders HERE at the layout root - every route wraps its
+ *  content (and the header) in its own stacking contexts, so a modal
+ *  rendered inside them can never layer above the page. */
+export const ProjectMemoryContext = createContextId<Signal<string | null>>(
+  "app.project-memory",
+);
 
 export default component$(() => {
   const theme = useSignal<AppTheme>("dark");
@@ -156,12 +165,17 @@ export default component$(() => {
 
   useContextProvider(ThemeContext, { theme });
 
+  const projectMemoryFolder = useSignal<string | null>(null);
+  useContextProvider(ProjectMemoryContext, projectMemoryFolder);
+
   return (
     <ModeProvider>
       <AiDataProvider>
         <VisionDownloadProvider>
           <Slot />
           <VisionDownloadIndicator />
+          {/* Root-level so no route stacking context can bury it. */}
+          <WorkspaceMemoryModal folderPath={projectMemoryFolder} />
         </VisionDownloadProvider>
       </AiDataProvider>
     </ModeProvider>

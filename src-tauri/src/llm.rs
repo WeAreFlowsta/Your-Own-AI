@@ -583,6 +583,16 @@ pub struct VisionPick {
 /// Set true when the chat server (`:8080`) exits during a load — i.e. it failed to
 /// fit (out of GPU memory) or otherwise died. `start_llama_server` watches it to
 /// turn a dead server into a clear "too large" error instead of a silent hang.
+/// The context size the chat server was last started with - the truth the
+/// agent bridge must tell the agent (an inflated context_window in its
+/// config stops its own compaction from ever firing).
+pub static CURRENT_CTX_SIZE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+pub fn current_ctx_size() -> u32 {
+    let v = CURRENT_CTX_SIZE.load(std::sync::atomic::Ordering::Relaxed);
+    if v == 0 { 8192 } else { v }
+}
+
 static CHAT_LOAD_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Whether the dying server's stderr showed MEMORY exhaustion. Distinguishes a
 /// genuine too-large model from an engine crash (e.g. an access violation) -
@@ -670,14 +680,34 @@ pub async fn start_llama_server(
         sysinfo::RefreshKind::nothing().with_memory(sysinfo::MemoryRefreshKind::everything()),
     );
     let total_ram_gb = sys.total_memory() as f64 / (1024.0 * 1024.0 * 1024.0);
-    let ctx_size = if total_ram_gb >= 32.0 {
-        "16384"  // 32GB+ — large context
+    // A small model's KV cache is cheap: give it the large context even on
+    // moderate-RAM machines. This is what lets a 4B drive agent sessions
+    // (the agent's system prompt alone is ~9k tokens - an 8k context walls
+    // into a retry loop before the first file is read).
+    let model_size_gb = model_filename
+        .as_ref()
+        .and_then(|f| std::fs::metadata(models_dir.join(f)).ok())
+        .map(|m| m.len() as f64 / (1024.0 * 1024.0 * 1024.0));
+    let small_model = model_size_gb.map(|s| s < 6.0).unwrap_or(false);
+    // Small models get a long runway: a 4B's KV cache is cheap even at 32k,
+    // and agent sessions genuinely use it (a real folder task filled 16k in
+    // eight calls and died truncated).
+    let ctx_size = if small_model {
+        if total_ram_gb >= 12.0 { "32768" } else { "8192" }
+    } else if total_ram_gb >= 32.0 {
+        "16384"
     } else if total_ram_gb >= 12.0 {
-        "8192"   // 12-32GB — moderate context
+        "8192"
     } else {
-        "4096"   // <12GB — minimum usable context
+        "4096"
     };
-    println!("[LLM] System RAM: {:.1}GB, using context size: {}", total_ram_gb, ctx_size);
+    CURRENT_CTX_SIZE.store(ctx_size.parse::<u32>().unwrap_or(8192), std::sync::atomic::Ordering::Relaxed);
+    println!(
+        "[LLM] System RAM: {:.1}GB, model size: {}, using context size: {}",
+        total_ram_gb,
+        model_size_gb.map(|s| format!("{:.1}GB", s)).unwrap_or_else(|| "?".into()),
+        ctx_size
+    );
 
     // Build args
     // --reasoning off: disables native thinking by default for all models.

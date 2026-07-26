@@ -76,6 +76,7 @@ pub fn spawn(app: AppHandle) {
             .route("/health", get(|| async { Json(json!({ "status": "ok" })) }))
             .route("/v1/models", get(list_models))
             .route("/v1/chat/completions", post(chat_completions))
+            .route("/mcp", post(mcp_post).get(mcp_get))
             .with_state(app);
 
         let addr = format!("127.0.0.1:{PORT}");
@@ -124,7 +125,12 @@ fn load_ais(app: &AppHandle) -> Vec<Value> {
 /// name (case-insensitive), then slug. A trailing `:agent` suffix is stripped
 /// (agent mode lands in a later phase; treated as persona for now).
 fn resolve_ai(app: &AppHandle, model: &str) -> Option<ResolvedAi> {
-    let base = model.strip_suffix(":agent").unwrap_or(model).trim();
+    let base = model
+        .strip_suffix(":agent-device")
+        .or_else(|| model.strip_suffix(":agent"))
+        .or_else(|| model.strip_suffix(":plan"))
+        .unwrap_or(model)
+        .trim();
     let want = slug(base);
     let ais = load_ais(app);
 
@@ -300,7 +306,19 @@ async fn chat_completions(
             _ => "balanced",
         };
         let picks = crate::router::OnlinePicks::default();
-        match crate::router::route(&app, mode, &query, eagerness, task, difficulty, lean, &picks, None).await {
+        // Agent sessions route deterministically to a tool-capable model
+        // (the flag is computed again below for prompt handling - cheap).
+        let plan_routing = model.trim().ends_with(":plan");
+        // ":agent-device" = the subagent-offload variant: simple side-work
+        // (explore fan-outs) forced onto a capable DEVICE model - free and
+        // private - while the leader stays wherever it routes.
+        let device_only = model.trim().ends_with(":agent-device");
+        let agent_routing = plan_routing
+            || device_only
+            || model.trim().ends_with(":agent")
+            || header_str(&headers, "x-your-own-ai-mode").as_deref() == Some("agent");
+        let route_mode = if device_only { "offline" } else { mode };
+        match crate::router::route(&app, route_mode, &query, eagerness, task, difficulty, lean, &picks, None, agent_routing, plan_routing).await {
             Ok(r) => {
                 log::info!("[inference] router ({}): {mode} task={task} diff={difficulty} eag={eagerness} -> {} ({})", ai.name, r.model, r.reason);
                 ai.model = r.model;
@@ -356,6 +374,8 @@ async fn chat_completions(
     // memory + transcript + identity), not its persona. Persona mode (default):
     // we drive the system prompt.
     let agent_mode = model.trim().ends_with(":agent")
+        || model.trim().ends_with(":plan")
+        || model.trim().ends_with(":agent-device")
         || header_str(&headers, "x-your-own-ai-mode").as_deref() == Some("agent");
 
     // Agent mode injects memory by DEFAULT; a caller can opt out — e.g. to keep
@@ -363,6 +383,16 @@ async fn chat_completions(
     // model toward refusing tools — with `X-Your-Own-AI-Memory: off`.
     let agent_memory = !matches!(
         header_str(&headers, "x-your-own-ai-memory")
+            .map(|s| s.to_ascii_lowercase())
+            .as_deref(),
+        Some("off" | "false" | "0" | "no")
+    );
+    // `X-Your-Own-AI-Record: off` skips transcript recording for this
+    // exchange - for internal calls whose output is stored elsewhere (the
+    // workspace-memory updater writes its own revision entry; recording the
+    // exchange too would double-store it as a provider conversation).
+    let record_exchange = !matches!(
+        header_str(&headers, "x-your-own-ai-record")
             .map(|s| s.to_ascii_lowercase())
             .as_deref(),
         Some("off" | "false" | "0" | "no")
@@ -411,7 +441,7 @@ async fn chat_completions(
     // conversation key; tagged with the calling app).
     let rec = RecordCtx {
         app: app.clone(),
-        agent_key: ai.agent_pub_key.clone(),
+        agent_key: if record_exchange { ai.agent_pub_key.clone() } else { String::new() },
         ai_id: ai.id.clone(),
         ai_name: ai.name.clone(),
         model: ai.model.clone(),
@@ -582,9 +612,13 @@ fn find_sub(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
-/// Stateful `<think>…</think>` remover for the streamed content (the tags can
-/// span SSE chunks). Strips reasoning from what the CALLER sees; the recorded
-/// transcript keeps it (recorded from the raw body, separated into `thinking`).
+/// Stateful `<think>…</think>` splitter for the streamed content (the tags can
+/// span SSE chunks). The caller's `content` stays clean, and the reasoning is
+/// re-emitted as `delta.reasoning_content` - the OpenAI-compatible field agent
+/// clients already turn into visible thoughts. Models whose reasoning arrives
+/// inline as <think> (Sol through the proxy's Responses adapter) used to lose
+/// it here entirely: agent sessions sat frozen through every reasoning
+/// stretch. The recorded transcript still keeps the raw body.
 #[derive(Default)]
 struct ThinkStripper {
     in_think: bool,
@@ -592,20 +626,26 @@ struct ThinkStripper {
 }
 
 impl ThinkStripper {
-    fn feed(&mut self, s: &str) -> String {
+    /// Returns (visible content, reasoning) extracted from this chunk.
+    fn feed(&mut self, s: &str) -> (String, String) {
         let mut work = std::mem::take(&mut self.pending);
         work.push_str(s);
         let mut out = String::new();
+        let mut thought = String::new();
         loop {
             if self.in_think {
                 match work.find("</think>") {
                     Some(i) => {
+                        thought.push_str(&work[..i]);
                         work = work.split_off(i + "</think>".len());
                         self.in_think = false;
                     }
                     None => {
-                        self.pending = keep_partial_tail(&work, "</think>");
-                        return out;
+                        let tail = keep_partial_tail(&work, "</think>");
+                        let keep = work.len() - tail.len();
+                        thought.push_str(&work[..keep]);
+                        self.pending = tail;
+                        return (out, thought);
                     }
                 }
             } else {
@@ -620,7 +660,7 @@ impl ThinkStripper {
                         let keep = work.len() - tail.len();
                         out.push_str(&work[..keep]);
                         self.pending = tail;
-                        return out;
+                        return (out, thought);
                     }
                 }
             }
@@ -638,9 +678,9 @@ fn keep_partial_tail(s: &str, tag: &str) -> String {
     String::new()
 }
 
-/// Transform one SSE event for the caller: strip `<think>` from `delta.content`,
-/// pass everything else through. Returns the event to emit (with framing), or
-/// None to drop it.
+/// Transform one SSE event for the caller: split `<think>` out of
+/// `delta.content` into `delta.reasoning_content`, pass everything else
+/// through. Returns the event to emit (with framing), or None to drop it.
 fn process_event(event: &str, stripper: &mut ThinkStripper) -> Option<String> {
     let line = event.lines().find(|l| l.starts_with("data:"))?;
     let payload = line["data:".len()..].trim();
@@ -661,8 +701,11 @@ fn process_event(event: &str, stripper: &mut ThinkStripper) -> Option<String> {
         .and_then(|d| d.get("content"))
         .and_then(Value::as_str)
     {
-        let visible = stripper.feed(content);
+        let (visible, thought) = stripper.feed(content);
         v["choices"][0]["delta"]["content"] = Value::String(visible);
+        if !thought.is_empty() {
+            v["choices"][0]["delta"]["reasoning_content"] = Value::String(thought);
+        }
     }
     Some(format!("data: {v}\n\n"))
 }
@@ -777,7 +820,8 @@ fn spawn_record(rec: RecordCtx, assistant: String) {
             let hc = hc_state.clone();
             async move {
                 crate::commands_holochain::record_transcript_entry(
-                    app, agent, conv, role, content, sequence, model, thinking, None, None, hc,
+                    app, agent, conv, role, content, sequence, model, thinking, None, None, None,
+                    None, hc,
                 )
                 .await
             }
@@ -817,27 +861,167 @@ fn conv_key_lookup(key: &Option<String>) -> Option<(String, u32)> {
     conv_map().lock().unwrap().get(key).cloned()
 }
 
+// ── project-memory MCP endpoint ─────────────────────────────────────────────
+//
+// The Build agent's deliberate-memory tools, served over MCP Streamable
+// HTTP. The bridge declares this server in `session/new` with headers
+// naming the project and the writing AI; the agent then saves durable
+// notes THE MOMENT it learns them (`remember_for_project`) and can check
+// what is already known (`read_project_memory`). Responses mirror the
+// minimal shape the agent's own client tests accept: plain JSON bodies,
+// an mcp-session-id on initialize, bare 202 for notifications, and a
+// hang-open SSE stream on GET.
+
+fn mcp_result(id: &Value, result: Value) -> Response {
+    Json(json!({ "jsonrpc": "2.0", "id": id, "result": result })).into_response()
+}
+
+fn mcp_tool_text(id: &Value, text: String, is_error: bool) -> Response {
+    mcp_result(
+        id,
+        json!({ "content": [{ "type": "text", "text": text }], "isError": is_error }),
+    )
+}
+
+async fn mcp_post(
+    State(app): State<AppHandle>,
+    headers: HeaderMap,
+    Json(req): Json<Value>,
+) -> Response {
+    let id = req["id"].clone();
+    let folder = header_str(&headers, "x-project").unwrap_or_default();
+    let agent_key = header_str(&headers, "x-agent-key").unwrap_or_default();
+    let agent_label = header_str(&headers, "x-agent-label").unwrap_or_else(|| "your AI".into());
+    match req["method"].as_str() {
+        Some("initialize") => {
+            let mut resp = mcp_result(
+                &id,
+                json!({
+                    "protocolVersion": req["params"]["protocolVersion"].clone(),
+                    "capabilities": { "tools": {} },
+                    "serverInfo": { "name": "project-memory", "version": env!("CARGO_PKG_VERSION") },
+                }),
+            );
+            resp.headers_mut()
+                .insert("mcp-session-id", header::HeaderValue::from_static("project-memory"));
+            resp
+        }
+        Some("tools/list") => mcp_result(
+            &id,
+            json!({ "tools": [
+                {
+                    "name": "remember_for_project",
+                    "description": "Save one durable note to this project's shared memory - a command that works, a key file location, a convention, a decision. Use it the moment you learn something future sessions will need. Keep each note to one line.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "note": { "type": "string", "description": "The durable note, one line." }
+                        },
+                        "required": ["note"]
+                    }
+                },
+                {
+                    "name": "read_project_memory",
+                    "description": "Read this project's current shared memory notes.",
+                    "inputSchema": { "type": "object", "properties": {} }
+                }
+            ] }),
+        ),
+        Some("tools/call") => {
+            if folder.is_empty() {
+                return mcp_tool_text(&id, "No project is open.".to_string(), true);
+            }
+            match req["params"]["name"].as_str() {
+                Some("remember_for_project") => {
+                    let note = req["params"]["arguments"]["note"].as_str().unwrap_or("");
+                    if agent_key.is_empty() {
+                        return mcp_tool_text(&id, "No writer identity for this session.".to_string(), true);
+                    }
+                    match crate::commands_holochain::project_memory_append_note(
+                        &app, &agent_key, &agent_label, &folder, note,
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            log::info!("[mcp] {} remembered a note for {}", agent_label, folder);
+                            mcp_tool_text(&id, "Remembered for this project.".to_string(), false)
+                        }
+                        Err(e) => {
+                            log::warn!("[mcp] remember_for_project failed: {e}");
+                            mcp_tool_text(&id, format!("Could not save the note: {e}"), true)
+                        }
+                    }
+                }
+                Some("read_project_memory") => {
+                    match crate::commands_holochain::project_memory_read(&app, &folder).await {
+                        Ok(content) if !content.trim().is_empty() => {
+                            mcp_tool_text(&id, content, false)
+                        }
+                        Ok(_) => mcp_tool_text(&id, "(no project memory yet)".to_string(), false),
+                        Err(e) => mcp_tool_text(&id, format!("Could not read memory: {e}"), true),
+                    }
+                }
+                other => mcp_tool_text(&id, format!("Unknown tool: {:?}", other), true),
+            }
+        }
+        // notifications/initialized and anything else: acknowledge quietly.
+        _ => StatusCode::ACCEPTED.into_response(),
+    }
+}
+
+async fn mcp_get() -> Response {
+    // A hang-open SSE stream (the client keeps it for server-initiated
+    // messages; we never send any).
+    let stream = async_stream::stream! {
+        let () = std::future::pending().await;
+        yield Ok::<_, std::io::Error>(String::new());
+    };
+    (
+        [(header::CONTENT_TYPE, "text/event-stream")],
+        Body::from_stream(stream),
+    )
+        .into_response()
+}
+
 #[cfg(test)]
 mod think_tests {
     use super::ThinkStripper;
 
-    /// Feed `pieces` one at a time; return the concatenated visible output.
-    fn run(pieces: &[&str]) -> String {
+    /// Feed `pieces` one at a time; return (visible, reasoning) concatenated.
+    fn run(pieces: &[&str]) -> (String, String) {
         let mut s = ThinkStripper::default();
-        pieces.iter().map(|p| s.feed(p)).collect()
+        let mut visible = String::new();
+        let mut thought = String::new();
+        for p in pieces {
+            let (v, t) = s.feed(p);
+            visible.push_str(&v);
+            thought.push_str(&t);
+        }
+        (visible, thought)
     }
 
     #[test]
     fn strips_think_blocks_across_chunks() {
-        assert_eq!(run(&["hello"]), "hello");
-        assert_eq!(run(&["<think>reasoning</think>answer"]), "answer");
+        assert_eq!(run(&["hello"]).0, "hello");
+        assert_eq!(run(&["<think>reasoning</think>answer"]).0, "answer");
         // tag split across chunks
-        assert_eq!(run(&["a<thi", "nk>secret</thi", "nk>visible"]), "avisible");
+        assert_eq!(run(&["a<thi", "nk>secret</thi", "nk>visible"]).0, "avisible");
         // think in the middle
-        assert_eq!(run(&["pre", "<think>", "hidden", "</think>", "post"]), "prepost");
+        assert_eq!(run(&["pre", "<think>", "hidden", "</think>", "post"]).0, "prepost");
         // a lone '<' that isn't a think tag is held then released
-        assert_eq!(run(&["hi <", "br> there"]), "hi <br> there");
-        // unclosed think → everything after is dropped
-        assert_eq!(run(&["ok <think> never closes"]), "ok ");
+        assert_eq!(run(&["hi <", "br> there"]).0, "hi <br> there");
+        // unclosed think → everything after leaves content (it is reasoning)
+        assert_eq!(run(&["ok <think> never closes"]).0, "ok ");
+    }
+
+    #[test]
+    fn reasoning_is_kept_not_dropped() {
+        // The stripped text streams on as reasoning_content - Sol's thinking
+        // must stay visible to agent clients, not vanish.
+        assert_eq!(run(&["<think>reasoning</think>answer"]).1, "reasoning");
+        assert_eq!(run(&["a<thi", "nk>sec", "ret</thi", "nk>b"]).1, "secret");
+        // reasoning streams live even before the close tag arrives
+        assert_eq!(run(&["<think>partial thought"]).1, "partial thought");
+        assert_eq!(run(&["plain text only"]).1, "");
     }
 }

@@ -34,6 +34,12 @@ pub struct HolochainManager {
     /// this, two racers pass the already-provisioned check and collide on
     /// the same source chain ("head has moved") during the credential grant.
     provision_lock: Mutex<()>,
+    /// One zome call at a time per agent chain. An agent turn's final
+    /// answer write races the provider-side record of the same turn's last
+    /// model call (same chain, milliseconds apart) - the loser gets
+    /// "source chain head has moved" and its write is REJECTED, which
+    /// surfaced as answers missing from resumed conversations.
+    chain_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     /// User data key + per-user network seed (Phase A).
     pub recovery: RecoveryMaterial,
 }
@@ -47,6 +53,7 @@ impl HolochainManager {
             resource_dir,
             agents: Mutex::new(HashMap::new()),
             provision_lock: Mutex::new(()),
+            chain_locks: Mutex::new(HashMap::new()),
             recovery,
         }
     }
@@ -254,18 +261,53 @@ impl HolochainManager {
         let client = agent.app_client.clone();
         drop(agents); // Release lock before await!
 
+        // One call at a time per chain: the answer write and the provider-
+        // side record of the same turn land milliseconds apart, and the
+        // conductor rejects the second committer ("source chain head has
+        // moved") - a lost transcript entry. Serialize, and retry the rare
+        // conflict that still slips through (e.g. conductor-internal
+        // writes moving the head).
+        let chain_lock = {
+            let mut locks = self.chain_locks.lock().await;
+            locks
+                .entry(agent_key.to_string())
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone()
+        };
+        let _chain_guard = chain_lock.lock().await;
+
         use holochain_client::ZomeCallTarget;
         use holochain_types::prelude::{FunctionName, RoleName, ZomeName};
 
-        client
-            .call_zome(
-                ZomeCallTarget::RoleName(RoleName::from(dna::ROLE_NAME)),
-                ZomeName::from(zome_name),
-                FunctionName::from(fn_name),
-                payload,
-            )
-            .await
-            .map_err(|e| format!("Zome call {}/{} failed: {}", zome_name, fn_name, e))
+        let mut last_err = String::new();
+        for attempt in 0..3 {
+            match client
+                .call_zome(
+                    ZomeCallTarget::RoleName(RoleName::from(dna::ROLE_NAME)),
+                    ZomeName::from(zome_name),
+                    FunctionName::from(fn_name),
+                    payload.clone(),
+                )
+                .await
+            {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    last_err = format!("{}", e);
+                    if attempt < 2 && last_err.contains("head has moved") {
+                        log::warn!(
+                            "[holochain] head-moved conflict on {}/{} - retrying ({})",
+                            zome_name,
+                            fn_name,
+                            attempt + 1
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(50 * (attempt + 1))).await;
+                        continue;
+                    }
+                    break;
+                }
+            }
+        }
+        Err(format!("Zome call {}/{} failed: {}", zome_name, fn_name, last_err))
     }
 
     /// Walk the agent generations behind a given agent key, newest first.

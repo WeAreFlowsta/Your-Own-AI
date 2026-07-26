@@ -157,6 +157,105 @@ export interface Message {
   showUpgradeButton?: boolean;
   originalUserQuery?: string;
   originalUserMessageContent?: string;
+  /** The reply bubble of a folder-agent turn (ONE per turn). Skips
+   *  ChatMessage's per-bubble min-height reservation - the agent turn
+   *  reserves scroll space with one turn-scoped spacer instead. */
+  agentTurn?: boolean;
+  /** The agent turn's working log, rendered as the work rail inside the
+   *  reply bubble (steps + narration + thoughts + permissions, in true
+   *  order). `content` holds only the text the AI is currently saying -
+   *  which, at turn end, IS the final answer. */
+  agentLog?: AgentLogItem[];
+  /** Turn-level stats from the agent's turn_completed usage - drives the
+   *  collapsed stub ("6 steps - 5 files - 40s") and the Tokens panel. */
+  agentStats?: { durationMs?: number; modelCalls?: number };
+  /** An agent permission request (folder open). Renders as an inline card;
+   *  once answered it collapses to a one-line receipt. */
+  agentPermission?: AgentPermission;
+}
+
+/** One entry in an agent turn's working log.
+ *  `id` is assigned ONCE at creation and preserved through every update -
+ *  it is the render key. Index keys made Qwik re-match elements across
+ *  item types during the turn's rapid inserts, mis-nesting rows into each
+ *  other's flex buttons (labels wrapping word-by-word, text over text). */
+export type AgentLogItem = { id: string } & (
+  | { type: 'action'; action: AgentAction }
+  /** Text the AI said mid-work, superseded by later activity - shown muted
+   *  inside the box, without bubble chrome. */
+  | { type: 'narration'; text: string }
+  /** Model reasoning (agent_thought_chunk). Shown only when the user turns
+   *  on the thinking view. */
+  | { type: 'thought'; text: string }
+  /** A permission ask at its true position in the work. Pending = the full
+   *  card; answered = its receipt line. */
+  | { type: 'permission'; permission: AgentPermission }
+  /** The agent's live task plan (ACP plan updates). Each update replaces
+   *  the entries wholesale; the item keeps its place in the log. */
+  | { type: 'plan'; entries: AgentPlanEntry[] }
+);
+
+/** One task in the agent's plan checklist. */
+export interface AgentPlanEntry {
+  content: string;
+  priority?: 'high' | 'medium' | 'low';
+  status: 'pending' | 'in_progress' | 'completed';
+}
+
+/** One tool action inside an agent turn's working log. */
+export interface AgentAction {
+  toolCallId: string;
+  /** Humanized: "Reading package.json", "Running npm test". */
+  label: string;
+  /** ACP/x.ai tool kind: read | edit | list | search | execute | fetch... */
+  kind?: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'failed';
+  /** File paths this action touched (feeds the changed-files viewer). */
+  locations?: string[];
+  /** The full input (path, command...) for the expanded view. */
+  detail?: string;
+  /** Result preview (directory tree, file text, command output). */
+  output?: string;
+  /** Total line count of the result, for the "· 84 lines" hint. */
+  outputLines?: number;
+  /** Edit result as a real diff (ACP diff content). `lines` render the
+   *  colored view live; only the counts survive into the transcript. */
+  diff?: AgentActionDiff;
+  /** The latest line of a background task's live log (tailed from the
+   *  agent's terminal logs while the turn runs). Display-only - never
+   *  persisted. */
+  liveLine?: string;
+}
+
+export interface AgentActionDiff {
+  path: string;
+  added: number;
+  removed: number;
+  lines?: import('../utils/lineDiff').DiffLine[];
+}
+
+/** The exact thing the agent asked to do, straight from the ACP toolCall -
+ *  rendered verbatim on the card, never paraphrased. */
+export interface AgentPermission {
+  requestId: number;
+  /** The tool call this ask belongs to - on Allow, the rail grows the
+   *  step immediately (the agent stays silent while executing). */
+  toolCallId?: string;
+  title: string;
+  /** ACP tool kind (drives the verb header + icon). */
+  kind?: string;
+  /** The exact command for execute asks - shown whole, never truncated. */
+  command?: string;
+  /** The exact payload for tool asks with no command - e.g. the NOTE the
+   *  agent wants to remember. Shown verbatim on the card. */
+  detail?: string;
+  /** The edit shown as a real diff (collapsed preview + "show all"). */
+  diff?: AgentActionDiff;
+  locations?: string[];
+  options: { optionId: string; name: string; kind?: string }[];
+  state: 'pending' | 'answered' | 'expired';
+  /** One-line receipt after answering, e.g. "Allowed: npm install - once". */
+  receipt?: string;
 }
 
 export type ChatAction = 'Write a report...' | 'Write code...' | null;
@@ -231,4 +330,9 @@ export interface HolochainTranscriptEntry {
   runtime?: { app_version: string; online: boolean; max_tokens?: number | null } | null;
   routing_reason?: string | null;
   routing_task?: string | null;
+  /** Agent turn: the working log ({ items, stats }) - restores the rail on
+   *  resume. Client-side schema; old entries read back null. */
+  agent_log?: { items?: AgentLogItem[]; stats?: Message['agentStats'] } | null;
+  /** Workspace folder the turn worked in. */
+  folder_path?: string | null;
 }

@@ -862,6 +862,43 @@ main {
   animation: metallic-status-pulse-light 2s ease infinite;
 }
 
+/* Copy / run-in-terminal buttons injected onto finished code blocks.
+   Revealed on hover so reading stays clean. */
+.markdown-content pre .code-block-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+.markdown-content pre:hover .code-block-actions {
+  opacity: 1;
+}
+.code-block-actions button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+}
+.code-block-actions button:hover {
+  color: var(--text-primary);
+  background: var(--bg-dropdown-hover);
+}
+
+/* NOTE: a background-clip:text sweeping "shimmer" was tried for the agent
+   working box and REMOVED - WebKitGTK leaves stale glyph paints when the
+   clipped text changes under animation (status words painted over the rows
+   below). Liveness comes from ThemeAwareLottie + the pulse gradient above. */
+
 @keyframes metallic-status-pulse-light {
   0%, 100% { color: #606068; }
   33% { color: #484050; }

@@ -1,10 +1,12 @@
 import { component$, useSignal, $, type QRL } from '@builder.io/qwik';
-import { LuSparkles, LuPaperclip, LuFileText, LuCode } from '@qwikest/icons/lucide';
+import { LuSparkles, LuPaperclip, LuFileText, LuCode, LuFolderOpen } from '@qwikest/icons/lucide';
 import type { ChatAction } from '../types';
 
 interface ActionMenuProps {
   setSelectedAction$: QRL<(action: ChatAction) => void>;
   onAttachFiles$: QRL<(paths: string[]) => void>;
+  /** Open a folder for this conversation (Build agent). Absent = no entry. */
+  onOpenFolder$?: QRL<(path: string) => void>;
   isMultiLine: boolean;
 }
 
@@ -43,6 +45,19 @@ export const ActionMenu = component$<ActionMenuProps>((props) => {
       }
     } catch (err) {
       console.error('[ActionMenu] File picker error:', err);
+    }
+  });
+
+  const handleOpenFolder = $(async () => {
+    actionMenuOpen.value = false;
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const selected = await open({ directory: true });
+      if (typeof selected === 'string' && selected) {
+        props.onOpenFolder$?.(selected);
+      }
+    } catch (err) {
+      console.error('[ActionMenu] Folder picker error:', err);
     }
   });
 
@@ -94,6 +109,16 @@ export const ActionMenu = component$<ActionMenuProps>((props) => {
                 <LuPaperclip class="h-4 w-4 mr-3" />
                 Add file
               </button>
+              {props.onOpenFolder$ && (
+                <button
+                  type="button"
+                  onClick$={handleOpenFolder}
+                  class="text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)] hover:text-[var(--text-dropdown-active)] group flex w-full items-center px-2 py-2 text-sm"
+                >
+                  <LuFolderOpen class="h-4 w-4 mr-3" />
+                  Open a project...
+                </button>
+              )}
             </div>
           </>
         )}
