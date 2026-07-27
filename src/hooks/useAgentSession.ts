@@ -83,8 +83,11 @@ const ONLINE_ERROR_CODES = [
  *  "..."}} - substring matching covers both shapes. */
 function extractOnlineError(raw: string): { code: string; message?: string } | null {
   for (const code of ONLINE_ERROR_CODES) {
-    if (!raw.includes(`"${code}"`)) continue;
-    const m = raw.match(/"message"\s*:\s*"([^"]+)"/);
+    // Bare-word match: the JSON may arrive re-encoded with escaped quotes
+    // (\"allowance_exceeded\"), which a quoted needle would miss. These
+    // code words don't occur in legitimate error prose.
+    if (!raw.includes(code)) continue;
+    const m = raw.match(/"message\\?"\s*:\s*\\?"([^"\\]+)/);
     return { code, message: m?.[1] };
   }
   return null;
@@ -1393,7 +1396,22 @@ export function useAgentSession(props: UseAgentSessionProps) {
       const err = e.payload?.error;
       const stop = e.payload?.result?.stopReason;
       if (err) {
-        finishTurn(err.message ? String(err.message) : "The agent hit an error.");
+        // Terminal model errors arrive HERE (the RPC response), with the
+        // real reason in message and/or data - billing/auth codes raise
+        // the standard card instead of raw provider JSON in the bubble.
+        const raw = [
+          err.message ? String(err.message) : "",
+          err.data ? JSON.stringify(err.data) : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        const online = raw ? extractOnlineError(raw) : null;
+        if (online) {
+          props.chatState.error = JSON.stringify(online);
+          finishTurn("The online model couldn't continue - details below.");
+        } else {
+          finishTurn(err.message ? String(err.message) : "The agent hit an error.");
+        }
       } else if (stop === "refusal") {
         finishTurn("The agent declined to continue this task.");
       } else {
