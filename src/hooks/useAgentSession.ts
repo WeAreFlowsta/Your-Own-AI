@@ -36,6 +36,7 @@ import {
   saveWorkspaceMemory,
 } from "../utils/workspaceMemory";
 import type { UseChatState } from "./useChat";
+import { extractOnlineError } from "../utils/onlineErrors";
 
 export interface AgentSessionState {
   folderPath: string | null;
@@ -66,32 +67,6 @@ export interface AgentSessionState {
 /** Upstream-refusal signatures worth an offer: provider overload / rate
  *  limits, surfaced through the proxy as 429s. */
 const OVERLOAD_RE = /overload|429|too many requests|rate.?limit/i;
-
-/** Billing/auth codes the chat already renders as action cards (sign in,
- *  link plan, manage plan). An agent turn dying on one of these must raise
- *  the SAME card - never dump the provider's raw JSON into the bubble. */
-const ONLINE_ERROR_CODES = [
-  "auth_required",
-  "entitlement_required",
-  "allowance_exceeded",
-  "overage_settlement_failed",
-] as const;
-
-/** Fish a known online-error code (and its message) out of an agent error
- *  string. The proxy's JSON arrives embedded in prose ("Unauthorized (401)
- *  from http://...: {...}"), as either {"code":"..."} or {"error":{"type":
- *  "..."}} - substring matching covers both shapes. */
-function extractOnlineError(raw: string): { code: string; message?: string } | null {
-  for (const code of ONLINE_ERROR_CODES) {
-    // Bare-word match: the JSON may arrive re-encoded with escaped quotes
-    // (\"allowance_exceeded\"), which a quoted needle would miss. These
-    // code words don't occur in legitimate error prose.
-    if (!raw.includes(code)) continue;
-    const m = raw.match(/"message\\?"\s*:\s*\\?"([^"\\]+)/);
-    return { code, message: m?.[1] };
-  }
-  return null;
-}
 
 /** A resumed conversation restores the transcript for the USER's eyes, but
  *  the agent process starts blank - it never saw those turns, so it forgets

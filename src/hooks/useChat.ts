@@ -31,6 +31,7 @@ import { resolveRoutingSignals, type RoutingTask } from "../utils/routingTaskCla
 import { responseLengthOptions } from "../data/response-lengths";
 import { getArchetypeById } from "../data/bundled-archetypes";
 import { MISSION_CORE } from "../data/missionCore";
+import { extractOnlineError } from "../utils/onlineErrors";
 
 /** Hex SHA-256 of a UTF-8 string (provenance for attached context). */
 async function sha256Hex(text: string): Promise<string> {
@@ -1350,6 +1351,12 @@ export function useChat(props: UseChatProps) {
               aiId: selectedAi.id,
               aiLabel: selectedAi.label,
             });
+          } else if (extractOnlineError(errorMsg)) {
+            // Billing/auth from the online proxy ({"code":"allowance_exceeded"}
+            // and friends) → the standard action cards, never raw JSON in the
+            // bubble.
+            state.messages = state.messages.filter((m) => m.id !== assistantId);
+            state.error = JSON.stringify(extractOnlineError(errorMsg));
           } else {
             state.messages = state.messages.map((m) =>
               m.id === assistantId
