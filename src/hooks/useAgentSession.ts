@@ -632,6 +632,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     if (!text.trim()) return;
     lastPrompt.value = text;
     state.overloadOffer = null;
+    props.chatState.error = null;
     if (state.status !== "ready" && state.status !== "starting" && state.status !== "working") {
       props.chatState.error = JSON.stringify({
         code: "AGENT_NOT_RUNNING",
