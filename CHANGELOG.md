@@ -3,6 +3,13 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.1.0-beta.14] - 2026-07-27
+
+### Fixed
+- The monthly-allowance and sign-in notices now appear as proper cards in
+  normal chat as well - the last remaining path that printed the raw error
+  into the reply.
+
 ## [0.1.0-beta.13] - 2026-07-27
 
 ### Fixed
