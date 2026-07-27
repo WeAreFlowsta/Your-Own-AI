@@ -94,6 +94,9 @@ export default component$(() => {
   // A scanned PDF currently being OCR'd (installed path) — drives the "reading…"
   // notice, since OCR can take a while and scales with page count.
   const ocrProcessing = useSignal<string | null>(null);
+  // Filename currently being read into context (any type) - drives the
+  // reading notice so a big PDF drop never looks like nothing happened.
+  const attachReading = useSignal<string | null>(null);
   const contextWindowSize = useSignal(8192);
 
   // Refs (replace useRef)
@@ -823,6 +826,7 @@ export default component$(() => {
 
       // Images take the vision path: read as a base64 data URL (not text).
       if (imageExts.includes(ext)) {
+        attachReading.value = filePath.split(/[\\/]/).pop() || "image";
         try {
           const img = await invoke<{ filename: string; data_url: string; size_bytes: number }>(
             "read_image_for_context",
@@ -833,12 +837,15 @@ export default component$(() => {
           ];
         } catch (err) {
           console.error(`[ChatPage] Failed to read image ${filePath}:`, err);
+        } finally {
+          attachReading.value = null;
         }
         continue;
       }
 
       // Skip if already attached
       if (attachedFiles.value.some(f => f.path === filePath)) continue;
+      attachReading.value = filePath.split(/[\\/]/).pop() || "document";
       try {
         const result = await invoke<{
           filename: string;
@@ -857,7 +864,9 @@ export default component$(() => {
           truncated: result.truncated,
           estimatedTokens: result.estimated_tokens,
         }];
+        attachReading.value = null;
       } catch (err) {
+        attachReading.value = null;
         // A PDF that yields no text is almost certainly scanned (image-based) →
         // OCR it if installed, otherwise offer the optional download.
         if (filePath.toLowerCase().endsWith(".pdf")) {
@@ -1062,6 +1071,7 @@ export default component$(() => {
                 attachedFiles={attachedFiles}
                 ocrProcessing={ocrProcessing}
                 ocrNeeded={ocrNeeded}
+                reading={attachReading}
               />
             </div>
 

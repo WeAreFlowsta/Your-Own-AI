@@ -6,6 +6,8 @@ interface OcrAttachStatusProps {
   attachedFiles: Signal<AttachedFile[]>;
   ocrProcessing: Signal<string | null>;
   ocrNeeded: Signal<{ filePath: string; filename: string } | null>;
+  /** Filename being read into context (any attachment type). */
+  reading?: Signal<string | null>;
 }
 
 /**
@@ -17,6 +19,13 @@ interface OcrAttachStatusProps {
 export const OcrAttachStatus = component$<OcrAttachStatusProps>((props) => {
   return (
     <>
+      {props.reading?.value && !props.ocrProcessing.value && (
+        <div class="mt-2 flex items-center gap-2.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-2 text-xs text-[var(--text-secondary)]">
+          <span class="inline-block w-2 h-2 rounded-full bg-[var(--bg-button-primary)] animate-pulse shrink-0" />
+          Reading “{props.reading.value}”…
+        </div>
+      )}
+
       {props.ocrProcessing.value && (
         <div class="mt-2 flex items-center gap-2.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-2 text-xs text-[var(--text-secondary)]">
           <span class="inline-block w-2 h-2 rounded-full bg-[var(--bg-button-primary)] animate-pulse shrink-0" />
