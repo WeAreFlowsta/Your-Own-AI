@@ -581,7 +581,6 @@ pub fn run() {
             commands_holochain::get_conversation_transcript,
             commands_holochain::get_ai_holochain_status,
             commands_holochain::purge_ai_app,
-            commands_holochain::export_transcript_recovery,
             commands_holochain::save_text_download,
             memory::get_memory_facts,
             memory::save_memory_facts,

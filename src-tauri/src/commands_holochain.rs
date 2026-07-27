@@ -884,41 +884,6 @@ pub async fn purge_ai_app(
     Ok(removed)
 }
 
-/// Export the transcript recovery material (data key + network seed) to
-/// the user's Downloads folder. Standalone users MUST export this (or
-/// later escrow it via Vault) — without it, the encrypted transcripts
-/// are unrecoverable after device loss, even from their own nodes.
-#[tauri::command]
-pub async fn export_transcript_recovery(
-    app: tauri::AppHandle,
-    hc_state: State<'_, Arc<HolochainState>>,
-) -> Result<String, String> {
-    use tauri::Manager;
-    let material = hc_state.get()?.recovery.clone();
-    let json = serde_json::to_string_pretty(&serde_json::json!({
-        "_readme": "Your Own AI transcript recovery material. Keep this file safe and private — anyone with it can decrypt your AI conversation transcripts, and without it your transcripts cannot be recovered after device loss.",
-        "version": material.version,
-        "network_seed": material.network_seed,
-        "data_key_hex": material.data_key_hex,
-    }))
-    .map_err(|e| format!("Failed to serialize: {}", e))?;
-
-    let dir = app
-        .path()
-        .download_dir()
-        .map_err(|e| format!("No downloads directory: {}", e))?;
-    let path = dir.join("yoai-transcript-recovery.json");
-    std::fs::write(&path, json).map_err(|e| format!("Failed to write: {}", e))?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-    }
-
-    Ok(path.display().to_string())
-}
-
 /// Write a caller-supplied text file (e.g. an exported conversation
 /// transcript) to the user's Downloads folder and return the path.
 /// The filename is sanitised to a single, safe path component.

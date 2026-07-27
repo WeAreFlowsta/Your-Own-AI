@@ -438,8 +438,7 @@ export default component$<FlowstaAccountProps>((props) => {
         )}
         <p class="mt-1 text-sm text-[var(--text-secondary)]">
           Your AIs' conversations live on this device, encrypted with a key
-          only you hold (you can export the recovery key from any AI's
-          Memory page). While you're signed in, Your Own AI automatically
+          only you hold. While you're signed in, Your Own AI automatically
           backs up that key AND your conversations to your Flowsta Vault -
           and Vault's "Download Export" hands you all of it, readable, with
           the keys, yours to take anywhere. No lock-in, by design.
