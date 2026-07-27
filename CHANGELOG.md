@@ -3,6 +3,21 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.1.0-beta.11] - 2026-07-27
+
+### Changed
+- **A new app icon.** The mark in neutral chrome on a black tile, sized to
+  be seen.
+- **Conversation backups that grow with you.** With the newest Flowsta
+  Vault, each conversation backs up as its own compressed object - there
+  is no overall size budget, a single long session can never be too large
+  to protect, and backup runs only re-send conversations with new
+  messages. Older Vaults keep the single-snapshot backup they have today.
+- The NVIDIA graphics-card speed tip now sits below the message field on
+  the home page.
+- Backups copy in Settings now describes the one recovery story: your
+  key and conversations back up to your Flowsta Vault together.
+
 ## [0.1.0-beta.10] - 2026-07-27
 
 ### Added
