@@ -39,6 +39,9 @@ import { ImageCropModal } from './ImageCropModal';
 import { KnowledgeSection } from './KnowledgeSection';
 import { ThumbnailGalleryModal } from './ThumbnailGalleryModal';
 import type { GalleryThumb } from '../data/thumbnail-gallery';
+import { buildAiPack, signAiPack, aiPackFilename } from '../utils/aiPack';
+import { vaultState, signInToFlowsta } from '../utils/packSigning';
+import { getAiKnowledge } from '../utils/transcriptMemory';
 import { LiquidMetalBorder } from './LiquidMetalBorder';
 import LiquidMetalButton from './LiquidMetalButton';
 
@@ -225,6 +228,72 @@ const AiFormModal = component$<AiFormModalProps>(
       cleanup(() => {
         document.body.classList.remove('modal-open');
       });
+    });
+
+    // Export AI - the whole character as a shareable pack (signed or not).
+    const exportOpen = useSignal(false);
+    const exportBusy = useSignal(false);
+    const exportErr = useSignal('');
+    const exportNote = useSignal('');
+    const exportVaultUnlocked = useSignal(false);
+
+    const buildPack = $(async () => {
+      const ai = editingAi!;
+      let thumb: string | null = null;
+      try {
+        const bytes = await invoke<number[]>('get_ai_thumbnail', { aiId: ai.id });
+        if (bytes?.length) {
+          const { thumbnailBytesToDataUrl } = await import('../utils/aiPack');
+          thumb = thumbnailBytesToDataUrl(bytes);
+        }
+      } catch { /* no portrait */ }
+      const knowledge = (await getAiKnowledge(ai.id)).map((e) => ({ text: e.text }));
+      return buildAiPack(ai, thumb, knowledge);
+    });
+
+    const openExport = $(async () => {
+      exportErr.value = '';
+      exportNote.value = '';
+      exportVaultUnlocked.value = (await vaultState()).unlocked;
+      exportOpen.value = true;
+    });
+
+    const doExport = $(async (signed: boolean) => {
+      exportBusy.value = true;
+      exportErr.value = '';
+      try {
+        let pack = await buildPack();
+        if (signed) pack = { ...pack, signature: await signAiPack(pack) };
+        const path = await invoke<string>('save_text_download', {
+          filename: aiPackFilename(pack),
+          content: JSON.stringify(pack, null, 2),
+        });
+        exportOpen.value = false;
+        exportNote.value = `${signed ? 'Signed pack' : 'Pack'} saved to ${path}`;
+      } catch (e) {
+        const m = e instanceof Error ? e.message : String(e);
+        exportErr.value =
+          m === 'vault_locked'
+            ? 'Flowsta Vault is locked — unlock it to sign.'
+            : m === 'vault_not_found'
+              ? 'Flowsta Vault isn\'t running.'
+              : 'Couldn\'t save the pack.';
+      } finally {
+        exportBusy.value = false;
+      }
+    });
+
+    const doExportSignIn = $(async () => {
+      exportBusy.value = true;
+      exportErr.value = '';
+      try {
+        await signInToFlowsta();
+        exportVaultUnlocked.value = (await vaultState()).unlocked;
+      } catch {
+        exportErr.value = 'Sign-in was cancelled or didn\'t complete.';
+      } finally {
+        exportBusy.value = false;
+      }
     });
 
     // Initialize/reset form state when modal opens or editingAi changes
@@ -1228,6 +1297,16 @@ const AiFormModal = component$<AiFormModalProps>(
 
             {/* Buttons */}
             <div class="flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-3 pt-2">
+              {editingAi && (
+                <LiquidMetalButton
+                  variant="secondary"
+                  onClick$={openExport}
+                  disabled={store.isSubmitting}
+                  class="mt-3 sm:mt-0 sm:mr-auto w-full sm:w-auto inline-flex justify-center px-6 py-2.5 text-base font-medium"
+                >
+                  Export AI
+                </LiquidMetalButton>
+              )}
               <LiquidMetalButton
                 variant="secondary"
                 onClick$={onClose$}
@@ -1250,6 +1329,67 @@ const AiFormModal = component$<AiFormModalProps>(
               </LiquidMetalButton>
             </div>
           </form>
+
+          {/* Export AI dialog - signed (provenance) or plain file. */}
+          {exportOpen.value && (
+            <div class="absolute inset-0 z-20 flex items-center justify-center rounded-xl bg-black/60 p-6">
+              <div class="w-full max-w-sm rounded-xl bg-[var(--bg-header-footer)] p-6 shadow-2xl border border-[var(--border-subtle)]">
+                <h4 class="text-base font-semibold text-[var(--text-primary)]">Export AI</h4>
+                <p class="mt-2 text-sm text-[var(--text-secondary)]">
+                  Saves {editingAi?.name} as a shareable pack: personality,
+                  appearance, and its Knowledge. Conversations and personal
+                  memories are never included.
+                </p>
+                <p class="mt-2 text-xs text-[var(--text-muted)]">
+                  Signing with your Flowsta identity lets anyone who imports
+                  it see it really came from you.
+                </p>
+                {exportErr.value && (
+                  <p class="mt-2 text-xs text-red-400">{exportErr.value}</p>
+                )}
+                <div class="mt-4 flex flex-col gap-2">
+                  {exportVaultUnlocked.value ? (
+                    <LiquidMetalButton
+                      onClick$={$(() => doExport(true))}
+                      disabled={exportBusy.value}
+                      class="w-full justify-center px-5 py-2 text-sm"
+                    >
+                      {exportBusy.value ? 'Working...' : 'Export signed'}
+                    </LiquidMetalButton>
+                  ) : (
+                    <LiquidMetalButton
+                      onClick$={doExportSignIn}
+                      disabled={exportBusy.value}
+                      class="w-full justify-center px-5 py-2 text-sm"
+                    >
+                      {exportBusy.value ? 'Working...' : 'Sign in with Flowsta to sign'}
+                    </LiquidMetalButton>
+                  )}
+                  <LiquidMetalButton
+                    variant="secondary"
+                    onClick$={$(() => doExport(false))}
+                    disabled={exportBusy.value}
+                    class="w-full justify-center px-5 py-2 text-sm"
+                  >
+                    Export unsigned
+                  </LiquidMetalButton>
+                  <LiquidMetalButton
+                    variant="secondary"
+                    onClick$={$(() => { exportOpen.value = false; })}
+                    disabled={exportBusy.value}
+                    class="w-full justify-center px-5 py-2 text-sm"
+                  >
+                    Cancel
+                  </LiquidMetalButton>
+                </div>
+              </div>
+            </div>
+          )}
+          {exportNote.value && (
+            <p class="absolute bottom-2 left-0 right-0 z-10 mx-auto w-fit rounded-full bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] px-4 py-1.5 text-xs text-[var(--text-secondary)]" onClick$={$(() => { exportNote.value = ''; })}>
+              {exportNote.value}
+            </p>
+          )}
         </div>
         <ImageCropModal
           show={store.showCropModal}

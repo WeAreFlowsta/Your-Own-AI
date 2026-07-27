@@ -24,6 +24,7 @@ import {
   LuBrain,
   LuArchive,
   LuRotateCcw,
+  LuUpload,
 } from "@qwikest/icons/lucide";
 import { formatModelForCard } from "../../utils/modelNameFormatter";
 import AppHeader from "../../components/AppHeader";
@@ -34,6 +35,10 @@ import ConfirmModal from "../../components/ConfirmModal";
 import LastActiveAiModal from "../../components/LastActiveAiModal";
 import LiquidMetalButton from "../../components/LiquidMetalButton";
 import { Callout } from "../../components/Callout";
+import AiPackImportModal from "../../components/AiPackImportModal";
+import { parseAiPack, verifyAiPack, thumbnailDataUrlToBytes, type AiPack } from "../../utils/aiPack";
+import type { VerifyState } from "../../utils/packSigning";
+import { addKnowledge } from "../../utils/transcriptMemory";
 
 export default component$(() => {
   const nav = useNavigate();
@@ -45,9 +50,69 @@ export default component$(() => {
     purgeCustomAi,
     updateCustomAiStatus,
     reorderAis,
+    createCustomAi,
+    refreshThumbnail,
   } = useAiDataActions();
 
   const deletingAiId = useSignal<string | null>(null);
+  // Import AI (pack file → preview → create)
+  const importPack = useSignal<AiPack | null>(null);
+  const importVerify = useSignal<VerifyState | null>(null);
+  const importBusy = useSignal(false);
+  const importNote = useSignal("");
+
+  const onPackPicked = $(async (file: File) => {
+    importNote.value = "";
+    const pack = parseAiPack(await file.text());
+    if (!pack) {
+      importNote.value =
+        "That file isn't an AI pack. Expected a .json pack exported with \"Export AI\".";
+      return;
+    }
+    importVerify.value = await verifyAiPack(pack);
+    importPack.value = pack;
+  });
+
+  const confirmImport = $(async () => {
+    const pack = importPack.value;
+    if (!pack || importVerify.value === "tampered") return;
+    importBusy.value = true;
+    try {
+      const newAi = await createCustomAi({
+        name: pack.name,
+        description: pack.description,
+        baseArchetypeId: pack.baseArchetypeId,
+        systemPrompt: pack.systemPrompt,
+        model: "auto:offline",
+        askBlurb: pack.askBlurb,
+        emoji: pack.emoji,
+        useEmojis: pack.useEmojis,
+        lengthDisposition: pack.lengthDisposition as UserDefinedAI["lengthDisposition"],
+        defaultMode: pack.defaultMode as UserDefinedAI["defaultMode"],
+      });
+      if (pack.thumbnail) {
+        const bytes = thumbnailDataUrlToBytes(pack.thumbnail);
+        if (bytes) {
+          try {
+            await invoke("save_ai_thumbnail", { aiId: newAi.id, thumbnailData: bytes });
+            await refreshThumbnail(newAi.id);
+          } catch { /* portrait is a nice-to-have */ }
+        }
+      }
+      let added = 0;
+      for (const e of pack.knowledge) {
+        if (e.text.trim() && (await addKnowledge(newAi.id, e.text))) added++;
+      }
+      importNote.value = `${pack.name} joined your AIs${added ? ` with ${added} knowledge item${added === 1 ? "" : "s"}` : ""}.`;
+    } catch (e) {
+      importNote.value = "The import didn't complete - please try again.";
+      console.error("[YourAIs] Pack import failed:", e);
+    } finally {
+      importBusy.value = false;
+      importPack.value = null;
+      importVerify.value = null;
+    }
+  });
   // Which action is running in the remove modal: 'archive' | 'purge' | null.
   const deleteBusyAction = useSignal<"archive" | "purge" | null>(null);
 
@@ -366,6 +431,25 @@ export default component$(() => {
               Your AIs
             </h2>
             <div class="flex items-center gap-2">
+              <label class="cursor-pointer">
+                <input
+                  type="file"
+                  accept=".json,application/json"
+                  class="hidden"
+                  onChange$={(_, el) => {
+                    const f = el.files?.[0];
+                    el.value = "";
+                    if (f) onPackPicked(f);
+                  }}
+                />
+                <LiquidMetalButton
+                  variant="secondary"
+                  class="pointer-events-none flex items-center h-9 px-4 sm:px-5 text-[0.9375rem]"
+                >
+                  <LuUpload class="w-4 h-4 mr-1.5" />
+                  Import AI
+                </LiquidMetalButton>
+              </label>
               <LiquidMetalButton
                 onClick$={handleCreateNewAi}
                 class="flex items-center h-9 px-4 sm:px-5 text-[0.9375rem] transition-all duration-150 ease-in-out"
@@ -580,6 +664,30 @@ export default component$(() => {
       </div>
 
       {/* Modals */}
+      {importPack.value && (
+        <AiPackImportModal
+          pack={importPack}
+          verify={importVerify}
+          importing={importBusy}
+          archetypeLabel={
+            aiData.archetypeTemplates.find(
+              (a) => a.id === importPack.value?.baseArchetypeId,
+            )?.name || "Custom personality"
+          }
+          onConfirm$={confirmImport}
+          onCancel$={$(() => {
+            importPack.value = null;
+            importVerify.value = null;
+          })}
+        />
+      )}
+      {importNote.value && (
+        <div class="fixed bottom-6 left-1/2 z-40 -translate-x-1/2 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-dropdown)] px-4 py-2 text-sm text-[var(--text-secondary)] shadow-lg"
+          onClick$={() => (importNote.value = "")}
+        >
+          {importNote.value}
+        </div>
+      )}
       {isAiModalOpen.value && (
         <AiFormModal
           isOpen={isAiModalOpen.value}
