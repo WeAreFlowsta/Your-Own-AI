@@ -3,6 +3,18 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.1.0-beta.12] - 2026-07-27
+
+### Changed
+- The loaded-model indicator now sits first in the header, so the project
+  chip and conversations stay together.
+
+### Fixed
+- Sign-in and plan notices now appear as proper cards during project work
+  too - an online model needing attention mid-session no longer prints raw
+  error text into the chat. Sending a new message clears the previous
+  notice.
+
 ## [0.1.0-beta.11] - 2026-07-27
 
 ### Changed
