@@ -3,6 +3,13 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.1.0-beta.13] - 2026-07-27
+
+### Fixed
+- Online-model billing and sign-in notices now appear as proper cards on
+  every failure path during project work - one route was still printing
+  the raw error into the chat.
+
 ## [0.1.0-beta.12] - 2026-07-27
 
 ### Changed
