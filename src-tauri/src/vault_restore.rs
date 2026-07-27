@@ -291,13 +291,14 @@ fn remap_annotation(
 }
 
 /// Fetch the "latest" full-data backup from Vault.
-async fn fetch_data_backup(port: u16) -> Result<serde_json::Value, String> {
+/// Retrieve one labeled backup; the full IPC response (data / data_base64).
+async fn retrieve_label(port: u16, label: &str) -> Result<serde_json::Value, String> {
     let resp = http()
         .post(format!("http://127.0.0.1:{}/backup/retrieve", port))
         .header("Origin", VAULT_ORIGIN)
         .json(&serde_json::json!({
             "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
-            "label": vault_escrow::DATA_LABEL,
+            "label": label,
         }))
         .send()
         .await
@@ -310,11 +311,73 @@ async fn fetch_data_backup(port: u16) -> Result<serde_json::Value, String> {
             return Err(body["error"].as_str().unwrap_or("retrieve_failed").to_string());
         }
     }
-    let v: serde_json::Value = resp
-        .json()
+    resp.json()
         .await
-        .map_err(|e| format!("bad retrieve response: {}", e))?;
-    Ok(v["data"].clone())
+        .map_err(|e| format!("bad retrieve response: {}", e))
+}
+
+/// The full backup for replay. Incremental manifests are reassembled into
+/// the canonical monolith shape (cells[].records[]) by fetching each
+/// conversation's gzipped object(s), so everything downstream - cell
+/// assignment, replay, dedup - is untouched. Legacy "latest" monoliths
+/// pass through as-is.
+async fn fetch_data_backup(port: u16) -> Result<serde_json::Value, String> {
+    match retrieve_label(port, vault_escrow::MANIFEST_LABEL).await {
+        Ok(v) => {
+            let mut manifest = v["data"].clone();
+            let index = manifest["conversations"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            // role_name -> records, in manifest (chronological) order.
+            let mut cells: Vec<(String, Vec<serde_json::Value>)> = Vec::new();
+            for entry in &index {
+                let role = entry["role_name"].as_str().unwrap_or("").to_string();
+                let labels: Vec<String> = entry["labels"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|l| l.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                for label in &labels {
+                    let obj = retrieve_label(port, label)
+                        .await
+                        .map_err(|e| format!("conversation object {}: {}", label, e))?;
+                    let b64 = obj["data_base64"]
+                        .as_str()
+                        .ok_or_else(|| format!("conversation object {} has no bytes", label))?;
+                    use base64::Engine;
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(b64)
+                        .map_err(|_| format!("conversation object {} is corrupted", label))?;
+                    let plain = vault_escrow::gunzip_bytes(&bytes)
+                        .map_err(|e| format!("conversation object {}: {}", label, e))?;
+                    let part: serde_json::Value = serde_json::from_slice(&plain)
+                        .map_err(|e| format!("conversation object {}: {}", label, e))?;
+                    let records = part["records"].as_array().cloned().unwrap_or_default();
+                    match cells.iter_mut().find(|(r, _)| *r == role) {
+                        Some((_, recs)) => recs.extend(records),
+                        None => cells.push((role.clone(), records)),
+                    }
+                }
+            }
+            manifest["cells"] = serde_json::json!(cells
+                .into_iter()
+                .map(|(role_name, records)| serde_json::json!({
+                    "role_name": role_name,
+                    "records": records,
+                }))
+                .collect::<Vec<_>>());
+            Ok(manifest)
+        }
+        Err(e) if e == "no_backup" => {
+            let v = retrieve_label(port, vault_escrow::DATA_LABEL).await?;
+            Ok(v["data"].clone())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Everything already on this device, decrypted just enough to dedup:

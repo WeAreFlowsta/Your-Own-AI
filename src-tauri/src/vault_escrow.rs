@@ -421,8 +421,196 @@ pub async fn vault_escrow_keep_local(app: tauri::AppHandle) -> Result<EscrowStat
 // after transcript writes, and after each successful escrow sync.
 
 pub(crate) const DATA_LABEL: &str = "latest";
-/// Stay under Vault's 50 MB per-backup cap with headroom for JSON overhead.
+/// LEGACY monolith mode only (Vaults without /backup/limits): stay under
+/// the old 50 MB per-backup cap with headroom for JSON overhead.
 const BACKUP_BUDGET_BYTES: usize = 45 * 1024 * 1024;
+
+/// Incremental mode: the manifest object - conversation index + keys +
+/// AI configs + everything small. Conversation records live in their own
+/// per-conversation objects listed under `conversations[].labels`.
+pub(crate) const MANIFEST_LABEL: &str = "manifest";
+/// Local record of what each conversation object last uploaded, so backup
+/// runs only re-send conversations with new records.
+const SYNC_STATE_FILE: &str = "backup-sync-state.json";
+
+/// The Vault's advertised backup contract. `None` = the Vault predates
+/// GET /backup/limits - fall back to the legacy single-snapshot mode
+/// (older Vaults also rotate named labels, which would eat per-conversation
+/// objects, so the probe doubles as the safety gate).
+struct BackupLimits {
+    max_object_bytes: usize,
+}
+
+async fn fetch_backup_limits(port: u16) -> Option<BackupLimits> {
+    let resp = http()
+        .get(format!("http://127.0.0.1:{}/backup/limits", port))
+        .header("Origin", VAULT_ORIGIN)
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let v: serde_json::Value = resp.json().await.ok()?;
+    if v["named_labels_rotate"].as_bool() != Some(false) {
+        return None;
+    }
+    let max = v["max_object_bytes"].as_u64()? as usize;
+    (max > 0).then_some(BackupLimits {
+        max_object_bytes: max,
+    })
+}
+
+pub(crate) fn gzip_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
+    use std::io::Write;
+    let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(6));
+    enc.write_all(data).map_err(|e| format!("gzip: {}", e))?;
+    enc.finish().map_err(|e| format!("gzip: {}", e))
+}
+
+pub(crate) fn gunzip_bytes(data: &[u8]) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let mut out = Vec::new();
+    flate2::read::GzDecoder::new(data)
+        .read_to_end(&mut out)
+        .map_err(|e| format!("gunzip: {}", e))?;
+    Ok(out)
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct SyncEntry {
+    records: usize,
+    size: usize,
+    labels: Vec<String>,
+}
+
+fn sync_state_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join(SYNC_STATE_FILE))
+}
+
+fn load_sync_state(app: &tauri::AppHandle) -> std::collections::HashMap<String, SyncEntry> {
+    sync_state_path(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_sync_state(app: &tauri::AppHandle, state: &std::collections::HashMap<String, SyncEntry>) {
+    if let (Some(p), Ok(json)) = (sync_state_path(app), serde_json::to_string(state)) {
+        if let Err(e) = std::fs::write(&p, json) {
+            log::warn!("[escrow] could not persist backup sync state: {}", e);
+        }
+    }
+}
+
+/// Stable per-conversation object label, from the conversation record's
+/// action hash (unique, survives renames, same across runs).
+fn conv_label(c: &ConvBundle) -> Option<String> {
+    let h = c.records.first()?["actionHash"].as_str()?;
+    Some(format!("conv-{}", &h[..h.len().min(24)]))
+}
+
+/// Serialize a conversation into one or more gzipped part payloads, each
+/// under the vault's per-object cap. Parts are built under the cap in
+/// plaintext (gzip of JSON only shrinks), then verified compressed; a part
+/// that somehow still exceeds the cap is split further by records.
+fn build_conv_parts(
+    c: &ConvBundle,
+    base_label: &str,
+    cap: usize,
+) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let mut groups: Vec<Vec<&serde_json::Value>> = Vec::new();
+    let mut cur: Vec<&serde_json::Value> = Vec::new();
+    let mut cur_size = 0usize;
+    for r in &c.records {
+        let s = serde_json::to_vec(r).map(|v| v.len()).unwrap_or(0);
+        if !cur.is_empty() && cur_size + s > cap {
+            groups.push(std::mem::take(&mut cur));
+            cur_size = 0;
+        }
+        cur.push(r);
+        cur_size += s;
+    }
+    if !cur.is_empty() {
+        groups.push(cur);
+    }
+
+    let mut work: std::collections::VecDeque<Vec<&serde_json::Value>> = groups.into();
+    let mut compressed: Vec<Vec<u8>> = Vec::new();
+    while let Some(g) = work.pop_front() {
+        let payload = serde_json::json!({
+            "version": 2,
+            "role_name": c.installed_app_id,
+            "started_at": c.started_at,
+            "records": g,
+        });
+        let plain = serde_json::to_vec(&payload).map_err(|e| e.to_string())?;
+        let gz = gzip_bytes(&plain)?;
+        if gz.len() > cap {
+            if g.len() <= 1 {
+                return Err("one conversation record exceeds the vault's object cap".into());
+            }
+            let mid = g.len() / 2;
+            let (a, b) = g.split_at(mid);
+            work.push_front(b.to_vec());
+            work.push_front(a.to_vec());
+            continue;
+        }
+        compressed.push(gz);
+    }
+
+    let multi = compressed.len() > 1;
+    Ok(compressed
+        .into_iter()
+        .enumerate()
+        .map(|(i, bytes)| {
+            let label = if multi {
+                format!("{}.p{}", base_label, i)
+            } else {
+                base_label.to_string()
+            };
+            (label, bytes)
+        })
+        .collect())
+}
+
+async fn post_backup_object(port: u16, label: &str, bytes: &[u8]) -> Result<(), String> {
+    use base64::Engine;
+    let resp = http()
+        .post(format!("http://127.0.0.1:{}/backup", port))
+        .header("Origin", VAULT_ORIGIN)
+        .json(&serde_json::json!({
+            "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
+            "app_name": "Your Own AI",
+            "label": label,
+            "data_base64": base64::engine::general_purpose::STANDARD.encode(bytes),
+            "content_type": "application/json+gzip",
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("vault unreachable: {}", e))?;
+    if !resp.status().is_success() {
+        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+        return Err(format!(
+            "backup object {} rejected: {}",
+            label,
+            body["error"].as_str().unwrap_or("backup_failed")
+        ));
+    }
+    Ok(())
+}
+
+async fn delete_backup_label(port: u16, label: &str) {
+    let _ = http()
+        .post(format!("http://127.0.0.1:{}/backup/delete", port))
+        .header("Origin", VAULT_ORIGIN)
+        .json(&serde_json::json!({
+            "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
+            "label": label,
+        }))
+        .send()
+        .await;
+}
 
 /// Marker file left by the key restore: this device holds the right key
 /// but has NOT replayed the Vault conversations yet. While it exists,
@@ -661,7 +849,11 @@ fn assemble_full_payload(
     if dropped > 0 {
         payload["truncated_conversations"] = serde_json::json!(dropped);
         payload["_truncation_note"] = serde_json::json!(format!(
-            "{} oldest conversation(s) did not fit the backup size budget and were left out.",
+            "{} conversation(s) did not fit this Vault's single-snapshot size \
+             budget and were left out (a conversation larger than the budget \
+             can never be included, however recent). Update Flowsta Vault - \
+             newer versions store each conversation separately with no \
+             overall budget.",
             dropped
         ));
     }
@@ -685,35 +877,39 @@ fn may_overwrite(local_records: u64, existing_records: Option<u64>) -> bool {
     local_records > 0 || existing_records.unwrap_or(0) == 0
 }
 
-/// Record count of the existing "latest" snapshot in Vault.
+/// Record count of the existing snapshot in Vault - the incremental
+/// manifest when present, else the legacy "latest" monolith.
 /// `Ok(None)` = no snapshot stored. A snapshot whose summary can't be read
 /// counts as non-empty - when in doubt, don't overwrite.
 async fn fetch_existing_data_records(port: u16) -> Result<Option<u64>, String> {
-    let resp = http()
-        .post(format!("http://127.0.0.1:{}/backup/retrieve", port))
-        .header("Origin", VAULT_ORIGIN)
-        .json(&serde_json::json!({
-            "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
-            "label": DATA_LABEL,
-        }))
-        .send()
-        .await
-        .map_err(|e| format!("vault unreachable: {}", e))?;
-    match resp.status() {
-        reqwest::StatusCode::NOT_FOUND => return Ok(None),
-        s if s.is_success() => {}
-        _ => {
-            let body: serde_json::Value = resp.json().await.unwrap_or_default();
-            return Err(body["error"].as_str().unwrap_or("retrieve_failed").to_string());
+    for label in [MANIFEST_LABEL, DATA_LABEL] {
+        let resp = http()
+            .post(format!("http://127.0.0.1:{}/backup/retrieve", port))
+            .header("Origin", VAULT_ORIGIN)
+            .json(&serde_json::json!({
+                "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
+                "label": label,
+            }))
+            .send()
+            .await
+            .map_err(|e| format!("vault unreachable: {}", e))?;
+        match resp.status() {
+            reqwest::StatusCode::NOT_FOUND => continue,
+            s if s.is_success() => {}
+            _ => {
+                let body: serde_json::Value = resp.json().await.unwrap_or_default();
+                return Err(body["error"].as_str().unwrap_or("retrieve_failed").to_string());
+            }
         }
+        let v: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("bad retrieve response: {}", e))?;
+        return Ok(Some(
+            v["data"]["_summary"]["totalRecords"].as_u64().unwrap_or(1),
+        ));
     }
-    let v: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("bad retrieve response: {}", e))?;
-    Ok(Some(
-        v["data"]["_summary"]["totalRecords"].as_u64().unwrap_or(1),
-    ))
+    Ok(None)
 }
 
 /// Your Memory profile-facts store - a local encrypted file, NOT Holochain
@@ -793,6 +989,201 @@ fn collect_ai_knowledge(
 }
 
 /// Build + write the full-data backup. Returns small stats for callers/UI.
+/// Everything that rides the backup besides conversation records: Your
+/// Memory profile facts, per-AI thumbnails, and authored knowledge. Applied
+/// to the legacy monolith and the incremental manifest identically.
+fn attach_extras(
+    app: &tauri::AppHandle,
+    recovery: &RecoveryMaterial,
+    payload: &mut serde_json::Value,
+) {
+    // Your Memory profile facts: local encrypted file, not Holochain data.
+    // Carried readable (CAL) + as the raw file for a lossless restore.
+    if let Ok(dir) = app.path().app_data_dir() {
+        let facts_path = dir.join(FACTS_FILE);
+        if let Ok(bytes) = std::fs::read(&facts_path) {
+            use base64::Engine;
+            let mut block = serde_json::json!({
+                "_readme": "Your Memory - the profile facts your AIs have learned \
+                            (or you authored), as stored on this device. \
+                            human_readable is the decrypted view; raw_b64 is the \
+                            encrypted file itself, restorable with app_keys.",
+                "raw_b64": base64::engine::general_purpose::STANDARD.encode(&bytes),
+            });
+            if let Ok(key) = recovery.data_key() {
+                if let Some(human) = facts_human_readable(&key, &bytes) {
+                    block["human_readable"] = human;
+                }
+            }
+            payload["memory_facts"] = block;
+        }
+    }
+
+    // Per-AI thumbnails (small jpgs), keyed by AI id.
+    let ai_ids: Vec<String> = payload["ai_configs"]["data"]["custom-ais"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|a| a["id"].as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let thumbs = collect_thumbnails(app, &ai_ids);
+    if !thumbs.is_empty() {
+        payload["thumbnails"] = serde_json::json!({
+            "_readme": "Your AIs' images (base64 JPEG), keyed by AI id.",
+            "data": thumbs,
+        });
+    }
+
+    // Per-AI authored knowledge - user-given, not derivable from transcripts.
+    if let Ok(key) = recovery.data_key() {
+        let knowledge = collect_ai_knowledge(app, &key, &ai_ids);
+        if !knowledge.is_empty() {
+            payload["ai_knowledge"] = serde_json::json!({
+                "_readme": "Knowledge you gave each AI (its Remembers tab), keyed \
+                            by AI id. Embedding vectors are rebuilt on restore.",
+                "data": knowledge,
+            });
+        }
+    }
+}
+
+/// Incremental mode: one gzipped object per conversation + a manifest.
+/// Only conversations with new records upload; nothing is ever left out.
+async fn write_incremental_backup(
+    app: &tauri::AppHandle,
+    port: u16,
+    limits: &BackupLimits,
+    recovery: &RecoveryMaterial,
+    ai_configs: Option<serde_json::Value>,
+    convs: Vec<ConvBundle>,
+) -> Result<serde_json::Value, String> {
+    let mut sync = load_sync_state(app);
+    let mut counts: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    let mut total_records = 0u64;
+    let mut index: Vec<serde_json::Value> = Vec::new();
+    let mut uploaded_objects = 0usize;
+    let mut unchanged = 0usize;
+
+    let mut ordered = convs;
+    ordered.sort_by(|a, b| a.started_at.cmp(&b.started_at));
+
+    for c in &ordered {
+        let Some(label) = conv_label(c) else { continue };
+        for r in &c.records {
+            let t = r["entryType"].as_str().unwrap_or("Unknown").to_string();
+            *counts.entry(t).or_insert(0) += 1;
+            total_records += 1;
+        }
+
+        let prev = sync.get(&label);
+        let labels: Vec<String> = if prev
+            .map(|p| p.records == c.records.len() && p.size == c.size)
+            .unwrap_or(false)
+        {
+            unchanged += 1;
+            prev.map(|p| p.labels.clone()).unwrap_or_default()
+        } else {
+            let parts = build_conv_parts(c, &label, limits.max_object_bytes)?;
+            for (part_label, bytes) in &parts {
+                post_backup_object(port, part_label, bytes).await?;
+                uploaded_objects += 1;
+            }
+            let labels: Vec<String> = parts.into_iter().map(|(l, _)| l).collect();
+            sync.insert(
+                label.clone(),
+                SyncEntry {
+                    records: c.records.len(),
+                    size: c.size,
+                    labels: labels.clone(),
+                },
+            );
+            labels
+        };
+
+        index.push(serde_json::json!({
+            "label": label,
+            "role_name": c.installed_app_id,
+            "started_at": c.started_at,
+            "records": c.records.len(),
+            "labels": labels,
+        }));
+    }
+
+    let mut manifest = serde_json::json!({
+        "version": 2,
+        "_readme": "Your Own AI backup manifest. Conversations are stored as \
+                    separate compressed objects - one per conversation, listed \
+                    under conversations[].labels. The app_keys block holds the \
+                    encryption key and network seed. Keep any export of this \
+                    file private.",
+        "license": "Cryptographic Autonomy License v1.0 (CAL-1.0)",
+        "app": { "name": "Your Own AI", "client_id": YOAI_HOLOCHAIN_CLIENT_ID },
+        "exported_at_iso": iso_now(),
+        "_summary": {
+            "countsByEntryType": counts,
+            "totalRecords": total_records,
+        },
+        "conversations": index,
+        "app_keys": {
+            "_readme": "The transcript encryption key (hex) and per-user network \
+                        seed Your Own AI generates locally. Needed to decrypt this \
+                        user's transcripts on any device.",
+            "transcript_data_key_hex": recovery.data_key_hex,
+            "transcript_network_seed": recovery.network_seed,
+            "version": recovery.version,
+        },
+    });
+    if let Some(cfg) = ai_configs {
+        manifest["ai_configs"] = serde_json::json!({
+            "_readme": "Your AI personalities (names, personas, settings) as \
+                        stored on this device. Thumbnails are not included.",
+            "data": cfg,
+        });
+    }
+    attach_extras(app, recovery, &mut manifest);
+
+    let resp = http()
+        .post(format!("http://127.0.0.1:{}/backup", port))
+        .header("Origin", VAULT_ORIGIN)
+        .json(&serde_json::json!({
+            "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
+            "app_name": "Your Own AI",
+            "label": MANIFEST_LABEL,
+            "data": manifest,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("vault unreachable: {}", e))?;
+    if !resp.status().is_success() {
+        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+        return Err(body["error"].as_str().unwrap_or("backup_failed").to_string());
+    }
+
+    // The manifest is now the authoritative snapshot - retire the legacy
+    // monolith so a stale copy can't shadow it (restore prefers the
+    // manifest, but Your Data would show two conflicting snapshots).
+    delete_backup_label(port, DATA_LABEL).await;
+    save_sync_state(app, &sync);
+
+    log::info!(
+        "[escrow] incremental backup: {} conversations ({} records), {} object(s) uploaded, {} unchanged",
+        index.len(),
+        total_records,
+        uploaded_objects,
+        unchanged,
+    );
+    Ok(serde_json::json!({
+        "mode": "incremental",
+        "conversations": index.len(),
+        "records": total_records,
+        "truncated_conversations": 0,
+        "uploaded_objects": uploaded_objects,
+        "unchanged_conversations": unchanged,
+    }))
+}
+
 pub async fn write_full_backup(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
     let port = match escrow_port(app).await {
         Ok(p) => p,
@@ -856,61 +1247,20 @@ pub async fn write_full_backup(app: &tauri::AppHandle) -> Result<serde_json::Val
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
 
+    // Per-conversation incremental mode whenever the Vault supports it
+    // (advertises /backup/limits and guarantees named labels never rotate).
+    // EVERYTHING is backed up - no budget, nothing left out; only changed
+    // conversations re-upload. Older Vaults get the legacy single snapshot.
+    if let Some(limits) = fetch_backup_limits(port).await {
+        return write_incremental_backup(app, port, &limits, &recovery, ai_configs, convs).await;
+    }
+
     let conversations = convs.len();
     let mut payload = assemble_full_payload(&recovery, ai_configs, convs, BACKUP_BUDGET_BYTES);
     let total_records = payload["_summary"]["totalRecords"].as_u64().unwrap_or(0);
     let truncated = payload["truncated_conversations"].as_u64().unwrap_or(0);
 
-    // Your Memory profile facts: local encrypted file, not Holochain data.
-    // Carried readable (CAL) + as the raw file for a lossless restore.
-    if let Ok(dir) = app.path().app_data_dir() {
-        let facts_path = dir.join(FACTS_FILE);
-        if let Ok(bytes) = std::fs::read(&facts_path) {
-            use base64::Engine;
-            let mut block = serde_json::json!({
-                "_readme": "Your Memory - the profile facts your AIs have learned \
-                            (or you authored), as stored on this device. \
-                            human_readable is the decrypted view; raw_b64 is the \
-                            encrypted file itself, restorable with app_keys.",
-                "raw_b64": base64::engine::general_purpose::STANDARD.encode(&bytes),
-            });
-            if let Ok(key) = recovery.data_key() {
-                if let Some(human) = facts_human_readable(&key, &bytes) {
-                    block["human_readable"] = human;
-                }
-            }
-            payload["memory_facts"] = block;
-        }
-    }
-
-    // Per-AI thumbnails (small jpgs), keyed by AI id.
-    let ai_ids: Vec<String> = payload["ai_configs"]["data"]["custom-ais"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|a| a["id"].as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-    let thumbs = collect_thumbnails(app, &ai_ids);
-    if !thumbs.is_empty() {
-        payload["thumbnails"] = serde_json::json!({
-            "_readme": "Your AIs' images (base64 JPEG), keyed by AI id.",
-            "data": thumbs,
-        });
-    }
-
-    // Per-AI authored knowledge - user-given, not derivable from transcripts.
-    if let Ok(key) = recovery.data_key() {
-        let knowledge = collect_ai_knowledge(app, &key, &ai_ids);
-        if !knowledge.is_empty() {
-            payload["ai_knowledge"] = serde_json::json!({
-                "_readme": "Knowledge you gave each AI (its Remembers tab), keyed \
-                            by AI id. Embedding vectors are rebuilt on restore.",
-                "data": knowledge,
-            });
-        }
-    }
+    attach_extras(app, &recovery, &mut payload);
 
     let resp = http()
         .post(format!("http://127.0.0.1:{}/backup", port))
@@ -972,6 +1322,77 @@ pub async fn vault_backup_now(app: tauri::AppHandle) -> Result<serde_json::Value
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn bundle_with(n_records: usize, pad: usize) -> ConvBundle {
+        let records: Vec<serde_json::Value> = (0..n_records)
+            .map(|i| {
+                serde_json::json!({
+                    "entryType": "Message",
+                    "actionHash": format!("{:039x}", i + 0xabc),
+                    "human_readable": {"content": "x".repeat(pad)},
+                })
+            })
+            .collect();
+        let size = records
+            .iter()
+            .map(|r| serde_json::to_vec(r).unwrap().len())
+            .sum();
+        ConvBundle {
+            installed_app_id: "ai-1".into(),
+            started_at: 1000,
+            records,
+            size,
+        }
+    }
+
+    #[test]
+    fn conv_label_is_stable_hash_prefix() {
+        let c = bundle_with(2, 10);
+        let l = conv_label(&c).unwrap();
+        assert!(l.starts_with("conv-"));
+        assert_eq!(l, conv_label(&c).unwrap());
+        assert_eq!(l.len(), "conv-".len() + 24);
+    }
+
+    #[test]
+    fn small_conversation_is_one_object_that_roundtrips() {
+        let c = bundle_with(5, 100);
+        let parts = build_conv_parts(&c, "conv-x", 1024 * 1024).unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].0, "conv-x");
+        let plain = gunzip_bytes(&parts[0].1).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&plain).unwrap();
+        assert_eq!(v["records"].as_array().unwrap().len(), 5);
+        assert_eq!(v["role_name"], "ai-1");
+    }
+
+    #[test]
+    fn oversized_conversation_splits_ordered_under_cap() {
+        // Records of ~30KB against a 64KB cap force multiple parts.
+        // Incompressible-ish content (repeat compresses well, so use the
+        // record COUNT to force plaintext grouping over the cap).
+        let c = bundle_with(40, 30_000);
+        let cap = 64 * 1024;
+        let parts = build_conv_parts(&c, "conv-big", cap).unwrap();
+        assert!(parts.len() > 1);
+        let mut all: Vec<String> = Vec::new();
+        for (i, (label, bytes)) in parts.iter().enumerate() {
+            assert_eq!(label, &format!("conv-big.p{}", i));
+            assert!(bytes.len() <= cap);
+            let v: serde_json::Value =
+                serde_json::from_slice(&gunzip_bytes(bytes).unwrap()).unwrap();
+            for r in v["records"].as_array().unwrap() {
+                all.push(r["actionHash"].as_str().unwrap().to_string());
+            }
+        }
+        // Every record present exactly once, in original chain order.
+        let expected: Vec<String> = c
+            .records
+            .iter()
+            .map(|r| r["actionHash"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(all, expected);
+    }
 
     fn material() -> RecoveryMaterial {
         RecoveryMaterial {
