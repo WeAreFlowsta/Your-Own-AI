@@ -195,6 +195,28 @@ export default component$<AppHeaderProps>(
           </div>
 
           <div class="flex items-center gap-4">
+            {/* Current Model Badge with Status Indicator */}
+            {showModelWidget && currentModel && (
+              <span
+                class="text-xs text-[var(--text-secondary)] hidden md:flex items-center gap-2 px-3 h-9 bg-[var(--bg-dropdown)] rounded-full border border-[var(--border-subtle)]"
+                title="The model loaded on this device right now"
+              >
+                <span
+                  class={`w-2 h-2 rounded-full ${
+                    modelTooBig
+                      ? "bg-red-500"
+                      : isModelLoading
+                        ? "bg-orange-500 animate-pulse"
+                        : "bg-green-500"
+                  }`}
+                />
+                {currentModel.replace(".gguf", "").replace(/-/g, " ")}
+                {modelTooBig && (
+                  <span class="text-red-500 font-medium">· too big</span>
+                )}
+              </span>
+            )}
+
             {/* THE WORKSPACE SLOT - always present once Build is installed.
                 Open: status dot + path (the mode is unmistakable).
                 Closed: "Open a folder" with recents. Chatters (no Build)
@@ -452,28 +474,6 @@ export default component$<AppHeaderProps>(
                       )}
                     </span>
                   </>
-                )}
-              </span>
-            )}
-
-            {/* Current Model Badge with Status Indicator */}
-            {showModelWidget && currentModel && (
-              <span
-                class="text-xs text-[var(--text-secondary)] hidden md:flex items-center gap-2 px-3 h-9 bg-[var(--bg-dropdown)] rounded-full border border-[var(--border-subtle)]"
-                title="The model loaded on this device right now"
-              >
-                <span
-                  class={`w-2 h-2 rounded-full ${
-                    modelTooBig
-                      ? "bg-red-500"
-                      : isModelLoading
-                        ? "bg-orange-500 animate-pulse"
-                        : "bg-green-500"
-                  }`}
-                />
-                {currentModel.replace(".gguf", "").replace(/-/g, " ")}
-                {modelTooBig && (
-                  <span class="text-red-500 font-medium">· too big</span>
                 )}
               </span>
             )}
