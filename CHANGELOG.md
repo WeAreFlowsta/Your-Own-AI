@@ -3,6 +3,16 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.1.0-beta.16] - 2026-07-29
+
+### Added
+- **Serve your AIs to your other devices.** A new toggle in Settings →
+  External access opens the local endpoint to your network, minting an
+  access key that other devices present as their API key - the same
+  three-field setup every OpenAI-compatible app already uses, with Copy
+  setup providing all three. Apps on this computer stay keyless, devices
+  without the key are refused, and the key can be regenerated anytime.
+
 ## [0.1.0-beta.15] - 2026-07-28
 
 ### Added
