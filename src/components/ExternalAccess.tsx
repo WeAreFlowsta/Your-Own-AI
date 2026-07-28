@@ -1,4 +1,5 @@
 import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
+import { invoke } from "@tauri-apps/api/core";
 import { LuCheck, LuCopy, LuChevronDown, LuLink } from "@qwikest/icons/lucide";
 import { getLocalCustomAis } from "../utils/localAiStorage";
 
@@ -15,30 +16,43 @@ function modelId(name: string): string {
 }
 
 /** Self-contained connection snippet for one AI: everything another app
- *  needs (base URL + model) plus a runnable example. */
-function setupSnippet(model: string): string {
-  return [
-    `Base URL: ${ENDPOINT}`,
-    `Model: ${model}`,
+ *  needs (base URL + model + key when networked) plus a runnable example. */
+function setupSnippet(model: string, base: string, key?: string): string {
+  const lines = [`Base URL: ${base}`, `Model: ${model}`];
+  if (key) lines.push(`API key: ${key}`);
+  lines.push(
     "",
     "Example:",
-    `curl ${ENDPOINT}/chat/completions \\`,
+    `curl ${base}/chat/completions \\`,
     `  -H "Content-Type: application/json" \\`,
+  );
+  if (key) lines.push(`  -H "Authorization: Bearer ${key}" \\`);
+  lines.push(
     `  -d '{"model": "${model}", "messages": [{"role": "user", "content": "Hello"}]}'`,
-  ].join("\n");
+  );
+  return lines.join("\n");
+}
+
+interface LanStatus {
+  enabled: boolean;
+  key: string;
+  ips: string[];
+  port: number;
 }
 
 /**
  * Settings → External app access.
  *
- * A lightweight status surface so users can discover that their custom AIs are
- * available to other apps on this computer, copy the endpoint, see exactly
- * which model name to use for each AI, and how to connect.
+ * This computer's apps connect keyless via localhost. The network toggle
+ * additionally serves other devices on the local network - which must
+ * present the auto-minted access key as their API key.
  */
 export default component$(() => {
   const copiedKey = useSignal("");
   const showHow = useSignal(false);
   const ais = useSignal<{ name: string; model: string }[]>([]);
+  const lan = useSignal<LanStatus>({ enabled: false, key: "", ips: [], port: 11435 });
+  const lanBusy = useSignal(false);
 
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async () => {
@@ -47,6 +61,11 @@ export default component$(() => {
       ais.value = list.map((a) => ({ name: a.name, model: modelId(a.name) }));
     } catch {
       /* none / store not ready */
+    }
+    try {
+      lan.value = await invoke<LanStatus>("lan_access_status");
+    } catch {
+      /* status stays default */
     }
   });
 
@@ -60,6 +79,25 @@ export default component$(() => {
     }
   });
 
+  const toggleLan = $(async () => {
+    if (lanBusy.value) return;
+    lanBusy.value = true;
+    try {
+      lan.value = await invoke<LanStatus>("lan_access_set", {
+        enabled: !lan.value.enabled,
+      });
+    } catch {
+      /* keep previous state */
+    } finally {
+      lanBusy.value = false;
+    }
+  });
+
+  const lanBase = () =>
+    lan.value.ips.length > 0
+      ? `http://${lan.value.ips[0]}:${lan.value.port}/v1`
+      : `http://<this-computer's-address>:${lan.value.port}/v1`;
+
   return (
     <section class="bg-[var(--bg-card)] rounded-2xl p-6 border border-[var(--border-subtle)]">
       <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela mb-1 flex items-center gap-2">
@@ -67,8 +105,8 @@ export default component$(() => {
         External app access
       </h2>
       <p class="text-sm text-[var(--text-secondary)] mb-4">
-        Let other apps on this computer use your custom AIs for chat — with their
-        persona, memory and conversation history.
+        Let other apps use your custom AIs for chat — with their persona,
+        memory and conversation history.
       </p>
 
       {/* Status */}
@@ -82,7 +120,7 @@ export default component$(() => {
 
       {/* Endpoint + copy */}
       <div class="text-xs uppercase tracking-wide text-[var(--text-secondary)] mb-1.5">
-        Local endpoint
+        On this computer
       </div>
       <div class="flex items-center gap-2">
         <code class="flex-1 text-sm font-mono px-3 py-2 rounded-lg bg-[var(--bg-main)] border border-[var(--border-subtle)] text-[var(--text-primary)] truncate">
@@ -100,6 +138,108 @@ export default component$(() => {
           )}
           {copiedKey.value === "endpoint" ? "Copied" : "Copy"}
         </button>
+      </div>
+      <p class="mt-1.5 text-xs text-[var(--text-muted)]">
+        Apps on this computer need no key — being here is the credential.
+      </p>
+
+      {/* Other devices on the network */}
+      <div class="mt-5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-main)] p-4">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <p class="text-sm font-medium text-[var(--text-primary)]">
+              Other devices on this network
+            </p>
+            <p class="mt-0.5 text-xs text-[var(--text-secondary)]">
+              Serve your AIs to your other machines — they connect with an
+              access key.
+            </p>
+          </div>
+          <button
+            onClick$={toggleLan}
+            disabled={lanBusy.value}
+            class={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+              lan.value.enabled
+                ? "bg-emerald-500"
+                : "bg-[var(--border-subtle)]"
+            }`}
+            aria-label="Allow other devices on this network"
+          >
+            <span
+              class={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${
+                lan.value.enabled ? "left-[22px]" : "left-0.5"
+              }`}
+            />
+          </button>
+        </div>
+
+        {lan.value.enabled && (
+          <div class="mt-3 space-y-3">
+            <div>
+              <div class="text-xs uppercase tracking-wide text-[var(--text-secondary)] mb-1.5">
+                From other devices
+              </div>
+              <div class="flex items-center gap-2">
+                <code class="flex-1 text-sm font-mono px-3 py-2 rounded-lg bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[var(--text-primary)] truncate">
+                  {lanBase()}
+                </code>
+                <button
+                  onClick$={() => copy(lanBase(), "lan-endpoint")}
+                  title="Copy network endpoint"
+                  class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] transition-colors"
+                >
+                  {copiedKey.value === "lan-endpoint" ? (
+                    <LuCheck class="w-4 h-4 text-emerald-500" />
+                  ) : (
+                    <LuCopy class="w-4 h-4" />
+                  )}
+                  {copiedKey.value === "lan-endpoint" ? "Copied" : "Copy"}
+                </button>
+              </div>
+            </div>
+            <div>
+              <div class="text-xs uppercase tracking-wide text-[var(--text-secondary)] mb-1.5">
+                Access key — paste as the API key
+              </div>
+              <div class="flex items-center gap-2">
+                <code class="flex-1 text-sm font-mono px-3 py-2 rounded-lg bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[var(--text-primary)] truncate">
+                  {lan.value.key}
+                </code>
+                <button
+                  onClick$={() => copy(lan.value.key, "lan-key")}
+                  title="Copy access key"
+                  class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] transition-colors"
+                >
+                  {copiedKey.value === "lan-key" ? (
+                    <LuCheck class="w-4 h-4 text-emerald-500" />
+                  ) : (
+                    <LuCopy class="w-4 h-4" />
+                  )}
+                  {copiedKey.value === "lan-key" ? "Copied" : "Copy"}
+                </button>
+                <button
+                  onClick$={$(async () => {
+                    try {
+                      const key = await invoke<string>("lan_access_regenerate_key");
+                      lan.value = { ...lan.value, key };
+                    } catch {
+                      /* keep old key */
+                    }
+                  })}
+                  title="Make a new key - devices using the old one will need the new key"
+                  class="px-3 py-2 rounded-lg text-sm border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] transition-colors"
+                >
+                  New key
+                </button>
+              </div>
+            </div>
+            <p class="text-xs text-[var(--text-muted)]">
+              Any device on this network with the key can chat with your AIs
+              and read the replies — enable only on networks you trust. Your
+              firewall may ask to allow Your Own AI the first time.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* How to connect (disclosure) */}
@@ -119,8 +259,10 @@ export default component$(() => {
             <span class="font-mono text-[var(--text-primary)]">base URL</span> at
             the endpoint above, and set the{" "}
             <span class="font-mono text-[var(--text-primary)]">model</span> to one
-            of your AIs below. That AI's persona, memory and history all apply. No
-            API key is needed on this computer — any value works.
+            of your AIs below. That AI's persona, memory and history all apply.
+            {lan.value.enabled
+              ? " From another device, use the network endpoint and paste the access key as the API key."
+              : " No API key is needed on this computer — any value works."}
           </p>
 
           {/* The exact model name to use for each AI (avoids confusion with
@@ -153,7 +295,16 @@ export default component$(() => {
                         )}
                       </button>
                       <button
-                        onClick$={() => copy(setupSnippet(ai.model), `${ai.model}-setup`)}
+                        onClick$={() =>
+                          copy(
+                            setupSnippet(
+                              ai.model,
+                              lan.value.enabled ? lanBase() : ENDPOINT,
+                              lan.value.enabled ? lan.value.key : undefined,
+                            ),
+                            `${ai.model}-setup`,
+                          )
+                        }
                         title="Copy the base URL, model name, and a runnable example"
                         class="flex items-center gap-1 text-xs text-[var(--text-link)] hover:underline"
                       >

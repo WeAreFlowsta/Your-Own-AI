@@ -492,6 +492,9 @@ pub fn run() {
         .manage(LLMState::new())
         .manage(agent_bridge::AgentBridgeState::new())
         .invoke_handler(tauri::generate_handler![
+            inference_server::lan_access_status,
+            inference_server::lan_access_set,
+            inference_server::lan_access_regenerate_key,
             flowsta::flowsta_vault_status,
             flowsta::vault_sign,
             flowsta::verify_pack_signature,

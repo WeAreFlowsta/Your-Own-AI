@@ -68,22 +68,167 @@ struct ResolvedAi {
     agent_pub_key: String,
 }
 
-/// Spawn the inference server in a background task. Best-effort: a bind failure
-/// is logged and the app continues (the server is an add-on, not core).
+/// LAN access config: OFF = loopback-only, keyless (the default). ON =
+/// the server also accepts connections from the local network, which MUST
+/// present the access key as a standard `Authorization: Bearer` token
+/// (the "API key" field every OpenAI-compatible client already has).
+/// Loopback callers stay keyless either way - being on the machine is the
+/// credential there.
+#[derive(Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct LanAccess {
+    pub enabled: bool,
+    pub key: String,
+}
+
+fn lan_config_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    use tauri::Manager;
+    app.path().app_data_dir().ok().map(|d| d.join("lan-access.json"))
+}
+
+pub fn lan_config(app: &AppHandle) -> LanAccess {
+    lan_config_path(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_lan_config(app: &AppHandle, cfg: &LanAccess) -> Result<(), String> {
+    let p = lan_config_path(app).ok_or("no app data dir")?;
+    std::fs::write(&p, serde_json::to_string(cfg).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())
+}
+
+fn generate_key() -> String {
+    use rand::RngCore;
+    let mut bytes = [0u8; 24];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    format!("yoai-{}", hex::encode(bytes))
+}
+
+/// Non-loopback machine addresses, for showing the user their reachable
+/// URLs. Best-effort: derived by asking the OS which local address routes
+/// outward (no packets are actually sent to the probe address).
+fn lan_ips() -> Vec<String> {
+    let mut out = Vec::new();
+    if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+        if socket.connect("192.0.2.1:9").is_ok() {
+            if let Ok(addr) = socket.local_addr() {
+                if !addr.ip().is_loopback() {
+                    out.push(addr.ip().to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
+#[tauri::command]
+pub fn lan_access_status(app: AppHandle) -> serde_json::Value {
+    let cfg = lan_config(&app);
+    json!({
+        "enabled": cfg.enabled,
+        "key": cfg.key,
+        "ips": lan_ips(),
+        "port": PORT,
+    })
+}
+
+#[tauri::command]
+pub fn lan_access_set(app: AppHandle, enabled: bool) -> Result<serde_json::Value, String> {
+    let mut cfg = lan_config(&app);
+    cfg.enabled = enabled;
+    if enabled && cfg.key.is_empty() {
+        cfg.key = generate_key();
+    }
+    save_lan_config(&app, &cfg)?;
+    restart_server(app.clone());
+    Ok(json!({ "enabled": cfg.enabled, "key": cfg.key, "ips": lan_ips(), "port": PORT }))
+}
+
+#[tauri::command]
+pub fn lan_access_regenerate_key(app: AppHandle) -> Result<String, String> {
+    let mut cfg = lan_config(&app);
+    cfg.key = generate_key();
+    save_lan_config(&app, &cfg)?;
+    Ok(cfg.key)
+}
+
+/// Shutdown signal for the running server so a LAN-access toggle can
+/// rebind on the right interface.
+static SHUTDOWN: std::sync::Mutex<Option<tokio::sync::watch::Sender<bool>>> =
+    std::sync::Mutex::new(None);
+
+fn restart_server(app: AppHandle) {
+    if let Some(tx) = SHUTDOWN.lock().unwrap().take() {
+        let _ = tx.send(true);
+    }
+    spawn(app);
+}
+
+/// Reject non-loopback callers without the access key. Loopback is always
+/// allowed keyless.
+async fn lan_guard(
+    axum::extract::State(app): axum::extract::State<AppHandle>,
+    axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if peer.ip().is_loopback() {
+        return next.run(req).await;
+    }
+    let cfg = lan_config(&app);
+    if !cfg.enabled || cfg.key.is_empty() {
+        return err(StatusCode::FORBIDDEN, "Network access is not enabled.", "lan_disabled");
+    }
+    let presented = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::trim)
+        .unwrap_or("");
+    if presented != cfg.key {
+        return err(
+            StatusCode::UNAUTHORIZED,
+            "A valid access key is required from other devices. Copy it from Settings, External access.",
+            "invalid_access_key",
+        );
+    }
+    next.run(req).await
+}
+
+/// Spawn the inference server in a background task. Best-effort: a bind
+/// failure is logged, never fatal. Rebinds via restart_server when LAN
+/// access is toggled.
 pub fn spawn(app: AppHandle) {
+    let (tx, mut rx) = tokio::sync::watch::channel(false);
+    *SHUTDOWN.lock().unwrap() = Some(tx);
     tauri::async_runtime::spawn(async move {
+        let lan = lan_config(&app).enabled;
         let router = Router::new()
             .route("/health", get(|| async { Json(json!({ "status": "ok" })) }))
             .route("/v1/models", get(list_models))
             .route("/v1/chat/completions", post(chat_completions))
             .route("/mcp", post(mcp_post).get(mcp_get))
+            .layer(axum::middleware::from_fn_with_state(app.clone(), lan_guard))
             .with_state(app);
 
-        let addr = format!("127.0.0.1:{PORT}");
+        let addr = if lan {
+            format!("0.0.0.0:{PORT}")
+        } else {
+            format!("127.0.0.1:{PORT}")
+        };
         match tokio::net::TcpListener::bind(&addr).await {
             Ok(listener) => {
                 log::info!("[inference] Your Own AI inference server on http://{addr}");
-                if let Err(e) = axum::serve(listener, router).await {
+                let serve = axum::serve(
+                    listener,
+                    router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                )
+                .with_graceful_shutdown(async move {
+                    let _ = rx.wait_for(|v| *v).await;
+                });
+                if let Err(e) = serve.await {
                     log::error!("[inference] server exited: {e}");
                 }
             }
