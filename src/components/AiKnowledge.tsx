@@ -57,6 +57,7 @@ export default component$<Props>(({ aiId, aiName }) => {
   const exporting = useSignal(false);
   const exportErr = useSignal("");
   const vaultUnlocked = useSignal(false);
+  const vaultInstalled = useSignal(false);
   // Import
   const importOpen = useSignal(false);
   const importPack = useSignal<KnowledgePack | null>(null);
@@ -113,7 +114,9 @@ export default component$<Props>(({ aiId, aiName }) => {
 
   const openExport = $(async () => {
     exportErr.value = "";
-    vaultUnlocked.value = (await vaultState()).unlocked;
+    const vs = await vaultState();
+    vaultInstalled.value = vs.installed;
+    vaultUnlocked.value = vs.unlocked;
     exportOpen.value = true;
   });
 
@@ -165,7 +168,9 @@ export default component$<Props>(({ aiId, aiName }) => {
     exportErr.value = "";
     try {
       await signInToFlowsta();
-      vaultUnlocked.value = (await vaultState()).unlocked;
+      const vs = await vaultState();
+      vaultInstalled.value = vs.installed;
+      vaultUnlocked.value = vs.unlocked;
       if (!vaultUnlocked.value) exportErr.value = "Sign-in didn't complete.";
     } catch (e) {
       const m = e instanceof Error ? e.message : String(e);
@@ -400,7 +405,9 @@ export default component$<Props>(({ aiId, aiName }) => {
             <p class="text-sm text-[var(--text-secondary)] mb-4">
               {vaultUnlocked.value
                 ? "Sign it with your Flowsta identity so others can verify it's from you and hasn't been changed — or export it unsigned."
-                : "Sign in with Flowsta to sign this pack so others can trust where it came from — or export it unsigned."}
+                : vaultInstalled.value
+                  ? "Your Flowsta Vault is locked. Unlock it to sign this pack — or export it unsigned."
+                  : "Signing needs the Flowsta Vault app on this computer. You can still export unsigned."}
             </p>
             {exportErr.value && (
               <p class="text-xs text-red-400 mb-3">{exportErr.value}</p>
@@ -417,7 +424,7 @@ export default component$<Props>(({ aiId, aiName }) => {
                   )}
                   <LuShieldCheck class="w-4 h-4" /> Export signed
                 </LiquidMetalButton>
-              ) : (
+              ) : vaultInstalled.value ? (
                 <LiquidMetalButton
                   onClick$={doSignIn}
                   disabled={exporting.value}
@@ -426,7 +433,18 @@ export default component$<Props>(({ aiId, aiName }) => {
                   {exporting.value && (
                     <div class="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
                   )}
-                  Sign in with Flowsta
+                  I've unlocked it — sign in
+                </LiquidMetalButton>
+              ) : (
+                <LiquidMetalButton
+                  onClick$={$(async () => {
+                    const { openUrl } = await import("@tauri-apps/plugin-opener");
+                    await openUrl("https://flowsta.com/vault/");
+                  })}
+                  disabled={exporting.value}
+                  class="flex items-center justify-center gap-2 px-4 py-2 text-sm"
+                >
+                  Get Flowsta Vault
                 </LiquidMetalButton>
               )}
               <LiquidMetalButton

@@ -236,6 +236,7 @@ const AiFormModal = component$<AiFormModalProps>(
     const exportErr = useSignal('');
     const exportNote = useSignal('');
     const exportVaultUnlocked = useSignal(false);
+    const exportVaultInstalled = useSignal(false);
 
     const buildPack = $(async () => {
       const ai = editingAi!;
@@ -254,7 +255,9 @@ const AiFormModal = component$<AiFormModalProps>(
     const openExport = $(async () => {
       exportErr.value = '';
       exportNote.value = '';
-      exportVaultUnlocked.value = (await vaultState()).unlocked;
+      const vs = await vaultState();
+      exportVaultInstalled.value = vs.installed;
+      exportVaultUnlocked.value = vs.unlocked;
       exportOpen.value = true;
     });
 
@@ -288,7 +291,9 @@ const AiFormModal = component$<AiFormModalProps>(
       exportErr.value = '';
       try {
         await signInToFlowsta();
-        exportVaultUnlocked.value = (await vaultState()).unlocked;
+        const vs = await vaultState();
+        exportVaultInstalled.value = vs.installed;
+        exportVaultUnlocked.value = vs.unlocked;
       } catch {
         exportErr.value = 'Sign-in was cancelled or didn\'t complete.';
       } finally {
@@ -1341,8 +1346,11 @@ const AiFormModal = component$<AiFormModalProps>(
                   memories are never included.
                 </p>
                 <p class="mt-2 text-xs text-[var(--text-muted)]">
-                  Signing with your Flowsta identity lets anyone who imports
-                  it see it really came from you.
+                  {exportVaultUnlocked.value
+                    ? "Signing with your Flowsta identity lets anyone who imports it see it really came from you."
+                    : exportVaultInstalled.value
+                      ? "Your Flowsta Vault is locked. Unlock it to sign - or export unsigned."
+                      : "Signing needs the Flowsta Vault app on this computer. You can still export unsigned."}
                 </p>
                 {exportErr.value && (
                   <p class="mt-2 text-xs text-red-400">{exportErr.value}</p>
@@ -1356,13 +1364,24 @@ const AiFormModal = component$<AiFormModalProps>(
                     >
                       {exportBusy.value ? 'Working...' : 'Export signed'}
                     </LiquidMetalButton>
-                  ) : (
+                  ) : exportVaultInstalled.value ? (
                     <LiquidMetalButton
                       onClick$={doExportSignIn}
                       disabled={exportBusy.value}
                       class="w-full justify-center px-5 py-2 text-sm"
                     >
-                      {exportBusy.value ? 'Working...' : 'Sign in with Flowsta to sign'}
+                      {exportBusy.value ? 'Working...' : "I've unlocked it — sign in"}
+                    </LiquidMetalButton>
+                  ) : (
+                    <LiquidMetalButton
+                      onClick$={$(async () => {
+                        const { openUrl } = await import('@tauri-apps/plugin-opener');
+                        await openUrl('https://flowsta.com/vault/');
+                      })}
+                      disabled={exportBusy.value}
+                      class="w-full justify-center px-5 py-2 text-sm"
+                    >
+                      Get Flowsta Vault
                     </LiquidMetalButton>
                   )}
                   <LiquidMetalButton
