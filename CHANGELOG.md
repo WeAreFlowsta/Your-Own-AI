@@ -3,6 +3,18 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.1.0-beta.15] - 2026-07-28
+
+### Added
+- A "Reading ..." notice appears the moment any file is attached, so a
+  large document never looks like nothing happened while it's read in.
+
+### Changed
+- The signed-export dialogs (Export AI and knowledge packs) now know
+  whether Flowsta Vault is installed and unlocked, and guide you to the
+  right next step for each case - including a direct link to get the
+  Vault when it isn't installed. Exporting unsigned is always available.
+
 ## [0.1.0-beta.14] - 2026-07-27
 
 ### Fixed
