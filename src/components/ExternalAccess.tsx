@@ -326,6 +326,15 @@ export default component$(() => {
 
           <p class="text-xs opacity-80">
             Works with OpenAI-compatible tools and agent frameworks.
+            Step-by-step guides for Hermes Agent, OpenClaw, and more:{" "}
+            <a
+              href="https://docs.yourownai.net/external-apps/connect"
+              target="_blank"
+              rel="noopener"
+              class="text-[var(--text-link)] hover:underline"
+            >
+              docs.yourownai.net
+            </a>
           </p>
         </div>
       )}
