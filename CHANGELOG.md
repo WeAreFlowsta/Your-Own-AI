@@ -3,6 +3,18 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.1.0-rc.1] - 2026-07-29
+
+### Added
+- The "How to connect" panel in External access links to step-by-step
+  guides for Hermes Agent, OpenClaw, and other OpenAI-compatible apps
+  at docs.yourownai.net.
+
+### Changed
+- Windows installers are now code signed - no more "Windows protected
+  your PC" step during install. macOS builds remain signed and
+  notarized as always.
+
 ## [0.1.0-beta.16] - 2026-07-29
 
 ### Added

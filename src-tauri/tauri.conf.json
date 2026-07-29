@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Your Own AI",
-  "version": "0.1.0-beta.16",
+  "version": "0.1.0-rc.1",
   "identifier": "com.solar.yourowai",
   "build": {
     "beforeDevCommand": "rm -rf node_modules/.vite .qwik tmp dist 2>/dev/null; npm run dev",
@@ -118,7 +118,13 @@
       },
       "signCommand": {
         "cmd": "pwsh",
-        "args": ["-ExecutionPolicy", "Bypass", "-File", "scripts/sign-windows.ps1", "%1"]
+        "args": [
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "scripts/sign-windows.ps1",
+          "%1"
+        ]
       }
     }
   }
