@@ -46,7 +46,11 @@ export default component$(() => {
 
   return (
     <div class="flex flex-col h-screen bg-[var(--bg-main)]">
-      <div class="relative z-10">
+      {/* z-20: above page content so header dropdowns (projects, menus)
+          are never painted over by in-page stacking contexts like the
+          AI selector row (z-10). Page modals are fixed z-50 and still
+          cover the header. */}
+      <div class="relative z-20">
         <AppHeader
           handleNewQuestion$={handleNewQuestion}
           handleModelsClick$={handleModelsClick}
