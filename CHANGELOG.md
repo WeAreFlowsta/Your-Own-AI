@@ -3,6 +3,13 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.1.0-rc.2] - 2026-07-29
+
+### Fixed
+- The projects dropdown in the header no longer gets painted over by
+  the AI selector row on the chat page - header menus now always stack
+  above page content.
+
 ## [0.1.0-rc.1] - 2026-07-29
 
 ### Added
