@@ -1,0 +1,108 @@
+name: Rebuild Windows CUDA llama-server (hotfix)
+
+# Targeted rebuild of ONLY the Windows CUDA engine zip, replacing that one
+# asset on an existing llama-* release. Use for a Windows-CUDA-only engine
+# fix (e.g. the OpenSSL-DLL crash) without a ~3h full 6-platform rebuild.
+# The permanent fix lives in build-llama-binaries.yml; this just gets it
+# onto the pinned release fast. Safe to delete once a full build at a new
+# tag supersedes it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      llama_cpp_version:
+        description: 'llama.cpp git tag (must match the release, e.g. b9637)'
+        required: true
+        default: 'b9637'
+      release_tag:
+        description: 'Release to replace the asset on (e.g. llama-b9637)'
+        required: true
+        default: 'llama-b9637'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows-cuda:
+    # windows-2022, NOT windows-latest: newer images ship a Visual Studio
+    # that CUDA 12.x's nvcc rejects outright. Same pins as the main build.
+    runs-on: windows-2022
+    steps:
+      - name: Setup MSVC dev environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install CUDA toolkit 12.9
+        uses: Jimver/cuda-toolkit@v0.2.35
+        with:
+          cuda: '12.9.1'
+          method: 'local'
+
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: ${{ github.event.inputs.llama_cpp_version }}
+
+      - name: Build binary with CUDA support
+        run: |
+          cmake -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DBUILD_SHARED_LIBS=OFF `
+            -DGGML_NATIVE=OFF `
+            -DGGML_AVX=ON `
+            -DGGML_AVX2=ON `
+            -DGGML_FMA=ON `
+            -DGGML_F16C=ON `
+            -DGGML_CUDA=ON `
+            -DCMAKE_CUDA_FLAGS="-allow-unsupported-compiler" `
+            -DCMAKE_CUDA_ARCHITECTURES="61;70;75;80;86;89" `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
+            -DCMAKE_POLICY_DEFAULT_CMP0091=NEW `
+            -DLLAMA_CURL=OFF `
+            -DLLAMA_SERVER_SSL=OFF `
+            -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON `
+            -DLLAMA_SERVER_WEBUI=OFF
+          cmake --build build --target llama-server
+
+      # CI can't execute this exe (no NVIDIA driver on runners), so this
+      # import scan is the only tripwire against the OpenSSL-DLL crash.
+      - name: Guard - no dynamic OpenSSL dependency
+        shell: pwsh
+        run: |
+          $bytes = [System.IO.File]::ReadAllBytes("build/bin/llama-server.exe")
+          $ascii = [System.Text.Encoding]::ASCII.GetString($bytes)
+          if ($ascii -match "libcrypto-3|libssl-3|libcrypto-1|libssl-1") {
+            throw "llama-server.exe still imports OpenSSL DLLs - it will crash on clean machines. Fix the build flags."
+          }
+          if ($ascii -match "MSVCP140.dll|VCRUNTIME140") {
+            throw "llama-server.exe imports the dynamic MSVC runtime - build with static CRT."
+          }
+          Write-Host "OK: no OpenSSL or dynamic-CRT imports"
+
+      - name: Package with CUDA runtime DLLs
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path pkg | Out-Null
+          Copy-Item build\bin\llama-server.exe pkg\
+          $cudaBin = "$env:CUDA_PATH\bin"
+          foreach ($dll in @("cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll")) {
+            Copy-Item "$cudaBin\$dll" pkg\
+          }
+          if ((Get-Item pkg\llama-server.exe).Length -lt 5MB) { Write-Error "binary too small"; exit 1 }
+          foreach ($dll in @("cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll")) {
+            if (-not (Test-Path "pkg\$dll")) { Write-Error "missing $dll"; exit 1 }
+          }
+          Get-ChildItem pkg | Format-Table Name, Length
+
+      - name: Replace the release asset
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          V="${{ github.event.inputs.llama_cpp_version }}"
+          ZIP="llama-server-cuda-${V}-x86_64-pc-windows-msvc.zip"
+          (cd pkg && 7z a -tzip -mx=9 "../${ZIP}" ./*)
+          gh release upload "${{ github.event.inputs.release_tag }}" \
+            "${ZIP}" \
+            --repo "${{ github.repository }}" --clobber
+          echo "Replaced ${ZIP} on ${{ github.event.inputs.release_tag }}"

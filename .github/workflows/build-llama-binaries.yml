@@ -362,8 +362,29 @@ jobs:
             -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
             -DCMAKE_POLICY_DEFAULT_CMP0091=NEW `
             -DLLAMA_CURL=OFF `
+            -DLLAMA_SERVER_SSL=OFF `
+            -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON `
             -DLLAMA_SERVER_WEBUI=OFF
           cmake --build build --target llama-server
+
+      # Same OpenSSL quarantine as the plain Windows job. This job shipped a
+      # broken engine once: without the flags above CMake found the runner's
+      # OpenSSL and linked libcrypto-3-x64.dll / libssl-3-x64.dll - absent on
+      # user machines, so the CUDA engine crashed on spawn with "DLL not
+      # found". CI can't execute this exe (no NVIDIA driver on runners), so
+      # this import scan is the only tripwire.
+      - name: Guard - no dynamic OpenSSL dependency
+        shell: pwsh
+        run: |
+          $bytes = [System.IO.File]::ReadAllBytes("build/bin/llama-server.exe")
+          $ascii = [System.Text.Encoding]::ASCII.GetString($bytes)
+          if ($ascii -match "libcrypto-3|libssl-3|libcrypto-1|libssl-1") {
+            throw "llama-server.exe still imports OpenSSL DLLs - it will crash on clean machines. Fix the build flags."
+          }
+          if ($ascii -match "MSVCP140.dll|VCRUNTIME140") {
+            throw "llama-server.exe imports the dynamic MSVC runtime - build with static CRT (CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded)."
+          }
+          Write-Host "OK: no OpenSSL or dynamic-CRT imports"
 
       - name: Package with CUDA runtime DLLs
         shell: pwsh
