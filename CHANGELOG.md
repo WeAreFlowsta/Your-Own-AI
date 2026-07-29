@@ -3,6 +3,41 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.1.0] - 2026-07-29
+
+The first stable release of Your Own AI - private AI on your machine.
+No one in control but you.
+
+- **Yours, offline.** Author AIs with their own personalities, portraits,
+  memories, and knowledge. Chat with open models from the built-in
+  catalog, GPU accelerated, with no account and nothing leaving your
+  device.
+- **Documents, with proof.** Attach files - scanned paper included, read
+  on-device - and check any answer claim by claim against the exact
+  wording in the source.
+- **Projects.** Open a folder and your AI reads files, proposes edits,
+  and runs commands, asking permission for every action - powered by the
+  free Your Own AI Build add-on.
+- **Memory you can read.** A shared profile, per-AI memories, and project
+  memory - every entry visible, editable, and deletable.
+- **Records you can prove.** Conversations are written into
+  tamper-evident, signed records on your device. Export any
+  conversation, and optionally sign it with your Flowsta identity.
+- **Backed up, recoverable.** With Flowsta Vault connected, every
+  conversation, AI, and memory backs up automatically and restores on a
+  new device.
+- **Share your AIs.** Export any AI as a signed pack others can import
+  and verify - eight free characters are on yourownai.net.
+- **Online when you want it.** Optional paid plans add frontier models
+  and web search through a relay that strips your identity and never
+  stores your messages. Everything local stays free, always.
+- **An engine for other apps.** A local OpenAI-compatible endpoint
+  serves your AIs - personality, memory, and records included - to
+  editors, agent frameworks, and scripts, on this computer or your
+  network.
+- Installers are code signed on Windows and signed and notarized on
+  macOS.
+
 ## [0.1.0-rc.2] - 2026-07-29
 
 ### Fixed
