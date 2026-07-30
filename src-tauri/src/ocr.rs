@@ -20,13 +20,11 @@ pub const RECOGNITION_MODEL: &str = "text-recognition.rten";
 /// under `<resource_dir>/resources/` (the conductor resolves the .happ the same
 /// way — see lib.rs), so the path is `<resource_dir>/resources/pdfium/`.
 fn pdfium_lib_dir(app_handle: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app_handle
+    let data_dir = app_handle
         .path()
-        .resource_dir()
-        .map_err(|e| format!("Failed to resolve resource dir: {e}"))?
-        .join("resources")
-        .join("pdfium");
-    Ok(dir)
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve data dir: {e}"))?;
+    Ok(crate::resolve_resource_dir(app_handle, &data_dir).join("pdfium"))
 }
 
 /// Are both ocrs models downloaded?

@@ -660,11 +660,7 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .expect("Failed to get app data dir");
-            let resource_dir = app
-                .path()
-                .resource_dir()
-                .expect("Failed to get resource dir")
-                .join("resources");
+            let resource_dir = resolve_resource_dir(app.handle(), &data_dir);
 
             tauri::async_runtime::spawn(async move {
                 log::info!("Starting Holochain conductor...");
@@ -770,4 +766,56 @@ pub fn run() {
                 }
             }
         });
+}
+
+/// Where the bundled resources (hApp bundle, pdfium) live. `resource_dir()`
+/// can fail outright on some Windows boxes (seen in the field: custom-drive
+/// install, AV interference - same failure Vault hit and fixed). A panic
+/// here killed the app at startup with no window; fall back to the
+/// exe-relative resources dir, then the data dir - loudly, so the log
+/// names the real problem.
+#[cfg(debug_assertions)]
+pub(crate) fn resolve_resource_dir(
+    _app_handle: &tauri::AppHandle,
+    _data_dir: &std::path::Path,
+) -> std::path::PathBuf {
+    // Dev mode: Tauri doesn't copy resources to target/debug/, point at the
+    // source resources/ folder.
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources")
+}
+
+#[cfg(not(debug_assertions))]
+pub(crate) fn resolve_resource_dir(
+    app_handle: &tauri::AppHandle,
+    data_dir: &std::path::Path,
+) -> std::path::PathBuf {
+    use tauri::Manager;
+    match app_handle.path().resource_dir() {
+        Ok(d) => return d.join("resources"),
+        Err(e) => log::warn!(
+            "[resources] resource_dir() failed: {} - trying exe-relative resources",
+            e
+        ),
+    }
+    match std::env::current_exe() {
+        Ok(exe) => {
+            if let Some(dir) = exe.parent() {
+                let candidate = dir.join("resources");
+                if candidate.is_dir() {
+                    log::warn!("[resources] using exe-relative resources at {:?}", candidate);
+                    return candidate;
+                }
+                log::warn!(
+                    "[resources] exe-relative resources missing at {:?}",
+                    candidate
+                );
+            }
+        }
+        Err(e) => log::warn!("[resources] current_exe() failed: {}", e),
+    }
+    log::warn!(
+        "[resources] falling back to data dir {:?} - bundled resources will only be found if copied there",
+        data_dir
+    );
+    data_dir.to_path_buf()
 }
