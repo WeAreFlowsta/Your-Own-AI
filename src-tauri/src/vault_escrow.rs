@@ -1304,42 +1304,142 @@ fn skipped(reason: &str) -> serde_json::Value {
     })
 }
 
+// ── Write gates (probe seam for unit tests) ────────────────────────────
+//
+// The gate CASCADE is the protection and its ORDER is load-bearing:
+// identity gate (inside escrow_port) → restore-pending hold → key
+// coherence → slot read-before-write. The probes are Vault bridge calls,
+// so the decision logic lives behind this trait; tests script probe
+// results and assert outcomes AND call order.
+
+pub(crate) trait GateProbes {
+    /// Record count of the existing snapshot; `Ok(None)` = no snapshot.
+    async fn existing_data_records(&self) -> Result<Option<u64>, String>;
+    /// The escrowed recovery material; `Ok(None)` = no escrow stored.
+    async fn escrow(&self) -> Result<Option<RecoveryMaterial>, String>;
+}
+
+struct VaultGateProbes {
+    port: u16,
+}
+
+impl GateProbes for VaultGateProbes {
+    async fn existing_data_records(&self) -> Result<Option<u64>, String> {
+        fetch_existing_data_records(self.port).await
+    }
+    async fn escrow(&self) -> Result<Option<RecoveryMaterial>, String> {
+        fetch_escrow(self.port).await
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum PreflightSkip {
+    /// Conversations haven't been replayed from the Vault yet - a snapshot
+    /// from this device would shadow the user's copy.
+    RestorePending,
+    /// The Vault escrow holds recovery material for a DIFFERENT transcript
+    /// key - this device may not touch the data slots.
+    EscrowConflict,
+    /// The escrow could not be read - when in doubt, never write.
+    EscrowProbeFailed(String),
+}
+
+pub(crate) enum Preflight {
+    Proceed { recovery: RecoveryMaterial },
+    Skip(PreflightSkip),
+}
+
+/// The pre-collection gates, in order.
+///
+/// Restore-pending hold: the key came from Vault but the conversations
+/// haven't been replayed yet - sit tight until the restore runs, unless
+/// the Vault slot turns out to be empty (nothing to protect;
+/// `on_pending_resolved` fires so the caller can clear the marker, even
+/// when a LATER gate then skips - the pending question itself is settled).
+///
+/// Key-coherence gate: the data backup never writes while the Vault's
+/// escrowed recovery material differs from this device's. A fresh install
+/// generates a NEW random transcript key, so a machine that was never
+/// restored can't pass this gate while the Vault still holds another
+/// device's world - resolving the conflict (restore, or an explicit "keep
+/// this device's key") is what unlocks data backups. This closes the
+/// launch-sync window where one first chat message used to bypass the
+/// empty-slot guard and rewrite the manifest.
+///
+/// `local_recovery` is a closure on purpose: it must not run (or fail)
+/// before the restore-pending hold has had its say.
+pub(crate) async fn preflight_gates<P: GateProbes>(
+    probes: &P,
+    restore_pending: bool,
+    on_pending_resolved: impl FnOnce(),
+    local_recovery: impl FnOnce() -> Result<RecoveryMaterial, String>,
+) -> Result<Preflight, String> {
+    if restore_pending {
+        match probes.existing_data_records().await {
+            Ok(existing) if existing.unwrap_or(0) == 0 => on_pending_resolved(),
+            _ => return Ok(Preflight::Skip(PreflightSkip::RestorePending)),
+        }
+    }
+
+    let recovery = local_recovery()?;
+
+    match probes.escrow().await {
+        Ok(Some(ref m)) if *m == recovery => {}
+        Ok(None) => {}
+        Ok(Some(_)) => return Ok(Preflight::Skip(PreflightSkip::EscrowConflict)),
+        Err(e) => return Ok(Preflight::Skip(PreflightSkip::EscrowProbeFailed(e))),
+    }
+
+    Ok(Preflight::Proceed { recovery })
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum SlotSkip {
+    EmptyWouldOverwrite,
+    ProbeFailed(String),
+}
+
+/// Slot gate: never write a slot that was not first successfully read.
+/// The probe runs on EVERY backup (a confirmed-absent slot counts as a
+/// successful read); any probe failure skips - when in doubt, never
+/// overwrite. Plus the standing rule: an empty snapshot never overwrites
+/// records.
+pub(crate) async fn slot_gate<P: GateProbes>(
+    probes: &P,
+    local_records: u64,
+) -> Option<SlotSkip> {
+    match probes.existing_data_records().await {
+        Ok(existing) if may_overwrite(local_records, existing) => None,
+        Ok(_) => Some(SlotSkip::EmptyWouldOverwrite),
+        Err(e) => Some(SlotSkip::ProbeFailed(e)),
+    }
+}
+
 pub async fn write_full_backup(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
     let port = match escrow_port(app, true).await {
         Ok(p) => p,
         Err(s) => return Err(s.error.unwrap_or(s.state)),
     };
-    // Restore pending: the key came from Vault but the conversations
-    // haven't been replayed yet - any snapshot from this device would
-    // shadow the user's Vault copy. Sit tight until the restore runs,
-    // unless the Vault slot turns out to be empty (nothing to protect).
-    if restore_pending_path(app).map(|p| p.exists()).unwrap_or(false) {
-        match fetch_existing_data_records(port).await {
-            Ok(existing) if existing.unwrap_or(0) == 0 => clear_restore_pending(app),
-            _ => {
-                log::warn!(
-                    "[escrow] full backup skipped: conversation restore from Vault is \
-                     pending on this device (Settings → Restore conversations from Vault)"
-                );
-                return Ok(skipped("restore_pending"));
-            }
+    let probes = VaultGateProbes { port };
+    let pending = restore_pending_path(app).map(|p| p.exists()).unwrap_or(false);
+
+    let recovery = match preflight_gates(
+        &probes,
+        pending,
+        || clear_restore_pending(app),
+        || local_recovery(app),
+    )
+    .await?
+    {
+        Preflight::Proceed { recovery } => recovery,
+        Preflight::Skip(PreflightSkip::RestorePending) => {
+            log::warn!(
+                "[escrow] full backup skipped: conversation restore from Vault is \
+                 pending on this device (Settings → Restore conversations from Vault)"
+            );
+            return Ok(skipped("restore_pending"));
         }
-    }
-
-    let recovery = local_recovery(app)?;
-
-    // Key-coherence gate: the data backup never writes while the Vault's
-    // escrowed recovery material differs from this device's. A fresh
-    // install generates a NEW random transcript key, so a machine that was
-    // never restored can't pass this gate while the Vault still holds
-    // another device's world - resolving the conflict (restore, or an
-    // explicit "keep this device's key") is what unlocks data backups.
-    // This closes the launch-sync window where one first chat message used
-    // to bypass the empty-slot guard and rewrite the manifest.
-    match fetch_escrow(port).await {
-        Ok(Some(ref m)) if *m == recovery => {}
-        Ok(None) => {}
-        Ok(Some(_)) => {
+        Preflight::Skip(PreflightSkip::EscrowConflict) => {
             log::warn!(
                 "[escrow] full backup skipped: the Vault holds recovery material \
                  for a different transcript key - resolve the key conflict first \
@@ -1347,23 +1447,18 @@ pub async fn write_full_backup(app: &tauri::AppHandle) -> Result<serde_json::Val
             );
             return Ok(skipped("escrow_conflict"));
         }
-        Err(e) => {
+        Preflight::Skip(PreflightSkip::EscrowProbeFailed(e)) => {
             log::warn!("[escrow] full backup skipped: could not read the escrow: {}", e);
             return Ok(skipped("probe_failed"));
         }
-    }
+    };
 
     let convs = collect_conversations(app).await?;
     let local_records: u64 = convs.iter().map(|c| c.records.len() as u64).sum();
 
-    // Slot gate: never write a slot that was not first successfully read.
-    // The probe runs on EVERY backup (a confirmed-absent slot counts as a
-    // successful read); any probe failure skips - when in doubt, never
-    // overwrite. Plus the standing rule: an empty snapshot never overwrites
-    // records.
-    match fetch_existing_data_records(port).await {
-        Ok(existing) if may_overwrite(local_records, existing) => {}
-        Ok(_) => {
+    match slot_gate(&probes, local_records).await {
+        None => {}
+        Some(SlotSkip::EmptyWouldOverwrite) => {
             log::warn!(
                 "[escrow] full backup skipped: no local conversations but the \
                  Vault snapshot has records - refusing to overwrite it \
@@ -1371,7 +1466,7 @@ pub async fn write_full_backup(app: &tauri::AppHandle) -> Result<serde_json::Val
             );
             return Ok(skipped("empty_would_overwrite"));
         }
-        Err(e) => {
+        Some(SlotSkip::ProbeFailed(e)) => {
             log::warn!("[escrow] full backup skipped: could not probe the existing snapshot: {}", e);
             return Ok(skipped("probe_failed"));
         }
@@ -1668,5 +1763,216 @@ mod tests {
             .map(|r| r["human_readable"]["started_at"].as_i64().unwrap())
             .collect();
         assert_eq!(starts, vec![200, 300]); // chronological within the cell
+    }
+
+    // ── Guard sequencing (the write gates behind GateProbes) ────────────
+
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+
+    struct Scripted {
+        existing: RefCell<VecDeque<Result<Option<u64>, String>>>,
+        escrow: RefCell<VecDeque<Result<Option<RecoveryMaterial>, String>>>,
+        calls: RefCell<Vec<&'static str>>,
+    }
+
+    impl Scripted {
+        fn new(
+            existing: Vec<Result<Option<u64>, String>>,
+            escrow: Vec<Result<Option<RecoveryMaterial>, String>>,
+        ) -> Self {
+            Self {
+                existing: RefCell::new(existing.into()),
+                escrow: RefCell::new(escrow.into()),
+                calls: RefCell::new(Vec::new()),
+            }
+        }
+        fn calls(&self) -> Vec<&'static str> {
+            self.calls.borrow().clone()
+        }
+    }
+
+    impl GateProbes for Scripted {
+        async fn existing_data_records(&self) -> Result<Option<u64>, String> {
+            self.calls.borrow_mut().push("existing");
+            self.existing
+                .borrow_mut()
+                .pop_front()
+                .expect("gate probed existing_data_records more often than scripted")
+        }
+        async fn escrow(&self) -> Result<Option<RecoveryMaterial>, String> {
+            self.calls.borrow_mut().push("escrow");
+            self.escrow
+                .borrow_mut()
+                .pop_front()
+                .expect("gate probed escrow more often than scripted")
+        }
+    }
+
+    fn other_material() -> RecoveryMaterial {
+        RecoveryMaterial {
+            network_seed: "yoai-user-ffff".into(),
+            data_key_hex: "cd".repeat(32),
+            version: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn happy_path_probes_escrow_only_then_slot_reads_before_write() {
+        let p = Scripted::new(
+            vec![Ok(Some(5))],
+            vec![Ok(Some(material()))],
+        );
+        let out = preflight_gates(&p, false, || {}, || Ok(material()))
+            .await
+            .unwrap();
+        assert!(matches!(out, Preflight::Proceed { .. }));
+        // Not pending: the snapshot is NOT probed during preflight.
+        assert_eq!(p.calls(), vec!["escrow"]);
+
+        assert_eq!(slot_gate(&p, 3).await, None);
+        assert_eq!(p.calls(), vec!["escrow", "existing"]);
+    }
+
+    #[tokio::test]
+    async fn pending_hold_blocks_before_recovery_or_escrow() {
+        let p = Scripted::new(vec![Ok(Some(4))], vec![]);
+        let events = RefCell::new(Vec::<&str>::new());
+        let out = preflight_gates(
+            &p,
+            true,
+            || events.borrow_mut().push("cleared"),
+            || {
+                events.borrow_mut().push("local_recovery");
+                Ok(material())
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(out, Preflight::Skip(PreflightSkip::RestorePending)));
+        // The hold decides FIRST: no marker clear, no key material read,
+        // no escrow probe.
+        assert!(events.borrow().is_empty());
+        assert_eq!(p.calls(), vec!["existing"]);
+    }
+
+    #[tokio::test]
+    async fn pending_probe_failure_keeps_the_hold() {
+        let p = Scripted::new(vec![Err("vault unreachable".into())], vec![]);
+        let out = preflight_gates(&p, true, || {}, || Ok(material()))
+            .await
+            .unwrap();
+        assert!(matches!(out, Preflight::Skip(PreflightSkip::RestorePending)));
+    }
+
+    #[tokio::test]
+    async fn pending_resolves_against_empty_slot_in_probe_then_recovery_then_escrow_order() {
+        let p = Scripted::new(vec![Ok(None)], vec![Ok(None)]);
+        let events = RefCell::new(Vec::<&str>::new());
+        let out = preflight_gates(
+            &p,
+            true,
+            || events.borrow_mut().push("cleared"),
+            || {
+                events.borrow_mut().push("local_recovery");
+                Ok(material())
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(out, Preflight::Proceed { .. }));
+        assert_eq!(*events.borrow(), vec!["cleared", "local_recovery"]);
+        assert_eq!(p.calls(), vec!["existing", "escrow"]);
+    }
+
+    #[tokio::test]
+    async fn pending_resolution_survives_a_later_escrow_conflict() {
+        // The pending question is settled by the empty slot even though the
+        // key-coherence gate then refuses - the marker clear must happen.
+        let p = Scripted::new(vec![Ok(Some(0))], vec![Ok(Some(other_material()))]);
+        let cleared = RefCell::new(false);
+        let out = preflight_gates(&p, true, || *cleared.borrow_mut() = true, || Ok(material()))
+            .await
+            .unwrap();
+        assert!(matches!(out, Preflight::Skip(PreflightSkip::EscrowConflict)));
+        assert!(*cleared.borrow());
+    }
+
+    #[tokio::test]
+    async fn escrow_conflict_refuses() {
+        let p = Scripted::new(vec![], vec![Ok(Some(other_material()))]);
+        let out = preflight_gates(&p, false, || {}, || Ok(material()))
+            .await
+            .unwrap();
+        assert!(matches!(out, Preflight::Skip(PreflightSkip::EscrowConflict)));
+    }
+
+    #[tokio::test]
+    async fn escrow_probe_failure_refuses_with_detail() {
+        let p = Scripted::new(vec![], vec![Err("boom".into())]);
+        let out = preflight_gates(&p, false, || {}, || Ok(material()))
+            .await
+            .unwrap();
+        match out {
+            Preflight::Skip(PreflightSkip::EscrowProbeFailed(e)) => assert_eq!(e, "boom"),
+            _ => panic!("expected EscrowProbeFailed"),
+        }
+    }
+
+    #[tokio::test]
+    async fn absent_escrow_proceeds() {
+        let p = Scripted::new(vec![], vec![Ok(None)]);
+        let out = preflight_gates(&p, false, || {}, || Ok(material()))
+            .await
+            .unwrap();
+        assert!(matches!(out, Preflight::Proceed { .. }));
+    }
+
+    #[tokio::test]
+    async fn local_recovery_failure_propagates_before_the_escrow_probe() {
+        let p = Scripted::new(vec![], vec![]);
+        // No unwrap_err: Preflight deliberately has no Debug (it carries
+        // RecoveryMaterial, which must never be printable).
+        match preflight_gates(&p, false, || {}, || Err::<RecoveryMaterial, _>("no key".into()))
+            .await
+        {
+            Err(e) => assert_eq!(e, "no key"),
+            Ok(_) => panic!("expected the local recovery error to propagate"),
+        }
+        assert!(p.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn slot_gate_empty_local_never_overwrites_records() {
+        let p = Scripted::new(vec![Ok(Some(96))], vec![]);
+        assert_eq!(slot_gate(&p, 0).await, Some(SlotSkip::EmptyWouldOverwrite));
+    }
+
+    #[tokio::test]
+    async fn slot_gate_confirmed_absent_or_empty_slot_allows_first_write() {
+        let p = Scripted::new(vec![Ok(None), Ok(Some(0))], vec![]);
+        assert_eq!(slot_gate(&p, 0).await, None);
+        assert_eq!(slot_gate(&p, 0).await, None);
+    }
+
+    #[tokio::test]
+    async fn slot_gate_probe_failure_refuses() {
+        let p = Scripted::new(vec![Err("timeout".into())], vec![]);
+        assert_eq!(
+            slot_gate(&p, 7).await,
+            Some(SlotSkip::ProbeFailed("timeout".into()))
+        );
+    }
+
+    #[test]
+    fn may_overwrite_matrix() {
+        // Local records always may write (the identity + coherence gates
+        // upstream are what keep a foreign device out).
+        assert!(may_overwrite(1, Some(96)));
+        assert!(may_overwrite(1, None));
+        // An empty snapshot only ever lands on a confirmed-empty slot.
+        assert!(may_overwrite(0, None));
+        assert!(may_overwrite(0, Some(0)));
+        assert!(!may_overwrite(0, Some(1)));
     }
 }
