@@ -294,6 +294,17 @@ export const WelcomeModal = component$<WelcomeModalProps>(
                 >
                   Or browse all available models →
                 </button>
+
+                {/* Returning users must learn their world is recoverable
+                    BEFORE they start chatting - this modal is the only
+                    first-run surface, and until this note existed nothing
+                    in the app hinted at it. */}
+                <p class="border-t border-[var(--border-subtle)] pt-3 text-xs text-[var(--text-muted)]">
+                  Used Your Own AI before, with a Flowsta Vault backup? Sign
+                  in and restore first - Settings → Your Flowsta Account →
+                  Restore conversations from Vault - so your AIs and
+                  conversations come back before you start anything new here.
+                </p>
               </div>
             )}
           </div>
