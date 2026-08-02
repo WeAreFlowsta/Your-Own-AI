@@ -351,6 +351,21 @@ pub async fn flowsta_sign_in(app: tauri::AppHandle) -> Result<FlowstaSession, St
         "expires_at",
         serde_json::json!(now_secs() + tokens["expires_in"].as_u64().unwrap_or(86400) - 300),
     );
+    // First sign-in on this install: record who this device's escrow and
+    // data backups belong to. A LATER sign-in under a different identity
+    // deliberately does NOT re-point it - the escrow gate fails closed and
+    // the account panel surfaces the mismatch instead (the local data still
+    // belongs to whoever created it).
+    if store
+        .get(crate::vault_escrow::ESCROW_OWNER_KEY)
+        .and_then(|v| v.as_str().map(String::from))
+        .is_none()
+    {
+        store.set(
+            crate::vault_escrow::ESCROW_OWNER_KEY,
+            serde_json::json!(agent_pub_key),
+        );
+    }
     store.save().map_err(|e| e.to_string())?;
 
     // Profile (display name / username / avatar) via the scope grant
@@ -406,8 +421,15 @@ pub fn spawn_proxy_keepalive(app: tauri::AppHandle) {
 }
 
 /// URL the frontend opens (system browser) to link this device's plan.
+/// Async so it can refuse a stale key: the URL carries the stored identity
+/// into a plan-linking flow, so a Vault that is unlocked under a DIFFERENT
+/// key must block it (the positive-mismatch wipe may not have run yet).
+/// Locked/unreachable keeps the stored key - same contract as the session.
 #[tauri::command]
-pub fn flowsta_link_url(app: tauri::AppHandle) -> Result<String, String> {
+pub async fn flowsta_link_url(app: tauri::AppHandle) -> Result<String, String> {
+    if !session_identity_ok(&app).await {
+        return Err("identity_mismatch".into());
+    }
     let store = app.store(AUTH_STORE).map_err(|e| e.to_string())?;
     let key = store
         .get("agent_pub_key")

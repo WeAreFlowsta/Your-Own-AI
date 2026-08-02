@@ -46,6 +46,9 @@ export interface AiDataState {
   isInitialized: boolean;
   archetypesError: string | null;
   userAisError: string | null;
+  /** Startup Vault-restore outcome the user must see (restore failed or was
+   *  partial); null when nothing needs attention. Dismissable in the UI. */
+  startupRestoreWarning: string | null;
 }
 
 export const AiDataContext = createContextId<AiDataState>("app.aidata");
@@ -63,6 +66,7 @@ export const AiDataProvider = component$(() => {
       isInitialized: false,
       archetypesError: null,
       userAisError: null,
+      startupRestoreWarning: null,
     },
     { deep: true }
   );
@@ -119,14 +123,29 @@ export const AiDataProvider = component$(() => {
         setLoadingText("Restoring your conversations from your Vault…");
         for (let attempt = 0; attempt < 15; attempt++) {
           try {
-            const stats = await invoke("vault_restore_conversations");
+            const stats = await invoke<{ missing_objects?: number; missing_records?: number; orphan_entries?: number }>(
+              "vault_restore_conversations"
+            );
             console.log("[AiDataContext] Startup restore complete:", stats);
+            // A restore that dropped anything must say so - silence here
+            // used to turn permanent data loss into a normal-looking boot.
+            const missing = stats.missing_objects ?? 0;
+            const orphans = stats.orphan_entries ?? 0;
+            if (missing > 0 || orphans > 0) {
+              state.startupRestoreWarning =
+                `Your conversations were restored from your Vault, but ${missing > 0 ? `${missing} conversation object${missing === 1 ? " was" : "s were"} missing or unreadable (about ${stats.missing_records ?? 0} records)` : ""}${missing > 0 && orphans > 0 ? " and " : ""}${orphans > 0 ? `${orphans} record${orphans === 1 ? "" : "s"} had no parent conversation` : ""}. Everything recoverable was restored. Details in Settings → Backups & recovery.`;
+            }
             break;
           } catch (e) {
             if (String(e).includes("still starting")) {
               await new Promise((r) => setTimeout(r, 2000));
             } else {
               console.warn("[AiDataContext] Startup restore failed (Settings button remains):", e);
+              // The restore-pending marker stays on disk, so backups stay
+              // suspended and the next launch retries - tell the user
+              // instead of booting as if nothing happened.
+              state.startupRestoreWarning =
+                "Restoring your conversations from your Vault didn't finish - your data is safe in the Vault and automatic backups are paused until it completes. It will retry next launch, or use Settings → Backups & recovery → Restore conversations from Vault.";
               break;
             }
           }

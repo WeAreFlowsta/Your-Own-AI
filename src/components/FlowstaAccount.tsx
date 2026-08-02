@@ -22,9 +22,17 @@ interface FlowstaSession {
 }
 
 interface EscrowStatus {
-  state: "synced" | "conflict" | "unlinked" | "vault_unavailable" | "error";
+  state:
+    | "synced"
+    | "conflict"
+    | "unlinked"
+    | "vault_unavailable"
+    | "vault_locked"
+    | "identity_mismatch"
+    | "error";
   local_conversations: number | null;
   error: string | null;
+  backups_held: boolean;
 }
 
 interface RestoreStats {
@@ -35,8 +43,12 @@ interface RestoreStats {
   conversations_preserved: number;
   records_preserved: number;
   conversations_skipped: number;
+  orphan_entries: number;
+  missing_objects: number;
+  missing_records: number;
   memory_facts_restored: boolean;
   thumbnails_restored: number;
+  knowledge_restored: number;
 }
 
 const VAULT_DOWNLOAD_URL = "https://flowsta.com/vault";
@@ -68,6 +80,7 @@ export default component$<FlowstaAccountProps>((props) => {
   const restarting = useSignal(false);
   const restoreDataBusy = useSignal(false);
   const restoreDataResult = useSignal("");
+  const restoreDataWarning = useSignal("");
   const { refreshUserAis } = useAiDataActions();
 
   const syncEscrow = $(async () => {
@@ -120,6 +133,7 @@ export default component$<FlowstaAccountProps>((props) => {
     confirmAction.value = null;
     restoreDataBusy.value = true;
     restoreDataResult.value = "";
+    restoreDataWarning.value = "";
     error.value = "";
     try {
       const stats = await invoke<RestoreStats>("vault_restore_conversations");
@@ -136,6 +150,11 @@ export default component$<FlowstaAccountProps>((props) => {
       if (stats.memory_facts_restored) {
         parts.push("Your Memory profile facts restored.");
       }
+      if (stats.knowledge_restored > 0) {
+        parts.push(
+          `${stats.knowledge_restored} authored knowledge entr${stats.knowledge_restored === 1 ? "y" : "ies"} restored.`
+        );
+      }
       if (stats.conversations_preserved > 0) {
         parts.push(
           `${stats.conversations_preserved} conversation${stats.conversations_preserved === 1 ? "" : "s"} from deleted AIs preserved - kept in your data and backups, not shown in the app.`
@@ -149,6 +168,20 @@ export default component$<FlowstaAccountProps>((props) => {
         );
       }
       restoreDataResult.value = parts.join(" ");
+      // Partial-recovery honesty: anything the backup promised but could
+      // not deliver is a warning, never silence.
+      const warnings: string[] = [];
+      if (stats.missing_objects > 0) {
+        warnings.push(
+          `${stats.missing_objects} conversation object${stats.missing_objects === 1 ? " was" : "s were"} missing or corrupted in the Vault (about ${stats.missing_records} record${stats.missing_records === 1 ? "" : "s"}) and could not be recovered. Everything else was restored.`
+        );
+      }
+      if (stats.orphan_entries > 0) {
+        warnings.push(
+          `${stats.orphan_entries} record${stats.orphan_entries === 1 ? "" : "s"} in the backup had no parent conversation (truncated or partial backup) and could not be restored.`
+        );
+      }
+      restoreDataWarning.value = warnings.join(" ");
       await refreshUserAis();
     } catch (e) {
       const msg = String(e);
@@ -157,6 +190,11 @@ export default component$<FlowstaAccountProps>((props) => {
           "Your Vault backup was made under a different transcript key. Restore the key from Vault first (above), then try again.";
       } else if (msg.includes("no_backup")) {
         error.value = "No conversation backup found in your Vault yet.";
+      } else if (msg.includes("identity_mismatch")) {
+        error.value =
+          "Your Vault is unlocked under a different identity than the one this device's data belongs to. Unlock the Vault that owns this data, or use \"Restore key from Vault\" to adopt the current identity.";
+      } else if (msg.includes("vault_locked")) {
+        error.value = "Your Vault is locked - unlock it and try again.";
       } else if (msg.includes("vault_unavailable")) {
         error.value = "Flowsta Vault isn't running - start it and try again.";
       } else {
@@ -387,6 +425,22 @@ export default component$<FlowstaAccountProps>((props) => {
             </div>
           )}
 
+          {escrow.value?.state === "identity_mismatch" && (
+            <div class="rounded-lg border border-amber-700/60 bg-amber-900/20 p-4">
+              <p class="text-sm font-medium text-amber-200">
+                Your Vault holds a different identity
+              </p>
+              <p class="mt-1 text-xs text-[var(--text-secondary)]">
+                The data on this device belongs to a different Flowsta identity
+                than the one your Vault is unlocked with, so automatic backups
+                are paused - they would overwrite the other identity's backup.
+                Unlock the Vault that owns this data to resume, or use
+                "Restore key from Vault" below to adopt the current identity
+                (this replaces what's on this device).
+              </p>
+            </div>
+          )}
+
           {escrow.value?.state === "conflict" && (
             <div class="rounded-lg border border-amber-700/60 bg-amber-900/20 p-4">
               <p class="text-sm font-medium text-amber-200">
@@ -448,10 +502,31 @@ export default component$<FlowstaAccountProps>((props) => {
             Connect your Flowsta Vault above to turn on automatic backup.
           </p>
         )}
-        {signedIn() && escrow.value?.state === "synced" && (
+        {signedIn() && escrow.value?.state === "synced" && !escrow.value.backups_held && (
           <p class="mt-2 text-xs text-emerald-400">
             ✓ Recovery key and conversations back up to your Vault
             automatically.
+          </p>
+        )}
+        {signedIn() && escrow.value?.backups_held && (
+          <p class="mt-2 text-xs text-amber-300">
+            Automatic backups are paused: your Vault backup may hold
+            conversations this device doesn't (after a key restore or a
+            reset). Restore conversations from Vault below to resume - or
+            they resume on their own if the Vault backup turns out to be
+            empty.
+          </p>
+        )}
+        {signedIn() && escrow.value?.state === "vault_locked" && (
+          <p class="mt-2 text-xs text-amber-300">
+            Your Vault is locked - backups resume when you unlock it.
+          </p>
+        )}
+        {signedIn() && escrow.value?.state === "identity_mismatch" && section === "backups" && (
+          <p class="mt-2 text-xs text-amber-300">
+            Backups are paused: your Vault is unlocked under a different
+            identity than the one this device's data belongs to. See Your
+            Flowsta Account above.
           </p>
         )}
         {signedIn() && (
@@ -472,6 +547,19 @@ export default component$<FlowstaAccountProps>((props) => {
             </p>
             {restoreDataResult.value && (
               <p class="mt-2 text-xs text-emerald-400">{restoreDataResult.value}</p>
+            )}
+            {restoreDataWarning.value && (
+              <p class="mt-2 rounded-lg border border-amber-700/60 bg-amber-900/20 p-3 text-xs text-amber-200">
+                {restoreDataWarning.value}
+              </p>
+            )}
+            {/* The account half renders errors too, but as a separate
+                component instance when the settings page splits sections -
+                without this block, restore failures were invisible here. */}
+            {error.value && section === "backups" && (
+              <p class="mt-2 rounded-lg border border-red-800 bg-red-900/30 p-3 text-sm text-red-300">
+                {error.value}
+              </p>
             )}
           </div>
         )}

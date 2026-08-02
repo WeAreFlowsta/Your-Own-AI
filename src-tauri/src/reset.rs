@@ -51,8 +51,21 @@ pub async fn reset_to_defaults(app: AppHandle) -> Result<(), String> {
             }
         }
     }
-    for file in ["ai-data.json", "memory-facts.enc", "gpu-safety.json"] {
+    for file in ["ai-data.json", "memory-facts.enc", "gpu-safety.json",
+                 crate::vault_escrow::SYNC_STATE_FILE] {
         let _ = std::fs::remove_file(data_dir.join(file));
+    }
+    // The Vault may hold the only copy of the conversations this reset just
+    // wiped. Without this marker, the first post-reset chat would arm a
+    // backup that rewrites the Vault snapshot down to one conversation -
+    // the same silent mirror-wipe the escrow guards exist to prevent. The
+    // marker suspends automatic backups until the user either restores from
+    // Vault or the Vault slot is empty; the Flowsta Account panel shows it.
+    if let Err(e) = std::fs::write(
+        data_dir.join(crate::vault_escrow::RESTORE_PENDING_FILE),
+        b"",
+    ) {
+        log::warn!("[reset] could not write restore-pending marker: {e}");
     }
     // Per-AI episodic memory caches: transcript-emb-<id>.enc
     if let Ok(entries) = std::fs::read_dir(&data_dir) {

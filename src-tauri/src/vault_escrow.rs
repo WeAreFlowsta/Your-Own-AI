@@ -35,20 +35,25 @@ const ESCROW_LABEL: &str = "recovery";
 
 #[derive(Serialize, Clone)]
 pub struct EscrowStatus {
-    /// "synced" | "conflict" | "unlinked" | "vault_unavailable" | "error"
+    /// "synced" | "conflict" | "unlinked" | "vault_unavailable" |
+    /// "vault_locked" | "identity_mismatch" | "error"
     pub state: String,
     /// Raw conversation-record count across local agents; only filled when
     /// it matters (state == "conflict").
     pub local_conversations: Option<u64>,
     pub error: Option<String>,
+    /// Automatic data backups are suspended (restore-pending marker set by
+    /// a key restore or a factory reset) - the Vault snapshot may hold data
+    /// this device doesn't.
+    pub backups_held: bool,
 }
 
 impl EscrowStatus {
     fn state(s: &str) -> Self {
-        Self { state: s.into(), local_conversations: None, error: None }
+        Self { state: s.into(), local_conversations: None, error: None, backups_held: false }
     }
     fn error(e: String) -> Self {
-        Self { state: "error".into(), local_conversations: None, error: Some(e) }
+        Self { state: "error".into(), local_conversations: None, error: Some(e), backups_held: false }
     }
 }
 
@@ -187,10 +192,33 @@ pub(crate) fn local_recovery(app: &tauri::AppHandle) -> Result<RecoveryMaterial,
         .ok_or_else(|| "no local recovery material yet".to_string())
 }
 
+/// AUTH_STORE key recording which Vault identity this device's escrow and
+/// data backups belong to. Distinct from the session `agent_pub_key`:
+/// sign-out wipes the session but the data on disk still belongs to whoever
+/// created it, so the owner record must survive sign-out (and the
+/// SESSION_KEYS_FULL mismatch wipe). It changes only through an explicit
+/// adoption: first contact, or a user-driven conversation restore.
+pub(crate) const ESCROW_OWNER_KEY: &str = "escrow_owner";
+
 /// Preconditions shared by every escrow operation. Returns the Vault port.
 /// The link ceremony is never triggered from here - it rides sign-in; without
 /// a completed link the escrow simply waits ("unlinked").
-pub(crate) async fn escrow_port(app: &tauri::AppHandle) -> Result<u16, EscrowStatus> {
+///
+/// Identity gate: every caller that can WRITE requires the live, unlocked
+/// Vault identity to equal the recorded `escrow_owner`. This gate fails
+/// CLOSED on mismatch AND on cannot-confirm (locked Vault, missing key) -
+/// deliberately the OPPOSITE default to `session_identity_ok`'s fail-open.
+/// That asymmetry is load-bearing: an online request billed against a stale
+/// session is recoverable; a backup slot overwritten under the wrong
+/// identity is not. Do not "harmonize" the two.
+///
+/// `require_owner_match: false` is for the one deliberate adoption path
+/// (conversation restore) - it still requires an unlocked Vault with a
+/// readable identity, it only skips the owner comparison.
+pub(crate) async fn escrow_port(
+    app: &tauri::AppHandle,
+    require_owner_match: bool,
+) -> Result<u16, EscrowStatus> {
     let store = app
         .store(AUTH_STORE)
         .map_err(|e| EscrowStatus::error(e.to_string()))?;
@@ -198,9 +226,60 @@ pub(crate) async fn escrow_port(app: &tauri::AppHandle) -> Result<u16, EscrowSta
         return Err(EscrowStatus::state("unlinked"));
     }
     let vault = flowsta::find_vault().await;
-    match vault.port {
-        Some(p) => Ok(p),
-        None => Err(EscrowStatus::state("vault_unavailable")),
+    let port = match vault.port {
+        Some(p) => p,
+        None => return Err(EscrowStatus::state("vault_unavailable")),
+    };
+    // A locked Vault reports agent_pub_key: null - indistinguishable from a
+    // never-created one, and no identity to compare. No writes until unlock.
+    if !vault.unlocked {
+        return Err(EscrowStatus::state("vault_locked"));
+    }
+    let live = match vault.agent_pub_key {
+        Some(k) => k,
+        None => return Err(EscrowStatus::state("vault_locked")),
+    };
+    let owner = store
+        .get(ESCROW_OWNER_KEY)
+        .and_then(|v| v.as_str().map(String::from));
+    match owner {
+        Some(o) if o == live => Ok(port),
+        Some(_) if !require_owner_match => Ok(port),
+        Some(_) => Err(EscrowStatus::state("identity_mismatch")),
+        None => {
+            // First contact: this device's data has no recorded owner yet -
+            // adopt the identity in front of us. Existing installs land here
+            // once on upgrade; their sync state stays valid (same identity).
+            store.set(ESCROW_OWNER_KEY, serde_json::json!(live));
+            let _ = store.save();
+            Ok(port)
+        }
+    }
+}
+
+/// Record the live Vault identity as this device's escrow owner. Only for
+/// explicit adoption paths (a user-driven restore). Clears the backup sync
+/// state: "already uploaded" beliefs about another identity's slot would
+/// otherwise produce manifests pointing at objects that don't exist there.
+fn adopt_escrow_owner(app: &tauri::AppHandle, live: &str) {
+    if let Ok(store) = app.store(AUTH_STORE) {
+        let prev = store
+            .get(ESCROW_OWNER_KEY)
+            .and_then(|v| v.as_str().map(String::from));
+        if prev.as_deref() != Some(live) {
+            store.set(ESCROW_OWNER_KEY, serde_json::json!(live));
+            let _ = store.save();
+            clear_sync_state(app);
+            log::info!("[escrow] escrow owner adopted for the current Vault identity");
+        }
+    }
+}
+
+fn clear_sync_state(app: &tauri::AppHandle) {
+    if let Some(p) = sync_state_path(app) {
+        if p.exists() {
+            let _ = std::fs::remove_file(&p);
+        }
     }
 }
 
@@ -242,11 +321,18 @@ async fn count_local_conversations(app: &tauri::AppHandle) -> Result<u64, String
 /// different material. Safe to call repeatedly.
 #[tauri::command]
 pub async fn vault_escrow_sync(app: tauri::AppHandle) -> EscrowStatus {
-    let port = match escrow_port(&app).await {
+    let held = restore_pending_path(&app).map(|p| p.exists()).unwrap_or(false);
+    let mut status = vault_escrow_sync_inner(&app).await;
+    status.backups_held = held;
+    status
+}
+
+async fn vault_escrow_sync_inner(app: &tauri::AppHandle) -> EscrowStatus {
+    let port = match escrow_port(app, true).await {
         Ok(p) => p,
         Err(s) => return s,
     };
-    let local = match local_recovery(&app) {
+    let local = match local_recovery(app) {
         Ok(r) => r,
         Err(e) => return EscrowStatus::error(e),
     };
@@ -254,22 +340,23 @@ pub async fn vault_escrow_sync(app: tauri::AppHandle) -> EscrowStatus {
         Ok(None) => match write_escrow(port, &local).await {
             Ok(()) => {
                 log::info!("[escrow] transcript recovery material escrowed to Vault");
-                schedule_full_backup(&app);
+                schedule_full_backup(app);
                 EscrowStatus::state("synced")
             }
             Err(e) if e == "vault_never_unlocked" => EscrowStatus::state("vault_unavailable"),
             Err(e) => EscrowStatus::error(e),
         },
         Ok(Some(ref m)) if *m == local => {
-            schedule_full_backup(&app);
+            schedule_full_backup(app);
             EscrowStatus::state("synced")
         }
         Ok(Some(_)) => {
-            let count = count_local_conversations(&app).await.ok();
+            let count = count_local_conversations(app).await.ok();
             EscrowStatus {
                 state: "conflict".into(),
                 local_conversations: count,
                 error: None,
+                backups_held: false,
             }
         }
         Err(e) if e == "vault_never_unlocked" => EscrowStatus::state("vault_unavailable"),
@@ -290,7 +377,10 @@ pub async fn vault_escrow_restore(
     app: tauri::AppHandle,
     accept_data_loss: bool,
 ) -> Result<(), String> {
-    let port = match escrow_port(&app).await {
+    // The restore is the deliberate adoption path: pulling the Vault's key
+    // onto this device MEANS "this device now belongs to that identity",
+    // so it may run under an owner mismatch (unlocked Vault still required).
+    let port = match escrow_port(&app, false).await {
         Ok(p) => p,
         Err(s) => return Err(s.error.unwrap_or(s.state)),
     };
@@ -332,6 +422,22 @@ pub async fn vault_escrow_restore(
 
     // Swap the recovery material (old file preserved with a timestamp).
     transcript_crypto::replace_recovery_material(&data_dir, &escrowed)?;
+
+    // Adopting the Vault's key means this device now belongs to that Vault's
+    // identity - record it (also clears the backup sync state, whose
+    // "already uploaded" beliefs describe the previous owner's slot).
+    match flowsta::find_vault().await.agent_pub_key {
+        Some(live) => adopt_escrow_owner(&app, &live),
+        None => {
+            // Vault locked mid-restore: can't read who we just adopted.
+            // Drop the owner record so the next unlocked contact re-adopts.
+            if let Ok(store) = app.store(AUTH_STORE) {
+                store.delete(ESCROW_OWNER_KEY);
+                let _ = store.save();
+            }
+            clear_sync_state(&app);
+        }
+    }
 
     // Suspend automatic backups until the Vault conversations have been
     // replayed onto this device - the Vault snapshot may be the only copy.
@@ -381,7 +487,7 @@ pub async fn vault_escrow_restore(
 /// unrecoverable with no warning.
 #[tauri::command]
 pub async fn vault_escrow_keep_local(app: tauri::AppHandle) -> Result<EscrowStatus, String> {
-    let port = match escrow_port(&app).await {
+    let port = match escrow_port(&app, true).await {
         Ok(p) => p,
         Err(s) => return Err(s.error.unwrap_or(s.state)),
     };
@@ -431,7 +537,7 @@ const BACKUP_BUDGET_BYTES: usize = 45 * 1024 * 1024;
 pub(crate) const MANIFEST_LABEL: &str = "manifest";
 /// Local record of what each conversation object last uploaded, so backup
 /// runs only re-send conversations with new records.
-const SYNC_STATE_FILE: &str = "backup-sync-state.json";
+pub(crate) const SYNC_STATE_FILE: &str = "backup-sync-state.json";
 
 /// The Vault's advertised backup contract. `None` = the Vault predates
 /// GET /backup/limits - fall back to the legacy single-snapshot mode
@@ -617,7 +723,7 @@ async fn delete_backup_label(port: u16, label: &str) {
 /// automatic backups are suspended - anything written from here (even
 /// after a first chat) would overwrite the user's Vault copy with a
 /// near-empty snapshot. Cleared by a successful conversation restore.
-const RESTORE_PENDING_FILE: &str = "conversation-restore-pending";
+pub(crate) const RESTORE_PENDING_FILE: &str = "conversation-restore-pending";
 
 pub(crate) fn restore_pending_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     app.path()
@@ -873,6 +979,13 @@ fn assemble_full_payload(
 /// restored its key (or hasn't restored conversations yet) has zero local
 /// records while the Vault may hold the user's only copy - the launch-sync
 /// backup fired in that window would silently destroy it.
+///
+/// A NON-empty local set is allowed to shrink the snapshot (deleting a
+/// conversation is legitimate) - but only because the key-coherence gate in
+/// `write_full_backup` runs first: a device whose transcript key does not
+/// match the Vault's escrow can never reach this predicate, so "1 local
+/// conversation vs 96 in Vault" only happens on the device that authored
+/// the slot (or explicitly adopted it).
 fn may_overwrite(local_records: u64, existing_records: Option<u64>) -> bool {
     local_records > 0 || existing_records.unwrap_or(0) == 0
 }
@@ -1184,8 +1297,15 @@ async fn write_incremental_backup(
     }))
 }
 
+fn skipped(reason: &str) -> serde_json::Value {
+    serde_json::json!({
+        "skipped": reason,
+        "conversations": 0, "records": 0, "truncated_conversations": 0,
+    })
+}
+
 pub async fn write_full_backup(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
-    let port = match escrow_port(app).await {
+    let port = match escrow_port(app, true).await {
         Ok(p) => p,
         Err(s) => return Err(s.error.unwrap_or(s.state)),
     };
@@ -1201,41 +1321,59 @@ pub async fn write_full_backup(app: &tauri::AppHandle) -> Result<serde_json::Val
                     "[escrow] full backup skipped: conversation restore from Vault is \
                      pending on this device (Settings → Restore conversations from Vault)"
                 );
-                return Ok(serde_json::json!({
-                    "skipped": "restore_pending",
-                    "conversations": 0, "records": 0, "truncated_conversations": 0,
-                }));
+                return Ok(skipped("restore_pending"));
             }
         }
     }
 
     let recovery = local_recovery(app)?;
-    let convs = collect_conversations(app).await?;
 
-    // Overwrite guard: with nothing recorded locally, only write when the
-    // Vault slot is empty too (first-ever backup). Errors probing the slot
-    // also skip - when in doubt, never overwrite.
-    if convs.is_empty() {
-        match fetch_existing_data_records(port).await {
-            Ok(existing) if may_overwrite(0, existing) => {}
-            Ok(_) => {
-                log::warn!(
-                    "[escrow] full backup skipped: no local conversations but the \
-                     Vault snapshot has records - refusing to overwrite it \
-                     (restore conversations from Vault to bring them back)"
-                );
-                return Ok(serde_json::json!({
-                    "skipped": "empty_would_overwrite",
-                    "conversations": 0, "records": 0, "truncated_conversations": 0,
-                }));
-            }
-            Err(e) => {
-                log::warn!("[escrow] full backup skipped: could not probe the existing snapshot: {}", e);
-                return Ok(serde_json::json!({
-                    "skipped": "probe_failed",
-                    "conversations": 0, "records": 0, "truncated_conversations": 0,
-                }));
-            }
+    // Key-coherence gate: the data backup never writes while the Vault's
+    // escrowed recovery material differs from this device's. A fresh
+    // install generates a NEW random transcript key, so a machine that was
+    // never restored can't pass this gate while the Vault still holds
+    // another device's world - resolving the conflict (restore, or an
+    // explicit "keep this device's key") is what unlocks data backups.
+    // This closes the launch-sync window where one first chat message used
+    // to bypass the empty-slot guard and rewrite the manifest.
+    match fetch_escrow(port).await {
+        Ok(Some(ref m)) if *m == recovery => {}
+        Ok(None) => {}
+        Ok(Some(_)) => {
+            log::warn!(
+                "[escrow] full backup skipped: the Vault holds recovery material \
+                 for a different transcript key - resolve the key conflict first \
+                 (Settings → Flowsta Account)"
+            );
+            return Ok(skipped("escrow_conflict"));
+        }
+        Err(e) => {
+            log::warn!("[escrow] full backup skipped: could not read the escrow: {}", e);
+            return Ok(skipped("probe_failed"));
+        }
+    }
+
+    let convs = collect_conversations(app).await?;
+    let local_records: u64 = convs.iter().map(|c| c.records.len() as u64).sum();
+
+    // Slot gate: never write a slot that was not first successfully read.
+    // The probe runs on EVERY backup (a confirmed-absent slot counts as a
+    // successful read); any probe failure skips - when in doubt, never
+    // overwrite. Plus the standing rule: an empty snapshot never overwrites
+    // records.
+    match fetch_existing_data_records(port).await {
+        Ok(existing) if may_overwrite(local_records, existing) => {}
+        Ok(_) => {
+            log::warn!(
+                "[escrow] full backup skipped: no local conversations but the \
+                 Vault snapshot has records - refusing to overwrite it \
+                 (restore conversations from Vault to bring them back)"
+            );
+            return Ok(skipped("empty_would_overwrite"));
+        }
+        Err(e) => {
+            log::warn!("[escrow] full backup skipped: could not probe the existing snapshot: {}", e);
+            return Ok(skipped("probe_failed"));
         }
     }
     let ai_configs = app
@@ -1452,7 +1590,9 @@ mod tests {
         assert!(!may_overwrite(0, Some(96))); // the launch-sync-after-key-restore trap
         assert!(may_overwrite(0, None)); // first-ever backup
         assert!(may_overwrite(0, Some(0))); // existing snapshot already empty
-        assert!(may_overwrite(1, Some(96))); // non-empty writes are allowed
+        // Non-empty writes may shrink the slot - safe ONLY behind the
+        // key-coherence gate (a foreign device can't hold the slot's key).
+        assert!(may_overwrite(1, Some(96)));
     }
 
     #[test]

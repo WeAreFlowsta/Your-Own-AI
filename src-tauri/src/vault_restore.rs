@@ -316,11 +316,34 @@ async fn retrieve_label(port: u16, label: &str) -> Result<serde_json::Value, Str
         .map_err(|e| format!("bad retrieve response: {}", e))
 }
 
+/// Decode one fetched conversation object into its records.
+fn decode_conv_object(label: &str, obj: &serde_json::Value) -> Result<Vec<serde_json::Value>, String> {
+    let b64 = obj["data_base64"]
+        .as_str()
+        .ok_or_else(|| format!("conversation object {} has no bytes", label))?;
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|_| format!("conversation object {} is corrupted", label))?;
+    let plain = vault_escrow::gunzip_bytes(&bytes)
+        .map_err(|e| format!("conversation object {}: {}", label, e))?;
+    let part: serde_json::Value = serde_json::from_slice(&plain)
+        .map_err(|e| format!("conversation object {}: {}", label, e))?;
+    Ok(part["records"].as_array().cloned().unwrap_or_default())
+}
+
 /// The full backup for replay. Incremental manifests are reassembled into
 /// the canonical monolith shape (cells[].records[]) by fetching each
 /// conversation's gzipped object(s), so everything downstream - cell
 /// assignment, replay, dedup - is untouched. Legacy "latest" monoliths
 /// pass through as-is.
+///
+/// A PERMANENTLY unrecoverable object (absent from the Vault, or corrupted
+/// past decoding) never aborts the walk: everything else is still
+/// recoverable, and aborting used to turn one missing object into a 0%
+/// restore reported as "no backup at all". Such objects are collected into
+/// `_missing_objects` for the caller to surface. TRANSIENT failures (Vault
+/// unreachable mid-walk) still abort - retrying later loses nothing.
 async fn fetch_data_backup(port: u16) -> Result<serde_json::Value, String> {
     match retrieve_label(port, vault_escrow::MANIFEST_LABEL).await {
         Ok(v) => {
@@ -331,6 +354,7 @@ async fn fetch_data_backup(port: u16) -> Result<serde_json::Value, String> {
                 .unwrap_or_default();
             // role_name -> records, in manifest (chronological) order.
             let mut cells: Vec<(String, Vec<serde_json::Value>)> = Vec::new();
+            let mut missing: Vec<serde_json::Value> = Vec::new();
             for entry in &index {
                 let role = entry["role_name"].as_str().unwrap_or("").to_string();
                 let labels: Vec<String> = entry["labels"]
@@ -342,21 +366,35 @@ async fn fetch_data_backup(port: u16) -> Result<serde_json::Value, String> {
                     })
                     .unwrap_or_default();
                 for label in &labels {
-                    let obj = retrieve_label(port, label)
-                        .await
-                        .map_err(|e| format!("conversation object {}: {}", label, e))?;
-                    let b64 = obj["data_base64"]
-                        .as_str()
-                        .ok_or_else(|| format!("conversation object {} has no bytes", label))?;
-                    use base64::Engine;
-                    let bytes = base64::engine::general_purpose::STANDARD
-                        .decode(b64)
-                        .map_err(|_| format!("conversation object {} is corrupted", label))?;
-                    let plain = vault_escrow::gunzip_bytes(&bytes)
-                        .map_err(|e| format!("conversation object {}: {}", label, e))?;
-                    let part: serde_json::Value = serde_json::from_slice(&plain)
-                        .map_err(|e| format!("conversation object {}: {}", label, e))?;
-                    let records = part["records"].as_array().cloned().unwrap_or_default();
+                    let records = match retrieve_label(port, label).await {
+                        Ok(obj) => match decode_conv_object(label, &obj) {
+                            Ok(r) => r,
+                            Err(e) => {
+                                // Corrupted past decoding - permanent; keep walking.
+                                log::warn!("[restore] {} - skipping this object", e);
+                                missing.push(serde_json::json!({
+                                    "label": label, "reason": "corrupted",
+                                    "records": entry["records"].as_u64().unwrap_or(0),
+                                }));
+                                continue;
+                            }
+                        },
+                        Err(e) if e == "no_backup" => {
+                            // Absent from the Vault - permanent; keep walking.
+                            log::warn!(
+                                "[restore] conversation object {} is missing from the \
+                                 Vault - skipping it and continuing",
+                                label
+                            );
+                            missing.push(serde_json::json!({
+                                "label": label, "reason": "missing",
+                                "records": entry["records"].as_u64().unwrap_or(0),
+                            }));
+                            continue;
+                        }
+                        // Transient (unreachable / refused) - abort, retry later.
+                        Err(e) => return Err(format!("conversation object {}: {}", label, e)),
+                    };
                     match cells.iter_mut().find(|(r, _)| *r == role) {
                         Some((_, recs)) => recs.extend(records),
                         None => cells.push((role.clone(), records)),
@@ -370,6 +408,9 @@ async fn fetch_data_backup(port: u16) -> Result<serde_json::Value, String> {
                     "records": records,
                 }))
                 .collect::<Vec<_>>());
+            if !missing.is_empty() {
+                manifest["_missing_objects"] = serde_json::json!(missing);
+            }
             Ok(manifest)
         }
         Err(e) if e == "no_backup" => {
@@ -631,11 +672,19 @@ pub fn vault_restore_pending(app: tauri::AppHandle) -> bool {
 pub async fn vault_restore_conversations(
     app: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
-    let port = match vault_escrow::escrow_port(&app).await {
+    let port = match vault_escrow::escrow_port(&app, true).await {
         Ok(p) => p,
         Err(s) => return Err(s.error.unwrap_or(s.state)),
     };
     let backup = fetch_data_backup(port).await?;
+    let missing_objects = backup["_missing_objects"]
+        .as_array()
+        .map(|a| a.len() as u64)
+        .unwrap_or(0);
+    let missing_records: u64 = backup["_missing_objects"]
+        .as_array()
+        .map(|a| a.iter().map(|m| m["records"].as_u64().unwrap_or(0)).sum())
+        .unwrap_or(0);
 
     // The raw cipher bytes only decrypt under the key they were written
     // with - a different local key means "restore the key first" (the
@@ -807,6 +856,8 @@ pub async fn vault_restore_conversations(
         "records_preserved": records_preserved,
         "conversations_skipped": conversations_skipped,
         "orphan_entries": orphan_entries,
+        "missing_objects": missing_objects,
+        "missing_records": missing_records,
         "memory_facts_restored": memory_facts_restored,
         "thumbnails_restored": thumbnails_restored,
         "knowledge_restored": knowledge_restored,
