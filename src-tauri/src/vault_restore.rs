@@ -886,6 +886,56 @@ pub fn memory_reembed_done(app: tauri::AppHandle) {
 mod tests {
     use super::*;
 
+    fn gz_object(records: serde_json::Value) -> serde_json::Value {
+        use base64::Engine;
+        let payload = serde_json::json!({
+            "version": 2, "role_name": "ai-1", "started_at": 100, "records": records,
+        });
+        let gz = vault_escrow::gzip_bytes(&serde_json::to_vec(&payload).unwrap()).unwrap();
+        serde_json::json!({
+            "data_base64": base64::engine::general_purpose::STANDARD.encode(gz),
+        })
+    }
+
+    #[test]
+    fn decode_conv_object_roundtrips() {
+        let obj = gz_object(serde_json::json!([{ "entryType": "Message" }, { "entryType": "Message" }]));
+        let records = decode_conv_object("conv-x", &obj).unwrap();
+        assert_eq!(records.len(), 2);
+    }
+
+    #[test]
+    fn decode_conv_object_reports_each_damage_mode() {
+        // Missing bytes entirely.
+        let err = decode_conv_object("conv-a", &serde_json::json!({})).unwrap_err();
+        assert!(err.contains("no bytes"), "{err}");
+        // Corrupted base64.
+        let err = decode_conv_object(
+            "conv-b",
+            &serde_json::json!({ "data_base64": "!!!not-base64!!!" }),
+        )
+        .unwrap_err();
+        assert!(err.contains("corrupted"), "{err}");
+        // Valid base64, not gzip.
+        use base64::Engine;
+        let err = decode_conv_object(
+            "conv-c",
+            &serde_json::json!({
+                "data_base64": base64::engine::general_purpose::STANDARD.encode(b"plainbytes"),
+            }),
+        )
+        .unwrap_err();
+        assert!(err.contains("conv-c"), "{err}");
+    }
+
+    #[test]
+    fn decode_conv_object_empty_records_is_ok_not_error() {
+        // A conversation object with zero records decodes to an empty list -
+        // damage accounting must not confuse it with a decode failure.
+        let obj = gz_object(serde_json::json!([]));
+        assert_eq!(decode_conv_object("conv-e", &obj).unwrap().len(), 0);
+    }
+
     fn conv_rec(hash: &str, started_at: i64, ai_id: &str, name: &str) -> serde_json::Value {
         serde_json::json!({
             "entryType": "Conversation",
