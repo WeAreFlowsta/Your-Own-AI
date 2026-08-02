@@ -279,16 +279,36 @@ pub async fn start_holochain(
         fail_with_lair_cleanup!(e);
     }
 
-    // 3. Connect to lair.
+    // 3. Connect to lair. Timeout is load-bearing: this connect has hung
+    // indefinitely in the field (lair up, socket present, no answer) - the
+    // UI then spins forever with nothing in the log between "socket ready"
+    // and "config written". Bound it and say so, loudly.
     let _ = app_handle.emit(
         "conductor-status",
         ConductorStatus::Starting {
             message: "Connecting to lair-keystore...".into(),
         },
     );
-    let lair_client = match lair::connect_to_lair(&connection_url, &passphrase).await {
-        Ok(c) => c,
-        Err(e) => fail_with_lair_cleanup!(e),
+    log::info!("Connecting to lair-keystore at {}", connection_url);
+    let lair_client = match tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        lair::connect_to_lair(&connection_url, &passphrase),
+    )
+    .await
+    {
+        Ok(Ok(c)) => c,
+        Ok(Err(e)) => {
+            log::error!("Lair connect failed: {}", e);
+            fail_with_lair_cleanup!(e);
+        }
+        Err(_) => {
+            log::error!(
+                "Lair connect timed out after 30s (server running, socket present, no response)"
+            );
+            fail_with_lair_cleanup!(
+                "Timed out connecting to the key store after 30 seconds. Please send us your log file - it now shows exactly where startup stopped.".to_string()
+            );
+        }
     };
     log::info!("Connected to lair-keystore");
 
