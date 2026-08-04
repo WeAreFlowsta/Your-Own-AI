@@ -411,14 +411,49 @@ pub async fn vault_escrow_restore(
                 manager.handle.conductor_child.id(),
                 manager.handle.lair_child.id(),
             ] {
-                let _ = std::process::Command::new("kill")
-                    .arg(pid.to_string())
-                    .output();
+                crate::process_ext::stop_pid(pid);
             }
             log::info!("[escrow] signalled conductor + lair to stop for restore");
         }
     }
     tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+
+    // Wipe the key-derived state BEFORE committing the new key. The old
+    // Holochain state belongs to the old key; if it cannot be removed
+    // (Windows releases file locks a beat after the processes die - or not
+    // at all if something still holds them), adopting the key anyway would
+    // relaunch into a half-wiped hybrid where lair cannot start and NOTHING
+    // works. Retry while the locks release; on persistent failure abort
+    // with the old key still intact - the user just tries again.
+    for dir in ["conductor", "lair"] {
+        let p = data_dir.join(dir);
+        let mut last_err = String::new();
+        let mut removed = false;
+        for _ in 0..20 {
+            if !p.exists() {
+                removed = true;
+                break;
+            }
+            match std::fs::remove_dir_all(&p) {
+                Ok(_) => {
+                    removed = true;
+                    break;
+                }
+                Err(e) => {
+                    last_err = e.to_string();
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+            }
+        }
+        if !removed {
+            return Err(format!(
+                "Could not release this device's Holochain state for the restore \
+                 ({}: {}). Close and reopen Your Own AI, then try Restore again - \
+                 nothing has been changed.",
+                dir, last_err
+            ));
+        }
+    }
 
     // Swap the recovery material (old file preserved with a timestamp).
     transcript_crypto::replace_recovery_material(&data_dir, &escrowed)?;
@@ -445,17 +480,9 @@ pub async fn vault_escrow_restore(
         log::warn!("[escrow] could not write restore-pending marker: {}", e);
     }
 
-    // The Holochain state and the derived memory caches are all keyed to the
-    // old material - remove them so relaunch starts clean on the restored
-    // seed. AI configs, models, and the Flowsta session are untouched.
-    for dir in ["conductor", "lair"] {
-        let p = data_dir.join(dir);
-        if p.exists() {
-            if let Err(e) = std::fs::remove_dir_all(&p) {
-                log::warn!("[escrow] could not remove {dir}/: {e}");
-            }
-        }
-    }
+    // The derived memory caches are keyed to the old material too (the
+    // Holochain state was wiped above, before the key swap). AI configs,
+    // models, and the Flowsta session are untouched.
     let _ = std::fs::remove_file(data_dir.join("memory-facts.enc"));
     if let Ok(entries) = std::fs::read_dir(&data_dir) {
         for entry in entries.flatten() {

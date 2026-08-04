@@ -761,8 +761,8 @@ pub fn run() {
                 if let Some(manager) = hc_state.manager.get() {
                     let conductor_pid = manager.handle.conductor_child.id();
                     let lair_pid = manager.handle.lair_child.id();
-                    let _ = std::process::Command::new("kill").arg(conductor_pid.to_string()).output();
-                    let _ = std::process::Command::new("kill").arg(lair_pid.to_string()).output();
+                    process_ext::stop_pid(conductor_pid);
+                    process_ext::stop_pid(lair_pid);
                     println!("[Exit] Holochain stopped (pids: {}, {})", conductor_pid, lair_pid);
                 }
             }

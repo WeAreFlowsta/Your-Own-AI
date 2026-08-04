@@ -32,9 +32,7 @@ pub async fn reset_to_defaults(app: AppHandle) -> Result<(), String> {
                 manager.handle.conductor_child.id(),
                 manager.handle.lair_child.id(),
             ] {
-                let _ = std::process::Command::new("kill")
-                    .arg(pid.to_string())
-                    .output();
+                crate::process_ext::stop_pid(pid);
             }
             log::info!("[reset] signalled conductor + lair to stop");
         }

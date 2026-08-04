@@ -102,6 +102,26 @@ impl CommandExt for Command {
     }
 }
 
+/// Terminate a process by PID, platform-correct. `kill` does not exist on
+/// Windows - calling it there is a silent no-op that left conductor + lair
+/// running (and their databases locked) straight through resets and key
+/// restores. Windows uses taskkill with /T so the child tree goes too.
+pub fn stop_pid(pid: u32) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = std::process::Command::new("kill").arg(pid.to_string()).output();
+    }
+}
+
 #[cfg(target_os = "windows")]
 mod win_job {
     //! Kill-on-close Job Object: the Windows stand-in for Linux's
