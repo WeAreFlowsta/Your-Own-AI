@@ -547,13 +547,15 @@ export default component$<FlowstaAccountProps>((props) => {
           lastBackup.value.reason !== "restore_pending" &&
           escrow.value?.state !== "vault_locked" && (
             <p class="mt-2 text-xs text-amber-300">
-              {lastBackup.value.reason === "restore_choice_pending"
+              {/* Substring match: vault refusals arrive wrapped (e.g.
+                  "backup object conv-… rejected: restore_choice_pending"). */}
+              {(lastBackup.value.reason ?? "").includes("restore_choice_pending")
                 ? "Automatic backups are paused: your Vault was just restored and is waiting for you to import your Vault export (or choose to start fresh) in the Vault. Backups resume once you decide."
-                : lastBackup.value.reason === "escrow_conflict"
+                : (lastBackup.value.reason ?? "").includes("escrow_conflict")
                   ? "Automatic backups are paused: your Vault holds recovery material for a different key than this device's. Restore conversations from Vault below, or resolve the key conflict, to resume."
-                  : lastBackup.value.reason === "empty_would_overwrite"
+                  : (lastBackup.value.reason ?? "").includes("empty_would_overwrite")
                     ? "Automatic backups are paused: the Vault backup has conversations this device doesn't. Restore conversations from Vault below to resume."
-                    : lastBackup.value.reason === "probe_failed"
+                    : (lastBackup.value.reason ?? "").includes("probe_failed")
                       ? "The last backup couldn't check the Vault first, so it held off. It retries automatically."
                       : `The last backup attempt didn't complete (${lastBackup.value.reason ?? "unknown"}). It retries automatically; the log file has detail.`}
             </p>
