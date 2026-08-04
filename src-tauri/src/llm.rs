@@ -206,23 +206,32 @@ struct GpuDevice {
 /// the downloaded CUDA build when installed and not laddered out by GPU
 /// safe mode, else the bundled sidecar. The embedding and utility servers
 /// deliberately do NOT use this — they are CPU-only and always bundled.
+///
+/// The working directory is the MODELS dir and model/projector args must be
+/// bare filenames: llama-server reads argv through the ANSI code page on
+/// Windows, so an absolute path under a non-ASCII user profile (C:\Users\
+/// Gülşah\…) arrives mangled and the file "does not exist". A relative
+/// filename is pure ASCII and resolves through the process working
+/// directory, which the OS carries wide. Runtime libraries still resolve:
+/// exe-dir DLL search on Windows, $ORIGIN rpath on Linux.
 fn chat_server_command(
     app_handle: &AppHandle,
+    work_dir: &std::path::Path,
 ) -> Result<tauri_plugin_shell::process::Command, String> {
     match crate::engine::active_backend(app_handle) {
         crate::engine::Backend::Cuda => {
             let bin = crate::engine::cuda_engine_binary(app_handle)
                 .ok_or("CUDA engine binary missing")?;
-            let dir = bin.parent().map(PathBuf::from).unwrap_or_default();
-            // The CUDA runtime libraries sit beside the binary (exe-dir DLL
-            // search on Windows, $ORIGIN rpath on Linux); current_dir is
-            // belt-and-braces.
-            Ok(app_handle.shell().command(bin).current_dir(dir))
+            Ok(app_handle
+                .shell()
+                .command(bin)
+                .current_dir(work_dir.to_path_buf()))
         }
-        crate::engine::Backend::Bundled => app_handle
+        crate::engine::Backend::Bundled => Ok(app_handle
             .shell()
             .sidecar("llama-server")
-            .map_err(|e| format!("Failed to find llama-server binary: {}", e)),
+            .map_err(|e| format!("Failed to find llama-server binary: {}", e))?
+            .current_dir(work_dir.to_path_buf())),
     }
 }
 
@@ -327,7 +336,8 @@ async fn select_gpu_device_args(app_handle: &AppHandle) -> Vec<String> {
         return vec!["-ngl".to_string(), "0".to_string()];
     }
 
-    let cmd = match chat_server_command(app_handle) {
+    let probe_dir = get_models_dir(app_handle).unwrap_or_else(|_| std::env::temp_dir());
+    let cmd = match chat_server_command(app_handle, &probe_dir) {
         Ok(c) => c.args(["--list-devices"]),
         Err(_) => return Vec::new(),
     };
@@ -392,7 +402,10 @@ async fn compute_available_vram_mib(app_handle: &AppHandle) -> Option<u64> {
     if !crate::gpu_safety::gpu_allowed(app_handle) {
         return None;
     }
-    let cmd = chat_server_command(app_handle).ok()?.args(["--list-devices"]);
+    let probe_dir = get_models_dir(app_handle).unwrap_or_else(|_| std::env::temp_dir());
+    let cmd = chat_server_command(app_handle, &probe_dir)
+        .ok()?
+        .args(["--list-devices"]);
     let output = cmd.output().await.ok()?;
     let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
     combined.push_str(&String::from_utf8_lossy(&output.stderr));
@@ -600,6 +613,20 @@ static CHAT_LOAD_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::Atom
 /// hunting for smaller models that would never help.
 static CHAT_LOAD_OOM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Whether the dying server's stderr showed it could not OPEN the model
+/// file at all. That is a disk/path condition, not a memory one - it must
+/// never be reported (or cached) as "too large".
+static CHAT_LOAD_OPEN_FAILED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// File-open failure markers in llama.cpp output.
+fn looks_like_open_failure(line: &str) -> bool {
+    let l = line.to_ascii_lowercase();
+    l.contains("failed to open gguf file")
+        || l.contains("gguf_init_from_file: failed")
+        || l.contains("no such file or directory")
+}
+
 /// Memory-exhaustion markers in llama.cpp / ggml / driver output.
 fn looks_like_oom(line: &str) -> bool {
     let l = line.to_ascii_lowercase();
@@ -742,8 +769,10 @@ pub async fn start_llama_server(
     if let Some(filename) = model_filename {
         let model_path = models_dir.join(&filename);
         if model_path.exists() {
+            // Bare filename, resolved via the models-dir working directory
+            // (see chat_server_command) - never an absolute path in argv.
             args.push("--model".to_string());
-            args.push(model_path.to_string_lossy().to_string());
+            args.push(filename.clone());
             // MedGemma 1.5 reasons in Gemma thought markers that detokenize
             // to nothing - without --special the reasoning prints as normal
             // text fused to the answer with no recoverable boundary. With it,
@@ -768,7 +797,7 @@ pub async fn start_llama_server(
                     .unwrap_or("")
                     .to_string();
                 args.push("--mmproj".to_string());
-                args.push(projector.to_string_lossy().to_string());
+                args.push(pname.clone());
                 args.push("--no-mmproj-offload".to_string()); // vision tower on CPU
                 log::info!("[LLM] Vision: paired projector {} for {}", pname, filename);
                 *state.current_mmproj.lock().await = Some(pname);
@@ -800,7 +829,8 @@ pub async fn start_llama_server(
     );
     CHAT_LOAD_FAILED.store(false, std::sync::atomic::Ordering::SeqCst);
     CHAT_LOAD_OOM.store(false, std::sync::atomic::Ordering::SeqCst);
-    let (mut rx, child) = chat_server_command(&app_handle)?
+    CHAT_LOAD_OPEN_FAILED.store(false, std::sync::atomic::Ordering::SeqCst);
+    let (mut rx, child) = chat_server_command(&app_handle, &models_dir)?
         .args(&args)
         .spawn()
         .map_err(|e| format!("Failed to start llama-server: {}", e))?;
@@ -831,6 +861,9 @@ pub async fn start_llama_server(
                     log::info!("[llama-server] {}", text.trim_end());
                     if looks_like_oom(&text) {
                         CHAT_LOAD_OOM.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    if looks_like_open_failure(&text) {
+                        CHAT_LOAD_OPEN_FAILED.store(true, std::sync::atomic::Ordering::SeqCst);
                     }
                 }
                 tauri_plugin_shell::process::CommandEvent::Error(err) => {
@@ -867,19 +900,23 @@ pub async fn start_llama_server(
                 return Ok(());
             }
             if CHAT_LOAD_FAILED.load(Ordering::SeqCst) {
-                // Remember the failure so we don't burn ~30s loading it again
-                // this session — the next attempt rejects instantly. Clears on
-                // restart (in case the user frees VRAM).
-                if let Some(ref name) = loading_name {
-                    if let Ok(mut set) = too_big_set().lock() {
-                        set.insert(name.clone());
-                    }
-                }
-                // Only claim "too large" when the engine's own output showed
-                // memory exhaustion; a silent death is a crash, and telling the
-                // user to pick a smaller model would send them down a dead end.
+                // Only claim "too large" - and only poison the session cache -
+                // when the engine's own output showed memory exhaustion. A
+                // file-open failure is a disk/path condition and a silent
+                // death is a crash; caching either as "too big" made every
+                // retry refuse instantly for the wrong reason.
                 if CHAT_LOAD_OOM.load(Ordering::SeqCst) {
+                    // Remember so we don't burn ~30s loading it again this
+                    // session. Clears on restart (the user may free VRAM).
+                    if let Some(ref name) = loading_name {
+                        if let Ok(mut set) = too_big_set().lock() {
+                            set.insert(name.clone());
+                        }
+                    }
                     return Err("MODEL_TOO_LARGE".to_string());
+                }
+                if CHAT_LOAD_OPEN_FAILED.load(Ordering::SeqCst) {
+                    return Err("MODEL_FILE_UNREADABLE".to_string());
                 }
                 return Err("MODEL_LOAD_CRASHED".to_string());
             }
@@ -1038,8 +1075,10 @@ async fn ensure_embedding_server(
     // spare the chat GPU. NB: pooling + ctx are model-specific — swapping the
     // embedding model (see EMBEDDING_MODEL) may require changing these.
     let args = vec![
+        // Bare filename + models-dir working directory: absolute paths under
+        // a non-ASCII user profile arrive mangled in llama-server's argv.
         "--model".to_string(),
-        model_path.to_string_lossy().to_string(),
+        model_filename.to_string(),
         "--embedding".to_string(),
         "--pooling".to_string(),
         "cls".to_string(),
@@ -1058,6 +1097,7 @@ async fn ensure_embedding_server(
         .shell()
         .sidecar("llama-server")
         .map_err(|e| format!("Failed to find llama-server binary: {}", e))?
+        .current_dir(models_dir.clone())
         .args(&args)
         .spawn()
         .map_err(|e| format!("Failed to start embedding server: {}", e))?;
@@ -1204,8 +1244,10 @@ async fn ensure_utility_server(
     // to spare the chat GPU; reasoning off (these tasks don't reason); modest
     // context fits the extraction prompt + one turn.
     let args = vec![
+        // Bare filename + models-dir working directory (same rationale as
+        // the chat and embedding servers).
         "--model".to_string(),
-        model_path.to_string_lossy().to_string(),
+        model_filename.to_string(),
         "--port".to_string(),
         UTIL_PORT.to_string(),
         "--host".to_string(),
@@ -1223,6 +1265,7 @@ async fn ensure_utility_server(
         .shell()
         .sidecar("llama-server")
         .map_err(|e| format!("Failed to find llama-server binary: {}", e))?
+        .current_dir(models_dir.clone())
         .args(&args)
         .spawn()
         .map_err(|e| format!("Failed to start utility server: {}", e))?;
@@ -2500,6 +2543,30 @@ pub async fn cancel_chat_completion(
     println!("[LLM] Cancelling active stream");
     state.cancel_stream.store(true, std::sync::atomic::Ordering::Relaxed);
     Ok(())
+}
+
+#[cfg(test)]
+mod load_failure_classification_tests {
+    use super::{looks_like_oom, looks_like_open_failure};
+
+    #[test]
+    fn open_failure_lines_are_not_oom() {
+        // Real lines from a Windows load failure under a non-ASCII profile.
+        let lines = [
+            "0.00.134.744 E gguf_init_from_file: failed to open GGUF file 'C:\\Users\\G?lsah\\...' (No such file or directory)",
+            "E llama_model_load: error loading model: llama_model_loader: failed to load model from C:\\...",
+        ];
+        assert!(looks_like_open_failure(lines[0]));
+        assert!(!looks_like_oom(lines[0]));
+        assert!(!looks_like_oom(lines[1]));
+    }
+
+    #[test]
+    fn oom_lines_are_not_open_failures() {
+        let l = "ggml_vulkan: ErrorOutOfDeviceMemory while trying to allocate";
+        assert!(looks_like_oom(l));
+        assert!(!looks_like_open_failure(l));
+    }
 }
 
 #[cfg(test)]

@@ -662,6 +662,12 @@ export function useChat(props: UseChatProps) {
             abortWith(
               `${selectedAi.label}'s model is too large for your graphics card. Pick a smaller model on the Offline Models page (look for the "Your GPU" badge).`
             );
+          } else if (errorMessage.includes("MODEL_FILE_UNREADABLE")) {
+            props.currentModel.value = preferredModel;
+            props.modelTooBig.value = true;
+            abortWith(
+              `${selectedAi.label}'s model file couldn't be opened from disk. Downloading it again from the Offline Models page usually fixes this - if it keeps happening, the log file shows why.`
+            );
           } else {
             abortWith(
               errorMessage.includes("Model file not found")
