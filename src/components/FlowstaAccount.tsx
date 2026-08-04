@@ -1,5 +1,6 @@
 import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getButtonUrl } from "@flowsta/login-button";
 import LiquidMetalButton from "./LiquidMetalButton";
@@ -74,6 +75,10 @@ export default component$<FlowstaAccountProps>((props) => {
   const busy = useSignal(false);
   const error = useSignal("");
   const escrow = useSignal<EscrowStatus | null>(null);
+  // Outcome of the most recent backup attempt - a held or failed backup
+  // must be visible here, never log-only (this section says backups are
+  // automatic, so silence reads as success).
+  const lastBackup = useSignal<{ status: string; reason?: string } | null>(null);
   const escrowBusy = useSignal(false);
   // Which confirmation dialog is open, if any.
   const confirmAction = useSignal<"restore" | "keep_local" | "restore_data" | null>(null);
@@ -218,6 +223,16 @@ export default component$<FlowstaAccountProps>((props) => {
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async ({ cleanup }) => {
     await refresh();
+    try {
+      lastBackup.value = await invoke<{ status: string; reason?: string } | null>(
+        "last_backup_outcome"
+      );
+    } catch { /* older backend without the command */ }
+    const unlistenBackup = await listen<{ status: string; reason?: string }>(
+      "escrow-backup-outcome",
+      (event) => (lastBackup.value = event.payload)
+    );
+    cleanup(() => unlistenBackup());
     // Live-poll Vault state until signed in — installing or unlocking
     // Vault updates this section without restarting the app.
     const interval = setInterval(async () => {
@@ -522,6 +537,27 @@ export default component$<FlowstaAccountProps>((props) => {
             Your Vault is locked - backups resume when you unlock it.
           </p>
         )}
+        {/* The last backup attempt was refused or failed. The Vault-side
+            restore hold has no local marker, so without this line the
+            refusal would be invisible. Reasons already covered by the
+            notices above (this device's own restore-pending marker) skip. */}
+        {signedIn() &&
+          lastBackup.value &&
+          lastBackup.value.status !== "ok" &&
+          lastBackup.value.reason !== "restore_pending" &&
+          escrow.value?.state !== "vault_locked" && (
+            <p class="mt-2 text-xs text-amber-300">
+              {lastBackup.value.reason === "restore_choice_pending"
+                ? "Automatic backups are paused: your Vault was just restored and is waiting for you to import your Vault export (or choose to start fresh) in the Vault. Backups resume once you decide."
+                : lastBackup.value.reason === "escrow_conflict"
+                  ? "Automatic backups are paused: your Vault holds recovery material for a different key than this device's. Restore conversations from Vault below, or resolve the key conflict, to resume."
+                  : lastBackup.value.reason === "empty_would_overwrite"
+                    ? "Automatic backups are paused: the Vault backup has conversations this device doesn't. Restore conversations from Vault below to resume."
+                    : lastBackup.value.reason === "probe_failed"
+                      ? "The last backup couldn't check the Vault first, so it held off. It retries automatically."
+                      : `The last backup attempt didn't complete (${lastBackup.value.reason ?? "unknown"}). It retries automatically; the log file has detail.`}
+            </p>
+          )}
         {signedIn() && escrow.value?.state === "identity_mismatch" && section === "backups" && (
           <p class="mt-2 text-xs text-amber-300">
             Backups are paused: your Vault is unlocked under a different

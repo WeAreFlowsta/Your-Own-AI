@@ -1415,7 +1415,61 @@ pub(crate) async fn slot_gate<P: GateProbes>(
     }
 }
 
+/// Outcome of the most recent backup attempt, for the settings panel.
+/// A refusal - the app's own gates OR the Vault refusing the write - must
+/// be visible in the UI, never log-only: the panel says backups are
+/// automatic, so silence reads as success.
+static LAST_BACKUP_OUTCOME: std::sync::Mutex<Option<serde_json::Value>> =
+    std::sync::Mutex::new(None);
+
+fn record_backup_outcome(app: &tauri::AppHandle, outcome: serde_json::Value) {
+    if let Ok(mut slot) = LAST_BACKUP_OUTCOME.lock() {
+        *slot = Some(outcome.clone());
+    }
+    use tauri::Emitter;
+    let _ = app.emit("escrow-backup-outcome", outcome);
+}
+
+/// The most recent backup attempt's outcome (None = no attempt yet).
+#[tauri::command]
+pub fn last_backup_outcome() -> Option<serde_json::Value> {
+    LAST_BACKUP_OUTCOME.lock().ok().and_then(|s| s.clone())
+}
+
 pub async fn write_full_backup(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let result = write_full_backup_inner(app).await;
+    match &result {
+        Ok(v) => {
+            if let Some(reason) = v.get("skipped").and_then(|r| r.as_str()) {
+                record_backup_outcome(
+                    app,
+                    serde_json::json!({ "status": "held", "reason": reason, "at": iso_now() }),
+                );
+            } else {
+                record_backup_outcome(
+                    app,
+                    serde_json::json!({
+                        "status": "ok",
+                        "records": v.get("records"),
+                        "at": iso_now(),
+                    }),
+                );
+            }
+        }
+        // Not-linked / Vault-away are idle states, not refusals - clear any
+        // stale notice rather than alarming about a Vault that's just closed.
+        Err(e) if e == "unlinked" || e == "vault_unavailable" => {}
+        Err(e) => {
+            record_backup_outcome(
+                app,
+                serde_json::json!({ "status": "failed", "reason": e, "at": iso_now() }),
+            );
+        }
+    }
+    result
+}
+
+async fn write_full_backup_inner(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
     let port = match escrow_port(app, true).await {
         Ok(p) => p,
         Err(s) => return Err(s.error.unwrap_or(s.state)),

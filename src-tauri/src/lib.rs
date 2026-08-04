@@ -509,6 +509,7 @@ pub fn run() {
             vault_escrow::vault_escrow_restore,
             vault_escrow::vault_escrow_keep_local,
             vault_escrow::vault_backup_now,
+            vault_escrow::last_backup_outcome,
             vault_restore::vault_restore_conversations,
             vault_restore::vault_restore_pending,
             vault_restore::memory_reembed_pending,
