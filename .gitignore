@@ -35,3 +35,4 @@ dna/*/target
 dev-env.sh
 .env.dev
 dev-urls.json
+tsconfig.tsbuildinfo
