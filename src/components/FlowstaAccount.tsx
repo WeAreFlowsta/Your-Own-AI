@@ -456,30 +456,6 @@ export default component$<FlowstaAccountProps>((props) => {
             </div>
           )}
 
-          {escrow.value?.state === "conflict" && (
-            <div class="rounded-lg border border-amber-700/60 bg-amber-900/20 p-4">
-              <p class="text-sm font-medium text-amber-200">
-                Your Vault holds a different transcript key
-              </p>
-              <p class="mt-1 text-xs text-[var(--text-secondary)]">
-                {(escrow.value.local_conversations ?? 0) > 0
-                  ? `This usually means this device was set up fresh while your Vault kept the key from a previous install. This device currently has ${escrow.value.local_conversations} conversation record${escrow.value.local_conversations === 1 ? "" : "s"} under its own key - restoring the Vault key deletes them.`
-                  : "This usually means this device was set up fresh while your Vault kept the key from a previous install. Nothing has been written under this device's key yet, so restoring is safe."}
-              </p>
-              <div class="mt-3 flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
-                <button
-                  class="rounded-full border border-[var(--border-subtle)] px-5 py-2 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)]"
-                  onClick$={() => (confirmAction.value = "keep_local")}
-                >
-                  Keep this device's key
-                </button>
-                <LiquidMetalButton onClick$={() => (confirmAction.value = "restore")}>
-                  <span class="px-5 py-2 text-sm">Restore key from Vault</span>
-                </LiquidMetalButton>
-              </div>
-            </div>
-          )}
-
           <button
             class="text-sm text-[var(--text-muted)] underline hover:text-[var(--text-secondary)]"
             onClick$={handleSignOut}
@@ -512,6 +488,38 @@ export default component$<FlowstaAccountProps>((props) => {
           and Vault's "Download Export" hands you all of it, readable, with
           the keys, yours to take anywhere. No lock-in, by design.
         </p>
+        {/* Key conflict = the start of the RECOVERY story, so it lives here
+            with the rest of it, framed as the two steps it actually is.
+            (It used to sit in the account card above, which read as a
+            second, competing "restore from Vault" narrative.) */}
+        {signedIn() && escrow.value?.state === "conflict" && (
+          <div class="mt-3 rounded-lg border border-amber-700/60 bg-amber-900/20 p-4">
+            <p class="text-sm font-medium text-amber-200">
+              Bringing this device back from your Vault takes two steps
+            </p>
+            <p class="mt-1 text-xs text-[var(--text-secondary)]">
+              Your Vault's backup was made under a different key than this
+              device is using - usually because this is a fresh install
+              while your Vault kept the key from the previous one.{" "}
+              {(escrow.value.local_conversations ?? 0) > 0
+                ? `Step 1 restores the Vault's key (this device has ${escrow.value.local_conversations} conversation record${escrow.value.local_conversations === 1 ? "" : "s"} under its own key - restoring deletes ${escrow.value.local_conversations === 1 ? "it" : "them"}, and the app restarts). `
+                : "Step 1 restores the Vault's key (nothing has been written under this device's key yet, so this is safe - the app restarts). "}
+              Step 2, after the restart: "Restore conversations from Vault"
+              below brings everything back.
+            </p>
+            <div class="mt-3 flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
+              <button
+                class="rounded-full border border-[var(--border-subtle)] px-5 py-2 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)]"
+                onClick$={() => (confirmAction.value = "keep_local")}
+              >
+                Keep this device's key
+              </button>
+              <LiquidMetalButton onClick$={() => (confirmAction.value = "restore")}>
+                <span class="px-5 py-2 text-sm">Step 1: Restore the Vault's key</span>
+              </LiquidMetalButton>
+            </div>
+          </div>
+        )}
         {!signedIn() && section === "backups" && (
           <p class="mt-2 text-xs text-[var(--text-muted)]">
             Connect your Flowsta Vault above to turn on automatic backup.
