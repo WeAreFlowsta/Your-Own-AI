@@ -539,13 +539,20 @@ export default component$<FlowstaAccountProps>((props) => {
         )}
         {/* The last backup attempt was refused or failed. The Vault-side
             restore hold has no local marker, so without this line the
-            refusal would be invisible. Reasons already covered by the
-            notices above (this device's own restore-pending marker) skip. */}
+            refusal would be invisible. ONE amber voice at a time: whenever
+            a richer escrow-state panel (key conflict, locked, identity
+            mismatch, this device's restore-pending) is already telling the
+            story, this line stays silent - those states pause backups by
+            definition and their panels carry the action to take. */}
         {signedIn() &&
           lastBackup.value &&
           lastBackup.value.status !== "ok" &&
-          lastBackup.value.reason !== "restore_pending" &&
-          escrow.value?.state !== "vault_locked" && (
+          !(lastBackup.value.reason ?? "").includes("restore_pending") &&
+          !(lastBackup.value.reason ?? "").includes("escrow_conflict") &&
+          escrow.value?.state !== "vault_locked" &&
+          escrow.value?.state !== "conflict" &&
+          escrow.value?.state !== "identity_mismatch" &&
+          !escrow.value?.backups_held && (
             <p class="mt-2 text-xs text-amber-300">
               {/* Substring match: vault refusals arrive wrapped (e.g.
                   "backup object conv-… rejected: restore_choice_pending"). */}
