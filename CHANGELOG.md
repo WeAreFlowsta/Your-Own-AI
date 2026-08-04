@@ -3,6 +3,33 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.1.1] - 2026-08-04
+
+### Fixed
+- **Offline models load for every Windows user name.** On Windows accounts
+  whose user folder contains non-ASCII characters (u with umlaut, Turkish
+  letters, and friends), every offline model failed to load with a
+  misleading "too large for your computer's memory" message. Model files
+  are now opened in a way that works for every profile path, and a file
+  that genuinely cannot be opened says so instead of blaming memory.
+- **Restoring your Vault key works reliably on Windows.** Adopting the key
+  from your Flowsta Vault could leave the app without a working
+  conversation engine until reinstall. The restore now stops everything
+  cleanly first, verifies the old state is fully released before switching
+  keys, and aborts safely - changing nothing - when it cannot.
+- Factory reset and app exit fully stop the background conversation engine
+  on Windows.
+
+### Added
+- **Backups tell you when they are waiting.** If a backup attempt is held
+  or fails - for example your Vault was just restored and wants its export
+  imported first - the Flowsta Account section says so in plain words,
+  with what to do next. Silence no longer looks like success.
+- **Key recovery reads as one story.** When your Vault holds a different
+  conversation key than this device, Backups & recovery walks you through
+  it as two labeled steps: restore the key, then restore the
+  conversations.
+
 ## [0.1.0] - 2026-07-29
 
 The first stable release of Your Own AI - private AI on your machine.
