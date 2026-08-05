@@ -556,10 +556,11 @@ export default component$(() => {
                       <LiquidMetalButton
                         variant="secondary"
                         onClick$={() => handleEditAi(ai)}
-                        title="Edit AI"
-                        class="p-2"
+                        title="Edit AI - persona, knowledge, and which model answers"
+                        class="px-3 py-1.5 flex items-center gap-1.5 rounded-full text-xs"
                       >
-                        <LuPencil class="w-[18px] h-[18px]" />
+                        <LuPencil class="w-[14px] h-[14px]" />
+                        <span>Edit</span>
                       </LiquidMetalButton>
                       <LiquidMetalButton
                         variant="secondary"
