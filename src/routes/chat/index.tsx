@@ -1539,12 +1539,12 @@ export default component$(() => {
         title={`${folderGuard.value?.currentLabel ?? "This AI"} may struggle with project work`}
         message={
           folderGuard.value?.offlineAuto
-            ? `${folderGuard.value.currentLabel} routes offline only, and none of your downloaded models can drive project work. Download an agentic coder from the Offline Models page, or switch this AI to a mode that can use online models.`
+            ? `${folderGuard.value.currentLabel} routes offline only, and none of your downloaded models can drive project work. Download a model marked "Agentic" from the Offline Models page, or switch this AI to a mode that can use online models.`
             : folderGuard.value?.offlineUncomfortable
-              ? `${folderGuard.value.currentLabel} routes offline only, and your agent-capable models don't fit comfortably on this hardware - project work may load very slowly or fail. A smaller agentic model, or a mode that can use online models, will work much better.`
+              ? `${folderGuard.value.currentLabel} routes offline only, and your project-capable models don't fit comfortably on this hardware - project work may load very slowly or fail. A smaller model marked "Agentic", or a mode that can use online models, will work much better.`
             : folderGuard.value?.suggestion
-              ? `${folderGuard.value.currentLabel}'s model isn't built for tool work, so project tasks may stall or fail. ${folderGuard.value.suggestion.label} can drive them properly - switch this project to ${folderGuard.value.suggestion.label}?`
-              : `${folderGuard.value?.currentLabel ?? "This AI"}'s model isn't built for tool work, so project tasks may stall or fail. None of your other AIs are set up for it yet either - an online model like GPT-5.6 Sol, or an agentic coder from the model library, works best.`
+              ? `${folderGuard.value.currentLabel}'s model isn't built for tool work, so project tasks may stall or fail. ${folderGuard.value.suggestion.label} can drive them properly - switch this project to ${folderGuard.value.suggestion.label}? To stay offline instead, pick a model marked "Agentic" on the Offline Models page.`
+              : `${folderGuard.value?.currentLabel ?? "This AI"}'s model isn't built for tool work, so project tasks may stall or fail. An online model like GPT-5.6 Sol works best - or to stay offline, download a model marked "Agentic" from the Offline Models page.`
         }
         confirmLabel={
           folderGuard.value?.suggestion
