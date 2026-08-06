@@ -3,6 +3,60 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.2.0-beta.1] - 2026-08-06
+
+### Changed
+- **Projects are dramatically faster.** Model metadata is now cached
+  instead of re-read on every step - agent steps that took close to a
+  minute on modest hardware now land in seconds, and opening a project
+  is near-instant.
+- **GPT-5.6 Sol drives project work by default**, and your own model
+  picks from Settings now apply to project sessions too (they were
+  silently ignored before).
+- **Model choices respect your hardware honestly.** Recommendations
+  count the memory that's actually free, integrated graphics is sized
+  as what it is (with a truthful "Integrated graphics" card badge), and
+  automatic picks prefer a model that runs comfortably over a smarter
+  one that barely loads.
+- **Privacy-first routing means what it says.** With the online lean
+  set to privacy-first, hard questions stay on your device and only
+  genuine live-web needs go online.
+- Gemma 4 downloads use Google's official builds carrying their July
+  refresh (better tool use, wider vision); the larger variants now
+  show their true 256K context. Existing Gemma downloads keep working -
+  re-download to get the refresh.
+- The app opens at a roomier default size, and the Your AIs cards say
+  "Edit" where before there was only an icon.
+
+### Added
+- **See your plan usage in Settings** - spend against your monthly
+  allowance, with an optional live ticker in the header (off by
+  default).
+- **System Information with "Copy for support"** - everything that
+  determines model fit, copyable in one click, with nothing personal
+  included.
+- **Project sessions warn before they can't work**: opening a folder
+  with an offline-only AI now tells you up front if no downloaded
+  model can drive project work, or if the capable one won't fit
+  comfortably on your hardware.
+
+### Fixed
+- **Editing your selected AI now applies immediately.** Before, an
+  open chat kept the AI's previous settings until you switched away -
+  including its online/offline mode, which could route a message
+  online after you had chosen Offline Only. Fixed, and this class of
+  routing promise is now verified automatically across nearly two
+  thousand setting combinations before each release.
+- A model that crashed the app while loading is never automatically
+  loaded again on the next start - no more crash loops that required
+  deleting files by hand.
+- A model too slow to load says so clearly and isn't retried that
+  session, instead of failing with a raw error code.
+- Models whose chat format can't support project work are no longer
+  offered for it, whatever their name suggests.
+- The "permission needed" button scrolls to the permission card
+  instead of past it.
+
 ## [0.1.1] - 2026-08-04
 
 ### Fixed
