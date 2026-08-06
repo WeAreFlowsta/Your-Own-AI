@@ -549,8 +549,33 @@ async fn chat_completions(
         // prompt (so theirs stays authoritative), unless opted out.
         let mut msgs = incoming.clone();
         if agent_memory {
-            let user_memory =
-                crate::inference_memory::build_memory_block(&app, &query, &ai.id, None).await;
+            // Agent sessions call per STEP; the user-memory block barely
+            // changes within one, but rebuilding it costs a CPU embedding
+            // query every time (measured ~0.7s/step on modest hardware).
+            // Cache per AI briefly - identical injection, one rebuild per
+            // couple of minutes instead of per step.
+            let user_memory = {
+                use std::sync::Mutex;
+                use std::time::{Duration, Instant};
+                static AGENT_MEM_CACHE: Mutex<Option<(String, String, Instant)>> = Mutex::new(None);
+                let cached = AGENT_MEM_CACHE
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .filter(|(id, _, at)| *id == ai.id && at.elapsed() < Duration::from_secs(120))
+                    .map(|(_, block, _)| block.clone());
+                match cached {
+                    Some(block) => block,
+                    None => {
+                        let block =
+                            crate::inference_memory::build_memory_block(&app, &query, &ai.id, None)
+                                .await;
+                        *AGENT_MEM_CACHE.lock().unwrap() =
+                            Some((ai.id.clone(), block.clone(), Instant::now()));
+                        block
+                    }
+                }
+            };
             if !user_memory.trim().is_empty() {
                 let ctx = json!({
                     "role": "system",
