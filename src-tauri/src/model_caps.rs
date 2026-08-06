@@ -181,6 +181,32 @@ pub fn online_agent_caps(text: &str) -> u8 {
     5
 }
 
+/// Offline agent readiness for the folder guard's AUTO case: with an
+/// offline-only auto mode, can any downloaded model drive agent work at
+/// all - and comfortably? Cheap since GGUF metadata is cached.
+#[derive(serde::Serialize)]
+pub struct OfflineAgentReadiness {
+    /// Some downloaded model is tool-capable (agent_caps >= 6).
+    pub capable: bool,
+    /// ...and at least one such model fits green on this hardware.
+    pub comfortable: bool,
+}
+
+#[tauri::command]
+pub async fn offline_agent_readiness(app: tauri::AppHandle) -> OfflineAgentReadiness {
+    let fits = crate::fit::assess(&app).await;
+    let capable_models: Vec<_> = fits
+        .iter()
+        .filter(|f| agent_caps(&f.name) >= 6)
+        .collect();
+    OfflineAgentReadiness {
+        capable: !capable_models.is_empty(),
+        comfortable: capable_models
+            .iter()
+            .any(|f| matches!(f.fit, crate::fit::Fit::Green)),
+    }
+}
+
 /// The folder guard's one question: can this AI's configured model drive
 /// agent work? `model` is UserDefinedAI.model - a gguf filename,
 /// "online:<id>", "external:<id>", or "auto:*" (router decides per turn,

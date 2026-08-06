@@ -564,6 +564,7 @@ pub fn run() {
             agent_bridge::path_is_file,
             terminal::open_in_terminal,
             model_caps::agent_capability,
+            model_caps::offline_agent_readiness,
             router::recent_routing_decisions,
             router::set_agent_online_override,
             router::alternate_online_agent,

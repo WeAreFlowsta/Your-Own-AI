@@ -232,6 +232,7 @@ export default component$(() => {
   // app-wide), and there is NEVER a silent model substitution. Auto-routing
   // AIs (score -1) pass: the router decides per turn.
   const folderGuard = useSignal<{
+    offlineAuto?: boolean;
     path: string;
     currentLabel: string;
     suggestion?: SelectedAiModel;
@@ -247,9 +248,27 @@ export default component$(() => {
     }
     openFolder$(path);
     try {
+      const aiModel = selectedAi.value.aiConfig?.model || "";
       const score = await invoke<number>("agent_capability", {
-        model: selectedAi.value.aiConfig?.model || "",
+        model: aiModel,
       });
+      // Auto modes score -1 (the router decides per turn) - but an
+      // offline-only auto with nothing agentic downloaded fails on the
+      // FIRST step, after the user has already typed. Warn now instead.
+      if (score === -1 && (aiModel === "auto:offline" || aiModel === "auto:my-hardware")) {
+        const ready = await invoke<{ capable: boolean; comfortable: boolean }>(
+          "offline_agent_readiness",
+        );
+        if (!ready.capable) {
+          folderGuard.value = {
+            path,
+            currentLabel: selectedAi.value.label,
+            suggestion: undefined,
+            offlineAuto: true,
+          };
+        }
+        return;
+      }
       if (score >= 0 && score < 6) {
         let suggestion: SelectedAiModel | undefined;
         for (const option of dynamicModelOptions.value) {
@@ -1495,9 +1514,11 @@ export default component$(() => {
         isOpen={folderGuard.value !== null}
         title={`${folderGuard.value?.currentLabel ?? "This AI"} may struggle with project work`}
         message={
-          folderGuard.value?.suggestion
-            ? `${folderGuard.value.currentLabel}'s model isn't built for tool work, so project tasks may stall or fail. ${folderGuard.value.suggestion.label} can drive them properly - switch this project to ${folderGuard.value.suggestion.label}?`
-            : `${folderGuard.value?.currentLabel ?? "This AI"}'s model isn't built for tool work, so project tasks may stall or fail. None of your other AIs are set up for it yet either - an online model like Kimi, or an agentic coder from the model library, works best.`
+          folderGuard.value?.offlineAuto
+            ? `${folderGuard.value.currentLabel} routes offline only, and none of your downloaded models can drive project work. Download an agentic coder from the Offline Models page, or switch this AI to a mode that can use online models.`
+            : folderGuard.value?.suggestion
+              ? `${folderGuard.value.currentLabel}'s model isn't built for tool work, so project tasks may stall or fail. ${folderGuard.value.suggestion.label} can drive them properly - switch this project to ${folderGuard.value.suggestion.label}?`
+              : `${folderGuard.value?.currentLabel ?? "This AI"}'s model isn't built for tool work, so project tasks may stall or fail. None of your other AIs are set up for it yet either - an online model like GPT-5.6 Sol, or an agentic coder from the model library, works best.`
         }
         confirmLabel={
           folderGuard.value?.suggestion
