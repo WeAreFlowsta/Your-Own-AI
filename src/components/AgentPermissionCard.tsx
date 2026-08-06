@@ -137,7 +137,7 @@ export const AgentPermissionCard = component$<AgentPermissionCardProps>(
         </div>
       </div>
     ) : (
-      <div class="max-w-4xl mx-auto w-full" ref={rootRef}>
+      <div class="max-w-4xl mx-auto w-full" ref={rootRef} data-agent-permission-card>
         <div class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-card)] p-4 space-y-3">
           <div class="flex items-center gap-2 text-sm font-medium text-[var(--text-primary)]">
             <Icon class="h-4 w-4 shrink-0" />

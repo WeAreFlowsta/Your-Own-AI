@@ -1082,7 +1082,14 @@ export default component$(() => {
               liveStatus={agentState.liveStatus}
               agentRetryStatus={agentState.retryStatus || undefined}
               onPermissionJump$={$(() => {
-                messagesEndRef.value?.scrollIntoView({ behavior: "smooth", block: "end" });
+                // Jump to the CARD, not the bottom of the chat - content
+                // rendered below the card made "end" overshoot past it.
+                const card = document.querySelector("[data-agent-permission-card]");
+                if (card) {
+                  card.scrollIntoView({ behavior: "smooth", block: "center" });
+                } else {
+                  messagesEndRef.value?.scrollIntoView({ behavior: "smooth", block: "end" });
+                }
               })}
             />
 
