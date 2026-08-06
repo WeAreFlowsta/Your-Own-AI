@@ -27,6 +27,12 @@ import {
 } from "@qwikest/icons/lucide";
 
 import { ThemeContext, ProjectMemoryContext, type AppTheme } from "../routes/layout";
+import {
+  fetchUsage,
+  formatUsage,
+  usageTickerEnabled,
+  type UsageSummary,
+} from "../utils/usagePrefs";
 
 import LiquidMetalButton from "./LiquidMetalButton";
 import { Callout } from "./Callout";
@@ -119,6 +125,36 @@ export default component$<AppHeaderProps>(
     // The project-memory modal lives at the layout root (route stacking
     // contexts would bury it here) - this signal opens it.
     const memoryFolder = useContext(ProjectMemoryContext);
+
+    // Optional online-usage ticker (Settings -> Your Flowsta Account, OFF by
+    // default). Polls only while enabled; hides itself signed-out or on free.
+    const usageTicker = useSignal<UsageSummary | null>(null);
+    const usageTickerOn = useSignal(false);
+
+    // eslint-disable-next-line qwik/no-use-visible-task
+    useVisibleTask$(({ cleanup }) => {
+      let timer: ReturnType<typeof setInterval> | null = null;
+      const poll = () => fetchUsage().then((u) => (usageTicker.value = u));
+      const apply = () => {
+        usageTickerOn.value = usageTickerEnabled();
+        if (timer) {
+          clearInterval(timer);
+          timer = null;
+        }
+        if (usageTickerOn.value) {
+          poll();
+          timer = setInterval(poll, 90_000);
+        } else {
+          usageTicker.value = null;
+        }
+      };
+      apply();
+      window.addEventListener("usagePrefsChanged", apply);
+      cleanup(() => {
+        window.removeEventListener("usagePrefsChanged", apply);
+        if (timer) clearInterval(timer);
+      });
+    });
     // Install-on-demand: the projects surface shows for EVERYONE; the
     // agent add-on downloads from here. The download runs in the Rust
     // runtime - navigating away never interrupts it.
@@ -195,6 +231,17 @@ export default component$<AppHeaderProps>(
           </div>
 
           <div class="flex items-center gap-4">
+            {/* Online-usage ticker - opt-in, paid plans only */}
+            {usageTickerOn.value && usageTicker.value && (
+              <a
+                href="/settings/"
+                title="Online usage this month - allowance resets on the 1st. Click for details."
+                class="text-xs text-[var(--text-secondary)] hidden lg:flex items-center gap-2 px-3 h-9 bg-[var(--bg-dropdown)] rounded-full border border-[var(--border-subtle)] hover:text-[var(--text-primary)] hover:border-[#71717a] transition-colors"
+              >
+                <span class="w-2 h-2 rounded-full bg-sky-500" />
+                {formatUsage(usageTicker.value)}
+              </a>
+            )}
             {/* Current Model Badge with Status Indicator */}
             {showModelWidget && currentModel && (
               <span

@@ -393,6 +393,48 @@ pub async fn flowsta_session(app: tauri::AppHandle) -> Result<FlowstaSession, St
     session_from_store(&app).await
 }
 
+/// This month's online usage against the plan allowance, for the Settings
+/// account card and the optional header ticker. None when signed out or the
+/// proxy is unreachable - display surfaces simply hide.
+#[derive(Debug, serde::Serialize)]
+pub struct UsageSummary {
+    pub month: String,
+    pub tier: String,
+    pub cost_usd: f64,
+    pub allowance_usd: f64,
+    pub overage_usd: f64,
+    pub overage_opt_in: bool,
+    pub requests: u64,
+}
+
+#[tauri::command]
+pub async fn flowsta_usage(app: tauri::AppHandle) -> Result<Option<UsageSummary>, String> {
+    let Ok(token) = get_access_token(&app).await else {
+        return Ok(None);
+    };
+    let resp = match http()
+        .get(format!("{}/billing/usage", proxy_url()))
+        .bearer_auth(&token)
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => r,
+        _ => return Ok(None),
+    };
+    let Ok(v) = resp.json::<serde_json::Value>().await else {
+        return Ok(None);
+    };
+    Ok(Some(UsageSummary {
+        month: v["month"].as_str().unwrap_or_default().to_string(),
+        tier: v["tier"].as_str().unwrap_or("free").to_string(),
+        cost_usd: v["cost_usd"].as_f64().unwrap_or(0.0),
+        allowance_usd: v["allowance_usd"].as_f64().unwrap_or(0.0),
+        overage_usd: v["overage_usd"].as_f64().unwrap_or(0.0),
+        overage_opt_in: v["overage_opt_in"].as_bool().unwrap_or(false),
+        requests: v["requests"].as_u64().unwrap_or(0),
+    }))
+}
+
 /// Keep the online proxy warm while the app is open. It scales to zero and a
 /// cold start adds ~3.5s to the first online request after idle (measured
 /// 2026-07-17); a 10-minute /health ping is effectively free and avoids

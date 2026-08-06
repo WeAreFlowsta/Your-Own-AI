@@ -6,6 +6,13 @@ import { getButtonUrl } from "@flowsta/login-button";
 import LiquidMetalButton from "./LiquidMetalButton";
 import ConfirmModal from "./ConfirmModal";
 import { useAiDataActions } from "../contexts/AiDataContext";
+import {
+  fetchUsage,
+  formatUsage,
+  setUsageTickerEnabled,
+  usageTickerEnabled,
+  type UsageSummary,
+} from "../utils/usagePrefs";
 
 interface VaultStatus {
   installed: boolean;
@@ -100,7 +107,12 @@ export default component$<FlowstaAccountProps>((props) => {
     }
   });
 
+  const usage = useSignal<UsageSummary | null>(null);
+  const tickerOn = useSignal(false);
+
   const refresh = $(async () => {
+    tickerOn.value = usageTickerEnabled();
+    fetchUsage().then((u) => (usage.value = u));
     try {
       const [v, s] = await Promise.all([
         invoke<VaultStatus>("flowsta_vault_status"),
@@ -415,6 +427,49 @@ export default component$<FlowstaAccountProps>((props) => {
               {(session.value.tier || "free").toUpperCase()}
             </span>
           </div>
+
+          {usage.value && (
+            <div class="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] p-4">
+              <div class="flex items-center justify-between gap-3">
+                <div>
+                  <p class="text-sm text-[var(--text-primary)]">
+                    {formatUsage(usage.value)} used this month
+                  </p>
+                  <p class="mt-0.5 text-xs text-[var(--text-muted)]">
+                    {usage.value.requests} requests · allowance resets on the 1st
+                    {usage.value.overage_opt_in && usage.value.overage_usd > 0
+                      ? ` · $${usage.value.overage_usd.toFixed(2)} overage so far`
+                      : ""}
+                  </p>
+                </div>
+              </div>
+              <div class="mt-3 flex items-center justify-between gap-3 border-t border-[var(--border-subtle)] pt-3">
+                <div>
+                  <p class="text-sm text-[var(--text-primary)]">Show usage in the header</p>
+                  <p class="mt-0.5 text-xs text-[var(--text-muted)]">
+                    A small live "{formatUsage(usage.value)}" pill beside the
+                    model indicator. Off keeps the header clean.
+                  </p>
+                </div>
+                <button
+                  onClick$={() => {
+                    setUsageTickerEnabled(!tickerOn.value);
+                    tickerOn.value = !tickerOn.value;
+                  }}
+                  class={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                    tickerOn.value ? "bg-emerald-500" : "bg-[var(--border-subtle)]"
+                  }`}
+                  aria-label="Show usage in the header"
+                >
+                  <span
+                    class={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${
+                      tickerOn.value ? "left-[22px]" : "left-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+          )}
 
           {session.value.linked === false && (
             <div class="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] p-4">

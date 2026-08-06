@@ -501,6 +501,7 @@ pub fn run() {
             flowsta::flowsta_sign_in,
             flowsta::flowsta_sign_out,
             flowsta::flowsta_session,
+            flowsta::flowsta_usage,
             flowsta::flowsta_link_url,
             flowsta::flowsta_account_url,
             flowsta::list_online_models,
