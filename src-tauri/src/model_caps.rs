@@ -197,7 +197,7 @@ pub async fn offline_agent_readiness(app: tauri::AppHandle) -> OfflineAgentReadi
     let fits = crate::fit::assess(&app).await;
     let capable_models: Vec<_> = fits
         .iter()
-        .filter(|f| agent_caps(&f.name) >= 6)
+        .filter(|f| agent_caps(&f.name) >= 6 && f.agent_template_ok)
         .collect();
     OfflineAgentReadiness {
         capable: !capable_models.is_empty(),

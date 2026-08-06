@@ -327,7 +327,11 @@ async fn pick_offline(app: &AppHandle, task: &str, lean: &str, agent_only: bool)
     let mut all = crate::fit::assess(app).await;
     // Agent sessions: tool-driving is a hard filter, not a preference.
     if agent_only {
-        all.retain(|f| crate::model_caps::agent_caps(&f.name) >= 6);
+        // Family capability AND the file's actual template: community
+        // builds ship templates that hard-reject agent-shaped
+        // conversations (strict role alternation) or lack tool support -
+        // a 400 at the first step, whatever the family name promises.
+        all.retain(|f| crate::model_caps::agent_caps(&f.name) >= 6 && f.agent_template_ok);
     }
     if all.is_empty() {
         return Err("No offline models downloaded".to_string());

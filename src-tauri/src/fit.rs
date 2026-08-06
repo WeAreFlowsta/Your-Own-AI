@@ -23,7 +23,9 @@ pub enum Fit {
 
 #[derive(Serialize, Clone, Debug)]
 pub struct ModelFit {
-    pub name: String, // GGUF filename
+    pub name: String,
+    /// The file's chat template can host agent conversations.
+    pub agent_template_ok: bool, // GGUF filename
     pub fit: Fit,
     pub need_gb: f64,
     pub weights_gb: f64,
@@ -139,6 +141,7 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
         };
         out.push(ModelFit {
             name: m.name,
+            agent_template_ok: meta.agent_template_ok(),
             fit: grade(need_gb, free_vram_gb, free_ram_gb),
             need_gb,
             weights_gb,

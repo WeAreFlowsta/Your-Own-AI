@@ -13,6 +13,12 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 #[derive(Debug, Clone)]
 pub struct GgufMeta {
     pub architecture: String,
+    /// The chat template declares tool support (contains a tools branch).
+    pub template_tools: bool,
+    /// The chat template hard-rejects non-alternating conversations -
+    /// agent scaffolding (system inserts, tool turns) makes it throw, so
+    /// such a model cannot drive agent sessions regardless of its family.
+    pub template_strict_alternation: bool,
     /// `general.size_label` — the converter's param-size tag (e.g. "3B",
     /// "4.6B", "mini"); "" if absent. Used to fill an otherwise-Unknown label.
     pub size_label: String,
@@ -29,6 +35,12 @@ pub struct GgufMeta {
 }
 
 impl GgufMeta {
+    /// Can this file's template host an agent conversation (tools present,
+    /// no strict-alternation guard)?
+    pub fn agent_template_ok(&self) -> bool {
+        self.template_tools && !self.template_strict_alternation
+    }
+
     /// Per-head dimension — explicit `key_length` if set (e.g. Gemma), else
     /// embedding_length / n_heads.
     pub fn head_dim(&self) -> u64 {
@@ -228,6 +240,8 @@ fn read_meta_uncached(path: &std::path::Path) -> Result<GgufMeta, String> {
     let kv_count = read_u64(&mut r).map_err(|e| e.to_string())?;
 
     let mut m = GgufMeta {
+        template_tools: false,
+        template_strict_alternation: false,
         architecture: String::new(),
         size_label: String::new(),
         n_layers: 0,
@@ -253,7 +267,12 @@ fn read_meta_uncached(path: &std::path::Path) -> Result<GgufMeta, String> {
             || key.ends_with(".context_length")
             || key == "general.file_type";
 
-        if key == "general.architecture" && vtype == 8 {
+        if key == "tokenizer.chat_template" && vtype == 8 {
+            let tpl = read_gstr(&mut r).map_err(|e| e.to_string())?;
+            m.template_tools = tpl.contains("tools") || tpl.contains("tool_call");
+            m.template_strict_alternation =
+                tpl.contains("raise_exception") && tpl.contains("alternate");
+        } else if key == "general.architecture" && vtype == 8 {
             m.architecture = read_gstr(&mut r).map_err(|e| e.to_string())?;
         } else if key == "general.size_label" && vtype == 8 {
             m.size_label = read_gstr(&mut r).map_err(|e| e.to_string())?;
