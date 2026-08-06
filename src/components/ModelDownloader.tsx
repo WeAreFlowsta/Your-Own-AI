@@ -830,12 +830,12 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                 {capabilityInfo[cap].label}
               </span>
             ))}
-            {family.contextWindow && (
+            {(selectedVariant.contextWindow || family.contextWindow) && (
               <span
                 class="px-2 py-0.5 bg-[var(--bg-main)] border border-[var(--border-subtle)] rounded text-xs text-[var(--text-muted)]"
                 title="Model's trained context window. Your Own AI loads at a smaller, RAM-capped context by default."
               >
-                {formatContext(family.contextWindow)} context
+                {formatContext(selectedVariant.contextWindow || family.contextWindow!)} context
               </span>
             )}
           </div>
@@ -867,10 +867,10 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                 <span>Parameters</span>
                 <span class="font-medium text-[var(--text-secondary)]">{selectedVariant.parameterCount}</span>
               </div>
-              {family.contextWindow && (
+              {(selectedVariant.contextWindow || family.contextWindow) && (
                 <div class="flex justify-between">
                   <span>Context window</span>
-                  <span class="font-medium text-[var(--text-secondary)]">{formatContext(family.contextWindow)} tokens</span>
+                  <span class="font-medium text-[var(--text-secondary)]">{formatContext(selectedVariant.contextWindow || family.contextWindow!)} tokens</span>
                 </div>
               )}
               <div class="flex justify-between">

@@ -37,6 +37,9 @@ export interface ModelVariant {
   // format is catalog data, not a refactor.
   size: number;            // GGUF download size in GB
   minRAM: number;          // Minimum RAM required in GB
+  /** Context window when it differs from the family's (e.g. Gemma 4's
+   *  larger variants carry 256K while E2B/E4B are 128K). */
+  contextWindow?: number;
   downloadUrl: string;
   filename: string;
   quantization: string;    // e.g., "Q4_K_M"
@@ -224,7 +227,7 @@ export const VISION_PROJECTORS: CapabilityModel[] = [
       'Lets the Gemma 4 E2B model see images you attach — diagrams, screenshots, photos. The lighter option; needs the Gemma 4 E2B model downloaded.',
     filename: 'gemma-4-E2B-mmproj-F16.gguf',
     downloadUrl:
-      'https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/mmproj-F16.gguf',
+      'https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf/resolve/main/gemma-4-E2B-it-mmproj.gguf',
     size: 0.99, // ~986 MB
   },
   {
@@ -235,7 +238,7 @@ export const VISION_PROJECTORS: CapabilityModel[] = [
       'Lets the Gemma 4 E4B model see images you attach — diagrams, screenshots, photos. Needs the Gemma 4 E4B model downloaded.',
     filename: 'gemma-4-E4B-mmproj-F16.gguf',
     downloadUrl:
-      'https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/mmproj-F16.gguf',
+      'https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/main/gemma-4-E4B-it-mmproj.gguf',
     size: 0.99, // ~990 MB
   },
   {
@@ -344,45 +347,51 @@ export const modelFamilies: ModelFamily[] = [
     traits: ['new'],
     modality: { in: ['text', 'vision'], out: ['text'] },
     variants: [
+      // Google's official QAT q4_0 builds (bf16-like quality at q4 size) -
+      // these also carry Google's July 2026 refresh (tool-calling fixes,
+      // wider vision resolution) that never got a version bump.
       {
         parameterCount: 'E2B',
-        size: 3.1,
+        size: 3.4,
         minRAM: 8,
-        downloadUrl: 'https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf',
-        filename: 'gemma-4-E2B-it-Q4_K_M.gguf',
-        quantization: 'Q4_K_M'
+        downloadUrl: 'https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf/resolve/main/gemma-4-E2B_q4_0-it.gguf',
+        filename: 'gemma-4-E2B_q4_0-it.gguf',
+        quantization: 'Q4_0 (QAT)'
       },
       {
         parameterCount: 'E4B',
-        size: 5.0,
+        size: 5.2,
         minRAM: 16,
-        downloadUrl: 'https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf',
-        filename: 'gemma-4-E4B-it-Q4_K_M.gguf',
-        quantization: 'Q4_K_M'
+        downloadUrl: 'https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/main/gemma-4-E4B_q4_0-it.gguf',
+        filename: 'gemma-4-E4B_q4_0-it.gguf',
+        quantization: 'Q4_0 (QAT)'
       },
       {
         parameterCount: '12B',
-        size: 7.1,
+        size: 7.0,
         minRAM: 16,
-        downloadUrl: 'https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-Q4_K_M.gguf',
-        filename: 'gemma-4-12b-it-Q4_K_M.gguf',
-        quantization: 'Q4_K_M'
+        contextWindow: 262144,
+        downloadUrl: 'https://huggingface.co/google/gemma-4-12B-it-qat-q4_0-gguf/resolve/main/gemma-4-12b-it-qat-q4_0.gguf',
+        filename: 'gemma-4-12b-it-qat-q4_0.gguf',
+        quantization: 'Q4_0 (QAT)'
       },
       {
         parameterCount: '26B-A4B (MoE)',
-        size: 16.9,
+        size: 14.5,
         minRAM: 32,
-        downloadUrl: 'https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/main/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf',
-        filename: 'gemma-4-26B-A4B-it-UD-Q4_K_M.gguf',
-        quantization: 'Q4_K_M'
+        contextWindow: 262144,
+        downloadUrl: 'https://huggingface.co/google/gemma-4-26B-A4B-it-qat-q4_0-gguf/resolve/main/gemma-4-26B_q4_0-it.gguf',
+        filename: 'gemma-4-26B_q4_0-it.gguf',
+        quantization: 'Q4_0 (QAT)'
       },
       {
         parameterCount: '31B',
-        size: 18.3,
+        size: 17.7,
         minRAM: 32,
-        downloadUrl: 'https://huggingface.co/unsloth/gemma-4-31B-it-GGUF/resolve/main/gemma-4-31B-it-Q4_K_M.gguf',
-        filename: 'gemma-4-31B-it-Q4_K_M.gguf',
-        quantization: 'Q4_K_M'
+        contextWindow: 262144,
+        downloadUrl: 'https://huggingface.co/google/gemma-4-31B-it-qat-q4_0-gguf/resolve/main/gemma-4-31B_q4_0-it.gguf',
+        filename: 'gemma-4-31B_q4_0-it.gguf',
+        quantization: 'Q4_0 (QAT)'
       }
     ]
   },
