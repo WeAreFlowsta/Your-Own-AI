@@ -289,7 +289,12 @@ pub async fn start_holochain(
             message: "Connecting to lair-keystore...".into(),
         },
     );
-    log::info!("Connecting to lair-keystore at {}", connection_url);
+    // Log the pipe address only - the URL's query string carries the
+    // connection token, and users share these logs with support.
+    log::info!(
+        "Connecting to lair-keystore at {}",
+        connection_url.split('?').next().unwrap_or("<unparseable>")
+    );
     let lair_client = match tokio::time::timeout(
         std::time::Duration::from_secs(30),
         lair::connect_to_lair(&connection_url, &passphrase),
