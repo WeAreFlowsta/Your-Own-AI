@@ -655,7 +655,9 @@ export const modelFamilies: ModelFamily[] = [
     description: 'Qwen 3.5 with safety guardrails removed. No content filtering or refusals.',
     category: 'specialist',
     recommended: false,
-    capabilities: ['writing', 'chat', 'agentic', 'coding', 'analysis'],
+    // NOT agentic: this build's template hard-rejects agent-shaped
+    // conversations (verified live) - the family name flatters it.
+    capabilities: ['writing', 'chat', 'analysis'],
     traits: ['uncensored'],
     variants: [
       {
