@@ -179,6 +179,42 @@ fn skip_value<R: Read + Seek>(r: &mut R, t: u32) -> std::io::Result<()> {
 
 /// Read the GGUF metadata of `path`. Errors on a non-GGUF / malformed file.
 pub fn read_meta(path: &std::path::Path) -> Result<GgufMeta, String> {
+    // Model files are immutable once downloaded, but their metadata blocks
+    // (which include multi-MB tokenizer arrays) were re-parsed on every
+    // call - and fit assessment reads every model several times per
+    // routing decision, which added up to ~25s per assess on a modest
+    // machine. Cache by (path, mtime, size); a re-download invalidates
+    // naturally.
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static META_CACHE: Mutex<Option<HashMap<(std::path::PathBuf, u64, u64), GgufMeta>>> =
+        Mutex::new(None);
+    let stat = std::fs::metadata(path).map_err(|e| format!("stat: {e}"))?;
+    let mtime = stat
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let key = (path.to_path_buf(), mtime, stat.len());
+    if let Some(hit) = META_CACHE
+        .lock()
+        .unwrap()
+        .get_or_insert_with(HashMap::new)
+        .get(&key)
+    {
+        return Ok(hit.clone());
+    }
+    let parsed = read_meta_uncached(path)?;
+    META_CACHE
+        .lock()
+        .unwrap()
+        .get_or_insert_with(HashMap::new)
+        .insert(key, parsed.clone());
+    Ok(parsed)
+}
+
+fn read_meta_uncached(path: &std::path::Path) -> Result<GgufMeta, String> {
     let f = File::open(path).map_err(|e| format!("open: {e}"))?;
     let mut r = BufReader::new(f);
 
