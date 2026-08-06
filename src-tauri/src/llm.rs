@@ -1930,6 +1930,13 @@ pub async fn is_model_downloaded(
  * Load a model for inference
  * Restarts llama-server with the specified model
  */
+/// Sentinel marking a chat-model load in flight. Written just before the
+/// load, removed the moment the attempt resolves either way - so the file
+/// existing at the NEXT load means the process died mid-load.
+fn load_sentinel_path(app_handle: &AppHandle) -> Option<std::path::PathBuf> {
+    Some(app_handle.path().app_data_dir().ok()?.join("model-load.pending"))
+}
+
 #[tauri::command]
 pub async fn load_model(
     app_handle: AppHandle,
@@ -1973,6 +1980,26 @@ pub async fn load_model(
         return Err("MODEL_TOO_LARGE".to_string());
     }
 
+    // Crash sentinel: if the process DIED mid-load of this same model (the
+    // OS out-of-memory killer leaves no error path - the sentinel file is
+    // the only witness), refuse the AUTOMATIC reload instead of crash-
+    // looping until the user hunts down the model files on disk. Explicit
+    // loads (user picked it again) proceed and get a fresh attempt.
+    let sentinel = load_sentinel_path(&app_handle);
+    if reason == "page-ensure" {
+        if let Some(p) = &sentinel {
+            if let Ok(prev) = std::fs::read_to_string(p) {
+                if prev.trim() == filename {
+                    log::warn!(
+                        "[LLM] '{}' was mid-load when the app last stopped — not reloading automatically",
+                        filename
+                    );
+                    return Err("MODEL_LOAD_CRASHED_LAST_RUN".to_string());
+                }
+            }
+        }
+    }
+
     println!("[LLM] Loading model: {}", filename);
 
     // Stop existing server if running
@@ -2000,9 +2027,17 @@ pub async fn load_model(
     // Reset running flag so start_llama_server doesn't skip
     *state.is_server_running.lock().await = false;
 
-    // Start server with the model
-    start_llama_server(app_handle, state.clone(), Some(filename.clone()), with_vision).await?;
-    
+    // Start server with the model - the sentinel is armed only around the
+    // load itself, and cleared on every outcome the process survives.
+    if let Some(p) = &sentinel {
+        let _ = std::fs::write(p, &filename);
+    }
+    let started = start_llama_server(app_handle, state.clone(), Some(filename.clone()), with_vision).await;
+    if let Some(p) = &sentinel {
+        let _ = std::fs::remove_file(p);
+    }
+    started?;
+
     // Store the current model filename
     *state.current_model.lock().await = Some(filename.clone());
     
