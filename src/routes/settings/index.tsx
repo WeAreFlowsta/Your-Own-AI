@@ -886,7 +886,7 @@ export default component$(() => {
                     <OnlineModelPicker
                       label="Agent work on projects"
                       hint="The online model that drives tools in project work - only capable ones are listed"
-                      recommended="Kimi K2.6"
+                      recommended="GPT-5.6 Sol"
                       storageKey="routingOnlineAgent"
                       selected={onlineAgent}
                       models={onlineAgentModels}
@@ -894,7 +894,7 @@ export default component$(() => {
                     <OnlineModelPicker
                       label="Planning and helper agents"
                       hint="The online model for the subagents that explore and plan - reasoning-lean, still tool-capable"
-                      recommended="GPT-5.6 Terra"
+                      recommended="GPT-5.6 Sol"
                       selected={onlinePlanning}
                       storageKey="routingOnlinePlanning"
                       models={onlineAgentModels}

@@ -31,6 +31,40 @@ export const ProjectMemoryContext = createContextId<Signal<string | null>>(
 export default component$(() => {
   const theme = useSignal<AppTheme>("dark");
 
+  // Routing picks predating the Settings store-mirror live only in
+  // localStorage, which HTTP-path routing (agent sessions) can't see.
+  // Mirror them into the tauri store once per launch so old picks apply
+  // everywhere. Best-effort; the Settings page keeps both in sync from
+  // here on.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(() => {
+    (async () => {
+      try {
+        const { Store } = await import("@tauri-apps/plugin-store");
+        const store = await Store.load("settings.json");
+        let dirty = false;
+        for (const key of [
+          "routingOnlineAgent",
+          "routingOnlinePlanning",
+          "routingOnlineHardCode",
+          "routingOnlineHardGeneral",
+          "routingOnlineFresh",
+          "routingProjectThrifty",
+          "routingProjectDeviceSubagents",
+        ]) {
+          const local = localStorage.getItem(key);
+          if (local !== null && (await store.get(key)) == null) {
+            await store.set(key, local);
+            dirty = true;
+          }
+        }
+        if (dirty) await store.save();
+      } catch {
+        /* store unavailable - picks stay webview-only */
+      }
+    })();
+  });
+
   // Load saved theme from localStorage on mount + dismiss loading overlay + global liquid metal hover
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(({ cleanup }) => {

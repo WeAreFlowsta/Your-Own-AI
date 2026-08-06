@@ -422,11 +422,13 @@ pub struct OnlinePicks {
 const DEFAULT_FRESH: &str = "online:grok-4.5-search";
 const DEFAULT_HARD_CODE: &str = "online:gpt-5.6-sol";
 const DEFAULT_HARD_GENERAL: &str = "online:gpt-5.6-terra";
-/// The agent slot: must be a PROVEN tool-driver through the proxy (kimi -
-/// verified end to end; Sol drops tools until Responses passthrough).
-const DEFAULT_AGENT: &str = "online:kimi-k2.6";
+/// The agent slot: the strongest proven tool-driver. Sol runs tools
+/// through the Responses passthrough (forced-tool calls measured ~1.7s
+/// with zero reasoning tokens on simple steps - it scales thinking to
+/// the step), so the flagship drives projects by default.
+const DEFAULT_AGENT: &str = "online:gpt-5.6-sol";
 /// Planning leans reasoning; must still drive tools (planners read files).
-const DEFAULT_PLAN: &str = "online:gpt-5.6-terra";
+const DEFAULT_PLAN: &str = "online:gpt-5.6-sol";
 
 /// Pick an online model for one routing decision. Order: the user's explicit
 /// choice for this slot (when still in the catalog) → the recommended default
