@@ -41,6 +41,10 @@ pub struct SystemInfo {
     pub os_version: String,
     pub gpu_name: Option<String>,
     pub total_vram_gb: Option<f64>,
+    /// True when the GPU shares system RAM (Intel/AMD integrated). Apple
+    /// Silicon's unified memory is deliberately NOT flagged - Metal is fast
+    /// there and its budget above is already a conservative slice.
+    pub gpu_integrated: bool,
 }
 
 pub struct LLMState {
@@ -1501,7 +1505,12 @@ pub fn get_system_info() -> Result<SystemInfo, String> {
     );
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     let (gpu_name, total_vram_gb) = get_gpu_info();
-    
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    let gpu_integrated = false;
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    let gpu_integrated = gpu_name.as_deref().map(is_integrated_gpu).unwrap_or(false);
+
     Ok(SystemInfo {
         total_memory_gb,
         used_memory_gb,
@@ -1510,6 +1519,7 @@ pub fn get_system_info() -> Result<SystemInfo, String> {
         os_version: System::os_version().unwrap_or_else(|| "Unknown".to_string()),
         gpu_name,
         total_vram_gb,
+        gpu_integrated,
     })
 }
 

@@ -802,18 +802,22 @@ export function getModality(family: ModelFamily): { in: Modality[]; out: Modalit
 export function getBestVariantForSystem(
   family: ModelFamily,
   totalRAM: number,
-  totalVRAM: number | null
+  totalVRAM: number | null,
+  freeRamGb?: number | null
 ): ModelVariant | null {
   const suitable = family.variants.filter(
-    v => getRunMode(v, totalRAM, totalVRAM) !== 'too-big',
+    v => getRunMode(v, totalRAM, totalVRAM, freeRamGb) !== 'too-big',
   );
   if (suitable.length === 0) return null;
 
-  // Prefer the largest variant that runs on the GPU (fast); otherwise the largest
-  // that runs on the CPU — so we recommend speed whenever the card allows it.
-  const onGpu = suitable.filter(v => getRunMode(v, totalRAM, totalVRAM) === 'gpu');
-  const pool = onGpu.length ? onGpu : suitable;
-  return pool.sort((a, b) => b.size - a.size)[0];
+  // Prefer the largest variant that runs on the GPU (fast). On CPU, biggest
+  // is NOT best - tokens/sec falls with size - so prefer the largest
+  // fast-class (≤5GB) variant and only exceed it when nothing smaller exists.
+  const onGpu = suitable.filter(v => getRunMode(v, totalRAM, totalVRAM, freeRamGb) === 'gpu');
+  if (onGpu.length) return onGpu.sort((a, b) => b.size - a.size)[0];
+  const fast = suitable.filter(v => v.size <= 5);
+  if (fast.length) return fast.sort((a, b) => b.size - a.size)[0];
+  return suitable.sort((a, b) => a.size - b.size)[0];
 }
 
 /** RAM to leave for the OS, this app, and everything else when sizing a
@@ -852,27 +856,40 @@ export function formatContext(tokens: number): string {
   return String(tokens);
 }
 
+/** CPU-run size budget. Sized from total RAM minus the OS reserve - and,
+ *  when the caller knows how much RAM is actually FREE right now, clamped
+ *  to that too (minus headroom for the KV cache and whatever the user has
+ *  open staying open). Totals alone recommended a 7.1GB model to a machine
+ *  with half its 16GB already in use; the load then OOM-killed the app. */
+function cpuBudgetGb(totalRAM: number, freeRamGb?: number | null): number {
+  const fromTotal = totalRAM - reservedRamGb(totalRAM);
+  if (freeRamGb == null) return fromTotal;
+  return Math.min(fromTotal, Math.max(1, freeRamGb - 1.5));
+}
+
 export function getRunMode(
   variant: ModelVariant,
   totalRAM: number,
   totalVRAM: number | null,
+  freeRamGb?: number | null,
 ): RunMode {
   // With a GPU, a model runs on it or not at all — we don't fall back to a slow
   // CPU run (a too-large model is flagged so, not crawled). Without a discrete GPU,
-  // the CPU is the only path, so RAM is what matters.
+  // the CPU is the only path, so RAM is what matters. Integrated GPUs share
+  // system RAM - callers pass totalVRAM = null for them so they size as CPU.
   if (totalVRAM && totalVRAM > 0) {
     return estimateVramGb(variant.size) <= totalVRAM ? 'gpu' : 'too-big';
   }
-  return totalRAM >= variant.size * 1.2 + reservedRamGb(totalRAM) ? 'cpu' : 'too-big';
+  return variant.size * 1.2 <= cpuBudgetGb(totalRAM, freeRamGb) ? 'cpu' : 'too-big';
 }
 
 /**
  * Get the best model family for user's system
  */
-export function getBestFamilyForRAM(totalRAM: number, totalVRAM: number | null): ModelFamily | undefined {
+export function getBestFamilyForRAM(totalRAM: number, totalVRAM: number | null, freeRamGb?: number | null): ModelFamily | undefined {
   // Get families that have at least one suitable variant
   const suitableFamilies = modelFamilies.filter(family => {
-    return getBestVariantForSystem(family, totalRAM, totalVRAM) !== null;
+    return getBestVariantForSystem(family, totalRAM, totalVRAM, freeRamGb) !== null;
   });
 
   // Filter to recommended families
@@ -882,8 +899,8 @@ export function getBestFamilyForRAM(totalRAM: number, totalVRAM: number | null):
 
   // Return the family with the largest variant they can run
   return recommended.sort((a, b) => {
-    const aVariant = getBestVariantForSystem(a, totalRAM, totalVRAM);
-    const bVariant = getBestVariantForSystem(b, totalRAM, totalVRAM);
+    const aVariant = getBestVariantForSystem(a, totalRAM, totalVRAM, freeRamGb);
+    const bVariant = getBestVariantForSystem(b, totalRAM, totalVRAM, freeRamGb);
     return (bVariant?.size || 0) - (aVariant?.size || 0);
   })[0];
 }
@@ -898,16 +915,16 @@ export function getModelFamilyById(id: string): ModelFamily | undefined {
 /**
  * Check if a variant is suitable for the system
  */
-export function isVariantSuitable(variant: ModelVariant, totalRAM: number, totalVRAM: number | null): boolean {
-  return getRunMode(variant, totalRAM, totalVRAM) !== 'too-big';
+export function isVariantSuitable(variant: ModelVariant, totalRAM: number, totalVRAM: number | null, freeRamGb?: number | null): boolean {
+  return getRunMode(variant, totalRAM, totalVRAM, freeRamGb) !== 'too-big';
 }
 
 /**
  * Can this system run ANY variant of the family? Used to sort runnable models
  * first and to power the "show only models I can run" filter.
  */
-export function isFamilyRunnable(family: ModelFamily, totalRAM: number, totalVRAM: number | null): boolean {
-  return family.variants.some(v => isVariantSuitable(v, totalRAM, totalVRAM));
+export function isFamilyRunnable(family: ModelFamily, totalRAM: number, totalVRAM: number | null, freeRamGb?: number | null): boolean {
+  return family.variants.some(v => isVariantSuitable(v, totalRAM, totalVRAM, freeRamGb));
 }
 
 /**

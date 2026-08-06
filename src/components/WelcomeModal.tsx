@@ -42,7 +42,9 @@ interface WelcomeModalProps {
  */
 function getRecommendedModel(systemInfo: SystemInfo | null): RecommendedModel {
   const totalRAM = systemInfo?.total_memory_gb || 4;
-  const totalVRAM = systemInfo?.total_vram_gb || null;
+  // Integrated graphics share system RAM - recommend as CPU, not as a card.
+  const totalVRAM = systemInfo?.gpu_integrated ? null : (systemInfo?.total_vram_gb || null);
+  const freeRAM = systemInfo ? Math.max(1, systemInfo.total_memory_gb - systemInfo.used_memory_gb) : null;
   const hasGPU = !!systemInfo?.gpu_name && (totalVRAM || 0) > 0;
   const gpuName = systemInfo?.gpu_name || 'GPU';
 
@@ -87,16 +89,18 @@ function getRecommendedModel(systemInfo: SystemInfo | null): RecommendedModel {
 
   // No GPU or nothing fits in VRAM — find best model for CPU
   // Pick the largest model from recommended families that fits in RAM with overhead
-  const bestFamily = getBestFamilyForRAM(totalRAM, null); // null VRAM = CPU-only calc
+  const bestFamily = getBestFamilyForRAM(totalRAM, null, freeRAM); // null VRAM = CPU-only calc
 
   if (bestFamily) {
-    const bestVariant = getBestVariantForSystem(bestFamily, totalRAM, null);
+    const bestVariant = getBestVariantForSystem(bestFamily, totalRAM, null, freeRAM);
     if (bestVariant) {
       return {
         familyId: bestFamily.id,
         familyName: bestFamily.name,
         variant: bestVariant,
-        reason: `With ${totalRAM.toFixed(0)}GB RAM, ${bestFamily.name} ${bestVariant.parameterCount} is optimised for your system — fast and efficient on CPU!`,
+        reason: systemInfo?.gpu_integrated
+          ? `Your graphics share system memory, so compact models are the quick ones here — ${bestFamily.name} ${bestVariant.parameterCount} runs nimbly and leaves room for everything else.`
+          : `With ${totalRAM.toFixed(0)}GB RAM, ${bestFamily.name} ${bestVariant.parameterCount} is optimized for your system — fast and efficient on CPU!`,
         hasGPU: false,
       };
     }

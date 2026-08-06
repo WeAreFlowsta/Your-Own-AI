@@ -73,6 +73,8 @@ interface ActiveDownload {
 const ACTIVE_DOWNLOAD_KEY = 'activeModelDownload';
 
 export interface SystemInfo {
+  /** True when the GPU shares system RAM (Intel/AMD integrated) - sized as CPU. */
+  gpu_integrated?: boolean;
   total_memory_gb: number;
   used_memory_gb: number;
   cpu_count: number;
@@ -156,11 +158,13 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(() => {
     const totalRAM = systemInfo?.total_memory_gb || 8;
-    const totalVRAM = systemInfo?.total_vram_gb || null;
+    // Integrated graphics share system RAM - size them as CPU, not as a card.
+    const totalVRAM = systemInfo?.gpu_integrated ? null : (systemInfo?.total_vram_gb || null);
+    const freeRAM = systemInfo ? Math.max(1, systemInfo.total_memory_gb - systemInfo.used_memory_gb) : null;
 
     const initialVariants: Record<string, ModelVariant> = {};
     modelFamilies.forEach((family) => {
-      const bestVariant = getBestVariantForSystem(family, totalRAM, totalVRAM);
+      const bestVariant = getBestVariantForSystem(family, totalRAM, totalVRAM, freeRAM);
       if (bestVariant) {
         initialVariants[family.id] = bestVariant;
       } else if (family.variants.length > 0) {
@@ -529,7 +533,9 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
   });
 
   const totalRAM = systemInfo?.total_memory_gb || 8;
-  const totalVRAM = systemInfo?.total_vram_gb || null;
+  // Integrated graphics share system RAM - size them as CPU, not as a card.
+  const totalVRAM = systemInfo?.gpu_integrated ? null : (systemInfo?.total_vram_gb || null);
+  const freeRAM = systemInfo ? Math.max(1, systemInfo.total_memory_gb - systemInfo.used_memory_gb) : null;
   const downloadedFilenames = new Set(store.downloadedModels.map((m) => m.name));
   // Task filters — the capability axis users actually shop by ("what's it for").
   // Size is handled separately by the runnable / "needs more memory" split below,
@@ -553,9 +559,9 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
   // Prefers models that fit fully in VRAM (fastest), then largest suitable.
   const bestPick = (() => {
     const candidates = modelFamilies
-      .filter(f => f.recommended && getBestVariantForSystem(f, totalRAM, totalVRAM) !== null)
+      .filter(f => f.recommended && getBestVariantForSystem(f, totalRAM, totalVRAM, freeRAM) !== null)
       .map(f => {
-        const variant = getBestVariantForSystem(f, totalRAM, totalVRAM)!;
+        const variant = getBestVariantForSystem(f, totalRAM, totalVRAM, freeRAM)!;
         const gpu = getGPUStatus(variant, totalVRAM);
         return { family: f, variant, gpu };
       });
@@ -594,8 +600,8 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
   // Split into what this machine can run vs. what needs more memory. The latter
   // is grouped under a collapsible divider (in-place), not just greyed at the
   // bottom — so the action and its effect sit in the same spot.
-  const runnableFamilies = visibleFamilies.filter(f => isFamilyRunnable(f, totalRAM, totalVRAM));
-  const tooBigFamilies = visibleFamilies.filter(f => !isFamilyRunnable(f, totalRAM, totalVRAM));
+  const runnableFamilies = visibleFamilies.filter(f => isFamilyRunnable(f, totalRAM, totalVRAM, freeRAM));
+  const tooBigFamilies = visibleFamilies.filter(f => !isFamilyRunnable(f, totalRAM, totalVRAM, freeRAM));
 
 
   /** Render a single model card */
@@ -626,8 +632,8 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
 
     const isDownloaded = downloadedFilenames.has(selectedVariant.filename);
     const isDownloading = store.downloading === family.id;
-    const isSuitable = isVariantSuitable(selectedVariant, totalRAM, totalVRAM);
-    const runMode = getRunMode(selectedVariant, totalRAM, totalVRAM);
+    const isSuitable = isVariantSuitable(selectedVariant, totalRAM, totalVRAM, freeRAM);
+    const runMode = getRunMode(selectedVariant, totalRAM, totalVRAM, freeRAM);
     const isExpanded = store.expandedDetails[family.id];
 
     // "Best for you" only shows when the selected variant matches the recommended one
@@ -654,12 +660,22 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                 <span class="px-2 py-0.5 bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/40 text-[10px] rounded-full font-semibold whitespace-nowrap">
                   {totalVRAM && totalVRAM > 0
                     ? "Too big for your GPU"
-                    : `Needs ${selectedVariant.minRAM}GB RAM`}
+                    : systemInfo?.gpu_integrated
+                      ? "Too big for your memory"
+                      : `Needs ${selectedVariant.minRAM}GB RAM`}
                 </span>
               )}
               {isSuitable && runMode === 'gpu' && (
                 <span class="px-2 py-0.5 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/40 text-[10px] rounded-full font-semibold whitespace-nowrap">
                   Your GPU
+                </span>
+              )}
+              {isSuitable && runMode === 'cpu' && systemInfo?.gpu_integrated && (
+                <span
+                  title="Your graphics share system memory, so this model runs on the processor"
+                  class="px-2 py-0.5 bg-sky-500/15 text-sky-700 dark:text-sky-400 border border-sky-500/40 text-[10px] rounded-full font-semibold whitespace-nowrap"
+                >
+                  Integrated graphics
                 </span>
               )}
               {isBestPick && (
@@ -719,7 +735,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                       }} />
                       <ul class="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-2xl bg-[var(--bg-card)] py-1 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none text-sm">
                         {family.variants.map((variant, idx) => {
-                          const variantSuitable = isVariantSuitable(variant, totalRAM, totalVRAM);
+                          const variantSuitable = isVariantSuitable(variant, totalRAM, totalVRAM, freeRAM);
                           return (
                             <li
                               key={idx}
