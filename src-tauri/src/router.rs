@@ -878,12 +878,15 @@ async fn route_inner(
             agent_online_override().or_else(|| picks.agent.clone().or(type_pref))
         };
         let offline_task = if plan { "reasoning" } else { "code" };
+        let t0 = std::time::Instant::now();
         let offline = pick_offline(app, offline_task, lean, true).await.ok();
+        let t_offline = t0.elapsed().as_millis();
         // Agent sessions hammer their model for many steps - "might load"
         // is not good enough. Green = fully comfortable on this hardware;
         // anything less turns a whole session into load-timeouts and
         // crawl (a 4B distill got picked by capability and then timed out
         // on a small-GPU machine).
+        let tg = std::time::Instant::now();
         let offline_green = match &offline {
             Some(name) => crate::fit::assess(app)
                 .await
@@ -891,6 +894,7 @@ async fn route_inner(
                 .any(|f| f.name == *name && matches!(f.fit, crate::fit::Fit::Green)),
             None => false,
         };
+        let t_green = tg.elapsed().as_millis();
         if mode != "online-offline" {
             return offline
                 .map(|m| RouteResult {
@@ -928,7 +932,15 @@ async fn route_inner(
             }
             log::info!("[router] cost-saver set but no green-fit agent model - routing online");
         }
-        if let Ok(models) = crate::flowsta::list_online_models().await {
+        let t1 = std::time::Instant::now();
+        let models_res = crate::flowsta::list_online_models().await;
+        log::info!(
+            "[router] agent pick timings: offline {}ms, green-check {}ms, online-list {}ms",
+            t_offline,
+            t_green,
+            t1.elapsed().as_millis()
+        );
+        if let Ok(models) = models_res {
             if let Some(id) = select_online_agent(&models, agent_pref.as_deref()) {
                 // The ledger and on-chain provenance must say WHY this model:
                 // an accepted overload offer is the user's call, not routing's.
