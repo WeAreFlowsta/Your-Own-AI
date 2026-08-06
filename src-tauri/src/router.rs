@@ -1233,6 +1233,68 @@ mod tests {
         assert!(gen.by_task("general") > med.by_task("general"));
     }
 
+    /// Today's regression, immortalized: catalog ids are prefixed, prefs
+    /// and defaults arrive in either shape - every combination must match.
+    #[test]
+    fn agent_selection_matches_every_id_shape() {
+        let mut models = catalog();
+        models.push(om("kimi-k2.6", "Kimi K2.6", "value tool-driver", None));
+        models.push(om("kimi-k3", "Kimi K3", "flagship", None));
+        // No pref -> the Sol default, never the alphabetical fallback.
+        assert_eq!(select_online_agent(&models, None).unwrap(), "online:gpt-5.6-sol");
+        // Raw pref matches prefixed ids.
+        assert_eq!(
+            select_online_agent(&models, Some("kimi-k2.6")).unwrap(),
+            "online:kimi-k2.6"
+        );
+        // Prefixed pref matches too.
+        assert_eq!(
+            select_online_agent(&models, Some("online:kimi-k2.6")).unwrap(),
+            "online:kimi-k2.6"
+        );
+        // Unknown pref falls back to the default, not to silence.
+        assert_eq!(
+            select_online_agent(&models, Some("online:claude-nope")).unwrap(),
+            "online:gpt-5.6-sol"
+        );
+        // Default missing from the catalog -> capability fallback, which
+        // must never hand agents a tools-blind model (sonar scores 1).
+        let no_sol: Vec<_> = models
+            .iter()
+            .filter(|m| !m.id.contains("sol"))
+            .cloned()
+            .collect();
+        let fb = select_online_agent(&no_sol, None).unwrap();
+        assert!(!fb.contains("sonar"), "agents must never get a search-only model, got {fb}");
+    }
+
+    /// Balanced lean: a comfortable (green) model beats a smarter one that
+    /// barely loads - the ordering that chose a timing-out 4B over a green
+    /// small model on 4GB hardware.
+    #[test]
+    fn balanced_ordering_puts_fit_before_capability() {
+        use std::cmp::Ordering;
+        let green_modest = OfflineRank { cap: 5, tier: 2, params_b: 2.0 };
+        let yellow_smart = OfflineRank { cap: 8, tier: 1, params_b: 4.0 };
+        assert_eq!(
+            offline_ordering("balanced", green_modest, yellow_smart),
+            Ordering::Greater,
+            "balanced must prefer the green fit"
+        );
+        // Quality lean remains the explicit capability-chaser.
+        assert_eq!(
+            offline_ordering("quality", green_modest, yellow_smart),
+            Ordering::Less,
+            "quality lean still chases capability"
+        );
+        // Within a tier, capability decides on balanced.
+        let green_smart = OfflineRank { cap: 8, tier: 2, params_b: 4.0 };
+        assert_eq!(
+            offline_ordering("balanced", green_smart, green_modest),
+            Ordering::Greater
+        );
+    }
+
     #[test]
     fn select_online_defaults_per_slot() {
         let models = catalog();
@@ -1285,25 +1347,26 @@ mod tests {
     }
 
     #[test]
-    fn select_agent_default_is_the_tool_driver() {
+    fn select_agent_default_is_sol() {
+        // The flagship drives projects by default (Eric's call, 2026-08-06;
+        // measured fast on simple tool steps - it scales thinking to need).
         assert_eq!(
             select_online_agent(&agent_catalog(), None).unwrap(),
-            "online:kimi-k2.6"
+            "online:gpt-5.6-sol"
         );
     }
 
     #[test]
-    fn select_agent_pref_wins_including_sol() {
-        // Sol is agent-eligible now that the proxy passes tools through -
-        // an existing Sol preference applies with no other changes.
+    fn select_agent_pref_wins() {
+        // An explicit pick beats the default, in either id shape.
         assert_eq!(
-            select_online_agent(&agent_catalog(), Some("online:gpt-5.6-sol")).unwrap(),
-            "online:gpt-5.6-sol"
+            select_online_agent(&agent_catalog(), Some("online:kimi-k2.6")).unwrap(),
+            "online:kimi-k2.6"
         );
         // A pref no longer in the catalog is ignored → default applies.
         assert_eq!(
             select_online_agent(&agent_catalog(), Some("online:retired")).unwrap(),
-            "online:kimi-k2.6"
+            "online:gpt-5.6-sol"
         );
     }
 
@@ -1357,8 +1420,10 @@ mod tests {
         let green_small = c(5, 2, 8.0); // fits fully, decent
         let yellow_big = c(7, 1, 24.0); // stronger, spills to CPU
         assert_eq!(best("speed", green_small, yellow_big).params_b, 8.0);
-        // balanced and quality both take the stronger model
-        assert_eq!(best("balanced", green_small, yellow_big).params_b, 24.0);
+        // Balanced now sides with the comfortable fit too (partial offload
+        // picked by capability produced load timeouts on small hardware);
+        // quality remains the explicit capability-chaser.
+        assert_eq!(best("balanced", green_small, yellow_big).params_b, 8.0);
         assert_eq!(best("quality", green_small, yellow_big).params_b, 24.0);
     }
 
@@ -1389,10 +1454,11 @@ mod tests {
     }
 
     #[test]
-    fn capability_dominates_for_balanced_and_quality() {
+    fn capability_dominates_only_for_quality() {
         let strong_red_risk = c(9, 1, 30.0);
         let weak_green = c(4, 2, 3.0);
-        assert_eq!(best("balanced", strong_red_risk, weak_green).cap, 9);
+        // Balanced takes what runs comfortably; quality chases the brain.
+        assert_eq!(best("balanced", strong_red_risk, weak_green).cap, 4);
         assert_eq!(best("quality", strong_red_risk, weak_green).cap, 9);
     }
 

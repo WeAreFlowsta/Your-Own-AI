@@ -210,6 +210,7 @@ pub fn spawn(app: AppHandle) {
             .route("/v1/models", get(list_models))
             .route("/v1/chat/completions", post(chat_completions))
             .route("/mcp", post(mcp_post).get(mcp_get))
+            .route("/internal/route-preview", get(route_preview))
             .layer(axum::middleware::from_fn_with_state(app.clone(), lan_guard))
             .with_state(app);
 
@@ -355,6 +356,41 @@ async fn list_models(State(app): State<AppHandle>) -> Response {
         }
     }
     Json(json!({ "object": "list", "data": data })).into_response()
+}
+
+/// `GET /internal/route-preview` - the routing DECISION for a parameter
+/// combination, without loading or generating anything. Dev builds only:
+/// this exists for the routing test matrix (tools/route-matrix.mjs),
+/// which sweeps every mode x task x difficulty x eagerness x lean x role
+/// combination and asserts the invariants (offline never online, privacy
+/// never leaves, agents never get a tools-blind model...).
+async fn route_preview(
+    State(app): State<AppHandle>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if !cfg!(debug_assertions) {
+        return err(StatusCode::NOT_FOUND, "not found", "not_found");
+    }
+    let g = |k: &str, d: &str| q.get(k).cloned().unwrap_or_else(|| d.to_string());
+    let picks = crate::router::OnlinePicks::from_store(&app);
+    match crate::router::route(
+        &app,
+        &g("mode", "online-offline"),
+        &g("q", "hello"),
+        &g("eagerness", "balanced"),
+        &g("task", "general"),
+        &g("difficulty", "easy"),
+        &g("lean", "balanced"),
+        &picks,
+        None,
+        g("agent", "0") == "1",
+        g("plan", "0") == "1",
+    )
+    .await
+    {
+        Ok(r) => Json(json!({ "model": r.model, "reason": r.reason })).into_response(),
+        Err(e) => Json(json!({ "error": e })).into_response(),
+    }
 }
 
 /// `POST /v1/chat/completions` — resolve the AI, ensure its model is loaded,
