@@ -852,6 +852,18 @@ async fn route_inner(
         };
         let offline_task = if plan { "reasoning" } else { "code" };
         let offline = pick_offline(app, offline_task, lean, true).await.ok();
+        // Agent sessions hammer their model for many steps - "might load"
+        // is not good enough. Green = fully comfortable on this hardware;
+        // anything less turns a whole session into load-timeouts and
+        // crawl (a 4B distill got picked by capability and then timed out
+        // on a small-GPU machine).
+        let offline_green = match &offline {
+            Some(name) => crate::fit::assess(app)
+                .await
+                .iter()
+                .any(|f| f.name == *name && matches!(f.fit, crate::fit::Fit::Green)),
+            None => false,
+        };
         if mode != "online-offline" {
             return offline
                 .map(|m| RouteResult {
@@ -863,23 +875,31 @@ async fn route_inner(
                 });
         }
         if eagerness == "privacy" {
-            if let Some(m) = offline.clone() {
+            // Privacy never silently goes online - but a model that cannot
+            // truly run here would only produce timeouts, so refuse plainly.
+            if let Some(m) = offline.clone().filter(|_| offline_green) {
                 return Ok(RouteResult {
                     model: m,
                     reason: "agent work kept on your device (privacy-first)".to_string(),
                 });
             }
+            return Err(
+                "No local model runs comfortably enough for private agent work on this hardware - download a smaller agentic model, or allow online for projects".to_string(),
+            );
         }
         // The cost-saver setting: whole project sessions stay on the device
-        // whenever a capable model fits - slower, free, private. A setting,
-        // not a default; documented in the routing explainer.
+        // whenever a capable model runs COMFORTABLY (green fit - the same
+        // bar as device workers). A setting, not a default; documented in
+        // the routing explainer. When the bar isn't met, fall through to
+        // online rather than fail the session.
         if store_pref(app, "routingProjectThrifty").as_deref() == Some("1") {
-            if let Some(m) = offline.clone() {
+            if let Some(m) = offline.clone().filter(|_| offline_green) {
                 return Ok(RouteResult {
                     model: m,
                     reason: "project work on your device (your cost-saver setting)".to_string(),
                 });
             }
+            log::info!("[router] cost-saver set but no green-fit agent model - routing online");
         }
         if let Ok(models) = crate::flowsta::list_online_models().await {
             if let Some(id) = select_online_agent(&models, agent_pref.as_deref()) {

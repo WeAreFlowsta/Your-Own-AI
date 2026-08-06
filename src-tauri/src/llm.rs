@@ -927,6 +927,14 @@ pub async fn start_llama_server(
             }
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
+        // Too slow to come up on this hardware - remember for the session
+        // (same memo as OOM, cleared on restart) so routing and retries
+        // don't burn the full timeout window on it again and again.
+        if let Some(ref name) = loading_name {
+            if let Ok(mut set) = too_big_set().lock() {
+                set.insert(name.clone());
+            }
+        }
         return Err("MODEL_LOAD_TIMEOUT".to_string());
     }
 
