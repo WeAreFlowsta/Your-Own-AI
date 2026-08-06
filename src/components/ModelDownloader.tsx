@@ -1101,8 +1101,9 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
           Available Offline Models
         </h2>
 
-        {/* Task filters + sort control */}
-        <div class="flex items-center justify-between gap-4 mb-6 sticky top-0 z-[5] bg-[var(--bg-main)] pt-2 -mt-2">
+        {/* Task filters + sort control. flex-wrap: below ~900px the sort
+            control drops to its own line instead of crowding the tab strip. */}
+        <div class="flex flex-wrap items-center justify-between gap-4 mb-6 sticky top-0 z-[5] bg-[var(--bg-main)] pt-2 -mt-2">
           <div class="flex gap-1 overflow-x-auto pb-1">
           {([
             { key: 'all' as const, label: 'All' },
