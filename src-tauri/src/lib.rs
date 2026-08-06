@@ -614,6 +614,12 @@ pub fn run() {
         .setup(|app| {
             // Surface which online-model endpoint is in use (prod vs a dev
             // override) so it's obvious at a glance in dev logs.
+            log::info!(
+                "Your Own AI {} starting ({} {})",
+                env!("CARGO_PKG_VERSION"),
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            );
             log::info!("[flowsta] online-model proxy: {}", flowsta::proxy_url());
 
             // Keep that proxy warm for signed-in users (cold start ≈ 3.5s).
