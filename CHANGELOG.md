@@ -5,22 +5,6 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 
 ## [0.2.0] - 2026-08-06
 
-Everything from 0.2.0-beta.1, plus:
-
-### Added
-- **Only one copy of the app runs at a time** - launching it again
-  focuses the open window instead of starting a second instance that
-  would fight the first over your models and graphics memory.
-- Older log files are kept when the log rotates, so a problem's
-  history survives an app restart.
-
-### Changed
-- The Your AIs card buttons share one size and style, and every
-  project-readiness notice now says exactly what to look for offline:
-  a model marked "Agentic" on the Offline Models page.
-
-## [0.2.0-beta.1] - 2026-08-06
-
 ### Changed
 - **Projects are dramatically faster.** Model metadata is now cached
   instead of re-read on every step - agent steps that took close to a
@@ -41,8 +25,10 @@ Everything from 0.2.0-beta.1, plus:
   refresh (better tool use, wider vision); the larger variants now
   show their true 256K context. Existing Gemma downloads keep working -
   re-download to get the refresh.
-- The app opens at a roomier default size, and the Your AIs cards say
-  "Edit" where before there was only an icon.
+- The app opens at a roomier default size, the Your AIs cards say
+  "Edit" where before there was only an icon, and every
+  project-readiness notice says exactly what to look for offline: a
+  model marked "Agentic" on the Offline Models page.
 
 ### Added
 - **See your plan usage in Settings** - spend against your monthly
@@ -55,6 +41,11 @@ Everything from 0.2.0-beta.1, plus:
   with an offline-only AI now tells you up front if no downloaded
   model can drive project work, or if the capable one won't fit
   comfortably on your hardware.
+- **Only one copy of the app runs at a time** - launching it again
+  focuses the open window instead of starting a second instance that
+  would fight the first over your models and graphics memory.
+- Older log files are kept when the log rotates, so a problem's
+  history survives an app restart.
 
 ### Fixed
 - **Editing your selected AI now applies immediately.** Before, an
