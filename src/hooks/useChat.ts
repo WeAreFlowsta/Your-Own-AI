@@ -662,6 +662,12 @@ export function useChat(props: UseChatProps) {
             abortWith(
               `${selectedAi.label}'s model is too large for your graphics card. Pick a smaller model on the Offline Models page (look for the "Your GPU" badge).`
             );
+          } else if (errorMessage.includes("MODEL_LOAD_TIMEOUT")) {
+            props.currentModel.value = preferredModel;
+            props.modelTooBig.value = true;
+            abortWith(
+              `${selectedAi.label}'s model took too long to load on this hardware, so the attempt was stopped. It won't be retried this session - a smaller model will load quickly (look for the "Your GPU" badge on the Offline Models page).`
+            );
           } else if (errorMessage.includes("MODEL_FILE_UNREADABLE")) {
             props.currentModel.value = preferredModel;
             props.modelTooBig.value = true;

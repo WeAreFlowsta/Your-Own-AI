@@ -296,10 +296,14 @@ fn offline_ordering(lean: &str, a: OfflineRank, b: OfflineRank) -> std::cmp::Ord
             .cmp(&b.cap)
             .then(a.params_b.partial_cmp(&b.params_b).unwrap_or(Equal))
             .then(a.tier.cmp(&b.tier)),
+        // Balanced: a model that runs COMFORTABLY beats a smarter one that
+        // barely loads - on small hardware cap-first systematically chose
+        // partial-offload models that crawled or timed out at load. Within
+        // a tier, capability decides; size breaks ties upward (quality).
         _ => a
-            .cap
-            .cmp(&b.cap)
-            .then(a.tier.cmp(&b.tier))
+            .tier
+            .cmp(&b.tier)
+            .then(a.cap.cmp(&b.cap))
             .then(a.params_b.partial_cmp(&b.params_b).unwrap_or(Equal)),
     }
 }
