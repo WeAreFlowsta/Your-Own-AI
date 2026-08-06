@@ -541,6 +541,7 @@ export default component$(() => {
                   <div class="px-5 py-3 mt-auto">
                     <div class="flex justify-between items-center">
                       <LiquidMetalButton
+                        variant="secondary"
                         onClick$={() => {
                           sessionStorage.setItem("memory-ai-id", ai.id);
                           sessionStorage.setItem("memory-agent-key", ai.agentPubKey || "");
