@@ -450,7 +450,7 @@ async fn chat_completions(
             Some("quality") => "quality",
             _ => "balanced",
         };
-        let picks = crate::router::OnlinePicks::default();
+        let picks = crate::router::OnlinePicks::from_store(&app);
         // Agent sessions route deterministically to a tool-capable model
         // (the flag is computed again below for prompt handling - cheap).
         let plan_routing = model.trim().ends_with(":plan");

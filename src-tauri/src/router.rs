@@ -419,6 +419,22 @@ pub struct OnlinePicks {
     pub plan: Option<String>,
 }
 
+impl OnlinePicks {
+    /// The user's Settings picks, read from the app store - for callers with
+    /// no webview in sight (the inference API, and through it every agent
+    /// session). Default::default() here silently discarded a user's chosen
+    /// agent model.
+    pub fn from_store(app: &AppHandle) -> Self {
+        Self {
+            fresh: store_pref(app, "routingOnlineFresh"),
+            hard_code: store_pref(app, "routingOnlineHardCode"),
+            hard_general: store_pref(app, "routingOnlineHardGeneral"),
+            agent: store_pref(app, "routingOnlineAgent"),
+            plan: store_pref(app, "routingOnlinePlanning"),
+        }
+    }
+}
+
 /// Recommended defaults per routing slot. Ids match the proxy catalog; if one
 /// is missing (the catalog moved on) selection falls back to the capability
 /// registry, so routing never breaks. The Settings page names these same
