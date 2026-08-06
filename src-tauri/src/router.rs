@@ -462,13 +462,17 @@ fn select_online(
     fresh: bool,
     pref: Option<&str>,
 ) -> Option<String> {
-    // Slot defaults are written "online:<id>"; catalog ids are raw. Strip
-    // the prefix before comparing - without this no default ever matched
-    // and the registry fallback silently drove every slot (the agent slot
-    // landed on the flagship kimi-k3 instead of the intended k2.6).
+    // Ids arrive in two shapes: list_online_models prefixes "online:",
+    // stored picks and slot defaults may carry it or not. Normalize BOTH
+    // sides - comparing a stripped needle against prefixed ids (or vice
+    // versa) silently kills every match and the alphabetical fallback
+    // takes over.
     let by_id = |id: &str| {
-        let raw = id.strip_prefix("online:").unwrap_or(id);
-        models.iter().find(|m| m.id == raw).map(|m| m.id.clone())
+        let want = id.strip_prefix("online:").unwrap_or(id);
+        models
+            .iter()
+            .find(|m| m.id.strip_prefix("online:").unwrap_or(&m.id) == want)
+            .map(|m| m.id.clone())
     };
     if let Some(hit) = pref.and_then(|p| by_id(p)) {
         return Some(hit);
@@ -522,8 +526,11 @@ fn select_online_agent(
     pref: Option<&str>,
 ) -> Option<String> {
     let by_id = |id: &str| {
-        let raw = id.strip_prefix("online:").unwrap_or(id);
-        models.iter().find(|m| m.id == raw).map(|m| m.id.clone())
+        let want = id.strip_prefix("online:").unwrap_or(id);
+        models
+            .iter()
+            .find(|m| m.id.strip_prefix("online:").unwrap_or(&m.id) == want)
+            .map(|m| m.id.clone())
     };
     if let Some(hit) = pref.and_then(|p| by_id(p)) {
         return Some(hit);
