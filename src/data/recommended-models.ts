@@ -227,7 +227,7 @@ export const VISION_PROJECTORS: CapabilityModel[] = [
       'Lets the Gemma 4 E2B model see images you attach — diagrams, screenshots, photos. The lighter option; needs the Gemma 4 E2B model downloaded.',
     filename: 'gemma-4-E2B-mmproj-F16.gguf',
     downloadUrl:
-      'https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf/resolve/main/gemma-4-E2B-it-mmproj.gguf',
+      'https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/mmproj-F16.gguf',
     size: 0.99, // ~986 MB
   },
   {
@@ -314,7 +314,7 @@ export const modelFamilies: ModelFamily[] = [
     description: 'Alibaba\'s latest. Top-tier coding, math, and reasoning. The 35B MoE runs fast for its size — only 3B parameters active per token.',
     category: 'quality',
     recommended: true,
-    capabilities: ['coding', 'math', 'reasoning', 'multilingual', 'chat'],
+    capabilities: ['coding', 'agentic', 'math', 'reasoning', 'multilingual', 'chat'],
     traits: ['new', 'moe'],
     variants: [
       {
@@ -350,13 +350,16 @@ export const modelFamilies: ModelFamily[] = [
       // Google's official QAT q4_0 builds (bf16-like quality at q4 size) -
       // these also carry Google's July 2026 refresh (tool-calling fixes,
       // wider vision resolution) that never got a version bump.
+      // E2B stays on unsloth's compact Q4_K_M (rebuilt 2026-07-17, carries
+      // the July refresh): the QAT build's extra ~0.25GB pushes it past
+      // 4GB cards - and small machines are E2B's entire audience.
       {
         parameterCount: 'E2B',
-        size: 3.4,
+        size: 3.1,
         minRAM: 8,
-        downloadUrl: 'https://huggingface.co/google/gemma-4-E2B-it-qat-q4_0-gguf/resolve/main/gemma-4-E2B_q4_0-it.gguf',
-        filename: 'gemma-4-E2B_q4_0-it.gguf',
-        quantization: 'Q4_0 (QAT)'
+        downloadUrl: 'https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf',
+        filename: 'gemma-4-E2B-it-Q4_K_M.gguf',
+        quantization: 'Q4_K_M'
       },
       {
         parameterCount: 'E4B',
@@ -615,7 +618,7 @@ export const modelFamilies: ModelFamily[] = [
     description: 'Qwen 3.5 distilled from Claude Opus reasoning traces. Enhanced chain-of-thought capabilities.',
     category: 'specialist',
     recommended: false,
-    capabilities: ['reasoning', 'analysis', 'writing'],
+    capabilities: ['reasoning', 'agentic', 'coding', 'analysis', 'writing'],
     traits: ['distilled', 'thinking'],
     variants: [
       {
@@ -652,7 +655,7 @@ export const modelFamilies: ModelFamily[] = [
     description: 'Qwen 3.5 with safety guardrails removed. No content filtering or refusals.',
     category: 'specialist',
     recommended: false,
-    capabilities: ['writing', 'chat', 'analysis'],
+    capabilities: ['writing', 'chat', 'agentic', 'coding', 'analysis'],
     traits: ['uncensored'],
     variants: [
       {
