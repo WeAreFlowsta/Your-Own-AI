@@ -486,8 +486,24 @@ pub fn run() {
             // at all). Accepted limitation — see apps/your-own-ai/building.md.
             .with_state_flags(tauri_plugin_window_state::StateFlags::all())
             .build())
+        // One instance only: two copies (e.g. a dev build beside the
+        // installed release - same identifier, same models, same GPU, same
+        // llama-server port) fight over everything; routing inside the
+        // second instance sees a machine already occupied and picks
+        // pathologically. A second launch focuses the existing window.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            use tauri::Manager;
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_log::Builder::new()
             .level(log::LevelFilter::Info)
+            // Keep rotated logs instead of discarding them - a support
+            // case's history must survive an app restart (a beta failure's
+            // log was lost to single-file rotation on 2026-08-06).
+            .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll)
+            .max_file_size(5_000_000)
             .build())
         .manage(LLMState::new())
         .manage(agent_bridge::AgentBridgeState::new())
