@@ -676,6 +676,20 @@ export default component$(() => {
         imageUrl: customThumb || archetypeThumb || "/generic-ai-placeholder.svg",
         aiConfig: target,
       };
+    } else {
+      // The selected AI still exists - but its CONFIG may have just been
+      // edited (model, mode, persona). Keeping the stale object meant an
+      // edit like "Auto - Offline Only" didn't apply to the open chat,
+      // which kept routing (online!) on the pre-edit mode. Refresh the
+      // live object whenever the stored config differs.
+      const fresh = options.find((opt) => opt.id === currentAi.id);
+      if (
+        fresh &&
+        JSON.stringify(fresh.aiConfig) !== JSON.stringify(currentAi.aiConfig)
+      ) {
+        console.log("[ChatPage] Refreshing selected AI after edit:", fresh.label);
+        selectedAi.value = fresh;
+      }
     }
   });
 
