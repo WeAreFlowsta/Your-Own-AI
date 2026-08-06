@@ -57,8 +57,11 @@ for (const mode of MODES)
               const online = String(r.model).startsWith("online:");
               if (online && (mode === "offline" || mode === "my-hardware"))
                 violations.push(`${label}: OFFLINE PROMISE BROKEN -> ${r.model} (${r.reason})`);
-              if (online && eag === "privacy")
-                violations.push(`${label}: PRIVACY PROMISE BROKEN -> ${r.model} (${r.reason})`);
+              // Privacy-first may still go online for GENUINE live-web
+              // needs (that's the mode's consent) - but never for hard-
+              // question escalation or anything else.
+              if (online && eag === "privacy" && !/current info|up-to-date/.test(r.reason))
+                violations.push(`${label}: PRIVACY DIAL IGNORED -> ${r.model} (${r.reason})`);
               if (online && qname === "health" && role.name === "chat")
                 violations.push(`${label}: HEALTH STAYED-HOME BROKEN -> ${r.model} (${r.reason})`);
               if (online && role.name !== "chat" && /sonar|search/.test(r.model))

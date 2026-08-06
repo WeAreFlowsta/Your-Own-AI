@@ -985,14 +985,26 @@ async fn route_inner(
         // (inherent to this mode; auto:offline is the never-online choice).
         // `is_fresh` = the query needs LIVE WEB (→ a search model), vs a
         // difficulty escalation (→ the best online model for the task).
-        let (why, is_fresh) = if looks_time_sensitive(query) {
+        // Privacy-first makes the dial mean what it says: online ONLY for
+        // genuine live-web needs. Keyword cues alone don't clear the bar -
+        // they must also pass the (stricter) semantic threshold - and hard
+        // questions stay home: a privacy-leaning user prefers a weaker
+        // local answer over sending the question out. (Found by the
+        // routing matrix: both paths ignored the dial entirely.)
+        let privacy = eagerness == "privacy";
+        let (why, is_fresh) = if looks_time_sensitive(query)
+            && (!privacy
+                || semantic_fresh_score(app, query, query_vec)
+                    .await
+                    .is_some_and(|s| s >= threshold_for(eagerness)))
+        {
             (Some("looks like it needs current info"), true)
         } else if semantic_fresh_score(app, query, query_vec)
             .await
             .is_some_and(|s| s >= threshold_for(eagerness))
         {
             (Some("seems to need up-to-date info"), true)
-        } else if difficulty == "hard" {
+        } else if difficulty == "hard" && !privacy {
             (Some("a hard question — using a stronger model"), false)
         } else {
             (None, false)
