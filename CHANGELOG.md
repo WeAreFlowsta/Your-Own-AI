@@ -3,6 +3,22 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.2.0] - 2026-08-06
+
+Everything from 0.2.0-beta.1, plus:
+
+### Added
+- **Only one copy of the app runs at a time** - launching it again
+  focuses the open window instead of starting a second instance that
+  would fight the first over your models and graphics memory.
+- Older log files are kept when the log rotates, so a problem's
+  history survives an app restart.
+
+### Changed
+- The Your AIs card buttons share one size and style, and every
+  project-readiness notice now says exactly what to look for offline:
+  a model marked "Agentic" on the Offline Models page.
+
 ## [0.2.0-beta.1] - 2026-08-06
 
 ### Changed
