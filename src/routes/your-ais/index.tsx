@@ -566,12 +566,12 @@ export default component$(() => {
                         variant="secondary"
                         onClick$={() => handleToggleAiStatus(ai)}
                         title={ai.status === "active" ? "Deactivate" : "Activate"}
-                        class="p-2"
+                        class="px-2.5 py-1.5 flex items-center rounded-full"
                       >
                         {ai.status === "active" ? (
-                          <LuPauseCircle class="w-[18px] h-[18px]" />
+                          <LuPauseCircle class="w-[16px] h-[16px]" />
                         ) : (
-                          <LuPlayCircle class="w-[18px] h-[18px]" />
+                          <LuPlayCircle class="w-[16px] h-[16px]" />
                         )}
                       </LiquidMetalButton>
                       <LiquidMetalButton
@@ -579,12 +579,12 @@ export default component$(() => {
                         onClick$={() => handleDeleteAiClick(ai)}
                         disabled={deletingAiId.value === ai.id}
                         title="Delete AI"
-                        class="p-2"
+                        class="px-2.5 py-1.5 flex items-center rounded-full"
                       >
                         {deletingAiId.value === ai.id ? (
-                          <div class="w-[18px] h-[18px] border-2 border-current border-t-transparent rounded-full animate-spin" />
+                          <div class="w-[16px] h-[16px] border-2 border-current border-t-transparent rounded-full animate-spin" />
                         ) : (
-                          <LuTrash2 class="w-[18px] h-[18px]" />
+                          <LuTrash2 class="w-[16px] h-[16px]" />
                         )}
                       </LiquidMetalButton>
                       </div>
