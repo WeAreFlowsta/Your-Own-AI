@@ -42,6 +42,7 @@ import {
   LuInfo,
   LuPauseCircle,
   LuPlayCircle,
+  LuCopy,
 } from '@qwikest/icons/lucide';
 import { getPausedModels, setModelPaused } from '../utils/modelPrefs';
 import { LiquidMetalBorder } from './LiquidMetalBorder';
@@ -78,6 +79,7 @@ export interface SystemInfo {
   total_memory_gb: number;
   used_memory_gb: number;
   cpu_count: number;
+  cpu_brand?: string;
   os_name: string;
   os_version: string;
   gpu_name: string | null;
@@ -124,6 +126,9 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
 
   const store = useStore({
     downloadedModels: [] as LocalModel[],
+    appVersion: '',
+    engineBackend: '',
+    systemInfoCopied: false,
     downloading: null as string | null,
     downloadProgress: null as DownloadProgress | null,
     /** Which file of the download is in flight: the model, or the vision
@@ -200,6 +205,49 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     loadModels();
     getModelsDir();
     store.pausedModels = [...getPausedModels()];
+    import('@tauri-apps/api/app').then(({ getVersion }) =>
+      getVersion().then((v) => (store.appVersion = v)).catch(() => {}),
+    );
+    invoke<{ installed: boolean; active_backend: 'bundled' | 'cuda' }>('engine_status')
+      .then((e) => {
+        store.engineBackend =
+          e.active_backend === 'cuda'
+            ? 'CUDA (downloaded engine)'
+            : 'Bundled (Vulkan / Metal)';
+      })
+      .catch(() => {});
+  });
+
+  /** Privacy-safe support snapshot: everything model-fit depends on, and
+   *  deliberately nothing personal - no folder paths (they contain the
+   *  account name), no identifiers of any kind. */
+  const copySystemInfo = $(async () => {
+    const lines = [
+      `Your Own AI ${store.appVersion || 'unknown version'}`,
+      `OS: ${systemInfo ? `${systemInfo.os_name} ${systemInfo.os_version}` : 'unknown'}`,
+      `CPU: ${systemInfo?.cpu_brand || 'unknown'} (${systemInfo?.cpu_count ?? '?'} cores)`,
+      `Memory: ${totalRAM.toFixed(1)}GB total${freeRAM !== null ? `, ${freeRAM.toFixed(1)}GB free` : ''}`,
+      `Graphics: ${
+        systemInfo?.gpu_name
+          ? systemInfo.gpu_integrated
+            ? `${systemInfo.gpu_name} (integrated, shares system memory)`
+            : `${systemInfo.gpu_name}${systemInfo.total_vram_gb ? ` (${systemInfo.total_vram_gb.toFixed(1)}GB VRAM)` : ''}`
+          : 'none detected'
+      }`,
+    ];
+    if (store.engineBackend) lines.push(`Engine: ${store.engineBackend}`);
+    lines.push(
+      `Downloaded models (${store.downloadedModels.length}): ${
+        store.downloadedModels.map((m) => m.name).join(', ') || 'none'
+      }`,
+    );
+    try {
+      await navigator.clipboard.writeText(lines.join('\n'));
+      store.systemInfoCopied = true;
+      setTimeout(() => (store.systemInfoCopied = false), 2000);
+    } catch {
+      /* clipboard unavailable */
+    }
   });
 
   // Pause/resume a downloaded model. Paused models stay on disk but are hidden
@@ -1168,30 +1216,77 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
         </LiquidMetalButton>
       </div>
 
-      {/* System Information */}
+      {/* System Information - everything model-fit depends on, plus a
+          privacy-safe copy for support (the models folder path stays OUT of
+          the copy: it contains the user's account name). */}
       <div class="mt-8 generic-container p-6 rounded-2xl">
-        <h3 class="font-semibold text-[var(--text-primary)] mb-3 text-base">
-          System Information
-        </h3>
+        <div class="mb-3 flex items-center justify-between gap-3">
+          <h3 class="font-semibold text-[var(--text-primary)] text-base">
+            System Information
+          </h3>
+          <button
+            onClick$={copySystemInfo}
+            title="Copy these details for support - your models folder path and account name are not included"
+            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:bg-[var(--bg-dropdown)] hover:text-[var(--text-primary)] transition-colors"
+          >
+            {store.systemInfoCopied ? (
+              <LuCheck class="w-3.5 h-3.5 text-emerald-500" />
+            ) : (
+              <LuCopy class="w-3.5 h-3.5" />
+            )}
+            {store.systemInfoCopied ? "Copied" : "Copy for support"}
+          </button>
+        </div>
         <div class="text-sm text-[var(--text-secondary)] space-y-2">
           <div class="flex items-center justify-between">
-            <span class="text-[var(--text-muted)]">System RAM:</span>
-            <span class="font-semibold">{totalRAM.toFixed(1)}GB</span>
+            <span class="text-[var(--text-muted)]">App version:</span>
+            <span class="font-semibold">{store.appVersion || "…"}</span>
           </div>
-          {systemInfo?.gpu_name && (
+          <div class="flex items-center justify-between">
+            <span class="text-[var(--text-muted)]">Operating system:</span>
+            <span class="font-semibold">
+              {systemInfo ? `${systemInfo.os_name} ${systemInfo.os_version}` : "…"}
+            </span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="text-[var(--text-muted)]">Processor:</span>
+            <span class="font-semibold">
+              {systemInfo?.cpu_brand || "Unknown"}
+              {systemInfo ? ` · ${systemInfo.cpu_count} cores` : ""}
+            </span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="text-[var(--text-muted)]">Memory:</span>
+            <span class="font-semibold">
+              {totalRAM.toFixed(1)}GB total
+              {freeRAM !== null ? ` · ${freeRAM.toFixed(1)}GB free now` : ""}
+            </span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="text-[var(--text-muted)]">Graphics:</span>
+            <span class="font-semibold">
+              {systemInfo?.gpu_name
+                ? systemInfo.gpu_integrated
+                  ? `${systemInfo.gpu_name} · integrated, shares system memory`
+                  : `${systemInfo.gpu_name}${systemInfo.total_vram_gb ? ` · ${systemInfo.total_vram_gb.toFixed(1)}GB VRAM` : ""}`
+                : "None detected · models run on the processor"}
+            </span>
+          </div>
+          {store.engineBackend && (
             <div class="flex items-center justify-between">
-              <span class="text-[var(--text-muted)]">GPU:</span>
-              <span class="font-semibold">{systemInfo.gpu_name}</span>
+              <span class="text-[var(--text-muted)]">Engine:</span>
+              <span class="font-semibold">{store.engineBackend}</span>
             </div>
           )}
-          {systemInfo?.total_vram_gb && (
-            <div class="flex items-center justify-between">
-              <span class="text-[var(--text-muted)]">VRAM:</span>
-              <span class="font-semibold">{systemInfo.total_vram_gb.toFixed(1)}GB</span>
-            </div>
-          )}
+          <div class="flex items-center justify-between">
+            <span class="text-[var(--text-muted)]">Downloaded models:</span>
+            <span class="font-semibold">{store.downloadedModels.length}</span>
+          </div>
           <div class="flex flex-col gap-1">
-            <span class="text-[var(--text-muted)]">Models Directory:</span>
+            <span class="text-[var(--text-muted)]">
+              Models directory
+              <span class="ml-1 text-[10px]">(shown here, never included in the copy)</span>
+            </span>
             <code class="text-xs bg-[var(--bg-dropdown)] px-2 py-1 rounded border border-[var(--border-subtle)] break-all">
               {store.modelsDirectory}
             </code>

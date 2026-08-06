@@ -37,6 +37,7 @@ pub struct SystemInfo {
     pub total_memory_gb: f64,
     pub used_memory_gb: f64,
     pub cpu_count: usize,
+    pub cpu_brand: String,
     pub os_name: String,
     pub os_version: String,
     pub gpu_name: Option<String>,
@@ -1515,6 +1516,11 @@ pub fn get_system_info() -> Result<SystemInfo, String> {
         total_memory_gb,
         used_memory_gb,
         cpu_count: sys.cpus().len(),
+        cpu_brand: sys
+            .cpus()
+            .first()
+            .map(|c| c.brand().trim().to_string())
+            .unwrap_or_default(),
         os_name: System::name().unwrap_or_else(|| "Unknown".to_string()),
         os_version: System::os_version().unwrap_or_else(|| "Unknown".to_string()),
         gpu_name,
