@@ -19,6 +19,16 @@ use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 use tokio::sync::Mutex;
 
+/// Milliseconds since the current agent process spawned (0 if unknown).
+fn startup_ms(app: &AppHandle) -> u128 {
+    app.state::<AgentBridgeState>()
+        .started_at
+        .lock()
+        .unwrap()
+        .map(|t| t.elapsed().as_millis())
+        .unwrap_or(0)
+}
+
 pub struct AgentBridgeState {
     child: Mutex<Option<CommandChild>>,
     session_id: Mutex<Option<String>>,
@@ -26,6 +36,9 @@ pub struct AgentBridgeState {
     /// page (not just the chat route) can render the workspace slot.
     folder: Mutex<Option<String>>,
     next_id: AtomicU64,
+    /// When the current agent process was spawned - startup-phase timing
+    /// for the "getting this project ready" window.
+    started_at: std::sync::Mutex<Option<std::time::Instant>>,
     /// Bumped on every spawn. A previous agent process dying AFTER its
     /// replacement started must neither clear the new process's state nor
     /// emit agent-exit - without this, reopening a folder raced the old
@@ -46,6 +59,7 @@ impl AgentBridgeState {
             session_id: Mutex::new(None),
             folder: Mutex::new(None),
             next_id: AtomicU64::new(1),
+            started_at: std::sync::Mutex::new(None),
             generation: AtomicU64::new(0),
         }
     }
@@ -256,6 +270,7 @@ pub async fn start_build_agent(
         .map_err(|e| format!("failed to start agent: {}", e))?;
 
     *state.child.lock().await = Some(child);
+    *state.started_at.lock().unwrap() = Some(std::time::Instant::now());
     *state.folder.lock().await = Some(cwd.clone());
     state.next_id.store(4, Ordering::SeqCst); // 1..=3 = handshake requests
 
@@ -371,6 +386,7 @@ async fn handle_agent_message(
                     ]
                 }])
             };
+            log::info!("[agent] initialized in {}ms - creating session", startup_ms(app));
             let request = json!({
                 "jsonrpc": "2.0",
                 "id": SESSION_NEW_ID,
@@ -390,6 +406,7 @@ async fn handle_agent_message(
                 .map(str::to_string);
             match session_id {
                 Some(sid) => {
+                    log::info!("[agent] session created in {}ms", startup_ms(app));
                     *state.session_id.lock().await = Some(sid.clone());
                     if let Some(model) = session_model {
                         // Select the conversation's AI; agent-ready follows
@@ -403,6 +420,7 @@ async fn handle_agent_message(
                         });
                         let _ = write_line(&state, &request).await;
                     } else {
+                        log::info!("[agent] ready in {}ms", startup_ms(app));
                         let _ = app.emit("agent-ready", json!({ "sessionId": sid }));
                     }
                 }
