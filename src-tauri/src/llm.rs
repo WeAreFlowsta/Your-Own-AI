@@ -1084,9 +1084,13 @@ async fn ensure_embedding_server(
         return Err(format!("Embedding model not downloaded: {}", model_filename));
     }
 
-    // bge-small-en-v1.5: CLS pooling, 512-token context. CPU-only (-ngl 0) to
-    // spare the chat GPU. NB: pooling + ctx are model-specific — swapping the
-    // embedding model (see EMBEDDING_MODEL) may require changing these.
+    // bge-small-en-v1.5: CLS pooling, 512-token context. CPU-only to spare
+    // the chat GPU. `--device none` and not just `-ngl 0`: with layers at 0
+    // the Vulkan backend still allocates a device compute buffer, which OOMs
+    // on a card the chat model has filled - and llama-server's OOM error
+    // path segfaults instead of exiting. NB: pooling + ctx are
+    // model-specific — swapping the embedding model (see EMBEDDING_MODEL)
+    // may require changing these.
     let args = vec![
         // Bare filename + models-dir working directory: absolute paths under
         // a non-ASCII user profile arrive mangled in llama-server's argv.
@@ -1102,6 +1106,8 @@ async fn ensure_embedding_server(
         "--ctx-size".to_string(),
         "512".to_string(),
         "--no-webui".to_string(),
+        "--device".to_string(),
+        "none".to_string(),
         "-ngl".to_string(),
         "0".to_string(),
     ];
@@ -1253,9 +1259,12 @@ async fn ensure_utility_server(
         return Err(format!("Utility model not downloaded: {}", model_filename));
     }
 
-    // Small generative model for extraction + classification. CPU-only (-ngl 0)
-    // to spare the chat GPU; reasoning off (these tasks don't reason); modest
-    // context fits the extraction prompt + one turn.
+    // Small generative model for extraction + classification. CPU-only to
+    // spare the chat GPU - `--device none` and not just `-ngl 0`, because
+    // the Vulkan backend still allocates a device compute buffer at zero
+    // layers, which OOMs on a card the chat model has filled and trips a
+    // segfault in llama-server's OOM error path. Reasoning off (these tasks
+    // don't reason); modest context fits the extraction prompt + one turn.
     let args = vec![
         // Bare filename + models-dir working directory (same rationale as
         // the chat and embedding servers).
@@ -1270,6 +1279,8 @@ async fn ensure_utility_server(
         "--reasoning".to_string(),
         "off".to_string(),
         "--no-webui".to_string(),
+        "--device".to_string(),
+        "none".to_string(),
         "-ngl".to_string(),
         "0".to_string(),
     ];
