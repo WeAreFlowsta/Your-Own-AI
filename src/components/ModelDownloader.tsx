@@ -1292,6 +1292,16 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
               {store.modelsDirectory}
             </code>
           </div>
+          <p class="pt-1 text-xs text-[var(--text-muted)]">
+            Something not working?{" "}
+            <a
+              href="/settings/#settings-diagnostics"
+              class="text-[var(--text-link)] hover:underline"
+            >
+              Save a diagnostic report in Settings
+            </a>
+            .
+          </p>
         </div>
       </div>
 

@@ -133,6 +133,7 @@ const SECTIONS = [
   { id: "settings-engines", label: "Engines" },
   { id: "settings-external", label: "External access" },
   { id: "settings-appearance", label: "Appearance" },
+  { id: "settings-diagnostics", label: "Help & diagnostics" },
   { id: "settings-reset", label: "Reset" },
 ];
 
@@ -468,6 +469,53 @@ export default component$(() => {
   // Factory reset — wipe local AIs/conversations/memory and restore defaults.
   const resetModalOpen = useSignal(false);
   const resetting = useSignal(false);
+
+  // Help & diagnostics
+  /** What this OS calls its crash evidence, for the section description. */
+  const crashRecordsName = useSignal("your system's crash records for this app");
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(() => {
+    const ua = navigator.userAgent;
+    crashRecordsName.value = ua.includes("Windows")
+      ? "Windows' crash records for this app"
+      : ua.includes("Mac")
+        ? "macOS's crash reports for this app"
+        : "your system's crash journal entries for this app";
+  });
+  const diagBusy = useSignal(false);
+  const diagSavedPath = useSignal("");
+  const diagError = useSignal("");
+
+  const saveDiagnostics = $(async () => {
+    diagError.value = "";
+    try {
+      const [{ save }, { invoke }] = await Promise.all([
+        import("@tauri-apps/plugin-dialog"),
+        import("@tauri-apps/api/core"),
+      ]);
+      const date = new Date().toISOString().slice(0, 10);
+      const path = await save({
+        defaultPath: `your-own-ai-diagnostics-${date}.txt`,
+        filters: [{ name: "Text file", extensions: ["txt"] }],
+      });
+      if (!path) return;
+      diagBusy.value = true;
+      diagSavedPath.value = await invoke<string>("export_diagnostics", { path });
+    } catch (e) {
+      diagError.value = String(e);
+    } finally {
+      diagBusy.value = false;
+    }
+  });
+
+  const revealDiagnostics = $(async () => {
+    try {
+      const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
+      await revealItemInDir(diagSavedPath.value);
+    } catch {
+      // Reveal is a convenience; the saved-path text remains the fallback.
+    }
+  });
   const doReset = $(async () => {
     resetting.value = true;
     try {
@@ -1008,6 +1056,52 @@ export default component$(() => {
                     </button>
                   </SettingToggle>
                 </div>
+              </section>
+
+              {/* Help & diagnostics */}
+              <section
+                id="settings-diagnostics"
+                class="scroll-mt-4 bg-[var(--bg-card)] rounded-2xl p-6 border border-[var(--border-subtle)]"
+              >
+                <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela mb-2">
+                  Help &amp; diagnostics
+                </h2>
+                <p class="text-sm text-[var(--text-secondary)] mb-4">
+                  <span class="font-semibold text-[var(--text-primary)]">
+                    Save diagnostic report
+                  </span>{" "}
+                  - bundles the app's own logs, your system details, and{" "}
+                  {crashRecordsName.value} into one readable text file. It never
+                  includes your conversations, memories, or keys - open it in
+                  any text editor and see exactly what you're sharing. Nothing
+                  is sent anywhere; you choose who gets the file.
+                </p>
+                <div class="flex flex-wrap items-center gap-3">
+                  <LiquidMetalButton
+                    onClick$={saveDiagnostics}
+                    class="px-4 py-2 text-sm"
+                  >
+                    {diagBusy.value ? "Gathering…" : "Save diagnostic report"}
+                  </LiquidMetalButton>
+                  {diagSavedPath.value && !diagBusy.value && (
+                    <button
+                      type="button"
+                      onClick$={revealDiagnostics}
+                      class="text-sm text-[var(--text-link)] hover:underline"
+                    >
+                      Show in folder
+                    </button>
+                  )}
+                </div>
+                {diagSavedPath.value && !diagBusy.value && (
+                  <p class="mt-3 text-xs text-[var(--text-muted)]">
+                    Saved to {diagSavedPath.value} - attach this file when
+                    asking for help.
+                  </p>
+                )}
+                {diagError.value && (
+                  <p class="mt-3 text-xs text-red-400">{diagError.value}</p>
+                )}
               </section>
 
               {/* Reset to defaults */}

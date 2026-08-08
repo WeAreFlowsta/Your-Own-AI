@@ -1,6 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod diagnostics;          // one-click diagnostic report (Settings > Help & diagnostics)
 mod llm;                  // llama-server module
 mod engine;               // optional inference engines (pinned tag; CUDA backend later)
 mod ocr;                  // OCR for scanned PDFs (pdfium render + ocrs)
@@ -610,6 +611,7 @@ pub fn run() {
             transcript_memory::save_transcript_embeddings,
             gpu_safety::gpu_safe_mode_status,
             gpu_safety::gpu_retry,
+            diagnostics::export_diagnostics,
         ])
         .setup(|app| {
             // Surface which online-model endpoint is in use (prod vs a dev
