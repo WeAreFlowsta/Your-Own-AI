@@ -321,27 +321,58 @@ fn crash_records() -> String {
     out
 }
 
+/// Only crash-shaped journal sources: kernel segfault/trap/oom lines,
+/// systemd-coredump entries, and the coredump list - each filtered to our
+/// process names. Grepping the whole journal for our names is wrong twice
+/// over: desktop apps mirror stdout into the journal (re-capturing the app
+/// log), and sudo records mentioning the installer carry the bare username.
 #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
 fn crash_records() -> String {
-    let pattern = "yourowai|your-own-ai|Your.Own.AI|Your Own AI|llama-server";
-    let out = std::process::Command::new("journalctl")
-        .args(["--since", "7 days ago", "--no-pager", "-q", "-g", pattern])
-        .output();
-    match out {
-        Ok(o) if o.status.success() => {
-            let text = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if text.is_empty() {
-                "no journal entries for this app in the last 7 days".to_string()
-            } else {
-                text
+    let mut found = Vec::new();
+    let queries: [(&str, &[&str]); 2] = [
+        (
+            "kernel",
+            // _TRANSPORT=kernel, NOT -k: -k means current-boot-only and
+            // silently misses every crash from before the last reboot.
+            &["_TRANSPORT=kernel", "--since", "7 days ago", "--no-pager", "-q", "-g", "segfault|traps|oom|out of memory"],
+        ),
+        (
+            "systemd-coredump",
+            &["--since", "7 days ago", "--no-pager", "-q", "-t", "systemd-coredump"],
+        ),
+    ];
+    for (label, args) in &queries {
+        match std::process::Command::new("journalctl").args(*args).output() {
+            Ok(o) if o.status.success() => {
+                for line in String::from_utf8_lossy(&o.stdout).lines() {
+                    if matches_marker(line) {
+                        found.push(line.to_string());
+                    }
+                }
+            }
+            Ok(o) => found.push(format!(
+                "({label} query failed: {})",
+                String::from_utf8_lossy(&o.stderr).trim()
+            )),
+            Err(e) => found.push(format!("({label} query failed: {e})")),
+        }
+    }
+    if let Ok(o) = std::process::Command::new("coredumpctl")
+        .args(["list", "--since", "7 days ago", "--no-pager"])
+        .output()
+    {
+        if o.status.success() {
+            for line in String::from_utf8_lossy(&o.stdout).lines() {
+                if matches_marker(line) {
+                    found.push(line.to_string());
+                }
             }
         }
-        Ok(o) => format!(
-            "collector failed: journalctl exited with {}: {}",
-            o.status,
-            String::from_utf8_lossy(&o.stderr)
-        ),
-        Err(e) => format!("collector failed: could not run journalctl: {e}"),
+    }
+    if found.is_empty() {
+        "no crash records for this app in the last 7 days".to_string()
+    } else {
+        found.join("\n")
     }
 }
 
