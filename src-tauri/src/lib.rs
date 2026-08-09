@@ -1,6 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod conversation_import;  // bring-your-history: parse + archive exported chats
 mod diagnostics;          // one-click diagnostic report (Settings > Help & diagnostics)
 mod llm;                  // llama-server module
 mod engine;               // optional inference engines (pinned tag; CUDA backend later)
@@ -612,6 +613,9 @@ pub fn run() {
             gpu_safety::gpu_safe_mode_status,
             gpu_safety::gpu_retry,
             diagnostics::export_diagnostics,
+            conversation_import::import_conversations_scan,
+            conversation_import::import_archives_list,
+            conversation_import::import_archive_delete,
         ])
         .setup(|app| {
             // Surface which online-model endpoint is in use (prod vs a dev

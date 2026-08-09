@@ -12,6 +12,7 @@ import AppHeader from "../../components/AppHeader";
 import { useHeaderWorkspace } from "../../hooks/useHeaderWorkspace";
 import LiquidMetalButton from "../../components/LiquidMetalButton";
 import ProfileMemory from "../../components/ProfileMemory";
+import ImportHistoryCard from "../../components/ImportHistoryCard";
 
 export default component$(() => {
   const nav = useNavigate();
@@ -57,6 +58,8 @@ export default component$(() => {
           </div>
 
           <ProfileMemory readOnly={false} />
+
+          <ImportHistoryCard />
         </div>
       </div>
     </div>
