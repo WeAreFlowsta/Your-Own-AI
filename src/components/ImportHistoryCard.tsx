@@ -11,6 +11,7 @@
  */
 import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
 import { LuDownload, LuTrash2, LuChevronDown } from "@qwikest/icons/lucide";
+import LiquidMetalButton from "./LiquidMetalButton";
 
 interface ImportSummary {
   archive_id: string;
@@ -81,11 +82,13 @@ export default component$(() => {
   /** Which archive's AI dropdown is open (custom menu - a native <select>
    *  popup is GTK-themed on Linux/webkit and ignores our theme). */
   const adoptMenuOpenId = useSignal<string | null>(null);
-  /** Coding-sessions panel: open state + the "What to bring" choice.
-   *  user_only is the suggested default for coding sources - 90% of a
-   *  session is tool traffic and the assistant's prose is rarely about
-   *  the user. The choice applies at parse time: a user-only archive
-   *  never stores assistant text at all. */
+  /** One primary CTA opens a source chooser: an AI chat app vs a coding
+   *  assistant. The coding branch adds the "What to bring" choice -
+   *  user_only is its suggested default (90% of a session is tool traffic
+   *  and the assistant's prose is rarely about the user). The choice
+   *  applies at parse time: a user-only archive never stores assistant
+   *  text at all. */
+  const chooserOpen = useSignal(false);
   const codingOpen = useSignal(false);
   const bringMode = useSignal<"user_only" | "full">("user_only");
 
@@ -191,6 +194,8 @@ export default component$(() => {
         mode: mode === "user_only" ? "user_only" : null,
       });
       justImported.value = summary;
+      chooserOpen.value = false;
+      codingOpen.value = false;
       await refresh();
       // Learning starts right away and continues in the background - it
       // survives navigating away and resumes on the next launch if needed.
@@ -266,29 +271,62 @@ export default component$(() => {
         </h3>
       </div>
       <p class="mb-4 text-sm text-[var(--text-secondary)]">
-        Bring your conversations from ChatGPT, Claude, or Perplexity - pick the
-        export file (the .zip they email you, or the conversations .json inside
-        it) and it becomes an encrypted archive on this machine. Coding
-        assistants work too (Claude Code, Aider). Nothing is uploaded anywhere.
+        Bring your conversations with you - from AI chat apps like ChatGPT,
+        Claude, and Perplexity, or from coding assistants like Claude Code and
+        Aider. Your history becomes an encrypted archive on this machine.
+        Nothing is uploaded anywhere.
       </p>
-      <div class="flex flex-wrap items-center gap-2">
-        <button
-          onClick$={pickAndImport}
-          disabled={busy.value}
-          class="rounded-lg border border-[var(--border-subtle)] px-4 py-2 text-sm text-[var(--text-primary)] transition-colors hover:bg-[var(--bg-dropdown)] disabled:opacity-60"
-        >
-          {busy.value ? "Reading your export…" : "Choose export file"}
-        </button>
-        <button
-          onClick$={() => (codingOpen.value = !codingOpen.value)}
-          disabled={busy.value}
-          class="rounded-lg border border-[var(--border-subtle)] px-4 py-2 text-sm text-[var(--text-primary)] transition-colors hover:bg-[var(--bg-dropdown)] disabled:opacity-60"
-        >
-          Import coding sessions
-        </button>
-      </div>
+      <LiquidMetalButton
+        onClick$={() => {
+          chooserOpen.value = !chooserOpen.value;
+          if (!chooserOpen.value) codingOpen.value = false;
+        }}
+        disabled={busy.value}
+        class="px-4 py-2 text-sm"
+      >
+        {busy.value ? "Reading your history…" : "Import your history"}
+      </LiquidMetalButton>
 
-      {codingOpen.value && (
+      {chooserOpen.value && (
+        <div class="mt-3">
+          <p class="mb-2 text-xs font-medium text-[var(--text-primary)]">
+            Where is your history coming from?
+          </p>
+          <div class="flex flex-col gap-2 sm:flex-row">
+            <button
+              onClick$={pickAndImport}
+              disabled={busy.value}
+              class="flex-1 rounded-xl border border-[var(--border-subtle)] p-3 text-left transition-colors hover:border-[var(--bg-button-primary)] disabled:opacity-60"
+            >
+              <span class="block text-sm font-medium text-[var(--text-primary)]">
+                An AI chat app
+              </span>
+              <span class="mt-1 block text-xs text-[var(--text-secondary)]">
+                ChatGPT, Claude, or Perplexity - pick the export file they
+                give you.
+              </span>
+            </button>
+            <button
+              onClick$={() => (codingOpen.value = !codingOpen.value)}
+              disabled={busy.value}
+              class={`flex-1 rounded-xl border p-3 text-left transition-colors hover:border-[var(--bg-button-primary)] disabled:opacity-60 ${
+                codingOpen.value
+                  ? "border-[var(--bg-button-primary)]"
+                  : "border-[var(--border-subtle)]"
+              }`}
+            >
+              <span class="block text-sm font-medium text-[var(--text-primary)]">
+                A coding assistant
+              </span>
+              <span class="mt-1 block text-xs text-[var(--text-secondary)]">
+                Claude Code or Aider sessions already on this machine.
+              </span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {chooserOpen.value && codingOpen.value && (
         <div class="mt-3 rounded-lg border border-[var(--border-subtle)] p-3">
           <p class="mb-2 text-xs font-medium text-[var(--text-primary)]">
             What to bring
@@ -331,20 +369,22 @@ export default component$(() => {
             with either choice.
           </p>
           <div class="mt-3 flex flex-wrap items-center gap-2">
-            <button
+            <LiquidMetalButton
+              variant="secondary"
               onClick$={() => pickCodingAndImport(true)}
               disabled={busy.value}
-              class="rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-primary)] transition-colors hover:bg-[var(--bg-dropdown)] disabled:opacity-60"
+              class="px-3 py-1.5 text-xs"
             >
               {busy.value ? "Reading sessions…" : "Choose session folder"}
-            </button>
-            <button
+            </LiquidMetalButton>
+            <LiquidMetalButton
+              variant="secondary"
               onClick$={() => pickCodingAndImport(false)}
               disabled={busy.value}
-              class="rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-primary)] transition-colors hover:bg-[var(--bg-dropdown)] disabled:opacity-60"
+              class="px-3 py-1.5 text-xs"
             >
               Choose a single file
-            </button>
+            </LiquidMetalButton>
           </div>
           <p class="mt-2 text-xs text-[var(--text-muted)]">
             Claude Code: pick your .claude/projects folder (or one project
@@ -392,7 +432,7 @@ export default component$(() => {
           {archives.value.map((a) => (
             <div
               key={a.archive_id}
-              class="rounded-lg border border-[var(--border-subtle)] px-3 py-2 text-sm"
+              class="group rounded-lg border border-[var(--border-subtle)] px-3 py-2 text-sm"
             >
               <div class="flex items-center justify-between">
                 <span class="text-[var(--text-secondary)]">
@@ -405,14 +445,16 @@ export default component$(() => {
                     <span class="ml-2 text-emerald-500">· learned</span>
                   )}
                 </span>
-                <button
-                  onClick$={() => remove(a.archive_id)}
-                  title="Delete this imported archive"
-                  aria-label="Delete this imported archive"
-                  class="p-1 text-[var(--text-muted)] transition-colors hover:text-red-400"
-                >
-                  <LuTrash2 class="h-4 w-4" />
-                </button>
+                <div class="opacity-0 transition-opacity group-hover:opacity-100">
+                  <LiquidMetalButton
+                    variant="danger"
+                    onClick$={() => remove(a.archive_id)}
+                    title="Delete this imported archive"
+                    class="p-1"
+                  >
+                    <LuTrash2 class="h-4 w-4" />
+                  </LiquidMetalButton>
+                </div>
               </div>
 
               {(a.adopted_by ?? []).length > 0 && (
@@ -501,15 +543,16 @@ export default component$(() => {
                         </>
                       )}
                     </div>
-                    <button
+                    <LiquidMetalButton
+                      variant="secondary"
                       onClick$={() => adopt(a.archive_id)}
                       disabled={adoptBusyId.value !== null}
-                      class="rounded-lg border border-[var(--border-subtle)] px-2.5 py-1 text-xs text-[var(--text-primary)] transition-colors hover:bg-[var(--bg-dropdown)] disabled:opacity-60"
+                      class="px-2.5 py-1 text-xs"
                     >
                       {(a.adopted_by ?? []).length > 0
                         ? "Add to another AI's conversations"
                         : "Add to this AI's conversations"}
-                    </button>
+                    </LiquidMetalButton>
                   </div>
                 )
               )}
