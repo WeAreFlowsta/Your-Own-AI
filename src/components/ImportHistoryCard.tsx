@@ -42,24 +42,50 @@ function dateRange(s: ImportSummary): string {
   return from === to ? from : `${from} - ${to}`;
 }
 
+interface DistillView {
+  state: string;
+  archiveId: string | null;
+  processed: number;
+  total: number;
+  error: string | null;
+}
+
 export default component$(() => {
   const archives = useSignal<ImportSummary[]>([]);
   const busy = useSignal(false);
   const error = useSignal("");
   const justImported = useSignal<ImportSummary | null>(null);
+  const distill = useSignal<DistillView>({
+    state: "idle",
+    archiveId: null,
+    processed: 0,
+    total: 0,
+    error: null,
+  });
+  const learnedIds = useSignal<string[]>([]);
 
   const refresh = $(async () => {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       archives.value = await invoke<ImportSummary[]>("import_archives_list");
+      const { distilledArchiveIds } = await import("../utils/importDistiller");
+      learnedIds.value = distilledArchiveIds();
     } catch {
       // Non-fatal: the card still offers the import button.
     }
   });
 
   // eslint-disable-next-line qwik/no-use-visible-task
-  useVisibleTask$(() => {
+  useVisibleTask$(async ({ cleanup }) => {
     refresh();
+    const { subscribeDistill, distilledArchiveIds } = await import(
+      "../utils/importDistiller"
+    );
+    const unsubscribe = subscribeDistill((s) => {
+      distill.value = { ...s };
+      if (s.state === "done") learnedIds.value = distilledArchiveIds();
+    });
+    cleanup(() => unsubscribe());
   });
 
   const pickAndImport = $(async () => {
@@ -79,6 +105,10 @@ export default component$(() => {
       });
       justImported.value = summary;
       await refresh();
+      // Learning starts right away and continues in the background - it
+      // survives navigating away and resumes on the next launch if needed.
+      const { startDistill } = await import("../utils/importDistiller");
+      await startDistill(summary.archive_id);
     } catch (e) {
       error.value = String(e);
     } finally {
@@ -90,6 +120,8 @@ export default component$(() => {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       await invoke("import_archive_delete", { archiveId });
+      const { clearDistillState } = await import("../utils/importDistiller");
+      clearDistillState(archiveId);
       if (justImported.value?.archive_id === archiveId) justImported.value = null;
       await refresh();
     } catch (e) {
@@ -129,6 +161,29 @@ export default component$(() => {
       )}
       {error.value && <p class="mt-3 text-sm text-red-400">{error.value}</p>}
 
+      {distill.value.state === "running" && (
+        <p class="mt-3 text-sm text-[var(--text-secondary)]">
+          Learning from your history: {distill.value.processed} of{" "}
+          {distill.value.total} messages… You can leave this page - it keeps
+          going, and resumes next launch if you close the app.
+        </p>
+      )}
+      {distill.value.state === "waiting-model" && (
+        <p class="mt-3 text-sm text-[var(--text-secondary)]">
+          Learning will start once the reasoning component finishes
+          downloading (Settings → Components) - it resumes automatically.
+        </p>
+      )}
+      {distill.value.state === "done" && (
+        <p class="mt-3 text-sm text-emerald-500">
+          Finished learning from your imported history - anything personal it
+          found is now in the memory list above.
+        </p>
+      )}
+      {distill.value.state === "error" && distill.value.error && (
+        <p class="mt-3 text-sm text-red-400">{distill.value.error}</p>
+      )}
+
       {archives.value.length > 0 && (
         <div class="mt-4 space-y-2">
           {archives.value.map((a) => (
@@ -142,6 +197,9 @@ export default component$(() => {
                 </span>{" "}
                 · {a.conversation_count} conversations
                 {dateRange(a) ? ` · ${dateRange(a)}` : ""}
+                {learnedIds.value.includes(a.archive_id) && (
+                  <span class="ml-2 text-emerald-500">· learned</span>
+                )}
               </span>
               <button
                 onClick$={() => remove(a.archive_id)}

@@ -622,6 +622,22 @@ pub fn import_archives_list(app: AppHandle) -> Result<Vec<ImportSummary>, String
     Ok(load_manifest(&app)?.archives)
 }
 
+/// Decrypt and return one archive's full content - the stage-2 distiller
+/// reads conversations through this.
+#[tauri::command]
+pub fn import_archive_get(app: AppHandle, archive_id: String) -> Result<ImportArchive, String> {
+    let path = imports_dir(&app)?.join(format!("import-{archive_id}.enc"));
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Could not read the archive: {e}"))?;
+    let blob: EncryptedArchiveFile =
+        serde_json::from_str(&text).map_err(|e| format!("Archive file is malformed: {e}"))?;
+    let key = data_key(&app)?;
+    let nonce = hex::decode(&blob.nonce).map_err(|e| e.to_string())?;
+    let cipher = hex::decode(&blob.cipher).map_err(|e| e.to_string())?;
+    let plain = crate::transcript_crypto::decrypt(&key, &nonce, &cipher)?;
+    serde_json::from_slice(&plain).map_err(|e| format!("Archive content is malformed: {e}"))
+}
+
 /// Delete an imported archive (its encrypted blob + manifest row).
 #[tauri::command]
 pub fn import_archive_delete(app: AppHandle, archive_id: String) -> Result<(), String> {

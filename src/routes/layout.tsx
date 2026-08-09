@@ -63,6 +63,15 @@ export default component$(() => {
         /* store unavailable - picks stay webview-only */
       }
     })();
+
+    // Resume an interrupted history-import distill (cursor survives
+    // restarts; no-op when nothing is pending). Delayed so it never
+    // competes with the busy startup window.
+    setTimeout(() => {
+      import("../utils/importDistiller")
+        .then((m) => m.resumeIfPending())
+        .catch(() => {});
+    }, 15_000);
   });
 
   // Load saved theme from localStorage on mount + dismiss loading overlay + global liquid metal hover

@@ -615,6 +615,7 @@ pub fn run() {
             diagnostics::export_diagnostics,
             conversation_import::import_conversations_scan,
             conversation_import::import_archives_list,
+            conversation_import::import_archive_get,
             conversation_import::import_archive_delete,
         ])
         .setup(|app| {
