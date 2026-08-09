@@ -1,10 +1,13 @@
 /**
  * "Bring your history" - import conversations exported from other AI apps
- * (ChatGPT, Claude, Perplexity) into an encrypted local archive.
+ * (ChatGPT, Claude, Perplexity) or coding assistants (Claude Code, Aider)
+ * into an encrypted local archive.
  *
- * Stage 1 only: pick file -> parse -> encrypted archive -> instant summary.
- * Stage 2 (the background distiller that turns archives into memory) lands
- * next and will pick archives up from here.
+ * Stage 1: pick file/folder -> parse -> encrypted archive -> instant
+ * summary. Stage 2: the background distiller turns archives into memory.
+ * Adoption writes an archive into a chosen AI's conversations. Coding
+ * sources add a "What to bring" choice (user-only vs full) applied at
+ * parse time.
  */
 import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
 import { LuDownload, LuTrash2, LuChevronDown } from "@qwikest/icons/lucide";
@@ -30,6 +33,8 @@ const SOURCE_NAMES: Record<string, string> = {
   chatgpt: "ChatGPT",
   claude: "Claude",
   perplexity: "Perplexity",
+  "claude-code": "Claude Code",
+  aider: "Aider",
 };
 
 function sourceName(source: string): string {
@@ -76,6 +81,13 @@ export default component$(() => {
   /** Which archive's AI dropdown is open (custom menu - a native <select>
    *  popup is GTK-themed on Linux/webkit and ignores our theme). */
   const adoptMenuOpenId = useSignal<string | null>(null);
+  /** Coding-sessions panel: open state + the "What to bring" choice.
+   *  user_only is the suggested default for coding sources - 90% of a
+   *  session is tool traffic and the assistant's prose is rarely about
+   *  the user. The choice applies at parse time: a user-only archive
+   *  never stores assistant text at all. */
+  const codingOpen = useSignal(false);
+  const bringMode = useSignal<"user_only" | "full">("user_only");
 
   const refresh = $(async () => {
     try {
@@ -170,20 +182,13 @@ export default component$(() => {
     }
   });
 
-  const pickAndImport = $(async () => {
-    error.value = "";
-    justImported.value = null;
+  const runImport = $(async (path: string, mode: "user_only" | "full") => {
+    busy.value = true;
     try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const selected = await open({
-        multiple: false,
-        filters: [{ name: "Chat export", extensions: ["zip", "json"] }],
-      });
-      if (!selected || Array.isArray(selected)) return;
-      busy.value = true;
       const { invoke } = await import("@tauri-apps/api/core");
       const summary = await invoke<ImportSummary>("import_conversations_scan", {
-        path: selected,
+        path,
+        mode: mode === "user_only" ? "user_only" : null,
       });
       justImported.value = summary;
       await refresh();
@@ -195,6 +200,47 @@ export default component$(() => {
       error.value = String(e);
     } finally {
       busy.value = false;
+    }
+  });
+
+  const pickAndImport = $(async () => {
+    error.value = "";
+    justImported.value = null;
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Chat export", extensions: ["zip", "json"] }],
+      });
+      if (!selected || Array.isArray(selected)) return;
+      await runImport(selected, "full");
+    } catch (e) {
+      error.value = String(e);
+    }
+  });
+
+  /** Coding sessions: pick a folder of .jsonl sessions (Claude Code) or a
+   *  single session/history file (a .jsonl, or Aider's
+   *  .aider.chat.history.md). */
+  const pickCodingAndImport = $(async (directory: boolean) => {
+    error.value = "";
+    justImported.value = null;
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open(
+        directory
+          ? { multiple: false, directory: true }
+          : {
+              multiple: false,
+              filters: [
+                { name: "Coding sessions", extensions: ["jsonl", "md"] },
+              ],
+            },
+      );
+      if (!selected || Array.isArray(selected)) return;
+      await runImport(selected, bringMode.value);
+    } catch (e) {
+      error.value = String(e);
     }
   });
 
@@ -222,16 +268,91 @@ export default component$(() => {
       <p class="mb-4 text-sm text-[var(--text-secondary)]">
         Bring your conversations from ChatGPT, Claude, or Perplexity - pick the
         export file (the .zip they email you, or the conversations .json inside
-        it) and it becomes an encrypted archive on this machine. Nothing is
-        uploaded anywhere.
+        it) and it becomes an encrypted archive on this machine. Coding
+        assistants work too (Claude Code, Aider). Nothing is uploaded anywhere.
       </p>
-      <button
-        onClick$={pickAndImport}
-        disabled={busy.value}
-        class="rounded-lg border border-[var(--border-subtle)] px-4 py-2 text-sm text-[var(--text-primary)] transition-colors hover:bg-[var(--bg-dropdown)] disabled:opacity-60"
-      >
-        {busy.value ? "Reading your export…" : "Choose export file"}
-      </button>
+      <div class="flex flex-wrap items-center gap-2">
+        <button
+          onClick$={pickAndImport}
+          disabled={busy.value}
+          class="rounded-lg border border-[var(--border-subtle)] px-4 py-2 text-sm text-[var(--text-primary)] transition-colors hover:bg-[var(--bg-dropdown)] disabled:opacity-60"
+        >
+          {busy.value ? "Reading your export…" : "Choose export file"}
+        </button>
+        <button
+          onClick$={() => (codingOpen.value = !codingOpen.value)}
+          disabled={busy.value}
+          class="rounded-lg border border-[var(--border-subtle)] px-4 py-2 text-sm text-[var(--text-primary)] transition-colors hover:bg-[var(--bg-dropdown)] disabled:opacity-60"
+        >
+          Import coding sessions
+        </button>
+      </div>
+
+      {codingOpen.value && (
+        <div class="mt-3 rounded-lg border border-[var(--border-subtle)] p-3">
+          <p class="mb-2 text-xs font-medium text-[var(--text-primary)]">
+            What to bring
+          </p>
+          <div class="space-y-1.5">
+            <label class="flex cursor-pointer items-start gap-2 text-xs text-[var(--text-secondary)]">
+              <input
+                type="radio"
+                name="bring-mode"
+                checked={bringMode.value === "user_only"}
+                onChange$={() => (bringMode.value = "user_only")}
+                class="mt-0.5 accent-[var(--bg-button-primary)]"
+              />
+              <span>
+                <span class="font-medium text-[var(--text-primary)]">
+                  Just what you said
+                </span>{" "}
+                - only your own messages. The usual pick: it is what teaches
+                your AIs about you.
+              </span>
+            </label>
+            <label class="flex cursor-pointer items-start gap-2 text-xs text-[var(--text-secondary)]">
+              <input
+                type="radio"
+                name="bring-mode"
+                checked={bringMode.value === "full"}
+                onChange$={() => (bringMode.value = "full")}
+                class="mt-0.5 accent-[var(--bg-button-primary)]"
+              />
+              <span>
+                <span class="font-medium text-[var(--text-primary)]">
+                  Full conversations
+                </span>{" "}
+                - also keeps the assistant's replies.
+              </span>
+            </label>
+          </div>
+          <p class="mt-2 text-xs text-[var(--text-muted)]">
+            Commands, file contents, and other tool output are never imported
+            with either choice.
+          </p>
+          <div class="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              onClick$={() => pickCodingAndImport(true)}
+              disabled={busy.value}
+              class="rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-primary)] transition-colors hover:bg-[var(--bg-dropdown)] disabled:opacity-60"
+            >
+              {busy.value ? "Reading sessions…" : "Choose session folder"}
+            </button>
+            <button
+              onClick$={() => pickCodingAndImport(false)}
+              disabled={busy.value}
+              class="rounded-lg border border-[var(--border-subtle)] px-3 py-1.5 text-xs text-[var(--text-primary)] transition-colors hover:bg-[var(--bg-dropdown)] disabled:opacity-60"
+            >
+              Choose a single file
+            </button>
+          </div>
+          <p class="mt-2 text-xs text-[var(--text-muted)]">
+            Claude Code: pick your .claude/projects folder (or one project
+            inside it). Aider: pick the .aider.chat.history.md file in your
+            repo.
+          </p>
+        </div>
+      )}
 
       {justImported.value && (
         <p class="mt-3 text-sm text-emerald-500">

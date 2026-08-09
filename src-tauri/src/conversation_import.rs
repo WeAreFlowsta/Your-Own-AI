@@ -446,10 +446,16 @@ struct ClaudeCodeLine {
     timestamp: Option<String>,
     #[serde(rename = "aiTitle")]
     ai_title: Option<String>,
+    /// A title the user set by hand; wins over the generated one.
+    #[serde(rename = "customTitle")]
+    custom_title: Option<String>,
     #[serde(rename = "isSidechain", default)]
     is_sidechain: bool,
     #[serde(rename = "isMeta", default)]
     is_meta: bool,
+    /// Synthetic assistant lines carrying an API error, not a reply.
+    #[serde(rename = "isApiErrorMessage", default)]
+    is_api_error_message: bool,
 }
 
 #[derive(Deserialize)]
@@ -467,11 +473,15 @@ fn is_harness_text(t: &str) -> bool {
         || t.starts_with("<ide_")
         || t.starts_with("Caveat: The messages below")
         || t.starts_with("This session is being continued")
+        || t.starts_with("[Request interrupted")
 }
 
 /// Extract the text blocks from a Claude Code message content value
 /// (string, or an array of typed blocks - only `text` blocks count; tool
-/// results, tool calls, and thinking are never imported).
+/// results, tool calls, and thinking are never imported). Harness blocks
+/// are dropped PER BLOCK: real sessions mix an IDE-context block with the
+/// user's actual words in one message, and a whole-message check would
+/// throw the real words away with the noise.
 fn claude_code_text(content: &serde_json::Value) -> String {
     match content {
         serde_json::Value::String(s) => s.clone(),
@@ -479,32 +489,40 @@ fn claude_code_text(content: &serde_json::Value) -> String {
             .iter()
             .filter(|b| b["type"] == "text")
             .filter_map(|b| b["text"].as_str())
+            .filter(|t| !is_harness_text(t))
             .collect::<Vec<_>>()
             .join("\n"),
         _ => String::new(),
     }
 }
 
-/// Parse one Claude Code session .jsonl into one conversation. Reads line
-/// by line so a 100MB session never lives in memory whole.
-fn parse_claude_code_session(path: &PathBuf) -> Result<ImportedConversation, String> {
-    use std::io::BufRead;
-    let file = std::fs::File::open(path).map_err(|e| format!("Could not open {path:?}: {e}"))?;
-    let reader = std::io::BufReader::new(file);
-
-    let mut title: Option<String> = None;
+/// Parse a Claude Code session (.jsonl lines) into one conversation. The
+/// reader form keeps a 100MB session from ever living in memory whole and
+/// lets tests feed lines directly.
+fn parse_claude_code_lines(
+    reader: impl std::io::BufRead,
+    source_id: Option<String>,
+) -> ImportedConversation {
+    let mut ai_title: Option<String> = None;
+    let mut custom_title: Option<String> = None;
     let mut created: Option<i64> = None;
     let mut messages: Vec<ImportedMessage> = Vec::new();
 
     for line in reader.lines() {
         let Ok(line) = line else { continue };
         let Ok(entry) = serde_json::from_str::<ClaudeCodeLine>(&line) else { continue };
-        if entry.is_sidechain || entry.is_meta {
+        if entry.is_sidechain || entry.is_meta || entry.is_api_error_message {
+            continue;
+        }
+        if let Some(t) = entry.custom_title {
+            if !t.trim().is_empty() {
+                custom_title = Some(t.trim().to_string());
+            }
             continue;
         }
         if let Some(t) = entry.ai_title {
             if !t.trim().is_empty() {
-                title = Some(t.trim().to_string());
+                ai_title = Some(t.trim().to_string());
             }
             continue;
         }
@@ -530,7 +548,8 @@ fn parse_claude_code_session(path: &PathBuf) -> Result<ImportedConversation, Str
         });
     }
 
-    let title = title.unwrap_or_else(|| {
+    // The user's own title wins; then the generated one; then first words.
+    let title = custom_title.or(ai_title).unwrap_or_else(|| {
         messages
             .iter()
             .find(|m| m.role == "user")
@@ -538,40 +557,63 @@ fn parse_claude_code_session(path: &PathBuf) -> Result<ImportedConversation, Str
             .unwrap_or_else(|| "Coding session".to_string())
     });
 
-    Ok(ImportedConversation {
-        source_id: path
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string()),
+    ImportedConversation {
+        source_id,
         title,
         created_at_us: created,
         messages,
-    })
+    }
+}
+
+fn parse_claude_code_session(path: &PathBuf) -> Result<ImportedConversation, String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("Could not open {path:?}: {e}"))?;
+    Ok(parse_claude_code_lines(
+        std::io::BufReader::new(file),
+        path.file_stem().map(|s| s.to_string_lossy().to_string()),
+    ))
 }
 
 /// A folder of Claude Code sessions: every .jsonl becomes a conversation.
+/// Recurses ONE level so picking ~/.claude/projects itself (sessions live
+/// in per-project subfolders) works as naturally as picking one project.
 fn parse_claude_code_dir(dir: &PathBuf) -> Result<(String, Vec<ImportedConversation>), String> {
-    let mut convs = Vec::new();
-    for entry in std::fs::read_dir(dir).map_err(|e| format!("Could not read the folder: {e}"))? {
-        let Ok(entry) = entry else { continue };
-        let path = entry.path();
-        if path.extension().is_none_or(|e| e != "jsonl") {
-            continue;
-        }
-        if entry
-            .metadata()
-            .map(|m| m.len() > MAX_IMPORT_BYTES)
-            .unwrap_or(true)
-        {
-            continue;
-        }
-        match parse_claude_code_session(&path) {
-            Ok(c) if !c.messages.is_empty() => convs.push(c),
-            _ => {}
+    fn scan_files(dir: &PathBuf, recurse: bool, convs: &mut Vec<ImportedConversation>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries {
+            let Ok(entry) = entry else { continue };
+            let path = entry.path();
+            if path.is_dir() {
+                // Session folders keep subagent transcripts in a
+                // "subagents" subfolder - sidechain chatter, never imported.
+                let name = entry.file_name();
+                if recurse && name != "subagents" {
+                    scan_files(&path, false, convs);
+                }
+                continue;
+            }
+            if path.extension().is_none_or(|e| e != "jsonl") {
+                continue;
+            }
+            if entry
+                .metadata()
+                .map(|m| m.len() > MAX_IMPORT_BYTES)
+                .unwrap_or(true)
+            {
+                continue;
+            }
+            match parse_claude_code_session(&path) {
+                Ok(c) if !c.messages.is_empty() => convs.push(c),
+                _ => {}
+            }
         }
     }
+
+    std::fs::read_dir(dir).map_err(|e| format!("Could not read the folder: {e}"))?;
+    let mut convs = Vec::new();
+    scan_files(dir, true, &mut convs);
     if convs.is_empty() {
         return Err(
-            "No coding sessions found in this folder. Pick a folder containing .jsonl session files (for Claude Code: a folder inside ~/.claude/projects).".to_string(),
+            "No coding sessions found in this folder. Pick your ~/.claude/projects folder (or one project folder inside it) containing .jsonl session files.".to_string(),
         );
     }
     convs.sort_by_key(|c| c.created_at_us.unwrap_or(0));
@@ -644,6 +686,17 @@ fn parse_aider_history(text: &str) -> Result<(String, Vec<ImportedConversation>)
         return Err("This looks like an Aider history file, but no sessions were found in it.".to_string());
     }
     Ok(("aider".to_string(), convs))
+}
+
+/// The "Just what you said" import choice: keep only the user's own
+/// messages. Applied at parse time so a user-only archive simply never
+/// stores assistant text - honest to the label, nothing downstream needs
+/// a mode flag. Conversations left empty by the filter are dropped.
+fn apply_user_only(conversations: &mut Vec<ImportedConversation>) {
+    for conv in conversations.iter_mut() {
+        conv.messages.retain(|m| m.role == "user");
+    }
+    conversations.retain(|c| !c.messages.is_empty());
 }
 
 // ── File handling ──────────────────────────────────────────────────────
@@ -815,9 +868,7 @@ pub async fn import_conversations_scan(
             .map_err(|e| e.to_string())??;
 
     if mode.as_deref() == Some("user_only") {
-        for conv in &mut conversations {
-            conv.messages.retain(|m| m.role == "user");
-        }
+        apply_user_only(&mut conversations);
     }
 
     // Drop empty conversations; an export full of empty threads is noise.
@@ -1246,10 +1297,188 @@ mod tests {
         assert!(convs[0].messages[0].ts_us.is_some());
     }
 
+    /// Dogfood harness against the developer's own local Claude Code data.
+    /// Ignored by default (depends on ~/.claude/projects existing); run
+    /// with: cargo test dogfood -- --ignored --nocapture
+    /// Prints counts only - never session content.
+    #[test]
+    #[ignore]
+    fn dogfood_real_claude_code_sessions() {
+        let Ok(home) = std::env::var("HOME") else { return };
+        let root = PathBuf::from(home).join(".claude").join("projects");
+        if !root.exists() {
+            return;
+        }
+        let (source, convs) = parse_claude_code_dir(&root).expect("real tree should parse");
+        assert_eq!(source, "claude-code");
+        let (mut users, mut assts, mut leaks, mut mentions, mut no_ts, mut untitled) =
+            (0, 0, 0, 0, 0, 0);
+        for c in &convs {
+            if c.title.trim().is_empty() {
+                untitled += 1;
+            }
+            for m in &c.messages {
+                if m.role == "user" { users += 1 } else { assts += 1 }
+                if is_harness_text(&m.text) {
+                    leaks += 1;
+                }
+                // Mid-text marker MENTIONS are only printed - sessions about
+                // harness internals legitimately quote these strings.
+                if m.text.contains("<system-reminder") || m.text.contains("<task-notification") {
+                    mentions += 1;
+                }
+                if m.ts_us.is_none() {
+                    no_ts += 1;
+                }
+            }
+        }
+        println!(
+            "conversations: {} | user msgs: {} | assistant msgs: {} | harness leaks: {} | marker mentions: {} | msgs missing ts: {} | untitled: {}",
+            convs.len(), users, assts, leaks, mentions, no_ts, untitled
+        );
+        assert!(!convs.is_empty());
+        assert_eq!(leaks, 0, "harness text leaked into imported messages");
+        assert_eq!(untitled, 0);
+    }
+
     #[test]
     fn unrecognized_is_a_clear_error() {
         let err = detect_and_parse(r#"{"foo": "bar"}"#).unwrap_err();
         assert!(err.contains("ChatGPT"));
+    }
+
+    fn parse_cc(lines: &str) -> ImportedConversation {
+        parse_claude_code_lines(std::io::Cursor::new(lines), Some("session-1".to_string()))
+    }
+
+    #[test]
+    fn claude_code_session_parses() {
+        let jsonl = r#"{"type":"queue-operation","operation":"enqueue"}
+{"type":"user","timestamp":"2026-07-09T02:53:42.711Z","message":{"role":"user","content":"fix the login bug"}}
+{"type":"assistant","timestamp":"2026-07-09T02:53:50.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"let me look"},{"type":"text","text":"Found it - the token check."},{"type":"tool_use","name":"Read","input":{}}]}}
+{"type":"user","timestamp":"2026-07-09T02:54:00.000Z","message":{"role":"user","content":[{"type":"tool_result","content":"file contents here"}]}}
+{"type":"ai-title","aiTitle":"Login bug hunt"}
+{"type":"user","isSidechain":true,"message":{"role":"user","content":"subagent chatter"}}
+{"type":"user","isMeta":true,"message":{"role":"user","content":"meta line"}}
+{"type":"assistant","isApiErrorMessage":true,"message":{"role":"assistant","content":[{"type":"text","text":"API Error: overloaded"}]}}
+not even json
+"#;
+        let conv = parse_cc(jsonl);
+        assert_eq!(conv.title, "Login bug hunt");
+        assert_eq!(conv.source_id.as_deref(), Some("session-1"));
+        let texts: Vec<&str> = conv.messages.iter().map(|m| m.text.as_str()).collect();
+        assert_eq!(texts, vec!["fix the login bug", "Found it - the token check."]);
+        assert_eq!(conv.messages[0].role, "user");
+        assert_eq!(conv.messages[1].role, "assistant");
+        assert!(conv.created_at_us.is_some());
+        assert_eq!(conv.created_at_us, conv.messages[0].ts_us);
+    }
+
+    #[test]
+    fn claude_code_custom_title_wins() {
+        let jsonl = r#"{"type":"ai-title","aiTitle":"Generated title"}
+{"type":"custom-title","customTitle":"my sprint"}
+{"type":"ai-title","aiTitle":"Later generated title"}
+{"type":"user","message":{"role":"user","content":"hello"}}
+"#;
+        assert_eq!(parse_cc(jsonl).title, "my sprint");
+    }
+
+    #[test]
+    fn claude_code_title_falls_back_to_first_user_words() {
+        let jsonl =
+            r#"{"type":"user","message":{"role":"user","content":"rename the button"}}"#;
+        assert_eq!(parse_cc(jsonl).title, "rename the button");
+    }
+
+    #[test]
+    fn claude_code_mixed_harness_block_keeps_user_text() {
+        // Real sessions mix an IDE-context block with the user's actual
+        // words in ONE message - the noise goes, the words stay.
+        let jsonl = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"<ide_opened_file>The user opened a file</ide_opened_file>"},{"type":"text","text":"remove the line break on the home page"}]}}
+"#;
+        let conv = parse_cc(jsonl);
+        assert_eq!(conv.messages.len(), 1);
+        assert_eq!(conv.messages[0].text, "remove the line break on the home page");
+    }
+
+    #[test]
+    fn claude_code_harness_strings_skipped() {
+        let jsonl = r#"{"type":"user","message":{"role":"user","content":"<local-command-stdout>ok</local-command-stdout>"}}
+{"type":"user","message":{"role":"user","content":"Caveat: The messages below were generated by the user while running local commands."}}
+{"type":"user","message":{"role":"user","content":"This session is being continued from a previous conversation."}}
+{"type":"user","message":{"role":"user","content":"[Request interrupted by user]"}}
+{"type":"user","message":{"role":"user","content":"<task-notification>agent done</task-notification>"}}
+{"type":"user","message":{"role":"user","content":"a real question"}}
+"#;
+        let conv = parse_cc(jsonl);
+        assert_eq!(conv.messages.len(), 1);
+        assert_eq!(conv.messages[0].text, "a real question");
+    }
+
+    #[test]
+    fn aider_history_parses_sessions() {
+        let md = "# aider chat started at 2024-05-10 09:48:53\n\
+\n\
+#### add a retry to the fetch call\n\
+#### and log the failure\n\
+\n\
+Sure - I added a retry loop with a warning log.\n\
+More assistant prose.\n\
+\n\
+# aider chat started at 2024-06-01 20:00:00\n\
+\n\
+#### rename the config struct\n\
+\n\
+Done, renamed it everywhere.\n";
+        let (source, convs) = parse_aider_history(md).unwrap();
+        assert_eq!(source, "aider");
+        assert_eq!(convs.len(), 2);
+        assert!(convs[0].created_at_us.is_some());
+        assert_eq!(convs[0].messages.len(), 2);
+        assert_eq!(convs[0].messages[0].role, "user");
+        assert_eq!(
+            convs[0].messages[0].text,
+            "add a retry to the fetch call\nand log the failure"
+        );
+        assert_eq!(convs[0].messages[1].role, "assistant");
+        assert!(convs[0].messages[1].text.contains("retry loop"));
+        assert_eq!(convs[1].messages.len(), 2);
+        assert!(convs[1].title.contains("2024-06-01"));
+    }
+
+    #[test]
+    fn aider_without_sessions_is_an_error() {
+        assert!(parse_aider_history("just some markdown\n").is_err());
+    }
+
+    #[test]
+    fn user_only_mode_drops_assistant_text() {
+        let mut convs = vec![
+            ImportedConversation {
+                source_id: None,
+                title: "a".into(),
+                created_at_us: None,
+                messages: vec![
+                    ImportedMessage { role: "user".into(), text: "mine".into(), ts_us: None },
+                    ImportedMessage { role: "assistant".into(), text: "theirs".into(), ts_us: None },
+                ],
+            },
+            ImportedConversation {
+                source_id: None,
+                title: "assistant-only".into(),
+                created_at_us: None,
+                messages: vec![ImportedMessage {
+                    role: "assistant".into(),
+                    text: "theirs".into(),
+                    ts_us: None,
+                }],
+            },
+        ];
+        apply_user_only(&mut convs);
+        assert_eq!(convs.len(), 1);
+        assert_eq!(convs[0].messages.len(), 1);
+        assert_eq!(convs[0].messages[0].text, "mine");
     }
 
     #[test]
