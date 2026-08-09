@@ -30,6 +30,13 @@ interface AiOption {
   name: string;
 }
 
+interface CodingDetect {
+  found: boolean;
+  path: string | null;
+  project_count: number;
+  session_count: number;
+}
+
 const SOURCE_NAMES: Record<string, string> = {
   chatgpt: "ChatGPT",
   claude: "Claude",
@@ -91,6 +98,12 @@ export default component$(() => {
   const chooserOpen = useSignal(false);
   const codingOpen = useSignal(false);
   const bringMode = useSignal<"user_only" | "full">("user_only");
+  /** Which coding assistant the user picked, and what auto-detection
+   *  found for it. Claude Code's session store has ONE standard home
+   *  (~/.claude/projects), so we find it ourselves - nobody should have
+   *  to unhide dotfolders in a picker dialog. */
+  const codingTool = useSignal<"claude-code" | "aider" | null>(null);
+  const ccDetect = useSignal<CodingDetect | null>(null);
 
   const refresh = $(async () => {
     try {
@@ -185,13 +198,19 @@ export default component$(() => {
     }
   });
 
-  const runImport = $(async (path: string, mode: "user_only" | "full") => {
+  const runImport = $(
+    async (
+      path: string,
+      mode: "user_only" | "full",
+      sourceHint?: "claude-code" | "aider",
+    ) => {
     busy.value = true;
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       const summary = await invoke<ImportSummary>("import_conversations_scan", {
         path,
         mode: mode === "user_only" ? "user_only" : null,
+        sourceHint: sourceHint ?? null,
       });
       justImported.value = summary;
       chooserOpen.value = false;
@@ -224,26 +243,48 @@ export default component$(() => {
     }
   });
 
-  /** Coding sessions: pick a folder of .jsonl sessions (Claude Code) or a
-   *  single session/history file (a .jsonl, or Aider's
-   *  .aider.chat.history.md). */
-  const pickCodingAndImport = $(async (directory: boolean) => {
+  /** Pick a coding assistant: Claude Code auto-detects its standard
+   *  session store; Aider needs the user's project folder (we find the
+   *  hidden history file inside it ourselves). */
+  const selectTool = $(async (tool: "claude-code" | "aider") => {
+    error.value = "";
+    codingTool.value = codingTool.value === tool ? null : tool;
+    if (codingTool.value === "claude-code" && !ccDetect.value) {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        ccDetect.value = await invoke<CodingDetect>(
+          "import_detect_claude_code",
+        );
+      } catch {
+        ccDetect.value = {
+          found: false,
+          path: null,
+          project_count: 0,
+          session_count: 0,
+        };
+      }
+    }
+  });
+
+  /** One-click import of the auto-detected Claude Code sessions. */
+  const importDetected = $(async () => {
+    const path = ccDetect.value?.path;
+    if (!path) return;
+    error.value = "";
+    justImported.value = null;
+    await runImport(path, bringMode.value, "claude-code");
+  });
+
+  /** Manual fallback: pick a folder yourself (a Claude Code project
+   *  folder, or the repo you ran Aider in). */
+  const pickCodingFolder = $(async (hint: "claude-code" | "aider") => {
     error.value = "";
     justImported.value = null;
     try {
       const { open } = await import("@tauri-apps/plugin-dialog");
-      const selected = await open(
-        directory
-          ? { multiple: false, directory: true }
-          : {
-              multiple: false,
-              filters: [
-                { name: "Coding sessions", extensions: ["jsonl", "md"] },
-              ],
-            },
-      );
+      const selected = await open({ multiple: false, directory: true });
       if (!selected || Array.isArray(selected)) return;
-      await runImport(selected, bringMode.value);
+      await runImport(selected, bringMode.value, hint);
     } catch (e) {
       error.value = String(e);
     }
@@ -279,7 +320,10 @@ export default component$(() => {
       <LiquidMetalButton
         onClick$={() => {
           chooserOpen.value = !chooserOpen.value;
-          if (!chooserOpen.value) codingOpen.value = false;
+          if (!chooserOpen.value) {
+            codingOpen.value = false;
+            codingTool.value = null;
+          }
         }}
         disabled={busy.value}
         class="px-4 py-2 text-sm"
@@ -329,6 +373,34 @@ export default component$(() => {
       {chooserOpen.value && codingOpen.value && (
         <div class="mt-3 rounded-lg border border-[var(--border-subtle)] p-3">
           <p class="mb-2 text-xs font-medium text-[var(--text-primary)]">
+            Which coding assistant?
+          </p>
+          <div class="flex flex-wrap items-center gap-2">
+            <LiquidMetalButton
+              variant="secondary"
+              onClick$={() => selectTool("claude-code")}
+              disabled={busy.value}
+              class={`px-3 py-1.5 text-xs ${
+                codingTool.value === "claude-code" ? "btn-amber-accent" : ""
+              }`}
+            >
+              Claude Code
+            </LiquidMetalButton>
+            <LiquidMetalButton
+              variant="secondary"
+              onClick$={() => selectTool("aider")}
+              disabled={busy.value}
+              class={`px-3 py-1.5 text-xs ${
+                codingTool.value === "aider" ? "btn-amber-accent" : ""
+              }`}
+            >
+              Aider
+            </LiquidMetalButton>
+          </div>
+
+          {codingTool.value && (
+          <>
+          <p class="mb-2 mt-4 text-xs font-medium text-[var(--text-primary)]">
             What to bring
           </p>
           <div class="space-y-1.5">
@@ -368,29 +440,89 @@ export default component$(() => {
             Commands, file contents, and other tool output are never imported
             with either choice.
           </p>
-          <div class="mt-3 flex flex-wrap items-center gap-2">
-            <LiquidMetalButton
-              variant="secondary"
-              onClick$={() => pickCodingAndImport(true)}
-              disabled={busy.value}
-              class="px-3 py-1.5 text-xs"
-            >
-              {busy.value ? "Reading sessions…" : "Choose session folder"}
-            </LiquidMetalButton>
-            <LiquidMetalButton
-              variant="secondary"
-              onClick$={() => pickCodingAndImport(false)}
-              disabled={busy.value}
-              class="px-3 py-1.5 text-xs"
-            >
-              Choose a single file
-            </LiquidMetalButton>
-          </div>
-          <p class="mt-2 text-xs text-[var(--text-muted)]">
-            Claude Code: pick your .claude/projects folder (or one project
-            inside it). Aider: pick the .aider.chat.history.md file in your
-            repo.
-          </p>
+
+          {codingTool.value === "claude-code" && (
+            <div class="mt-4">
+              {ccDetect.value === null ? (
+                <p class="text-xs text-[var(--text-secondary)]">
+                  Looking for your Claude Code sessions…
+                </p>
+              ) : ccDetect.value.found ? (
+                <>
+                  <p class="text-xs text-[var(--text-secondary)]">
+                    Found your Claude Code sessions:{" "}
+                    <span class="font-medium text-[var(--text-primary)]">
+                      {ccDetect.value.session_count} session
+                      {ccDetect.value.session_count === 1 ? "" : "s"}
+                      {ccDetect.value.project_count > 0
+                        ? ` across ${ccDetect.value.project_count} project${
+                            ccDetect.value.project_count === 1 ? "" : "s"
+                          }`
+                        : ""}
+                    </span>
+                    .
+                  </p>
+                  <div class="mt-2 flex flex-wrap items-center gap-2">
+                    <LiquidMetalButton
+                      variant="secondary"
+                      onClick$={importDetected}
+                      disabled={busy.value}
+                      class="px-3 py-1.5 text-xs"
+                    >
+                      {busy.value ? "Reading sessions…" : "Import them"}
+                    </LiquidMetalButton>
+                    <LiquidMetalButton
+                      variant="secondary"
+                      onClick$={() => pickCodingFolder("claude-code")}
+                      disabled={busy.value}
+                      class="px-3 py-1.5 text-xs"
+                    >
+                      Choose a different folder
+                    </LiquidMetalButton>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p class="text-xs text-[var(--text-secondary)]">
+                    Claude Code's usual session folder wasn't found on this
+                    machine. If your sessions live somewhere else, point us
+                    at that folder.
+                  </p>
+                  <div class="mt-2">
+                    <LiquidMetalButton
+                      variant="secondary"
+                      onClick$={() => pickCodingFolder("claude-code")}
+                      disabled={busy.value}
+                      class="px-3 py-1.5 text-xs"
+                    >
+                      {busy.value ? "Reading sessions…" : "Choose folder"}
+                    </LiquidMetalButton>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {codingTool.value === "aider" && (
+            <div class="mt-4">
+              <p class="text-xs text-[var(--text-secondary)]">
+                Pick the project folder you used Aider in - its chat history
+                is found inside automatically.
+              </p>
+              <div class="mt-2">
+                <LiquidMetalButton
+                  variant="secondary"
+                  onClick$={() => pickCodingFolder("aider")}
+                  disabled={busy.value}
+                  class="px-3 py-1.5 text-xs"
+                >
+                  {busy.value ? "Reading history…" : "Choose project folder"}
+                </LiquidMetalButton>
+              </div>
+            </div>
+          )}
+          </>
+          )}
         </div>
       )}
 

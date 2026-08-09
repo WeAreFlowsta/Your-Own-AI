@@ -699,15 +699,45 @@ fn apply_user_only(conversations: &mut Vec<ImportedConversation>) {
     conversations.retain(|c| !c.messages.is_empty());
 }
 
+/// The Aider history file a repo folder carries.
+const AIDER_HISTORY_FILE: &str = ".aider.chat.history.md";
+
+/// An Aider import where the user picks their PROJECT folder - we find the
+/// hidden history file for them (nobody should have to toggle hidden files
+/// in a picker dialog).
+fn parse_aider_dir(dir: &PathBuf) -> Result<(String, Vec<ImportedConversation>), String> {
+    let file = dir.join(AIDER_HISTORY_FILE);
+    if !file.is_file() {
+        return Err(
+            "No Aider history found in this folder. Pick the project folder where you ran Aider - it keeps its chat history in a file there automatically.".to_string(),
+        );
+    }
+    let text =
+        std::fs::read_to_string(&file).map_err(|e| format!("Could not read the history: {e}"))?;
+    parse_aider_history(&text)
+}
+
 // ── File handling ──────────────────────────────────────────────────────
 
 /// Read the import source: a folder of coding sessions, a Claude Code
 /// .jsonl, an Aider history .md, bare JSON, or a ZIP scanned for parseable
 /// JSON entries (largest first - conversations.json dwarfs the metadata).
-fn read_import_file(path: &PathBuf) -> Result<(String, Vec<ImportedConversation>), String> {
+/// `source_hint` carries the tool the user chose in the UI, so a folder
+/// pick parses as what they meant instead of guessing.
+fn read_import_file(
+    path: &PathBuf,
+    source_hint: Option<&str>,
+) -> Result<(String, Vec<ImportedConversation>), String> {
     let meta = std::fs::metadata(path).map_err(|e| format!("Could not open the file: {e}"))?;
     if meta.is_dir() {
-        return parse_claude_code_dir(path);
+        return match source_hint {
+            Some("aider") => parse_aider_dir(path),
+            Some("claude-code") => parse_claude_code_dir(path),
+            // No hint: try Claude Code sessions first, then an Aider repo.
+            _ => parse_claude_code_dir(path).or_else(|first_err| {
+                parse_aider_dir(path).map_err(|_| first_err)
+            }),
+        };
     }
     if meta.len() > MAX_IMPORT_BYTES {
         return Err("This file is larger than 512MB. Extract the ZIP and pick the conversations .json inside it.".to_string());
@@ -854,6 +884,7 @@ pub async fn import_conversations_scan(
     app: AppHandle,
     path: String,
     mode: Option<String>,
+    source_hint: Option<String>,
 ) -> Result<ImportSummary, String> {
     let path_buf = PathBuf::from(&path);
     let file_name = path_buf
@@ -862,10 +893,11 @@ pub async fn import_conversations_scan(
         .unwrap_or_else(|| "export".to_string());
 
     // Parse on a blocking thread - big files shouldn't stall the runtime.
-    let (source, mut conversations) =
-        tauri::async_runtime::spawn_blocking(move || read_import_file(&path_buf))
-            .await
-            .map_err(|e| e.to_string())??;
+    let (source, mut conversations) = tauri::async_runtime::spawn_blocking(move || {
+        read_import_file(&path_buf, source_hint.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
     if mode.as_deref() == Some("user_only") {
         apply_user_only(&mut conversations);
@@ -919,6 +951,64 @@ pub async fn import_conversations_scan(
 #[tauri::command]
 pub fn import_archives_list(app: AppHandle) -> Result<Vec<ImportSummary>, String> {
     Ok(load_manifest(&app)?.archives)
+}
+
+/// Where a coding assistant's history lives on this machine, found for the
+/// user - nobody should have to hunt hidden folders in a picker dialog.
+#[derive(Serialize)]
+pub struct CodingSourceDetect {
+    pub found: bool,
+    /// The folder to import when found (feed straight back into scan).
+    pub path: Option<String>,
+    pub project_count: usize,
+    pub session_count: usize,
+}
+
+/// Look for Claude Code's session store in its standard location
+/// (~/.claude/projects, per-project subfolders of .jsonl sessions).
+#[tauri::command]
+pub fn import_detect_claude_code(app: AppHandle) -> CodingSourceDetect {
+    let none = CodingSourceDetect {
+        found: false,
+        path: None,
+        project_count: 0,
+        session_count: 0,
+    };
+    let Ok(home) = app.path().home_dir() else { return none };
+    let root = home.join(".claude").join("projects");
+    if !root.is_dir() {
+        return none;
+    }
+    let mut project_count = 0usize;
+    let mut session_count = 0usize;
+    let Ok(entries) = std::fs::read_dir(&root) else { return none };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let count_sessions = |dir: &std::path::Path| -> usize {
+            std::fs::read_dir(dir)
+                .map(|es| {
+                    es.flatten()
+                        .filter(|e| e.path().extension().is_some_and(|x| x == "jsonl"))
+                        .count()
+                })
+                .unwrap_or(0)
+        };
+        if path.is_dir() {
+            let in_project = count_sessions(&path);
+            if in_project > 0 {
+                project_count += 1;
+                session_count += in_project;
+            }
+        } else if path.extension().is_some_and(|x| x == "jsonl") {
+            session_count += 1;
+        }
+    }
+    CodingSourceDetect {
+        found: session_count > 0,
+        path: Some(root.to_string_lossy().to_string()),
+        project_count,
+        session_count,
+    }
 }
 
 fn load_archive(app: &AppHandle, archive_id: &str) -> Result<ImportArchive, String> {
