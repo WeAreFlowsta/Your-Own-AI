@@ -67,6 +67,7 @@ const IMPORT_SOURCE_NAMES: Record<string, string> = {
   perplexity: "Perplexity",
   "claude-code": "Claude Code",
   aider: "Aider",
+  opencode: "OpenCode",
 };
 
 function importLabel(sourceAiId: string): string {

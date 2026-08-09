@@ -43,6 +43,7 @@ const SOURCE_NAMES: Record<string, string> = {
   perplexity: "Perplexity",
   "claude-code": "Claude Code",
   aider: "Aider",
+  opencode: "OpenCode",
 };
 
 function sourceName(source: string): string {
@@ -99,11 +100,14 @@ export default component$(() => {
   const codingOpen = useSignal(false);
   const bringMode = useSignal<"user_only" | "full">("user_only");
   /** Which coding assistant the user picked, and what auto-detection
-   *  found for it. Claude Code's session store has ONE standard home
-   *  (~/.claude/projects), so we find it ourselves - nobody should have
-   *  to unhide dotfolders in a picker dialog. */
-  const codingTool = useSignal<"claude-code" | "aider" | null>(null);
-  const ccDetect = useSignal<CodingDetect | null>(null);
+   *  found for it. Claude Code (~/.claude/projects) and OpenCode
+   *  (~/.local/share/opencode) have ONE standard home each, so we find
+   *  them ourselves - nobody should have to unhide dotfolders in a
+   *  picker dialog. */
+  const codingTool = useSignal<"claude-code" | "aider" | "opencode" | null>(
+    null,
+  );
+  const detects = useSignal<Record<string, CodingDetect>>({});
 
   const refresh = $(async () => {
     try {
@@ -238,7 +242,7 @@ export default component$(() => {
     async (
       path: string,
       mode: "user_only" | "full",
-      sourceHint?: "claude-code" | "aider",
+      sourceHint?: "claude-code" | "aider" | "opencode",
     ) => {
     busy.value = true;
     try {
@@ -279,41 +283,41 @@ export default component$(() => {
     }
   });
 
-  /** Pick a coding assistant: Claude Code auto-detects its standard
-   *  session store; Aider needs the user's project folder (we find the
-   *  hidden history file inside it ourselves). */
-  const selectTool = $(async (tool: "claude-code" | "aider") => {
+  /** Pick a coding assistant: Claude Code and OpenCode auto-detect their
+   *  standard session stores; Aider needs the user's project folder (we
+   *  find the hidden history file inside it ourselves). */
+  const DETECT_COMMANDS: Record<string, string> = {
+    "claude-code": "import_detect_claude_code",
+    opencode: "import_detect_opencode",
+  };
+  const selectTool = $(async (tool: "claude-code" | "aider" | "opencode") => {
     error.value = "";
     codingTool.value = codingTool.value === tool ? null : tool;
-    if (codingTool.value === "claude-code" && !ccDetect.value) {
+    const command = DETECT_COMMANDS[tool];
+    if (codingTool.value === tool && command && !detects.value[tool]) {
+      let result: CodingDetect;
       try {
         const { invoke } = await import("@tauri-apps/api/core");
-        ccDetect.value = await invoke<CodingDetect>(
-          "import_detect_claude_code",
-        );
+        result = await invoke<CodingDetect>(command);
       } catch {
-        ccDetect.value = {
-          found: false,
-          path: null,
-          project_count: 0,
-          session_count: 0,
-        };
+        result = { found: false, path: null, project_count: 0, session_count: 0 };
       }
+      detects.value = { ...detects.value, [tool]: result };
     }
   });
 
-  /** One-click import of the auto-detected Claude Code sessions. */
-  const importDetected = $(async () => {
-    const path = ccDetect.value?.path;
+  /** One-click import of an auto-detected session store. */
+  const importDetected = $(async (tool: "claude-code" | "opencode") => {
+    const path = detects.value[tool]?.path;
     if (!path) return;
     error.value = "";
     justImported.value = null;
-    await runImport(path, bringMode.value, "claude-code");
+    await runImport(path, bringMode.value, tool);
   });
 
   /** Manual fallback: pick a folder yourself (a Claude Code project
-   *  folder, or the repo you ran Aider in). */
-  const pickCodingFolder = $(async (hint: "claude-code" | "aider") => {
+   *  folder, OpenCode's data folder, or the repo you ran Aider in). */
+  const pickCodingFolder = $(async (hint: "claude-code" | "aider" | "opencode") => {
     error.value = "";
     justImported.value = null;
     try {
@@ -349,9 +353,9 @@ export default component$(() => {
       </div>
       <p class="mb-4 text-sm text-[var(--text-secondary)]">
         Bring your conversations with you - from AI chat apps like ChatGPT,
-        Claude, and Perplexity, or from coding assistants like Claude Code and
-        Aider. Your history becomes an encrypted archive on this machine.
-        Nothing is uploaded anywhere.
+        Claude, and Perplexity, or from coding assistants like Claude Code,
+        OpenCode, and Aider. Your history becomes an encrypted archive on this
+        machine. Nothing is uploaded anywhere.
       </p>
       <LiquidMetalButton
         onClick$={() => {
@@ -424,6 +428,16 @@ export default component$(() => {
             </LiquidMetalButton>
             <LiquidMetalButton
               variant="secondary"
+              onClick$={() => selectTool("opencode")}
+              disabled={busy.value}
+              class={`px-3 py-1.5 text-xs ${
+                codingTool.value === "opencode" ? "btn-amber-accent" : ""
+              }`}
+            >
+              OpenCode
+            </LiquidMetalButton>
+            <LiquidMetalButton
+              variant="secondary"
               onClick$={() => selectTool("aider")}
               disabled={busy.value}
               class={`px-3 py-1.5 text-xs ${
@@ -477,67 +491,77 @@ export default component$(() => {
             with either choice.
           </p>
 
-          {codingTool.value === "claude-code" && (
-            <div class="mt-4">
-              {ccDetect.value === null ? (
-                <p class="text-xs text-[var(--text-secondary)]">
-                  Looking for your Claude Code sessions…
-                </p>
-              ) : ccDetect.value.found ? (
-                <>
-                  <p class="text-xs text-[var(--text-secondary)]">
-                    Found your Claude Code sessions:{" "}
-                    <span class="font-medium text-[var(--text-primary)]">
-                      {ccDetect.value.session_count} session
-                      {ccDetect.value.session_count === 1 ? "" : "s"}
-                      {ccDetect.value.project_count > 0
-                        ? ` across ${ccDetect.value.project_count} project${
-                            ccDetect.value.project_count === 1 ? "" : "s"
-                          }`
-                        : ""}
-                    </span>
-                    .
-                  </p>
-                  <div class="mt-2 flex flex-wrap items-center gap-2">
-                    <LiquidMetalButton
-                      variant="secondary"
-                      onClick$={importDetected}
-                      disabled={busy.value}
-                      class="px-3 py-1.5 text-xs"
-                    >
-                      {busy.value ? "Reading sessions…" : "Import them"}
-                    </LiquidMetalButton>
-                    <LiquidMetalButton
-                      variant="secondary"
-                      onClick$={() => pickCodingFolder("claude-code")}
-                      disabled={busy.value}
-                      class="px-3 py-1.5 text-xs"
-                    >
-                      Choose a different folder
-                    </LiquidMetalButton>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <p class="text-xs text-[var(--text-secondary)]">
-                    Claude Code's usual session folder wasn't found on this
-                    machine. If your sessions live somewhere else, point us
-                    at that folder.
-                  </p>
-                  <div class="mt-2">
-                    <LiquidMetalButton
-                      variant="secondary"
-                      onClick$={() => pickCodingFolder("claude-code")}
-                      disabled={busy.value}
-                      class="px-3 py-1.5 text-xs"
-                    >
-                      {busy.value ? "Reading sessions…" : "Choose folder"}
-                    </LiquidMetalButton>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
+          {(codingTool.value === "claude-code" ||
+            codingTool.value === "opencode") &&
+            (() => {
+              const tool = codingTool.value as "claude-code" | "opencode";
+              const d = detects.value[tool];
+              const name = SOURCE_NAMES[tool];
+              return (
+                <div class="mt-4">
+                  {!d ? (
+                    <p class="text-xs text-[var(--text-secondary)]">
+                      Looking for your {name} sessions…
+                    </p>
+                  ) : d.found ? (
+                    <>
+                      <p class="text-xs text-[var(--text-secondary)]">
+                        Found your {name} sessions:{" "}
+                        <span class="font-medium text-[var(--text-primary)]">
+                          {d.session_count > 0
+                            ? `${d.session_count} session${
+                                d.session_count === 1 ? "" : "s"
+                              }`
+                            : "sessions"}
+                          {d.project_count > 0
+                            ? ` across ${d.project_count} project${
+                                d.project_count === 1 ? "" : "s"
+                              }`
+                            : ""}
+                        </span>
+                        .
+                      </p>
+                      <div class="mt-2 flex flex-wrap items-center gap-2">
+                        <LiquidMetalButton
+                          variant="secondary"
+                          onClick$={() => importDetected(tool)}
+                          disabled={busy.value}
+                          class="px-3 py-1.5 text-xs"
+                        >
+                          {busy.value ? "Reading sessions…" : "Import them"}
+                        </LiquidMetalButton>
+                        <LiquidMetalButton
+                          variant="secondary"
+                          onClick$={() => pickCodingFolder(tool)}
+                          disabled={busy.value}
+                          class="px-3 py-1.5 text-xs"
+                        >
+                          Choose a different folder
+                        </LiquidMetalButton>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p class="text-xs text-[var(--text-secondary)]">
+                        {name}'s usual data folder wasn't found on this
+                        machine. If your sessions live somewhere else, point
+                        us at that folder.
+                      </p>
+                      <div class="mt-2">
+                        <LiquidMetalButton
+                          variant="secondary"
+                          onClick$={() => pickCodingFolder(tool)}
+                          disabled={busy.value}
+                          class="px-3 py-1.5 text-xs"
+                        >
+                          {busy.value ? "Reading sessions…" : "Choose folder"}
+                        </LiquidMetalButton>
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+            })()}
 
           {codingTool.value === "aider" && (
             <div class="mt-4">

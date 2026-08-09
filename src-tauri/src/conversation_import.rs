@@ -699,6 +699,171 @@ fn apply_user_only(conversations: &mut Vec<ImportedConversation>) {
     conversations.retain(|c| !c.messages.is_empty());
 }
 
+// ── OpenCode ───────────────────────────────────────────────────────────
+//
+// OpenCode stores sessions in a SQLite db (opencode.db in its data dir,
+// ~/.local/share/opencode on every OS - it applies the XDG layout even on
+// Windows). Schema verified against a real 1.18 db generated locally:
+// session(id, parent_id, title, time_created ms), message(id, session_id,
+// time_created ms, data JSON w/ role), part(id, message_id, data JSON w/
+// type; "text" parts carry the content, tool/step/reasoning parts are
+// separate types). parent_id marks subagent sessions - skipped, like
+// Claude Code sidechains. NOTE: older OpenCode versions used a JSON-file
+// tree instead; current versions migrate it into the db on first launch.
+
+/// Message envelope JSON from the `message.data` column.
+#[derive(Deserialize)]
+struct OpenCodeMessageData {
+    role: Option<String>,
+}
+
+/// Part JSON from the `part.data` column (only the fields we read).
+#[derive(Deserialize)]
+struct OpenCodePartData {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    text: Option<String>,
+    #[serde(default)]
+    synthetic: bool,
+    #[serde(default)]
+    ignored: bool,
+}
+
+/// Parse an OpenCode session database into conversations. Copies the db
+/// (plus -wal/-shm if present) to a temp dir first so a running OpenCode
+/// is never locked or raced, then reads the copy.
+fn parse_opencode_db(db_path: &std::path::Path) -> Result<(String, Vec<ImportedConversation>), String> {
+    let tmp = std::env::temp_dir().join(format!("yoai-oc-import-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    let copy = tmp.join("opencode.db");
+    std::fs::copy(db_path, &copy).map_err(|e| format!("Could not read the OpenCode data: {e}"))?;
+    for ext in ["-wal", "-shm"] {
+        let side = db_path.with_file_name(format!("opencode.db{ext}"));
+        if side.exists() {
+            let _ = std::fs::copy(&side, tmp.join(format!("opencode.db{ext}")));
+        }
+    }
+    let result = read_opencode_copy(&copy);
+    let _ = std::fs::remove_dir_all(&tmp);
+    result
+}
+
+fn read_opencode_copy(copy: &std::path::Path) -> Result<(String, Vec<ImportedConversation>), String> {
+    let conn = rusqlite::Connection::open(copy)
+        .map_err(|e| format!("Could not open the OpenCode database: {e}"))?;
+
+    // Text parts per message, in part-id order (prt_ ids are monotonic).
+    let mut texts: HashMap<String, Vec<String>> = HashMap::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT message_id, data FROM part ORDER BY id")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows.flatten() {
+            let (message_id, data) = row;
+            let Ok(part) = serde_json::from_str::<OpenCodePartData>(&data) else { continue };
+            if part.kind.as_deref() != Some("text") || part.synthetic || part.ignored {
+                continue;
+            }
+            let Some(text) = part.text else { continue };
+            if text.trim().is_empty() {
+                continue;
+            }
+            texts.entry(message_id).or_default().push(text);
+        }
+    }
+
+    // Messages per session, in time order.
+    let mut by_session: HashMap<String, Vec<ImportedMessage>> = HashMap::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT id, session_id, time_created, data FROM message ORDER BY time_created")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows.flatten() {
+            let (id, session_id, time_ms, data) = row;
+            let Ok(msg) = serde_json::from_str::<OpenCodeMessageData>(&data) else { continue };
+            let Some(role) = msg.role.as_deref().and_then(normalize_role) else { continue };
+            let Some(parts) = texts.remove(&id) else { continue };
+            let text = parts.join("\n");
+            let text = text.trim();
+            if text.is_empty() {
+                continue;
+            }
+            by_session.entry(session_id).or_default().push(ImportedMessage {
+                role: role.to_string(),
+                text: text.to_string(),
+                ts_us: Some(time_ms * 1000),
+            });
+        }
+    }
+
+    // Top-level sessions (parent_id set = subagent chatter, skipped).
+    let mut convs: Vec<ImportedConversation> = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare("SELECT id, title, time_created FROM session WHERE parent_id IS NULL ORDER BY time_created")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows.flatten() {
+            let (id, title, time_ms) = row;
+            let Some(messages) = by_session.remove(&id) else { continue };
+            if messages.is_empty() {
+                continue;
+            }
+            let title = if title.trim().is_empty() {
+                messages
+                    .iter()
+                    .find(|m| m.role == "user")
+                    .map(|m| m.text.chars().take(60).collect::<String>())
+                    .unwrap_or_else(|| "Coding session".to_string())
+            } else {
+                title.trim().to_string()
+            };
+            convs.push(ImportedConversation {
+                source_id: Some(id),
+                title,
+                created_at_us: Some(time_ms * 1000),
+                messages,
+            });
+        }
+    }
+
+    if convs.is_empty() {
+        return Err(
+            "No sessions found in this OpenCode data. If you use an older OpenCode version, update it and open it once - it moves your history into the new format.".to_string(),
+        );
+    }
+    Ok(("opencode".to_string(), convs))
+}
+
+/// OpenCode's data dir - the XDG path on every OS (a known OpenCode quirk:
+/// it applies the Linux layout on Windows and macOS too).
+fn opencode_db_path(home: &std::path::Path) -> PathBuf {
+    home.join(".local").join("share").join("opencode").join("opencode.db")
+}
+
 /// The Aider history file a repo folder carries.
 const AIDER_HISTORY_FILE: &str = ".aider.chat.history.md";
 
@@ -730,12 +895,25 @@ fn read_import_file(
 ) -> Result<(String, Vec<ImportedConversation>), String> {
     let meta = std::fs::metadata(path).map_err(|e| format!("Could not open the file: {e}"))?;
     if meta.is_dir() {
+        let oc_db = path.join("opencode.db");
         return match source_hint {
             Some("aider") => parse_aider_dir(path),
             Some("claude-code") => parse_claude_code_dir(path),
-            // No hint: try Claude Code sessions first, then an Aider repo.
+            Some("opencode") => {
+                if oc_db.is_file() {
+                    parse_opencode_db(&oc_db)
+                } else {
+                    Err("No OpenCode data found in this folder. Pick OpenCode's data folder - it contains a file named opencode.db.".to_string())
+                }
+            }
+            // No hint: try Claude Code sessions, then OpenCode, then Aider.
             _ => parse_claude_code_dir(path).or_else(|first_err| {
-                parse_aider_dir(path).map_err(|_| first_err)
+                if oc_db.is_file() {
+                    parse_opencode_db(&oc_db)
+                } else {
+                    Err(first_err.clone())
+                }
+                .or_else(|_| parse_aider_dir(path).map_err(|_| first_err))
             }),
         };
     }
@@ -752,6 +930,9 @@ fn read_import_file(
             return Err("This session file contains no conversation messages.".to_string());
         }
         return Ok(("claude-code".to_string(), vec![conv]));
+    }
+    if ext == "db" {
+        return parse_opencode_db(path);
     }
     let is_zip = ext == "zip";
     if !is_zip {
@@ -962,6 +1143,57 @@ pub struct CodingSourceDetect {
     pub path: Option<String>,
     pub project_count: usize,
     pub session_count: usize,
+}
+
+/// Look for OpenCode's session database in its standard location. Counts
+/// top-level sessions and distinct projects with a read-only open (a
+/// running OpenCode is unaffected).
+#[tauri::command]
+pub fn import_detect_opencode(app: AppHandle) -> CodingSourceDetect {
+    let none = CodingSourceDetect {
+        found: false,
+        path: None,
+        project_count: 0,
+        session_count: 0,
+    };
+    let Ok(home) = app.path().home_dir() else { return none };
+    let db = opencode_db_path(&home);
+    if !db.is_file() {
+        return none;
+    }
+    let Ok(conn) = rusqlite::Connection::open_with_flags(
+        &db,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) else {
+        // Present but unreadable right now - still offer the import; the
+        // copy-based parse gets its own chance (and its own error).
+        return CodingSourceDetect {
+            found: true,
+            path: Some(db.to_string_lossy().to_string()),
+            project_count: 0,
+            session_count: 0,
+        };
+    };
+    let sessions: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM session WHERE parent_id IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    let projects: i64 = conn
+        .query_row(
+            "SELECT COUNT(DISTINCT project_id) FROM session WHERE parent_id IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    CodingSourceDetect {
+        found: sessions > 0,
+        path: Some(db.to_string_lossy().to_string()),
+        project_count: projects as usize,
+        session_count: sessions as usize,
+    }
 }
 
 /// Look for Claude Code's session store in its standard location
@@ -1429,6 +1661,81 @@ mod tests {
         assert_eq!(source, "perplexity");
         assert_eq!(convs[0].messages.len(), 2);
         assert!(convs[0].messages[0].ts_us.is_some());
+    }
+
+    /// Build an OpenCode-shaped SQLite fixture matching the real 1.18
+    /// schema (verified against a locally generated db) and parse it.
+    #[test]
+    fn opencode_db_parses() {
+        let dir = std::env::temp_dir().join(format!("yoai-oc-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("opencode.db");
+        let _ = std::fs::remove_file(&db_path);
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT, parent_id TEXT, title TEXT NOT NULL, time_created INTEGER NOT NULL);
+                 CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
+                 CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, data TEXT NOT NULL);",
+            )
+            .unwrap();
+            conn.execute_batch(r#"
+                INSERT INTO session VALUES ('ses_1','prj_1',NULL,'Fix the login bug',1786275050508);
+                INSERT INTO session VALUES ('ses_sub','prj_1','ses_1','subagent chatter',1786275050600);
+                INSERT INTO message VALUES ('msg_1','ses_1',1786275050633,'{"role":"user","time":{"created":1786275050633}}');
+                INSERT INTO message VALUES ('msg_2','ses_1',1786275051218,'{"role":"assistant","time":{"created":1786275051218}}');
+                INSERT INTO message VALUES ('msg_sub','ses_sub',1786275051300,'{"role":"user"}');
+                INSERT INTO part VALUES ('prt_1','msg_1','{"type":"text","text":"the login times out on slow networks"}');
+                INSERT INTO part VALUES ('prt_2','msg_2','{"type":"step-start"}');
+                INSERT INTO part VALUES ('prt_3','msg_2','{"type":"text","text":"Found it - the token check races the redirect."}');
+                INSERT INTO part VALUES ('prt_4','msg_2','{"type":"tool","text":"tool noise"}');
+                INSERT INTO part VALUES ('prt_5','msg_2','{"type":"text","text":"injected","synthetic":true}');
+                INSERT INTO part VALUES ('prt_6','msg_2','{"type":"step-finish"}');
+                INSERT INTO part VALUES ('prt_7','msg_sub','{"type":"text","text":"sub text"}');
+            "#)
+            .unwrap();
+        }
+        let (source, convs) = parse_opencode_db(&db_path).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(source, "opencode");
+        assert_eq!(convs.len(), 1, "subagent session must be skipped");
+        assert_eq!(convs[0].title, "Fix the login bug");
+        let texts: Vec<&str> = convs[0].messages.iter().map(|m| m.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            vec![
+                "the login times out on slow networks",
+                "Found it - the token check races the redirect."
+            ],
+            "only text parts survive; tool/step/synthetic parts are dropped"
+        );
+        assert_eq!(convs[0].messages[0].role, "user");
+        assert_eq!(convs[0].messages[0].ts_us, Some(1786275050633 * 1000));
+        assert_eq!(convs[0].created_at_us, Some(1786275050508 * 1000));
+    }
+
+    /// Dogfood against a REAL OpenCode database (generated by running the
+    /// actual OpenCode CLI). Ignored by default; run with:
+    /// YOAI_OC_DB=/path/to/opencode.db cargo test oc_dogfood -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn oc_dogfood_real_db() {
+        let Ok(path) = std::env::var("YOAI_OC_DB") else { return };
+        let (source, convs) = parse_opencode_db(std::path::Path::new(&path)).unwrap();
+        assert_eq!(source, "opencode");
+        let (mut users, mut assts) = (0, 0);
+        for c in &convs {
+            assert!(!c.title.trim().is_empty());
+            for m in &c.messages {
+                if m.role == "user" { users += 1 } else { assts += 1 }
+                assert!(m.ts_us.is_some());
+            }
+        }
+        println!(
+            "conversations: {} | user msgs: {} | assistant msgs: {}",
+            convs.len(), users, assts
+        );
+        assert!(!convs.is_empty());
     }
 
     /// Dogfood harness against the developer's own local Claude Code data.
