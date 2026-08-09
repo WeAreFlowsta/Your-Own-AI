@@ -46,7 +46,10 @@ export interface KnowledgeDocument {
   addedAt: number;
 }
 
-/** Cap entries per AI (drop oldest) so the per-AI blob can't grow unbounded. */
+/** Cap EPISODIC entries per AI (drop oldest) so the per-AI blob can't grow
+ *  unbounded. Authored knowledge (documents, lore the user gave the AI) is
+ *  deliberately exempt: the user placed it there, so chat volume must never
+ *  evict it. */
 const MAX_PER_AI = 1000;
 /** Cap stored/injected text length, to bound both the store and the prompt. */
 const MAX_TEXT = 600;
@@ -231,10 +234,13 @@ export async function indexTurn(input: {
     }
   });
 
-  const capped = existing.slice(-MAX_PER_AI);
+  // Cap episodic only - authored knowledge is never evicted by chat volume.
+  const authored = existing.filter((e) => e.kind === "authored");
+  const episodic = existing.filter((e) => e.kind !== "authored").slice(-MAX_PER_AI);
+  const capped = [...authored, ...episodic];
   await saveEmb(aiId, capped);
   console.log(
-    `[Memory] Indexed turn for AI ${aiId.slice(0, 8)} (${capped.length} memories)`,
+    `[Memory] Indexed turn for AI ${aiId.slice(0, 8)} (${episodic.length} memories, ${authored.length} knowledge entries)`,
   );
 }
 

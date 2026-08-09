@@ -133,10 +133,7 @@ pub async fn index_turn(app: &AppHandle, ai_id: &str, conversation_hash: &str, u
         created_at: now_micros(),
         source: None,
     });
-    let len = existing.len();
-    if len > MAX_PER_AI {
-        existing.drain(0..len - MAX_PER_AI);
-    }
+    cap_episodic(&mut existing);
     let hc_state2 = app.state::<Arc<HolochainState>>();
     let _ = crate::transcript_memory::save_transcript_embeddings(
         app.clone(),
@@ -144,6 +141,26 @@ pub async fn index_turn(app: &AppHandle, ai_id: &str, conversation_hash: &str, u
         existing,
         hc_state2,
     );
+}
+
+/// Drop the oldest EPISODIC entries over the cap. Authored knowledge
+/// (documents, lore the user gave the AI) is deliberately exempt: the user
+/// placed it there, so chat volume must never evict it. Mirrors the same
+/// rule in `transcriptMemory.ts` `indexTurn`.
+fn cap_episodic(existing: &mut Vec<TranscriptEmbedding>) {
+    let episodic_count = existing.iter().filter(|e| e.kind != "authored").count();
+    if episodic_count <= MAX_PER_AI {
+        return;
+    }
+    let mut to_drop = episodic_count - MAX_PER_AI;
+    existing.retain(|e| {
+        if to_drop > 0 && e.kind != "authored" {
+            to_drop -= 1;
+            false
+        } else {
+            true
+        }
+    });
 }
 
 /// Top relevant entries: absolute floor + a relative margin off the best match
@@ -309,4 +326,45 @@ pub async fn build_memory_block(
     }
 
     block
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(kind: &str, id: usize) -> TranscriptEmbedding {
+        TranscriptEmbedding {
+            id: id.to_string(),
+            conversation_hash: "c".into(),
+            role: "user".into(),
+            text: "t".into(),
+            vector: vec![],
+            kind: kind.into(),
+            created_at: id as i64,
+            source: None,
+        }
+    }
+
+    #[test]
+    fn cap_drops_oldest_episodic_only() {
+        // 2 authored at the FRONT (oldest) + MAX_PER_AI + 3 episodic.
+        let mut all: Vec<TranscriptEmbedding> = vec![entry("authored", 0), entry("authored", 1)];
+        all.extend((2..MAX_PER_AI + 5).map(|i| entry("episodic", i)));
+        cap_episodic(&mut all);
+        let authored = all.iter().filter(|e| e.kind == "authored").count();
+        let episodic = all.iter().filter(|e| e.kind != "authored").count();
+        assert_eq!(authored, 2, "authored knowledge must never be evicted");
+        assert_eq!(episodic, MAX_PER_AI);
+        // The dropped entries are the OLDEST episodic ones (ids 2, 3, 4).
+        assert!(!all.iter().any(|e| e.id == "2" || e.id == "3" || e.id == "4"));
+        assert!(all.iter().any(|e| e.id == (MAX_PER_AI + 4).to_string()));
+    }
+
+    #[test]
+    fn cap_noop_under_limit() {
+        let mut all: Vec<TranscriptEmbedding> =
+            (0..10).map(|i| entry(if i % 2 == 0 { "episodic" } else { "authored" }, i)).collect();
+        cap_episodic(&mut all);
+        assert_eq!(all.len(), 10);
+    }
 }
