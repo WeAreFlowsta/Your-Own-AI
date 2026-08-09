@@ -81,6 +81,19 @@ export default component$(() => {
         .then((m) => m.resumeIfPending())
         .catch(() => {});
     }, 20_000);
+
+    // One-time repair: restore facts left hidden by forgets that removed
+    // their superseding fact before restore-on-forget existed.
+    setTimeout(() => {
+      const FLAG = "memory-orphan-repair-v1";
+      if (localStorage.getItem(FLAG)) return;
+      import("../utils/memory")
+        .then(async (m) => {
+          await m.repairMemoryOrphans();
+          localStorage.setItem(FLAG, "done");
+        })
+        .catch(() => {});
+    }, 25_000);
   });
 
   // Load saved theme from localStorage on mount + dismiss loading overlay + global liquid metal hover

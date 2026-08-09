@@ -367,8 +367,46 @@ export function setMemoryPaused(paused: boolean): void {
 }
 
 /** Forget a single fact (hard delete from the store). */
+/**
+ * A forget can remove the fact that superseded an older one (bulk-forgetting
+ * an import, or trashing a wrong "update"), leaving that subject+predicate
+ * with a hidden predecessor and no live fact - the user's original memory
+ * silently gone from view. Restore the newest such predecessor per pair:
+ * forgetting the replacement brings the original back. Notes are exempt
+ * (many live at once by design; they are never superseded).
+ */
+function restoreOrphanedPredecessors(facts: Fact[]): boolean {
+  const key = (f: Fact) => `${f.subject} ${f.predicate}`;
+  const live = new Set(facts.filter((f) => f.valid_to == null).map(key));
+  const newestOrphan = new Map<string, Fact>();
+  for (const f of facts) {
+    if (f.valid_to == null || f.predicate === "note" || live.has(key(f))) {
+      continue;
+    }
+    const cur = newestOrphan.get(key(f));
+    if (!cur || (f.valid_to ?? 0) > (cur.valid_to ?? 0)) {
+      newestOrphan.set(key(f), f);
+    }
+  }
+  for (const f of newestOrphan.values()) {
+    f.valid_to = null;
+    f.updated_at = Date.now() * 1000;
+  }
+  return newestOrphan.size > 0;
+}
+
+/** One-time launch repair for stores that already contain orphaned
+ *  predecessors (created before restore-on-forget existed). */
+export async function repairMemoryOrphans(): Promise<void> {
+  const facts = await getFacts();
+  if (restoreOrphanedPredecessors(facts)) {
+    await saveFacts(facts);
+  }
+}
+
 export async function forgetFact(id: string): Promise<Fact[]> {
   const facts = (await getFacts()).filter((f) => f.id !== id);
+  restoreOrphanedPredecessors(facts);
   await saveFacts(facts);
   return facts;
 }
@@ -399,6 +437,7 @@ export async function forgetAll(sourceAiId?: string): Promise<void> {
     return;
   }
   const facts = (await getFacts()).filter((f) => f.source_ai_id !== sourceAiId);
+  restoreOrphanedPredecessors(facts);
   await saveFacts(facts);
 }
 
