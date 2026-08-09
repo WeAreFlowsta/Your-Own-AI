@@ -435,21 +435,247 @@ pub fn detect_and_parse(text: &str) -> Result<(String, Vec<ImportedConversation>
     Err("This file isn't a recognized export. Supported today: ChatGPT, Claude, and Perplexity data exports (the .zip or the conversations .json inside it).".to_string())
 }
 
+// ── Coding-assistant sources ───────────────────────────────────────────
+
+/// One line of a Claude Code session file (only the fields we read).
+#[derive(Deserialize)]
+struct ClaudeCodeLine {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    message: Option<ClaudeCodeMessage>,
+    timestamp: Option<String>,
+    #[serde(rename = "aiTitle")]
+    ai_title: Option<String>,
+    #[serde(rename = "isSidechain", default)]
+    is_sidechain: bool,
+    #[serde(rename = "isMeta", default)]
+    is_meta: bool,
+}
+
+#[derive(Deserialize)]
+struct ClaudeCodeMessage {
+    content: Option<serde_json::Value>,
+}
+
+/// Synthetic / harness text a human never typed - skipped on import.
+fn is_harness_text(t: &str) -> bool {
+    let t = t.trim_start();
+    t.starts_with("<system-reminder")
+        || t.starts_with("<local-command")
+        || t.starts_with("<command-name")
+        || t.starts_with("<task-notification")
+        || t.starts_with("<ide_")
+        || t.starts_with("Caveat: The messages below")
+        || t.starts_with("This session is being continued")
+}
+
+/// Extract the text blocks from a Claude Code message content value
+/// (string, or an array of typed blocks - only `text` blocks count; tool
+/// results, tool calls, and thinking are never imported).
+fn claude_code_text(content: &serde_json::Value) -> String {
+    match content {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(blocks) => blocks
+            .iter()
+            .filter(|b| b["type"] == "text")
+            .filter_map(|b| b["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+/// Parse one Claude Code session .jsonl into one conversation. Reads line
+/// by line so a 100MB session never lives in memory whole.
+fn parse_claude_code_session(path: &PathBuf) -> Result<ImportedConversation, String> {
+    use std::io::BufRead;
+    let file = std::fs::File::open(path).map_err(|e| format!("Could not open {path:?}: {e}"))?;
+    let reader = std::io::BufReader::new(file);
+
+    let mut title: Option<String> = None;
+    let mut created: Option<i64> = None;
+    let mut messages: Vec<ImportedMessage> = Vec::new();
+
+    for line in reader.lines() {
+        let Ok(line) = line else { continue };
+        let Ok(entry) = serde_json::from_str::<ClaudeCodeLine>(&line) else { continue };
+        if entry.is_sidechain || entry.is_meta {
+            continue;
+        }
+        if let Some(t) = entry.ai_title {
+            if !t.trim().is_empty() {
+                title = Some(t.trim().to_string());
+            }
+            continue;
+        }
+        let kind = entry.kind.as_deref().unwrap_or("");
+        if kind != "user" && kind != "assistant" {
+            continue;
+        }
+        let Some(msg) = entry.message else { continue };
+        let Some(content) = msg.content else { continue };
+        let text = claude_code_text(&content);
+        let text = text.trim();
+        if text.is_empty() || is_harness_text(text) {
+            continue;
+        }
+        let ts = entry.timestamp.as_deref().and_then(iso_to_micros);
+        if created.is_none() {
+            created = ts;
+        }
+        messages.push(ImportedMessage {
+            role: if kind == "user" { "user" } else { "assistant" }.to_string(),
+            text: text.to_string(),
+            ts_us: ts,
+        });
+    }
+
+    let title = title.unwrap_or_else(|| {
+        messages
+            .iter()
+            .find(|m| m.role == "user")
+            .map(|m| m.text.chars().take(60).collect::<String>())
+            .unwrap_or_else(|| "Coding session".to_string())
+    });
+
+    Ok(ImportedConversation {
+        source_id: path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string()),
+        title,
+        created_at_us: created,
+        messages,
+    })
+}
+
+/// A folder of Claude Code sessions: every .jsonl becomes a conversation.
+fn parse_claude_code_dir(dir: &PathBuf) -> Result<(String, Vec<ImportedConversation>), String> {
+    let mut convs = Vec::new();
+    for entry in std::fs::read_dir(dir).map_err(|e| format!("Could not read the folder: {e}"))? {
+        let Ok(entry) = entry else { continue };
+        let path = entry.path();
+        if path.extension().is_none_or(|e| e != "jsonl") {
+            continue;
+        }
+        if entry
+            .metadata()
+            .map(|m| m.len() > MAX_IMPORT_BYTES)
+            .unwrap_or(true)
+        {
+            continue;
+        }
+        match parse_claude_code_session(&path) {
+            Ok(c) if !c.messages.is_empty() => convs.push(c),
+            _ => {}
+        }
+    }
+    if convs.is_empty() {
+        return Err(
+            "No coding sessions found in this folder. Pick a folder containing .jsonl session files (for Claude Code: a folder inside ~/.claude/projects).".to_string(),
+        );
+    }
+    convs.sort_by_key(|c| c.created_at_us.unwrap_or(0));
+    Ok(("claude-code".to_string(), convs))
+}
+
+/// Aider's .aider.chat.history.md: "# aider chat started at <ts>" opens a
+/// session; "#### " lines are the user's prompts; other prose is the
+/// assistant. One file = many conversations.
+fn parse_aider_history(text: &str) -> Result<(String, Vec<ImportedConversation>), String> {
+    let mut convs: Vec<ImportedConversation> = Vec::new();
+    let mut current: Option<ImportedConversation> = None;
+    // Accumulators for run-together lines of the same speaker.
+    let mut user_buf = String::new();
+    let mut ai_buf = String::new();
+
+    fn flush(buf: &mut String, role: &str, conv: &mut Option<ImportedConversation>) {
+        let t = buf.trim();
+        if !t.is_empty() {
+            if let Some(c) = conv.as_mut() {
+                c.messages.push(ImportedMessage {
+                    role: role.to_string(),
+                    text: t.to_string(),
+                    ts_us: None,
+                });
+            }
+        }
+        buf.clear();
+    }
+
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("# aider chat started at ") {
+            flush(&mut user_buf, "user", &mut current);
+            flush(&mut ai_buf, "assistant", &mut current);
+            if let Some(c) = current.take() {
+                if !c.messages.is_empty() {
+                    convs.push(c);
+                }
+            }
+            let ts = iso_to_micros(rest.trim());
+            current = Some(ImportedConversation {
+                source_id: None,
+                title: format!("Aider session {}", rest.trim()),
+                created_at_us: ts,
+                messages: Vec::new(),
+            });
+        } else if let Some(prompt) = line.strip_prefix("#### ") {
+            flush(&mut ai_buf, "assistant", &mut current);
+            if !user_buf.is_empty() {
+                user_buf.push('\n');
+            }
+            user_buf.push_str(prompt);
+        } else {
+            flush(&mut user_buf, "user", &mut current);
+            if !ai_buf.is_empty() {
+                ai_buf.push('\n');
+            }
+            ai_buf.push_str(line);
+        }
+    }
+    flush(&mut user_buf, "user", &mut current);
+    flush(&mut ai_buf, "assistant", &mut current);
+    if let Some(c) = current.take() {
+        if !c.messages.is_empty() {
+            convs.push(c);
+        }
+    }
+
+    if convs.is_empty() {
+        return Err("This looks like an Aider history file, but no sessions were found in it.".to_string());
+    }
+    Ok(("aider".to_string(), convs))
+}
+
 // ── File handling ──────────────────────────────────────────────────────
 
-/// Read the import file: bare JSON, or a ZIP scanned for parseable JSON
-/// entries (largest first - conversations.json dwarfs the metadata files).
+/// Read the import source: a folder of coding sessions, a Claude Code
+/// .jsonl, an Aider history .md, bare JSON, or a ZIP scanned for parseable
+/// JSON entries (largest first - conversations.json dwarfs the metadata).
 fn read_import_file(path: &PathBuf) -> Result<(String, Vec<ImportedConversation>), String> {
     let meta = std::fs::metadata(path).map_err(|e| format!("Could not open the file: {e}"))?;
+    if meta.is_dir() {
+        return parse_claude_code_dir(path);
+    }
     if meta.len() > MAX_IMPORT_BYTES {
         return Err("This file is larger than 512MB. Extract the ZIP and pick the conversations .json inside it.".to_string());
     }
-    let is_zip = path
+    let ext = path
         .extension()
-        .map(|e| e.eq_ignore_ascii_case("zip"))
-        .unwrap_or(false);
+        .map(|e| e.to_ascii_lowercase().to_string_lossy().to_string())
+        .unwrap_or_default();
+    if ext == "jsonl" {
+        let conv = parse_claude_code_session(path)?;
+        if conv.messages.is_empty() {
+            return Err("This session file contains no conversation messages.".to_string());
+        }
+        return Ok(("claude-code".to_string(), vec![conv]));
+    }
+    let is_zip = ext == "zip";
     if !is_zip {
         let text = std::fs::read_to_string(path).map_err(|e| format!("Could not read the file: {e}"))?;
+        if text.trim_start().starts_with("# aider chat started at") {
+            return parse_aider_history(&text);
+        }
         return detect_and_parse(&text);
     }
 
@@ -567,9 +793,15 @@ fn summarize(archive: &ImportArchive) -> ImportSummary {
 // ── Commands ───────────────────────────────────────────────────────────
 
 /// Stage 1: parse the picked file, store the encrypted archive, return the
-/// summary. Synchronous work measured in seconds, not minutes.
+/// summary. Synchronous work measured in seconds, not minutes. `mode`
+/// "user_only" keeps just what the user said - the assistant's replies are
+/// never stored (the "Just what you said" import choice); default is full.
 #[tauri::command]
-pub async fn import_conversations_scan(app: AppHandle, path: String) -> Result<ImportSummary, String> {
+pub async fn import_conversations_scan(
+    app: AppHandle,
+    path: String,
+    mode: Option<String>,
+) -> Result<ImportSummary, String> {
     let path_buf = PathBuf::from(&path);
     let file_name = path_buf
         .file_name()
@@ -581,6 +813,12 @@ pub async fn import_conversations_scan(app: AppHandle, path: String) -> Result<I
         tauri::async_runtime::spawn_blocking(move || read_import_file(&path_buf))
             .await
             .map_err(|e| e.to_string())??;
+
+    if mode.as_deref() == Some("user_only") {
+        for conv in &mut conversations {
+            conv.messages.retain(|m| m.role == "user");
+        }
+    }
 
     // Drop empty conversations; an export full of empty threads is noise.
     conversations.retain(|c| !c.messages.is_empty());
