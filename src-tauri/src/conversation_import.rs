@@ -1122,6 +1122,26 @@ async fn commit_encrypted(
     ExternIO::decode(&result).map_err(|e| e.to_string())
 }
 
+/// Adoptions currently writing, keyed "archive_id:ai_id". A second click
+/// (or a launch-resume racing a click) must not start an overlapping loop:
+/// both would read the existing-conversations set before either writes,
+/// and every conversation would land twice.
+fn adoptions_in_flight() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static IN_FLIGHT: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    IN_FLIGHT.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// Removes its key on every exit path, including errors.
+struct AdoptionGuard(String);
+impl Drop for AdoptionGuard {
+    fn drop(&mut self) {
+        if let Ok(mut set) = adoptions_in_flight().lock() {
+            set.remove(&self.0);
+        }
+    }
+}
+
 /// Adopt an archive into one AI's conversations: every conversation is
 /// written onto that AI's chain with its ORIGINAL timestamps and an
 /// "import:<source>" label. Re-running after an interruption completes the
@@ -1137,6 +1157,19 @@ pub async fn import_archive_adopt(
 ) -> Result<u32, String> {
     use holochain_types::prelude::ExternIO;
     use tauri::Emitter;
+
+    let flight_key = format!("{archive_id}:{ai_id}");
+    {
+        let mut set = adoptions_in_flight()
+            .lock()
+            .map_err(|_| "Adoption tracking unavailable".to_string())?;
+        if !set.insert(flight_key.clone()) {
+            return Err(
+                "This archive is already being added to that AI's conversations - it's still running in the background.".to_string(),
+            );
+        }
+    }
+    let _guard = AdoptionGuard(flight_key);
 
     let manager = hc_state.get()?;
     let key = manager.data_key()?;
@@ -1256,6 +1289,17 @@ pub async fn import_archive_adopt(
         written,
         archive.source,
         ai_name
+    );
+    // The page that started this may be long gone - the done event lets
+    // whoever is mounted now refresh and kick the episodic summaries.
+    let _ = app.emit(
+        "import-adopt-done",
+        serde_json::json!({
+            "archiveId": archive_id,
+            "aiId": ai_id,
+            "aiName": ai_name,
+            "written": written,
+        }),
     );
     Ok(written)
 }

@@ -72,6 +72,15 @@ export default component$(() => {
         .then((m) => m.resumeIfPending())
         .catch(() => {});
     }, 15_000);
+
+    // Finish any adoption (imported archive -> AI's conversations) the
+    // last run left mid-write. Waits for the records engine itself;
+    // no-op when nothing is pending.
+    setTimeout(() => {
+      import("../utils/importAdoption")
+        .then((m) => m.resumeIfPending())
+        .catch(() => {});
+    }, 20_000);
   });
 
   // Load saved theme from localStorage on mount + dismiss loading overlay + global liquid metal hover

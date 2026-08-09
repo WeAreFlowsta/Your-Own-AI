@@ -133,15 +133,37 @@ export default component$(() => {
       .filter((ai) => ai.status === "active" && ai.agentPubKey)
       .map((ai) => ({ id: ai.id, name: ai.name }));
     const { listen } = await import("@tauri-apps/api/event");
-    const unlisten = await listen<{ done: number; total: number }>(
-      "import-adopt-progress",
-      (e) => {
-        adoptProgress.value = { done: e.payload.done, total: e.payload.total };
-      },
-    );
+    const unlisten = await listen<{
+      archiveId: string;
+      done: number;
+      total: number;
+    }>("import-adopt-progress", (e) => {
+      adoptProgress.value = { done: e.payload.done, total: e.payload.total };
+      // Re-attach: if this page was remounted mid-adoption, the events
+      // are the only sign a backend loop is running - show it and keep
+      // the buttons disabled.
+      if (adoptBusyId.value === null) adoptBusyId.value = e.payload.archiveId;
+    });
+    const unlistenDone = await listen<{
+      archiveId: string;
+      aiId: string;
+      written: number;
+    }>("import-adopt-done", async (e) => {
+      const { clearPending } = await import("../utils/importAdoption");
+      clearPending(e.payload.archiveId, e.payload.aiId);
+      if (adoptBusyId.value === e.payload.archiveId) {
+        adoptBusyId.value = null;
+        adoptProgress.value = null;
+      }
+      await refresh();
+      import("../utils/importSummaries")
+        .then((m) => m.summarizeAdoptedConversations(e.payload.aiId))
+        .catch(() => {});
+    });
     cleanup(() => {
       unsubscribe();
       unlisten();
+      unlistenDone();
     });
     // Catch-up pass: any adopted archive whose summaries were interrupted
     // (or waiting on models) finishes here. Idempotent per conversation.
@@ -177,12 +199,19 @@ export default component$(() => {
     adoptBusyId.value = archiveId;
     adoptProgress.value = null;
     try {
+      // Marker first: if the app dies mid-write, the next launch finds it
+      // and finishes the job (backend dedup makes the re-run safe).
+      const { markPending, clearPending } = await import(
+        "../utils/importAdoption"
+      );
+      markPending({ archiveId, aiId: ai.id, aiName: ai.name });
       const { invoke } = await import("@tauri-apps/api/core");
       await invoke<number>("import_archive_adopt", {
         archiveId,
         aiId: ai.id,
         aiName: ai.name,
       });
+      clearPending(archiveId, ai.id);
       await refresh();
       // Give the adopting AI recall over its new history - background,
       // idempotent, quietly retried by the next card mount if models
@@ -192,6 +221,13 @@ export default component$(() => {
         .catch(() => {});
     } catch (e) {
       error.value = String(e);
+      // The loop ended, so the crash marker no longer applies - EXCEPT
+      // when the error says another run is still writing; that run's
+      // completion (or crash) owns the marker.
+      if (!String(e).includes("already being added")) {
+        const { clearPending } = await import("../utils/importAdoption");
+        clearPending(archiveId, ai.id);
+      }
     } finally {
       adoptBusyId.value = null;
       adoptProgress.value = null;
