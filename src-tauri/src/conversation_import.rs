@@ -474,6 +474,9 @@ fn is_harness_text(t: &str) -> bool {
         || t.starts_with("Caveat: The messages below")
         || t.starts_with("This session is being continued")
         || t.starts_with("[Request interrupted")
+        // Codex wraps its harness context in user-role items with these tags.
+        || t.starts_with("<environment_context")
+        || t.starts_with("<user_instructions")
 }
 
 /// Extract the text blocks from a Claude Code message content value
@@ -729,28 +732,27 @@ struct OpenCodePartData {
     ignored: bool,
 }
 
-/// Parse an OpenCode session database into conversations. Copies the db
-/// (plus -wal/-shm if present) to a temp dir first so a running OpenCode
-/// is never locked or raced, then reads the copy.
-fn parse_opencode_db(db_path: &std::path::Path) -> Result<(String, Vec<ImportedConversation>), String> {
-    let tmp = std::env::temp_dir().join(format!("yoai-oc-import-{}", std::process::id()));
-    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-    let copy = tmp.join("opencode.db");
-    std::fs::copy(db_path, &copy).map_err(|e| format!("Could not read the OpenCode data: {e}"))?;
-    for ext in ["-wal", "-shm"] {
-        let side = db_path.with_file_name(format!("opencode.db{ext}"));
-        if side.exists() {
-            let _ = std::fs::copy(&side, tmp.join(format!("opencode.db{ext}")));
-        }
-    }
-    let result = read_opencode_copy(&copy);
-    let _ = std::fs::remove_dir_all(&tmp);
-    result
+/// Open a source app's SQLite db READ-ONLY, in place. Never copies (real
+/// stores reach many GB - Eric's Cursor db is 7.1GB) and never write-locks
+/// the owning app; a busy timeout rides out short write bursts, and the
+/// friendly error tells the user what to close if the db stays locked.
+fn open_sqlite_readonly(
+    path: &std::path::Path,
+    app_name: &str,
+) -> Result<rusqlite::Connection, String> {
+    let conn = rusqlite::Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .map_err(|e| format!("Could not open the {app_name} data: {e}"))?;
+    let _ = conn.busy_timeout(std::time::Duration::from_secs(5));
+    Ok(conn)
 }
 
-fn read_opencode_copy(copy: &std::path::Path) -> Result<(String, Vec<ImportedConversation>), String> {
-    let conn = rusqlite::Connection::open(copy)
-        .map_err(|e| format!("Could not open the OpenCode database: {e}"))?;
+/// Parse an OpenCode session database into conversations. Read-only, in
+/// place - a running OpenCode is never locked or raced.
+fn parse_opencode_db(db_path: &std::path::Path) -> Result<(String, Vec<ImportedConversation>), String> {
+    let conn = open_sqlite_readonly(db_path, "OpenCode")?;
 
     // Text parts per message, in part-id order (prt_ ids are monotonic).
     let mut texts: HashMap<String, Vec<String>> = HashMap::new();
@@ -864,6 +866,301 @@ fn opencode_db_path(home: &std::path::Path) -> PathBuf {
     home.join(".local").join("share").join("opencode").join("opencode.db")
 }
 
+// ── Codex (OpenAI) ─────────────────────────────────────────────────────
+//
+// Codex stores sessions as JSONL "rollouts" under
+// ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl. Live-verified
+// against a real codex-cli 0.147.0 run + the serializer itself
+// (openai/codex codex-rs/protocol/src/models.rs). New-format line =
+// {timestamp, type, payload}; type "response_item" with payload
+// {type:"message", role, content:[{type: input_text|output_text, text}]}.
+// Roles other than user/assistant (developer, system) are harness; tool
+// calls / reasoning / web searches are separate payload types we never
+// touch. Old-format files (pre-envelope) are bare item lines - parsed by
+// fallback. Harness text INSIDE user items (<environment_context>,
+// <user_instructions>) is dropped per block, like Claude Code.
+
+#[derive(Deserialize)]
+struct CodexLine {
+    timestamp: Option<String>,
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    payload: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct CodexMessageItem {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    role: Option<String>,
+    #[serde(default)]
+    content: Vec<CodexContentItem>,
+}
+
+#[derive(Deserialize)]
+struct CodexContentItem {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    text: Option<String>,
+}
+
+fn codex_item_to_message(item: &serde_json::Value, ts_us: Option<i64>) -> Option<ImportedMessage> {
+    let msg: CodexMessageItem = serde_json::from_value(item.clone()).ok()?;
+    if msg.kind.as_deref() != Some("message") {
+        return None;
+    }
+    let role = normalize_role(msg.role.as_deref()?)?;
+    let text = msg
+        .content
+        .iter()
+        .filter(|c| matches!(c.kind.as_deref(), Some("input_text") | Some("output_text")))
+        .filter_map(|c| c.text.as_deref())
+        .filter(|t| !is_harness_text(t))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let text = text.trim();
+    if text.is_empty() || is_harness_text(text) {
+        return None;
+    }
+    Some(ImportedMessage {
+        role: role.to_string(),
+        text: text.to_string(),
+        ts_us,
+    })
+}
+
+/// Parse one Codex rollout .jsonl into one conversation.
+fn parse_codex_rollout(
+    reader: impl std::io::BufRead,
+    source_id: Option<String>,
+) -> ImportedConversation {
+    let mut created: Option<i64> = None;
+    let mut messages: Vec<ImportedMessage> = Vec::new();
+
+    for line in reader.lines() {
+        let Ok(line) = line else { continue };
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(entry) = serde_json::from_str::<CodexLine>(&line) {
+            if let Some(payload) = &entry.payload {
+                let ts = entry.timestamp.as_deref().and_then(iso_to_micros);
+                match entry.kind.as_deref() {
+                    Some("session_meta") => {
+                        if created.is_none() {
+                            created = ts.or_else(|| {
+                                payload["timestamp"].as_str().and_then(iso_to_micros)
+                            });
+                        }
+                        continue;
+                    }
+                    Some("response_item") => {
+                        if let Some(m) = codex_item_to_message(payload, ts) {
+                            if created.is_none() {
+                                created = m.ts_us;
+                            }
+                            messages.push(m);
+                        }
+                        continue;
+                    }
+                    _ => continue,
+                }
+            }
+        }
+        // Old-format rollouts: the line IS the bare response item.
+        if let Ok(item) = serde_json::from_str::<serde_json::Value>(&line) {
+            if let Some(m) = codex_item_to_message(&item, None) {
+                messages.push(m);
+            }
+        }
+    }
+
+    let title = messages
+        .iter()
+        .find(|m| m.role == "user")
+        .map(|m| m.text.chars().take(60).collect::<String>())
+        .unwrap_or_else(|| "Coding session".to_string());
+
+    ImportedConversation {
+        source_id,
+        title,
+        created_at_us: created,
+        messages,
+    }
+}
+
+/// A Codex sessions tree (~/.codex/sessions, date-sharded YYYY/MM/DD):
+/// every rollout file becomes a conversation.
+fn parse_codex_dir(dir: &PathBuf) -> Result<(String, Vec<ImportedConversation>), String> {
+    fn scan(dir: &std::path::Path, depth: usize, convs: &mut Vec<ImportedConversation>) {
+        if depth > 4 {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scan(&path, depth + 1, convs);
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with("rollout-") || !name.ends_with(".jsonl") {
+                continue;
+            }
+            let Ok(file) = std::fs::File::open(&path) else { continue };
+            let conv = parse_codex_rollout(
+                std::io::BufReader::new(file),
+                path.file_stem().map(|s| s.to_string_lossy().to_string()),
+            );
+            if !conv.messages.is_empty() {
+                convs.push(conv);
+            }
+        }
+    }
+    // The user may pick ~/.codex itself, or the sessions folder inside it.
+    let root = if dir.join("sessions").is_dir() {
+        dir.join("sessions")
+    } else {
+        dir.clone()
+    };
+    let mut convs = Vec::new();
+    scan(&root, 0, &mut convs);
+    if convs.is_empty() {
+        return Err(
+            "No Codex sessions found in this folder. Pick your .codex folder (or the sessions folder inside it).".to_string(),
+        );
+    }
+    convs.sort_by_key(|c| c.created_at_us.unwrap_or(0));
+    Ok(("codex".to_string(), convs))
+}
+
+// ── Cursor ─────────────────────────────────────────────────────────────
+//
+// Cursor keeps every conversation in ONE global SQLite db:
+// <config>/Cursor/User/globalStorage/state.vscdb. Live-verified 2026-08-10
+// against a real 7.1GB db (160 conversations): cursorDiskKV holds
+// composerData:<id> JSON (name, createdAt ms, fullConversationHeadersOnly
+// = ordered [{bubbleId, type}]) and bubbleId:<composerId>:<bubbleId> JSON
+// (text, createdAt ISO). type 1 = user, 2 = assistant; assistant bubbles
+// with empty text are tool/thinking steps - excluded by the text filter
+// alone. The composerHeaders table is a recent addition covering only new
+// conversations, so enumeration walks the composerData keys; headers are
+// joined for isSubagent when present. NEVER copy this db (size) - read
+// only, in place.
+
+#[derive(Deserialize)]
+struct CursorComposerData {
+    #[serde(rename = "composerId")]
+    composer_id: Option<String>,
+    name: Option<String>,
+    #[serde(rename = "createdAt")]
+    created_at: Option<i64>,
+    #[serde(rename = "fullConversationHeadersOnly", default)]
+    headers: Vec<CursorBubbleHeader>,
+    #[serde(rename = "isBestOfNSubcomposer", default)]
+    is_best_of_n_subcomposer: bool,
+}
+
+#[derive(Deserialize)]
+struct CursorBubbleHeader {
+    #[serde(rename = "bubbleId")]
+    bubble_id: String,
+    /// 1 = user, 2 = assistant; number or string in the wild.
+    #[serde(rename = "type")]
+    kind: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+struct CursorBubble {
+    text: Option<String>,
+    #[serde(rename = "createdAt")]
+    created_at: Option<String>,
+}
+
+fn parse_cursor_db(db_path: &std::path::Path) -> Result<(String, Vec<ImportedConversation>), String> {
+    let conn = open_sqlite_readonly(db_path, "Cursor")?;
+
+    // Subagent composers per the (newer) headers table; absent in old dbs.
+    let mut subagents: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if let Ok(mut stmt) = conn.prepare("SELECT composerId FROM composerHeaders WHERE isSubagent = 1") {
+        if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
+            subagents.extend(rows.flatten());
+        }
+    }
+
+    let mut convs: Vec<ImportedConversation> = Vec::new();
+    let mut bubble_stmt = conn
+        .prepare("SELECT value FROM cursorDiskKV WHERE key = ?")
+        .map_err(|e| e.to_string())?;
+    let mut comp_stmt = conn
+        .prepare("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' AND value IS NOT NULL")
+        .map_err(|e| e.to_string())?;
+    let comp_rows = comp_stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| e.to_string())?;
+
+    for row in comp_rows.flatten() {
+        let (_, value) = row;
+        let Ok(comp) = serde_json::from_str::<CursorComposerData>(&value) else { continue };
+        let Some(cid) = comp.composer_id else { continue };
+        if comp.is_best_of_n_subcomposer || subagents.contains(&cid) {
+            continue;
+        }
+        let mut messages: Vec<ImportedMessage> = Vec::new();
+        for h in &comp.headers {
+            let kind = h.kind.as_i64().or_else(|| h.kind.as_str().and_then(|s| s.parse().ok()));
+            let role = match kind {
+                Some(1) => "user",
+                Some(2) => "assistant",
+                _ => continue,
+            };
+            let bubble_raw: Option<String> = bubble_stmt
+                .query_row([format!("bubbleId:{cid}:{}", h.bubble_id)], |r| {
+                    r.get::<_, Option<String>>(0)
+                })
+                .ok()
+                .flatten();
+            let Some(bubble_raw) = bubble_raw else { continue };
+            let Ok(bubble) = serde_json::from_str::<CursorBubble>(&bubble_raw) else { continue };
+            let text = bubble.text.unwrap_or_default();
+            let text = text.trim();
+            if text.is_empty() || is_harness_text(text) {
+                continue;
+            }
+            messages.push(ImportedMessage {
+                role: role.to_string(),
+                text: text.to_string(),
+                ts_us: bubble.created_at.as_deref().and_then(iso_to_micros),
+            });
+        }
+        if messages.is_empty() {
+            continue;
+        }
+        let title = comp
+            .name
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or_else(|| {
+                messages
+                    .iter()
+                    .find(|m| m.role == "user")
+                    .map(|m| m.text.chars().take(60).collect::<String>())
+                    .unwrap_or_else(|| "Coding session".to_string())
+            });
+        convs.push(ImportedConversation {
+            source_id: Some(cid),
+            title,
+            created_at_us: comp.created_at.map(|ms| ms * 1000),
+            messages,
+        });
+    }
+
+    if convs.is_empty() {
+        return Err("No conversations found in this Cursor data.".to_string());
+    }
+    convs.sort_by_key(|c| c.created_at_us.unwrap_or(0));
+    Ok(("cursor".to_string(), convs))
+}
+
 /// The Aider history file a repo folder carries.
 const AIDER_HISTORY_FILE: &str = ".aider.chat.history.md";
 
@@ -896,9 +1193,16 @@ fn read_import_file(
     let meta = std::fs::metadata(path).map_err(|e| format!("Could not open the file: {e}"))?;
     if meta.is_dir() {
         let oc_db = path.join("opencode.db");
+        // Cursor: the picked folder may be globalStorage itself or the
+        // Cursor config root above it.
+        let cursor_db = ["state.vscdb", "User/globalStorage/state.vscdb"]
+            .iter()
+            .map(|p| path.join(p))
+            .find(|p| p.is_file());
         return match source_hint {
             Some("aider") => parse_aider_dir(path),
             Some("claude-code") => parse_claude_code_dir(path),
+            Some("codex") => parse_codex_dir(path),
             Some("opencode") => {
                 if oc_db.is_file() {
                     parse_opencode_db(&oc_db)
@@ -906,33 +1210,62 @@ fn read_import_file(
                     Err("No OpenCode data found in this folder. Pick OpenCode's data folder - it contains a file named opencode.db.".to_string())
                 }
             }
-            // No hint: try Claude Code sessions, then OpenCode, then Aider.
+            Some("cursor") => match cursor_db {
+                Some(db) => parse_cursor_db(&db),
+                None => Err("No Cursor data found in this folder. Pick Cursor's data folder - it contains a file named state.vscdb under User/globalStorage.".to_string()),
+            },
+            // No hint: try each coding source in turn.
             _ => parse_claude_code_dir(path).or_else(|first_err| {
                 if oc_db.is_file() {
                     parse_opencode_db(&oc_db)
                 } else {
                     Err(first_err.clone())
                 }
+                .or_else(|_| match &cursor_db {
+                    Some(db) => parse_cursor_db(db),
+                    None => Err(first_err.clone()),
+                })
+                .or_else(|_| parse_codex_dir(path).map_err(|_| first_err.clone()))
                 .or_else(|_| parse_aider_dir(path).map_err(|_| first_err))
             }),
         };
-    }
-    if meta.len() > MAX_IMPORT_BYTES {
-        return Err("This file is larger than 512MB. Extract the ZIP and pick the conversations .json inside it.".to_string());
     }
     let ext = path
         .extension()
         .map(|e| e.to_ascii_lowercase().to_string_lossy().to_string())
         .unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    // SQLite and line-streamed sources never hold the whole file in memory,
+    // so the size guard below must NOT apply (a real Cursor db is 7GB+).
+    if ext == "vscdb" {
+        return parse_cursor_db(path);
+    }
+    if ext == "db" {
+        return parse_opencode_db(path);
+    }
     if ext == "jsonl" {
+        // Codex rollouts are also .jsonl - the filename distinguishes them.
+        if stem.starts_with("rollout-") {
+            let file = std::fs::File::open(path).map_err(|e| format!("Could not open the file: {e}"))?;
+            let conv = parse_codex_rollout(
+                std::io::BufReader::new(file),
+                Some(stem.clone()),
+            );
+            if !conv.messages.is_empty() {
+                return Ok(("codex".to_string(), vec![conv]));
+            }
+        }
         let conv = parse_claude_code_session(path)?;
         if conv.messages.is_empty() {
             return Err("This session file contains no conversation messages.".to_string());
         }
         return Ok(("claude-code".to_string(), vec![conv]));
     }
-    if ext == "db" {
-        return parse_opencode_db(path);
+    if meta.len() > MAX_IMPORT_BYTES {
+        return Err("This file is larger than 512MB. Extract the ZIP and pick the conversations .json inside it.".to_string());
     }
     let is_zip = ext == "zip";
     if !is_zip {
@@ -1192,6 +1525,104 @@ pub fn import_detect_opencode(app: AppHandle) -> CodingSourceDetect {
         found: sessions > 0,
         path: Some(db.to_string_lossy().to_string()),
         project_count: projects as usize,
+        session_count: sessions as usize,
+    }
+}
+
+/// Look for Codex's session rollouts in their standard location
+/// (~/.codex/sessions, date-sharded folders of rollout-*.jsonl).
+#[tauri::command]
+pub fn import_detect_codex(app: AppHandle) -> CodingSourceDetect {
+    let none = CodingSourceDetect {
+        found: false,
+        path: None,
+        project_count: 0,
+        session_count: 0,
+    };
+    let Ok(home) = app.path().home_dir() else { return none };
+    let root = home.join(".codex").join("sessions");
+    if !root.is_dir() {
+        return none;
+    }
+    fn count(dir: &std::path::Path, depth: usize) -> usize {
+        if depth > 4 {
+            return 0;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+        entries
+            .flatten()
+            .map(|e| {
+                let p = e.path();
+                if p.is_dir() {
+                    count(&p, depth + 1)
+                } else {
+                    let n = e.file_name().to_string_lossy().to_string();
+                    usize::from(n.starts_with("rollout-") && n.ends_with(".jsonl"))
+                }
+            })
+            .sum()
+    }
+    let sessions = count(&root, 0);
+    CodingSourceDetect {
+        found: sessions > 0,
+        path: Some(root.to_string_lossy().to_string()),
+        project_count: 0,
+        session_count: sessions,
+    }
+}
+
+/// Look for Cursor's global conversation store in its standard location
+/// (the VS Code-style config dir: <config>/Cursor/User/globalStorage).
+#[tauri::command]
+pub fn import_detect_cursor(app: AppHandle) -> CodingSourceDetect {
+    let none = CodingSourceDetect {
+        found: false,
+        path: None,
+        project_count: 0,
+        session_count: 0,
+    };
+    let Ok(config) = app.path().config_dir() else { return none };
+    let db = config
+        .join("Cursor")
+        .join("User")
+        .join("globalStorage")
+        .join("state.vscdb");
+    if !db.is_file() {
+        return none;
+    }
+    let Ok(conn) = rusqlite::Connection::open_with_flags(
+        &db,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) else {
+        // Locked right now (Cursor running) - still offer the import.
+        return CodingSourceDetect {
+            found: true,
+            path: Some(db.to_string_lossy().to_string()),
+            project_count: 0,
+            session_count: 0,
+        };
+    };
+    // Count conversations that actually contain messages (drafts and
+    // empty composers would inflate the number the card promises).
+    let with_bubbles: Result<i64, _> = conn.query_row(
+        "SELECT COUNT(*) FROM cursorDiskKV WHERE key LIKE 'composerData:%' AND value IS NOT NULL \
+         AND json_array_length(json_extract(value, '$.fullConversationHeadersOnly')) > 0",
+        [],
+        |r| r.get(0),
+    );
+    let sessions: i64 = with_bubbles.or_else(|_| {
+        // JSON1 unavailable in some builds - fall back to the plain count.
+        conn.query_row(
+            "SELECT COUNT(*) FROM cursorDiskKV WHERE key LIKE 'composerData:%' AND value IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+    })
+    .unwrap_or(0);
+    CodingSourceDetect {
+        found: sessions > 0,
+        path: Some(db.to_string_lossy().to_string()),
+        project_count: 0,
         session_count: sessions as usize,
     }
 }
@@ -1712,6 +2143,119 @@ mod tests {
         assert_eq!(convs[0].messages[0].role, "user");
         assert_eq!(convs[0].messages[0].ts_us, Some(1786275050633 * 1000));
         assert_eq!(convs[0].created_at_us, Some(1786275050508 * 1000));
+    }
+
+    /// Line shapes replicate a REAL codex-cli 0.147.0 rollout captured
+    /// 2026-08-10 (envelope {timestamp,type,payload}) plus an old-format
+    /// bare-item line.
+    #[test]
+    fn codex_rollout_parses() {
+        let jsonl = r#"{"timestamp":"2026-08-09T22:09:03.162Z","type":"session_meta","payload":{"id":"019fe892","timestamp":"2026-08-09T22:09:03.162Z","cwd":"/tmp/p","originator":"codex_exec"}}
+{"timestamp":"2026-08-09T22:09:03.500Z","type":"event_msg","payload":{"type":"task_started"}}
+{"timestamp":"2026-08-09T22:09:03.600Z","type":"response_item","payload":{"type":"message","id":"msg_1","role":"developer","content":[{"type":"input_text","text":"<skills_instructions>stuff</skills_instructions>"}]}}
+{"timestamp":"2026-08-09T22:09:03.700Z","type":"response_item","payload":{"type":"message","id":"msg_2","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/tmp/p</cwd>\n</environment_context>"}]}}
+{"timestamp":"2026-08-09T22:09:03.800Z","type":"response_item","payload":{"type":"message","id":"msg_3","role":"user","content":[{"type":"input_text","text":"<user_instructions>agents md text</user_instructions>"},{"type":"input_text","text":"add a retry to the fetch call"}]}}
+{"timestamp":"2026-08-09T22:09:04.000Z","type":"event_msg","payload":{"type":"user_message","message":"add a retry to the fetch call"}}
+{"timestamp":"2026-08-09T22:09:05.000Z","type":"response_item","payload":{"type":"reasoning","id":"rs_1","summary":[]}}
+{"timestamp":"2026-08-09T22:09:06.000Z","type":"response_item","payload":{"type":"function_call","id":"fc_1","name":"shell","arguments":"{}"}}
+{"timestamp":"2026-08-09T22:09:07.000Z","type":"response_item","payload":{"type":"message","id":"msg_4","role":"assistant","content":[{"type":"output_text","text":"Done - retry loop added with backoff."}]}}
+{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Old-format assistant line."}]}
+"#;
+        let conv = parse_codex_rollout(std::io::Cursor::new(jsonl), Some("rollout-x".into()));
+        let texts: Vec<&str> = conv.messages.iter().map(|m| m.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            vec![
+                "add a retry to the fetch call",
+                "Done - retry loop added with backoff.",
+                "Old-format assistant line."
+            ],
+            "developer role, env-context, user_instructions, reasoning, and tool calls all skipped; mixed harness+real user item keeps the real words"
+        );
+        assert_eq!(conv.messages[0].role, "user");
+        assert_eq!(conv.title, "add a retry to the fetch call");
+        assert!(conv.created_at_us.is_some());
+        assert!(conv.messages[0].ts_us.is_some());
+    }
+
+    /// Cursor fixture mirroring the REAL state.vscdb schema (verified
+    /// 2026-08-10 against a 7.1GB live db): composerData + bubbleId keys
+    /// in cursorDiskKV, partial composerHeaders, NULL rows, subagents.
+    #[test]
+    fn cursor_db_parses() {
+        let dir = std::env::temp_dir().join(format!("yoai-cursor-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("state.vscdb");
+        let _ = std::fs::remove_file(&db_path);
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value TEXT);
+                 CREATE TABLE composerHeaders (composerId TEXT PRIMARY KEY, workspaceId TEXT, createdAt INTEGER, lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER, recency INTEGER, checkpointAt INTEGER, value TEXT);",
+            )
+            .unwrap();
+            conn.execute_batch(r#"
+                INSERT INTO composerHeaders (composerId, isSubagent) VALUES ('comp-sub', 1);
+                INSERT INTO cursorDiskKV VALUES ('composerData:comp-1',
+                  '{"composerId":"comp-1","name":"Fix login","createdAt":1760130362369,"fullConversationHeadersOnly":[{"bubbleId":"b1","type":1},{"bubbleId":"b2","type":2},{"bubbleId":"b3","type":2},{"bubbleId":"b4","type":2}]}');
+                INSERT INTO cursorDiskKV VALUES ('bubbleId:comp-1:b1','{"type":1,"text":"the login times out","createdAt":"2025-10-11T03:16:34.655Z"}');
+                INSERT INTO cursorDiskKV VALUES ('bubbleId:comp-1:b2','{"type":2,"text":"","toolFormerData":{}}');
+                INSERT INTO cursorDiskKV VALUES ('bubbleId:comp-1:b3','{"type":2,"text":"Found the race in the token check.","createdAt":"2025-10-11T03:16:40.000Z"}');
+                INSERT INTO cursorDiskKV VALUES ('composerData:comp-sub',
+                  '{"composerId":"comp-sub","name":"sub","createdAt":1,"fullConversationHeadersOnly":[{"bubbleId":"s1","type":1}]}');
+                INSERT INTO cursorDiskKV VALUES ('bubbleId:comp-sub:s1','{"type":1,"text":"subagent chatter"}');
+                INSERT INTO cursorDiskKV VALUES ('composerData:comp-bestofn',
+                  '{"composerId":"comp-bestofn","isBestOfNSubcomposer":true,"fullConversationHeadersOnly":[{"bubbleId":"n1","type":1}]}');
+                INSERT INTO cursorDiskKV VALUES ('composerData:comp-null', NULL);
+                INSERT INTO cursorDiskKV VALUES ('composerData:empty-state-draft','{"composerId":"empty-state-draft","fullConversationHeadersOnly":[]}');
+            "#)
+            .unwrap();
+        }
+        let (source, convs) = parse_cursor_db(&db_path).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(source, "cursor");
+        assert_eq!(convs.len(), 1, "subagent, best-of-n, NULL, and empty composers skipped");
+        assert_eq!(convs[0].title, "Fix login");
+        let texts: Vec<&str> = convs[0].messages.iter().map(|m| m.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            vec!["the login times out", "Found the race in the token check."],
+            "empty-text assistant bubble (tool step) and missing bubble b4 skipped"
+        );
+        assert_eq!(convs[0].messages[0].role, "user");
+        assert_eq!(convs[0].created_at_us, Some(1760130362369 * 1000));
+        assert!(convs[0].messages[0].ts_us.is_some());
+    }
+
+    /// Dogfood against the developer's REAL Cursor database. Ignored by
+    /// default; run with:
+    /// YOAI_CURSOR_DB=~/.config/Cursor/User/globalStorage/state.vscdb \
+    ///   cargo test cursor_dogfood -- --ignored --nocapture
+    /// Prints counts only - never content.
+    #[test]
+    #[ignore]
+    fn cursor_dogfood_real_db() {
+        let Ok(path) = std::env::var("YOAI_CURSOR_DB") else { return };
+        let (source, convs) = parse_cursor_db(std::path::Path::new(&path)).unwrap();
+        assert_eq!(source, "cursor");
+        let (mut users, mut assts, mut no_ts, mut untitled) = (0, 0, 0, 0);
+        for c in &convs {
+            if c.title.trim().is_empty() {
+                untitled += 1;
+            }
+            for m in &c.messages {
+                if m.role == "user" { users += 1 } else { assts += 1 }
+                if m.ts_us.is_none() {
+                    no_ts += 1;
+                }
+            }
+        }
+        println!(
+            "conversations: {} | user msgs: {} | assistant msgs: {} | msgs missing ts: {} | untitled: {}",
+            convs.len(), users, assts, no_ts, untitled
+        );
+        assert!(!convs.is_empty());
+        assert_eq!(untitled, 0);
     }
 
     /// Dogfood against a REAL OpenCode database (generated by running the

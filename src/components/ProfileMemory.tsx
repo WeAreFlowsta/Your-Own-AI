@@ -68,6 +68,8 @@ const IMPORT_SOURCE_NAMES: Record<string, string> = {
   "claude-code": "Claude Code",
   aider: "Aider",
   opencode: "OpenCode",
+  codex: "Codex",
+  cursor: "Cursor",
 };
 
 function importLabel(sourceAiId: string): string {

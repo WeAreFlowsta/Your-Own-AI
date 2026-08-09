@@ -44,6 +44,25 @@ const SOURCE_NAMES: Record<string, string> = {
   "claude-code": "Claude Code",
   aider: "Aider",
   opencode: "OpenCode",
+  codex: "Codex",
+  cursor: "Cursor",
+};
+
+/** Coding tools the card offers. Tools with a detect command find their
+ *  own session store; the rest need a folder pick. */
+type CodingTool = "claude-code" | "opencode" | "codex" | "cursor" | "aider";
+const CODING_TOOLS: CodingTool[] = [
+  "claude-code",
+  "opencode",
+  "codex",
+  "cursor",
+  "aider",
+];
+const DETECT_COMMANDS: Partial<Record<CodingTool, string>> = {
+  "claude-code": "import_detect_claude_code",
+  opencode: "import_detect_opencode",
+  codex: "import_detect_codex",
+  cursor: "import_detect_cursor",
 };
 
 function sourceName(source: string): string {
@@ -104,9 +123,7 @@ export default component$(() => {
    *  (~/.local/share/opencode) have ONE standard home each, so we find
    *  them ourselves - nobody should have to unhide dotfolders in a
    *  picker dialog. */
-  const codingTool = useSignal<"claude-code" | "aider" | "opencode" | null>(
-    null,
-  );
+  const codingTool = useSignal<CodingTool | null>(null);
   const detects = useSignal<Record<string, CodingDetect>>({});
 
   const refresh = $(async () => {
@@ -242,7 +259,7 @@ export default component$(() => {
     async (
       path: string,
       mode: "user_only" | "full",
-      sourceHint?: "claude-code" | "aider" | "opencode",
+      sourceHint?: CodingTool,
     ) => {
     busy.value = true;
     try {
@@ -283,14 +300,10 @@ export default component$(() => {
     }
   });
 
-  /** Pick a coding assistant: Claude Code and OpenCode auto-detect their
-   *  standard session stores; Aider needs the user's project folder (we
-   *  find the hidden history file inside it ourselves). */
-  const DETECT_COMMANDS: Record<string, string> = {
-    "claude-code": "import_detect_claude_code",
-    opencode: "import_detect_opencode",
-  };
-  const selectTool = $(async (tool: "claude-code" | "aider" | "opencode") => {
+  /** Pick a coding assistant: tools with a detect command find their own
+   *  session stores; Aider needs the user's project folder (we find the
+   *  hidden history file inside it ourselves). */
+  const selectTool = $(async (tool: CodingTool) => {
     error.value = "";
     codingTool.value = codingTool.value === tool ? null : tool;
     const command = DETECT_COMMANDS[tool];
@@ -307,7 +320,7 @@ export default component$(() => {
   });
 
   /** One-click import of an auto-detected session store. */
-  const importDetected = $(async (tool: "claude-code" | "opencode") => {
+  const importDetected = $(async (tool: CodingTool) => {
     const path = detects.value[tool]?.path;
     if (!path) return;
     error.value = "";
@@ -316,8 +329,8 @@ export default component$(() => {
   });
 
   /** Manual fallback: pick a folder yourself (a Claude Code project
-   *  folder, OpenCode's data folder, or the repo you ran Aider in). */
-  const pickCodingFolder = $(async (hint: "claude-code" | "aider" | "opencode") => {
+   *  folder, another tool's data folder, or the repo you ran Aider in). */
+  const pickCodingFolder = $(async (hint: CodingTool) => {
     error.value = "";
     justImported.value = null;
     try {
@@ -354,8 +367,8 @@ export default component$(() => {
       <p class="mb-4 text-sm text-[var(--text-secondary)]">
         Bring your conversations with you - from AI chat apps like ChatGPT,
         Claude, and Perplexity, or from coding assistants like Claude Code,
-        OpenCode, and Aider. Your history becomes an encrypted archive on this
-        machine. Nothing is uploaded anywhere.
+        OpenCode, Codex, Cursor, and Aider. Your history becomes an encrypted
+        archive on this machine. Nothing is uploaded anywhere.
       </p>
       <LiquidMetalButton
         onClick$={() => {
@@ -416,36 +429,19 @@ export default component$(() => {
             Which coding assistant?
           </p>
           <div class="flex flex-wrap items-center gap-2">
-            <LiquidMetalButton
-              variant="secondary"
-              onClick$={() => selectTool("claude-code")}
-              disabled={busy.value}
-              class={`px-3 py-1.5 text-xs ${
-                codingTool.value === "claude-code" ? "btn-amber-accent" : ""
-              }`}
-            >
-              Claude Code
-            </LiquidMetalButton>
-            <LiquidMetalButton
-              variant="secondary"
-              onClick$={() => selectTool("opencode")}
-              disabled={busy.value}
-              class={`px-3 py-1.5 text-xs ${
-                codingTool.value === "opencode" ? "btn-amber-accent" : ""
-              }`}
-            >
-              OpenCode
-            </LiquidMetalButton>
-            <LiquidMetalButton
-              variant="secondary"
-              onClick$={() => selectTool("aider")}
-              disabled={busy.value}
-              class={`px-3 py-1.5 text-xs ${
-                codingTool.value === "aider" ? "btn-amber-accent" : ""
-              }`}
-            >
-              Aider
-            </LiquidMetalButton>
+            {CODING_TOOLS.map((tool) => (
+              <LiquidMetalButton
+                key={tool}
+                variant="secondary"
+                onClick$={() => selectTool(tool)}
+                disabled={busy.value}
+                class={`px-3 py-1.5 text-xs ${
+                  codingTool.value === tool ? "btn-amber-accent" : ""
+                }`}
+              >
+                {SOURCE_NAMES[tool]}
+              </LiquidMetalButton>
+            ))}
           </div>
 
           {codingTool.value && (
@@ -491,10 +487,10 @@ export default component$(() => {
             with either choice.
           </p>
 
-          {(codingTool.value === "claude-code" ||
-            codingTool.value === "opencode") &&
+          {codingTool.value !== null &&
+            codingTool.value in DETECT_COMMANDS &&
             (() => {
-              const tool = codingTool.value as "claude-code" | "opencode";
+              const tool = codingTool.value as CodingTool;
               const d = detects.value[tool];
               const name = SOURCE_NAMES[tool];
               return (

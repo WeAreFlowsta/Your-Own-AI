@@ -616,6 +616,8 @@ pub fn run() {
             conversation_import::import_conversations_scan,
             conversation_import::import_detect_claude_code,
             conversation_import::import_detect_opencode,
+            conversation_import::import_detect_codex,
+            conversation_import::import_detect_cursor,
             conversation_import::import_archives_list,
             conversation_import::import_archive_get,
             conversation_import::import_archive_adopt,
