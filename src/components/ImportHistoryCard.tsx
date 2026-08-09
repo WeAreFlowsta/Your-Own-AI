@@ -521,19 +521,18 @@ export default component$(() => {
                       <div class="mt-2 flex flex-wrap items-center gap-2">
                         <LiquidMetalButton
                           variant="secondary"
-                          onClick$={() => importDetected(tool)}
-                          disabled={busy.value}
-                          class="px-3 py-1.5 text-xs"
-                        >
-                          {busy.value ? "Reading sessions…" : "Import them"}
-                        </LiquidMetalButton>
-                        <LiquidMetalButton
-                          variant="secondary"
                           onClick$={() => pickCodingFolder(tool)}
                           disabled={busy.value}
                           class="px-3 py-1.5 text-xs"
                         >
                           Choose a different folder
+                        </LiquidMetalButton>
+                        <LiquidMetalButton
+                          onClick$={() => importDetected(tool)}
+                          disabled={busy.value}
+                          class="px-3 py-1.5 text-xs"
+                        >
+                          {busy.value ? "Reading sessions…" : "Import them"}
                         </LiquidMetalButton>
                       </div>
                     </>
