@@ -58,6 +58,21 @@ const RELATION_OPTIONS = [
 import { memoryExtractionIdle } from "../utils/memoryExtraction";
 import ConfirmModal from "./ConfirmModal";
 import LiquidMetalButton from "./LiquidMetalButton";
+import { LuDownload } from "@qwikest/icons/lucide";
+
+/** Friendly name for an import tag ("import:claude-code" -> "Claude Code"). */
+const IMPORT_SOURCE_NAMES: Record<string, string> = {
+  chatgpt: "ChatGPT",
+  claude: "Claude",
+  perplexity: "Perplexity",
+  "claude-code": "Claude Code",
+  aider: "Aider",
+};
+
+function importLabel(sourceAiId: string): string {
+  const key = sourceAiId.slice("import:".length);
+  return IMPORT_SOURCE_NAMES[key] ?? key;
+}
 
 interface ProfileMemoryProps {
   /** Read-only mirror (per-AI tab) vs full management (global page). */
@@ -74,6 +89,11 @@ export default component$<ProfileMemoryProps>(
     const editingId = useSignal<string | null>(null);
     const editValue = useSignal("");
     const showForgetConfirm = useSignal(false);
+    /** Review-an-import mode: an "import:<source>" tag, or null for all.
+     *  Imports can flood the list (a coding history is mostly task talk),
+     *  so auditing them needs their facts isolated and bulk-forgettable. */
+    const sourceFilter = useSignal<string | null>(null);
+    const showForgetSourceConfirm = useSignal(false);
     const showAdd = useSignal(false);
     const addPredicate = useSignal("likes");
     const addValue = useSignal("");
@@ -123,6 +143,15 @@ export default component$<ProfileMemoryProps>(
       await forgetAll();
       facts.value = [];
       showForgetConfirm.value = false;
+    });
+
+    const doForgetSource = $(async () => {
+      const tag = sourceFilter.value;
+      showForgetSourceConfirm.value = false;
+      if (!tag) return;
+      await forgetAll(tag);
+      sourceFilter.value = null;
+      await activeFacts$();
     });
 
     const doAddFact = $(async () => {
@@ -345,7 +374,63 @@ export default component$<ProfileMemoryProps>(
           </div>
         ) : (
           <div class="space-y-2">
-            {facts.value.map((f) => (
+            {(() => {
+              // Import filter chips - only when imported facts exist.
+              const counts = new Map<string, number>();
+              for (const f of facts.value) {
+                if (f.source_ai_id?.startsWith("import:")) {
+                  counts.set(
+                    f.source_ai_id,
+                    (counts.get(f.source_ai_id) ?? 0) + 1,
+                  );
+                }
+              }
+              if (counts.size === 0) return null;
+              return (
+                <div class="flex flex-wrap items-center gap-2 pb-1">
+                  <LiquidMetalButton
+                    variant="secondary"
+                    onClick$={() => (sourceFilter.value = null)}
+                    class={`px-2.5 py-1 text-xs ${
+                      sourceFilter.value === null ? "btn-amber-accent" : ""
+                    }`}
+                  >
+                    Everything ({facts.value.length})
+                  </LiquidMetalButton>
+                  {[...counts.entries()].map(([tag, n]) => (
+                    <LiquidMetalButton
+                      key={tag}
+                      variant="secondary"
+                      onClick$={() =>
+                        (sourceFilter.value =
+                          sourceFilter.value === tag ? null : tag)
+                      }
+                      class={`px-2.5 py-1 text-xs ${
+                        sourceFilter.value === tag ? "btn-amber-accent" : ""
+                      }`}
+                    >
+                      {importLabel(tag)} import ({n})
+                    </LiquidMetalButton>
+                  ))}
+                  {!readOnly && sourceFilter.value && (
+                    <LiquidMetalButton
+                      variant="danger"
+                      onClick$={() => (showForgetSourceConfirm.value = true)}
+                      class="px-2.5 py-1 text-xs"
+                    >
+                      Forget all of these
+                    </LiquidMetalButton>
+                  )}
+                </div>
+              );
+            })()}
+            {facts.value
+              .filter(
+                (f) =>
+                  sourceFilter.value === null ||
+                  f.source_ai_id === sourceFilter.value,
+              )
+              .map((f) => (
               <div
                 key={f.id}
                 class="group flex items-start gap-3 p-3.5 rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)]"
@@ -399,6 +484,11 @@ export default component$<ProfileMemoryProps>(
                             <LuShieldCheck class="w-3 h-3" /> from a signed
                             conversation
                           </span>
+                        ) : f.source_ai_id?.startsWith("import:") ? (
+                          <span class="flex items-center gap-1 text-violet-400/80">
+                            <LuDownload class="w-3 h-3" /> from your{" "}
+                            {importLabel(f.source_ai_id)} import
+                          </span>
                         ) : (
                           <span class="flex items-center gap-1">
                             <LuMessageSquare class="w-3 h-3" /> learned from your chats
@@ -442,6 +532,15 @@ export default component$<ProfileMemoryProps>(
           confirmLabel="Forget all"
           onConfirm$={doForgetAll}
           onCancel$={() => (showForgetConfirm.value = false)}
+        />
+        <ConfirmModal
+          isOpen={showForgetSourceConfirm.value}
+          variant="danger"
+          title={`Forget the ${sourceFilter.value ? importLabel(sourceFilter.value) : ""} import's memories?`}
+          message="This clears every memory learned from that import. The imported conversations themselves are kept, and anything learned from your own chats stays. This can't be undone."
+          confirmLabel="Forget them"
+          onConfirm$={doForgetSource}
+          onCancel$={() => (showForgetSourceConfirm.value = false)}
         />
       </>
     );

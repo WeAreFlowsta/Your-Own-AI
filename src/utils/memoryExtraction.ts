@@ -56,6 +56,7 @@ CRITICAL — a question, a request, a task, or small talk is NOT a fact, so outp
 - Asking you to DO something ("write me a report on X", "write code to…", "explain X") — output [].
 - Asking a question ("how does X work?", "what's the weather?") — output [].
 - Praise, thanks, or compliments about you or your answer ("thanks", "that's helpful", "great job", "go deeper") — output [].
+- Work-in-progress talk about code, builds, bugs, files, or a task at hand ("fix the login bug", "my build is failing", "we should rename X", "i pushed the change") — output []. A durable occupation ("I'm a nurse", "I'm building an app for florists") IS a fact; the day's task list is NOT.
 Asking ABOUT a topic does NOT mean they like, dislike, prefer, or are interested in it. (But a fact phrased as a question still counts: "did you know I live in X?" states they live in X.)
 
 likes / dislikes / prefers / interested_in: ONLY from an explicit statement of feeling ("I love jazz", "I can't stand mondays", "I'm really into woodworking") — NEVER inferred from a question, request, or compliment.
@@ -77,6 +78,10 @@ message: "did you know I'm a teacher?"
 message: "did you know I live in Brindale?"
 [{"subject":"user","predicate":"lives_in","value":"Brindale","confidence":0.9}]
 message: "write me a report on the housing market"
+[]
+message: "i think we should rename the config struct and add a retry to the fetch call"
+[]
+message: "my build is failing again - can you check the logs?"
 []
 message: "how does HTTPS work?"
 []
