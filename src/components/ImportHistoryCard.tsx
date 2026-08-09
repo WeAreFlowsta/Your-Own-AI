@@ -7,7 +7,7 @@
  * next and will pick archives up from here.
  */
 import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
-import { LuDownload, LuTrash2 } from "@qwikest/icons/lucide";
+import { LuDownload, LuTrash2, LuChevronDown } from "@qwikest/icons/lucide";
 
 interface ImportSummary {
   archive_id: string;
@@ -73,6 +73,9 @@ export default component$(() => {
   const adoptPick = useSignal<Record<string, string>>({});
   const adoptBusyId = useSignal<string | null>(null);
   const adoptProgress = useSignal<{ done: number; total: number } | null>(null);
+  /** Which archive's AI dropdown is open (custom menu - a native <select>
+   *  popup is GTK-themed on Linux/webkit and ignores our theme). */
+  const adoptMenuOpenId = useSignal<string | null>(null);
 
   const refresh = $(async () => {
     try {
@@ -115,12 +118,19 @@ export default component$(() => {
   });
 
   const adopt = $(async (archiveId: string) => {
+    // Same resolution as the dropdown label: explicit pick, else last-used
+    // AI, else the first AI that hasn't already adopted this archive.
+    const adopted =
+      archives.value.find((x) => x.archive_id === archiveId)?.adopted_by ?? [];
+    const avail = aiOptions.value.filter(
+      (o) => !adopted.some((x) => x.ai_id === o.id),
+    );
     const lastAiId =
       typeof localStorage !== "undefined" ? localStorage.getItem("lastAiId") : null;
-    const aiId =
-      adoptPick.value[archiveId] ||
-      (aiOptions.value.some((a) => a.id === lastAiId) ? lastAiId! : aiOptions.value[0]?.id);
-    const ai = aiOptions.value.find((a) => a.id === aiId);
+    const ai =
+      avail.find((o) => o.id === adoptPick.value[archiveId]) ??
+      avail.find((o) => o.id === lastAiId) ??
+      avail[0];
     if (!ai) return;
     error.value = "";
     adoptBusyId.value = archiveId;
@@ -283,34 +293,74 @@ export default component$(() => {
               ) : (
                 aiOptions.value.length > 0 && (
                   <div class="mt-2 flex flex-wrap items-center gap-2">
-                    <select
-                      value={
-                        adoptPick.value[a.archive_id] ??
-                        aiOptions.value.find(
-                          (o) =>
-                            typeof localStorage !== "undefined" &&
-                            o.id === localStorage.getItem("lastAiId"),
-                        )?.id ??
-                        aiOptions.value[0].id
-                      }
-                      onChange$={(_, el) =>
-                        (adoptPick.value = {
-                          ...adoptPick.value,
-                          [a.archive_id]: el.value,
-                        })
-                      }
-                      class="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-2 py-1 text-xs text-[var(--text-primary)]"
-                    >
-                      {aiOptions.value
-                        .filter(
-                          (o) => !(a.adopted_by ?? []).some((x) => x.ai_id === o.id),
-                        )
-                        .map((o) => (
-                          <option key={o.id} value={o.id}>
-                            {o.name}
-                          </option>
-                        ))}
-                    </select>
+                    {/* Custom dropdown - a native <select> popup is
+                        GTK-themed on Linux/webkit and ignores our theme. */}
+                    <div class="relative">
+                      <button
+                        type="button"
+                        onClick$={() =>
+                          (adoptMenuOpenId.value =
+                            adoptMenuOpenId.value === a.archive_id
+                              ? null
+                              : a.archive_id)
+                        }
+                        class="flex items-center justify-between gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-2.5 py-1 text-xs text-[var(--text-primary)] focus:outline-none focus:border-[var(--bg-button-primary)]"
+                      >
+                        <span>
+                          {(() => {
+                            const avail = aiOptions.value.filter(
+                              (o) =>
+                                !(a.adopted_by ?? []).some((x) => x.ai_id === o.id),
+                            );
+                            const lastAiId =
+                              typeof localStorage !== "undefined"
+                                ? localStorage.getItem("lastAiId")
+                                : null;
+                            const picked =
+                              avail.find((o) => o.id === adoptPick.value[a.archive_id]) ??
+                              avail.find((o) => o.id === lastAiId) ??
+                              avail[0];
+                            return picked?.name ?? "No AI available";
+                          })()}
+                        </span>
+                        <LuChevronDown class="h-3.5 w-3.5 flex-shrink-0 text-[var(--text-muted)]" />
+                      </button>
+                      {adoptMenuOpenId.value === a.archive_id && (
+                        <>
+                          <div
+                            class="fixed inset-0 z-40"
+                            onClick$={() => (adoptMenuOpenId.value = null)}
+                          />
+                          <div class="absolute left-0 top-full z-50 mt-1 max-h-60 w-full min-w-[150px] overflow-auto rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-dropdown)] py-1 shadow-xl">
+                            {aiOptions.value
+                              .filter(
+                                (o) =>
+                                  !(a.adopted_by ?? []).some((x) => x.ai_id === o.id),
+                              )
+                              .map((o) => (
+                                <button
+                                  key={o.id}
+                                  type="button"
+                                  onClick$={() => {
+                                    adoptPick.value = {
+                                      ...adoptPick.value,
+                                      [a.archive_id]: o.id,
+                                    };
+                                    adoptMenuOpenId.value = null;
+                                  }}
+                                  class={`block w-full px-3 py-1.5 text-left text-xs transition-colors hover:bg-[var(--bg-card)] ${
+                                    o.id === adoptPick.value[a.archive_id]
+                                      ? "font-medium text-[var(--text-primary)]"
+                                      : "text-[var(--text-secondary)]"
+                                  }`}
+                                >
+                                  {o.name}
+                                </button>
+                              ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
                     <button
                       onClick$={() => adopt(a.archive_id)}
                       disabled={adoptBusyId.value !== null}
