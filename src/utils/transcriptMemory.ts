@@ -614,6 +614,49 @@ export async function rebuildMemoryIndexIfPending(): Promise<void> {
   }
 }
 
+/** Add distilled episodic summaries (one per conversation) in a SINGLE
+ *  store write - the store is a whole-blob rewrite, so bulk writers must
+ *  batch. Entries carry the conversation's hash (recall + self-exclusion
+ *  work like any turn) and its original timestamp (imported memories age
+ *  like the history they describe). Returns how many were added. */
+export async function addEpisodicSummaries(
+  aiId: string,
+  items: { conversationHash: string; text: string; createdAt: number }[],
+): Promise<number> {
+  if (!aiId || items.length === 0) return 0;
+  if (!(await isEmbeddingModelReady())) return 0;
+  const texts = items.map((i) => i.text.trim().slice(0, MAX_TEXT)).filter(Boolean);
+  if (texts.length === 0) return 0;
+  let vecs: number[][];
+  try {
+    vecs = await embedInBatches(texts);
+  } catch (e) {
+    console.warn("[Memory] addEpisodicSummaries embed failed:", e);
+    return 0;
+  }
+  const all = await getEmb(aiId);
+  let added = 0;
+  items.forEach((item, i) => {
+    const vec = vecs[i];
+    if (!vec || !vec.length) return;
+    all.push({
+      id: crypto.randomUUID(),
+      conversation_hash: item.conversationHash,
+      role: "user",
+      text: item.text.trim().slice(0, MAX_TEXT),
+      vector: vec,
+      kind: "episodic",
+      created_at: item.createdAt,
+    });
+    added += 1;
+  });
+  if (added === 0) return 0;
+  const authored = all.filter((e) => e.kind === "authored");
+  const episodic = all.filter((e) => e.kind !== "authored").slice(-MAX_PER_AI);
+  await saveEmb(aiId, [...authored, ...episodic]);
+  return added;
+}
+
 /** Forget a single remembered turn by id. */
 export async function deleteAiMemory(aiId: string, id: string): Promise<void> {
   const all = await getEmb(aiId);

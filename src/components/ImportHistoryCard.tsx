@@ -115,6 +115,19 @@ export default component$(() => {
       unsubscribe();
       unlisten();
     });
+    // Catch-up pass: any adopted archive whose summaries were interrupted
+    // (or waiting on models) finishes here. Idempotent per conversation.
+    const adoptedAiIds = new Set(
+      archives.value.flatMap((a) => (a.adopted_by ?? []).map((x) => x.ai_id)),
+    );
+    if (adoptedAiIds.size > 0) {
+      const { summarizeAdoptedConversations } = await import(
+        "../utils/importSummaries"
+      );
+      for (const aiId of adoptedAiIds) {
+        summarizeAdoptedConversations(aiId).catch(() => {});
+      }
+    }
   });
 
   const adopt = $(async (archiveId: string) => {
@@ -143,6 +156,12 @@ export default component$(() => {
         aiName: ai.name,
       });
       await refresh();
+      // Give the adopting AI recall over its new history - background,
+      // idempotent, quietly retried by the next card mount if models
+      // aren't ready yet.
+      import("../utils/importSummaries")
+        .then((m) => m.summarizeAdoptedConversations(ai.id))
+        .catch(() => {});
     } catch (e) {
       error.value = String(e);
     } finally {
