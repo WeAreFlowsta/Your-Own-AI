@@ -416,7 +416,8 @@ export default component$(() => {
                 A coding assistant
               </span>
               <span class="mt-1 block text-xs text-[var(--text-secondary)]">
-                Claude Code or Aider sessions already on this machine.
+                Claude Code, OpenCode, Codex, Cursor, or Aider sessions
+                already on this machine.
               </span>
             </button>
           </div>
