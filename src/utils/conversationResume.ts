@@ -48,8 +48,10 @@ export async function listAllConversations(
         for (const conversation of conversations) {
           // External-API conversations (source set - e.g. the Build agent's
           // own model calls through the local server) are records, not
-          // places - they live on the Memory page, not here.
-          if (conversation.source) continue;
+          // places - they live on the Memory page, not here. Imported
+          // history is the exception: an adopted conversation IS a place -
+          // the user can pick up where they left off with their old app.
+          if (conversation.source && !conversation.source.startsWith("import:")) continue;
           out.push({
             conversation,
             title:

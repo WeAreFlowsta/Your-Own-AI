@@ -616,6 +616,7 @@ pub fn run() {
             conversation_import::import_conversations_scan,
             conversation_import::import_archives_list,
             conversation_import::import_archive_get,
+            commands_holochain::delete_conversation,
             conversation_import::import_archive_delete,
         ])
         .setup(|app| {
@@ -710,7 +711,7 @@ pub fn run() {
 
                 match conductor::start_holochain(
                     hc_app_handle.clone(),
-                    data_dir,
+                    data_dir.clone(),
                     passphrase.to_string(),
                 )
                 .await
@@ -721,6 +722,19 @@ pub fn run() {
                         // Phase A fresh start: remove pre-versioning apps.
                         if let Err(e) = dna::cleanup_legacy_apps(manager.handle.admin_port).await {
                             log::warn!("Legacy app cleanup failed: {}", e);
+                        }
+
+                        // Hot-swap coordinator zomes to this build's version
+                        // (no-op once applied; new externs reach existing
+                        // cells without touching the DNA hash).
+                        if let Err(e) = dna::update_coordinators_sweep(
+                            manager.handle.admin_port,
+                            &manager.resource_dir,
+                            &data_dir,
+                        )
+                        .await
+                        {
+                            log::warn!("Coordinator sweep failed: {}", e);
                         }
 
                         // Reconnect any agents from previous sessions.

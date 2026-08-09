@@ -57,6 +57,7 @@ log = "0.4"
 lair_keystore_api = "=0.6.3"
 holochain_client = { version = "=0.8.1", default-features = false }
 holochain_types = "=0.6.1"
+mr_bundle = "=0.6.1"
 rmp-serde = "1"
 hex = "0.4"
 flate2 = "1"

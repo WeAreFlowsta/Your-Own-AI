@@ -8,11 +8,26 @@ use holochain_client::{
     InstallAppPayload,
 };
 use holochain_types::app::AppBundleSource;
-use holochain_types::prelude::AgentPubKey;
+use holochain_types::prelude::{
+    AgentPubKey, CoordinatorBundle, CoordinatorManifest, CoordinatorSource,
+    UpdateCoordinatorsPayload, ZomeDependency, ZomeManifest,
+};
 use std::path::Path;
 
 /// The hApp bundle filename (in src-tauri/resources/).
 const HAPP_FILENAME: &str = "yourown_ai_transcript_v1_happ.happ";
+
+/// The coordinator zome version this build ships. Bump when the coordinator
+/// zome gains/changes externs (rebuild via dna/v1/build-coordinator.sh);
+/// the startup sweep hot-swaps every installed cell - new installs included,
+/// so the committed .happ (and with it the DNA hash) is never rebuilt.
+/// v1 = original externs; v2 = + delete_conversation.
+pub const COORDINATOR_VERSION: u32 = 2;
+/// The standalone coordinator wasm (in src-tauri/resources/), staged by
+/// dna/v1/build-coordinator.sh.
+const COORDINATOR_WASM_FILENAME: &str = "transcript_coordinator.wasm";
+/// App-data marker recording the last version the sweep applied.
+const COORDINATOR_MARKER_FILENAME: &str = "coordinator-version";
 
 /// The role name inside the hApp bundle (must match happ.yaml).
 pub const ROLE_NAME: &str = "transcript";
@@ -100,6 +115,90 @@ pub async fn install_transcript_app(
 
     log::info!("Transcript app installed and enabled for AI: {}", ai_id);
     Ok(app_id)
+}
+
+/// Hot-swap the coordinator zome on every installed transcript cell to the
+/// version this build ships. Runs at startup after the conductor is up;
+/// no-ops via the marker once a version has been applied. The integrity
+/// zome (and so the DNA hash) is never touched - existing cells keep their
+/// data and gain the new externs live.
+pub async fn update_coordinators_sweep(
+    admin_port: u16,
+    resource_dir: &Path,
+    app_data_dir: &Path,
+) -> Result<u32, String> {
+    let marker = app_data_dir.join(COORDINATOR_MARKER_FILENAME);
+    let applied: u32 = std::fs::read_to_string(&marker)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(1);
+    if applied >= COORDINATOR_VERSION {
+        return Ok(0);
+    }
+
+    let wasm_path = resource_dir.join(COORDINATOR_WASM_FILENAME);
+    let wasm = std::fs::read(&wasm_path)
+        .map_err(|e| format!("Coordinator wasm missing at {:?}: {}", wasm_path, e))?;
+
+    let manifest = CoordinatorManifest {
+        zomes: vec![ZomeManifest {
+            name: ROLE_NAME.into(),
+            hash: None,
+            path: COORDINATOR_WASM_FILENAME.to_string(),
+            dependencies: Some(vec![ZomeDependency {
+                name: "transcript_integrity".into(),
+            }]),
+        }],
+    };
+    let bundle: CoordinatorBundle = mr_bundle::Bundle::new(
+        manifest,
+        [(COORDINATOR_WASM_FILENAME.to_string(), wasm.into())],
+    )
+    .map_err(|e| format!("Could not assemble coordinator bundle: {}", e))?
+    .into();
+
+    let admin_ws = AdminWebsocket::connect(
+        format!("localhost:{}", admin_port),
+        Some("your-own-ai".to_string()),
+    )
+    .await
+    .map_err(|e| format!("Failed to connect to admin WebSocket: {}", e))?;
+
+    let apps = admin_ws
+        .list_apps(None)
+        .await
+        .map_err(|e| format!("Failed to list apps: {}", e))?;
+
+    let mut updated = 0u32;
+    for app in apps.iter().filter(|a| a.installed_app_id.starts_with(APP_ID_PREFIX)) {
+        for cells in app.cell_info.values() {
+            for cell in cells {
+                if let holochain_client::CellInfo::Provisioned(p) = cell {
+                    admin_ws
+                        .update_coordinators(UpdateCoordinatorsPayload {
+                            cell_id: p.cell_id.clone(),
+                            source: CoordinatorSource::Bundle(Box::new(bundle.clone())),
+                        })
+                        .await
+                        .map_err(|e| {
+                            format!(
+                                "update_coordinators failed for {}: {:?}",
+                                app.installed_app_id, e
+                            )
+                        })?;
+                    updated += 1;
+                }
+            }
+        }
+    }
+
+    std::fs::write(&marker, COORDINATOR_VERSION.to_string()).map_err(|e| e.to_string())?;
+    log::info!(
+        "[dna] coordinator sweep: {} cell(s) hot-swapped to v{}",
+        updated,
+        COORDINATOR_VERSION
+    );
+    Ok(updated)
 }
 
 /// One-time fresh start (Phase A): uninstall pre-versioning transcript

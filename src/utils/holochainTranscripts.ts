@@ -174,6 +174,21 @@ export async function recordGroundingAnnotation(
 }
 
 /**
+ * Delete a conversation (tombstone) from an AI's chain. The deletion is a
+ * signed chain action - the record of deleting remains, the content leaves
+ * every query. Returns the number of records tombstoned.
+ */
+export async function deleteConversation(
+  agentKey: string,
+  conversationHash: string,
+): Promise<number> {
+  return await invoke<number>("delete_conversation", {
+    agentKey,
+    conversationHash,
+  });
+}
+
+/**
  * Get all messages in a conversation.
  */
 export async function getTranscript(

@@ -124,6 +124,54 @@ pub fn get_conversation(action_hash: ActionHash) -> ExternResult<Option<Record>>
     get(action_hash, GetOptions::default())
 }
 
+/// Delete a conversation from this agent's chain: tombstone the list link,
+/// every message link and entry, and the conversation-metadata entry itself.
+/// A link only exists while its create has no matching delete, so the
+/// conversation vanishes from `get_all_conversations` and its messages from
+/// `get_conversation_entries`. Author-only deletion is enforced by the
+/// integrity zome's `RegisterDelete` validation. Returns the number of
+/// records tombstoned. Deletes are themselves signed chain actions - the
+/// record OF the deletion remains, the content does not.
+#[hdk_extern]
+pub fn delete_conversation(conversation_hash: ActionHash) -> ExternResult<u32> {
+    let mut deleted: u32 = 0;
+
+    // Message entries + their links off the conversation.
+    let entry_links = get_links(
+        LinkQuery::try_new(conversation_hash.clone(), LinkTypes::ConversationToEntries)?,
+        GetStrategy::default(),
+    )?;
+    for link in entry_links {
+        if let Ok(entry_hash) = ActionHash::try_from(link.target.clone()) {
+            // Best-effort per entry: a missing/already-deleted entry must
+            // not strand the rest of the conversation undeleted.
+            if delete_entry(entry_hash).is_ok() {
+                deleted += 1;
+            }
+        }
+        delete_link(link.create_link_hash, GetOptions::default())?;
+    }
+
+    // The agent-list link that makes it appear in get_all_conversations.
+    let agent = agent_anchor()?;
+    let conv_links = get_links(
+        LinkQuery::try_new(agent, LinkTypes::AllConversations)?,
+        GetStrategy::default(),
+    )?;
+    for link in conv_links {
+        if ActionHash::try_from(link.target.clone()).ok().as_ref() == Some(&conversation_hash) {
+            delete_link(link.create_link_hash, GetOptions::default())?;
+        }
+    }
+
+    // The conversation-metadata entry itself.
+    if delete_entry(conversation_hash).is_ok() {
+        deleted += 1;
+    }
+
+    Ok(deleted)
+}
+
 // ── Migration scaffolding (future DNA versions) ─────────────────────────
 //
 // Single-user simplification of ProofPoll's anchor-based pattern: when a

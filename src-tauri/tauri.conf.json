@@ -94,6 +94,7 @@
     ],
     "resources": [
       "resources/*.happ",
+      "resources/*.wasm",
       "resources/pdfium/*"
     ],
     "icon": [

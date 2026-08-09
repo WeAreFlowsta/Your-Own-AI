@@ -20,7 +20,8 @@ import {
   type WorkspaceMemory,
 } from "../../utils/workspaceMemory";
 import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
-import { LuArrowLeft, LuMessageSquare, LuChevronDown, LuChevronUp, LuInfo, LuDownload, LuPencil, LuShieldCheck, LuBrain, LuUser } from "@qwikest/icons/lucide";
+import { LuArrowLeft, LuMessageSquare, LuChevronDown, LuChevronUp, LuInfo, LuDownload, LuPencil, LuShieldCheck, LuBrain, LuUser, LuTrash2 } from "@qwikest/icons/lucide";
+import ConfirmModal from "../../components/ConfirmModal";
 import AppHeader from "../../components/AppHeader";
 import { useHeaderWorkspace } from "../../hooks/useHeaderWorkspace";
 import { ProjectMemoryContext } from "../layout";
@@ -209,6 +210,8 @@ export default component$(() => {
   const exportStatus = useSignal<string | null>(null);
   // Export-options modal: which conversation, and whether it's open.
   const exportModalConv = useSignal<HolochainConversation | null>(null);
+  const deleteModalConv = useSignal<HolochainConversation | null>(null);
+  const deletingConv = useSignal(false);
 
   const handleExport = $(async (conv: HolochainConversation, opts: ExportOptions, sign: boolean) => {
     exportStatus.value = sign
@@ -515,10 +518,14 @@ export default component$(() => {
                           <span class="px-1.5 py-0.5 rounded bg-[var(--bg-main)] text-[var(--text-secondary)] font-mono">{conv.model_used}</span>
                           {conv.source && (
                             <span
-                              title={`Via an external app: ${conv.source}`}
+                              title={
+                                conv.source.startsWith("import:")
+                                  ? `Imported from your ${conv.source.slice(7)} export`
+                                  : `Via an external app: ${conv.source}`
+                              }
                               class="px-1.5 py-0.5 rounded bg-[var(--text-link)]/15 text-[var(--text-link)] font-semibold tracking-wide"
                             >
-                              API
+                              {conv.source.startsWith("import:") ? "Imported" : "API"}
                             </span>
                           )}
                         </div>
@@ -542,6 +549,13 @@ export default component$(() => {
                       class="flex-shrink-0 p-2 rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-main)] hover:text-[var(--text-primary)] transition-colors"
                     >
                       <LuDownload class="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick$={() => (deleteModalConv.value = conv)}
+                      title="Delete this conversation from your records"
+                      class="flex-shrink-0 p-2 rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-main)] hover:text-red-400 transition-colors"
+                    >
+                      <LuTrash2 class="w-4 h-4" />
                     </button>
                     <button
                       class="flex-shrink-0 p-2 text-[var(--text-muted)]"
@@ -799,6 +813,37 @@ export default component$(() => {
           exportModalConv.value = null;
           if (conv) handleExport(conv, opts, sign);
         })}
+      />
+
+      <ConfirmModal
+        isOpen={deleteModalConv.value !== null}
+        title="Delete this conversation?"
+        message="This removes the conversation and all its messages from your records. The deletion itself is signed into your chain - the record that something was deleted remains, the content does not. This can't be undone."
+        confirmLabel="Delete conversation"
+        cancelLabel="Cancel"
+        variant="danger"
+        busy={deletingConv.value}
+        onConfirm$={$(async () => {
+          const conv = deleteModalConv.value;
+          if (!conv) return;
+          deletingConv.value = true;
+          try {
+            const { deleteConversation } = await import(
+              "../../utils/holochainTranscripts"
+            );
+            await deleteConversation(conv.agent_key || agentKey.value, conv.hash);
+            conversations.value = conversations.value.filter(
+              (c) => c.hash !== conv.hash,
+            );
+            if (expandedHash.value === conv.hash) expandedHash.value = null;
+          } catch (e) {
+            console.warn("[Memory] delete conversation failed:", e);
+          } finally {
+            deletingConv.value = false;
+            deleteModalConv.value = null;
+          }
+        })}
+        onCancel$={$(() => (deleteModalConv.value = null))}
       />
     </div>
   );

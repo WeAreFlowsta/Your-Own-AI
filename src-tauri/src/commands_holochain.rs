@@ -754,6 +754,40 @@ pub async fn get_conversations(
 
 /// Get all messages in a conversation.
 /// `agent_key` is the hex-encoded agent pub key.
+/// Delete a conversation from an AI's chain: tombstones the list link,
+/// every message entry, and the conversation-metadata entry (author-only,
+/// enforced by the integrity zome). The deletion itself is a signed chain
+/// action - the record OF deleting remains; the content leaves all queries.
+/// Returns the number of records tombstoned.
+#[tauri::command]
+pub async fn delete_conversation(
+    app: tauri::AppHandle,
+    agent_key: String,
+    conversation_hash: String,
+    hc_state: State<'_, Arc<HolochainState>>,
+) -> Result<u32, String> {
+    let raw_bytes = hex::decode(&conversation_hash)
+        .map_err(|e| format!("Invalid conversation hash hex: {}", e))?;
+    let conv_hash = ActionHash::from_raw_39(raw_bytes);
+
+    let payload = ExternIO::encode(conv_hash).map_err(|e| format!("Failed to encode: {}", e))?;
+    let result = hc_state
+        .get()?
+        .call_zome(&agent_key, "transcript", "delete_conversation", payload)
+        .await?;
+    let deleted: u32 =
+        ExternIO::decode(&result).map_err(|e| format!("Failed to decode: {}", e))?;
+
+    log::info!(
+        "[transcripts] deleted conversation {}… ({} records tombstoned)",
+        &conversation_hash[..12.min(conversation_hash.len())],
+        deleted
+    );
+    // The chain changed shape - refresh the escrow backup like other writes.
+    crate::vault_escrow::schedule_full_backup(&app);
+    Ok(deleted)
+}
+
 #[tauri::command]
 pub async fn get_conversation_transcript(
     agent_key: String,
