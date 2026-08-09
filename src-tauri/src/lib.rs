@@ -616,6 +616,7 @@ pub fn run() {
             conversation_import::import_conversations_scan,
             conversation_import::import_archives_list,
             conversation_import::import_archive_get,
+            conversation_import::import_archive_adopt,
             commands_holochain::delete_conversation,
             conversation_import::import_archive_delete,
         ])

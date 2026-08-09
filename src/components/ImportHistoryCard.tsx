@@ -18,6 +18,12 @@ interface ImportSummary {
   earliest_us: number | null;
   latest_us: number | null;
   imported_at_us: number;
+  adopted_by: { ai_id: string; ai_name: string }[];
+}
+
+interface AiOption {
+  id: string;
+  name: string;
 }
 
 const SOURCE_NAMES: Record<string, string> = {
@@ -63,6 +69,10 @@ export default component$(() => {
     error: null,
   });
   const learnedIds = useSignal<string[]>([]);
+  const aiOptions = useSignal<AiOption[]>([]);
+  const adoptPick = useSignal<Record<string, string>>({});
+  const adoptBusyId = useSignal<string | null>(null);
+  const adoptProgress = useSignal<{ done: number; total: number } | null>(null);
 
   const refresh = $(async () => {
     try {
@@ -85,7 +95,50 @@ export default component$(() => {
       distill.value = { ...s };
       if (s.state === "done") learnedIds.value = distilledArchiveIds();
     });
-    cleanup(() => unsubscribe());
+    // Active provisioned AIs for the adoption picker; default = last used.
+    const { getLocalCustomAis } = await import("../utils/localAiStorage");
+    const ais = await getLocalCustomAis();
+    aiOptions.value = ais
+      .filter((ai) => ai.status === "active" && ai.agentPubKey)
+      .map((ai) => ({ id: ai.id, name: ai.name }));
+    const { listen } = await import("@tauri-apps/api/event");
+    const unlisten = await listen<{ done: number; total: number }>(
+      "import-adopt-progress",
+      (e) => {
+        adoptProgress.value = { done: e.payload.done, total: e.payload.total };
+      },
+    );
+    cleanup(() => {
+      unsubscribe();
+      unlisten();
+    });
+  });
+
+  const adopt = $(async (archiveId: string) => {
+    const lastAiId =
+      typeof localStorage !== "undefined" ? localStorage.getItem("lastAiId") : null;
+    const aiId =
+      adoptPick.value[archiveId] ||
+      (aiOptions.value.some((a) => a.id === lastAiId) ? lastAiId! : aiOptions.value[0]?.id);
+    const ai = aiOptions.value.find((a) => a.id === aiId);
+    if (!ai) return;
+    error.value = "";
+    adoptBusyId.value = archiveId;
+    adoptProgress.value = null;
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke<number>("import_archive_adopt", {
+        archiveId,
+        aiId: ai.id,
+        aiName: ai.name,
+      });
+      await refresh();
+    } catch (e) {
+      error.value = String(e);
+    } finally {
+      adoptBusyId.value = null;
+      adoptProgress.value = null;
+    }
   });
 
   const pickAndImport = $(async () => {
@@ -189,26 +242,87 @@ export default component$(() => {
           {archives.value.map((a) => (
             <div
               key={a.archive_id}
-              class="flex items-center justify-between rounded-lg border border-[var(--border-subtle)] px-3 py-2 text-sm"
+              class="rounded-lg border border-[var(--border-subtle)] px-3 py-2 text-sm"
             >
-              <span class="text-[var(--text-secondary)]">
-                <span class="font-semibold text-[var(--text-primary)]">
-                  {sourceName(a.source)}
-                </span>{" "}
-                · {a.conversation_count} conversations
-                {dateRange(a) ? ` · ${dateRange(a)}` : ""}
-                {learnedIds.value.includes(a.archive_id) && (
-                  <span class="ml-2 text-emerald-500">· learned</span>
-                )}
-              </span>
-              <button
-                onClick$={() => remove(a.archive_id)}
-                title="Delete this imported archive"
-                aria-label="Delete this imported archive"
-                class="p-1 text-[var(--text-muted)] transition-colors hover:text-red-400"
-              >
-                <LuTrash2 class="h-4 w-4" />
-              </button>
+              <div class="flex items-center justify-between">
+                <span class="text-[var(--text-secondary)]">
+                  <span class="font-semibold text-[var(--text-primary)]">
+                    {sourceName(a.source)}
+                  </span>{" "}
+                  · {a.conversation_count} conversations
+                  {dateRange(a) ? ` · ${dateRange(a)}` : ""}
+                  {learnedIds.value.includes(a.archive_id) && (
+                    <span class="ml-2 text-emerald-500">· learned</span>
+                  )}
+                </span>
+                <button
+                  onClick$={() => remove(a.archive_id)}
+                  title="Delete this imported archive"
+                  aria-label="Delete this imported archive"
+                  class="p-1 text-[var(--text-muted)] transition-colors hover:text-red-400"
+                >
+                  <LuTrash2 class="h-4 w-4" />
+                </button>
+              </div>
+
+              {(a.adopted_by ?? []).length > 0 && (
+                <p class="mt-1 text-xs text-[var(--text-muted)]">
+                  In {a.adopted_by.map((x) => x.ai_name).join(", ")}
+                  {"'"}s conversations.
+                </p>
+              )}
+
+              {adoptBusyId.value === a.archive_id ? (
+                <p class="mt-2 text-xs text-[var(--text-secondary)]">
+                  Adding to conversations
+                  {adoptProgress.value
+                    ? `: ${adoptProgress.value.done} of ${adoptProgress.value.total}`
+                    : "…"}
+                  {" "}- original dates preserved.
+                </p>
+              ) : (
+                aiOptions.value.length > 0 && (
+                  <div class="mt-2 flex flex-wrap items-center gap-2">
+                    <select
+                      value={
+                        adoptPick.value[a.archive_id] ??
+                        aiOptions.value.find(
+                          (o) =>
+                            typeof localStorage !== "undefined" &&
+                            o.id === localStorage.getItem("lastAiId"),
+                        )?.id ??
+                        aiOptions.value[0].id
+                      }
+                      onChange$={(_, el) =>
+                        (adoptPick.value = {
+                          ...adoptPick.value,
+                          [a.archive_id]: el.value,
+                        })
+                      }
+                      class="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-2 py-1 text-xs text-[var(--text-primary)]"
+                    >
+                      {aiOptions.value
+                        .filter(
+                          (o) => !(a.adopted_by ?? []).some((x) => x.ai_id === o.id),
+                        )
+                        .map((o) => (
+                          <option key={o.id} value={o.id}>
+                            {o.name}
+                          </option>
+                        ))}
+                    </select>
+                    <button
+                      onClick$={() => adopt(a.archive_id)}
+                      disabled={adoptBusyId.value !== null}
+                      class="rounded-lg border border-[var(--border-subtle)] px-2.5 py-1 text-xs text-[var(--text-primary)] transition-colors hover:bg-[var(--bg-dropdown)] disabled:opacity-60"
+                    >
+                      {(a.adopted_by ?? []).length > 0
+                        ? "Add to another AI's conversations"
+                        : "Add to this AI's conversations"}
+                    </button>
+                  </div>
+                )
+              )}
             </div>
           ))}
         </div>

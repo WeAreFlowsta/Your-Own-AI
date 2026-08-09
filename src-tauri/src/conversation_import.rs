@@ -61,6 +61,15 @@ pub struct ImportSummary {
     pub earliest_us: Option<i64>,
     pub latest_us: Option<i64>,
     pub imported_at_us: i64,
+    /// AIs whose chains hold this archive's conversations (adoption).
+    #[serde(default)]
+    pub adopted_by: Vec<AdoptedBy>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdoptedBy {
+    pub ai_id: String,
+    pub ai_name: String,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -551,6 +560,7 @@ fn summarize(archive: &ImportArchive) -> ImportSummary {
         earliest_us: earliest,
         latest_us: latest,
         imported_at_us: archive.imported_at_us,
+        adopted_by: Vec::new(),
     }
 }
 
@@ -622,20 +632,24 @@ pub fn import_archives_list(app: AppHandle) -> Result<Vec<ImportSummary>, String
     Ok(load_manifest(&app)?.archives)
 }
 
-/// Decrypt and return one archive's full content - the stage-2 distiller
-/// reads conversations through this.
-#[tauri::command]
-pub fn import_archive_get(app: AppHandle, archive_id: String) -> Result<ImportArchive, String> {
-    let path = imports_dir(&app)?.join(format!("import-{archive_id}.enc"));
+fn load_archive(app: &AppHandle, archive_id: &str) -> Result<ImportArchive, String> {
+    let path = imports_dir(app)?.join(format!("import-{archive_id}.enc"));
     let text = std::fs::read_to_string(&path)
         .map_err(|e| format!("Could not read the archive: {e}"))?;
     let blob: EncryptedArchiveFile =
         serde_json::from_str(&text).map_err(|e| format!("Archive file is malformed: {e}"))?;
-    let key = data_key(&app)?;
+    let key = data_key(app)?;
     let nonce = hex::decode(&blob.nonce).map_err(|e| e.to_string())?;
     let cipher = hex::decode(&blob.cipher).map_err(|e| e.to_string())?;
     let plain = crate::transcript_crypto::decrypt(&key, &nonce, &cipher)?;
     serde_json::from_slice(&plain).map_err(|e| format!("Archive content is malformed: {e}"))
+}
+
+/// Decrypt and return one archive's full content - the stage-2 distiller
+/// reads conversations through this.
+#[tauri::command]
+pub fn import_archive_get(app: AppHandle, archive_id: String) -> Result<ImportArchive, String> {
+    load_archive(&app, &archive_id)
 }
 
 /// Delete an imported archive (its encrypted blob + manifest row).
@@ -649,6 +663,222 @@ pub fn import_archive_delete(app: AppHandle, archive_id: String) -> Result<(), S
     let mut manifest = load_manifest(&app)?;
     manifest.archives.retain(|a| a.archive_id != archive_id);
     save_manifest(&app, &manifest)
+}
+
+// ── Adoption (2b): write an archive onto a chosen AI's chain ───────────
+//
+// Follows vault_restore::replay_group: direct zome calls with caller-built
+// encrypted plaintext, which is what lets original timestamps survive
+// (the Tauri write commands stamp "now"). Serialized + head-moved-retried
+// by HolochainManager::call_zome.
+
+/// What the zome expects for start_conversation.
+#[derive(Serialize, Debug)]
+struct ZomeEncryptedInput {
+    cipher: Vec<u8>,
+    nonce: Vec<u8>,
+}
+
+/// What the zome expects for record_message.
+#[derive(Serialize, Debug)]
+struct ZomeRecordMessageInput {
+    conversation_hash: holochain_types::prelude::ActionHash,
+    cipher: Vec<u8>,
+    nonce: Vec<u8>,
+}
+
+/// The zome-side encrypted entry, for decoding existing records.
+#[derive(Deserialize)]
+struct EncryptedEntryRaw {
+    cipher: Vec<u8>,
+    nonce: Vec<u8>,
+}
+
+/// The integrity zome rejects ciphertext over 1 MiB; stay well under it.
+/// A rejected write would lose the message mid-adoption.
+const ADOPT_CONTENT_BUDGET: usize = 900_000;
+
+fn bounded_content(text: &str) -> String {
+    if text.len() <= ADOPT_CONTENT_BUDGET {
+        return text.to_string();
+    }
+    let mut end = ADOPT_CONTENT_BUDGET;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!(
+        "{}\n\n(Message truncated during import - the original exceeded the record size limit.)",
+        &text[..end]
+    )
+}
+
+/// Encrypt a plaintext JSON value and commit it through a transcript zome
+/// function, returning the new record's action hash.
+async fn commit_encrypted(
+    manager: &crate::holochain::HolochainManager,
+    agent_key: &str,
+    key: &[u8; 32],
+    fn_name: &str,
+    conversation_hash: Option<holochain_types::prelude::ActionHash>,
+    plain: &serde_json::Value,
+) -> Result<holochain_types::prelude::ActionHash, String> {
+    use holochain_types::prelude::ExternIO;
+    let bytes = serde_json::to_vec(plain).map_err(|e| e.to_string())?;
+    let (nonce, cipher) = crate::transcript_crypto::encrypt(key, &bytes)?;
+    let payload = match conversation_hash {
+        None => ExternIO::encode(ZomeEncryptedInput {
+            cipher,
+            nonce: nonce.to_vec(),
+        }),
+        Some(h) => ExternIO::encode(ZomeRecordMessageInput {
+            conversation_hash: h,
+            cipher,
+            nonce: nonce.to_vec(),
+        }),
+    }
+    .map_err(|e| e.to_string())?;
+    let result = manager
+        .call_zome(agent_key, "transcript", fn_name, payload)
+        .await?;
+    ExternIO::decode(&result).map_err(|e| e.to_string())
+}
+
+/// Adopt an archive into one AI's conversations: every conversation is
+/// written onto that AI's chain with its ORIGINAL timestamps and an
+/// "import:<source>" label. Re-running after an interruption completes the
+/// missing conversations instead of duplicating finished ones (dedup on
+/// started_at, the restore pattern).
+#[tauri::command]
+pub async fn import_archive_adopt(
+    app: AppHandle,
+    archive_id: String,
+    ai_id: String,
+    ai_name: String,
+    hc_state: tauri::State<'_, std::sync::Arc<crate::commands_holochain::HolochainState>>,
+) -> Result<u32, String> {
+    use holochain_types::prelude::ExternIO;
+    use tauri::Emitter;
+
+    let manager = hc_state.get()?;
+    let key = manager.data_key()?;
+    let archive = load_archive(&app, &archive_id)?;
+
+    // Existing started_at values on the adopting agent's chain.
+    let mut existing_started: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    let payload = ExternIO::encode(()).map_err(|e| e.to_string())?;
+    if let Ok(result) = manager
+        .call_zome(&ai_id, "transcript", "get_all_conversations", payload)
+        .await
+    {
+        if let Ok(records) = ExternIO::decode::<Vec<holochain_types::prelude::Record>>(&result) {
+            for record in &records {
+                let Some(entry) = record.entry().as_option() else { continue };
+                let Some(app_bytes) = entry.as_app_entry() else { continue };
+                let Ok(ee) = rmp_serde::from_slice::<EncryptedEntryRaw>(app_bytes.as_ref().bytes())
+                else {
+                    continue;
+                };
+                let Ok(plain) = crate::transcript_crypto::decrypt(&key, &ee.nonce, &ee.cipher)
+                else {
+                    continue;
+                };
+                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&plain) {
+                    if let Some(s) = v["started_at"].as_i64() {
+                        existing_started.insert(s);
+                    }
+                }
+            }
+        }
+    }
+
+    let total = archive.conversations.len();
+    let mut written = 0u32;
+    let mut last_pct = 101u32;
+    for (idx, conv) in archive.conversations.iter().enumerate() {
+        // Timestamp fallback chain: conversation -> first message -> import
+        // time (+idx keeps fallback values unique within one archive).
+        let started_at = conv
+            .created_at_us
+            .or_else(|| conv.messages.first().and_then(|m| m.ts_us))
+            .unwrap_or(archive.imported_at_us + idx as i64);
+        if existing_started.contains(&started_at) {
+            continue;
+        }
+
+        let meta = serde_json::json!({
+            "ai_personality_id": ai_id,
+            "ai_personality_name": ai_name,
+            "model_used": "imported",
+            "started_at": started_at,
+            "title": conv.title,
+            "source": format!("import:{}", archive.source),
+        });
+        let conv_hash =
+            commit_encrypted(manager, &ai_id, &key, "start_conversation", None, &meta).await?;
+
+        for (seq, msg) in conv.messages.iter().enumerate() {
+            let plain = serde_json::json!({
+                "role": msg.role,
+                "content": bounded_content(&msg.text),
+                "sequence": seq as u32,
+                "timestamp": msg.ts_us.unwrap_or(started_at),
+                "model": "imported",
+                "thinking": null,
+                "tokens": null,
+            });
+            commit_encrypted(
+                manager,
+                &ai_id,
+                &key,
+                "record_message",
+                Some(conv_hash.clone()),
+                &plain,
+            )
+            .await?;
+        }
+        written += 1;
+
+        let pct = (((idx + 1) * 100) / total.max(1)) as u32;
+        if pct != last_pct {
+            let _ = app.emit(
+                "import-adopt-progress",
+                serde_json::json!({
+                    "archiveId": archive_id,
+                    "aiId": ai_id,
+                    "done": idx + 1,
+                    "total": total,
+                    "percent": pct,
+                }),
+            );
+            last_pct = pct;
+        }
+    }
+
+    // Record the adoption in the manifest (drives the card's state).
+    let mut manifest = load_manifest(&app)?;
+    if let Some(row) = manifest
+        .archives
+        .iter_mut()
+        .find(|a| a.archive_id == archive_id)
+    {
+        if !row.adopted_by.iter().any(|a| a.ai_id == ai_id) {
+            row.adopted_by.push(AdoptedBy {
+                ai_id: ai_id.clone(),
+                ai_name: ai_name.clone(),
+            });
+        }
+    }
+    save_manifest(&app, &manifest)?;
+
+    // One backup refresh for the whole adoption, not one per write.
+    crate::vault_escrow::schedule_full_backup(&app);
+    log::info!(
+        "[import] adopted {} conversation(s) from {} into {}",
+        written,
+        archive.source,
+        ai_name
+    );
+    Ok(written)
 }
 
 /// Random v4-style UUID without a uuid-crate dependency.
