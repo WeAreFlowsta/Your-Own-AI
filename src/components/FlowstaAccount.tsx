@@ -477,10 +477,10 @@ export default component$<FlowstaAccountProps>((props) => {
                 Unlock online frontier models
               </p>
               <p class="mt-1 text-xs text-[var(--text-muted)]">
-                Chat with the best online models - GPT, Grok, Kimi, Perplexity
-                and more - on one simple plan. From $20/month, and every
-                dollar comes back as model credit. Your local AIs stay free
-                forever.
+                Chat with the best online models - GPT, Grok, Kimi, DeepSeek,
+                Qwen, GLM, and Perplexity web search - on one simple plan.
+                From $20/month, and every dollar comes back as model credit.
+                Your local AIs stay free forever.
               </p>
               <div class="mt-3">
                 <LiquidMetalButton onClick$={handleLinkPlan}>
