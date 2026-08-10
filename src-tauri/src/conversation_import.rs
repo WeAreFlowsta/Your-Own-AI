@@ -1785,24 +1785,47 @@ async fn commit_encrypted(
     ExternIO::decode(&result).map_err(|e| e.to_string())
 }
 
+/// A running adoption's live progress - also the overlap guard's record.
+#[derive(Clone, Serialize)]
+pub struct AdoptProgressStatus {
+    pub archive_id: String,
+    pub ai_id: String,
+    pub done: usize,
+    pub total: usize,
+}
+
 /// Adoptions currently writing, keyed "archive_id:ai_id". A second click
 /// (or a launch-resume racing a click) must not start an overlapping loop:
 /// both would read the existing-conversations set before either writes,
-/// and every conversation would land twice.
-fn adoptions_in_flight() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
-    static IN_FLIGHT: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
-        std::sync::OnceLock::new();
-    IN_FLIGHT.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+/// and every conversation would land twice. The map doubles as the live
+/// progress store so a remounted page can pick the count back up.
+fn adoptions_in_flight(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, AdoptProgressStatus>> {
+    static IN_FLIGHT: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, AdoptProgressStatus>>,
+    > = std::sync::OnceLock::new();
+    IN_FLIGHT.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
 /// Removes its key on every exit path, including errors.
 struct AdoptionGuard(String);
 impl Drop for AdoptionGuard {
     fn drop(&mut self) {
-        if let Ok(mut set) = adoptions_in_flight().lock() {
-            set.remove(&self.0);
+        if let Ok(mut map) = adoptions_in_flight().lock() {
+            map.remove(&self.0);
         }
     }
+}
+
+/// The adoptions running right now - lets the memory page re-attach its
+/// progress display after navigation instead of waiting for the next
+/// progress event (which can be minutes away during a long conversation).
+#[tauri::command]
+pub fn import_adopt_status() -> Vec<AdoptProgressStatus> {
+    adoptions_in_flight()
+        .lock()
+        .map(|m| m.values().cloned().collect())
+        .unwrap_or_default()
 }
 
 /// Adopt an archive into one AI's conversations: every conversation is
@@ -1823,16 +1846,25 @@ pub async fn import_archive_adopt(
 
     let flight_key = format!("{archive_id}:{ai_id}");
     {
-        let mut set = adoptions_in_flight()
+        let mut map = adoptions_in_flight()
             .lock()
             .map_err(|_| "Adoption tracking unavailable".to_string())?;
-        if !set.insert(flight_key.clone()) {
+        if map.contains_key(&flight_key) {
             return Err(
                 "This archive is already being added to that AI's conversations - it's still running in the background.".to_string(),
             );
         }
+        map.insert(
+            flight_key.clone(),
+            AdoptProgressStatus {
+                archive_id: archive_id.clone(),
+                ai_id: ai_id.clone(),
+                done: 0,
+                total: 0,
+            },
+        );
     }
-    let _guard = AdoptionGuard(flight_key);
+    let _guard = AdoptionGuard(flight_key.clone());
 
     let manager = hc_state.get()?;
     let key = manager.data_key()?;
@@ -1870,6 +1902,14 @@ pub async fn import_archive_adopt(
     let mut written = 0u32;
     let mut last_pct = 101u32;
     for (idx, conv) in archive.conversations.iter().enumerate() {
+        // Keep the pollable status current every conversation, even the
+        // dedup-skipped ones - the progress display reads this on remount.
+        if let Ok(mut map) = adoptions_in_flight().lock() {
+            if let Some(s) = map.get_mut(&flight_key) {
+                s.done = idx;
+                s.total = total;
+            }
+        }
         // Timestamp fallback chain: conversation -> first message -> import
         // time (+idx keeps fallback values unique within one archive).
         let started_at = conv

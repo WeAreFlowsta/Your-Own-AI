@@ -186,6 +186,25 @@ export default component$(() => {
       unlisten();
       unlistenDone();
     });
+    // Re-attach to an adoption already running in the backend - events
+    // alone can be minutes apart during a long conversation, so ask.
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const running = await invoke<
+        { archive_id: string; ai_id: string; done: number; total: number }[]
+      >("import_adopt_status");
+      if (running.length > 0 && adoptBusyId.value === null) {
+        adoptBusyId.value = running[0].archive_id;
+        if (running[0].total > 0) {
+          adoptProgress.value = {
+            done: running[0].done,
+            total: running[0].total,
+          };
+        }
+      }
+    } catch {
+      // Older backend without the status command - events still cover it.
+    }
     // Catch-up pass: any adopted archive whose summaries were interrupted
     // (or waiting on models) finishes here. Idempotent per conversation.
     const adoptedAiIds = new Set(
