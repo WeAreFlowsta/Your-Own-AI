@@ -474,13 +474,15 @@ export default component$<FlowstaAccountProps>((props) => {
           {session.value.linked === false && (
             <div class="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] p-4">
               <p class="text-sm font-medium text-[var(--text-primary)]">
-                Unlock online frontier models
+                Give your AIs the online frontier
               </p>
               <p class="mt-1 text-xs text-[var(--text-muted)]">
-                Chat with the best online models - GPT, Grok, Kimi, DeepSeek,
-                Qwen, GLM, and Perplexity web search - on one simple plan.
-                From $20/month, and every dollar comes back as model credit.
-                Your local AIs stay free forever.
+                One plan adds GPT, Grok, Kimi, DeepSeek, Qwen, GLM, and
+                Perplexity web search alongside your offline models. Smart
+                routing sends each message to the model that suits it, and
+                your AIs remember you everywhere - online or off. From
+                $20/month, and every dollar comes back as model credit.
+                Everything local stays free forever.
               </p>
               <div class="mt-3">
                 <LiquidMetalButton onClick$={handleLinkPlan}>
