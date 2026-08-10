@@ -346,12 +346,12 @@ export default component$<FlowstaAccountProps>((props) => {
       ) : !vault.value.installed ? (
         <div class="space-y-3">
           <p class="text-sm text-[var(--text-secondary)]">
-            Flowsta Vault isn't installed (or isn't running). Vault holds
-            your Flowsta identity on your own device — no passwords on
-            servers — and is how Your Own AI signs you in.
+            All of it comes with Flowsta Vault - the free app that holds your
+            identity on your own device, no passwords on servers. Install it,
+            unlock it, and this page signs you in automatically.
           </p>
           <LiquidMetalButton onClick$={() => openUrl(VAULT_DOWNLOAD_URL)}>
-            <span class="px-5 py-2.5 text-sm">Get Flowsta Vault</span>
+            <span class="px-5 py-2.5 text-sm">Get Flowsta Vault - free</span>
           </LiquidMetalButton>
           <button
             class="ml-3 text-sm text-[var(--text-link)] hover:underline"
@@ -473,27 +473,47 @@ export default component$<FlowstaAccountProps>((props) => {
 
           {session.value.linked === false && (
             <div class="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] p-4">
-              <p class="text-sm text-[var(--text-primary)]">
-                Link this device to your plan
+              <p class="text-sm font-medium text-[var(--text-primary)]">
+                Unlock online frontier models
               </p>
               <p class="mt-1 text-xs text-[var(--text-muted)]">
-                To use online models here, link this device to your
-                yourownai.net plan (or subscribe) in the browser — it takes a
-                few seconds.
+                Chat with the best online models - GPT, Grok, Kimi, Perplexity
+                and more - on one simple plan. From $20/month, and every
+                dollar comes back as model credit. Your local AIs stay free
+                forever.
               </p>
               <div class="mt-3">
                 <LiquidMetalButton onClick$={handleLinkPlan}>
-                  <span class="px-5 py-2 text-sm">Link my plan</span>
+                  <span class="px-5 py-2 text-sm">See plans</span>
                 </LiquidMetalButton>
+              </div>
+              <p class="mt-2 text-xs text-[var(--text-muted)]">
+                Already subscribed on yourownai.net? The same button links
+                this device to your plan - or{" "}
                 <button
-                  class="ml-3 text-sm text-[var(--text-link)] hover:underline"
+                  class="text-[var(--text-link)] hover:underline"
                   onClick$={refresh}
                 >
-                  I've linked it — refresh
-                </button>
-              </div>
+                  refresh
+                </button>{" "}
+                if you just did.
+              </p>
             </div>
           )}
+
+          {session.value.linked !== false &&
+            session.value.tier &&
+            session.value.tier !== "free" && (
+              <button
+                class="text-sm text-[var(--text-link)] hover:underline"
+                onClick$={async () => {
+                  const url = await invoke<string>("flowsta_account_url");
+                  await openUrl(url);
+                }}
+              >
+                Manage plan on yourownai.net
+              </button>
+            )}
 
           {escrow.value?.state === "identity_mismatch" && (
             <div class="rounded-lg border border-amber-700/60 bg-amber-900/20 p-4">
