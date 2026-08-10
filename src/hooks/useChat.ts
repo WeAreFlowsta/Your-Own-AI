@@ -927,13 +927,28 @@ export function useChat(props: UseChatProps) {
         // <think> on any mode is still parsed by extractThinkingFromContent.
         const captureThinking = turnMode === "report";
 
+        // Reasoning effort: frontier reasoning models think for seconds at
+        // their DEFAULT effort before the first token - even on small talk.
+        // A plain conversational turn asks for low effort; anything the
+        // classifier upgraded (report/code), an explicit sparkle, an image
+        // turn, or a turn the classifier never judged keeps the provider
+        // default. The proxy forwards the dial only to providers that
+        // support it.
+        const classifierJudged = !actionMode && smartMode;
+        const reasoningEffort =
+          turnMode === "chat" && classifierJudged && !needsVision
+            ? ("low" as const)
+            : undefined;
+
         for await (const chunk of llamaServerApi.chatCompletion(
           chatHistory,
           systemPrompt,
           controller.signal,
           maxTokens,
           captureThinking,
-          preferredModel || undefined
+          preferredModel || undefined,
+          undefined,
+          reasoningEffort
         )) {
           if (chunk.type === "status") {
             props.isModelLoading.value = true;

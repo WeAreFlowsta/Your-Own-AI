@@ -2188,6 +2188,7 @@ pub async fn stream_chat_completion(
     capture_thinking: Option<bool>,
     model: Option<String>,
     grammar: Option<String>,
+    reasoning_effort: Option<String>,
 ) -> Result<(), String> {
     // Online models ("online:<id>") route to the YOAI proxy with the
     // Flowsta (Vault-grant) token; external models ("external:<id>") post to
@@ -2290,14 +2291,24 @@ pub async fn stream_chat_completion(
     let request_body = if let Some(remote_id) = online_model.as_ref().or(external_model.as_ref()) {
         // Minimal standard body — provider-specific extras (stop lists,
         // chat_template_kwargs, top_k/repeat_penalty) stay local-only.
-        serde_json::json!({
+        let mut remote_body = serde_json::json!({
             "model": remote_id,
             "messages": all_messages,
             "stream": true,
             "stream_options": { "include_usage": true },
             "max_tokens": max_tokens.unwrap_or(4096),
             "temperature": 0.7,
-        })
+        });
+        // Latency/quality dial for reasoning models: plain conversational
+        // turns ask for low effort so the first token isn't behind seconds
+        // of default-depth thinking. Online only - the proxy strips it for
+        // providers that reject the param.
+        if online_model.is_some() {
+            if let Some(effort) = reasoning_effort.as_deref().filter(|e| !e.is_empty()) {
+                remote_body["reasoning_effort"] = serde_json::Value::String(effort.to_string());
+            }
+        }
+        remote_body
     } else {
         body
     };

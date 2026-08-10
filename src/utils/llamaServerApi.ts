@@ -124,7 +124,8 @@ export class LlamaServerAPI {
     maxTokens?: number,
     captureThinking?: boolean,
     model?: string,
-    grammar?: string
+    grammar?: string,
+    reasoningEffort?: 'low' | 'medium' | 'high'
   ): AsyncGenerator<StreamChunk, void, undefined> {
     const isRemote =
       !!model?.startsWith('online:') || !!model?.startsWith('external:');
@@ -189,6 +190,7 @@ export class LlamaServerAPI {
         captureThinking: captureThinking || false,
         model: model || null,
         grammar: grammar || null,
+        reasoningEffort: reasoningEffort || null,
       }).catch(err => {
         console.error('[LlamaServer] Stream command error:', err);
         streamError = err.toString();
