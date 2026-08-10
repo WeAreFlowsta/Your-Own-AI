@@ -2137,6 +2137,24 @@ struct SourceItem {
     title: String,
 }
 
+/// Shared client for chat streams. Keep-alive means turns after the first
+/// reuse the TCP+TLS connection to the online proxy - a fresh handshake to
+/// a far region costs ~0.4s per turn, every turn, and Client::new() paid
+/// it every time. Deliberately NO total timeout (a stream runs as long as
+/// generation does); the connect timeout still bounds a dead network.
+fn streaming_http() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .pool_idle_timeout(std::time::Duration::from_secs(300))
+            .pool_max_idle_per_host(2)
+            .tcp_keepalive(std::time::Duration::from_secs(60))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
+}
+
 /// MedGemma 1.5 reasons in Gemma's thought markers: the reply is
 /// `<unused94>thought\n{reasoning}<unused95>{answer}`. Those markers
 /// detokenize to NOTHING by default, so the reasoning printed as normal
@@ -2209,8 +2227,13 @@ pub async fn stream_chat_completion(
     // This works universally: thinking models use it, others ignore it.
     let should_think = capture_thinking.unwrap_or(false);
 
-    // Get model name: prefer Rust state, fall back to querying llama-server
-    let model_name = {
+    // Get model name: prefer Rust state, fall back to querying llama-server.
+    // Remote turns never use it (their body carries the remote id) - skip
+    // the lookup entirely rather than probing a llama-server that may not
+    // even be running.
+    let model_name = if online_model.is_some() || external_model.is_some() {
+        String::from("remote")
+    } else {
         let cached = state.current_model.lock().await.clone();
         if let Some(name) = cached {
             name
@@ -2310,7 +2333,7 @@ pub async fn stream_chat_completion(
     );
 
     // Wait for model to be fully loaded by polling health endpoint
-    let client = reqwest::Client::new();
+    let client = streaming_http();
     // Remote models (online proxy / external server) have no local model to wait for.
     let max_health_checks = if online_model.is_some() || external_model.is_some() { 0 } else { 60 };
     

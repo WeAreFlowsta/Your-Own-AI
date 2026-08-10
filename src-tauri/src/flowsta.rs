@@ -579,6 +579,28 @@ const SESSION_KEYS_FULL: [&str; 10] = [
 /// same-identity reconnect keeps working untouched: the key is deterministic,
 /// so it matches.
 async fn session_identity_ok(app: &tauri::AppHandle) -> bool {
+    // 60s positive cache: this guard runs before EVERY online request and
+    // its Vault /status probe can stall up to 1.5s. Identity switches are
+    // rare and still invalidate within a minute - a mis-billed request
+    // window of seconds, against a probe on the hot path of every turn.
+    static LAST_OK: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+    if let Ok(guard) = LAST_OK.lock() {
+        if let Some(t) = *guard {
+            if t.elapsed() < std::time::Duration::from_secs(60) {
+                return true;
+            }
+        }
+    }
+    let ok = session_identity_ok_uncached(app).await;
+    if ok {
+        if let Ok(mut guard) = LAST_OK.lock() {
+            *guard = Some(std::time::Instant::now());
+        }
+    }
+    ok
+}
+
+async fn session_identity_ok_uncached(app: &tauri::AppHandle) -> bool {
     let store = match app.store(AUTH_STORE) {
         Ok(s) => s,
         Err(_) => return true,
