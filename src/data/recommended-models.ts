@@ -220,6 +220,20 @@ export const UTILITY_MODEL: CapabilityModel = {
  */
 export const VISION_PROJECTORS: CapabilityModel[] = [
   {
+    id: 'muse-glimmer-vision',
+    name: 'Muse Glimmer vision',
+    role: 'vision-projector',
+    description:
+      'Lets Muse Glimmer see images you attach — screenshots, charts, documents. Needs the Muse Glimmer model downloaded.',
+    // Saved under OUR model-first name: the projector pairing matches by
+    // "<key>-mmproj" prefixing the model filename; Unsloth's mmproj-first
+    // upstream name would never pair.
+    filename: 'Muse-Glimmer-30B-mmproj-Q8_0.gguf',
+    downloadUrl:
+      'https://huggingface.co/unsloth/Muse-Glimmer-30B-GGUF/resolve/main/mmproj-Muse-Glimmer-30B-Q8_0.gguf',
+    size: 2.1,
+  },
+  {
     id: 'gemma-4-e2b-vision',
     name: 'Gemma 4 vision (E2B)',
     role: 'vision-projector',
@@ -306,6 +320,43 @@ export const OCR_MODELS: CapabilityModel = {
 
 export const modelFamilies: ModelFamily[] = [
   // ─── Recommended / Balanced ────────────────────────────────────────────
+  {
+    // Meta's agent-first local model (2026-08-10, Apache 2.0). EARLY
+    // SUPPORT: llama.cpp landed the architecture the day it released;
+    // treat field reports accordingly. Template verified tool-capable +
+    // blessed (gguf.rs test); reasoning_strength dial wired in llm.rs.
+    id: 'muse-glimmer',
+    contextWindow: 131072,
+    released: '2026-08-10',
+    name: 'Muse Glimmer',
+    description:
+      'Meta\'s new agent-first model - built for reliable tool use, working in project folders, and recovering from its own mistakes. Sees images too. Brand-new: early support, expect rough edges.',
+    category: 'quality',
+    recommended: true,
+    capabilities: ['agentic', 'coding', 'reasoning', 'chat'],
+    traits: ['new'],
+    modality: { in: ['text', 'vision'], out: ['text'] },
+    variants: [
+      {
+        parameterCount: '30B',
+        size: 12.4,
+        minRAM: 16,
+        downloadUrl:
+          'https://huggingface.co/unsloth/Muse-Glimmer-30B-GGUF/resolve/main/Muse-Glimmer-30B-UD-Q2_K_XL.gguf',
+        filename: 'Muse-Glimmer-30B-UD-Q2_K_XL.gguf',
+        quantization: 'Q2_K_XL'
+      },
+      {
+        parameterCount: '30B',
+        size: 15.9,
+        minRAM: 32,
+        downloadUrl:
+          'https://huggingface.co/unsloth/Muse-Glimmer-30B-GGUF/resolve/main/Muse-Glimmer-30B-UD-Q4_K_XL.gguf',
+        filename: 'Muse-Glimmer-30B-UD-Q4_K_XL.gguf',
+        quantization: 'Q4_K_XL'
+      }
+    ]
+  },
   {
     id: 'qwen-3.6',
     contextWindow: 262144,

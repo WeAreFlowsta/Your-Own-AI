@@ -2277,10 +2277,32 @@ pub async fn stream_chat_completion(
             "<|eot_id|>",        // Llama 3
         ],
     });
-    if should_think {
-        body["chat_template_kwargs"] = serde_json::json!({
-            "enable_thinking": true
-        });
+    {
+        let mut tpl_kwargs = serde_json::Map::new();
+        if should_think {
+            tpl_kwargs.insert("enable_thinking".to_string(), serde_json::json!(true));
+        }
+        // Muse Glimmer's template reasons at "high" strength BY DEFAULT, so
+        // the latency dial matters even more locally than online. Plain
+        // conversational turns pass low (the same classifier decision that
+        // sets online reasoning_effort); report/code turns keep the model's
+        // default depth. The template also accepts the current date.
+        if model_name.to_lowercase().contains("muse-glimmer") {
+            if let Some(effort) = reasoning_effort.as_deref().filter(|e| !e.is_empty()) {
+                tpl_kwargs.insert(
+                    "reasoning_strength".to_string(),
+                    serde_json::json!(effort),
+                );
+            }
+            let date = crate::diagnostics::utc_now_string()
+                .chars()
+                .take(10)
+                .collect::<String>();
+            tpl_kwargs.insert("current_date".to_string(), serde_json::json!(date));
+        }
+        if !tpl_kwargs.is_empty() {
+            body["chat_template_kwargs"] = serde_json::Value::Object(tpl_kwargs);
+        }
     }
     // Optional GBNF grammar to constrain output (local llama.cpp only — used by
     // memory extraction to force schema-valid JSON). Online providers don't take

@@ -41,6 +41,13 @@ impl Caps {
 pub fn known_caps(model_name: &str) -> Option<Caps> {
     let n = model_name.to_lowercase();
 
+    // Meta's Muse Glimmer (2026-08) - agent-FIRST local model: reliable
+    // tool schemas over long workflows, error recovery, vision encoder.
+    // Scores track Meta's agentic-suite results vs same-class peers.
+    // Early llama.cpp support - re-rank after real field use.
+    if n.contains("muse-glimmer") {
+        return Some(Caps { overall: 8, coding: 8, reasoning: 8, math: 7, vision: 7, medical: 3 });
+    }
     // Agentic coders built on a reasoning base (coding-first, also strong reasoning).
     // Listed before the generic coder rule so they keep their higher reasoning score.
     if n.contains("ornith") {

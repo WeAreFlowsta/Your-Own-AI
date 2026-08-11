@@ -453,7 +453,7 @@ fn redact_pipe_keys(text: &str) -> String {
 // --- Time (no chrono dependency) ------------------------------------------
 
 /// "YYYY-MM-DD HH:MM:SS" for now, UTC. Civil-from-days per Howard Hinnant.
-fn utc_now_string() -> String {
+pub(crate) fn utc_now_string() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())

@@ -19,7 +19,7 @@ use tauri::{AppHandle, Manager};
 /// installer build fails when they disagree. Optional engine downloads
 /// use the same tag, so the bundled engine and any downloaded backend
 /// stay version-locked.
-pub const LLAMA_ENGINE_TAG: &str = "llama-b9637";
+pub const LLAMA_ENGINE_TAG: &str = "llama-b10355";
 
 /// Repo whose `llama-<tag>` releases hold the bundled binaries AND the
 /// optional engine zips (built by build-llama-binaries.yml).
@@ -33,7 +33,7 @@ pub enum Backend {
     Cuda,
 }
 
-/// The version part of the tag ("llama-b9637" -> "b9637").
+/// The version part of the tag ("llama-b10355" -> "b10355").
 fn tag_version() -> &'static str {
     LLAMA_ENGINE_TAG
         .strip_prefix("llama-")
@@ -512,7 +512,7 @@ mod tests {
 
     #[test]
     fn tag_version_strips_prefix() {
-        assert_eq!(tag_version(), "b9637");
+        assert_eq!(tag_version(), "b10355");
     }
 
     #[test]
@@ -527,7 +527,7 @@ mod tests {
     fn download_url_is_release_asset_shaped() {
         if let Some(url) = cuda_download_url() {
             assert!(url.starts_with(
-                "https://github.com/WeAreFlowsta/Your-Own-AI/releases/download/llama-b9637/llama-server-cuda-b9637-"
+                "https://github.com/WeAreFlowsta/Your-Own-AI/releases/download/llama-b10355/llama-server-cuda-b10355-"
             ));
             assert!(url.ends_with(".zip"));
         }
