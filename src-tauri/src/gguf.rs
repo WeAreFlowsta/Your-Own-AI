@@ -405,6 +405,21 @@ mod tests {
         }
     }
 
+    /// Muse Glimmer's REAL chat template (extracted from the Unsloth GGUF
+    /// header, 2026-08-11) must pass the agent blessing: it has full tool
+    /// support AND a raise_exception that is NOT an alternation guard (it
+    /// fires on string-typed tool arguments). The phrases below are the
+    /// load-bearing excerpts - if the blessing heuristic ever changes such
+    /// that this unblesses, this test says so before a release does.
+    #[test]
+    fn muse_glimmer_template_is_blessed() {
+        let excerpt = "{%- if args is not mapping -%}{{- raise_exception('Onyx ATEM chat template requires tool_call.function.arguments to be a dict (mapping); a JSON string cannot be parsed in the HF jinja sandbox.') -}}{%- endif -%} {%- if message.get('tool_calls') -%} render_tool_defs(tools)";
+        let tools = excerpt.contains("tools") || excerpt.contains("tool_call");
+        let strict = excerpt.contains("raise_exception") && excerpt.contains("alternate");
+        assert!(tools, "Muse template must register as tool-capable");
+        assert!(!strict, "Muse's argument-type raise_exception must not read as strict alternation");
+    }
+
     /// The embedding model must be flagged (it 500s the chat server), the chat
     /// models must not be — this is the offline-router crash fix.
     #[test]
