@@ -576,6 +576,15 @@ export default component$(() => {
             isModelLoading.value = false;
             return;
           }
+          if (msg.includes("Model file not found")) {
+            // The remembered model's file is gone (failed/partial download,
+            // cleaned disk). Start with no model loaded - the first send
+            // surfaces the normal pick-or-download flow. (The backend now
+            // refuses to start a model-less server; see start_llama_server.)
+            console.log("[ChatPage] Preload model file missing:", targetModel);
+            isModelLoading.value = false;
+            return;
+          }
           throw e;
         }
         modelTooBig.value = false;

@@ -808,7 +808,17 @@ pub async fn start_llama_server(
                 *state.current_mmproj.lock().await = Some(pname);
             }
         } else {
-            println!("[LLM] Model not found, starting server without model");
+            // A model was explicitly requested but its file is missing (failed
+            // or partial download, cleaned disk). Starting a model-LESS server
+            // here used to "work" - and then every chat request bounced off it
+            // with a baffling 400 "model 'X' not found" (first seen live:
+            // Muse on the 4060, 0.3.0-beta.1). Fail honestly instead; the
+            // callers already map this string to the missing-model UX.
+            log::error!(
+                "[LLM] Requested model file missing on disk: {} - refusing to start a model-less server",
+                filename
+            );
+            return Err("Model file not found".to_string());
         }
     }
 
