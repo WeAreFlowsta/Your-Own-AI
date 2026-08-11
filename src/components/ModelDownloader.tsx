@@ -127,6 +127,13 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
   const store = useStore({
     downloadedModels: [] as LocalModel[],
     appVersion: '',
+    /** Beta-build-only escape hatch: lets us download/test models the fit
+     *  check would refuse (e.g. Muse 30B on an 8GB card - partial offload).
+     *  Gated on the version string containing "beta" (or dev), so it
+     *  REMOVES ITSELF from stable release builds. Manual downloads only -
+     *  auto-routing fit picks are untouched. */
+    isBetaBuild: false,
+    betaFitOverride: false,
     engineBackend: '',
     systemInfoCopied: false,
     downloading: null as string | null,
@@ -206,7 +213,14 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     getModelsDir();
     store.pausedModels = [...getPausedModels()];
     import('@tauri-apps/api/app').then(({ getVersion }) =>
-      getVersion().then((v) => (store.appVersion = v)).catch(() => {}),
+      getVersion().then((v) => {
+        store.appVersion = v;
+        store.isBetaBuild = v.includes('beta') || import.meta.env.DEV;
+        if (store.isBetaBuild) {
+          store.betaFitOverride =
+            localStorage.getItem('beta-fit-override') === 'on';
+        }
+      }).catch(() => {}),
     );
     invoke<{ installed: boolean; active_backend: 'bundled' | 'cuda' }>('engine_status')
       .then((e) => {
@@ -930,7 +944,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
             <div class="flex justify-end">
               <LiquidMetalButton
                 onClick$={() => handleDownload$(family.id)}
-                disabled={!isSuitable || store.downloading !== null}
+                disabled={(!isSuitable && !store.betaFitOverride) || store.downloading !== null}
                 class="flex items-center gap-2 px-4 py-2 text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <LuHardDriveDownload class="w-4 h-4" />
@@ -1195,6 +1209,26 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
               </span>
               <div class="h-px flex-1 bg-[var(--border-subtle)]" />
             </button>
+          )}
+
+          {store.showTooBig && store.isBetaBuild && (
+            <label class="col-span-full flex items-start gap-2.5 rounded-lg border border-amber-700/50 bg-amber-900/15 px-3.5 py-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={store.betaFitOverride}
+                onChange$={(_, el) => {
+                  store.betaFitOverride = el.checked;
+                  localStorage.setItem('beta-fit-override', el.checked ? 'on' : 'off');
+                }}
+                class="mt-0.5 accent-amber-500"
+              />
+              <span class="text-xs text-amber-200/90 leading-relaxed">
+                <span class="font-semibold">Beta testing:</span> allow
+                downloading models beyond this hardware. They run partly on
+                the processor - expect slow replies, and loading can fail.
+                Auto model picks ignore these; you choose them yourself.
+              </span>
+            </label>
           )}
 
           {store.showTooBig && tooBigFamilies.map((family) => (
