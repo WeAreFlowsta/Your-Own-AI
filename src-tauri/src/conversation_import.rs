@@ -152,10 +152,79 @@ struct ClaudeContentSegment {
     text: Option<String>,
 }
 
-/// Perplexity: account export thread shapes vary; accept both a bare array
-/// of threads and a `{"threads": [...]}` wrapper. Harden against real files
-/// as they arrive - detection requires the `messages`/`entries` field so
-/// other sources' files can't mis-parse here.
+/// Perplexity's REAL account export (verified against Eric's own file,
+/// 2026-08-11): `{"conversations": [{context_title, context_uuid,
+/// created_at, mode, entries: [{query, answer, created_at, ...}]}]}`.
+/// Each entry is a Q&A PAIR - one user query + one assistant answer
+/// (plain markdown), not role-based messages.
+#[derive(Deserialize)]
+struct PerplexityExport {
+    conversations: Vec<PerplexityExportConv>,
+}
+
+#[derive(Deserialize)]
+struct PerplexityExportConv {
+    context_title: Option<String>,
+    context_uuid: Option<String>,
+    created_at: Option<String>,
+    #[serde(default)]
+    entries: Vec<PerplexityExportEntry>,
+}
+
+#[derive(Deserialize)]
+struct PerplexityExportEntry {
+    query: Option<String>,
+    answer: Option<String>,
+    created_at: Option<String>,
+}
+
+fn parse_perplexity_export_conv(c: PerplexityExportConv) -> ImportedConversation {
+    let mut messages: Vec<ImportedMessage> = Vec::new();
+    for e in c.entries {
+        let ts = e.created_at.as_deref().and_then(iso_to_micros);
+        if let Some(q) = e.query {
+            let q = q.trim();
+            if !q.is_empty() {
+                messages.push(ImportedMessage {
+                    role: "user".to_string(),
+                    text: q.to_string(),
+                    ts_us: ts,
+                });
+            }
+        }
+        if let Some(a) = e.answer {
+            let a = a.trim();
+            if !a.is_empty() {
+                messages.push(ImportedMessage {
+                    role: "assistant".to_string(),
+                    text: a.to_string(),
+                    ts_us: ts,
+                });
+            }
+        }
+    }
+    let title = c
+        .context_title
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or_else(|| {
+            messages
+                .iter()
+                .find(|m| m.role == "user")
+                .map(|m| m.text.chars().take(60).collect::<String>())
+                .unwrap_or_else(|| "Conversation".to_string())
+        });
+    ImportedConversation {
+        source_id: c.context_uuid,
+        title,
+        created_at_us: c.created_at.as_deref().and_then(iso_to_micros),
+        messages,
+    }
+}
+
+/// OLDER community-exporter Perplexity shapes (kept as fallback): a bare
+/// array of threads or a `{"threads": [...]}` wrapper. Detection requires
+/// the `messages`/`entries` field so other sources' files can't mis-parse
+/// here.
 #[derive(Deserialize)]
 struct PerplexityWrapper {
     threads: Vec<PerplexityThread>,
@@ -414,6 +483,22 @@ pub fn detect_and_parse(text: &str) -> Result<(String, Vec<ImportedConversation>
                 "chatgpt".to_string(),
                 convs.into_iter().map(parse_chatgpt_conv).collect(),
             ));
+        }
+    }
+    // The REAL Perplexity account export ({"conversations": [...]} with
+    // query/answer entry pairs) - tried before the legacy thread shapes.
+    if let Ok(e) = serde_json::from_str::<PerplexityExport>(text) {
+        if !e.conversations.is_empty() {
+            let convs: Vec<ImportedConversation> = e
+                .conversations
+                .into_iter()
+                .map(parse_perplexity_export_conv)
+                .collect();
+            // Only claim the file if it actually yielded messages - an
+            // unrelated {"conversations": ...} wrapper falls through.
+            if convs.iter().any(|c| !c.messages.is_empty()) {
+                return Ok(("perplexity".to_string(), convs));
+            }
         }
     }
     if let Ok(w) = serde_json::from_str::<PerplexityWrapper>(text) {
@@ -2117,6 +2202,38 @@ mod tests {
         assert!(convs[0].messages.is_empty());
     }
 
+    /// Field names replicate a REAL Perplexity account export
+    /// (user_data_export ZIP, verified 2026-08-11): conversations wrapper,
+    /// context_* fields, Q&A-pair entries.
+    #[test]
+    fn perplexity_real_export_parses() {
+        let json = r#"{"conversations": [{
+            "context_uuid": "ctx-1",
+            "context_title": "API input display",
+            "created_at": "2025-05-11T03:13:57.538661Z",
+            "updated_at": "2025-05-11T03:14:10.000000Z",
+            "mode": "COPILOT",
+            "collection_uuid": null,
+            "entries": [{
+                "entry_uuid": "e-1",
+                "query": "does the api have the option to display the input",
+                "answer": "The API supports this via the echo parameter.",
+                "created_at": "2025-05-11T03:13:57.576659Z",
+                "label": null,
+                "query_status": null
+            }]
+        }]}"#;
+        let (source, convs) = detect_and_parse(json).unwrap();
+        assert_eq!(source, "perplexity");
+        assert_eq!(convs.len(), 1);
+        assert_eq!(convs[0].title, "API input display");
+        assert_eq!(convs[0].source_id.as_deref(), Some("ctx-1"));
+        let roles: Vec<&str> = convs[0].messages.iter().map(|m| m.role.as_str()).collect();
+        assert_eq!(roles, vec!["user", "assistant"], "each entry = a Q&A pair");
+        assert!(convs[0].messages[0].ts_us.is_some());
+        assert!(convs[0].created_at_us.is_some());
+    }
+
     #[test]
     fn perplexity_shapes_parse() {
         let wrapped = r#"{"threads": [{
@@ -2265,6 +2382,26 @@ mod tests {
         assert_eq!(convs[0].messages[0].role, "user");
         assert_eq!(convs[0].created_at_us, Some(1760130362369 * 1000));
         assert!(convs[0].messages[0].ts_us.is_some());
+    }
+
+    /// Dogfood against a REAL Perplexity export ZIP. Ignored by default;
+    /// run with: YOAI_PPLX_ZIP=/path/to/export.zip cargo test pplx_dogfood -- --ignored --nocapture
+    /// Prints counts only - never content.
+    #[test]
+    #[ignore]
+    fn pplx_dogfood_real_export() {
+        let Ok(path) = std::env::var("YOAI_PPLX_ZIP") else { return };
+        let (source, convs) = read_import_file(&PathBuf::from(&path), None).unwrap();
+        assert_eq!(source, "perplexity");
+        let (mut users, mut assts) = (0, 0);
+        for c in &convs {
+            assert!(!c.title.trim().is_empty());
+            for m in &c.messages {
+                if m.role == "user" { users += 1 } else { assts += 1 }
+            }
+        }
+        println!("conversations: {} | user msgs: {} | assistant msgs: {}", convs.len(), users, assts);
+        assert!(!convs.is_empty());
     }
 
     /// Dogfood against the developer's REAL Cursor database. Ignored by
