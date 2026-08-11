@@ -28,6 +28,25 @@ const PROCESS_MARKERS: &[&str] = &[
 
 #[tauri::command]
 pub async fn export_diagnostics(app: AppHandle, path: String) -> Result<String, String> {
+    // An empty path means "save it somewhere sensible yourself" - used by the
+    // startup-failure escape hatch, which has no file dialog available. Prefer
+    // the Desktop (most findable), fall back to home, then the app data dir.
+    let path = if path.trim().is_empty() {
+        let name = format!(
+            "your-own-ai-diagnostics-{}.txt",
+            utc_now_string().replace([':', ' '], "-")
+        );
+        let dir = app
+            .path()
+            .desktop_dir()
+            .or_else(|_| app.path().home_dir())
+            .or_else(|_| app.path().app_data_dir())
+            .map_err(|e| format!("Could not find a place to save the report: {e}"))?;
+        dir.join(name).to_string_lossy().to_string()
+    } else {
+        path
+    };
+
     let mut r = String::new();
 
     let _ = writeln!(r, "Your Own AI diagnostic report");

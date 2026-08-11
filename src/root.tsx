@@ -41,6 +41,22 @@ export default component$(() => {
             <div id="app-loading-text" style="margin-top:16px;color:#888;font-family:'Plus Jakarta Sans',system-ui,sans-serif;font-size:14px">
               Loading your AIs...
             </div>
+            {/* Startup-failure escape hatch: if the app never finishes
+                loading (e.g. antivirus killing the records engine, as on
+                MUMATİ's machine), this reveals a way to save a diagnostic
+                report WITHOUT reaching Settings. Pure vanilla + the global
+                Tauri API, so nothing about it depends on the frozen app. */}
+            <div id="app-loading-help" style="display:none;margin-top:28px;max-width:340px;text-align:center;font-family:'Plus Jakarta Sans',system-ui,sans-serif">
+              <div style="color:#aaa;font-size:13px;line-height:1.5">
+                This is taking longer than usual. Some antivirus tools block
+                Your Own AI from starting. You can save a diagnostic report to
+                send to support - it works even when the app won't open.
+              </div>
+              <button id="app-loading-diag-btn" style="margin-top:14px;padding:8px 18px;border:1px solid #4e5cde;border-radius:9px;background:transparent;color:#c7ccf5;font-size:13px;cursor:pointer">
+                Save a diagnostic report
+              </button>
+              <div id="app-loading-diag-result" style="margin-top:12px;color:#888;font-size:12px;line-height:1.5;word-break:break-all"></div>
+            </div>
           </div>
         </div>
         <script
@@ -48,7 +64,45 @@ export default component$(() => {
             (function(){
               var t = localStorage.getItem('theme') || 'dark';
               var bg = {dark:'#000000',light:'#fafafc'}[t];
-              document.getElementById('app-loading').style.background = bg;
+              var overlay = document.getElementById('app-loading');
+              if (overlay) overlay.style.background = bg;
+
+              // Reveal the diagnostics escape hatch if the overlay is still
+              // up after 60s - i.e. startup never completed. AiDataContext
+              // hides the whole overlay on success, so a visible overlay
+              // here means the app is genuinely stuck. 60s clears even a
+              // slow-but-healthy first launch (MUMATİ's never converges, so
+              // the exact threshold only matters for false positives). It's
+              // additive anyway - a late success still hides the whole thing.
+              setTimeout(function(){
+                var ov = document.getElementById('app-loading');
+                if (!ov || ov.style.display === 'none' || ov.style.opacity === '0') return;
+                var help = document.getElementById('app-loading-help');
+                if (help) help.style.display = 'block';
+              }, 60000);
+
+              var btn = document.getElementById('app-loading-diag-btn');
+              if (btn) btn.addEventListener('click', function(){
+                var out = document.getElementById('app-loading-diag-result');
+                btn.disabled = true;
+                btn.textContent = 'Saving...';
+                try {
+                  window.__TAURI__.core.invoke('export_diagnostics', { path: '' })
+                    .then(function(p){
+                      if (out) out.textContent = 'Saved to: ' + p;
+                      btn.textContent = 'Saved';
+                    })
+                    .catch(function(e){
+                      if (out) out.textContent = 'Could not save: ' + e;
+                      btn.disabled = false;
+                      btn.textContent = 'Try again';
+                    });
+                } catch (e) {
+                  if (out) out.textContent = 'Could not save: ' + e;
+                  btn.disabled = false;
+                  btn.textContent = 'Try again';
+                }
+              });
             })();
           `}
         />
