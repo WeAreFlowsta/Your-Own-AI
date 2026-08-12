@@ -732,11 +732,17 @@ pub async fn start_llama_server(
     // Small models get a long runway: a 4B's KV cache is cheap even at 32k,
     // and agent sessions genuinely use it (a real folder task filled 16k in
     // eight calls and died truncated).
+    // RAM thresholds sit BELOW the installed sizes they stand for: the OS
+    // reports USABLE memory, so a "32GB" machine reads ~31.8GB and a "12GB"
+    // machine ~11.7GB. The old >= 32.0 check could never be true on the
+    // flagship 32GB config, sending big models to an 8k context - which
+    // walls the agent (its system prompt alone is ~9k) on the first project
+    // turn. Seen live: 8270 tokens vs 8192 on a 31.8GB 4060 Ti box.
     let ctx_size = if small_model {
-        if total_ram_gb >= 12.0 { "32768" } else { "8192" }
-    } else if total_ram_gb >= 32.0 {
+        if total_ram_gb >= 11.0 { "32768" } else { "8192" }
+    } else if total_ram_gb >= 30.0 {
         "16384"
-    } else if total_ram_gb >= 12.0 {
+    } else if total_ram_gb >= 11.0 {
         "8192"
     } else {
         "4096"
