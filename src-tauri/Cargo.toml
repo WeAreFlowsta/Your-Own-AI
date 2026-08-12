@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.3.0-beta.4"
+version = "0.3.0-beta.5"
 description = "Offline-first AI App"
 authors = ["Your Own AI"]
 homepage = "https://yourownai.net"
