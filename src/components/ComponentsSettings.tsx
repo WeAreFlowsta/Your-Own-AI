@@ -233,6 +233,11 @@ const ComponentCard = component$<CardProps>((props) => {
  *  download), but the same card language as every other component. */
 const BuildComponentCard = component$(() => {
   const installed = useSignal(false);
+  // Installed, but older than the version this app ships - the card offers
+  // an update, never the first-install pitch ("didn't I already do this?").
+  const updateAvailable = useSignal(false);
+  const installedVersion = useSignal('');
+  const pinnedVersion = useSignal('');
   const downloading = useSignal(false);
   const percent = useSignal(0);
   const error = useSignal<string | null>(null);
@@ -244,10 +249,16 @@ const BuildComponentCard = component$(() => {
       const { invoke } = await import("@tauri-apps/api/core");
       const st = (await invoke("build_install_status")) as {
         installed: boolean;
+        installed_version: string | null;
+        pinned_version: string;
+        update_available: boolean;
         downloading: boolean;
         error: string | null;
       };
       installed.value = st.installed;
+      updateAvailable.value = st.update_available;
+      installedVersion.value = st.installed_version ?? '';
+      pinnedVersion.value = st.pinned_version;
       downloading.value = st.downloading;
       error.value = st.error;
     } catch {
@@ -264,6 +275,8 @@ const BuildComponentCard = component$(() => {
     const und = await listen<any>("build-install-done", (e) => {
       downloading.value = false;
       installed.value = true;
+      updateAvailable.value = false;
+      installedVersion.value = pinnedVersion.value;
       error.value = null;
       const path = e.payload?.path;
       if (typeof path === "string" && path) {
@@ -289,8 +302,12 @@ const BuildComponentCard = component$(() => {
     percent.value = 0;
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      invoke("download_build_agent").catch(() => {
-        /* failure arrives via its event */
+      invoke("download_build_agent").catch((e) => {
+        // Guard rejections (e.g. "Close the open project first, then
+        // update.") return straight from the command without firing the
+        // failure event - surface them here or the button spins forever.
+        downloading.value = false;
+        error.value = String(e);
       });
     } catch {
       downloading.value = false;
@@ -344,14 +361,38 @@ const BuildComponentCard = component$(() => {
         )}
         {error.value && <p class="text-xs text-red-400 mt-1">{error.value}</p>}
         {installed.value && !downloading.value && (
-          <p class="mt-2 text-[11px] text-emerald-400/80 flex items-center gap-1">
-            <LuCheck class="w-3 h-3" /> Installed — projects are ready.
-          </p>
+          updateAvailable.value ? (
+            <p class="mt-2 text-[11px] text-amber-400/90 flex items-center gap-1">
+              <LuDownload class="w-3 h-3" /> Update available - you have{' '}
+              {installedVersion.value || 'an older version'}, this app comes
+              with {pinnedVersion.value}. Projects keep working meanwhile.
+            </p>
+          ) : (
+            <p class="mt-2 text-[11px] text-emerald-400/80 flex items-center gap-1">
+              <LuCheck class="w-3 h-3" /> Installed — projects are ready.
+            </p>
+          )
         )}
       </div>
 
       <div class="flex-shrink-0">
-        {installed.value ? (
+        {installed.value && updateAvailable.value && !downloading.value ? (
+          <div class="flex items-center gap-2">
+            <LiquidMetalButton
+              onClick$={doDownload}
+              class="flex items-center gap-1.5 px-3 py-1.5 text-xs"
+            >
+              <LuDownload class="w-3.5 h-3.5" /> Update
+            </LiquidMetalButton>
+            <LiquidMetalButton
+              variant="danger"
+              onClick$={doUninstall}
+              class="flex items-center gap-1.5 px-3 py-1.5 text-xs"
+            >
+              <LuTrash2 class="w-3.5 h-3.5" /> Remove
+            </LiquidMetalButton>
+          </div>
+        ) : installed.value ? (
           <LiquidMetalButton
             variant="danger"
             onClick$={doUninstall}

@@ -60,10 +60,30 @@ pub fn installed_path(app: &AppHandle) -> Option<String> {
     path.is_file().then(|| path.display().to_string())
 }
 
+/// The installed agent's version, from the VERSION marker written at
+/// install time. A binary with no marker predates versioning and can only
+/// be v0.1.0 (the sole release shipped before the marker existed).
+pub fn installed_version(app: &AppHandle) -> Option<String> {
+    installed_path(app)?;
+    let marker = install_dir(app).ok()?.join("VERSION");
+    Some(
+        std::fs::read_to_string(marker)
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|_| "0.1.0".to_string()),
+    )
+}
+
 #[derive(serde::Serialize)]
 pub struct BuildInstallStatus {
     pub installed: bool,
     pub path: Option<String>,
+    /// Version of the binary on disk (None when not installed).
+    pub installed_version: Option<String>,
+    /// The version this app build installs (BUILD_RELEASE_TAG).
+    pub pinned_version: String,
+    /// Installed, but an older version than this app ships - the UI must
+    /// offer an UPDATE, never the first-install pitch.
+    pub update_available: bool,
     pub downloading: bool,
     /// The archive name progress events are keyed by.
     pub archive: Option<String>,
@@ -73,9 +93,14 @@ pub struct BuildInstallStatus {
 #[tauri::command]
 pub fn build_install_status(app: AppHandle) -> BuildInstallStatus {
     let path = installed_path(&app);
+    let installed_version = installed_version(&app);
+    let update_available = matches!(&installed_version, Some(v) if v != version());
     BuildInstallStatus {
         installed: path.is_some(),
         path,
+        installed_version,
+        pinned_version: version().to_string(),
+        update_available,
         downloading: DOWNLOADING.load(Ordering::SeqCst),
         archive: platform_asset(),
         error: LAST_ERROR.lock().ok().and_then(|e| e.clone()),
@@ -87,7 +112,17 @@ pub fn build_install_status(app: AppHandle) -> BuildInstallStatus {
 /// (keyed by the archive name) and completion emits `build-install-done`
 /// with the installed path.
 #[tauri::command]
-pub async fn download_build_agent(app: AppHandle) -> Result<String, String> {
+pub async fn download_build_agent(
+    app: AppHandle,
+    bridge: tauri::State<'_, crate::agent_bridge::AgentBridgeState>,
+) -> Result<String, String> {
+    // Updating replaces the binary, which fails on Windows while the agent
+    // runs (the exe is locked) and would orphan a live session anywhere -
+    // same guard as uninstall, applied only when a binary already exists
+    // (a first install has nothing running).
+    if installed_path(&app).is_some() && bridge.has_open_folder().await {
+        return Err("Close the open project first, then update.".to_string());
+    }
     if DOWNLOADING.swap(true, Ordering::SeqCst) {
         return Err("Already downloading".to_string());
     }
@@ -142,8 +177,14 @@ async fn download_and_install(app: &AppHandle) -> Result<String, String> {
     }
     let _ = std::fs::remove_dir_all(&final_dir);
     std::fs::rename(&partial, &final_dir).map_err(|e| format!("cannot finalize install: {}", e))?;
+    // Version marker - what update detection reads. A failed write is
+    // tolerated (the install still works); the version then reads as the
+    // pre-marker 0.1.0 and the next update offer simply re-downloads.
+    if let Err(e) = std::fs::write(final_dir.join("VERSION"), version()) {
+        log::warn!("[build] could not write version marker: {}", e);
+    }
     let path = final_dir.join(binary_name()).display().to_string();
-    log::info!("[build] installed Your Own AI Build at {}", path);
+    log::info!("[build] installed Your Own AI Build {} at {}", version(), path);
     Ok(path)
 }
 
