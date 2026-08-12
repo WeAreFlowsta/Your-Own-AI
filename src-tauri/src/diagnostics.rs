@@ -47,6 +47,27 @@ pub async fn export_diagnostics(app: AppHandle, path: String) -> Result<String, 
         path
     };
 
+    let report = build_report(&app).await;
+    std::fs::write(&path, report).map_err(|e| format!("Could not write the report: {e}"))?;
+    Ok(path)
+}
+
+/// Same report, straight to the clipboard - for the support flows where
+/// "attach the file from your Desktop" is itself a hurdle (asked for after
+/// the first Windows beta reports). Returns the report length so the UI can
+/// confirm something real was copied.
+#[tauri::command]
+pub async fn copy_diagnostics(app: AppHandle) -> Result<usize, String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    let report = build_report(&app).await;
+    let len = report.len();
+    app.clipboard()
+        .write_text(report)
+        .map_err(|e| format!("Could not copy to the clipboard: {e}"))?;
+    Ok(len)
+}
+
+async fn build_report(app: &AppHandle) -> String {
     let mut r = String::new();
 
     let _ = writeln!(r, "Your Own AI diagnostic report");
@@ -81,9 +102,7 @@ pub async fn export_diagnostics(app: AppHandle, path: String) -> Result<String, 
         &log_tail_section(&app),
     );
 
-    let report = redact(&r);
-    std::fs::write(&path, report).map_err(|e| format!("Could not write the report: {e}"))?;
-    Ok(path)
+    redact(&r)
 }
 
 fn section(out: &mut String, title: &str, body: &str) {

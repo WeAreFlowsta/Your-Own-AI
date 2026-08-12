@@ -29,6 +29,7 @@ mod vault_escrow;          // transcript-key escrow in the user's Flowsta Vault
 mod vault_restore;         // replay conversations from the Vault backup onto this device
 mod model_caps;            // capability registry (benchmark-informed scores)
 mod process_ext;           // Windows: hide sidecar consoles + kill-on-close job; Linux: PDEATHSIG
+mod instance_guard;        // single-instance port lock + orphan-process sweep
 
 use llm::LLMState;
 use holochain::HolochainManager;
@@ -476,11 +477,29 @@ async fn get_context_window_size() -> Result<u64, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // One instance only: two copies (e.g. a dev build beside the
+        // installed release - same identifier, same models, same GPU, same
+        // llama-server port) fight over everything; routing inside the
+        // second instance sees a machine already occupied and picks
+        // pathologically. A second launch focuses the existing window.
+        // Registered FIRST per the plugin docs, so a losing instance exits
+        // before any other plugin does work. NOT sufficient on its own: the
+        // Windows impl silently lets the loser continue whenever the
+        // winner's hidden message window isn't findable (simultaneous
+        // double-launch, or a hung zombie) - instance_guard in setup() is
+        // the authoritative lock.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            use tauri::Manager;
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_window_state::Builder::new()
             // Remembers size/position/maximized on Windows, macOS, and Linux/X11.
             // NOTE: restore is a no-op on GNOME Wayland (the compositor owns window
@@ -488,17 +507,6 @@ pub fn run() {
             // at all). Accepted limitation — see apps/your-own-ai/building.md.
             .with_state_flags(tauri_plugin_window_state::StateFlags::all())
             .build())
-        // One instance only: two copies (e.g. a dev build beside the
-        // installed release - same identifier, same models, same GPU, same
-        // llama-server port) fight over everything; routing inside the
-        // second instance sees a machine already occupied and picks
-        // pathologically. A second launch focuses the existing window.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            use tauri::Manager;
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.set_focus();
-            }
-        }))
         .plugin(tauri_plugin_log::Builder::new()
             .level(log::LevelFilter::Info)
             // Keep rotated logs instead of discarding them - a support
@@ -613,6 +621,7 @@ pub fn run() {
             gpu_safety::gpu_safe_mode_status,
             gpu_safety::gpu_retry,
             diagnostics::export_diagnostics,
+            diagnostics::copy_diagnostics,
             conversation_import::import_conversations_scan,
             conversation_import::import_detect_claude_code,
             conversation_import::import_detect_opencode,
@@ -636,44 +645,23 @@ pub fn run() {
             );
             log::info!("[flowsta] online-model proxy: {}", flowsta::proxy_url());
 
+            // Instance lock FIRST - before anything spawns. Exits here if
+            // another live instance holds the port; clears zombie sessions
+            // and orphaned sidecars (stale conductor/lair/llama-server from
+            // a crashed run) so they can't poison this one.
+            let inference_listener = instance_guard::acquire_or_exit(app.handle());
+
             // Keep that proxy warm for signed-in users (cold start ≈ 3.5s).
             flowsta::spawn_proxy_keepalive(app.handle().clone());
 
             // Start the OpenAI-compatible inference server (external apps use
-            // the user's custom AIs). Best-effort; logs and continues on bind
-            // failure.
-            inference_server::spawn(app.handle().clone());
+            // the user's custom AIs) on the listener the instance lock bound.
+            inference_server::spawn(app.handle().clone(), inference_listener);
 
-            // Start bundled llama-server on app startup
-            let app_handle = app.handle().clone();
-
-            tauri::async_runtime::spawn(async move {
-                let llm_state = app_handle.state::<LLMState>();
-
-                // Check if server is already running
-                match llm::is_llama_server_running().await {
-                    Ok(true) => {
-                        println!("[Setup] llama-server already running");
-                    }
-                    Ok(false) => {
-                        println!("[Setup] Starting bundled llama-server...");
-
-                        // Start without a model (model will be loaded when user selects one)
-                        match llm::start_llama_server(app_handle.clone(), llm_state, None, false).await {
-                            Ok(_) => {
-                                println!("[Setup] llama-server started successfully on port 8080");
-                            }
-                            Err(e) => {
-                                eprintln!("[Setup] Failed to start llama-server: {}", e);
-                                eprintln!("[Setup] App will continue, but local AI will not work");
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("[Setup] Error checking llama-server: {}", e);
-                    }
-                }
-            });
+            // No eager llama-server start: with no model to serve it would sit
+            // in "router mode" (b10355) answering every chat with a 400. The
+            // server starts on the first model load instead (chat page ensures
+            // the remembered model on mount).
 
             // Reconnect to Vault on launch if a prior link was wiped (e.g. Vault
             // was reset): re-link so YOAI reappears in Vault's connected apps,

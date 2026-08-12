@@ -705,8 +705,16 @@ pub async fn start_llama_server(
         }
     }
     
+    // No model, no server. A model-less llama-server (b10355: "router mode")
+    // happily accepts requests and 400s every one of them - the bare-server
+    // class of bug. The only caller that passed None was the old eager start
+    // at app setup, now removed; the server starts on the first model load.
+    if model_filename.is_none() {
+        return Err("No model specified - the server starts with a model load".to_string());
+    }
+
     let models_dir = get_models_dir(&app_handle)?;
-    
+
     // Determine safe context size based on available system RAM
     let sys = sysinfo::System::new_with_specifics(
         sysinfo::RefreshKind::nothing().with_memory(sysinfo::MemoryRefreshKind::everything()),

@@ -37,6 +37,7 @@ sysinfo = "0.33"
 futures = "0.3"
 ash = "0.38"
 tauri-plugin-dialog = "2.6.0"
+tauri-plugin-clipboard-manager = "2"
 zip = "7"
 # Already in the tree via holochain_sqlite (same version) - a direct
 # declaration adds no new native code. Used to read OpenCode's session db.

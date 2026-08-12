@@ -485,6 +485,24 @@ export default component$(() => {
   const diagBusy = useSignal(false);
   const diagSavedPath = useSignal("");
   const diagError = useSignal("");
+  const diagCopied = useSignal(false);
+
+  // Clipboard variant: no file to find and attach - paste straight into an
+  // email or chat. Copying happens on the Rust side (same report builder).
+  const copyDiagnostics = $(async () => {
+    diagError.value = "";
+    diagCopied.value = false;
+    diagBusy.value = true;
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke<number>("copy_diagnostics");
+      diagCopied.value = true;
+    } catch (e) {
+      diagError.value = String(e);
+    } finally {
+      diagBusy.value = false;
+    }
+  });
 
   const saveDiagnostics = $(async () => {
     diagError.value = "";
@@ -1078,6 +1096,13 @@ export default component$(() => {
                 </p>
                 <div class="flex flex-wrap items-center gap-3">
                   <LiquidMetalButton
+                    variant="secondary"
+                    onClick$={copyDiagnostics}
+                    class="px-4 py-2 text-sm"
+                  >
+                    {diagCopied.value ? "Copied" : "Copy to clipboard"}
+                  </LiquidMetalButton>
+                  <LiquidMetalButton
                     onClick$={saveDiagnostics}
                     class="px-4 py-2 text-sm"
                   >
@@ -1093,6 +1118,11 @@ export default component$(() => {
                     </button>
                   )}
                 </div>
+                {diagCopied.value && !diagBusy.value && (
+                  <p class="mt-3 text-xs text-[var(--text-muted)]">
+                    Report copied - paste it into your reply.
+                  </p>
+                )}
                 {diagSavedPath.value && !diagBusy.value && (
                   <p class="mt-3 text-xs text-[var(--text-muted)]">
                     Saved to {diagSavedPath.value} - attach this file when

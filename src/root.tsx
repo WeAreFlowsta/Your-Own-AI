@@ -55,6 +55,9 @@ export default component$(() => {
               <button id="app-loading-diag-btn" style="margin-top:14px;padding:8px 18px;border:1px solid #4e5cde;border-radius:9px;background:transparent;color:#c7ccf5;font-size:13px;cursor:pointer">
                 Save a diagnostic report
               </button>
+              <button id="app-loading-copy-btn" style="margin-top:10px;margin-left:8px;padding:8px 18px;border:1px solid #555;border-radius:9px;background:transparent;color:#aaa;font-size:13px;cursor:pointer">
+                Copy to clipboard
+              </button>
               <div id="app-loading-diag-result" style="margin-top:12px;color:#888;font-size:12px;line-height:1.5;word-break:break-all"></div>
             </div>
           </div>
@@ -101,6 +104,31 @@ export default component$(() => {
                   if (out) out.textContent = 'Could not save: ' + e;
                   btn.disabled = false;
                   btn.textContent = 'Try again';
+                }
+              });
+
+              // Clipboard variant of the same report - for users who find
+              // locating a Desktop file harder than pasting into a chat.
+              var copyBtn = document.getElementById('app-loading-copy-btn');
+              if (copyBtn) copyBtn.addEventListener('click', function(){
+                var out = document.getElementById('app-loading-diag-result');
+                copyBtn.disabled = true;
+                copyBtn.textContent = 'Copying...';
+                try {
+                  window.__TAURI__.core.invoke('copy_diagnostics')
+                    .then(function(){
+                      if (out) out.textContent = 'Copied - paste it into your message to support.';
+                      copyBtn.textContent = 'Copied';
+                    })
+                    .catch(function(e){
+                      if (out) out.textContent = 'Could not copy: ' + e;
+                      copyBtn.disabled = false;
+                      copyBtn.textContent = 'Try again';
+                    });
+                } catch (e) {
+                  if (out) out.textContent = 'Could not copy: ' + e;
+                  copyBtn.disabled = false;
+                  copyBtn.textContent = 'Try again';
                 }
               });
             })();

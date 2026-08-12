@@ -40,8 +40,9 @@ fn conv_map() -> &'static Mutex<HashMap<String, (String, u32)>> {
     CONV_MAP.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Dedicated Your Own AI port (deliberately NOT Ollama's 11434).
-const PORT: u16 = 11435;
+/// Dedicated Your Own AI port (deliberately NOT Ollama's 11434). Doubles as
+/// the single-instance lock: instance_guard binds it before anything spawns.
+pub(crate) const PORT: u16 = 11435;
 
 /// The local chat server's OpenAI endpoint (port owned by llm.rs).
 fn llama_upstream() -> String {
@@ -162,7 +163,7 @@ fn restart_server(app: AppHandle) {
     if let Some(tx) = SHUTDOWN.lock().unwrap().take() {
         let _ = tx.send(true);
     }
-    spawn(app);
+    spawn(app, None);
 }
 
 /// Reject non-loopback callers without the access key. Loopback is always
@@ -197,16 +198,19 @@ async fn lan_guard(
     next.run(req).await
 }
 
-/// Spawn the inference server in a background task. Best-effort: a bind
-/// failure is logged, never fatal. Rebinds via restart_server when LAN
-/// access is toggled.
-pub fn spawn(app: AppHandle) {
+/// Spawn the inference server in a background task. At app startup the
+/// listener comes pre-bound from instance_guard (it IS the single-instance
+/// lock); the LAN-toggle restart path passes None and binds fresh. A bind
+/// failure on the restart path is logged, never fatal.
+pub fn spawn(app: AppHandle, pre_bound: Option<std::net::TcpListener>) {
     let (tx, mut rx) = tokio::sync::watch::channel(false);
     *SHUTDOWN.lock().unwrap() = Some(tx);
     tauri::async_runtime::spawn(async move {
         let lan = lan_config(&app).enabled;
         let router = Router::new()
-            .route("/health", get(|| async { Json(json!({ "status": "ok" })) }))
+            // The `app` field is the single-instance health probe's identity
+            // check - a foreign server on this port must not read as us.
+            .route("/health", get(|| async { Json(json!({ "status": "ok", "app": "your-own-ai" })) }))
             .route("/v1/models", get(list_models))
             .route("/v1/chat/completions", post(chat_completions))
             .route("/mcp", post(mcp_post).get(mcp_get))
@@ -219,7 +223,19 @@ pub fn spawn(app: AppHandle) {
         } else {
             format!("127.0.0.1:{PORT}")
         };
-        match tokio::net::TcpListener::bind(&addr).await {
+        let listener = match pre_bound {
+            Some(l) => {
+                // Bound synchronously (and blocking) by instance_guard;
+                // convert for tokio.
+                l.set_nonblocking(true)
+                    .map_err(|e| e.to_string())
+                    .and_then(|_| tokio::net::TcpListener::from_std(l).map_err(|e| e.to_string()))
+            }
+            None => tokio::net::TcpListener::bind(&addr)
+                .await
+                .map_err(|e| e.to_string()),
+        };
+        match listener {
             Ok(listener) => {
                 log::info!("[inference] Your Own AI inference server on http://{addr}");
                 let serve = axum::serve(
