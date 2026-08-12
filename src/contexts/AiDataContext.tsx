@@ -179,64 +179,87 @@ export const AiDataProvider = component$(() => {
 
     // Provision Holochain agents for all AIs (assigns agent pub keys)
     if (state.userDefinedAis.length > 0) {
-      try {
-        const { provisionAllAgents } = await import(
-          "../utils/holochainTranscripts"
-        );
-        const aiIds = state.userDefinedAis.map((ai) => ai.id);
-        setLoadingText("Setting up AI agents...");
-        console.log(`[AiDataContext] Provisioning ${aiIds.length} AI agents...`);
+      const runProvisioning = async () => {
+        try {
+          const { provisionAllAgents } = await import(
+            "../utils/holochainTranscripts"
+          );
+          const aiIds = state.userDefinedAis.map((ai) => ai.id);
+          console.log(`[AiDataContext] Provisioning ${aiIds.length} AI agents...`);
 
-        // Retry while the conductor is still starting - with backoff, not a
-        // fixed 2s hammer (a beta box once retried failing installs every 2s
-        // for hours, silently). A hard install error is NOT retried: it
-        // fails identically every time; give up and tell the user instead.
-        const delays = [1000, 2000, 4000, 8000, 15000, 30000];
-        let agentKeys: Record<string, string> = {};
-        for (let attempt = 0; ; attempt++) {
-          try {
-            agentKeys = await provisionAllAgents(aiIds);
-            state.provisioningWarning = null;
-            break;
-          } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            if (msg.includes("still starting") && attempt < delays.length) {
-              console.log(
-                `[AiDataContext] Conductor starting, retrying in ${delays[attempt]}ms (${attempt + 1}/${delays.length})`
-              );
-              await new Promise((r) => setTimeout(r, delays[attempt]));
-              continue;
-            }
-            console.warn("[AiDataContext] Agent provisioning gave up:", msg);
-            state.provisioningWarning =
-              "Your AIs' conversation records couldn't be set up this session, so new chats aren't being saved to your records. Restarting the app usually fixes this. If it keeps happening, save a diagnostic report in Settings, Help and diagnostics.";
-            break;
-          }
-        }
-
-        // Set AI IDs to their agent pub keys (the canonical identifier)
-        for (const ai of state.userDefinedAis) {
-          const pubKey = agentKeys[ai.id];
-          if (pubKey && ai.id !== pubKey) {
-            const oldId = ai.id;
-            ai.agentPubKey = pubKey;
-            ai.id = pubKey;
-            await updateLocalCustomAi(oldId, { id: pubKey, agentPubKey: pubKey } as any);
-            // Migrate thumbnail to new ID
+          // Retry while the conductor is still starting - with backoff, not a
+          // fixed 2s hammer (a beta box once retried failing installs every 2s
+          // for hours, silently). A hard install error is NOT retried: it
+          // fails identically every time; give up and tell the user instead.
+          const delays = [1000, 2000, 4000, 8000, 15000, 30000];
+          let agentKeys: Record<string, string> = {};
+          for (let attempt = 0; ; attempt++) {
             try {
-              const thumbData = await invoke<number[]>('get_ai_thumbnail', { aiId: oldId });
-              await invoke('save_ai_thumbnail', { aiId: pubKey, thumbnailData: thumbData });
-              await invoke('delete_ai_thumbnail', { aiId: oldId });
-            } catch {
-              // No thumbnail to migrate
+              agentKeys = await provisionAllAgents(aiIds);
+              state.provisioningWarning = null;
+              break;
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e);
+              if (msg.includes("still starting") && attempt < delays.length) {
+                console.log(
+                  `[AiDataContext] Conductor starting, retrying in ${delays[attempt]}ms (${attempt + 1}/${delays.length})`
+                );
+                await new Promise((r) => setTimeout(r, delays[attempt]));
+                continue;
+              }
+              console.warn("[AiDataContext] Agent provisioning gave up:", msg);
+              state.provisioningWarning =
+                "Your AIs' conversation records couldn't be set up this session, so new chats aren't being saved to your records. Restarting the app usually fixes this. If it keeps happening, save a diagnostic report in Settings, Help and diagnostics.";
+              break;
             }
-            console.log(`[AiDataContext] AI ${ai.name}: ${oldId} → ${pubKey.slice(0, 16)}...`);
-          } else if (pubKey) {
-            ai.agentPubKey = pubKey;
           }
+
+          // Set AI IDs to their agent pub keys (the canonical identifier)
+          for (const ai of state.userDefinedAis) {
+            const pubKey = agentKeys[ai.id];
+            if (pubKey && ai.id !== pubKey) {
+              const oldId = ai.id;
+              ai.agentPubKey = pubKey;
+              ai.id = pubKey;
+              await updateLocalCustomAi(oldId, { id: pubKey, agentPubKey: pubKey } as any);
+              // Migrate thumbnail to new ID
+              try {
+                const thumbData = await invoke<number[]>('get_ai_thumbnail', { aiId: oldId });
+                await invoke('save_ai_thumbnail', { aiId: pubKey, thumbnailData: thumbData });
+                await invoke('delete_ai_thumbnail', { aiId: oldId });
+              } catch {
+                // No thumbnail to migrate
+              }
+              console.log(`[AiDataContext] AI ${ai.name}: ${oldId} → ${pubKey.slice(0, 16)}...`);
+            } else if (pubKey) {
+              ai.agentPubKey = pubKey;
+            }
+          }
+        } catch (e) {
+          console.warn("[AiDataContext] Agent provisioning failed (non-fatal):", e);
         }
-      } catch (e) {
-        console.warn("[AiDataContext] Agent provisioning failed (non-fatal):", e);
+      };
+
+      // The loading gate only truly needs provisioning when some AI has no
+      // agent key yet (first launch / freshly restored device): the id
+      // migration below renames ids the rest of startup depends on. On every
+      // other launch the keys are already stored, the Rust side reconnects
+      // the cells independently, and the sweep is verification - running it
+      // in the background cuts the slowest step out of a normal start (on a
+      // busy low-resource machine the conductor wait + per-cell re-enable
+      // retries held the gate for a minute or more). The records-paused
+      // banner still appears if the background sweep ultimately fails.
+      if (
+        state.userDefinedAis.some(
+          (ai) => !ai.agentPubKey || ai.id !== ai.agentPubKey
+        )
+      ) {
+        setLoadingText("Setting up AI agents...");
+        await runProvisioning();
+      } else {
+        runProvisioning().catch((e) =>
+          console.warn("[AiDataContext] Background provisioning failed:", e)
+        );
       }
     }
 
