@@ -126,6 +126,18 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
 
   const store = useStore({
     downloadedModels: [] as LocalModel[],
+    // Per downloaded model: how it fits THIS machine (grade, trained vs
+    // actual runtime context, agent-capable template). Keyed by filename.
+    modelFits: {} as Record<
+      string,
+      {
+        fit: 'green' | 'yellow' | 'red';
+        context_max: number;
+        context_runtime: number;
+        agent_template_ok: boolean;
+        need_gb: number;
+      }
+    >,
     appVersion: '',
     /** Beta-build-only escape hatch: lets us download/test models the fit
      *  check would refuse (e.g. Muse 30B on an 8GB card - partial offload).
@@ -195,6 +207,25 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
       console.error('Failed to load models:', error);
     } finally {
       store.loadingModels = false;
+    }
+    // Fit assessment for the downloaded cards (grade + runtime context).
+    // Separate and non-blocking: the cards render immediately and the fit
+    // line fills in when the probe (a --list-devices run) answers.
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const fits = await invoke<
+        {
+          name: string;
+          fit: 'green' | 'yellow' | 'red';
+          context_max: number;
+          context_runtime: number;
+          agent_template_ok: boolean;
+          need_gb: number;
+        }[]
+      >('assess_model_fit');
+      store.modelFits = Object.fromEntries(fits.map((f) => [f.name, f]));
+    } catch (e) {
+      console.warn('Fit assessment failed:', e);
     }
   });
 
@@ -858,7 +889,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
             {(selectedVariant.contextWindow || family.contextWindow) && (
               <span
                 class="px-2 py-0.5 bg-[var(--bg-main)] border border-[var(--border-subtle)] rounded text-xs text-[var(--text-muted)]"
-                title="Model's trained context window. Your Own AI loads at a smaller, RAM-capped context by default."
+                title="Model's trained context window. Your Own AI picks the actual runtime context from your graphics card and memory - downloaded models show it as 'runs at'."
               >
                 {formatContext(selectedVariant.contextWindow || family.contextWindow!)} context
               </span>
@@ -1061,6 +1092,28 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
               const quantization = catalogMatch?.variant.quantization || model.quantization;
               const description = catalogMatch?.family.description || null;
               const isPaused = store.pausedModels.includes(model.name);
+              const fitInfo = store.modelFits[model.name];
+              // Grade labels stay honest about the consequence, not the
+              // mechanism: green = whole model in graphics memory.
+              const fitBadge = fitInfo
+                ? {
+                    green: {
+                      label: 'Full speed',
+                      cls: 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400',
+                      tip: 'Fits entirely in your graphics card’s memory.',
+                    },
+                    yellow: {
+                      label: 'Runs slower',
+                      cls: 'bg-amber-500/10 border-amber-500/25 text-amber-400',
+                      tip: 'Larger than your graphics card’s free memory - part of it runs on the processor, so responses are slower.',
+                    },
+                    red: {
+                      label: 'Too large',
+                      cls: 'bg-red-500/10 border-red-500/25 text-red-400',
+                      tip: 'Needs more memory than this machine has free.',
+                    },
+                  }[fitInfo.fit]
+                : null;
 
               return (
                 <div
@@ -1079,10 +1132,30 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                           Paused
                         </span>
                       )}
+                      {fitBadge && (
+                        <span
+                          title={fitBadge.tip}
+                          class={`px-2 py-0.5 border text-[10px] rounded-full font-semibold whitespace-nowrap ${fitBadge.cls}`}
+                        >
+                          {fitBadge.label}
+                        </span>
+                      )}
                     </div>
                     <p class="text-sm text-[var(--text-secondary)] mb-2">
                       {paramSize} • {quantization} • {model.size}
                     </p>
+                    {fitInfo && fitInfo.context_runtime > 0 && (
+                      <p
+                        class="text-xs text-[var(--text-muted)] mb-2"
+                        title="Trained context = what the model was built to handle. 'Runs at' = the context Your Own AI starts it with on this machine, chosen from your graphics card and memory."
+                      >
+                        {fitInfo.context_max > 0
+                          ? `${formatContext(fitInfo.context_max)} context trained`
+                          : 'Context'}{' '}
+                        · runs at {formatContext(fitInfo.context_runtime)} here
+                        {fitInfo.agent_template_ok ? ' · works in projects' : ''}
+                      </p>
+                    )}
                     {description && (
                       <p class="text-xs text-[var(--text-muted)] line-clamp-2">
                         {description}

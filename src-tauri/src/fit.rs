@@ -35,6 +35,9 @@ pub struct ModelFit {
     pub params_b: f64, // approx, from size_bytes / effective-bpw
     pub n_layers: u64,
     pub context_max: u64,
+    /// The context the server would actually start this model with on this
+    /// machine right now (choose_ctx) - what "runs at" means in the UI.
+    pub context_runtime: u64,
 }
 
 /// The context sizes the server can start at.
@@ -204,6 +207,7 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
             params_b,
             n_layers: meta.n_layers,
             context_max: meta.context_length,
+            context_runtime: ctx,
         });
     }
     out
