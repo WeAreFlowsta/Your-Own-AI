@@ -227,14 +227,13 @@ export async function provisionAgent(aiId: string): Promise<string | null> {
 export async function provisionAllAgents(
   aiIds: string[],
 ): Promise<Record<string, string>> {
-  try {
-    return await invoke<Record<string, string>>("provision_all_agents", {
-      aiIds,
-    });
-  } catch (e) {
-    console.warn("[Holochain] Failed to provision agents:", e);
-    return {};
-  }
+  // Unlike the rest of this module this one THROWS: the caller's retry
+  // logic needs to tell "conductor still starting" (retry shortly) apart
+  // from a hard install failure (retrying repeats the same error - stop
+  // and tell the user). See provision_all_agents in commands_holochain.rs.
+  return await invoke<Record<string, string>>("provision_all_agents", {
+    aiIds,
+  });
 }
 
 /**

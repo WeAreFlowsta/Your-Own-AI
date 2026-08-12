@@ -49,6 +49,9 @@ export interface AiDataState {
   /** Startup Vault-restore outcome the user must see (restore failed or was
    *  partial); null when nothing needs attention. Dismissable in the UI. */
   startupRestoreWarning: string | null;
+  /** Agent provisioning gave up (conductor never came up, or every install
+   *  failed the same way). Chat still works; records are paused. Dismissable. */
+  provisioningWarning: string | null;
 }
 
 export const AiDataContext = createContextId<AiDataState>("app.aidata");
@@ -67,6 +70,7 @@ export const AiDataProvider = component$(() => {
       archetypesError: null,
       userAisError: null,
       startupRestoreWarning: null,
+      provisioningWarning: null,
     },
     { deep: true }
   );
@@ -183,13 +187,31 @@ export const AiDataProvider = component$(() => {
         setLoadingText("Setting up AI agents...");
         console.log(`[AiDataContext] Provisioning ${aiIds.length} AI agents...`);
 
-        // Retry provisioning — conductor may still be starting
+        // Retry while the conductor is still starting - with backoff, not a
+        // fixed 2s hammer (a beta box once retried failing installs every 2s
+        // for hours, silently). A hard install error is NOT retried: it
+        // fails identically every time; give up and tell the user instead.
+        const delays = [1000, 2000, 4000, 8000, 15000, 30000];
         let agentKeys: Record<string, string> = {};
-        for (let attempt = 0; attempt < 10; attempt++) {
-          agentKeys = await provisionAllAgents(aiIds);
-          if (Object.keys(agentKeys).length > 0) break;
-          console.log(`[AiDataContext] Conductor not ready, retrying... (${attempt + 1}/10)`);
-          await new Promise((r) => setTimeout(r, 2000));
+        for (let attempt = 0; ; attempt++) {
+          try {
+            agentKeys = await provisionAllAgents(aiIds);
+            state.provisioningWarning = null;
+            break;
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            if (msg.includes("still starting") && attempt < delays.length) {
+              console.log(
+                `[AiDataContext] Conductor starting, retrying in ${delays[attempt]}ms (${attempt + 1}/${delays.length})`
+              );
+              await new Promise((r) => setTimeout(r, delays[attempt]));
+              continue;
+            }
+            console.warn("[AiDataContext] Agent provisioning gave up:", msg);
+            state.provisioningWarning =
+              "Your AIs' conversation records couldn't be set up this session, so new chats aren't being saved to your records. Restarting the app usually fixes this. If it keeps happening, save a diagnostic report in Settings, Help and diagnostics.";
+            break;
+          }
         }
 
         // Set AI IDs to their agent pub keys (the canonical identifier)

@@ -1036,6 +1036,22 @@ export default component$(() => {
           </button>
         </div>
       )}
+      {/* Provisioning gave up (conductor never ready, or installs hard-
+          failing): without this banner a session with paused records looks
+          exactly like a healthy one. Chat itself still works. */}
+      {aiDataState.provisioningWarning && (
+        <div class="relative z-30 flex items-start gap-3 border-b border-amber-700/60 bg-amber-900/30 px-4 py-2.5 text-xs text-amber-200">
+          <span class="min-w-0 flex-1">{aiDataState.provisioningWarning}</span>
+          <button
+            type="button"
+            class="shrink-0 text-amber-300 hover:text-amber-100"
+            aria-label="Dismiss"
+            onClick$={() => (aiDataState.provisioningWarning = null)}
+          >
+            ✕
+          </button>
+        </div>
+      )}
       {/* Header */}
       {/* z-20: above page content so header dropdowns (projects, menus)
           are never painted over by in-page stacking contexts like the

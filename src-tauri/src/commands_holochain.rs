@@ -262,6 +262,11 @@ pub async fn provision_ai_agent(
 /// Provision agents for multiple AIs at once (used at startup).
 /// `ai_ids` are the stable local IDs used as lair seed tags.
 /// Returns a map of AI ID → agent pub key hex.
+///
+/// Error contract for the caller's retry logic: "still starting" (from
+/// `get()`) means try again shortly; any other error means every install
+/// failed the same way (e.g. the happ file is unreadable) and retrying
+/// won't change the answer - surface it instead.
 #[tauri::command]
 pub async fn provision_all_agents(
     ai_ids: Vec<String>,
@@ -269,6 +274,8 @@ pub async fn provision_all_agents(
 ) -> Result<std::collections::HashMap<String, String>, String> {
     let manager = hc_state.get()?;
     let mut results = std::collections::HashMap::new();
+    let total = ai_ids.len();
+    let mut last_err: Option<String> = None;
 
     for ai_id in ai_ids {
         match manager.provision_agent(&ai_id).await {
@@ -277,7 +284,14 @@ pub async fn provision_all_agents(
             }
             Err(e) => {
                 log::warn!("Failed to provision agent for AI {}: {}", ai_id, e);
+                last_err = Some(e);
             }
+        }
+    }
+
+    if results.is_empty() {
+        if let Some(e) = last_err {
+            return Err(format!("Provisioning failed for all {} AIs: {}", total, e));
         }
     }
 
