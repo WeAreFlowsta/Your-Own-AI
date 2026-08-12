@@ -97,7 +97,7 @@ function modelGroupKeys(m: OnlineModel): string[] {
 // Surfaced as a badge so the page answers "which of these does Auto already
 // use for me?" without the user opening Settings.
 const AUTO_DEFAULTS: Record<string, string> = {
-  'online:grok-4.5-search': 'Auto pick · fresh info',
+  'online:grok-4.6-search': 'Auto pick · fresh info',
   'online:gpt-5.6-sol': 'Auto pick · hard coding',
   'online:gpt-5.6-terra': 'Auto pick · hard questions',
 };

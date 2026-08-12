@@ -443,7 +443,7 @@ impl OnlinePicks {
 /// is missing (the catalog moved on) selection falls back to the capability
 /// registry, so routing never breaks. The Settings page names these same
 /// models as "Recommended" - keep the two in sync.
-const DEFAULT_FRESH: &str = "online:grok-4.5-search";
+const DEFAULT_FRESH: &str = "online:grok-4.6-search";
 const DEFAULT_HARD_CODE: &str = "online:gpt-5.6-sol";
 const DEFAULT_HARD_GENERAL: &str = "online:gpt-5.6-terra";
 /// The agent slot: the strongest proven tool-driver. Sol runs tools
@@ -1204,8 +1204,8 @@ mod tests {
 
     fn catalog() -> Vec<crate::flowsta::OnlineModel> {
         vec![
-            om("grok-4.5", "Grok 4.5", "xAI's newest", None),
-            om("grok-4.5-search", "Grok 4.5 (Web)", "live web search", Some(0.005)),
+            om("grok-4.6", "Grok 4.6", "xAI's frontier model", None),
+            om("grok-4.6-search", "Grok 4.6 (Web)", "live web search", Some(0.005)),
             om("gpt-5.6-sol", "GPT-5.6 Sol", "OpenAI's flagship", None),
             om("gpt-5.6-terra", "GPT-5.6 Terra", "balanced flagship", None),
             om("sonar", "Sonar", "Perplexity search", Some(0.005)),
@@ -1311,7 +1311,7 @@ mod tests {
     fn select_online_defaults_per_slot() {
         let models = catalog();
         // Fresh → the web-search default.
-        assert_eq!(select_online(&models, "general", true, None).unwrap(), "online:grok-4.5-search");
+        assert_eq!(select_online(&models, "general", true, None).unwrap(), "online:grok-4.6-search");
         // Hard code / math / reasoning → the flagship.
         for task in ["code", "math", "reasoning"] {
             assert_eq!(select_online(&models, task, false, None).unwrap(), "online:gpt-5.6-sol");
