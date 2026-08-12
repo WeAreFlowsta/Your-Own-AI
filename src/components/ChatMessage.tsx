@@ -1014,11 +1014,12 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
         copyBtn.innerHTML = COPY_SVG;
         copyBtn.addEventListener('click', async () => {
           try {
-            await navigator.clipboard.writeText(commandText(code.innerText));
+            const { copyText } = await import('../utils/clipboard');
+            await copyText(commandText(code.innerText));
             copyBtn.innerHTML = CHECK_SVG;
             setTimeout(() => (copyBtn.innerHTML = COPY_SVG), 1500);
-          } catch {
-            /* clipboard unavailable */
+          } catch (e) {
+            console.warn('[ChatMessage] copy failed:', e);
           }
         });
         bar.appendChild(copyBtn);

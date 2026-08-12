@@ -256,11 +256,14 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
       }`,
     );
     try {
-      await navigator.clipboard.writeText(lines.join('\n'));
+      // Rust-side copy: navigator.clipboard is denied by Windows WebView2,
+      // which made this button silently do nothing there.
+      const { copyText } = await import('../utils/clipboard');
+      await copyText(lines.join('\n'));
       store.systemInfoCopied = true;
       setTimeout(() => (store.systemInfoCopied = false), 2000);
-    } catch {
-      /* clipboard unavailable */
+    } catch (e) {
+      console.warn('[ModelDownloader] copy failed:', e);
     }
   });
 

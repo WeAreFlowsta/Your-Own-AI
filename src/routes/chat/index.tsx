@@ -831,7 +831,10 @@ export default component$(() => {
       if (!immediate) {
         // Belt and braces for the press-Enter flow (and cmd on Windows,
         // which cannot pre-fill): the command is also on the clipboard.
-        await navigator.clipboard.writeText(command).catch(() => {});
+        // Rust-side copy - WebView2 denies navigator.clipboard.
+        await import("../../utils/clipboard")
+          .then(({ copyText }) => copyText(command))
+          .catch(() => {});
       }
       await invoke("open_in_terminal", {
         command,

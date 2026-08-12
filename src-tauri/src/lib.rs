@@ -30,6 +30,7 @@ mod vault_restore;         // replay conversations from the Vault backup onto th
 mod model_caps;            // capability registry (benchmark-informed scores)
 mod process_ext;           // Windows: hide sidecar consoles + kill-on-close job; Linux: PDEATHSIG
 mod instance_guard;        // single-instance port lock + orphan-process sweep
+mod clipboard;             // Rust-side copy (WebView2 denies navigator.clipboard)
 
 use llm::LLMState;
 use holochain::HolochainManager;
@@ -622,6 +623,7 @@ pub fn run() {
             gpu_safety::gpu_retry,
             diagnostics::export_diagnostics,
             diagnostics::copy_diagnostics,
+            clipboard::copy_text,
             conversation_import::import_conversations_scan,
             conversation_import::import_detect_claude_code,
             conversation_import::import_detect_opencode,

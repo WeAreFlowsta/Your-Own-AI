@@ -71,11 +71,12 @@ export default component$(() => {
 
   const copy = $(async (text: string, key: string) => {
     try {
-      await navigator.clipboard.writeText(text);
+      const { copyText } = await import("../utils/clipboard");
+      await copyText(text);
       copiedKey.value = key;
       setTimeout(() => (copiedKey.value = ""), 1500);
-    } catch {
-      /* clipboard unavailable — no-op */
+    } catch (e) {
+      console.warn("[ExternalAccess] copy failed:", e);
     }
   });
 

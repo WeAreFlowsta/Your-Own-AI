@@ -34,11 +34,12 @@ export const CodePanel = component$<CodePanelProps>(({ codeString, language, onC
 
   const copyCode = $(async () => {
     try {
-      await navigator.clipboard.writeText(commandText(codeString));
+      const { copyText } = await import('../utils/clipboard');
+      await copyText(commandText(codeString));
       copied.value = true;
       setTimeout(() => (copied.value = false), 1500);
-    } catch {
-      /* clipboard unavailable */
+    } catch (e) {
+      console.warn('[CodePanel] copy failed:', e);
     }
   });
 
