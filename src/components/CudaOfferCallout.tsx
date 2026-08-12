@@ -17,6 +17,10 @@ const zipNameFor = (tag: string) =>
  */
 export default component$(() => {
   const eligible = useSignal(false);
+  // True when an OLDER engine version is installed: the user already did
+  // this once, so the copy must say "update", never "install" - a repeat of
+  // the first-install pitch reads as "didn't I already do this?".
+  const isUpdate = useSignal(false);
   const tag = useSignal('');
   const downloading = useSignal(false);
   const percent = useSignal(0);
@@ -27,7 +31,7 @@ export default component$(() => {
   useVisibleTask$(async ({ cleanup }) => {
     try {
       const [status, info, safe] = await Promise.all([
-        invoke<{ supported: boolean; installed: boolean; tag: string }>('engine_status'),
+        invoke<{ supported: boolean; installed: boolean; stale_version_installed: boolean; tag: string }>('engine_status'),
         invoke<{ gpu_name?: string | null }>('get_system_info'),
         invoke<{ cuda_disabled?: boolean }>('gpu_safe_mode_status').catch(
           () => ({ cuda_disabled: false }),
@@ -35,6 +39,7 @@ export default component$(() => {
       ]);
       const nvidia = (info.gpu_name ?? '').toLowerCase().includes('nvidia');
       tag.value = status.tag;
+      isUpdate.value = status.stale_version_installed && !status.installed;
       eligible.value =
         nvidia && status.supported && !status.installed && !safe.cuda_disabled;
     } catch {
@@ -71,22 +76,28 @@ export default component$(() => {
   return (
     <Callout
       intent="premium"
-      title="Your NVIDIA graphics card can go faster"
-      id="home-tip-cuda-engine"
+      title={
+        isUpdate.value
+          ? 'Your NVIDIA engine needs an update'
+          : 'Your NVIDIA graphics card can go faster'
+      }
+      // The update variant carries the engine version in its dismiss id, so
+      // dismissing one update's tip (or the original install tip) never
+      // hides the NEXT update's.
+      id={isUpdate.value ? `home-tip-cuda-engine-${tag.value}` : 'home-tip-cuda-engine'}
       class="mt-10 text-left"
     >
       {done.value ? (
         <p>
-          Installed. The high-performance engine takes over the next time a
-          model loads - nothing else to do.
+          {isUpdate.value ? 'Updated' : 'Installed'}. The high-performance
+          engine takes over the next time a model loads - nothing else to do.
         </p>
       ) : (
         <>
           <p class="mb-2.5">
-            An optional high-performance engine is available for NVIDIA cards
-            like yours - faster reading and quicker replies. One download
-            (about 850 MB), no setup, and you can remove it anytime in
-            Settings.
+            {isUpdate.value
+              ? 'This app update comes with a newer version of the high-performance NVIDIA engine you installed earlier. One download (about 850 MB) and you keep your full speed - until then, models run on the standard engine.'
+              : 'An optional high-performance engine is available for NVIDIA cards like yours - faster reading and quicker replies. One download (about 850 MB), no setup, and you can remove it anytime in Settings.'}
           </p>
           {downloading.value ? (
             <div class="flex items-center gap-3">
@@ -105,7 +116,7 @@ export default component$(() => {
               onClick$={doDownload}
               class="flex items-center px-3 py-1.5 text-xs"
             >
-              Download the NVIDIA engine
+              {isUpdate.value ? 'Update the NVIDIA engine' : 'Download the NVIDIA engine'}
             </LiquidMetalButton>
           )}
           {error.value && (
