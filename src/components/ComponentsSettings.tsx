@@ -54,6 +54,10 @@ const pairedModelFor = (m: CapabilityModel): { name: string; filename: string } 
 /** One downloadable capability component — its own download/remove state. */
 const ComponentCard = component$<CardProps>((props) => {
   const downloaded = useSignal(false);
+  // A file this component USED to ship as is on disk, but the current one
+  // isn't: the user already installed this component once - offer an
+  // update, never the first-install pitch.
+  const updateAvailable = useSignal(false);
   const downloading = useSignal(false);
   const percent = useSignal(0);
   const error = useSignal("");
@@ -67,6 +71,11 @@ const ComponentCard = component$<CardProps>((props) => {
       filesOf(props.model).map((f) => modelManager.isModelDownloaded(f.filename)),
     );
     downloaded.value = present.every(Boolean);
+    const prev = props.model.previousFilenames ?? [];
+    updateAvailable.value =
+      !downloaded.value &&
+      prev.length > 0 &&
+      (await Promise.all(prev.map((f) => modelManager.isModelDownloaded(f)))).some(Boolean);
     if (paired) modelInstalled.value = await modelManager.isModelDownloaded(paired.filename);
     checking.value = false;
   });
@@ -85,6 +94,22 @@ const ComponentCard = component$<CardProps>((props) => {
           // Smooth 0–100 across all files.
           (p) => (percent.value = Math.round(((i + p.percent / 100) / files.length) * 100)),
         );
+      }
+      // Update path: the files just downloaded replace older ones. Stop the
+      // component's server first (it may hold the old file open - Windows
+      // won't delete a locked file), then reclaim the superseded downloads.
+      const prev = props.model.previousFilenames ?? [];
+      const stale: string[] = [];
+      for (const f of prev) {
+        if (await modelManager.isModelDownloaded(f)) stale.push(f);
+      }
+      if (stale.length) {
+        if (props.stopCommand) {
+          try { await invoke(props.stopCommand); } catch { /* not running */ }
+        }
+        for (const f of stale) {
+          try { await modelManager.deleteModel(f); } catch { /* reclaimed on the next update */ }
+        }
       }
       await refresh();
       // A device restore may be waiting on this exact model to rebuild the
@@ -175,6 +200,12 @@ const ComponentCard = component$<CardProps>((props) => {
         {blocked && (
           <p class="mt-1.5 text-xs text-amber-500/90">
             Install {paired!.name} from Offline Models first — downloading the model brings this in automatically.
+          </p>
+        )}
+        {updateAvailable.value && !downloading.value && !downloaded.value && (
+          <p class="mt-1.5 text-xs text-amber-500/90">
+            Update available - this app version comes with a newer replacement
+            for the one you installed. Updating removes the old download.
           </p>
         )}
         {downloading.value && (
@@ -409,7 +440,8 @@ const BuildComponentCard = component$(() => {
             onClick$={doDownload}
             class="flex items-center gap-1.5 px-3 py-1.5 text-xs"
           >
-            <LuDownload class="w-3.5 h-3.5" /> Download
+            <LuDownload class="w-3.5 h-3.5" />{' '}
+            {updateAvailable.value ? 'Update' : 'Download'}
           </LiquidMetalButton>
         )}
       </div>

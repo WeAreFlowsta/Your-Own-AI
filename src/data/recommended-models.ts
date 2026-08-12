@@ -162,6 +162,14 @@ export interface CapabilityModel {
   /** Multi-file components (e.g. OCR needs two models). When set, the card
    *  installs/removes all of them; `filename`/`downloadUrl` mirror files[0]. */
   files?: { filename: string; downloadUrl: string }[];
+  /** Filenames this component previously shipped under. THE CONVENTION:
+   *  whenever `filename`/`files` change, move every replaced name in here.
+   *  That is what turns the Components card into an "Update" offer for
+   *  people who installed the old one (instead of repeating the
+   *  first-install pitch) and lets the update delete the superseded file.
+   *  Leave a name out and those users see "Download" for a thing they
+   *  already downloaded, and keep both copies on disk. */
+  previousFilenames?: string[];
 }
 
 /**
@@ -174,6 +182,12 @@ export interface CapabilityModel {
  * worked. Swappable (the index is rebuildable) — but a swap must also update the
  * Rust pooling flag (`ensure_embedding_server`) and the query/doc prefixes
  * (`embeddings.ts`). URL verified to resolve 2026-06-21 (67 MB).
+ *
+ * ⚠️ A swap is a MIGRATION, not just a new download: every per-AI memory
+ * index holds THIS model's vectors, and recall silently degrades to noise
+ * under a different one. Shipping a replacement means adding the old
+ * filename to `previousFilenames` AND wiring a full re-embed (the rebuild
+ * walker in transcriptMemory is the starting point).
  */
 export const EMBEDDING_MODEL: CapabilityModel = {
   id: 'bge-small-en-v1.5',
