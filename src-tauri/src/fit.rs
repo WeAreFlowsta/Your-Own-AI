@@ -37,16 +37,68 @@ pub struct ModelFit {
     pub context_max: u64,
 }
 
-/// Context the server will actually run at (matches `start_llama_server`'s
-/// RAM-tier policy), used for the KV-cache term.
-pub fn runtime_ctx(total_ram_gb: f64) -> u64 {
-    if total_ram_gb >= 32.0 {
+/// The context sizes the server can start at.
+const CTX_LADDER: [u64; 4] = [32768, 16384, 8192, 4096];
+
+/// The RAM-tier baseline (the sizes that have shipped for months). The
+/// thresholds sit BELOW the installed sizes they stand for: the OS reports
+/// USABLE memory, so a "32GB" machine reads ~31.8GB and a "12GB" machine
+/// ~11.7GB - a >= 32.0 check can never match the hardware it targets.
+pub fn ram_tier_ctx(total_ram_gb: f64, small_model: bool) -> u64 {
+    if small_model {
+        if total_ram_gb >= 11.0 { 32768 } else { 8192 }
+    } else if total_ram_gb >= 30.0 {
         16384
-    } else if total_ram_gb >= 12.0 {
+    } else if total_ram_gb >= 11.0 {
         8192
     } else {
         4096
     }
+}
+
+/// The context the server should run this model at, VRAM-aware.
+///
+/// The RAM tier is the FLOOR - this function only ever raises it, so no
+/// machine regresses below the shipped behavior. On top of that:
+/// 1. The largest rung whose weights + KV + overhead fit fully in (90% of)
+///    free VRAM - fully-on-GPU stays fast, so take every token it carries.
+/// 2. A 16384 agent floor for partial-offload models when free VRAM plus a
+///    bounded RAM slice carry it: an agent session needs >8k (its system
+///    prompt alone is ~9k), and every KV byte displaces weights from VRAM,
+///    so a bigger rung than 16k would slow an already-offloaded model for
+///    no agent benefit.
+/// Clamped to the model's trained context. CPU-only machines (no usable
+/// discrete GPU) keep the RAM tier - there is no second pool to reason about.
+pub fn choose_ctx(
+    meta: &GgufMeta,
+    size_bytes: u64,
+    total_ram_gb: f64,
+    free_vram_gb: Option<f64>,
+) -> u64 {
+    let small_model = (size_bytes as f64 / GIB) < 6.0;
+    let mut pick = ram_tier_ctx(total_ram_gb, small_model);
+    if let Some(vram) = free_vram_gb {
+        let need = |ctx: u64| model_need(meta, size_bytes, ctx).2;
+        // 1. Largest fully-on-GPU rung (same green bound the fit badge uses).
+        for &c in &CTX_LADDER {
+            if c > pick && need(c) <= 0.9 * vram {
+                pick = c;
+                break;
+            }
+        }
+        // 2. Agent floor under partial offload. The RAM slice is bounded:
+        //    the OS, the webview, and the conductor need the rest.
+        let ram_budget = 0.6 * total_ram_gb;
+        if pick < 16384 && need(16384) <= vram + ram_budget {
+            pick = 16384;
+        }
+    }
+    // Never start past the model's trained context (floor 4096 regardless -
+    // below that nothing useful runs).
+    if meta.context_length > 0 {
+        pick = pick.min(meta.context_length.max(4096));
+    }
+    pick
 }
 
 /// Memory a model needs: quantized weights (the GGUF file size) + KV-cache at
@@ -112,7 +164,6 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
     sys.refresh_memory();
     let total_ram_gb = sys.total_memory() as f64 / GIB;
     let free_ram_gb = sys.available_memory() as f64 / GIB;
-    let ctx = runtime_ctx(total_ram_gb);
     let free_vram_gb = crate::llm::available_vram_mib(app)
         .await
         .map(|mib| mib as f64 / 1024.0);
@@ -126,6 +177,9 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
         if meta.is_embedding() {
             continue; // bge etc. — not a chat model; never a routing candidate
         }
+        // Grade at the context the server would actually start this model
+        // with - per model, since choose_ctx is VRAM- and size-aware.
+        let ctx = choose_ctx(&meta, m.size_bytes, total_ram_gb, free_vram_gb);
         let (weights_gb, kv_gb, mut need_gb) = model_need(&meta, m.size_bytes, ctx);
         // A model with a downloaded projector (mmproj) auto-loads it for vision, so
         // its ~1 GB lives in VRAM whenever this model runs — count it toward fit.
@@ -176,6 +230,60 @@ mod tests {
         assert_eq!(grade(4.0, None, 16.0), Fit::Green);
         assert_eq!(grade(13.0, None, 16.0), Fit::Yellow);
         assert_eq!(grade(20.0, None, 16.0), Fit::Red);
+    }
+
+    /// Synthetic header approximating a Muse-Glimmer-class 30B MoE 2-bit
+    /// (48 layers, GQA 8 kv-heads, head_dim 128) and a gemma-class 4B Q4.
+    fn meta(n_layers: u64, n_kv_heads: u64, head_dim: u64, trained_ctx: u64) -> GgufMeta {
+        GgufMeta {
+            architecture: "test".into(),
+            template_tools: true,
+            template_strict_alternation: false,
+            size_label: String::new(),
+            n_layers,
+            n_heads: n_kv_heads * 4,
+            n_kv_heads,
+            embedding_length: n_kv_heads * 4 * head_dim,
+            context_length: trained_ctx,
+            key_length: head_dim,
+            file_type: 0,
+        }
+    }
+
+    #[test]
+    fn choose_ctx_covers_the_configs_that_matter() {
+        const GB: u64 = 1024 * 1024 * 1024;
+        let muse = meta(48, 8, 128, 131072); // ~12GB file below
+        let small = meta(30, 8, 256, 32768); // ~4.6GB file below
+
+        // The flagship: 32GB machine (reports 31.8) + 8GB card (7.8 free).
+        // Muse partial-offloads; the agent floor must give it 16k.
+        assert_eq!(choose_ctx(&muse, 12 * GB, 31.8, Some(7.8)), 16384);
+
+        // Same machine, CPU-only (safe mode): RAM tier holds - 16384 for a
+        // big model on a 30GB+ box.
+        assert_eq!(choose_ctx(&muse, 12 * GB, 31.8, None), 16384);
+
+        // Muse on a 24GB card: fully-on-GPU at 32k (weights 12 + kv ~6.4
+        // + overhead < 21.6) - take the green rung.
+        assert_eq!(choose_ctx(&muse, 12 * GB, 31.8, Some(24.0)), 32768);
+
+        // Muse on a 16GB-RAM / 4GB-VRAM box: 16k does not fit the pools
+        // (need ~19GB vs 4 + 9.6) - stays at the 8k RAM tier.
+        assert_eq!(choose_ctx(&muse, 12 * GB, 15.8, Some(4.0)), 8192);
+
+        // Small model on an 8GB-RAM box (reports 7.8): tier says 8k, but a
+        // 12GB card carries 16k+ KV fully on GPU - upgraded, RAM untouched.
+        assert!(choose_ctx(&small, 46 * GB / 10, 7.8, Some(12.0)) >= 16384);
+
+        // Small model, 12GB machine (reports 11.7), no GPU: the 32k small-
+        // model tier (the agent runway) survives the usable-RAM reporting.
+        assert_eq!(choose_ctx(&small, 46 * GB / 10, 11.7, None), 32768);
+
+        // Never past the trained context: an 8k-trained model stays 8k on
+        // any hardware.
+        let short = meta(30, 8, 256, 8192);
+        assert_eq!(choose_ctx(&short, 46 * GB / 10, 31.8, Some(24.0)), 8192);
     }
 
     #[test]

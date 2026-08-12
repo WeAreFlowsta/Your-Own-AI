@@ -720,34 +720,36 @@ pub async fn start_llama_server(
         sysinfo::RefreshKind::nothing().with_memory(sysinfo::MemoryRefreshKind::everything()),
     );
     let total_ram_gb = sys.total_memory() as f64 / (1024.0 * 1024.0 * 1024.0);
-    // A small model's KV cache is cheap: give it the large context even on
-    // moderate-RAM machines. This is what lets a 4B drive agent sessions
-    // (the agent's system prompt alone is ~9k tokens - an 8k context walls
-    // into a retry loop before the first file is read).
+    // Context: VRAM-aware via fit::choose_ctx - the RAM tier is the floor
+    // (no machine regresses below the shipped sizes), raised when the GPU
+    // carries more: the largest rung that fits fully in free VRAM, plus a
+    // 16k agent floor for partial-offload models when VRAM + a bounded RAM
+    // slice carry it (the agent's system prompt alone is ~9k; an 8k context
+    // walls a project session on its first turn - seen live as 8270 vs 8192
+    // on a 31.8GB 4060 Ti box, where the old >= 32.0 RAM check could never
+    // match the hardware it targeted). Falls back to the RAM tier when the
+    // model's header can't be read.
     let model_size_gb = model_filename
         .as_ref()
         .and_then(|f| std::fs::metadata(models_dir.join(f)).ok())
         .map(|m| m.len() as f64 / (1024.0 * 1024.0 * 1024.0));
     let small_model = model_size_gb.map(|s| s < 6.0).unwrap_or(false);
-    // Small models get a long runway: a 4B's KV cache is cheap even at 32k,
-    // and agent sessions genuinely use it (a real folder task filled 16k in
-    // eight calls and died truncated).
-    // RAM thresholds sit BELOW the installed sizes they stand for: the OS
-    // reports USABLE memory, so a "32GB" machine reads ~31.8GB and a "12GB"
-    // machine ~11.7GB. The old >= 32.0 check could never be true on the
-    // flagship 32GB config, sending big models to an 8k context - which
-    // walls the agent (its system prompt alone is ~9k) on the first project
-    // turn. Seen live: 8270 tokens vs 8192 on a 31.8GB 4060 Ti box.
-    let ctx_size = if small_model {
-        if total_ram_gb >= 11.0 { "32768" } else { "8192" }
-    } else if total_ram_gb >= 30.0 {
-        "16384"
-    } else if total_ram_gb >= 11.0 {
-        "8192"
-    } else {
-        "4096"
+    let header = model_filename.as_ref().and_then(|f| {
+        let path = models_dir.join(f);
+        let meta = crate::gguf::read_meta(&path).ok()?;
+        let size_bytes = std::fs::metadata(&path).ok()?.len();
+        Some((meta, size_bytes))
+    });
+    let ctx_size: u64 = match header {
+        Some((meta, size_bytes)) => {
+            let free_vram_gb = available_vram_mib(&app_handle)
+                .await
+                .map(|mib| mib as f64 / 1024.0);
+            crate::fit::choose_ctx(&meta, size_bytes, total_ram_gb, free_vram_gb)
+        }
+        None => crate::fit::ram_tier_ctx(total_ram_gb, small_model),
     };
-    CURRENT_CTX_SIZE.store(ctx_size.parse::<u32>().unwrap_or(8192), std::sync::atomic::Ordering::Relaxed);
+    CURRENT_CTX_SIZE.store(ctx_size as u32, std::sync::atomic::Ordering::Relaxed);
     println!(
         "[LLM] System RAM: {:.1}GB, model size: {}, using context size: {}",
         total_ram_gb,
