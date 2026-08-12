@@ -236,6 +236,14 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
    *  deliberately nothing personal - no folder paths (they contain the
    *  account name), no identifiers of any kind. */
   const copySystemInfo = $(async () => {
+    // Computed HERE, never captured: the component-body totalRAM/freeRAM
+    // consts are declared AFTER this QRL, and a $() closure over a const
+    // declared later compiles clean but throws "Can't find variable" at
+    // runtime - which is why this button did nothing on every platform.
+    const totalRAM = systemInfo?.total_memory_gb || 8;
+    const freeRAM = systemInfo
+      ? Math.max(1, systemInfo.total_memory_gb - systemInfo.used_memory_gb)
+      : null;
     const lines = [
       `Your Own AI ${store.appVersion || 'unknown version'}`,
       `OS: ${systemInfo ? `${systemInfo.os_name} ${systemInfo.os_version}` : 'unknown'}`,
@@ -1262,10 +1270,11 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
           <h3 class="font-semibold text-[var(--text-primary)] text-base">
             System Information
           </h3>
-          <button
+          <LiquidMetalButton
+            variant="secondary"
             onClick$={copySystemInfo}
             title="Copy these details for support - your models folder path and account name are not included"
-            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:bg-[var(--bg-dropdown)] hover:text-[var(--text-primary)] transition-colors"
+            class="px-3 py-1.5 text-xs"
           >
             {store.systemInfoCopied ? (
               <LuCheck class="w-3.5 h-3.5 text-emerald-500" />
@@ -1273,7 +1282,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
               <LuCopy class="w-3.5 h-3.5" />
             )}
             {store.systemInfoCopied ? "Copied" : "Copy for support"}
-          </button>
+          </LiquidMetalButton>
         </div>
         <div class="text-sm text-[var(--text-secondary)] space-y-2">
           <div class="flex items-center justify-between">
