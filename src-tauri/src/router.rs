@@ -1193,6 +1193,8 @@ mod tests {
             context_window: 0,
             vision: false,
             category: "chat".to_string(),
+            categories: vec!["chat".to_string()],
+            released: None,
             pricing: Some(crate::flowsta::OnlinePricing {
                 input_per_mtok: 1.0,
                 output_per_mtok: 1.0,

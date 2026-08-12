@@ -510,8 +510,18 @@ pub struct OnlineModel {
     /// won't send an attached image to a model where this is false.
     pub vision: bool,
     pub category: String,
+    /// Every shelf this model belongs to (proxy defaults it to [category]).
+    pub categories: Vec<String>,
+    /// ISO ship date from the catalog - the online page's "Newest" sort key.
+    pub released: Option<String>,
     pub pricing: Option<OnlinePricing>,
 }
+// ⚠️ This struct is the bridge for /v1/models: a field the frontend reads
+// but isn't parsed here silently vanishes - the frontend types are optional,
+// so neither tsc nor cargo notices. "Newest" sorted alphabetically and
+// multi-shelf membership never rendered for WEEKS because released and
+// categories were missing from this parse. New catalog field = add it here
+// in the same change.
 
 #[tauri::command]
 pub async fn list_online_models() -> Result<Vec<OnlineModel>, String> {
@@ -534,6 +544,18 @@ pub async fn list_online_models() -> Result<Vec<OnlineModel>, String> {
                     context_window: m["context_window"].as_u64().unwrap_or(0),
                     vision: m["vision"].as_bool().unwrap_or(false),
                     category: m["category"].as_str().unwrap_or("chat").to_string(),
+                    categories: m["categories"]
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|x| x.as_str().map(str::to_string))
+                                .collect::<Vec<_>>()
+                        })
+                        .filter(|v| !v.is_empty())
+                        .unwrap_or_else(|| {
+                            vec![m["category"].as_str().unwrap_or("chat").to_string()]
+                        }),
+                    released: m["released"].as_str().map(str::to_string),
                     pricing: m["pricing"].as_object().map(|p| OnlinePricing {
                         input_per_mtok: p.get("input_per_mtok").and_then(|x| x.as_f64()).unwrap_or(0.0),
                         output_per_mtok: p.get("output_per_mtok").and_then(|x| x.as_f64()).unwrap_or(0.0),
