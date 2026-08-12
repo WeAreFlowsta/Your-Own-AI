@@ -148,15 +148,62 @@ fn gpu_section(app: &AppHandle) -> String {
 }
 
 async fn models_section(app: &AppHandle) -> String {
-    match crate::llm::list_local_models(app.clone()).await {
-        Ok(models) if models.is_empty() => "none".to_string(),
-        Ok(models) => models
-            .iter()
-            .map(|m| format!("{} ({})", m.name, m.size))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        Err(e) => format!("collector failed: {e}"),
+    // Deliberately RAW - every file in the models dir, not the model
+    // picker's filtered view. Vision projectors, embedding models, and
+    // interrupted downloads all explain symptoms the filtered list hides
+    // (an embedding model alone can put the GPU to work while the picker
+    // says "none"). Each .gguf gets a header parse: a file that completed
+    // its download but was later mangled (antivirus quarantine, disk
+    // trouble) reads UNREADABLE here instead of looking healthy.
+    let dir = match crate::llm::get_models_dir(app) {
+        Ok(d) => d,
+        Err(e) => return format!("collector failed: {e}"),
+    };
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(e) => return format!("collector failed: {e}"),
+    };
+    let mut lines: Vec<String> = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let size_gb = std::fs::metadata(&path)
+            .map(|m| m.len() as f64 / 1024_f64.powi(3))
+            .unwrap_or(0.0);
+        let lower = name.to_lowercase();
+        if lower.ends_with(".gguf.part") || lower.ends_with(".part") {
+            lines.push(format!(
+                "{name} ({size_gb:.1}GB, interrupted download - resumes on the next attempt)"
+            ));
+            continue;
+        }
+        if !lower.ends_with(".gguf") {
+            lines.push(format!("{name} ({size_gb:.1}GB, unexpected file)"));
+            continue;
+        }
+        let kind = if lower.contains("mmproj") {
+            ", vision projector"
+        } else {
+            ""
+        };
+        match crate::gguf::read_meta(&path) {
+            Ok(meta) if meta.is_embedding() => {
+                lines.push(format!("{name} ({size_gb:.1}GB, embedding model, header OK)"));
+            }
+            Ok(_) => lines.push(format!("{name} ({size_gb:.1}GB{kind}, header OK)")),
+            Err(e) => lines.push(format!(
+                "{name} ({size_gb:.1}GB{kind}, HEADER UNREADABLE: {e})"
+            )),
+        }
     }
+    if lines.is_empty() {
+        return "none".to_string();
+    }
+    lines.sort();
+    lines.join("\n")
 }
 
 fn conductor_section(app: &AppHandle) -> String {
