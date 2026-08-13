@@ -375,26 +375,36 @@ export const OnlineModels = component$(() => {
           </p>
         </div>
       ) : notLinked ? (
+        // Upgrade-first pitch - same card as Settings (FlowstaAccount), the
+        // combination story instead of a bare "choose a plan" step. Keep the
+        // two in sync when the pitch copy changes.
         <div class="generic-container rounded-2xl p-6 mb-8 space-y-3">
           <h3 class="text-lg font-semibold text-[var(--text-primary)]">
-            Last step — choose a plan
+            Give your AIs the online frontier
           </h3>
           <p class="text-sm text-[var(--text-secondary)]">
-            You're signed in. To use online models on this device, link it to your
-            yourownai.net plan (or subscribe) in the browser — it takes a few
-            seconds. Usage is metered, no lock-in.
+            One plan adds GPT, Grok, Kimi, DeepSeek, Qwen, GLM, and Perplexity
+            web search alongside your offline models. Smart routing sends each
+            message to the model that suits it, and your AIs remember you
+            everywhere - online or off. From $20/month, and every dollar comes
+            back as model credit. Everything local stays free forever.
           </p>
           <div>
             <LiquidMetalButton onClick$={handleLinkPlan}>
-              <span class="px-5 py-2 text-sm">Choose a plan</span>
+              <span class="px-5 py-2 text-sm">See plans</span>
             </LiquidMetalButton>
+          </div>
+          <p class="text-xs text-[var(--text-muted)]">
+            Already subscribed on yourownai.net? The same button links this
+            device to your plan - or{' '}
             <button
-              class="ml-3 text-sm text-[var(--text-link)] hover:underline"
+              class="text-[var(--text-link)] hover:underline"
               onClick$={refresh}
             >
-              I've linked it — refresh
-            </button>
-          </div>
+              refresh
+            </button>{' '}
+            if you just did.
+          </p>
         </div>
       ) : (
         <div class="generic-container rounded-2xl p-4 mb-8 flex items-center justify-between gap-3">
