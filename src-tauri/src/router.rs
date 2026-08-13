@@ -392,7 +392,8 @@ async fn pick_offline(app: &AppHandle, task: &str, lean: &str, agent_only: bool)
         .unwrap(); // pool is non-empty
 
     // Keep the loaded model unless a candidate beats it on THIS task by at least
-    // SWITCH_MARGIN — a reload is worth it for a real specialist, not a marginal gain.
+    // SWITCH_MARGIN — a reload is worth it for a real specialist, not a marginal
+    // gain. Fit-aware since beta.10: see keep_loaded.
     let current = app
         .state::<crate::llm::LLMState>()
         .current_model
@@ -401,12 +402,40 @@ async fn pick_offline(app: &AppHandle, task: &str, lean: &str, agent_only: bool)
         .clone();
     if let Some(cur) = current.filter(|c| !c.starts_with("online:")) {
         if let Some(cf) = pool.iter().find(|f| f.name == cur) {
-            if cap(&cf.name) + SWITCH_MARGIN >= cap(&best.name) {
+            let folder_open = app
+                .state::<crate::agent_bridge::AgentBridgeState>()
+                .has_open_folder()
+                .await;
+            if keep_loaded(cap(&cf.name), cap(&best.name), tier(cf), tier(best), folder_open) {
                 return Ok(cur.clone());
             }
         }
     }
     Ok(best.name.clone())
+}
+
+/// Should the loaded model stay loaded instead of switching to the
+/// ranked-best candidate?
+///
+/// Capability: a reload is worth it for a real specialist (SWITCH_MARGIN),
+/// never for a marginal gain. Fit: a partially-offloaded (yellow) loaded
+/// model does NOT hold the slot against a fully-on-GPU (green) candidate -
+/// every reply it keeps is a slow one (seen live: a 30B partial-offload
+/// answering "why is the sky blue" because nothing could out-CAP it) -
+/// UNLESS a project folder is open: agent sessions are deliberately
+/// session-stable, and evicting the project's model for a stray chat
+/// question costs a minutes-long reload on the way back.
+pub(crate) fn keep_loaded(
+    cap_cur: u8,
+    cap_best: u8,
+    tier_cur: u8,
+    tier_best: u8,
+    folder_open: bool,
+) -> bool {
+    if cap_cur + SWITCH_MARGIN < cap_best {
+        return false; // a real specialist wins regardless of fit or folders
+    }
+    tier_cur >= tier_best || folder_open
 }
 
 /// The user's per-slot online model choices from Settings. `None` = use the
@@ -1212,6 +1241,23 @@ mod tests {
             om("gpt-5.6-terra", "GPT-5.6 Terra", "balanced flagship", None),
             om("sonar", "Sonar", "Perplexity search", Some(0.005)),
         ]
+    }
+
+    #[test]
+    fn keep_loaded_is_fit_aware_with_a_project_guard() {
+        // Green loaded, green best, near-equal caps: classic stickiness holds.
+        assert!(keep_loaded(8, 8, 2, 2, false));
+        // Yellow loaded vs green best, no folder open: switch - the
+        // sky-is-blue case (a slow partial-offload must not hold the slot).
+        assert!(!keep_loaded(8, 8, 1, 2, false));
+        // Same, but a project folder is open: the project's model stays warm.
+        assert!(keep_loaded(8, 8, 1, 2, true));
+        // A real specialist evicts regardless of fit or folders.
+        assert!(!keep_loaded(6, 8, 2, 2, true));
+        // Yellow loaded vs yellow best: no fit win to be had - stay.
+        assert!(keep_loaded(8, 8, 1, 1, false));
+        // Loaded model BETTER fit than best candidate: stay.
+        assert!(keep_loaded(7, 8, 2, 1, false));
     }
 
     #[test]
