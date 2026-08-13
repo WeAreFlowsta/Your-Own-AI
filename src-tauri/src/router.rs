@@ -1252,8 +1252,12 @@ mod tests {
         assert!(!keep_loaded(8, 8, 1, 2, false));
         // Same, but a project folder is open: the project's model stays warm.
         assert!(keep_loaded(8, 8, 1, 2, true));
-        // A real specialist evicts regardless of fit or folders.
-        assert!(!keep_loaded(6, 8, 2, 2, true));
+        // A real specialist (beats the margin: gap of 3+) evicts regardless
+        // of fit or folders...
+        assert!(!keep_loaded(6, 9, 2, 2, true));
+        // ...but a 2-point gap is inside the margin - stickiness holds,
+        // matching the shipped inclusive-margin semantics.
+        assert!(keep_loaded(6, 8, 2, 2, false));
         // Yellow loaded vs yellow best: no fit win to be had - stay.
         assert!(keep_loaded(8, 8, 1, 1, false));
         // Loaded model BETTER fit than best candidate: stay.
