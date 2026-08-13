@@ -765,11 +765,13 @@ export default component$(() => {
                       <p>Health questions never leave your device.</p>
                       <p>Questions that need current information go to a live-web model, at the eagerness you set below.</p>
                       <p>Genuinely hard questions can be passed to a stronger online model (Auto - Online and Offline only).</p>
+                      <p>Plain conversation asks a model for quick, light thinking; reports, code, and genuinely hard questions get the deep kind - online and on your device alike.</p>
                       <p>Project work only ever uses models that can drive tools, and never switches models mid-session.</p>
-                      <p>Project sessions default to the recommended tool-driver online - a capable model that costs a fraction of the flagship.</p>
+                      <p>Project sessions default to the recommended tool-driver online - both project pickers below let you change that.</p>
                       <p>Simple project side-work (searching and reading fan-outs) runs on your device when a capable model runs comfortably on your hardware - free and private. You can turn this off below.</p>
                       <p>The small jobs inside project work - summaries, tidying the conversation memory - always run on your device.</p>
-                      <p>Picks are fit-aware: a model that runs well on your hardware beats a stronger one that struggles.</p>
+                      <p>Picks are fit-aware: a model that runs well on your hardware beats a stronger one that struggles. A loaded model that struggles hands off to one that runs at full speed - except while a project is open, so the session's model stays warm.</p>
+                      <p>Every model starts with as much room to read and remember as your graphics card and memory can carry.</p>
                       <p class="text-[var(--text-muted)]">
                         Every answer's Model button shows what happened and why, and each
                         decision is stored in the conversation's tamper-proof record.
