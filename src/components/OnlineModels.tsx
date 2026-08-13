@@ -230,8 +230,15 @@ export const OnlineModels = component$(() => {
   });
 
   const signedIn = !!store.session?.signed_in;
-  const notLinked = signedIn && store.session?.linked === false;
-  const usable = signedIn && !notLinked; // online models actually work
+  // Linking and paying are separate events since devices became linkable
+  // (and unlinkable) independently of checkout: a FREE account can be
+  // genuinely linked, and must still see the plan pitch - linked alone is
+  // not entitled. An explicit 'free' tier gates; an UNKNOWN tier (probe
+  // failed) keeps failing open so paying users never lose controls.
+  const needsPlan =
+    signedIn &&
+    (store.session?.linked === false || store.session?.tier === 'free');
+  const usable = signedIn && !needsPlan; // online models actually work
 
   return (
     <div class="max-w-7xl mx-auto px-6">
@@ -374,7 +381,7 @@ export const OnlineModels = component$(() => {
               : 'Vault will ask you to approve the sign-in.'}
           </p>
         </div>
-      ) : notLinked ? (
+      ) : needsPlan ? (
         // Upgrade-first pitch - same card as Settings (FlowstaAccount), the
         // combination story instead of a bare "choose a plan" step. Keep the
         // two in sync when the pitch copy changes.

@@ -20,12 +20,18 @@ export interface OnlineEntitlement {
 
 export async function getOnlineEntitlement(): Promise<OnlineEntitlement> {
   try {
-    const s = await invoke<{ signed_in: boolean; linked: boolean | null }>(
-      "flowsta_session",
-    );
+    const s = await invoke<{
+      signed_in: boolean;
+      linked: boolean | null;
+      tier: string | null;
+    }>("flowsta_session");
     return {
       signedIn: !!s.signed_in,
-      entitled: !!s.signed_in && s.linked !== false,
+      // Linked is not entitled: devices link independently of paying now,
+      // so an explicitly FREE tier gates even when linked. Unknown tier
+      // (probe failed) keeps failing OPEN - paying users must never lose
+      // controls to a slow check; the proxy enforces per request anyway.
+      entitled: !!s.signed_in && s.linked !== false && s.tier !== "free",
     };
   } catch {
     return { signedIn: false, entitled: false };

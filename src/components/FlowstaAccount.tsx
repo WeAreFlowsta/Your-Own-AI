@@ -471,7 +471,11 @@ export default component$<FlowstaAccountProps>((props) => {
             </div>
           )}
 
-          {session.value.linked === false && (
+          {(session.value.linked === false ||
+            session.value.tier === "free") && (
+            // Linked is not entitled: a device can be linked to a FREE
+            // account (linking rides sign-in/checkout independently now),
+            // and that account still needs the pitch, not "you're all set".
             <div class="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] p-4">
               <p class="text-sm font-medium text-[var(--text-primary)]">
                 Give your AIs the online frontier
