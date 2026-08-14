@@ -40,10 +40,19 @@ interface WelcomeModalProps {
  * Strategy: pick the best model that fits entirely in VRAM for maximum speed.
  * Falls back to best CPU-capable model if no GPU or nothing fits in VRAM.
  */
-function getRecommendedModel(systemInfo: SystemInfo | null): RecommendedModel {
+function getRecommendedModel(
+  systemInfo: SystemInfo | null,
+  gpuUnusable = false,
+): RecommendedModel {
   const totalRAM = systemInfo?.total_memory_gb || 4;
   // Integrated graphics share system RAM - recommend as CPU, not as a card.
-  const totalVRAM = systemInfo?.gpu_integrated ? null : (systemInfo?.total_vram_gb || null);
+  // gpuUnusable: the card exists but cannot run models (safe mode, or the
+  // engine's own device verdict) - sizing must plan for the processor, or
+  // the welcome pick would be "fast on your GPU" and then crawl on CPU.
+  const totalVRAM =
+    gpuUnusable || systemInfo?.gpu_integrated
+      ? null
+      : systemInfo?.total_vram_gb || null;
   const freeRAM = systemInfo ? Math.max(1, systemInfo.total_memory_gb - systemInfo.used_memory_gb) : null;
   const hasGPU = !!systemInfo?.gpu_name && (totalVRAM || 0) > 0;
   const gpuName = systemInfo?.gpu_name || 'GPU';
@@ -147,8 +156,23 @@ export const WelcomeModal = component$<WelcomeModalProps>(
     const isDownloading = useSignal(false);
     const downloadProgress = useSignal<DownloadProgress | null>(null);
     const error = useSignal<string | null>(null);
+    // The GPU may be present but unusable (safe mode / device verdict) -
+    // the recommendation recomputes to CPU sizing once the status answers.
+    const gpuUnusable = useSignal(false);
 
-    const recommendedModel = getRecommendedModel(systemInfo);
+    // eslint-disable-next-line qwik/no-use-visible-task
+    useVisibleTask$(async () => {
+      try {
+        const s = await invoke<{ active: boolean; device_unsupported?: string | null }>(
+          'gpu_safe_mode_status',
+        );
+        gpuUnusable.value = s.active || !!s.device_unsupported;
+      } catch {
+        /* GPU sizing stands */
+      }
+    });
+
+    const recommendedModel = getRecommendedModel(systemInfo, gpuUnusable.value);
 
     // Reset state when modal opens
     // eslint-disable-next-line qwik/no-use-visible-task

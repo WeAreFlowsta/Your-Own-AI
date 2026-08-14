@@ -139,6 +139,10 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
       }
     >,
     appVersion: '',
+    /** The GPU exists but cannot run models (safe mode, or the engine's
+     *  own device verdict) - every sizing decision on this page then plans
+     *  for the processor instead. */
+    gpuUnusable: false,
     /** Beta-build-only escape hatch: lets us download/test models the fit
      *  check would refuse (e.g. Muse 30B on an 8GB card - partial offload).
      *  Gated on the version string containing "beta" (or dev), so it
@@ -180,10 +184,23 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
 
   // Initialize selected variants based on system capabilities
   // eslint-disable-next-line qwik/no-use-visible-task
-  useVisibleTask$(() => {
+  useVisibleTask$(async () => {
+    // A GPU in safe mode (or with the engine's own unusable-device verdict)
+    // must size as CPU, or every card and badge plans for hardware that
+    // will never run a model. Resolved BEFORE the variant math below.
+    try {
+      const s = await invoke<{ active: boolean; device_unsupported?: string | null }>(
+        'gpu_safe_mode_status',
+      );
+      store.gpuUnusable = s.active || !!s.device_unsupported;
+    } catch {
+      /* GPU sizing stands */
+    }
     const totalRAM = systemInfo?.total_memory_gb || 8;
     // Integrated graphics share system RAM - size them as CPU, not as a card.
-    const totalVRAM = systemInfo?.gpu_integrated ? null : (systemInfo?.total_vram_gb || null);
+    const totalVRAM = store.gpuUnusable
+      ? null
+      : systemInfo?.gpu_integrated ? null : (systemInfo?.total_vram_gb || null);
     const freeRAM = systemInfo ? Math.max(1, systemInfo.total_memory_gb - systemInfo.used_memory_gb) : null;
 
     const initialVariants: Record<string, ModelVariant> = {};
@@ -638,7 +655,10 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
 
   const totalRAM = systemInfo?.total_memory_gb || 8;
   // Integrated graphics share system RAM - size them as CPU, not as a card.
-  const totalVRAM = systemInfo?.gpu_integrated ? null : (systemInfo?.total_vram_gb || null);
+  // An unusable GPU (safe mode / device verdict) sizes as CPU too.
+  const totalVRAM = store.gpuUnusable
+    ? null
+    : systemInfo?.gpu_integrated ? null : (systemInfo?.total_vram_gb || null);
   const freeRAM = systemInfo ? Math.max(1, systemInfo.total_memory_gb - systemInfo.used_memory_gb) : null;
   const downloadedFilenames = new Set(store.downloadedModels.map((m) => m.name));
   // Task filters — the capability axis users actually shop by ("what's it for").

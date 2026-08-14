@@ -416,6 +416,12 @@ async fn compute_available_vram_mib(app_handle: &AppHandle) -> Option<u64> {
     if !crate::gpu_safety::gpu_allowed(app_handle) {
         return None;
     }
+    // Device verdict: the GPU exists but cannot run models. Reporting its
+    // VRAM here would make fit badges, context sizing, and the router plan
+    // for a GPU that will never be used - None keeps every consumer honest.
+    if crate::gpu_safety::device_unsupported(app_handle).is_some() {
+        return None;
+    }
     let probe_dir = get_models_dir(app_handle).unwrap_or_else(|_| std::env::temp_dir());
     let cmd = chat_server_command(app_handle, &probe_dir)
         .ok()?
