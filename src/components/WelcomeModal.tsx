@@ -266,6 +266,17 @@ export const WelcomeModal = component$<WelcomeModalProps>(
                   <p class="text-sm text-[var(--text-secondary)] leading-relaxed">
                     {recommendedModel.reason}
                   </p>
+                  {/* CPU-class machines get one seed-planting sentence -
+                      deliberately NO link and no second button: the
+                      welcome's single job is the first offline download,
+                      and nothing here may route away from it. */}
+                  {!recommendedModel.hasGPU && (
+                    <p class="mt-2 text-xs text-[var(--text-muted)]">
+                      And later, if you ever want more: an optional plan adds
+                      online models that run at full speed on any machine.
+                      Everything offline stays free and private either way.
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
