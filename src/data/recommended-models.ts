@@ -234,6 +234,19 @@ export const UTILITY_MODEL: CapabilityModel = {
  */
 export const VISION_PROJECTORS: CapabilityModel[] = [
   {
+    id: 'qwen-3.8-vision',
+    name: 'Qwen 3.8 vision',
+    role: 'vision-projector',
+    description:
+      'Lets Qwen 3.8 see images you attach - screenshots, charts, documents. Needs the Qwen 3.8 model downloaded.',
+    // Saved under OUR model-first name (upstream is mmproj-first):
+    // key "qwen3.8-27b" prefixes the model filename for pairing.
+    filename: 'Qwen3.8-27B-mmproj-F16.gguf',
+    downloadUrl:
+      'https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/mmproj-F16.gguf',
+    size: 0.93,
+  },
+  {
     id: 'muse-glimmer-vision',
     name: 'Muse Glimmer vision',
     role: 'vision-projector',
@@ -372,11 +385,38 @@ export const modelFamilies: ModelFamily[] = [
     ]
   },
   {
+    id: 'qwen-3.8',
+    contextWindow: 262144,
+    released: '2026-08-14',
+    name: 'Qwen 3.8',
+    description: 'Alibaba\'s newest. Frontier coding, math, and reasoning with built-in thinking; a hybrid attention design keeps long documents fast. The strongest model here for 24GB-class graphics cards.',
+    category: 'quality',
+    recommended: true,
+    capabilities: ['coding', 'agentic', 'math', 'reasoning', 'multilingual', 'chat'],
+    traits: ['new'],
+    modality: { in: ['text', 'vision'], out: ['text'] },
+    variants: [
+      // The 3.8 open-weights generation is one dense 27B - no smaller
+      // siblings exist (the only other 3.8 model is the 2.4T API flagship).
+      // Apache-2.0, so no license gate. Only 16 of 64 layers are full
+      // attention (rest linear), so the KV cache stays small even at
+      // huge contexts.
+      {
+        parameterCount: '27B',
+        size: 17.1,
+        minRAM: 32,
+        downloadUrl: 'https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-Q4_K_M.gguf',
+        filename: 'Qwen3.8-27B-Q4_K_M.gguf',
+        quantization: 'Q4_K_M'
+      }
+    ]
+  },
+  {
     id: 'qwen-3.6',
     contextWindow: 262144,
     released: '2026-04-22',
     name: 'Qwen 3.6',
-    description: 'Alibaba\'s latest. Top-tier coding, math, and reasoning. The 35B MoE runs fast for its size — only 3B parameters active per token.',
+    description: 'Top-tier coding, math, and reasoning. The 35B MoE runs fast for its size — only 3B parameters active per token.',
     category: 'quality',
     recommended: true,
     capabilities: ['coding', 'agentic', 'math', 'reasoning', 'multilingual', 'chat'],

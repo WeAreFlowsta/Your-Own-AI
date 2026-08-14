@@ -85,6 +85,11 @@ pub fn known_caps(model_name: &str) -> Option<Caps> {
     if n.contains("deepseek") || n.contains("-r1") || n.contains("qwq") {
         return Some(Caps { overall: 8, coding: 6, reasoning: 9, math: 9, vision: 0, medical: 3 });
     }
+    // Qwen 3.8 (Aug 2026): frontier-class dense 27B with native vision.
+    // Must precede the generic qwen3 arm ("qwen3.8" contains "qwen3").
+    if n.contains("qwen3.8") || n.contains("qwen-3.8") {
+        return Some(Caps { overall: 9, coding: 9, reasoning: 9, math: 9, vision: 7, medical: 3 });
+    }
     // Strong all-rounders (current best per-size)
     if n.contains("qwen3") || n.contains("qwen-3") {
         return Some(Caps { overall: 8, coding: 8, reasoning: 8, math: 8, vision: 0, medical: 3 });
@@ -131,6 +136,11 @@ pub fn agent_caps(model_name: &str) -> u8 {
         return 8;
     }
     if n.contains("coder") || n.contains("-code") || n.contains("codestral") || n.contains("devstral") {
+        return 8;
+    }
+    // Qwen 3.8 shipped a dedicated tool-call format ("Developer role") and
+    // upstream llama.cpp grew a qwen3 parser for it. Above generic qwen3.
+    if n.contains("qwen3.8") || n.contains("qwen-3.8") {
         return 8;
     }
     if n.contains("qwen3") || n.contains("qwen-3") {
