@@ -394,7 +394,6 @@ fn crash_records() -> String {
     for (path, _) in &ours {
         let _ = writeln!(out, "- {}", path.file_name().unwrap_or_default().to_string_lossy());
     }
-    // Headers of the newest three carry the termination reason.
     for (path, _) in ours.iter().take(3) {
         if let Ok(content) = std::fs::read_to_string(path) {
             let head: Vec<&str> = content.lines().take(30).collect();
@@ -404,9 +403,30 @@ fn crash_records() -> String {
                 path.file_name().unwrap_or_default().to_string_lossy(),
                 head.join("\n")
             );
+            // The head is all metadata; WHY the process died lives in the
+            // exception/termination records deep in the JSON body. Without
+            // these lines a report says "it crashed" but not what for.
+            if let Some(cause) = ips_cause(&content) {
+                let _ = write!(out, "{cause}");
+            }
         }
     }
     out
+}
+
+/// Extract the exception and termination records from a macOS .ips crash
+/// report (one-line JSON summary, then a JSON body).
+#[cfg(target_os = "macos")]
+fn ips_cause(content: &str) -> Option<String> {
+    let body_start = content.find('\n')?;
+    let body: serde_json::Value = serde_json::from_str(content[body_start..].trim_start()).ok()?;
+    let mut cause = String::new();
+    for key in ["exception", "termination", "vmRegionInfo"] {
+        if let Some(v) = body.get(key) {
+            let _ = writeln!(cause, "{key}: {v}");
+        }
+    }
+    (!cause.is_empty()).then_some(cause)
 }
 
 /// Only crash-shaped journal sources: kernel segfault/trap/oom lines,
