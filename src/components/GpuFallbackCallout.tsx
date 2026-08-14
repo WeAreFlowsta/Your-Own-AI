@@ -65,8 +65,17 @@ export default component$(() => {
           : "Your graphics card's generation isn't supported by the AI engine, so models run on your processor instead - everything works, just slower."}
       </p>
       <p class="mb-2.5">
-        Smaller models run best on your processor - and online models run at
-        full speed on any machine, if you ever want them.
+        Smaller models run best on your processor - and{' '}
+        {/* A door, not a pitch: this goes to the Online Models page (the
+            storefront with its own explanation and gating), never toward a
+            checkout from an error surface. */}
+        <a
+          href="/online-models"
+          class="text-[var(--text-link)] hover:underline"
+        >
+          online models
+        </a>{' '}
+        run at full speed on any machine, if you ever want them.
       </p>
       <button
         type="button"
