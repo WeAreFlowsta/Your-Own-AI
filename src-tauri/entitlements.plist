@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Applied by the Tauri bundler to the app AND every sidecar it signs
+  (llama-server, yourowai-holochain, yourowai-lair-keystore).
+
+  The Holochain conductor JIT-compiles zome WebAssembly (wasmer) the
+  first time it installs a hApp. The hardened runtime that notarization
+  requires kills a process that makes unsigned memory executable unless
+  these entitlements are present - without them every notarized macOS
+  build boots the conductor cleanly and then crashes it at the first
+  install, so records never provision. Wasmer does not use Apple's
+  MAP_JIT path, so allow-unsigned-executable-memory is the one that
+  matters; allow-jit is insurance for a future wasmer that does.
+  Same set Holochain's own desktop apps ship (kangaroo-tauri).
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>
