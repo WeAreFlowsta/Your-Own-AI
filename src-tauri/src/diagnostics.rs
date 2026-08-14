@@ -141,9 +141,12 @@ fn system_section() -> String {
 fn gpu_section(app: &AppHandle) -> String {
     let st = crate::gpu_safety::gpu_safe_mode_status(app.clone());
     format!(
-        "Safe mode (forced CPU): {}\nCUDA laddered out: {}",
+        "Safe mode (forced CPU): {}\nCUDA laddered out: {}\nDevice unsupported: {}",
         if st.active { "ACTIVE" } else { "no" },
-        if st.cuda_disabled { "yes" } else { "no" }
+        if st.cuda_disabled { "yes" } else { "no" },
+        // The deterministic verdict ("vulkan-driver" = a driver update may
+        // fix it; "cuda-arch" = card below the CUDA build's floor).
+        st.device_unsupported.as_deref().unwrap_or("no"),
     )
 }
 

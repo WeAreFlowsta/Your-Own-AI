@@ -653,6 +653,10 @@ pub fn run() {
             // a crashed run) so they can't poison this one.
             let inference_listener = instance_guard::acquire_or_exit(app.handle());
 
+            // Prime the CUDA compute-capability read (subprocess; done off
+            // the startup path so no spawn decision ever waits on it).
+            tauri::async_runtime::spawn_blocking(engine::prime_compute_cap);
+
             // Keep that proxy warm for signed-in users (cold start ≈ 3.5s).
             flowsta::spawn_proxy_keepalive(app.handle().clone());
 

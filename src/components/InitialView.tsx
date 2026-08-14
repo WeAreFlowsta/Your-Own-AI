@@ -1,5 +1,6 @@
 import { component$, type QRL, type Signal } from '@builder.io/qwik';
 import CudaOfferCallout from './CudaOfferCallout';
+import GpuFallbackCallout from './GpuFallbackCallout';
 import { ChatInputBar } from './ChatInputBar';
 import { SelectedAiModel, ChatAction, AttachedFile, AttachedImage } from '../types';
 
@@ -59,6 +60,7 @@ export default component$<InitialViewProps>((props) => {
           </button>
         </div>
       )}
+      <GpuFallbackCallout />
       <CudaOfferCallout />
     </div>
   );

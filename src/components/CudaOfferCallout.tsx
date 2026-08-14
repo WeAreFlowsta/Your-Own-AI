@@ -31,7 +31,7 @@ export default component$(() => {
   useVisibleTask$(async ({ cleanup }) => {
     try {
       const [status, info, safe] = await Promise.all([
-        invoke<{ supported: boolean; installed: boolean; stale_version_installed: boolean; tag: string }>('engine_status'),
+        invoke<{ supported: boolean; gpu_supported: boolean; installed: boolean; stale_version_installed: boolean; tag: string }>('engine_status'),
         invoke<{ gpu_name?: string | null }>('get_system_info'),
         invoke<{ cuda_disabled?: boolean }>('gpu_safe_mode_status').catch(
           () => ({ cuda_disabled: false }),
@@ -40,8 +40,10 @@ export default component$(() => {
       const nvidia = (info.gpu_name ?? '').toLowerCase().includes('nvidia');
       tag.value = status.tag;
       isUpdate.value = status.stale_version_installed && !status.installed;
+      // gpu_supported: never pitch an engine the card's generation cannot
+      // execute (a GTX 960M install crashed every load until this gate).
       eligible.value =
-        nvidia && status.supported && !status.installed && !safe.cuda_disabled;
+        nvidia && status.supported && status.gpu_supported && !status.installed && !safe.cuda_disabled;
     } catch {
       /* stay hidden */
     }

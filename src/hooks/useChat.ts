@@ -649,7 +649,15 @@ export function useChat(props: UseChatProps) {
         } catch (error) {
           const errorMessage =
             error instanceof Error ? error.message : String(error);
-          if (errorMessage.includes("MODEL_LOAD_CRASHED")) {
+          if (errorMessage.includes("MODEL_DEVICE_UNSUPPORTED")) {
+            // Normally the backend retries on the processor and this never
+            // surfaces - it reaches here only if that retry also failed.
+            props.currentModel.value = preferredModel;
+            props.modelTooBig.value = true;
+            abortWith(
+              `Your graphics card can't run AI models right now (the app will use your processor instead). The retry didn't complete - restarting the app usually finishes the switch.`
+            );
+          } else if (errorMessage.includes("MODEL_LOAD_CRASHED")) {
             props.currentModel.value = preferredModel;
             props.modelTooBig.value = true;
             abortWith(

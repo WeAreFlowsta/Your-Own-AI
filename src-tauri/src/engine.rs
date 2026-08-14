@@ -96,11 +96,65 @@ fn other_cuda_version_installed(app: &AppHandle) -> bool {
     })
 }
 
+/// Arch floor of our CUDA builds - CMAKE_CUDA_ARCHITECTURES "61;70;75;80;86;89"
+/// in build-llama-binaries.yml and rebuild-llama-windows-cuda.yml (keep in
+/// sync). Below this floor the engine contains no code the GPU can execute,
+/// and every model load dies instantly with "no kernel image is available"
+/// (seen in the field on a GTX 960M, Maxwell = 5.0). CUDA 12.2 could build
+/// Maxwell (50;52) if a legacy engine is ever green-lit - the gate here
+/// distinguishes "below OUR floor" from "no NVIDIA at all" for exactly that.
+const CUDA_MIN_COMPUTE_CAP: f32 = 6.1;
+
+/// The GPU's CUDA compute capability, queried once per session from
+/// nvidia-smi (ships with every NVIDIA driver). None = no NVIDIA GPU, no
+/// driver, or the query failed - callers must NOT gate on None (the
+/// load-time device detection still protects them).
+static COMPUTE_CAP: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
+
+fn query_compute_cap() -> Option<f32> {
+    let mut cmd = std::process::Command::new("nvidia-smi");
+    cmd.args(["--query-gpu=compute_cap", "--format=csv,noheader"]);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW - no console flash
+    }
+    let out = cmd.output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    // One line per GPU; take the best card (matches our discrete-GPU pick).
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| l.trim().parse::<f32>().ok())
+        .fold(None, |best: Option<f32>, c| Some(best.map_or(c, |b| b.max(c))))
+}
+
+/// Prime the cached compute-cap query off the startup path (called from
+/// setup; the query is a subprocess and must not block a spawn decision).
+pub fn prime_compute_cap() {
+    let _ = COMPUTE_CAP.set(query_compute_cap());
+}
+
+/// Can this machine's NVIDIA GPU run our CUDA builds? True when unknown -
+/// gating may only ever act on a POSITIVE "too old" reading.
+pub fn cuda_gpu_supported() -> bool {
+    match COMPUTE_CAP.get() {
+        Some(Some(cap)) => *cap >= CUDA_MIN_COMPUTE_CAP,
+        _ => true,
+    }
+}
+
 /// Which backend the chat server should use right now: the downloaded CUDA
 /// engine when installed at the current tag AND not laddered out by GPU
-/// safe mode; else the bundled sidecar.
+/// safe mode AND the GPU's generation can actually execute it; else the
+/// bundled sidecar. The generation check protects people who installed the
+/// CUDA engine before the gate existed (or pressed Update on a stale one).
 pub fn active_backend(app: &AppHandle) -> Backend {
-    if cuda_engine_binary(app).is_some() && crate::gpu_safety::cuda_allowed(app) {
+    if cuda_engine_binary(app).is_some()
+        && crate::gpu_safety::cuda_allowed(app)
+        && cuda_gpu_supported()
+    {
         Backend::Cuda
     } else {
         Backend::Bundled
@@ -122,6 +176,9 @@ fn cuda_download_url() -> Option<String> {
 pub struct EngineStatus {
     /// A CUDA build exists for this platform.
     pub supported: bool,
+    /// This machine's NVIDIA GPU generation can execute our CUDA build
+    /// (true when unknown - only a positive too-old reading gates).
+    pub gpu_supported: bool,
     /// The CUDA engine is installed at the app's pinned tag.
     pub installed: bool,
     /// An older CUDA engine version is on disk (update available).
@@ -147,6 +204,7 @@ pub async fn engine_status(
     };
     Ok(EngineStatus {
         supported: cuda_triple().is_some(),
+        gpu_supported: cuda_gpu_supported(),
         installed: cuda_engine_binary(&app).is_some(),
         stale_version_installed: other_cuda_version_installed(&app),
         active_backend: active_backend(&app),

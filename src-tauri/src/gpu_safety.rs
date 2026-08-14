@@ -44,6 +44,12 @@ struct State {
     backend: String,
     /// The CUDA rung tripped: stay on the bundled engine until retried.
     cuda_disabled: bool,
+    /// The engine itself said this GPU cannot run models ("no kernel image",
+    /// "does not support 16-bit storage", "Unsupported device") - a
+    /// DETERMINISTIC verdict, unlike the crash ladder's statistics. Holds the
+    /// reason ("vulkan-driver" | "cuda-arch") or "" when the device is fine.
+    /// Cleared by gpu_retry (the user updated a driver and wants to try).
+    device_unsupported: String,
 }
 
 #[derive(Serialize)]
@@ -52,6 +58,9 @@ pub struct SafeModeStatus {
     pub just_engaged: bool,
     /// The CUDA engine was laddered out (bundled engine still runs the GPU).
     pub cuda_disabled: bool,
+    /// Set when the engine reported the GPU cannot run models at all -
+    /// "vulkan-driver" (a driver update may fix it) or "cuda-arch".
+    pub device_unsupported: Option<String>,
 }
 
 // Evaluate the crash sentinel at most once per process — the model can be
@@ -184,6 +193,57 @@ pub fn note_backend(app: &AppHandle, backend: &str) {
     }
 }
 
+/// A GPU-backed llama-server crashed during a model load with no better
+/// explanation (not OOM, not a file error, not a device verdict). Counts
+/// toward the same ladder the launch sentinel feeds - a streak steps the
+/// rung down exactly as if the whole app had died. This closes the gap
+/// where a child process could crash on every load forever without the
+/// ladder noticing (seen in the field: repeated engine crashes, ladder
+/// still reading "CUDA laddered out: no").
+pub fn note_gpu_child_crash(app: &AppHandle) {
+    if !enabled() {
+        return;
+    }
+    let mut st = load(app);
+    st.crashes += 1;
+    if st.crashes >= CRASH_THRESHOLD {
+        if st.backend == "cuda" && !st.cuda_disabled {
+            st.cuda_disabled = true;
+            st.just_engaged = true;
+            st.crashes = 0;
+            st.backend = "bundled".to_string();
+            log::warn!("[GPU] CUDA engine laddered out after repeated load crashes");
+        } else {
+            st.forced_cpu = true;
+            st.just_engaged = true;
+            log::warn!("[GPU] safe mode ENGAGED after repeated load crashes - CPU from next launch");
+        }
+    }
+    save(app, &st);
+}
+
+/// The engine reported this GPU cannot run models. Persist the verdict so
+/// every later spawn - this session and the next - goes straight to CPU
+/// instead of re-crashing. Deterministic, so no threshold: one sighting is
+/// the truth. NOT gated on `enabled()`: unlike the crash ladder (where a
+/// dev's Ctrl-C looks like a crash), this only fires on the engine's own
+/// explicit error text.
+pub fn note_device_unsupported(app: &AppHandle, reason: &str) {
+    let mut st = load(app);
+    if st.device_unsupported != reason {
+        st.device_unsupported = reason.to_string();
+        save(app, &st);
+        log::warn!("[GPU] device marked unsupported ({reason}) - models run on CPU until the user retries");
+    }
+}
+
+/// Fresh read (deliberately NOT the once-per-session cached decision):
+/// detection can happen mid-session, and the very next spawn must honor it.
+pub fn device_unsupported(app: &AppHandle) -> Option<String> {
+    let v = load(app).device_unsupported;
+    (!v.is_empty()).then_some(v)
+}
+
 /// Frontend: is safe mode active, and did it just engage this launch?
 #[tauri::command]
 pub fn gpu_safe_mode_status(app: AppHandle) -> SafeModeStatus {
@@ -192,6 +252,8 @@ pub fn gpu_safe_mode_status(app: AppHandle) -> SafeModeStatus {
         active: st.forced_cpu,
         just_engaged: st.just_engaged,
         cuda_disabled: st.cuda_disabled,
+        device_unsupported: (!st.device_unsupported.is_empty())
+            .then_some(st.device_unsupported),
     }
 }
 

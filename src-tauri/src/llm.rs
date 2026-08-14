@@ -341,6 +341,15 @@ async fn select_gpu_device_args(app_handle: &AppHandle) -> Vec<String> {
         return vec!["-ngl".to_string(), "0".to_string()];
     }
 
+    // The engine itself declared this GPU unusable (crippled Vulkan driver,
+    // CUDA arch below the build floor). Deterministic - retrying the GPU
+    // reproduces the same crash, so go straight to CPU until the user
+    // retries from Settings (e.g. after a driver update).
+    if let Some(reason) = crate::gpu_safety::device_unsupported(app_handle) {
+        log::warn!("[LLM] GPU marked unsupported ({reason}) — running on CPU (-ngl 0)");
+        return vec!["-ngl".to_string(), "0".to_string()];
+    }
+
     let probe_dir = get_models_dir(app_handle).unwrap_or_else(|_| std::env::temp_dir());
     let cmd = match chat_server_command(app_handle, &probe_dir) {
         Ok(c) => c.args(["--list-devices"]),
@@ -621,6 +630,10 @@ static CHAT_LOAD_OOM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicB
 /// Whether the dying server's stderr showed it could not OPEN the model
 /// file at all. That is a disk/path condition, not a memory one - it must
 /// never be reported (or cached) as "too large".
+/// 0 = not seen; 1 = cuda-arch; 2 = vulkan-driver. One atomic keeps the
+/// scanner lock-free like its siblings.
+static CHAT_LOAD_DEVICE_UNSUPPORTED: std::sync::atomic::AtomicU8 =
+    std::sync::atomic::AtomicU8::new(0);
 static CHAT_LOAD_OPEN_FAILED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -633,6 +646,29 @@ fn looks_like_open_failure(line: &str) -> bool {
 }
 
 /// Memory-exhaustion markers in llama.cpp / ggml / driver output.
+/// The engine's own "this GPU cannot run models, period" verdicts - as seen
+/// in the field: a CUDA build with no code for the GPU's generation
+/// (GTX 960M vs our arch floor), and a Vulkan driver that doesn't expose
+/// 16-bit storage (Windows' Dozen fallback layer on a machine without the
+/// full NVIDIA driver). Deterministic, unlike OOM - retrying reproduces it.
+/// Returns the reason tag the UI keys its advice on, or None.
+fn looks_like_device_unsupported(line: &str) -> Option<&'static str> {
+    let l = line.to_ascii_lowercase();
+    if l.contains("no kernel image is available") {
+        return Some("cuda-arch");
+    }
+    if l.contains("does not support 16-bit storage") {
+        return Some("vulkan-driver");
+    }
+    // llama.cpp's summary line for a device rejected at load ("error loading
+    // model: Unsupported device") - keep it specific enough not to match
+    // unrelated words like "unsupported model".
+    if l.contains("unsupported device") {
+        return Some("vulkan-driver");
+    }
+    None
+}
+
 fn looks_like_oom(line: &str) -> bool {
     let l = line.to_ascii_lowercase();
     l.contains("out of memory")
@@ -861,6 +897,7 @@ pub async fn start_llama_server(
     CHAT_LOAD_FAILED.store(false, std::sync::atomic::Ordering::SeqCst);
     CHAT_LOAD_OOM.store(false, std::sync::atomic::Ordering::SeqCst);
     CHAT_LOAD_OPEN_FAILED.store(false, std::sync::atomic::Ordering::SeqCst);
+    CHAT_LOAD_DEVICE_UNSUPPORTED.store(0, std::sync::atomic::Ordering::SeqCst);
     let (mut rx, child) = chat_server_command(&app_handle, &models_dir)?
         .args(&args)
         .spawn()
@@ -883,7 +920,16 @@ pub async fn start_llama_server(
         while let Some(event) = rx.recv().await {
             match event {
                 tauri_plugin_shell::process::CommandEvent::Stdout(line) => {
-                    log::info!("[llama-server] {}", String::from_utf8_lossy(&line).trim_end());
+                    let text = String::from_utf8_lossy(&line);
+                    log::info!("[llama-server] {}", text.trim_end());
+                    // ggml's raw prints (e.g. the Vulkan "does not support
+                    // 16-bit storage" line) can arrive on stdout - classify
+                    // both streams so the verdict is never missed.
+                    if let Some(reason) = looks_like_device_unsupported(&text) {
+                        let code = if reason == "cuda-arch" { 1 } else { 2 };
+                        CHAT_LOAD_DEVICE_UNSUPPORTED
+                            .store(code, std::sync::atomic::Ordering::SeqCst);
+                    }
                 }
                 tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
                     // llama.cpp logs most of its useful startup output (incl. the
@@ -895,6 +941,11 @@ pub async fn start_llama_server(
                     }
                     if looks_like_open_failure(&text) {
                         CHAT_LOAD_OPEN_FAILED.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    if let Some(reason) = looks_like_device_unsupported(&text) {
+                        let code = if reason == "cuda-arch" { 1 } else { 2 };
+                        CHAT_LOAD_DEVICE_UNSUPPORTED
+                            .store(code, std::sync::atomic::Ordering::SeqCst);
                     }
                 }
                 tauri_plugin_shell::process::CommandEvent::Error(err) => {
@@ -931,6 +982,16 @@ pub async fn start_llama_server(
                 return Ok(());
             }
             if CHAT_LOAD_FAILED.load(Ordering::SeqCst) {
+                // Device verdict FIRST - a rejected device can also print
+                // alloc-ish lines on its way down, and "too large" would
+                // both mislead the user and wrongly poison the session
+                // cache for a model that runs fine on CPU.
+                let device_code = CHAT_LOAD_DEVICE_UNSUPPORTED.load(Ordering::SeqCst);
+                if device_code != 0 {
+                    let reason = if device_code == 1 { "cuda-arch" } else { "vulkan-driver" };
+                    crate::gpu_safety::note_device_unsupported(&app_handle, reason);
+                    return Err(format!("MODEL_DEVICE_UNSUPPORTED:{reason}"));
+                }
                 // Only claim "too large" - and only poison the session cache -
                 // when the engine's own output showed memory exhaustion. A
                 // file-open failure is a disk/path condition and a silent
@@ -948,6 +1009,13 @@ pub async fn start_llama_server(
                 }
                 if CHAT_LOAD_OPEN_FAILED.load(Ordering::SeqCst) {
                     return Err("MODEL_FILE_UNREADABLE".to_string());
+                }
+                // Unexplained crash. If this spawn actually used the GPU,
+                // feed the safety ladder - child crashes previously never
+                // counted, letting a machine crash on every load forever.
+                let cpu_spawn = args.windows(2).any(|w| w[0] == "-ngl" && w[1] == "0");
+                if !cpu_spawn {
+                    crate::gpu_safety::note_gpu_child_crash(&app_handle);
                 }
                 return Err("MODEL_LOAD_CRASHED".to_string());
             }
@@ -2083,7 +2151,40 @@ pub async fn load_model(
     if let Some(p) = &sentinel {
         let _ = std::fs::write(p, &filename);
     }
-    let started = start_llama_server(app_handle, state.clone(), Some(filename.clone()), with_vision).await;
+    let mut started =
+        start_llama_server(app_handle.clone(), state.clone(), Some(filename.clone()), with_vision)
+            .await;
+
+    // The engine declared the GPU unusable (crippled Vulkan driver, CUDA
+    // build with no code for this card). The verdict is already persisted,
+    // so a retry now spawns CPU-only - do it immediately instead of handing
+    // the user an error for a model their machine CAN run. The banner
+    // telling them what happened rides the gpu-fallback event.
+    if let Err(ref e) = started {
+        if let Some(reason) = e.strip_prefix("MODEL_DEVICE_UNSUPPORTED:") {
+            log::warn!(
+                "[LLM] GPU rejected the load ({reason}) - retrying '{}' on CPU",
+                filename
+            );
+            let reason = reason.to_string();
+            *state.is_server_running.lock().await = false;
+            started = start_llama_server(
+                app_handle.clone(),
+                state.clone(),
+                Some(filename.clone()),
+                with_vision,
+            )
+            .await;
+            if started.is_ok() {
+                use tauri::Emitter;
+                let _ = app_handle.emit(
+                    "gpu-fallback",
+                    serde_json::json!({ "reason": reason, "model": filename }),
+                );
+            }
+        }
+    }
+
     if let Some(p) = &sentinel {
         let _ = std::fs::remove_file(p);
     }
@@ -2723,7 +2824,7 @@ mod load_failure_classification_tests {
 
 #[cfg(test)]
 mod gemma_thought_tests {
-    use super::translate_gemma_thought_markers;
+    use super::{looks_like_device_unsupported, translate_gemma_thought_markers};
 
     #[test]
     fn opening_marker_becomes_think_tag() {
@@ -2750,5 +2851,39 @@ mod gemma_thought_tests {
     fn ordinary_lines_pass_through_untouched() {
         let line = "1.  **Identify the core symptom:** sharp pain.\n";
         assert_eq!(translate_gemma_thought_markers(line), line);
+    }
+
+    #[test]
+    fn device_unsupported_classifier_matches_the_field_lines() {
+        // The EXACT lines from the two field diagnostics that drove this.
+        // GTX 960M (Maxwell) on our CUDA build:
+        assert_eq!(
+            looks_like_device_unsupported(
+                "0.03.435.338 E CUDA error: no kernel image is available for execution on the device"
+            ),
+            Some("cuda-arch")
+        );
+        // MX230 behind Windows' Dozen layer (no native Vulkan driver):
+        assert_eq!(
+            looks_like_device_unsupported(
+                "ggml_vulkan: device Vulkan0 does not support 16-bit storage."
+            ),
+            Some("vulkan-driver")
+        );
+        assert_eq!(
+            looks_like_device_unsupported(
+                "0.02.502.592 E llama_model_load: error loading model: Unsupported device"
+            ),
+            Some("vulkan-driver")
+        );
+        // OOM and ordinary output must NOT read as a device verdict.
+        assert_eq!(
+            looks_like_device_unsupported("ggml_vulkan: ErrorOutOfDeviceMemory"),
+            None
+        );
+        assert_eq!(
+            looks_like_device_unsupported("srv load_model: loading model 'gemma.gguf'"),
+            None
+        );
     }
 }

@@ -976,11 +976,28 @@ export function getBestFamilyForRAM(totalRAM: number, totalVRAM: number | null, 
 
   if (recommended.length === 0) return suitableFamilies[0];
 
-  // Return the family with the largest variant they can run
+  // Rank families by the SAME philosophy the variant picker uses, instead
+  // of raw pick size. Sorting by size descending contradicted the variant
+  // rule ("on CPU, biggest is NOT best") one level up: a family whose only
+  // variant was a 15.7GB 27B outranked a sensible 4GB pick on a 32GB-RAM /
+  // 2GB-VRAM machine BECAUSE it was huge - a 75-minute welcome download
+  // into CPU-crawl territory (seen in the field). Preference order:
+  //   1. a pick that runs on the GPU (fast) beats any CPU pick;
+  //      among GPU picks, larger = more capable and still fast.
+  //   2. among CPU picks, a fast-class (<=5GB) pick beats an oversized
+  //      one; larger wins WITHIN fast-class, smaller wins outside it.
+  const rank = (f: ModelFamily) => {
+    const v = getBestVariantForSystem(f, totalRAM, totalVRAM, freeRamGb);
+    if (!v) return { mode: -1, size: 0 };
+    const mode = getRunMode(v, totalRAM, totalVRAM, freeRamGb);
+    return { mode: mode === 'gpu' ? 2 : v.size <= 5 ? 1 : 0, size: v.size };
+  };
   return recommended.sort((a, b) => {
-    const aVariant = getBestVariantForSystem(a, totalRAM, totalVRAM, freeRamGb);
-    const bVariant = getBestVariantForSystem(b, totalRAM, totalVRAM, freeRamGb);
-    return (bVariant?.size || 0) - (aVariant?.size || 0);
+    const ra = rank(a);
+    const rb = rank(b);
+    if (ra.mode !== rb.mode) return rb.mode - ra.mode;
+    // GPU and fast-class CPU: bigger is better. Oversized CPU: smaller is.
+    return ra.mode === 0 ? ra.size - rb.size : rb.size - ra.size;
   })[0];
 }
 

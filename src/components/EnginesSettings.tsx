@@ -24,6 +24,9 @@ interface ExternalEngineInfo {
 
 interface EngineStatus {
   supported: boolean;
+  /** This machine's NVIDIA GPU generation can execute the CUDA build
+   *  (true when unknown - only a positive too-old reading gates). */
+  gpu_supported: boolean;
   installed: boolean;
   stale_version_installed: boolean;
   /** What the next chat-server start will use. */
@@ -217,7 +220,14 @@ export default component$(() => {
                 documents much faster; generation speed varies by card
                 generation. Needs an NVIDIA driver from 2023 or newer.
               </p>
-              {s.stale_version_installed && !s.installed && (
+              {!s.gpu_supported && (
+                <p class="mt-1.5 text-xs text-amber-500/90">
+                  Your graphics card's generation isn't supported by this
+                  engine - the standard engine is used instead. Everything
+                  still works.
+                </p>
+              )}
+              {s.gpu_supported && s.stale_version_installed && !s.installed && (
                 <p class="mt-1.5 text-xs text-amber-500/90">
                   Update available - the app was updated and needs a matching
                   engine. Download to update.
@@ -273,6 +283,12 @@ export default component$(() => {
               ) : downloading.value ? (
                 <span class="flex items-center gap-1.5 px-3 py-1.5 text-xs text-[var(--text-muted)]">
                   {percent.value >= 100 ? "Installing…" : `${percent.value}%`}
+                </span>
+              ) : !s.gpu_supported ? (
+                // No Download and no Update for a card that cannot execute
+                // this engine - offering either recreates the crash loop.
+                <span class="px-3 py-1.5 text-xs text-[var(--text-muted)] whitespace-nowrap">
+                  Not for this card
                 </span>
               ) : (
                 <LiquidMetalButton
