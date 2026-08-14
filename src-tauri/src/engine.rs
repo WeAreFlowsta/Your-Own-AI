@@ -15,11 +15,11 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
 /// The llama.cpp release tag this app is built against. MUST match
-/// `RELEASE_TAG` in `.github/workflows/build-app-installers.yml` - the
+/// `RELEASE_TAG` in `.github/workflows/build-release.yml` - the
 /// installer build fails when they disagree. Optional engine downloads
 /// use the same tag, so the bundled engine and any downloaded backend
 /// stay version-locked.
-pub const LLAMA_ENGINE_TAG: &str = "llama-b10355";
+pub const LLAMA_ENGINE_TAG: &str = "llama-b10435";
 
 /// Repo whose `llama-<tag>` releases hold the bundled binaries AND the
 /// optional engine zips (built by build-llama-binaries.yml).
@@ -33,7 +33,7 @@ pub enum Backend {
     Cuda,
 }
 
-/// The version part of the tag ("llama-b10355" -> "b10355").
+/// The version part of the tag ("llama-b10435" -> "b10435").
 fn tag_version() -> &'static str {
     LLAMA_ENGINE_TAG
         .strip_prefix("llama-")
@@ -570,7 +570,7 @@ mod tests {
 
     #[test]
     fn tag_version_strips_prefix() {
-        assert_eq!(tag_version(), "b10355");
+        assert_eq!(tag_version(), "b10435");
     }
 
     #[test]
@@ -585,7 +585,7 @@ mod tests {
     fn download_url_is_release_asset_shaped() {
         if let Some(url) = cuda_download_url() {
             assert!(url.starts_with(
-                "https://github.com/WeAreFlowsta/Your-Own-AI/releases/download/llama-b10355/llama-server-cuda-b10355-"
+                "https://github.com/WeAreFlowsta/Your-Own-AI/releases/download/llama-b10435/llama-server-cuda-b10435-"
             ));
             assert!(url.ends_with(".zip"));
         }
