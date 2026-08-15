@@ -313,8 +313,9 @@ fn offline_ordering(lean: &str, a: OfflineRank, b: OfflineRank) -> std::cmp::Ord
 /// Capability is the **task-specific** score (`by_task` — coding for a code
 /// query, etc.; `"general"` → overall). `lean` biases the ranking via
 /// `offline_ordering`:
-/// - `"balanced"` (default): capability, then fit tier (green = fully-on-GPU
-///   over yellow = partial offload), then size — the shipped behavior.
+/// - `"balanced"` (default): fit tier first (green = fully-on-GPU over
+///   yellow = partial offload), then capability, then size — a model that
+///   runs comfortably beats a smarter one that barely loads.
 /// - `"speed"`: fit tier first, then capability, and SMALLER wins size ties —
 ///   a fully-on-GPU model over a stronger one that spills to CPU.
 /// - `"quality"`: capability, then size, then fit tier — willing to take
@@ -393,13 +394,16 @@ async fn pick_offline(app: &AppHandle, task: &str, lean: &str, agent_only: bool)
 
     // Keep the loaded model unless a candidate beats it on THIS task by at least
     // SWITCH_MARGIN — a reload is worth it for a real specialist, not a marginal
-    // gain. Fit-aware since beta.10: see keep_loaded.
-    let current = app
-        .state::<crate::llm::LLMState>()
-        .current_model
-        .lock()
-        .await
-        .clone();
+    // gain. Fit-aware since beta.10: see keep_loaded. A load IN FLIGHT counts
+    // as the incumbent too - current_model is only written when a load
+    // finishes, and an unprotected 20s load window let a bigger model hijack
+    // the pick mid-load (0.4.0-beta.1 field find).
+    let current = {
+        let st = app.state::<crate::llm::LLMState>();
+        let loading = st.loading_model.lock().await.clone();
+        let loaded = st.current_model.lock().await.clone();
+        loading.or(loaded)
+    };
     if let Some(cur) = current.filter(|c| !c.starts_with("online:")) {
         if let Some(cf) = pool.iter().find(|f| f.name == cur) {
             let folder_open = app

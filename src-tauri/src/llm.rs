@@ -51,6 +51,13 @@ pub struct SystemInfo {
 pub struct LLMState {
     pub models_dir: Mutex<Option<PathBuf>>,
     pub current_model: Mutex<Option<String>>, // Currently loaded model filename
+    /// Model a load is IN FLIGHT for. `current_model` is only written once a
+    /// load completes, so for the whole load window (20s+ for big models) a
+    /// concurrent route would otherwise see no incumbent - the keep-loaded
+    /// rule can't protect a model it doesn't know about, and a bigger model
+    /// can hijack the pick mid-load (seen live on the 4060 Ti: Muse 30B
+    /// picked 3s into a Qwythos load for "why is the sky blue").
+    pub loading_model: Mutex<Option<String>>,
     /// Multimodal projector (mmproj) filename the server was started with, if the
     /// current model had a paired projector downloaded — i.e. the server can see
     /// images this run. `None` = text-only.
@@ -91,6 +98,7 @@ impl LLMState {
         Self {
             models_dir: Mutex::new(None),
             current_model: Mutex::new(None),
+            loading_model: Mutex::new(None),
             current_mmproj: Mutex::new(None),
             server_process: Mutex::new(None),
             is_server_running: Mutex::new(false),
@@ -2127,6 +2135,10 @@ pub async fn load_model(
 
     println!("[LLM] Loading model: {}", filename);
 
+    // Mark the load in flight so routing sees an incumbent for the whole
+    // load window (cleared at the single exit below).
+    *state.loading_model.lock().await = Some(filename.clone());
+
     // Stop existing server if running
     stop_llama_server(state.clone()).await.ok();
 
@@ -2194,6 +2206,7 @@ pub async fn load_model(
     if let Some(p) = &sentinel {
         let _ = std::fs::remove_file(p);
     }
+    *state.loading_model.lock().await = None;
     started?;
 
     // Store the current model filename

@@ -151,6 +151,24 @@ pub fn grade(need_gb: f64, free_vram_gb: Option<f64>, free_ram_gb: f64) -> Fit {
     }
 }
 
+/// Hand the incumbent's estimated footprint back to the free figures
+/// candidates are graded against ("as if the slot were free"). The
+/// incumbent lives in VRAM when a GPU budget exists, in RAM otherwise -
+/// a CPU-loaded incumbent distorts free RAM the same way.
+pub(crate) fn reclaim_adjust(
+    free_vram_gb: Option<f64>,
+    free_ram_gb: f64,
+    incumbent_need_gb: f64,
+) -> (Option<f64>, f64) {
+    if incumbent_need_gb <= 0.0 {
+        return (free_vram_gb, free_ram_gb);
+    }
+    match free_vram_gb {
+        Some(free) => (Some(free + incumbent_need_gb), free_ram_gb),
+        None => (None, free_ram_gb + incumbent_need_gb),
+    }
+}
+
 fn models_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
     Some(app.path().app_data_dir().ok()?.join("models"))
 }
@@ -170,6 +188,40 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
     let free_vram_gb = crate::llm::available_vram_mib(app)
         .await
         .map(|mib| mib as f64 / 1024.0);
+
+    // Grade every candidate AS IF the chat slot were free. Loading any
+    // candidate evicts the incumbent (loaded or mid-load), yet the free
+    // figures above still include the incumbent's own footprint - so a
+    // green model demotes ITSELF once loaded (its usage ate the free VRAM
+    // it is graded against), every rival grades a tier too low, and the
+    // tier-first balanced ordering stops discriminating (then raw
+    // capability decides, which the biggest model always wins). Hand the
+    // incumbent's estimated footprint back before grading. The estimate
+    // can exceed the incumbent's true VRAM share when it is partially
+    // offloaded - erring green is safe (the loader and the session
+    // too-big memo still guard reality); erring yellow is this bug.
+    let incumbent = {
+        let st = tauri::Manager::state::<crate::llm::LLMState>(app);
+        let loading = st.loading_model.lock().await.clone();
+        let current = st.current_model.lock().await.clone();
+        loading.or(current).filter(|c| !c.starts_with("online:"))
+    };
+    let reclaim_gb = incumbent
+        .and_then(|name| {
+            let path = dir.join(&name);
+            let meta = crate::gguf::read_meta(&path).ok()?;
+            let size = std::fs::metadata(&path).ok()?.len();
+            let ctx = choose_ctx(&meta, size, total_ram_gb, free_vram_gb);
+            let (_, _, mut need) = model_need(&meta, size, ctx);
+            if let Some(proj) = crate::llm::find_projector_for(&dir, &name) {
+                if let Ok(pm) = std::fs::metadata(&proj) {
+                    need += pm.len() as f64 / GIB;
+                }
+            }
+            Some(need)
+        })
+        .unwrap_or(0.0);
+    let (free_vram_gb, free_ram_gb) = reclaim_adjust(free_vram_gb, free_ram_gb, reclaim_gb);
 
     let mut out = Vec::new();
     for m in models {
@@ -222,6 +274,35 @@ pub async fn assess_model_fit(app: AppHandle) -> Result<Vec<ModelFit>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reclaim_returns_incumbent_footprint_to_the_right_budget() {
+        // GPU budget: incumbent's footprint comes back as VRAM.
+        assert_eq!(reclaim_adjust(Some(1.0), 16.0, 7.0), (Some(8.0), 16.0));
+        // CPU-only: it comes back as RAM instead.
+        assert_eq!(reclaim_adjust(None, 10.0, 5.0), (None, 15.0));
+        // No incumbent: both figures untouched.
+        assert_eq!(reclaim_adjust(Some(8.0), 16.0, 0.0), (Some(8.0), 16.0));
+    }
+
+    /// The 0.4.0-beta.1 field case (4060 Ti, balanced lean): with a ~7 GB
+    /// model loaded, raw free VRAM collapses to ~1 GB, EVERY candidate
+    /// grades yellow, and tier-first ordering stops discriminating - so raw
+    /// capability picks the 30B. With the incumbent's footprint reclaimed,
+    /// the incumbent-class model grades green again and out-ranks the
+    /// yellow 30B under balanced ordering.
+    #[test]
+    fn reclaim_keeps_tiers_discriminating_while_a_model_is_loaded() {
+        let (free_raw, ram) = (Some(1.0), 18.0);
+        // Without reclaim: both the 7 GB incumbent-class model and the
+        // 13 GB big model grade yellow - the tier can't tell them apart.
+        assert_eq!(grade(7.0, free_raw, ram), Fit::Yellow);
+        assert_eq!(grade(13.0, free_raw, ram), Fit::Yellow);
+        // With the incumbent's 7 GB reclaimed (card is really 8 GB):
+        let (free, ram) = reclaim_adjust(free_raw, ram, 7.0);
+        assert_eq!(grade(7.0, free, ram), Fit::Green);
+        assert_eq!(grade(13.0, free, ram), Fit::Yellow);
+    }
 
     #[test]
     fn grades_make_sense() {
