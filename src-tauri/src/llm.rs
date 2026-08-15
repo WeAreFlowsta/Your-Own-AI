@@ -240,40 +240,42 @@ fn chat_server_command(
                 .command(bin)
                 .current_dir(work_dir.to_path_buf()))
         }
-        crate::engine::Backend::Bundled => {
-            // The sidecar lives beside the app executable. If it is gone,
-            // say WHERE it should be: antivirus quarantine of the engine
-            // exe looks exactly like a missing file, and this failing
-            // UNLOGGED masqueraded as a silent load stall for days (GTX
-            // 960M field case - every load "started" and then nothing).
-            if let Ok(exe) = std::env::current_exe() {
-                let expected = exe.with_file_name(if cfg!(windows) {
-                    "llama-server.exe"
-                } else {
-                    "llama-server"
-                });
-                if !expected.exists() {
-                    let msg = format!(
-                        "Bundled engine missing at {} - an antivirus may have \
-                         quarantined it; restoring it there or reinstalling \
-                         the app fixes this",
-                        expected.display()
-                    );
-                    log::error!("[LLM] {msg}");
-                    return Err(msg);
-                }
-            }
-            Ok(app_handle
-                .shell()
-                .sidecar("llama-server")
-                .map_err(|e| {
-                    let msg = format!("Failed to find llama-server binary: {}", e);
-                    log::error!("[LLM] {msg}");
-                    msg
-                })?
-                .current_dir(work_dir.to_path_buf()))
-        }
+        crate::engine::Backend::Bundled => Ok(bundled_llama_command(app_handle)?
+            .current_dir(work_dir.to_path_buf())),
     }
+}
+
+/// The bundled llama-server as a spawnable command, resolved the way the
+/// holochain and lair sidecars already are: EXE-RELATIVE, never through
+/// Tauri's `sidecar()` resolver. That resolver shares Tauri's path
+/// resolution, which fails outright on some Windows installs (custom-drive
+/// installs, AV interference - the same machines where `resource_dir()`
+/// fails and we already fall back exe-relative for resources). On such a
+/// box `sidecar()` reports "cannot find the file" while the exe sits right
+/// beside the app (GTX 960M field case: three betas of "silent" load
+/// failures, all this). Same CommandChild type, so process tracking, the
+/// instance sweep, and console-window hiding are unchanged.
+fn bundled_llama_command(
+    app_handle: &AppHandle,
+) -> Result<tauri_plugin_shell::process::Command, String> {
+    let bin = crate::resolve_sidecar_bin("llama-server");
+    // In production the resolver returns the exe-relative path when it
+    // exists and a bare name otherwise; a bare name means the file beside
+    // the app is gone - say where it should have been.
+    if !cfg!(debug_assertions) && !bin.is_absolute() {
+        let expected = std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|d| d.join(if cfg!(windows) { "llama-server.exe" } else { "llama-server" })))
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "beside the app executable".to_string());
+        let msg = format!(
+            "Bundled engine missing at {expected} - an antivirus may have \
+             quarantined it; restoring it there or reinstalling the app fixes this"
+        );
+        log::error!("[LLM] {msg}");
+        return Err(msg);
+    }
+    Ok(app_handle.shell().command(bin))
 }
 
 /// Heuristic: is this GPU integrated / shared-memory (iGPU, APU, or software
@@ -1320,10 +1322,7 @@ async fn ensure_embedding_server(
         "0".to_string(),
     ];
 
-    let (mut rx, child) = app_handle
-        .shell()
-        .sidecar("llama-server")
-        .map_err(|e| format!("Failed to find llama-server binary: {}", e))?
+    let (mut rx, child) = bundled_llama_command(&app_handle)?
         .current_dir(models_dir.clone())
         .args(&args)
         .spawn()
@@ -1493,10 +1492,7 @@ async fn ensure_utility_server(
         "0".to_string(),
     ];
 
-    let (mut rx, child) = app_handle
-        .shell()
-        .sidecar("llama-server")
-        .map_err(|e| format!("Failed to find llama-server binary: {}", e))?
+    let (mut rx, child) = bundled_llama_command(&app_handle)?
         .current_dir(models_dir.clone())
         .args(&args)
         .spawn()
