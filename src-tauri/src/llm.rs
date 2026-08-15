@@ -363,9 +363,37 @@ async fn select_gpu_device_args(app_handle: &AppHandle) -> Vec<String> {
         Ok(c) => c.args(["--list-devices"]),
         Err(_) => return Vec::new(),
     };
-    let output = match cmd.output().await {
-        Ok(o) => o,
-        Err(_) => return Vec::new(),
+    // BOUNDED wait: on some machines the probe process never exits (deep
+    // Vulkan init hanging on an old driver, or antivirus holding a fresh
+    // binary) - an unbounded await here stalled the ENTIRE load silently
+    // and permanently, with no error and no engine output (GTX 960M field
+    // case, every load since the machine switched to the bundled engine).
+    // On timeout, force CPU with the GPU stack fully out of the loop
+    // (--device none, like the embed/util servers) so the real server
+    // can't hang in the same place. The hung probe child is left behind
+    // (killing through a dropped future isn't possible); the startup
+    // instance sweep clears it next launch.
+    let output = match tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        cmd.output(),
+    )
+    .await
+    {
+        Ok(Ok(o)) => o,
+        Ok(Err(_)) => return Vec::new(),
+        Err(_) => {
+            log::warn!(
+                "[LLM] device probe produced no result in 15s - forcing CPU \
+                 with GPU init skipped (--device none). A driver update may \
+                 restore GPU use."
+            );
+            return vec![
+                "-ngl".to_string(),
+                "0".to_string(),
+                "--device".to_string(),
+                "none".to_string(),
+            ];
+        }
     };
     let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
     combined.push_str(&String::from_utf8_lossy(&output.stderr));
@@ -434,7 +462,13 @@ async fn compute_available_vram_mib(app_handle: &AppHandle) -> Option<u64> {
     let cmd = chat_server_command(app_handle, &probe_dir)
         .ok()?
         .args(["--list-devices"]);
-    let output = cmd.output().await.ok()?;
+    // Bounded for the same reason as the device-selection probe: a probe
+    // process that never exits must degrade to "no VRAM figure" (RAM-based
+    // grading), not hang fit badges, the router, and the models page.
+    let output = tokio::time::timeout(std::time::Duration::from_secs(15), cmd.output())
+        .await
+        .ok()?
+        .ok()?;
     let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
     combined.push_str(&String::from_utf8_lossy(&output.stderr));
     let discrete: Vec<GpuDevice> = parse_gpu_devices(&combined)
@@ -635,6 +669,12 @@ pub fn current_ctx_size() -> u32 {
 }
 
 static CHAT_LOAD_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Whether the current chat-server spawn has produced ANY output line. A
+/// server that stays completely silent (antivirus holding the binary, GPU
+/// init hanging in the driver) looks identical to a slow load - this flag
+/// lets the wait loop say so in the log, so a diagnostic report carries
+/// evidence instead of a bare timeout (GTX 960M field case: total silence).
+static CHAT_ANY_OUTPUT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Whether the dying server's stderr showed MEMORY exhaustion. Distinguishes a
 /// genuine too-large model from an engine crash (e.g. an access violation) -
 /// beta 1 reported a crashing engine as "model too large", which sent the user
@@ -912,6 +952,7 @@ pub async fn start_llama_server(
     CHAT_LOAD_OOM.store(false, std::sync::atomic::Ordering::SeqCst);
     CHAT_LOAD_OPEN_FAILED.store(false, std::sync::atomic::Ordering::SeqCst);
     CHAT_LOAD_DEVICE_UNSUPPORTED.store(0, std::sync::atomic::Ordering::SeqCst);
+    CHAT_ANY_OUTPUT.store(false, std::sync::atomic::Ordering::SeqCst);
     let (mut rx, child) = chat_server_command(&app_handle, &models_dir)?
         .args(&args)
         .spawn()
@@ -934,6 +975,7 @@ pub async fn start_llama_server(
         while let Some(event) = rx.recv().await {
             match event {
                 tauri_plugin_shell::process::CommandEvent::Stdout(line) => {
+                    CHAT_ANY_OUTPUT.store(true, std::sync::atomic::Ordering::SeqCst);
                     let text = String::from_utf8_lossy(&line);
                     log::info!("[llama-server] {}", text.trim_end());
                     // ggml's raw prints (e.g. the Vulkan "does not support
@@ -946,6 +988,7 @@ pub async fn start_llama_server(
                     }
                 }
                 tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
+                    CHAT_ANY_OUTPUT.store(true, std::sync::atomic::Ordering::SeqCst);
                     // llama.cpp logs most of its useful startup output (incl. the
                     // ggml_vulkan device lines + model load) to stderr.
                     let text = String::from_utf8_lossy(&line);
@@ -991,7 +1034,18 @@ pub async fn start_llama_server(
     // hit. ~60s ceiling covers a slow but legitimate load.
     if model_specified {
         use std::sync::atomic::Ordering;
-        for _ in 0..120 {
+        for i in 0..120 {
+            // 15s of TOTAL silence is not a slow load - the process is
+            // blocked before its first print (antivirus hold, GPU init hung
+            // in the driver). Say so once, so the diagnostic report carries
+            // evidence instead of a bare timeout.
+            if i == 30 && !CHAT_ANY_OUTPUT.load(Ordering::SeqCst) {
+                log::warn!(
+                    "[LLM] llama-server has produced NO output 15s after \
+                     spawn - the binary may be blocked by antivirus or hung \
+                     in graphics driver initialization"
+                );
+            }
             if chat_server_health_ok().await {
                 return Ok(());
             }
