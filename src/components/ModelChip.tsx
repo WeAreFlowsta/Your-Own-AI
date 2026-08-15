@@ -1,4 +1,11 @@
-import { component$, useSignal, useStore, $, type QRL } from '@builder.io/qwik';
+import {
+  component$,
+  useSignal,
+  useStore,
+  useVisibleTask$,
+  $,
+  type QRL,
+} from '@builder.io/qwik';
 import { LuCheck, LuChevronDown } from '@qwikest/icons/lucide';
 import { invoke } from '@tauri-apps/api/core';
 import {
@@ -44,6 +51,26 @@ export const ModelChip = component$<ModelChipProps>((props) => {
   // sit inside overflow-hidden containers (the AI card's truncation wrapper
   // clips absolute children into invisibility).
   const panel = useStore({ left: 0, top: 0, bottom: 0 });
+  // The AI cards also carry a `transform` (hover lift), which makes the
+  // card - not the viewport - the containing block for position:fixed, so
+  // even fixed coordinates land outside the card and get clipped. While
+  // open, the overlay is teleported to document.body, where no ancestor
+  // can capture or clip it. Qwik's delegated events keep working on the
+  // moved subtree (the whole document is inside the q:container).
+  const overlayRef = useSignal<HTMLElement>();
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track, cleanup }) => {
+    track(() => open.value);
+    const el = overlayRef.value;
+    if (open.value && el && el.parentElement !== document.body) {
+      document.body.appendChild(el);
+    }
+    cleanup(() => {
+      if (el && el.parentElement === document.body) {
+        el.remove();
+      }
+    });
+  });
   const store = useStore({
     loading: false,
     localModels: [] as LocalModel[],
@@ -132,7 +159,7 @@ export const ModelChip = component$<ModelChipProps>((props) => {
         <LuChevronDown class="w-3 h-3 flex-shrink-0" />
       </button>
       {open.value && (
-        <>
+        <div ref={overlayRef}>
           <div class="fixed inset-0 z-20" onClick$={() => (open.value = false)} />
           <div
             class="fixed z-30 w-72 max-h-64 overflow-auto rounded-2xl bg-[var(--bg-card)] py-1 text-sm shadow-lg ring-1 ring-black ring-opacity-5"
@@ -249,7 +276,7 @@ export const ModelChip = component$<ModelChipProps>((props) => {
               </>
             )}
           </div>
-        </>
+        </div>
       )}
     </div>
   );
