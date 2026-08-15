@@ -240,11 +240,39 @@ fn chat_server_command(
                 .command(bin)
                 .current_dir(work_dir.to_path_buf()))
         }
-        crate::engine::Backend::Bundled => Ok(app_handle
-            .shell()
-            .sidecar("llama-server")
-            .map_err(|e| format!("Failed to find llama-server binary: {}", e))?
-            .current_dir(work_dir.to_path_buf())),
+        crate::engine::Backend::Bundled => {
+            // The sidecar lives beside the app executable. If it is gone,
+            // say WHERE it should be: antivirus quarantine of the engine
+            // exe looks exactly like a missing file, and this failing
+            // UNLOGGED masqueraded as a silent load stall for days (GTX
+            // 960M field case - every load "started" and then nothing).
+            if let Ok(exe) = std::env::current_exe() {
+                let expected = exe.with_file_name(if cfg!(windows) {
+                    "llama-server.exe"
+                } else {
+                    "llama-server"
+                });
+                if !expected.exists() {
+                    let msg = format!(
+                        "Bundled engine missing at {} - an antivirus may have \
+                         quarantined it; restoring it there or reinstalling \
+                         the app fixes this",
+                        expected.display()
+                    );
+                    log::error!("[LLM] {msg}");
+                    return Err(msg);
+                }
+            }
+            Ok(app_handle
+                .shell()
+                .sidecar("llama-server")
+                .map_err(|e| {
+                    let msg = format!("Failed to find llama-server binary: {}", e);
+                    log::error!("[LLM] {msg}");
+                    msg
+                })?
+                .current_dir(work_dir.to_path_buf()))
+        }
     }
 }
 
@@ -361,7 +389,10 @@ async fn select_gpu_device_args(app_handle: &AppHandle) -> Vec<String> {
     let probe_dir = get_models_dir(app_handle).unwrap_or_else(|_| std::env::temp_dir());
     let cmd = match chat_server_command(app_handle, &probe_dir) {
         Ok(c) => c.args(["--list-devices"]),
-        Err(_) => return Vec::new(),
+        Err(e) => {
+            log::error!("[LLM] device probe skipped - engine command unavailable: {e}");
+            return Vec::new();
+        }
     };
     // BOUNDED wait: on some machines the probe process never exits (deep
     // Vulkan init hanging on an old driver, or antivirus holding a fresh
@@ -953,10 +984,25 @@ pub async fn start_llama_server(
     CHAT_LOAD_OPEN_FAILED.store(false, std::sync::atomic::Ordering::SeqCst);
     CHAT_LOAD_DEVICE_UNSUPPORTED.store(0, std::sync::atomic::Ordering::SeqCst);
     CHAT_ANY_OUTPUT.store(false, std::sync::atomic::Ordering::SeqCst);
-    let (mut rx, child) = chat_server_command(&app_handle, &models_dir)?
-        .args(&args)
-        .spawn()
-        .map_err(|e| format!("Failed to start llama-server: {}", e))?;
+    // Resolve-and-spawn failures MUST be logged app-side: they return an
+    // error to the frontend and otherwise leave no trace in the app log -
+    // which read as a "silent stall" in field diagnostics for days.
+    let cmd = match chat_server_command(&app_handle, &models_dir) {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("[LLM] cannot resolve chat server binary: {e}");
+            return Err(e);
+        }
+    };
+    log::info!("[LLM] spawning chat server ({:?} engine)", backend);
+    let (mut rx, child) = match cmd.args(&args).spawn() {
+        Ok(pair) => pair,
+        Err(e) => {
+            let msg = format!("Failed to start llama-server: {}", e);
+            log::error!("[LLM] {msg}");
+            return Err(msg);
+        }
+    };
 
     *state.server_process.lock().await = Some(child);
     *is_running = true;
@@ -2261,6 +2307,11 @@ pub async fn load_model(
         let _ = std::fs::remove_file(p);
     }
     *state.loading_model.lock().await = None;
+    // Every load failure gets an app-side log line - errors that only
+    // travel to the frontend are invisible in diagnostic reports.
+    if let Err(ref e) = started {
+        log::error!("[LLM] load failed for '{}': {}", filename, e);
+    }
     started?;
 
     // Store the current model filename
