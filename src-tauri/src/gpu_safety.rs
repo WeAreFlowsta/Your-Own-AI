@@ -25,7 +25,12 @@ use std::sync::OnceLock;
 use tauri::{AppHandle, Manager};
 
 const STATE_FILE: &str = "gpu-safety.json";
-const CRASH_THRESHOLD: u32 = 2; // consecutive unclean GPU exits before CPU fallback
+// Consecutive unclean GPU exits before stepping down a rung. macOS tolerates
+// a longer streak: an unclean exit there is far more likely a force-quit than
+// a driver crash (Metal on Apple Silicon doesn't take systems down the way
+// desktop GPU drivers can), and a real M1 landed in false safe mode off two
+// force-quits. A genuine repeat offender still ladders out.
+const CRASH_THRESHOLD: u32 = if cfg!(target_os = "macos") { 4 } else { 2 };
 
 #[derive(Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -288,9 +293,12 @@ mod tests {
     }
 
     #[test]
-    fn two_consecutive_crashes_force_cpu() {
-        let (st, allow) = decide(State { pending: true, crashes: 1, ..Default::default() });
-        assert!(!allow, "second consecutive crash forces CPU");
+    fn crash_streak_at_threshold_forces_cpu() {
+        // crashes is threshold-relative so this stays true on macOS, where
+        // CRASH_THRESHOLD is higher (force-quit tolerance).
+        let (st, allow) =
+            decide(State { pending: true, crashes: CRASH_THRESHOLD - 1, ..Default::default() });
+        assert!(!allow, "crash at the threshold forces CPU");
         assert!(st.forced_cpu);
         assert!(st.just_engaged, "notice should pop this launch");
         assert!(!st.pending, "no GPU run this launch");
@@ -317,7 +325,7 @@ mod tests {
     fn cuda_crash_streak_falls_back_to_bundled_gpu() {
         let (st, allow) = decide(State {
             pending: true,
-            crashes: 1,
+            crashes: CRASH_THRESHOLD - 1,
             backend: "cuda".into(),
             ..Default::default()
         });
@@ -334,7 +342,7 @@ mod tests {
     fn bundled_crash_streak_after_cuda_rung_forces_cpu() {
         let (st, allow) = decide(State {
             pending: true,
-            crashes: 1,
+            crashes: CRASH_THRESHOLD - 1,
             backend: "bundled".into(),
             cuda_disabled: true,
             ..Default::default()
@@ -348,7 +356,7 @@ mod tests {
     fn bundled_crash_streak_without_cuda_forces_cpu() {
         let (st, allow) = decide(State {
             pending: true,
-            crashes: 1,
+            crashes: CRASH_THRESHOLD - 1,
             backend: "bundled".into(),
             ..Default::default()
         });
