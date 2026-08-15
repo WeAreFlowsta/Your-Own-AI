@@ -251,6 +251,7 @@ export default component$(() => {
   const headerWs = useHeaderWorkspace();
 
   const showModelWidget = useSignal(false);
+  const showChatModelChip = useSignal(true);
   const showHelpTips = useSignal(true);
   const allowAttachmentsOnline = useSignal(false);
   const groundDocumentsAuto = useSignal(false);
@@ -298,6 +299,9 @@ export default component$(() => {
     const savedWidget = localStorage.getItem("showModelWidget");
     showModelWidget.value =
       savedWidget === null ? false : savedWidget === "true";
+    // Default ON - only an explicit "false" hides the chip.
+    showChatModelChip.value =
+      localStorage.getItem("showChatModelChip") !== "false";
     showHelpTips.value = helpTipsEnabled();
     allowAttachmentsOnline.value =
       localStorage.getItem("allowAttachmentsOnline") === "true";
@@ -402,6 +406,19 @@ export default component$(() => {
     window.dispatchEvent(
       new CustomEvent("settingsChanged", {
         detail: { showModelWidget: showModelWidget.value },
+      })
+    );
+  });
+
+  const toggleChatModelChip = $(() => {
+    showChatModelChip.value = !showChatModelChip.value;
+    localStorage.setItem(
+      "showChatModelChip",
+      showChatModelChip.value.toString()
+    );
+    window.dispatchEvent(
+      new CustomEvent("settingsChanged", {
+        detail: { showChatModelChip: showChatModelChip.value },
       })
     );
   });
@@ -1060,6 +1077,16 @@ export default component$(() => {
                     onToggle$={toggleModelWidget}
                   >
                     Show the current model name and loading status in the header
+                  </SettingToggle>
+                  <SettingToggle
+                    title="Model chip in chat"
+                    checked={showChatModelChip}
+                    onToggle$={toggleChatModelChip}
+                  >
+                    The small model name beside the Ask row - shows which model
+                    arrangement the current AI uses, tap to change it. Turn off
+                    for a cleaner chat; you can always switch models from the
+                    Your AIs page.
                   </SettingToggle>
                   <SettingToggle
                     title="Show help tips"

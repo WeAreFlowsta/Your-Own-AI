@@ -1,4 +1,4 @@
-import { component$, type QRL, type Signal } from '@builder.io/qwik';
+import { component$, useSignal, useVisibleTask$, type QRL, type Signal } from '@builder.io/qwik';
 import type { SelectedAiModel, ChatAction, AttachedFile, AttachedImage } from '../types';
 import { AiSelector } from './AiSelector';
 import { ContentEditor } from './ContentEditor';
@@ -49,6 +49,23 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
   onOpenFolder$,
   theme,
 }) => {
+  // Settings > Appearance > "Model chip in chat" - default ON, an explicit
+  // opt-out for people who want the Ask row bare. Reacts live to the
+  // settingsChanged event so no chat reload is needed.
+  const showModelChip = useSignal(true);
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ cleanup }) => {
+    showModelChip.value = localStorage.getItem('showChatModelChip') !== 'false';
+    const onSettings = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail && 'showChatModelChip' in detail) {
+        showModelChip.value = !!detail.showChatModelChip;
+      }
+    };
+    window.addEventListener('settingsChanged', onSettings);
+    cleanup(() => window.removeEventListener('settingsChanged', onSettings));
+  });
+
   const askBlurbText = (selectedAi.aiConfig?.askBlurb && selectedAi.aiConfig.askBlurb.trim() !== '')
     ? (() => {
         const blurb = selectedAi.aiConfig.askBlurb!;
@@ -85,7 +102,7 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
               screens - the Your AIs cards cover it there. The chat holds a
               snapshot of the selected AI, so patch it alongside the
               context-level save the chip performs. */}
-          {selectedAi.aiConfig?.model && (
+          {selectedAi.aiConfig?.model && showModelChip.value && (
             <span class="ml-auto pl-2 hidden sm:inline-flex min-w-0">
               <ModelChip
                 aiId={selectedAi.aiConfig.id}
