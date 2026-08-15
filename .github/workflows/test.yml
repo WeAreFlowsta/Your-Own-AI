@@ -45,3 +45,30 @@ jobs:
       - name: Run unit tests
         working-directory: src-tauri
         run: cargo test --lib
+
+  # macOS-gated code (diagnostics .ips parsing, Metal paths, the macOS crash
+  # threshold) otherwise first compiles during a release build - too late to
+  # fail. Public repo, so the pricier mac runner costs nothing.
+  rust-tests-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Stub sidecar binaries
+        run: |
+          mkdir -p src-tauri/bin src-tauri/binaries
+          for n in bin/llama-server binaries/yourowai-holochain binaries/yourowai-lair-keystore; do
+            for t in aarch64-apple-darwin x86_64-apple-darwin; do
+              touch "src-tauri/${n}-${t}"
+              chmod +x "src-tauri/${n}-${t}"
+            done
+          done
+
+      - name: Run unit tests
+        working-directory: src-tauri
+        run: cargo test --lib
