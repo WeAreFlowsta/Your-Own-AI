@@ -479,8 +479,8 @@ export default component$(() => {
               <div class="inline-block w-8 h-8 border-4 border-[var(--border-subtle)] border-t-[var(--bg-button-primary)] rounded-full animate-spin"></div>
               <p class="mt-4 text-[var(--text-primary)]">Your records are warming up</p>
               <p class="mt-1 text-sm text-[var(--text-secondary)]">
-                Just after launch, your conversations take a moment to come
-                back online. This page updates by itself.
+                Just after launch, your conversations take a moment to be
+                ready. This page updates by itself.
               </p>
             </div>
           ) : conversations.value.length === 0 ? (

@@ -60,8 +60,8 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
             {!loading && warming && items.length === 0 && (
               <p class="px-4 py-3 text-sm text-[var(--text-muted)]">
                 Your records are warming up - just after launch, your
-                conversations take a moment to come back online. This list
-                updates by itself.
+                conversations take a moment to be ready. This list updates by
+                itself.
               </p>
             )}
             {!loading && !warming && items.length === 0 && (
