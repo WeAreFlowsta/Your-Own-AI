@@ -26,7 +26,7 @@ import {
   LuRotateCcw,
   LuUpload,
 } from "@qwikest/icons/lucide";
-import { formatModelForCard } from "../../utils/modelNameFormatter";
+import { ModelChip } from "../../components/ModelChip";
 import AppHeader from "../../components/AppHeader";
 import { useHeaderWorkspace } from "../../hooks/useHeaderWorkspace";
 import AiFormModal from "../../components/AiFormModal";
@@ -529,9 +529,11 @@ export default component$(() => {
                         <p class="text-xs text-[var(--text-secondary)] truncate">
                           {getPersonalityName(ai)} • {ai.status === "active" ? "Active" : "Inactive"}
                         </p>
-                        <p class="text-xs text-[var(--text-muted)] truncate" title={ai.model}>
-                          {formatModelForCard(ai.model)}
-                        </p>
+                        {/* The model line IS the switcher - the control
+                            sits where its effect shows. The edit modal
+                            keeps its picker; both render from
+                            utils/modelOptions. */}
+                        <ModelChip aiId={ai.id} model={ai.model} variant="card" />
                       </div>
                     </div>
                     <p class="text-sm text-[var(--text-secondary)] line-clamp-3 overflow-hidden">
@@ -664,7 +666,8 @@ export default component$(() => {
             Each AI is a personality with its own model and its own private,
             encrypted memory. Edit or delete the ones that come built in, and make
             as many of your own as you like — a coder, a writer, a brainstorm
-            partner. Switch any of them between offline and online models anytime.
+            partner. To switch a model, click the model name on any card - offline,
+            online, or automatic routing, anytime.
           </Callout>
         </div>
       </div>

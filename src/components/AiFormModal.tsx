@@ -35,6 +35,7 @@ import {
 import { invoke } from '@tauri-apps/api/core';
 import { richModelName } from '../utils/modelNameFormatter';
 import { isModelPaused } from '../utils/modelPrefs';
+import { autoOptions, offeredOnlineModels } from '../utils/modelOptions';
 import { ImageCropModal } from './ImageCropModal';
 import { KnowledgeSection } from './KnowledgeSection';
 import { ThumbnailGalleryModal } from './ThumbnailGalleryModal';
@@ -926,20 +927,14 @@ const AiFormModal = component$<AiFormModalProps>(
                       <li class="select-none pb-1 pl-4 pr-4 text-xs uppercase tracking-wider text-[var(--text-muted)]">
                         Smart routing
                       </li>
-                      {[
-                        { id: 'auto:offline', label: 'Auto — Offline Only', hint: 'best of your offline models' },
-                        // Offered when a server is connected; an AI already SET
-                        // to it keeps the option so editing never strips it.
-                        ...(store.externalModels.length > 0 || store.model === 'auto:my-hardware'
-                          ? [{ id: 'auto:my-hardware', label: 'Auto — My Hardware', hint: 'your device + your connected server' }]
-                          : []),
-                        // Offered with a plan; an AI already SET to it keeps the
-                        // option visible so editing never strips the setting.
-                        ...(store.onlineModels.length > 0 &&
-                        (store.onlineEntitled || store.model === 'auto:online-offline')
-                          ? [{ id: 'auto:online-offline', label: 'Auto — Online and Offline', hint: 'offline, + online for up-to-date questions' }]
-                          : []),
-                      ].map((opt) => (
+                      {/* Option rules shared with the ModelChip surfaces -
+                          see utils/modelOptions. */}
+                      {autoOptions({
+                        hasExternal: store.externalModels.length > 0,
+                        hasOnlineModels: store.onlineModels.length > 0,
+                        onlineEntitled: store.onlineEntitled,
+                        currentModel: store.model,
+                      }).map((opt) => (
                         <li
                           key={opt.id}
                           class={`relative cursor-default select-none py-2 pl-10 pr-4 hover:bg-[var(--bg-dropdown-hover)] hover:text-[var(--text-primary)] ${
@@ -1031,10 +1026,7 @@ const AiFormModal = component$<AiFormModalProps>(
                           Online models · Flowsta sign-in
                         </li>
                       )}
-                      {store.onlineModels
-                        // Offered with a plan; the one already selected stays either way.
-                        .filter((om) => store.onlineEntitled || om.id === store.model)
-                        .filter((om) => !isModelPaused(om.id) || om.id === store.model)
+                      {offeredOnlineModels(store.onlineModels, store.onlineEntitled, store.model, isModelPaused)
                         .map((om) => (
                         <li
                           key={om.id}

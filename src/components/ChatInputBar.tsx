@@ -2,6 +2,7 @@ import { component$, type QRL, type Signal } from '@builder.io/qwik';
 import type { SelectedAiModel, ChatAction, AttachedFile, AttachedImage } from '../types';
 import { AiSelector } from './AiSelector';
 import { ContentEditor } from './ContentEditor';
+import { ModelChip } from './ModelChip';
 import { LiquidMetalBorder } from './LiquidMetalBorder';
 
 interface ChatInputBarProps {
@@ -79,6 +80,27 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
           <span class="ml-2 text-[var(--text-primary)] text-xs sm:text-base">
             {askBlurbText}
           </span>
+          {/* Quiet model chip: makes the AI's standing model choice legible
+              at the point of use, one tap to change. Hidden on the smallest
+              screens - the Your AIs cards cover it there. The chat holds a
+              snapshot of the selected AI, so patch it alongside the
+              context-level save the chip performs. */}
+          {selectedAi.aiConfig?.model && (
+            <span class="ml-auto pl-2 hidden sm:inline-flex min-w-0">
+              <ModelChip
+                aiId={selectedAi.aiConfig.id}
+                model={selectedAi.aiConfig.model}
+                variant="header"
+                dropUp={isBottomBar}
+                onChanged$={(m) => {
+                  setSelectedAi$({
+                    ...selectedAi,
+                    aiConfig: { ...selectedAi.aiConfig, model: m },
+                  });
+                }}
+              />
+            </span>
+          )}
         </div>
       </div>
 
