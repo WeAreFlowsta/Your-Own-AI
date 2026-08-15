@@ -88,6 +88,41 @@ jobs:
         run: |
           .\build\bin\Release\llama-server.exe --version
 
+      # Mirror of the signing in build-llama-binaries.yml - a hotfix must
+      # never replace a signed exe with an unsigned one.
+      - name: Checkout app repo (signing script)
+        uses: actions/checkout@v4
+        with:
+          path: app-repo
+
+      - name: Setup Java (CodeSignTool)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Download CodeSignTool
+        shell: pwsh
+        run: |
+          $url = "https://github.com/SSLcom/CodeSignTool/releases/download/v1.3.2/CodeSignTool-v1.3.2.zip"
+          $zip = Join-Path $env:RUNNER_TEMP "CodeSignTool.zip"
+          $dest = Join-Path $env:RUNNER_TEMP "CodeSignTool"
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $dest -Force
+          "CODE_SIGN_TOOL_DIR=$dest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Sign llama-server.exe
+        shell: pwsh
+        env:
+          ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
+          ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
+          ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
+          ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
+        run: |
+          & app-repo/src-tauri/scripts/sign-windows.ps1 build/bin/Release/llama-server.exe
+          $sig = Get-AuthenticodeSignature build/bin/Release/llama-server.exe
+          if ($sig.Status -ne 'Valid') { throw "Signature not valid after signing: $($sig.Status)" }
+
       - name: Replace the release asset
         shell: bash
         env:
