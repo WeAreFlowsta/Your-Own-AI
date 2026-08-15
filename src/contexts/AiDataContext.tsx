@@ -191,7 +191,13 @@ export const AiDataProvider = component$(() => {
           // fixed 2s hammer (a beta box once retried failing installs every 2s
           // for hours, silently). A hard install error is NOT retried: it
           // fails identically every time; give up and tell the user instead.
-          const delays = [1000, 2000, 4000, 8000, 15000, 30000];
+          // CellDisabled is transient despite arriving as an error: on a
+          // slow or busy machine the conductor enables cells in a wave that
+          // outlives the Rust-side retry budget (seen live: every cell
+          // enabled ~70s after "ready", seconds AFTER provisioning had
+          // permanently given up) - so it rides the ladder too, and the two
+          // longest rungs exist to outlast that wave.
+          const delays = [1000, 2000, 4000, 8000, 15000, 30000, 45000, 60000];
           let agentKeys: Record<string, string> = {};
           for (let attempt = 0; ; attempt++) {
             try {
@@ -200,7 +206,9 @@ export const AiDataProvider = component$(() => {
               break;
             } catch (e) {
               const msg = e instanceof Error ? e.message : String(e);
-              if (msg.includes("still starting") && attempt < delays.length) {
+              const transient =
+                msg.includes("still starting") || msg.includes("CellDisabled");
+              if (transient && attempt < delays.length) {
                 console.log(
                   `[AiDataContext] Conductor starting, retrying in ${delays[attempt]}ms (${attempt + 1}/${delays.length})`
                 );
