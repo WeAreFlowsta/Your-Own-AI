@@ -788,6 +788,7 @@ export default component$(() => {
                       <p>Simple project side-work (searching and reading fan-outs) runs on your device when a capable model runs comfortably on your hardware - free and private. You can turn this off below.</p>
                       <p>The small jobs inside project work - summaries, tidying the conversation memory - always run on your device.</p>
                       <p>Picks are fit-aware: a model that runs well on your hardware beats a stronger one that struggles. A loaded model that struggles hands off to one that runs at full speed - except while a project is open, so the session's model stays warm.</p>
+                      <p>Models you pause on the Offline or Online Models pages are never auto-picked - pausing is your veto.</p>
                       <p>Every model starts with as much room to read and remember as your graphics card and memory can carry.</p>
                       <p class="text-[var(--text-muted)]">
                         Every answer's Model button shows what happened and why, and each

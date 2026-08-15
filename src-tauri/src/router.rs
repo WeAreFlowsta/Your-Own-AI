@@ -382,6 +382,20 @@ async fn pick_offline(app: &AppHandle, task: &str, lean: &str, agent_only: bool)
         if generalists.is_empty() { pool } else { generalists }
     };
 
+    // Paused models are out of Auto's reach. Same fallback rule as the
+    // specialist filter: if EVERYTHING is paused, answering beats refusing
+    // (the user paused models, not the app), and the loaded-model keep
+    // below only keeps pool members - so pausing the loaded model also
+    // RELEASES it on the next pick.
+    let paused = paused_models(app);
+    let pool: Vec<&crate::fit::ModelFit> = if paused.is_empty() {
+        pool
+    } else {
+        let unpaused: Vec<&crate::fit::ModelFit> =
+            pool.iter().copied().filter(|f| !paused.contains(&f.name)).collect();
+        if unpaused.is_empty() { pool } else { unpaused }
+    };
+
     let rank = |f: &crate::fit::ModelFit| OfflineRank {
         cap: cap(&f.name),
         tier: tier(f),
@@ -667,6 +681,20 @@ pub async fn device_subagents_enabled(app: &AppHandle) -> bool {
 
 /// A slot preference from the Rust-readable settings store (mirrored there
 /// by the Settings page so non-webview callers see user choices).
+/// Models the user PAUSED on the models pages (mirrored from the
+/// frontend's localStorage into the store on every change + at launch).
+/// Pause hides a model from every chooser; the router honors it too -
+/// "hide it from me" and "don't hand it to me" are the same intent.
+fn paused_models(app: &AppHandle) -> std::collections::HashSet<String> {
+    use tauri_plugin_store::StoreExt;
+    let Ok(store) = app.store("settings.json") else { return Default::default() };
+    store
+        .get("pausedModels")
+        .and_then(|v| v.as_array().cloned())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .unwrap_or_default()
+}
+
 fn store_pref(app: &AppHandle, key: &str) -> Option<String> {
     use tauri_plugin_store::StoreExt;
     let store = app.store("settings.json").ok()?;

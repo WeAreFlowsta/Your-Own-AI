@@ -13,6 +13,7 @@ import { VisionDownloadProvider } from "../contexts/VisionDownloadContext";
 import { VisionDownloadIndicator } from "../components/VisionDownloadIndicator";
 import { WorkspaceMemoryModal } from "../components/WorkspaceMemoryModal";
 import { prefetchModels } from "../utils/modelCache";
+import { mirrorPausedModels } from "../utils/modelPrefs";
 
 export type AppTheme = "light" | "dark";
 
@@ -107,6 +108,9 @@ export default component$(() => {
     // Warm the model-picker cache (local models + fit grades + online catalog) so
     // the first Edit-AI dropdown open is instant instead of cold-reading GGUF headers.
     prefetchModels();
+    // Sync pre-existing pauses into the store the router reads - pauses
+    // made before the router honored them must count from this launch on.
+    void mirrorPausedModels();
 
     // Loading overlay is dismissed by AiDataContext after full initialization
     // (archetypes + AIs + agent provisioning + thumbnails)

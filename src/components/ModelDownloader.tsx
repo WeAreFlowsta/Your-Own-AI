@@ -1187,7 +1187,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                       <LiquidMetalButton
                         variant="secondary"
                         onClick$={() => handleTogglePause$(model.name)}
-                        title={isPaused ? 'Resume - offer this model again when you choose a model for an AI' : 'Pause - hide this model wherever you choose a model for an AI. It stays downloaded, and any AI already set to it keeps it.'}
+                        title={isPaused ? 'Resume - offer this model again when you choose a model for an AI' : 'Pause - hide this model wherever you choose a model for an AI, and keep automatic routing from picking it. It stays downloaded, and any AI already set to it keeps it.'}
                         class="p-2 transition-colors"
                       >
                         {isPaused ? (
