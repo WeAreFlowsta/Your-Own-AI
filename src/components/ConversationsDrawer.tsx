@@ -52,17 +52,19 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
             </button>
           </div>
           <div class="flex-1 overflow-y-auto py-1">
-            {loading && (
+            {loading && !warming && (
               <p class="px-4 py-3 text-sm text-[var(--text-muted)]">
                 Loading your conversations..
               </p>
             )}
-            {!loading && warming && items.length === 0 && (
-              <p class="px-4 py-3 text-sm text-[var(--text-muted)]">
-                Your records are warming up - just after launch, your
-                conversations take a moment to be ready. This list updates by
-                itself.
-              </p>
+            {warming && items.length === 0 && (
+              <div class="flex items-start gap-3 px-4 py-3 text-sm text-[var(--text-muted)]">
+                <span class="mt-0.5 inline-block h-4 w-4 flex-shrink-0 rounded-full border-2 border-[var(--border-subtle)] border-t-[var(--text-secondary)] animate-spin" />
+                <span>
+                  Your records are warming up - just after launch, your
+                  conversations take a moment to be ready.
+                </span>
+              </div>
             )}
             {!loading && !warming && items.length === 0 && (
               <p class="px-4 py-3 text-sm text-[var(--text-muted)]">

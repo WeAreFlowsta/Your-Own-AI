@@ -351,8 +351,11 @@ export default component$(() => {
 
   const openConversations = $(async () => {
     conversationsOpen.value = true;
-    conversationsLoading.value = true;
-    conversationsWarming.value = false;
+    // Inside the launch grace window the drawer opens straight into the
+    // warmup state - one message for one wait, not "Loading" flipping to
+    // "warming" a moment later. Past the window it is a plain load.
+    conversationsWarming.value = emptyMayBeWarmup();
+    conversationsLoading.value = !conversationsWarming.value;
     try {
       // Right after app launch the conductor is still starting and reads
       // come back empty - hold the spinner until it's actually up, so the

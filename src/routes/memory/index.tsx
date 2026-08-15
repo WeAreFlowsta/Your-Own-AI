@@ -480,7 +480,7 @@ export default component$(() => {
               <p class="mt-4 text-[var(--text-primary)]">Your records are warming up</p>
               <p class="mt-1 text-sm text-[var(--text-secondary)]">
                 Just after launch, your conversations take a moment to be
-                ready. This page updates by itself.
+                ready.
               </p>
             </div>
           ) : conversations.value.length === 0 ? (
