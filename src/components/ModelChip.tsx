@@ -2,6 +2,7 @@ import {
   component$,
   useSignal,
   useStore,
+  useTask$,
   useVisibleTask$,
   $,
   type QRL,
@@ -46,6 +47,15 @@ interface ModelChipProps {
 export const ModelChip = component$<ModelChipProps>((props) => {
   const actions = useAiDataActions();
   const open = useSignal(false);
+  // The chip owns what it displays: selection updates it instantly (the
+  // host page's re-render arrives on its own schedule - a card that only
+  // catches up after navigation reads as "didn't stick"), and the task
+  // re-syncs it whenever the parent DOES pass a new value (e.g. the same
+  // AI edited through the modal).
+  const current = useSignal(props.model);
+  useTask$(({ track }) => {
+    current.value = track(() => props.model);
+  });
   // Panel position in viewport coordinates. The panel is position:fixed and
   // measured from the trigger, NOT absolute inside the chip - the chip can
   // sit inside overflow-hidden containers (the AI card's truncation wrapper
@@ -124,7 +134,8 @@ export const ModelChip = component$<ModelChipProps>((props) => {
 
   const select = $(async (model: string) => {
     open.value = false;
-    if (model === props.model) return;
+    if (model === current.value) return;
+    current.value = model;
     await actions.updateCustomAi(props.aiId, { model } as UpdateUserAiData);
     if (props.onChanged$) await props.onChanged$(model);
   });
@@ -155,7 +166,7 @@ export const ModelChip = component$<ModelChipProps>((props) => {
           }
         }}
       >
-        <span class="truncate">{formatModelForCard(props.model)}</span>
+        <span class="truncate">{formatModelForCard(current.value)}</span>
         <LuChevronDown class="w-3 h-3 flex-shrink-0" />
       </button>
       {open.value && (
@@ -183,14 +194,14 @@ export const ModelChip = component$<ModelChipProps>((props) => {
                   hasExternal: store.externalModels.length > 0,
                   hasOnlineModels: store.onlineModels.length > 0,
                   onlineEntitled: store.onlineEntitled,
-                  currentModel: props.model,
+                  currentModel: current.value,
                 }).map((opt) => (
-                  <div key={opt.id} class={itemClass(props.model === opt.id)} onClick$={() => select(opt.id)}>
-                    <span class={`block truncate ${props.model === opt.id ? 'font-medium' : 'font-normal'}`}>
+                  <div key={opt.id} class={itemClass(current.value === opt.id)} onClick$={() => select(opt.id)}>
+                    <span class={`block truncate ${current.value === opt.id ? 'font-medium' : 'font-normal'}`}>
                       {opt.label}
                       <span class="ml-2 text-xs text-[var(--text-muted)]">{opt.hint}</span>
                     </span>
-                    {props.model === opt.id && (
+                    {current.value === opt.id && (
                       <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-[var(--text-link)]">
                         <LuCheck class="h-4 w-4" aria-hidden="true" />
                       </span>
@@ -203,10 +214,10 @@ export const ModelChip = component$<ModelChipProps>((props) => {
                   </div>
                 )}
                 {store.localModels
-                  .filter((m) => !isModelPaused(m.name) || m.name === props.model)
+                  .filter((m) => !isModelPaused(m.name) || m.name === current.value)
                   .map((m) => (
-                    <div key={m.name} class={itemClass(props.model === m.name)} onClick$={() => select(m.name)}>
-                      <span class={`block truncate ${props.model === m.name ? 'font-medium' : 'font-normal'}`}>
+                    <div key={m.name} class={itemClass(current.value === m.name)} onClick$={() => select(m.name)}>
+                      <span class={`block truncate ${current.value === m.name ? 'font-medium' : 'font-normal'}`}>
                         {store.fits[m.name] && (
                           <span
                             class={`inline-block w-2 h-2 rounded-full mr-2 align-middle ${
@@ -220,7 +231,7 @@ export const ModelChip = component$<ModelChipProps>((props) => {
                         )}
                         {richModelName(m.name)}
                       </span>
-                      {props.model === m.name && (
+                      {current.value === m.name && (
                         <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-[var(--text-link)]">
                           <LuCheck class="h-4 w-4" aria-hidden="true" />
                         </span>
@@ -238,13 +249,13 @@ export const ModelChip = component$<ModelChipProps>((props) => {
                     Online models
                   </div>
                 )}
-                {offeredOnlineModels(store.onlineModels, store.onlineEntitled, props.model, isModelPaused).map(
+                {offeredOnlineModels(store.onlineModels, store.onlineEntitled, current.value, isModelPaused).map(
                   (om) => (
-                    <div key={om.id} class={itemClass(props.model === om.id)} onClick$={() => select(om.id)}>
-                      <span class={`block truncate ${props.model === om.id ? 'font-medium' : 'font-normal'}`}>
+                    <div key={om.id} class={itemClass(current.value === om.id)} onClick$={() => select(om.id)}>
+                      <span class={`block truncate ${current.value === om.id ? 'font-medium' : 'font-normal'}`}>
                         {om.display_name}
                       </span>
-                      {props.model === om.id && (
+                      {current.value === om.id && (
                         <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-[var(--text-link)]">
                           <LuCheck class="h-4 w-4" aria-hidden="true" />
                         </span>
@@ -260,13 +271,13 @@ export const ModelChip = component$<ModelChipProps>((props) => {
                 {store.externalModels.map((name) => (
                   <div
                     key={name}
-                    class={itemClass(props.model === `external:${name}`)}
+                    class={itemClass(current.value === `external:${name}`)}
                     onClick$={() => select(`external:${name}`)}
                   >
-                    <span class={`block truncate ${props.model === `external:${name}` ? 'font-medium' : 'font-normal'}`}>
+                    <span class={`block truncate ${current.value === `external:${name}` ? 'font-medium' : 'font-normal'}`}>
                       {name}
                     </span>
-                    {props.model === `external:${name}` && (
+                    {current.value === `external:${name}` && (
                       <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-[var(--text-link)]">
                         <LuCheck class="h-4 w-4" aria-hidden="true" />
                       </span>
