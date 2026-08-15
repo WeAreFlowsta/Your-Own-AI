@@ -8,7 +8,7 @@
  * States: no Vault → get Vault; Vault locked → unlock; signed out → sign in
  * (the button + how-to instructions); signed in but no plan → link a plan;
  * fully enabled → the model catalog with pause/play (shared with offline models
- * via utils/modelPrefs, so paused models drop out of the AI picker).
+ * via utils/modelPrefs, so paused models drop out of every model chooser).
  */
 
 import { component$, useStore, useVisibleTask$, $ } from '@builder.io/qwik';
@@ -633,7 +633,7 @@ export const OnlineModels = component$(() => {
                         <LiquidMetalButton
                           variant="secondary"
                           onClick$={() => handleTogglePause(model.id)}
-                          title={isPaused ? 'Resume — show this model in the AI picker' : 'Pause — hide this model from the AI picker'}
+                          title={isPaused ? 'Resume - offer this model again when you choose a model for an AI' : 'Pause - hide this model wherever you choose a model for an AI. It stays downloaded, and any AI already set to it keeps it.'}
                           class="p-2 transition-colors"
                         >
                           {isPaused ? (
