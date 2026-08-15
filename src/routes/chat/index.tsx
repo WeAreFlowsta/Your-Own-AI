@@ -30,6 +30,7 @@ import {
   type ConversationListItem,
   type LastConversationPointer,
 } from "../../utils/conversationResume";
+import { emptyMayBeWarmup, noteRecordsSeen, WARMUP_POLL_MS } from "../../utils/recordsWarmup";
 import { waitForHolochainReady } from "../../utils/holochainTranscripts";
 import ConfirmModal from "../../components/ConfirmModal";
 import { drainPendingExtractions, prewarmExtractionModel } from "../../utils/memoryExtraction";
@@ -222,6 +223,7 @@ export default component$(() => {
   // Conversations: the temporal lens - every conversation is a place.
   const conversationsOpen = useSignal(false);
   const conversationsLoading = useSignal(false);
+  const conversationsWarming = useSignal(false);
   const conversationItems = useSignal<ConversationListItem[]>([]);
   const lastConversation = useSignal<LastConversationPointer | null>(null);
   // A folder the resumed conversation worked in (ask before switching).
@@ -350,16 +352,30 @@ export default component$(() => {
   const openConversations = $(async () => {
     conversationsOpen.value = true;
     conversationsLoading.value = true;
+    conversationsWarming.value = false;
     try {
       // Right after app launch the conductor is still starting and reads
       // come back empty - hold the spinner until it's actually up, so the
       // drawer never shows "nothing yet" about records that exist.
       await waitForHolochainReady();
-      conversationItems.value = await listAllConversations(
-        dynamicModelOptions.value,
-      );
+      // "Up" is not "warm": the cell answers EMPTY until its records have
+      // loaded from disk. Inside the launch grace window an empty list is
+      // "not yet" - keep polling and say so (utils/recordsWarmup).
+      for (;;) {
+        const items = await listAllConversations(dynamicModelOptions.value);
+        if (items.length > 0) noteRecordsSeen();
+        conversationItems.value = items;
+        if (items.length === 0 && emptyMayBeWarmup() && conversationsOpen.value) {
+          conversationsWarming.value = true;
+          conversationsLoading.value = false;
+          await new Promise((r) => setTimeout(r, WARMUP_POLL_MS));
+          continue;
+        }
+        break;
+      }
     } finally {
       conversationsLoading.value = false;
+      conversationsWarming.value = false;
     }
   });
 
@@ -1520,6 +1536,7 @@ export default component$(() => {
         open={conversationsOpen.value}
         items={conversationItems.value}
         loading={conversationsLoading.value}
+        warming={conversationsWarming.value}
         onClose$={$(() => {
           conversationsOpen.value = false;
         })}

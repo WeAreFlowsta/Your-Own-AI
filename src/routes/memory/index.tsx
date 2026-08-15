@@ -49,6 +49,7 @@ import AiKnowledge from "../../components/AiKnowledge";
 import { RememberEntryButton } from "../../components/RememberEntryButton";
 import AiKnowledgeDocuments from "../../components/AiKnowledgeDocuments";
 import { Callout } from "../../components/Callout";
+import { emptyMayBeWarmup, noteRecordsSeen, WARMUP_POLL_MS } from "../../utils/recordsWarmup";
 
 /**
  * Header subtitle in its own component so the signal reads get a clean
@@ -58,15 +59,18 @@ import { Callout } from "../../components/Callout";
  */
 const MemorySubtitle = component$<{
   loading: Signal<boolean>;
+  warming: Signal<boolean>;
   conversations: Signal<HolochainConversation[]>;
-}>(({ loading, conversations }) => {
+}>(({ loading, warming, conversations }) => {
   const count = conversations.value.length;
   return (
     <p class="text-sm text-[var(--text-secondary)] flex items-center gap-1.5">
       <LuShieldCheck class="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
       {loading.value
         ? "Loading…"
-        : `${count} tamper-proof conversation${count !== 1 ? "s" : ""}`}
+        : warming.value
+          ? "Your records are warming up…"
+          : `${count} tamper-proof conversation${count !== 1 ? "s" : ""}`}
     </p>
   );
 });
@@ -79,6 +83,10 @@ export default component$(() => {
   const aiId = useSignal("");
   const agentKey = useSignal("");
   const conversations = useSignal<HolochainConversation[]>([]);
+  // "Warming": the records layer answered EMPTY inside the launch grace
+  // window - not believable as zero yet (see utils/recordsWarmup). Shown
+  // as its own state, never as "0" or "No memories yet".
+  const warming = useSignal(false);
   const loading = useSignal(true);
   const expandedHash = useSignal<string | null>(null);
   const transcriptEntries = useSignal<HolochainTranscriptEntry[]>([]);
@@ -144,12 +152,23 @@ export default component$(() => {
     }
 
     loading.value = true;
-    // Retry a few times in case conductor is still starting
-    for (let attempt = 0; attempt < 5; attempt++) {
+    warming.value = false;
+    // Retry a few times in case conductor is still starting - and keep
+    // polling through the warmup window when the read SUCCEEDS but empty
+    // (the cell is up before its records are; an early empty is "not
+    // yet", not "none").
+    for (let attempt = 0; ; attempt++) {
       try {
         const result = await getConversations(key);
+        if (result.length > 0) noteRecordsSeen();
         conversations.value = result;
         loading.value = false;
+        if (result.length === 0 && emptyMayBeWarmup()) {
+          warming.value = true;
+          await new Promise((r) => setTimeout(r, WARMUP_POLL_MS));
+          continue;
+        }
+        warming.value = false;
         return;
       } catch (e) {
         if (attempt < 4) {
@@ -157,6 +176,8 @@ export default component$(() => {
         } else {
           console.warn("[Memory] Failed to load conversations after retries:", e);
           loading.value = false;
+          warming.value = false;
+          return;
         }
       }
     }
@@ -301,7 +322,7 @@ export default component$(() => {
               <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela leading-tight">
                 {aiName.value}'s Memory
               </h2>
-              <MemorySubtitle loading={loading} conversations={conversations} />
+              <MemorySubtitle loading={loading} warming={warming} conversations={conversations} />
             </div>
 
           </div>
@@ -452,6 +473,15 @@ export default component$(() => {
             <div class="text-center py-16">
               <div class="inline-block w-8 h-8 border-4 border-[var(--border-subtle)] border-t-[var(--bg-button-primary)] rounded-full animate-spin"></div>
               <p class="mt-4 text-[var(--text-secondary)]">Loading memories...</p>
+            </div>
+          ) : warming.value && conversations.value.length === 0 ? (
+            <div class="text-center py-16">
+              <div class="inline-block w-8 h-8 border-4 border-[var(--border-subtle)] border-t-[var(--bg-button-primary)] rounded-full animate-spin"></div>
+              <p class="mt-4 text-[var(--text-primary)]">Your records are warming up</p>
+              <p class="mt-1 text-sm text-[var(--text-secondary)]">
+                Just after launch, your conversations take a moment to come
+                back online. This page updates by itself.
+              </p>
             </div>
           ) : conversations.value.length === 0 ? (
             <div class="text-center py-16 rounded-2xl border border-dashed border-[var(--border-subtle)]">

@@ -6,6 +6,8 @@ interface ConversationsDrawerProps {
   open: boolean;
   items: ConversationListItem[];
   loading: boolean;
+  /** Records answered empty inside the launch grace window - "not yet", not "none". */
+  warming?: boolean;
   onClose$: QRL<() => void>;
   onResume$: QRL<(item: ConversationListItem) => void>;
   onRename$: QRL<(hash: string, title: string) => void>;
@@ -29,7 +31,7 @@ function timeAgo(startedAtUs: number): string {
  * data.)
  */
 export const ConversationsDrawer = component$<ConversationsDrawerProps>(
-  ({ open, items, loading, onClose$, onResume$, onRename$ }) => {
+  ({ open, items, loading, warming, onClose$, onResume$, onRename$ }) => {
     const renamingHash = useSignal<string | null>(null);
     const renameDraft = useSignal("");
     if (!open) return null;
@@ -55,7 +57,14 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
                 Loading your conversations..
               </p>
             )}
-            {!loading && items.length === 0 && (
+            {!loading && warming && items.length === 0 && (
+              <p class="px-4 py-3 text-sm text-[var(--text-muted)]">
+                Your records are warming up - just after launch, your
+                conversations take a moment to come back online. This list
+                updates by itself.
+              </p>
+            )}
+            {!loading && !warming && items.length === 0 && (
               <p class="px-4 py-3 text-sm text-[var(--text-muted)]">
                 Nothing yet - your conversations will gather here, ready to
                 pick back up.
