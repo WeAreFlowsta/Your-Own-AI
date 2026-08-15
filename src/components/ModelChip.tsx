@@ -39,6 +39,11 @@ interface ModelChipProps {
 export const ModelChip = component$<ModelChipProps>((props) => {
   const actions = useAiDataActions();
   const open = useSignal(false);
+  // Panel position in viewport coordinates. The panel is position:fixed and
+  // measured from the trigger, NOT absolute inside the chip - the chip can
+  // sit inside overflow-hidden containers (the AI card's truncation wrapper
+  // clips absolute children into invisibility).
+  const panel = useStore({ left: 0, top: 0, bottom: 0 });
   const store = useStore({
     loading: false,
     localModels: [] as LocalModel[],
@@ -112,9 +117,15 @@ export const ModelChip = component$<ModelChipProps>((props) => {
           props.variant === 'header' ? 'text-[11px] sm:text-xs' : ''
         }`}
         title="Change which model answers as this AI"
-        onClick$={async () => {
+        onClick$={async (_, el) => {
           open.value = !open.value;
-          if (open.value) await load();
+          if (open.value) {
+            const r = el.getBoundingClientRect();
+            panel.left = Math.max(8, Math.min(r.left, window.innerWidth - 296));
+            panel.top = r.bottom + 4;
+            panel.bottom = window.innerHeight - r.top + 4;
+            await load();
+          }
         }}
       >
         <span class="truncate">{formatModelForCard(props.model)}</span>
@@ -124,9 +135,12 @@ export const ModelChip = component$<ModelChipProps>((props) => {
         <>
           <div class="fixed inset-0 z-20" onClick$={() => (open.value = false)} />
           <div
-            class={`absolute left-0 z-30 w-72 max-h-64 overflow-auto rounded-2xl bg-[var(--bg-card)] py-1 text-sm shadow-lg ring-1 ring-black ring-opacity-5 ${
-              props.dropUp ? 'bottom-full mb-1' : 'mt-1'
-            }`}
+            class="fixed z-30 w-72 max-h-64 overflow-auto rounded-2xl bg-[var(--bg-card)] py-1 text-sm shadow-lg ring-1 ring-black ring-opacity-5"
+            style={
+              props.dropUp
+                ? { left: `${panel.left}px`, bottom: `${panel.bottom}px` }
+                : { left: `${panel.left}px`, top: `${panel.top}px` }
+            }
           >
             {store.loading && store.localModels.length === 0 ? (
               <div class="flex items-center gap-2 px-4 py-3 text-xs text-[var(--text-muted)]">
