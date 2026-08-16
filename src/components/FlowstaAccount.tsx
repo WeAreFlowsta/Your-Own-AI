@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getButtonUrl } from "@flowsta/login-button";
+import { noteEntitlement } from "../utils/entitlement";
 import LiquidMetalButton from "./LiquidMetalButton";
 import ConfirmModal from "./ConfirmModal";
 import { useAiDataActions } from "../contexts/AiDataContext";
@@ -120,6 +121,7 @@ export default component$<FlowstaAccountProps>((props) => {
       ]);
       vault.value = v;
       session.value = s;
+      noteEntitlement(s);
       // Reconcile the transcript-key escrow whenever we're signed in. The
       // backend never overwrites a differing Vault copy - a mismatch just
       // reports "conflict" for the panel below.
@@ -254,6 +256,11 @@ export default component$<FlowstaAccountProps>((props) => {
       if (!session.value?.signed_in && !busy.value) await refresh();
     }, 5000);
     cleanup(() => clearInterval(interval));
+    // A plan activated (the layout's focus re-check noticed) - re-read so
+    // the pitch gives way to the usage card without a manual refresh.
+    const onEntitlement = () => { if (!busy.value) void refresh(); };
+    window.addEventListener("entitlementChanged", onEntitlement);
+    cleanup(() => window.removeEventListener("entitlementChanged", onEntitlement));
   });
 
   const handleSignIn = $(async () => {

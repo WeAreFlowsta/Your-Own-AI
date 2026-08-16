@@ -358,7 +358,9 @@ export default component$(() => {
       .then((v) => { appVersion.value = v; })
       .catch(() => { /* keep package.json fallback */ });
 
-    import("../../utils/entitlement")
+    // Re-run when a plan activates (entitlementChanged) so the routing
+    // section unlocks in place instead of on the next visit.
+    const loadEntitlement = () => import("../../utils/entitlement")
       .then(({ getOnlineEntitlement }) => getOnlineEntitlement())
       .then(async (e) => {
         onlineEntitled.value = e.entitled;
@@ -382,6 +384,11 @@ export default component$(() => {
         }
       })
       .catch(() => { /* keep fail-open default */ });
+    loadEntitlement();
+    // getOnlineEntitlement records the state it saw, so this cannot loop:
+    // a repeat read of the same state dispatches nothing.
+    const onEntitlement = () => { loadEntitlement(); };
+    window.addEventListener("entitlementChanged", onEntitlement);
 
     const handleStorageChange = () => {
       currentModel.value = localStorage.getItem("currentModel");
@@ -391,6 +398,7 @@ export default component$(() => {
     window.addEventListener("focus", handleStorageChange);
 
     return () => {
+      window.removeEventListener("entitlementChanged", onEntitlement);
       window.removeEventListener("storage", handleStorageChange);
       window.removeEventListener("focus", handleStorageChange);
     };

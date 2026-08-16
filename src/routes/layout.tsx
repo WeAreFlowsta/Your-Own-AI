@@ -123,6 +123,30 @@ export default component$(() => {
       } catch { /* best-effort */ }
     })();
 
+    // The moment a plan activates: record the entitlement once at launch
+    // (after startup has settled) and re-check on focus/visibility while
+    // the last known state is not-entitled - a plan is bought in the
+    // browser, so coming back to the app IS the moment. No polling once
+    // entitled; the check is throttled and best-effort.
+    const launchCheck = setTimeout(() => {
+      import("../utils/entitlement")
+        .then(({ getOnlineEntitlement }) => getOnlineEntitlement())
+        .catch(() => { /* best-effort */ });
+    }, 6000);
+    const recheckEntitlement = () => {
+      if (document.visibilityState === "hidden") return;
+      import("../utils/entitlement")
+        .then(({ recheckEntitlementIfUnentitled }) => recheckEntitlementIfUnentitled())
+        .catch(() => { /* best-effort */ });
+    };
+    window.addEventListener("focus", recheckEntitlement);
+    document.addEventListener("visibilitychange", recheckEntitlement);
+    cleanup(() => {
+      clearTimeout(launchCheck);
+      window.removeEventListener("focus", recheckEntitlement);
+      document.removeEventListener("visibilitychange", recheckEntitlement);
+    });
+
     // Loading overlay is dismissed by AiDataContext after full initialization
     // (archetypes + AIs + agent provisioning + thumbnails)
 
