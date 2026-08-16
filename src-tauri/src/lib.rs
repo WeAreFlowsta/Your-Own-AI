@@ -865,3 +865,32 @@ pub(crate) fn resolve_resource_dir(
     );
     data_dir.to_path_buf()
 }
+
+#[cfg(test)]
+mod attachment_extractor_smoke {
+    //! Real-file smoke for the attachment extractors - the crates under them
+    //! (pdf-extract/lopdf, calamine/quick-xml) parse USER input, so every
+    //! bump must be proven against real documents, not just compiled.
+    //! `#[ignore]` because the files live on a developer machine: run with
+    //! `YOAI_SMOKE_PDF=/path/a.pdf YOAI_SMOKE_XLSX=/path/b.xlsx cargo test
+    //! --lib attachment_extractor_smoke -- --ignored --nocapture`.
+    use super::{extract_pdf_text, extract_spreadsheet_text};
+
+    #[test]
+    #[ignore]
+    fn pdf_extracts_real_text() {
+        let Ok(p) = std::env::var("YOAI_SMOKE_PDF") else { return };
+        let text = extract_pdf_text(std::path::Path::new(&p)).expect("pdf extraction");
+        assert!(text.len() > 200, "expected substantial text, got {} chars", text.len());
+        eprintln!("pdf: {} chars, starts: {:?}", text.len(), &text[..text.len().min(120)]);
+    }
+
+    #[test]
+    #[ignore]
+    fn spreadsheet_extracts_real_cells() {
+        let Ok(p) = std::env::var("YOAI_SMOKE_XLSX") else { return };
+        let text = extract_spreadsheet_text(std::path::Path::new(&p)).expect("spreadsheet extraction");
+        assert!(text.len() > 20, "expected cell data, got {} chars", text.len());
+        eprintln!("xlsx: {} chars, starts: {:?}", text.len(), &text[..text.len().min(120)]);
+    }
+}
