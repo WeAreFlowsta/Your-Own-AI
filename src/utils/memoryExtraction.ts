@@ -265,6 +265,22 @@ export function memoryExtractionIdle(): Promise<void> {
   return Promise.allSettled([...inFlight]).then(() => undefined);
 }
 
+/** True while any extraction is running (drives the Ask-row "Remembering"
+ *  hint - background work the user can otherwise only feel as a pause). */
+export function memoryExtractionBusy(): boolean {
+  return inFlight.size > 0;
+}
+
+function announceBusy(): void {
+  try {
+    window.dispatchEvent(
+      new CustomEvent('memoryExtractionChanged', { detail: { busy: inFlight.size > 0 } }),
+    );
+  } catch {
+    /* non-browser context */
+  }
+}
+
 /**
  * Extract durable user facts from the user's message and reconcile them into
  * the store. Fire-and-forget; swallows its own errors. Runs on a LOCAL model
@@ -296,8 +312,10 @@ export function extractAndStoreFacts(input: {
   const p = runExtraction(input).finally(() => {
     inFlight.delete(p);
     removePendingTurn(pendingId);
+    announceBusy();
   });
   inFlight.add(p);
+  announceBusy();
   return p;
 }
 

@@ -1097,7 +1097,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         // minute - it goes ON THE RAIL as a step, because the pearl derives
         // its label from in-progress steps (a status field alone never
         // reaches the tip) and the transcript should hold it too.
-        state.liveStatus = "Tidying the conversation memory..";
+        state.liveStatus = "Condensing its working notes..";
         mutateTurn((m) => ({
           ...m,
           agentLog: [
@@ -1107,7 +1107,11 @@ export function useAgentSession(props: UseAgentSessionProps) {
               type: "action",
               action: {
                 toolCallId: `compact-${(m.agentLog ?? []).length}`,
-                label: "Tidying the conversation memory",
+                // The agent compacting its OWN context window (a summary call on the
+                // session's model) - not the AI's persistent memory. The old label
+                // ("Tidying the conversation memory") read as the latter and confused a
+                // real session; name the thing precisely.
+                label: "Condensing its working notes to keep going",
                 kind: "compact",
                 status: "in_progress",
               },

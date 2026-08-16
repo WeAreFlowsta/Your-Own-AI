@@ -53,6 +53,9 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
   // opt-out for people who want the Ask row bare. Reacts live to the
   // settingsChanged event so no chat reload is needed.
   const showModelChip = useSignal(true);
+  // Background memory extraction after a turn: otherwise felt only as a
+  // pause. A quiet hint in the Ask row while it runs.
+  const remembering = useSignal(false);
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(({ cleanup }) => {
     showModelChip.value = localStorage.getItem('showChatModelChip') !== 'false';
@@ -62,8 +65,15 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
         showModelChip.value = !!detail.showChatModelChip;
       }
     };
+    const onMemory = (e: Event) => {
+      remembering.value = !!(e as CustomEvent).detail?.busy;
+    };
     window.addEventListener('settingsChanged', onSettings);
-    cleanup(() => window.removeEventListener('settingsChanged', onSettings));
+    window.addEventListener('memoryExtractionChanged', onMemory);
+    cleanup(() => {
+      window.removeEventListener('settingsChanged', onSettings);
+      window.removeEventListener('memoryExtractionChanged', onMemory);
+    });
   });
 
   const askBlurbText = (selectedAi.aiConfig?.askBlurb && selectedAi.aiConfig.askBlurb.trim() !== '')
@@ -97,6 +107,15 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
           <span class="ml-2 text-[var(--text-primary)] text-xs sm:text-base">
             {askBlurbText}
           </span>
+          {remembering.value && (
+            <span
+              class="ml-3 hidden sm:inline-flex items-center gap-1.5 text-[11px] text-[var(--text-muted)]"
+              title="Learning durable facts from what you just said - on your device"
+            >
+              <span class="inline-block h-3 w-3 rounded-full border-2 border-[var(--border-subtle)] border-t-[var(--text-secondary)] animate-spin" />
+              Remembering..
+            </span>
+          )}
           {/* Quiet model chip: makes the AI's standing model choice legible
               at the point of use, one tap to change. Hidden on the smallest
               screens - the Your AIs cards cover it there. The chat holds a

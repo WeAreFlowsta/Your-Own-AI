@@ -171,12 +171,15 @@ fn ensure_agent_model_entry(
     };
 
     // The agent's ROLE models (compaction summaries etc.) follow the current
-    // AI, so those calls ride normal routing - for an auto AI the router
-    // picks something small and local (free, private). A stale alias here
-    // once pointed compaction at an online model silently.
+    // AI. session_summary carries a ":summary" suffix so the inference
+    // server can RECOGNIZE compaction (it was indistinguishable from a chat
+    // turn - a real session showed a long silent pause that was the agent
+    // tidying its context on the online model with nothing in the rail):
+    // it routes it like the session's agent turns and surfaces it as a
+    // step. Same suffix mechanism as ":agent" / ":plan".
     let roles_header = "[models]";
     let roles = format!(
-        "{roles_header}\ndefault = \"{slug}\"\nsession_summary = \"{slug}\"\nimage_description = \"{slug}\"\nweb_search = \"{slug}\"\n",
+        "{roles_header}\ndefault = \"{slug}\"\nsession_summary = \"{slug}:summary\"\nimage_description = \"{slug}\"\nweb_search = \"{slug}\"\n",
     );
     let content = if let Some(start) = content.find(roles_header) {
         let after = &content[start + roles_header.len()..];

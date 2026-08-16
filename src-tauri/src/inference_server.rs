@@ -291,6 +291,7 @@ fn resolve_ai(app: &AppHandle, model: &str) -> Option<ResolvedAi> {
         .strip_suffix(":agent-device")
         .or_else(|| model.strip_suffix(":agent"))
         .or_else(|| model.strip_suffix(":plan"))
+        .or_else(|| model.strip_suffix(":summary"))
         .unwrap_or(model)
         .trim();
     let want = slug(base);
@@ -510,8 +511,18 @@ async fn chat_completions(
         // (explore fan-outs) forced onto a capable DEVICE model - free and
         // private - while the leader stays wherever it routes.
         let device_only = model.trim().ends_with(":agent-device");
+        // ":summary" = the agent compacting its own context (the rail already
+        // shows this as "Tidying the conversation memory" from the agent's
+        // own auto_compact events). Routes like the session's agent turns -
+        // a summary of agent work should not drop to a tiny model - and is
+        // named in the log so a long compaction is identifiable in a report.
+        let summary_routing = model.trim().ends_with(":summary");
+        if summary_routing {
+            log::info!("[inference] agent compaction call for {} (session_summary role)", ai.name);
+        }
         let agent_routing = plan_routing
             || device_only
+            || summary_routing
             || model.trim().ends_with(":agent")
             || header_str(&headers, "x-your-own-ai-mode").as_deref() == Some("agent");
         let route_mode = if device_only { "offline" } else { mode };
@@ -573,7 +584,9 @@ async fn chat_completions(
     let agent_mode = model.trim().ends_with(":agent")
         || model.trim().ends_with(":plan")
         || model.trim().ends_with(":agent-device")
+        || model.trim().ends_with(":summary")
         || header_str(&headers, "x-your-own-ai-mode").as_deref() == Some("agent");
+
 
     // Agent mode injects memory by DEFAULT; a caller can opt out — e.g. to keep
     // tool-calling reliable on smaller models, where a memory block can tip the
