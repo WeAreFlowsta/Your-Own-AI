@@ -523,8 +523,31 @@ pub struct OnlineModel {
 // categories were missing from this parse. New catalog field = add it here
 // in the same change.
 
+/// Short session cache for the online catalog. The router asks for this
+/// list on EVERY agent step (~220-300 ms of network each time - measured
+/// 38 times in one real session, i.e. ~10 s of pure waiting) and the
+/// catalog changes on the order of days. 60 s is far longer than any gap
+/// between agent steps and far shorter than a catalog change matters;
+/// failures are not cached so a flaky moment retries next call.
+static ONLINE_MODELS_CACHE: std::sync::OnceLock<
+    tokio::sync::Mutex<Option<(std::time::Instant, Vec<OnlineModel>)>>,
+> = std::sync::OnceLock::new();
+const ONLINE_MODELS_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
 #[tauri::command]
 pub async fn list_online_models() -> Result<Vec<OnlineModel>, String> {
+    let cache = ONLINE_MODELS_CACHE.get_or_init(|| tokio::sync::Mutex::new(None));
+    if let Some((at, list)) = cache.lock().await.as_ref() {
+        if at.elapsed() < ONLINE_MODELS_TTL {
+            return Ok(list.clone());
+        }
+    }
+    let fresh = fetch_online_models().await?;
+    *cache.lock().await = Some((std::time::Instant::now(), fresh.clone()));
+    Ok(fresh)
+}
+
+async fn fetch_online_models() -> Result<Vec<OnlineModel>, String> {
     let v: serde_json::Value = http()
         .get(format!("{}/v1/models", proxy_url()))
         .send()
