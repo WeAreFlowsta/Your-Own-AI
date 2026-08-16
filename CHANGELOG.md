@@ -20,6 +20,15 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - Every way a model load can fail is now named in the diagnostic report,
   including a server that starts and produces no output at all.
 
+### Deleting a conversation works for every AI
+
+- **Fixed: deleting a conversation from an AI's records did nothing** for AIs
+  created after the app first learned to delete - new AIs, AIs restored
+  from your Vault, and every fresh install. The ability is now given to
+  each AI's records the moment they are set up, existing ones are brought
+  up to date on the next launch, and a delete that fails says so instead
+  of closing quietly.
+
 ### Your records, warming up honestly
 
 - After launch, the Memory page, the conversations drawer, and the home
