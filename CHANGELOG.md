@@ -3,6 +3,191 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.4.1] - 2026-08-16
+
+### Offline models load on every Windows install
+
+- **Fixed: on Windows installs outside the C: drive, the bundled engine
+  could not start, so offline models never loaded** - the app reached
+  "Starting server with model" and went silent. The engine was located
+  through a path resolver that fails on custom-drive installs; it is now
+  found relative to the app itself, the same way the record-keeping
+  engines already were. Thanks to the tester whose patient diagnostic
+  reports over three days led us to it.
+- Graphics-card probes are bounded: a driver that hangs while enumerating
+  devices no longer stalls every model load - after 15 seconds the load
+  continues on the processor.
+- Every way a model load can fail is now named in the diagnostic report,
+  including a server that starts and produces no output at all.
+
+### Your records, warming up honestly
+
+- After launch, the Memory page, the conversations drawer, and the home
+  screen's "Continue last conversation" all show that your records are
+  still warming up instead of an empty list, a false zero, or a dead
+  click - and open the moment they are ready.
+- Warmup copy says "ready", not "online" - these records never leave your
+  device.
+
+### Attachments
+
+- Attached documents appear as file chips in your message, never as their
+  extracted text - in regular chats and in project sessions alike.
+- Attachments stay on your device unless "Send attachments to online
+  models" is on. The setting now lives in Settings > Routing, because it
+  decides both where the message goes and what may leave the machine, and
+  the one setting governs regular chats and project sessions.
+
+### Agent sessions, seen clearly
+
+- Background work is named and visible: condensing working notes,
+  extracting memories, and scripts still running in the background stay in
+  the rail - even across a stopped and restarted turn.
+- The rail names the real tool behind an agent's action ("Remember
+  something for this project") instead of a generic "Use Tool".
+- Agent sessions start faster: the online model list is cached for a
+  minute instead of being fetched on every step.
+
+### Routing and models
+
+- A paused model is out of automatic routing's reach until you resume it,
+  and the pause and resume tooltips say exactly that.
+- Signed-in online accounts stay signed in as the service rotates their
+  sign-in tokens.
+
+### Under the hood
+
+- Rust dependencies audited and updated with the record-keeping crates
+  left byte-identical; the dependency lockfile is now committed so every
+  build is reproducible.
+- Front-end build tooling updated; the development build targets the same
+  JavaScript level as the production build.
+
+## [0.4.0] - 2026-08-15
+
+### Qwen 3.8-27B, offline with vision
+
+- Alibaba's newest open model joins the offline catalog - frontier-class
+  coding, math, and reasoning with built-in thinking, Apache-2.0 licensed.
+- Hybrid attention keeps long documents fast, with a 262K context window.
+- An optional vision add-on lets it see images you attach.
+- Best on 24GB-class graphics cards, or 32GB RAM on the processor.
+
+### Your records now work on macOS
+
+- Fixed: on Mac, the record-keeping engine crashed the first time it set
+  up an AI's conversation records - every macOS install was silently
+  affected, and new chats were never saved to your records.
+- The cause was missing security entitlements on our bundled engine; it
+  now ships with the same set Holochain's own desktop apps use, and
+  records set up in seconds on first launch (confirmed on Apple Silicon).
+- If your Mac ended up in "Running on CPU for stability" after
+  force-quitting the broken app, one click on "Try GPU again" restores
+  full speed - and macOS now tolerates force-quits without tripping that
+  safety net.
+- Huge thanks to the tester whose codesign-level bug report led us
+  straight to it.
+
+### Switch models where you are
+
+- The model name on every AI card is now a switcher - click it to change
+  that AI's model in place.
+- A quiet chip beside the chat's Ask row shows the current model
+  arrangement and switches it in one tap (Settings > Appearance can hide
+  it for a bare chat).
+- Same choices everywhere: automatic routing modes, your offline models
+  with their fit dots, online models, or your own connected server.
+
+### Honest on every graphics card
+
+- When a graphics driver can't actually run models, the app now detects
+  it, switches to your processor automatically, and says so plainly - with
+  a driver-update hint when one would genuinely help. "Model too large" is
+  no longer misused for driver failures.
+- The optional NVIDIA CUDA engine is only offered on cards it supports.
+- Model recommendations, fit badges, and context sizing all plan for the
+  processor when the graphics card is out of play.
+- Windows engine downloads are now code-signed.
+
+### Under the hood
+
+- Inference engine updated to llama.cpp b10435 - fixes Muse Glimmer
+  occasionally losing a trailing tool call in agent work, plus sharper
+  tool-call parsing for Qwen models.
+- Automatic model picks no longer grab a bigger model while your current
+  one is still loading - fit is judged as if the slot were free, so
+  balanced routing stays balanced.
+- On slow or busy machines, record setup now waits out the storage
+  engine's warmup instead of showing "records couldn't be set up" too
+  early.
+- Diagnostic reports on macOS now include the actual crash cause from
+  system crash records.
+
+## [0.3.0] - 2026-08-13
+
+### Muse Glimmer 30B, on your own hardware
+
+- Meta's Muse Glimmer 30B joins the offline catalog - chat, image
+  understanding, and real agent work in your project folders, running
+  entirely on your device.
+- Works on NVIDIA and AMD consumer graphics cards (optional
+  high-performance NVIDIA engine available in-app).
+- Inference engine updated to llama.cpp b10355.
+- Reasoning strength adapts to the question - quick answers stay quick,
+  hard problems get deep thinking.
+
+### Bring your history
+
+- Import your conversations from ChatGPT, Claude, and Perplexity exports.
+- Import coding sessions from Claude Code, OpenCode, Codex, Cursor, and
+  Aider - most auto-detected with one click.
+- Adopted conversations keep their original dates, and your AIs remember
+  what's in them.
+- Your Memory page: filter learned facts by import, forget any batch in
+  one click.
+
+### Online models
+
+- Grok 4.6 and Grok 4.6 (Web) available the day they launched - with
+  support for the restored reasoning dial.
+- DeepSeek V4 now serves its full 1M context; catalog shows every model's
+  real context and release date.
+- Online chats stream noticeably faster - connection reuse, lighter checks
+  before the first token.
+- Model cards show which shelf each model belongs to (chat, web search,
+  coding) and sort correctly by newest.
+
+### Smarter on your hardware
+
+- Context size is now chosen from your graphics card and memory together -
+  agent sessions get the room they need (fixes project work dying at 8K
+  context on 32GB machines).
+- Downloaded model cards show how each model fits this machine: full
+  speed, runs slower, or too large - plus trained context vs what it runs
+  at here.
+- Auto model picks are fit-aware end to end: a model that struggles on
+  your hardware hands off to one that runs at full speed, except while a
+  project is open so your session's model stays warm.
+
+### Diagnostics and reliability
+
+- One-click diagnostic report (Settings > Help & diagnostics) - system,
+  models, routing decisions, crash records; redacted, saved locally, never
+  uploaded; also copyable straight to the clipboard.
+- If the app ever gets stuck starting, the loading screen offers to save
+  the same report - no working app required.
+- The report lists every model file's health, so a damaged download can't
+  hide.
+- One app instance, enforced - a second launch or a leftover process can
+  no longer break startup.
+- Faster startup on machines where the record-keeping engine takes time
+  to warm up.
+- The NVIDIA engine and the Your Own AI Build agent both gained proper
+  update flows for future releases.
+- Copy buttons work reliably on Windows everywhere in the app.
+- Windows installer is code-signed; an MSI package is now published
+  alongside it.
+
 ## [0.2.0] - 2026-08-06
 
 ### Changed
