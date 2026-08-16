@@ -647,32 +647,58 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.overloadOffer = null;
   });
 
-  // Live background-task visibility: while a turn runs, tail the agent's
-  // terminal logs for recent command steps every couple of seconds. The
-  // step's expandable panel streams the log as it grows; its latest line
-  // rides the pearl. (Backgrounded commands complete their step instantly
-  // and keep writing - the log, not the step status, is the truth.)
+  // Live background-task visibility. The terminal log is the truth and it
+  // OUTLIVES the turn: a backgrounded command keeps writing after its step
+  // completes, after the user stops the turn, and into the next turn.
+  // The old tailer only watched the CURRENT turn's steps and only while a
+  // turn was running - a real session stopped a turn while a 10-minute
+  // script ran, started another, and the rail went silent (and its pearl
+  // froze on the last line it had read: "Hungary to sink barges" while
+  // the file had long moved on). Now: tail execute steps from the recent
+  // bubbles, keep tailing while a turn runs OR any watched log is still
+  // growing, and let a log that has gone quiet fall back to its final
+  // line rather than posing as live.
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(({ track, cleanup }) => {
     const working = track(() => props.chatState.isLoading);
-    if (!working || !state.folderPath) return;
+    track(() => props.chatState.messages.length);
+    if (!state.folderPath) return;
+    // Bytes seen per log - growth means the task is still alive.
+    const seen = new Map<string, number>();
+    let idleTicks = 0;
     const timer = setInterval(async () => {
-      const id = turnId.value;
-      if (!id) return;
-      const bubble = props.chatState.messages.find((m) => m.id === id);
-      const ids = (bubble?.agentLog ?? [])
+      // Recent bubbles' execute steps (last 3 agent turns): the previous
+      // turn's background task is exactly the one still running.
+      const bubbles = props.chatState.messages
+        .filter((m) => m.role === "assistant" && (m.agentLog?.length ?? 0) > 0)
+        .slice(-3);
+      const ids = bubbles
+        .flatMap((b) => b.agentLog ?? [])
         .filter((i) => i.type === "action" && i.action.kind === "execute")
         .map((i) => (i.type === "action" ? i.action.toolCallId : ""))
         .filter(Boolean)
-        .slice(-5);
+        .slice(-8);
       if (!ids.length) return;
       try {
         const logs = (await invokeTauri("read_agent_task_logs", {
           toolCallIds: ids,
         })) as Record<string, string>;
         if (!Object.keys(logs).length) return;
+        let anyGrew = false;
+        const alive = new Set<string>();
+        for (const [id, text] of Object.entries(logs)) {
+          const prev = seen.get(id) ?? -1;
+          if (text.length !== prev) {
+            anyGrew = anyGrew || prev !== -1;
+            seen.set(id, text.length);
+            alive.add(id);
+          }
+        }
+        // Not working and nothing has grown for a while: the background
+        // jobs are done - stop polling until the next turn re-arms us.
+        if (!working) idleTicks = anyGrew ? 0 : idleTicks + 1;
         props.chatState.messages = props.chatState.messages.map((m) => {
-          if (m.id !== id) return m;
+          if (!bubbles.some((b) => b.id === m.id)) return m;
           return {
             ...m,
             agentLog: (m.agentLog ?? []).map((i) => {
@@ -680,18 +706,21 @@ export function useAgentSession(props: UseAgentSessionProps) {
               const tail = logs[i.action.toolCallId];
               if (tail === undefined) return i;
               const lines = tail.split("\n").map((l) => l.trim()).filter(Boolean);
+              // liveLine only while the log is still growing: a finished
+              // task's last line must not sit in the pearl as if current.
               return {
                 ...i,
                 action: {
                   ...i.action,
                   output: tail.trim(),
                   outputLines: lines.length,
-                  liveLine: lines[lines.length - 1],
+                  liveLine: alive.has(i.action.toolCallId) ? lines[lines.length - 1] : undefined,
                 },
               };
             }),
           };
         });
+        if (!working && idleTicks >= 5) clearInterval(timer);
       } catch {
         /* logs are a live convenience */
       }

@@ -171,15 +171,17 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
           return `${item.action.label}..`;
         }
       }
-      // A background task's live log line beats a bare "Thinking.." - the
-      // step completed instantly (backgrounded) but the work is right here.
-      // Full-detail ambience; the simple view keeps labels + ticker only.
-      if (showThoughts.value) {
-        for (let i = log.length - 1; i >= 0; i--) {
-          const item = log[i];
-          if (item.type === "action" && item.action.liveLine) {
-            return item.action.liveLine.slice(0, 120);
-          }
+      // A background task that is still writing beats a bare "Thinking.." -
+      // the step completed instantly (backgrounded) but the work is right
+      // here, and for a ten-minute script "Thinking.." is a lie. Simple view
+      // names the step ("Running generate-articles.."); full detail shows
+      // the live line itself.
+      for (let i = log.length - 1; i >= 0; i--) {
+        const item = log[i];
+        if (item.type === "action" && item.action.liveLine) {
+          return showThoughts.value
+            ? item.action.liveLine.slice(0, 120)
+            : `${item.action.label}..`;
         }
       }
       if (showThoughts.value && last?.type === "thought") {
