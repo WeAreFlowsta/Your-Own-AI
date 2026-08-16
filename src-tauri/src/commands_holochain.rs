@@ -788,7 +788,17 @@ pub async fn delete_conversation(
     let result = hc_state
         .get()?
         .call_zome(&agent_key, "transcript", "delete_conversation", payload)
-        .await?;
+        .await
+        .map_err(|e| {
+            // Frontend-only errors were invisible in every diagnostic; a
+            // failed delete must leave a line here.
+            log::warn!(
+                "[transcripts] delete conversation {}… failed: {}",
+                &conversation_hash[..12.min(conversation_hash.len())],
+                e
+            );
+            e
+        })?;
     let deleted: u32 =
         ExternIO::decode(&result).map_err(|e| format!("Failed to decode: {}", e))?;
 

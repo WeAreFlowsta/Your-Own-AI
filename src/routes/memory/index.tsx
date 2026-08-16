@@ -233,6 +233,8 @@ export default component$(() => {
   const exportModalConv = useSignal<HolochainConversation | null>(null);
   const deleteModalConv = useSignal<HolochainConversation | null>(null);
   const deletingConv = useSignal(false);
+  // A failed delete says so where the row was - never a silent no-op.
+  const deleteError = useSignal<string | null>(null);
 
   const handleExport = $(async (conv: HolochainConversation, opts: ExportOptions, sign: boolean) => {
     exportStatus.value = sign
@@ -371,6 +373,18 @@ export default component$(() => {
               <button
                 class="flex-shrink-0 text-[var(--text-muted)] hover:text-[var(--text-primary)]"
                 onClick$={() => (exportStatus.value = null)}
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
+          {deleteError.value && (
+            <div class="mb-5 flex items-start justify-between gap-3 p-3 rounded-lg bg-red-500/10 border border-red-500/25 text-xs text-[var(--text-secondary)]">
+              <span>{deleteError.value}</span>
+              <button
+                class="flex-shrink-0 text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                onClick$={() => (deleteError.value = null)}
               >
                 ✕
               </button>
@@ -857,6 +871,7 @@ export default component$(() => {
           const conv = deleteModalConv.value;
           if (!conv) return;
           deletingConv.value = true;
+          deleteError.value = null;
           try {
             const { deleteConversation } = await import(
               "../../utils/holochainTranscripts"
@@ -868,6 +883,8 @@ export default component$(() => {
             if (expandedHash.value === conv.hash) expandedHash.value = null;
           } catch (e) {
             console.warn("[Memory] delete conversation failed:", e);
+            deleteError.value =
+              "This conversation couldn't be deleted. Restart the app and try again - if it still fails, save a diagnostic report from Settings > Help & diagnostics.";
           } finally {
             deletingConv.value = false;
             deleteModalConv.value = null;
