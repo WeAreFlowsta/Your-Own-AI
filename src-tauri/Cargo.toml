@@ -42,8 +42,8 @@ zip = "7"
 # Already in the tree via holochain_sqlite (same version) - a direct
 # declaration adds no new native code. Used to read OpenCode's session db.
 rusqlite = "0.37"
-calamine = "0.34.0"
-pdf-extract = "0.10.0"
+calamine = "0.36.1"
+pdf-extract = "0.12.0"
 # OCR for scanned PDFs (optional models downloaded at runtime). pdfium renders any
 # page (incl. CCITT/JBIG2 scans); ocrs (pure-Rust, RTen) does text recognition.
 # rten pinned to ocrs 0.11's version so the `Model` type unifies.

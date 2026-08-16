@@ -25,7 +25,6 @@ dist-ssr
 
 # Tauri
 src-tauri/target
-src-tauri/Cargo.lock
 src-tauri/bin/llama-server-*
 
 # DNA build artifacts
