@@ -24,6 +24,8 @@ interface InitialViewProps {
   onOpenFolder$?: QRL<(path: string) => void>;
   /** Quiet continuity line: the last conversation, one click to re-enter. */
   lastConversationTitle?: string;
+  /** The resume is polling through the launch records warmup. */
+  continueWarming?: boolean;
   onContinueLast$?: QRL<() => void>;
   theme: 'light' | 'dark';
 }
@@ -54,9 +56,17 @@ export default component$<InitialViewProps>((props) => {
         <div class="mt-3 text-center">
           <button
             onClick$={props.onContinueLast$}
-            class="text-sm text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+            class="inline-flex items-center gap-2 text-sm text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+            disabled={props.continueWarming}
           >
-            &#8635; Continue: {props.lastConversationTitle}
+            {props.continueWarming ? (
+              <>
+                <span class="inline-block h-3 w-3 rounded-full border-2 border-[var(--border-subtle)] border-t-[var(--text-secondary)] animate-spin" />
+                Your records are warming up - opening "{props.lastConversationTitle}" in a moment
+              </>
+            ) : (
+              <>&#8635; Continue: {props.lastConversationTitle}</>
+            )}
           </button>
         </div>
       )}

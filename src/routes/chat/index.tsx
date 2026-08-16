@@ -228,6 +228,9 @@ export default component$(() => {
   const lastConversation = useSignal<LastConversationPointer | null>(null);
   // A folder the resumed conversation worked in (ask before switching).
   const resumeFolderAsk = useSignal<string | null>(null);
+  // A resume that is waiting out the records warmup (drives the hero
+  // Continue line's state so the click never looks dead).
+  const resumeWarming = useSignal(false);
 
   // Folder guard: opening a workspace with an AI whose model can't drive
   // agent work offers a switch - the folder still opens (workspace is
@@ -323,11 +326,19 @@ export default component$(() => {
       // hero Continue line) can outrun the conductor - reads would come
       // back empty and the conversation would look blank or unanswered.
       await waitForHolochainReady();
-      const { messages, nextSequence, folderPath } = await loadConversationMessages(
-        target.agentKey,
-        target.hash,
-        ai,
-      );
+      // "Up" is not "warm": inside the launch grace window a read can
+      // SUCCEED empty while the cell loads its records. Bailing silently
+      // there made "Continue" a dead click - poll through the window with
+      // a visible state instead (utils/recordsWarmup).
+      let loaded = await loadConversationMessages(target.agentKey, target.hash, ai);
+      while (loaded.messages.length === 0 && emptyMayBeWarmup()) {
+        resumeWarming.value = true;
+        await new Promise((r) => setTimeout(r, WARMUP_POLL_MS));
+        loaded = await loadConversationMessages(target.agentKey, target.hash, ai);
+      }
+      resumeWarming.value = false;
+      const { messages, nextSequence, folderPath } = loaded;
+      if (messages.length > 0) noteRecordsSeen();
       if (messages.length === 0) return;
       chatState.messages = messages;
       chatState.conversationHash = target.hash;
@@ -1154,9 +1165,10 @@ export default component$(() => {
                     sanitizeTitle(lastConversation.value.title)
                   : undefined
               }
+              continueWarming={resumeWarming.value}
               onContinueLast$={$(() => {
                 const last = lastConversation.value;
-                if (last) resumeConversation(last);
+                if (last && !resumeWarming.value) resumeConversation(last);
               })}
               onPermissionRespond$={respondPermission$}
               onPermissionOffscreen$={$((off: boolean) => {
