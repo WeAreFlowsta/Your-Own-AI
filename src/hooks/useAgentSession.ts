@@ -163,9 +163,13 @@ function humanizeMcpName(name: string): string {
     "project-memory__read_project_memory": "Read the project's memory",
   };
   if (known[name]) return known[name];
-  const tool = name.includes("__") ? name.split("__").pop()! : name;
+  // "<server>__<tool>" -> "Tool words (server)": the server half says WHICH
+  // integration the agent reached for, which is what a reader wants to know.
+  const [server, ...rest] = name.split("__");
+  const tool = rest.length ? rest.join("__") : name;
   const words = tool.replace(/[_-]+/g, " ").trim();
-  return words.charAt(0).toUpperCase() + words.slice(1);
+  const label = words.charAt(0).toUpperCase() + words.slice(1);
+  return rest.length ? `${label} (${server.replace(/[_-]+/g, " ")})` : label;
 }
 
 /** Short human handle for a permission receipt: the command if there is
@@ -265,6 +269,22 @@ function humanizeAction(update: any): { label: string; kind?: string; detail?: s
     case "fetch":
       return { kind, label: input.url ? `Fetching ${input.url}` : "Fetching from the web", detail: input.url };
     default: {
+      // `use_tool` is the agent's dispatch for MCP tools: the real tool
+      // lives in input.tool_name ("project-memory__remember_for_project"),
+      // while the title is just "Use Tool" - which the rail showed verbatim,
+      // hiding the one thing that mattered. Name the real tool; keep its
+      // arguments as the expandable detail.
+      const mcpName: string | undefined =
+        typeof input.tool_name === "string" ? input.tool_name : undefined;
+      if (mcpName) {
+        let detail: string | undefined;
+        try {
+          detail = input.tool_input && Object.keys(input.tool_input).length
+            ? JSON.stringify(input.tool_input, null, 1).slice(0, 400)
+            : undefined;
+        } catch { /* unserializable input - label alone */ }
+        return { kind: "mcp", label: humanizeMcpName(mcpName), detail };
+      }
       const raw = meta.label || update.title || "Working...";
       return { kind, label: raw.includes("__") ? humanizeMcpName(raw) : raw };
     }
