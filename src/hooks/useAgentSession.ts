@@ -560,12 +560,18 @@ export function useAgentSession(props: UseAgentSessionProps) {
 
   /** The turn's single reply bubble, pushed at Enter. Mounting it anchors
    *  the question to the top and shows the avatar + action bar instantly. */
-  const startTurnBubble = $((userText: string) => {
+  const startTurnBubble = $((userText: string, attachedFiles?: string[]) => {
     const id = uuidv4();
     turnId.value = id;
     props.chatState.messages = [
       ...props.chatState.messages,
-      { id: uuidv4(), role: "user", content: userText, model: "user" },
+      {
+        id: uuidv4(),
+        role: "user",
+        content: userText,
+        model: "user",
+        ...(attachedFiles?.length ? { attachedFiles } : {}),
+      },
       {
         id,
         role: "assistant",
@@ -626,9 +632,15 @@ export function useAgentSession(props: UseAgentSessionProps) {
   });
 
   /** User prompt entry point while a folder is open. */
-  const sendPrompt$ = $(async (text: string) => {
-    if (!text.trim()) return;
-    lastPrompt.value = text;
+  /** Send a prompt. `extra.context` (attached documents' extracted text)
+   *  rides on the WIRE ahead of the prompt but never into the bubble - the
+   *  bubble shows a chip per `extra.files` name instead. Same split as the
+   *  resume digest in dispatchPrompt: what the model reads vs what the
+   *  user sees are different strings. */
+  const sendPrompt$ = $(async (text: string, extra?: { context?: string; files?: string[] }) => {
+    if (!text.trim() && !extra?.context) return;
+    const wire = extra?.context ? `${extra.context}\n\n${text}` : text;
+    lastPrompt.value = wire;
     state.overloadOffer = null;
     props.chatState.error = null;
     if (state.status !== "ready" && state.status !== "starting" && state.status !== "working") {
@@ -638,13 +650,13 @@ export function useAgentSession(props: UseAgentSessionProps) {
       });
       return;
     }
-    await startTurnBubble(text);
+    await startTurnBubble(text, extra?.files);
     if (state.status === "ready") {
-      await dispatchPrompt(text);
+      await dispatchPrompt(wire);
     } else {
       // Working: turns are strictly sequential over ACP - hold until the
       // current turn completes. Starting: hold until agent-ready.
-      queued.value = text;
+      queued.value = wire;
     }
   });
 

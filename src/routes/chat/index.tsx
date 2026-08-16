@@ -788,13 +788,17 @@ export default component$(() => {
     // conversation. Attached-file text rides along; images are a direct-chat
     // feature for now.
     if (agentState.folderPath) {
-      const agentInput = fileContext
-        ? `${fileContext}\n\n${finalInput}`
-        : finalInput;
-      sendAgentPrompt$(agentInput);
+      // Document text goes to the model as context; the bubble shows file
+      // chips - never the extracted text (a PDF used to land wholesale in
+      // the user's bubble on this path).
+      sendAgentPrompt$(finalInput, {
+        context: fileContext,
+        files: attachedFiles.value.map((f) => f.filename),
+      });
       input.value = "";
       selectedAction.value = null;
       attachedImages.value = [];
+      attachedFiles.value = [];
       return;
     }
 

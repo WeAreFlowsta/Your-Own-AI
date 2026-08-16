@@ -106,6 +106,10 @@ export interface Message {
   /** Data-URL images attached to a user turn — shown in the bubble and kept in
    *  the conversation so follow-up questions can still reference them. */
   images?: string[];
+  /** Names of documents attached to a user turn (PDF, spreadsheet, text).
+   *  Their extracted text goes to the model as context, NEVER into the
+   *  bubble - the bubble shows a file chip per name instead. */
+  attachedFiles?: string[];
   model: string; // AI id (e.g. 'veebo', 'local-123') or 'user' for user messages
   thinking?: string;
   isLoading?: boolean;

@@ -297,6 +297,12 @@ export function useChat(props: UseChatProps) {
       consentGranted: boolean = false,
     ) => {
       if (!userInput.trim() || state.isLoading) return;
+      // Attached document names for the bubble's file chips - parsed from
+      // the context's own "--- <name> ---" headers so the call signature
+      // stays put. The text itself never enters the bubble.
+      const attachedFileNames: string[] = fileContext
+        ? [...fileContext.matchAll(/^--- (.+?) ---$/gm)].map((m) => m[1])
+        : [];
       // Starting a turn clears any parked prompt (vision / consent).
       state.pendingTurn = null;
 
@@ -408,6 +414,7 @@ export function useChat(props: UseChatProps) {
         role: "user",
         content: userInput,
         images: images.length > 0 ? images : undefined,
+        attachedFiles: attachedFileNames.length > 0 ? attachedFileNames : undefined,
         model: "user",
       };
       const assistantId = uuidv4();

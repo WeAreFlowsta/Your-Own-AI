@@ -13,6 +13,7 @@ import { Message } from '../types';
 import {
   LuArrowUpCircle,
   LuBot,
+  LuFileText,
   LuPanelRightClose,
   LuPanelRightOpen,
 } from '@qwikest/icons/lucide';
@@ -1116,6 +1117,22 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
                   height={120}
                   class="max-h-32 w-auto rounded-lg border border-[var(--border-subtle)] object-cover"
                 />
+              ))}
+            </div>
+          )}
+          {/* Documents attach as chips: an image IS the content, a PDF is
+              a source the AI read - its text goes to the model, never here. */}
+          {props.message.attachedFiles && props.message.attachedFiles.length > 0 && (
+            <div class="flex flex-wrap gap-1.5 justify-end pt-1.5 pb-1">
+              {props.message.attachedFiles.map((name, i) => (
+                <span
+                  key={i}
+                  class="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-card)] px-2 py-0.5 text-xs text-[var(--text-secondary)]"
+                  title={name}
+                >
+                  <LuFileText class="h-3 w-3 flex-shrink-0" />
+                  <span class="max-w-[14rem] truncate">{name}</span>
+                </span>
               ))}
             </div>
           )}
