@@ -45,6 +45,11 @@ export default defineConfig((): UserConfig => ({
       "lottie-web",
       "cropperjs",
     ],
+    // The app runs only inside Tauri's modern webview, so dev pre-bundling
+    // targets esnext like the production build does. Vite's default legacy
+    // browser list (chrome87/safari14) is not something esbuild 0.28 will
+    // down-level modern syntax to - and nothing here needs it to.
+    esbuildOptions: { target: "esnext" },
   },
 
   build: {
