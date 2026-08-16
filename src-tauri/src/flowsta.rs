@@ -805,6 +805,13 @@ pub async fn get_access_token(app: &tauri::AppHandle) -> Result<String, String> 
         .ok_or("auth_required")?
         .to_string();
     store.set("access_token", serde_json::json!(access.clone()));
+    // Refresh rotation: the proxy returns a NEW refresh token on every
+    // refresh (0.4.1+). Store it so this device rotates; a used token is
+    // honored for a grace window server-side, so nothing breaks if a
+    // write fails between here and the next refresh.
+    if let Some(rotated) = tokens["refresh_token"].as_str().filter(|r| !r.is_empty()) {
+        store.set("refresh_token", serde_json::json!(rotated));
+    }
     store.set(
         "expires_at",
         serde_json::json!(now_secs() + tokens["expires_in"].as_u64().unwrap_or(86400) - 300),
