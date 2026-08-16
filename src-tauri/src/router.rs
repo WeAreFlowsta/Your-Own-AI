@@ -695,6 +695,17 @@ fn paused_models(app: &AppHandle) -> std::collections::HashSet<String> {
         .unwrap_or_default()
 }
 
+/// Boolean settings mirrored from the frontend (stored as "true"/"false"
+/// strings or JSON bools). Absent = false.
+pub(crate) fn store_pref_bool(app: &AppHandle, key: &str) -> bool {
+    use tauri_plugin_store::StoreExt;
+    let Ok(store) = app.store("settings.json") else { return false };
+    match store.get(key) {
+        Some(v) => v.as_bool().unwrap_or_else(|| v.as_str() == Some("true")),
+        None => false,
+    }
+}
+
 fn store_pref(app: &AppHandle, key: &str) -> Option<String> {
     use tauri_plugin_store::StoreExt;
     let store = app.store("settings.json").ok()?;

@@ -525,7 +525,28 @@ async fn chat_completions(
             || summary_routing
             || model.trim().ends_with(":agent")
             || header_str(&headers, "x-your-own-ai-mode").as_deref() == Some("agent");
-        let route_mode = if device_only { "offline" } else { mode };
+        // Attached documents are a privacy fact: in online-offline mode an
+        // agent turn carrying attachment context routes OFFLINE unless the
+        // user gave standing consent for attachments to go online (Settings
+        // > Routing, mirrored into the store as allowAttachmentsOnline). The
+        // app writes attachment context with a fixed marker, so the turn is
+        // recognizable without any new wire field. Direct chats apply the
+        // same rule client-side; this is the agent path's half.
+        let carries_attachment = incoming.iter().any(|m| {
+            m.get("content")
+                .and_then(Value::as_str)
+                .map(|c| c.contains("[Attached files for context]"))
+                .unwrap_or(false)
+        });
+        let attachments_may_go_online = crate::router::store_pref_bool(&app, "allowAttachmentsOnline");
+        let route_mode = if device_only {
+            "offline"
+        } else if mode == "online-offline" && carries_attachment && !attachments_may_go_online {
+            log::info!("[inference] attachment without online consent - routing {} offline", ai.name);
+            "offline"
+        } else {
+            mode
+        };
         match crate::router::route(&app, route_mode, &query, eagerness, task, difficulty, lean, &picks, None, agent_routing, plan_routing).await {
             Ok(r) => {
                 log::info!("[inference] router ({}): {mode} task={task} diff={difficulty} eag={eagerness} -> {} ({})", ai.name, r.model, r.reason);

@@ -558,12 +558,29 @@ export function useChat(props: UseChatProps) {
       // Routing receipt for this turn (shown in the hover strip + recorded in
       // the transcript). Stays undefined when the user picked the model.
       if (!modelOverride && preferredModel?.startsWith("auto:")) {
-        const mode =
+        // An attached image or document is a privacy fact the router must
+        // weigh: in online-offline mode it routes OFFLINE unless the user has
+        // given standing consent for attachments to go online (Settings >
+        // Routing > "Send attachments to online models"). With consent, the
+        // router is free to pick online when that is better - and no
+        // consent modal, since consent is already given. Without it, the
+        // pick stays local instead of routing straight into a modal.
+        const hasAttachment = images.length > 0 || !!fileContext;
+        const attachmentsMayGoOnline =
+          localStorage.getItem("allowAttachmentsOnline") === "true";
+        const requestedMode =
           preferredModel === "auto:online-offline"
             ? "online-offline"
             : preferredModel === "auto:my-hardware"
               ? "my-hardware"
               : "offline";
+        const mode =
+          requestedMode === "online-offline" && hasAttachment && !attachmentsMayGoOnline
+            ? "offline"
+            : requestedMode;
+        if (mode !== requestedMode) {
+          console.log("[Router] attachment without online consent - routing offline");
+        }
         // Eagerness (online FRESHNESS threshold) — Settings → Routing.
         const eagerness =
           localStorage.getItem("smartRoutingEagerness") || "balanced";

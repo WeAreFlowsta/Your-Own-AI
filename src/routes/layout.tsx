@@ -111,6 +111,17 @@ export default component$(() => {
     // Sync pre-existing pauses into the store the router reads - pauses
     // made before the router honored them must count from this launch on.
     void mirrorPausedModels();
+    // Same for the attachments-online consent: an existing "on" must reach
+    // the router's store from this launch on.
+    void (async () => {
+      try {
+        const on = localStorage.getItem("allowAttachmentsOnline") === "true";
+        const { Store } = await import("@tauri-apps/plugin-store");
+        const store = await Store.load("settings.json");
+        await store.set("allowAttachmentsOnline", on);
+        await store.save();
+      } catch { /* best-effort */ }
+    })();
 
     // Loading overlay is dismissed by AiDataContext after full initialization
     // (archetypes + AIs + agent provisioning + thumbnails)

@@ -428,12 +428,20 @@ export default component$(() => {
     setHelpTipsEnabled(showHelpTips.value);
   });
 
-  const toggleAttachmentsOnline = $(() => {
+  const toggleAttachmentsOnline = $(async () => {
     allowAttachmentsOnline.value = !allowAttachmentsOnline.value;
     localStorage.setItem(
       "allowAttachmentsOnline",
       allowAttachmentsOnline.value.toString()
     );
+    // Mirror into the store the Rust router reads, so agent turns (routed
+    // in the inference server) honor the same answer as direct chats.
+    try {
+      const { Store } = await import("@tauri-apps/plugin-store");
+      const store = await Store.load("settings.json");
+      await store.set("allowAttachmentsOnline", allowAttachmentsOnline.value);
+      await store.save();
+    } catch { /* store mirror is best-effort */ }
   });
 
   const toggleMemoryLearning = $(() => {
@@ -663,15 +671,6 @@ export default component$(() => {
                     document answers to run it on demand.
                   </SettingToggle>
                   <SettingToggle
-                    title="Send attachments to online models"
-                    checked={allowAttachmentsOnline}
-                    onToggle$={toggleAttachmentsOnline}
-                  >
-                    When on, images and files go to online (cloud) models without
-                    asking each time. Off means you're asked first, before anything
-                    leaves your device. Offline models always stay local.
-                  </SettingToggle>
-                  <SettingToggle
                     title="Run commands immediately"
                     checked={terminalRunImmediately}
                     onToggle$={toggleTerminalImmediate}
@@ -789,6 +788,7 @@ export default component$(() => {
                       <p>The small jobs inside project work - summaries, tidying the conversation memory - always run on your device.</p>
                       <p>Picks are fit-aware: a model that runs well on your hardware beats a stronger one that struggles. A loaded model that struggles hands off to one that runs at full speed - except while a project is open, so the session's model stays warm.</p>
                       <p>Models you pause on the Offline or Online Models pages are never auto-picked - pausing is your veto.</p>
+                      <p>A question with an image or document attached stays on your device unless you've turned on "Send attachments to online models" above - then online models may take it when they'd do better.</p>
                       <p>Every model starts with as much room to read and remember as your graphics card and memory can carry.</p>
                       <p class="text-[var(--text-muted)]">
                         Every answer's Model button shows what happened and why, and each
@@ -880,6 +880,27 @@ export default component$(() => {
                   Everything else stays on your device. "Offline Only" AIs
                   never go online.
                 </p>
+
+                {/* Attachments: one control with one meaning - the standing
+                    answer to "may my documents and images go to online
+                    models?". Off (default): the router keeps attachment turns
+                    on your device, and picking an online model by hand asks
+                    first. On: the router may route them online when that is
+                    better, with no per-turn ask. */}
+                <div class="mb-5">
+                  <SettingToggle
+                    title="Send attachments to online models"
+                    checked={allowAttachmentsOnline}
+                    onToggle$={toggleAttachmentsOnline}
+                  >
+                    Off: a question with an image or document attached stays on
+                    your device, even for an "Auto — Online and Offline" AI, and
+                    choosing an online model yourself asks before anything
+                    leaves. On: online models may be used for attachments when
+                    they'd do a better job, without asking each time. Offline
+                    AIs never send anything anywhere.
+                  </SettingToggle>
+                </div>
 
                 {/* Online eagerness — unchanged shipped knob. */}
                 <h4 class="text-base font-semibold text-[var(--text-primary)]">
