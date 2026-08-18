@@ -340,7 +340,14 @@ pub async fn start_conversation(
 
     crate::vault_escrow::schedule_full_backup(&app);
     let raw = hash.get_raw_39();
-    Ok(hex::encode(raw))
+    let hex_hash = hex::encode(raw);
+    if source.as_deref() == Some(WORKSPACE_MEMORY_SOURCE) {
+        if let Some(folder) = title.as_deref() {
+            project_memory_index_add(&app, folder, &agent_key, &hex_hash);
+        }
+        project_memory_cache_clear();
+    }
+    Ok(hex_hash)
 }
 
 /// Serialized-plaintext budget: the zome caps CIPHERTEXT at 1 MiB
@@ -440,6 +447,13 @@ pub async fn record_transcript_entry(
     let conv_hash = ActionHash::from_raw_39(raw_bytes);
 
     let manager = hc_state.get()?;
+
+    // A project-memory revision (from the app's Remember/curate paths or the
+    // MCP tool) makes every cached read stale - drop the cache before the
+    // write so a concurrent reader can never see the old content as fresh.
+    if model == "workspace-memory" {
+        project_memory_cache_clear();
+    }
 
     // Phase A: message content is encrypted with the user data key.
     let prov = provenance.unwrap_or_default();
@@ -561,6 +575,56 @@ pub async fn record_grounding_annotation(
 pub const WORKSPACE_MEMORY_SOURCE: &str = "workspace-memory";
 pub const WORKSPACE_MEMORY_MAX_LINES: usize = 60;
 
+// ── Project-memory read path: cache + index ─────────────────────────────────
+// Reading a folder's memory used to walk EVERY AI's conversations and then
+// every entry of every memory conversation - minutes on a busy machine, and
+// the agent's read tool blocked on it. Two fixes, both invalidated by the only
+// writers there are (the Rust append below and the frontend's recordMessage /
+// startConversation, which both pass through this file):
+//  - an in-process cache of the latest content per folder;
+//  - a persisted index folder -> [(agent_key, conversation_hash)] so a cold
+//    read touches only the memory conversations, never the whole catalogue.
+static PROJECT_MEMORY_CACHE: std::sync::LazyLock<tokio::sync::Mutex<std::collections::HashMap<String, String>>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(std::collections::HashMap::new()));
+
+fn project_memory_index_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    use tauri::Manager;
+    app.path().app_data_dir().ok().map(|d| d.join("project-memory-index.json"))
+}
+
+fn project_memory_index_load(app: &tauri::AppHandle) -> std::collections::HashMap<String, Vec<(String, String)>> {
+    project_memory_index_path(app)
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+fn project_memory_index_save(app: &tauri::AppHandle, idx: &std::collections::HashMap<String, Vec<(String, String)>>) {
+    if let Some(p) = project_memory_index_path(app) {
+        if let Ok(b) = serde_json::to_vec(idx) {
+            let _ = std::fs::write(p, b);
+        }
+    }
+}
+
+/// A memory conversation now exists for `folder` on `agent_key` - remember
+/// where, so later reads go straight to it.
+pub(crate) fn project_memory_index_add(app: &tauri::AppHandle, folder: &str, agent_key: &str, hash: &str) {
+    let mut idx = project_memory_index_load(app);
+    let list = idx.entry(folder.to_string()).or_default();
+    if !list.iter().any(|(a, h)| a == agent_key && h == hash) {
+        list.push((agent_key.to_string(), hash.to_string()));
+        project_memory_index_save(app, &idx);
+    }
+}
+
+/// Something wrote project memory (any folder) - drop cached content.
+pub(crate) fn project_memory_cache_clear() {
+    tauri::async_runtime::spawn(async {
+        PROJECT_MEMORY_CACHE.lock().await.clear();
+    });
+}
+
 /// The current memory for a folder: newest revision across all agents.
 /// Returns (content, writer_hint) where writer_hint is the conversation
 /// owner of the newest revision (unused by callers today, kept for parity).
@@ -569,14 +633,49 @@ pub async fn project_memory_read(
     folder: &str,
 ) -> Result<String, String> {
     use tauri::Manager;
+    if let Some(hit) = PROJECT_MEMORY_CACHE.lock().await.get(folder) {
+        return Ok(hit.clone());
+    }
+    let started = std::time::Instant::now();
     let hc_state = app.state::<Arc<HolochainState>>();
     let manager = hc_state.get()?;
+    // Fast path: the index names the memory conversations - read just those.
+    let indexed = project_memory_index_load(app).remove(folder).unwrap_or_default();
+    if !indexed.is_empty() {
+        let mut best_ts = 0i64;
+        let mut best = String::new();
+        let mut ok = true;
+        for (agent, hash) in &indexed {
+            match get_conversation_transcript(agent.clone(), hash.clone(), app.state()).await {
+                Ok(entries) => {
+                    for e in entries {
+                        if e.timestamp > best_ts {
+                            best_ts = e.timestamp;
+                            best = e.content;
+                        }
+                    }
+                }
+                Err(_) => { ok = false; break; }
+            }
+        }
+        if ok {
+            log::info!(
+                "[project-memory] read {} via index ({} conv, {} ms)",
+                folder, indexed.len(), started.elapsed().as_millis()
+            );
+            PROJECT_MEMORY_CACHE.lock().await.insert(folder.to_string(), best.clone());
+            return Ok(best);
+        }
+        // An indexed conversation could not be read (rare: cell not up yet) -
+        // fall through to the full walk, which rebuilds the index.
+    }
     let agent_keys: Vec<String> = {
         let agents = manager.agents.lock().await;
         agents.keys().cloned().collect()
     };
     let mut best_ts = 0i64;
     let mut best = String::new();
+    let mut found: Vec<(String, String)> = Vec::new();
     for key in agent_keys {
         let Ok(conversations) = get_conversations(key.clone(), app.state()).await else {
             continue;
@@ -588,6 +687,7 @@ pub async fn project_memory_read(
             if c.title.as_deref() != Some(folder) {
                 continue;
             }
+            found.push((c.agent_key.clone(), c.hash.clone()));
             let Ok(entries) = get_conversation_transcript(c.agent_key.clone(), c.hash.clone(), app.state()).await
             else {
                 continue;
@@ -600,6 +700,16 @@ pub async fn project_memory_read(
             }
         }
     }
+    log::info!(
+        "[project-memory] read {} via full walk ({} conv found, {} ms)",
+        folder, found.len(), started.elapsed().as_millis()
+    );
+    if !found.is_empty() {
+        let mut idx = project_memory_index_load(app);
+        idx.insert(folder.to_string(), found);
+        project_memory_index_save(app, &idx);
+    }
+    PROJECT_MEMORY_CACHE.lock().await.insert(folder.to_string(), best.clone());
     Ok(best)
 }
 
@@ -665,6 +775,7 @@ pub async fn project_memory_append_note(
             (writer_key.to_string(), hash, 0)
         }
     };
+    let content_for_cache = content.clone();
     record_transcript_entry(
         app.clone(),
         conv_key,
@@ -681,6 +792,9 @@ pub async fn project_memory_append_note(
         app.state(),
     )
     .await?;
+    // record_transcript_entry cleared the cache (any workspace-memory write
+    // does); put the content we just wrote back so the next read is instant.
+    PROJECT_MEMORY_CACHE.lock().await.insert(folder.to_string(), content_for_cache);
     Ok(())
 }
 
