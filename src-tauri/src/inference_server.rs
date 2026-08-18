@@ -1189,24 +1189,46 @@ async fn mcp_post(
             }
             match req["params"]["name"].as_str() {
                 Some("remember_for_project") => {
-                    let note = req["params"]["arguments"]["note"].as_str().unwrap_or("");
+                    let note = req["params"]["arguments"]["note"].as_str().unwrap_or("").to_string();
                     if agent_key.is_empty() {
                         return mcp_tool_text(&id, "No writer identity for this session.".to_string(), true);
                     }
-                    match crate::commands_holochain::project_memory_append_note(
-                        &app, &agent_key, &agent_label, &folder, note,
-                    )
-                    .await
-                    {
-                        Ok(()) => {
-                            log::info!("[mcp] {} remembered a note for {}", agent_label, folder);
-                            mcp_tool_text(&id, "Remembered for this project.".to_string(), false)
-                        }
-                        Err(e) => {
-                            log::warn!("[mcp] remember_for_project failed: {e}");
-                            mcp_tool_text(&id, format!("Could not save the note: {e}"), true)
-                        }
+                    if note.trim().is_empty() {
+                        return mcp_tool_text(&id, "Nothing to remember - the note was empty.".to_string(), true);
                     }
+                    // The save walks every AI's records and writes to the
+                    // chain - minutes on a busy machine - and the agent's
+                    // whole turn used to block on it. Answer now, write in
+                    // the background, one write at a time so two notes can
+                    // never race for the same memory conversation. A
+                    // failure is logged app-side; the note is not lost
+                    // silently, it is lost loudly.
+                    let (app2, key, label, folder2) =
+                        (app.clone(), agent_key.clone(), agent_label.clone(), folder.clone());
+                    tauri::async_runtime::spawn(async move {
+                        let _one_at_a_time = PROJECT_MEMORY_WRITE_LOCK.lock().await;
+                        let started = std::time::Instant::now();
+                        match crate::commands_holochain::project_memory_append_note(
+                            &app2, &key, &label, &folder2, &note,
+                        )
+                        .await
+                        {
+                            Ok(()) => log::info!(
+                                "[mcp] {} remembered a note for {} ({} ms, background)",
+                                label, folder2, started.elapsed().as_millis()
+                            ),
+                            Err(e) => log::warn!(
+                                "[mcp] remember_for_project failed after {} ms: {e}",
+                                started.elapsed().as_millis()
+                            ),
+                        }
+                    });
+                    log::info!("[mcp] {} queued a note for {}", agent_label, folder);
+                    mcp_tool_text(
+                        &id,
+                        "Remembered for this project (saving in the background).".to_string(),
+                        false,
+                    )
                 }
                 Some("read_project_memory") => {
                     match crate::commands_holochain::project_memory_read(&app, &folder).await {
@@ -1224,6 +1246,11 @@ async fn mcp_post(
         _ => StatusCode::ACCEPTED.into_response(),
     }
 }
+
+/// Project-memory writes from the MCP tool run in the background; this keeps
+/// them strictly sequential so two notes cannot both read the same base and
+/// drop each other's row.
+static PROJECT_MEMORY_WRITE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 async fn mcp_get() -> Response {
     // A hang-open SSE stream (the client keeps it for server-initiated
