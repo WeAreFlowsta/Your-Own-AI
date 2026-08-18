@@ -509,6 +509,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
               p.command && p.command.length > 500
                 ? p.command.slice(0, 500) + ".."
                 : p.command,
+            detail:
+              p.detail && p.detail.length > 2000 ? p.detail.slice(0, 2000) + ".." : p.detail,
             diff: p.diff
               ? { path: p.diff.path, added: p.diff.added, removed: p.diff.removed }
               : undefined,
@@ -534,14 +536,20 @@ export function useAgentSession(props: UseAgentSessionProps) {
       );
     }
     if (jsonSize(items) > LOG_BUDGET && items.length > 80) {
+      // Permission decisions are the audit trail - they survive the trim
+      // wherever they sat; only steps/narration in the middle are dropped.
+      const head = items.slice(0, 40);
+      const tail = items.slice(-40);
+      const middlePerms = items.slice(40, -40).filter((i) => i.type === "permission");
       items = [
-        ...items.slice(0, 40),
+        ...head,
+        ...middlePerms,
         {
           id: "log-trimmed",
           type: "narration" as const,
-          text: `.. ${items.length - 80} steps trimmed to fit the transcript ..`,
+          text: `.. ${items.length - 80 - middlePerms.length} steps trimmed to fit the transcript ..`,
         },
-        ...items.slice(-40),
+        ...tail,
       ];
     }
     const actionHash = await recordMessage(
@@ -913,7 +921,16 @@ export function useAgentSession(props: UseAgentSessionProps) {
           ? `Allowed: ${receiptSubject(perm)} - ${scoped ? alwaysScope(option.name) : "once"}`
           : `Declined: ${receiptSubject(perm)}${scoped ? ` - ${alwaysScope(option.name)}` : ""}`;
 
-      await updatePermission(requestId, (p) => ({ ...p, state: "answered", receipt }));
+      await updatePermission(requestId, (p) => ({
+        ...p,
+        state: "answered",
+        receipt,
+        decision,
+        scope: scoped ? "always" : "once",
+        optionKind: option!.kind,
+        answeredAt: new Date().toISOString(),
+        via: "button",
+      }));
       state.pendingPermissionId = null;
 
       if (decision === "allow") {
@@ -983,6 +1000,11 @@ export function useAgentSession(props: UseAgentSessionProps) {
       ...p,
       state: "answered",
       receipt: "Declined - you replied instead",
+      decision: "reject",
+      scope: "once",
+      optionKind: option?.kind,
+      answeredAt: new Date().toISOString(),
+      via: "reply",
     }));
     state.pendingPermissionId = null;
     state.liveStatus = "Thinking..";
@@ -1393,6 +1415,52 @@ export function useAgentSession(props: UseAgentSessionProps) {
       });
     });
 
+    // A permission the APP answered on the user's behalf (the harness asks
+    // before every project-memory read; the app allows it by policy). It
+    // never shows a card, but it belongs in the same record as the asks
+    // the user answered - logged already-answered, via "auto".
+    const unPermissionAuto = await listen<any>("agent-permission-auto", (e) => {
+      const params = e.payload?.params ?? {};
+      const tc = params.toolCall ?? {};
+      const opt = (params.options ?? []).find((o: any) => o.optionId === e.payload?.optionId);
+      const scoped = typeof opt?.kind === "string" && opt.kind.endsWith("always");
+      const permission: AgentPermission = {
+        requestId: e.payload?.id,
+        toolCallId: typeof tc.toolCallId === "string" ? tc.toolCallId : undefined,
+        title: tc.title
+          ? tc.title.includes("__")
+            ? humanizeMcpName(tc.title)
+            : tc.title
+          : "Read this project's memory",
+        kind: tc.kind,
+        locations: (tc.locations ?? []).map((l: any) => l?.path).filter(Boolean),
+        options: [],
+        state: "answered",
+        receipt: "Allowed automatically - reading this project's memory (app policy)",
+        decision: "allow",
+        scope: scoped ? "always" : "once",
+        optionKind: opt?.kind,
+        answeredAt: new Date().toISOString(),
+        via: "auto",
+      };
+      mutateTurn((m) => {
+        if (
+          (m.agentLog ?? []).some(
+            (i) => i.type === "permission" && i.permission.requestId === permission.requestId,
+          )
+        ) {
+          return m;
+        }
+        return {
+          ...m,
+          agentLog: [
+            ...(m.agentLog ?? []),
+            { id: `perm-${permission.requestId}`, type: "permission", permission },
+          ],
+        };
+      });
+    });
+
     // Turn ids whose transcript entry has been written. Recording dedupes
     // HERE, independent of the UI's once-per-turn guard - a stray event
     // that flips the loading flag early must never cost the chain its
@@ -1600,7 +1668,15 @@ export function useAgentSession(props: UseAgentSessionProps) {
                 ...m,
                 agentLog: m.agentLog.map((i) =>
                   i.type === "permission" && i.permission.requestId === requestId
-                    ? { ...i, permission: { ...i.permission, state: "expired" as const } }
+                    ? {
+                        ...i,
+                        permission: {
+                          ...i.permission,
+                          state: "expired" as const,
+                          answeredAt: new Date().toISOString(),
+                          via: "expired" as const,
+                        },
+                      }
                     : i,
                 ),
               }
@@ -1616,6 +1692,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       unReady();
       unUpdate();
       unPermission();
+      unPermissionAuto();
       unHint();
       unRoute();
       unTurn();

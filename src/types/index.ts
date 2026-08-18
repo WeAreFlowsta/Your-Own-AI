@@ -263,6 +263,19 @@ export interface AgentPermission {
   state: 'pending' | 'answered' | 'expired';
   /** One-line receipt after answering, e.g. "Allowed: npm install - once". */
   receipt?: string;
+  /** Structured outcome, recorded with the turn so a grant can be audited
+   *  as data, not parsed out of the receipt line. */
+  decision?: 'allow' | 'reject';
+  /** once = this ask only; always = the agent persists the grant for this
+   *  folder (its own store, outside the record). */
+  scope?: 'once' | 'always';
+  /** The ACP option kind that was selected (allow_once, allow_always, ..). */
+  optionKind?: string;
+  /** ISO time the ask was answered or expired. */
+  answeredAt?: string;
+  /** How it was answered: a card button, a typed reply (= decline once),
+   *  the app's own policy (auto), or never (expired with the turn). */
+  via?: 'button' | 'reply' | 'auto' | 'expired';
 }
 
 export type ChatAction = 'Write a report...' | 'Write code...' | null;

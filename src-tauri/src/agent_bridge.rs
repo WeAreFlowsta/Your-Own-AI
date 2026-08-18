@@ -427,6 +427,17 @@ async fn handle_agent_message(
                     .map(str::to_string);
                 if let Some(opt) = allow {
                     log::info!("[agent] auto-allowed read of the project's memory");
+                    // The grant the app made on the user's behalf belongs in
+                    // the same audit record as the ones they answered - the
+                    // UI logs it as an already-answered permission item.
+                    let _ = app.emit(
+                        "agent-permission-auto",
+                        &json!({
+                            "id": req_id,
+                            "params": msg.get("params").cloned().unwrap_or(Value::Null),
+                            "optionId": opt,
+                        }),
+                    );
                     let _ = write_line(
                         &state,
                         &json!({
