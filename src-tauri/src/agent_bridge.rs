@@ -362,7 +362,44 @@ async fn handle_agent_message(
 
     match (method, id) {
         // A request FROM the agent that needs a user decision.
-        (Some("session/request_permission"), Some(_)) => {
+        (Some("session/request_permission"), Some(req_id)) => {
+            // Reading the project's own memory is not something to ask the
+            // user about - no other coding agent asks before checking its
+            // notes, and the answer is always yes. The harness classifies
+            // every `use_tool` dispatch as mutating, so it asks; answer the
+            // read-only memory tool ourselves and never show a card. Writes
+            // (remember_for_project) still ask - the note is shown on the card.
+            let tool_name = msg
+                .pointer("/params/toolCall/rawInput/tool_name")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if tool_name == "project-memory__read_project_memory" {
+                let allow = msg
+                    .pointer("/params/options")
+                    .and_then(Value::as_array)
+                    .and_then(|opts| {
+                        opts.iter()
+                            .find(|o| o.get("kind").and_then(Value::as_str) == Some("allow_once"))
+                            .or_else(|| opts.iter().find(|o| {
+                                o.get("kind").and_then(Value::as_str).map_or(false, |k| k.starts_with("allow"))
+                            }))
+                    })
+                    .and_then(|o| o.get("optionId").and_then(Value::as_str))
+                    .map(str::to_string);
+                if let Some(opt) = allow {
+                    log::info!("[agent] auto-allowed read of the project's memory");
+                    let _ = write_line(
+                        &state,
+                        &json!({
+                            "jsonrpc": "2.0",
+                            "id": req_id,
+                            "result": { "outcome": { "outcome": "selected", "optionId": opt } }
+                        }),
+                    )
+                    .await;
+                    return;
+                }
+            }
             let _ = app.emit("agent-permission", &msg);
         }
         // Notifications: session updates and agent housekeeping.
