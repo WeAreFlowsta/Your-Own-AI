@@ -1272,6 +1272,7 @@ mod tests {
                 output_per_mtok: 1.0,
                 request_fee_usd: 0.0,
                 search_per_call_usd: search_fee,
+                cached_input_per_mtok: None,
             }),
         }
     }

@@ -2455,6 +2455,7 @@ pub async fn stream_chat_completion(
     model: Option<String>,
     grammar: Option<String>,
     reasoning_effort: Option<String>,
+    conversation_key: Option<String>,
 ) -> Result<(), String> {
     // Online models ("online:<id>") route to the YOAI proxy with the
     // Flowsta (Vault-grant) token; external models ("external:<id>") post to
@@ -2594,6 +2595,14 @@ pub async fn stream_chat_completion(
         if online_model.is_some() {
             if let Some(effort) = reasoning_effort.as_deref().filter(|e| !e.is_empty()) {
                 remote_body["reasoning_effort"] = serde_json::Value::String(effort.to_string());
+            }
+            // Prompt-cache routing key: one opaque id per conversation, so
+            // each turn lands on the provider machine holding the cached
+            // prefix of the turns before it (a warm turn bills at the cached
+            // rate - a tenth of a cold one on the frontier models). The proxy
+            // forwards it only to providers that document the field.
+            if let Some(key) = conversation_key.as_deref().filter(|k| !k.is_empty()) {
+                remote_body["prompt_cache_key"] = serde_json::Value::String(key.chars().take(128).collect());
             }
         }
         remote_body

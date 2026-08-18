@@ -262,8 +262,17 @@ export interface UseChatState {
   } | null;
   /** Current Holochain conversation hash (null if not recording) */
   conversationHash: string | null;
+  /** Opaque per-conversation key sent with online turns as the provider's
+   *  prompt-cache routing key (fresh per new chat; the conversation hash
+   *  when an existing conversation is opened, so resuming it stays warm). */
+  cacheKey: string;
   /** Message sequence counter for ordering */
   messageSequence: number;
+}
+
+/** Random opaque id for prompt-cache routing - no user or device meaning. */
+export function newCacheKey(): string {
+  return `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 export interface UseChatProps {
@@ -281,6 +290,7 @@ export function useChat(props: UseChatProps) {
     error: null,
     pendingTurn: null,
     conversationHash: null,
+    cacheKey: newCacheKey(),
     messageSequence: 0,
   });
 
@@ -980,7 +990,8 @@ export function useChat(props: UseChatProps) {
           captureThinking,
           preferredModel || undefined,
           undefined,
-          reasoningEffort
+          reasoningEffort,
+          state.cacheKey
         )) {
           if (chunk.type === "status") {
             props.isModelLoading.value = true;
@@ -1459,6 +1470,7 @@ export function useChat(props: UseChatProps) {
     state.error = null;
     state.isLoading = false;
     state.conversationHash = null;
+    state.cacheKey = newCacheKey();
     state.messageSequence = 0;
   });
 

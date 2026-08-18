@@ -498,6 +498,11 @@ pub struct OnlinePricing {
     /// Extra per-web-search-call fee (web-search models only); None otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub search_per_call_usd: Option<f64>,
+    /// Rate for input tokens the provider serves from its prompt cache (the
+    /// earlier turns of a conversation) - a fraction of input_per_mtok. None
+    /// when the provider has no cache pricing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_input_per_mtok: Option<f64>,
 }
 
 #[derive(Serialize, Clone)]
@@ -584,6 +589,7 @@ async fn fetch_online_models() -> Result<Vec<OnlineModel>, String> {
                         output_per_mtok: p.get("output_per_mtok").and_then(|x| x.as_f64()).unwrap_or(0.0),
                         request_fee_usd: p.get("request_fee_usd").and_then(|x| x.as_f64()).unwrap_or(0.0),
                         search_per_call_usd: p.get("search_per_call_usd").and_then(|x| x.as_f64()),
+                        cached_input_per_mtok: p.get("cached_input_per_mtok").and_then(|x| x.as_f64()),
                     }),
                 })
                 .collect()

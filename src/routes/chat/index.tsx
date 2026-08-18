@@ -342,6 +342,7 @@ export default component$(() => {
       if (messages.length === 0) return;
       chatState.messages = messages;
       chatState.conversationHash = target.hash;
+      chatState.cacheKey = target.hash;
       chatState.messageSequence = nextSequence;
       const firstUser = messages.find((m) => m.role === "user");
       rememberLastConversation({

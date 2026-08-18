@@ -125,7 +125,10 @@ export class LlamaServerAPI {
     captureThinking?: boolean,
     model?: string,
     grammar?: string,
-    reasoningEffort?: 'low' | 'medium' | 'high'
+    reasoningEffort?: 'low' | 'medium' | 'high',
+    /** Opaque per-conversation id: online turns send it as the provider's
+     *  prompt-cache routing key so consecutive turns reuse the cached prefix. */
+    conversationKey?: string
   ): AsyncGenerator<StreamChunk, void, undefined> {
     const isRemote =
       !!model?.startsWith('online:') || !!model?.startsWith('external:');
@@ -191,6 +194,7 @@ export class LlamaServerAPI {
         model: model || null,
         grammar: grammar || null,
         reasoningEffort: reasoningEffort || null,
+        conversationKey: conversationKey || null,
       }).catch(err => {
         console.error('[LlamaServer] Stream command error:', err);
         streamError = err.toString();

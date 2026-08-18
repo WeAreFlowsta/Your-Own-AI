@@ -47,6 +47,7 @@ interface OnlinePricing {
   output_per_mtok: number;
   request_fee_usd: number;
   search_per_call_usd?: number; // web-search models only
+  cached_input_per_mtok?: number; // input the provider serves from its prompt cache
 }
 
 interface OnlineModel {
@@ -616,6 +617,15 @@ export const OnlineModels = component$(() => {
                               {fmtUsd(model.pricing.output_per_mtok)}
                             </span>{' '}/ 1M out
                           </span>
+                          {!!model.pricing.cached_input_per_mtok && model.pricing.cached_input_per_mtok > 0 && (
+                            <span
+                              title="Earlier turns of a conversation are usually served from the provider's cache and billed at this lower rate"
+                            >
+                              <span class="font-medium text-[var(--text-primary)]">
+                                {fmtUsdSmall(model.pricing.cached_input_per_mtok)}
+                              </span>{' '}/ 1M cached in
+                            </span>
+                          )}
                           {model.pricing.request_fee_usd > 0 && (
                             <span>+ {fmtUsd(model.pricing.request_fee_usd)} / request</span>
                           )}
