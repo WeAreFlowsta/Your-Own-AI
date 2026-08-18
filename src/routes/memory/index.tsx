@@ -287,6 +287,7 @@ export default component$(() => {
         handleModelsClick$={$(() => nav("/setup/"))}
         folderPath={headerWs.folderPath.value}
         folderStatus={headerWs.folderStatus.value}
+        permissionMode={headerWs.permissionMode.value}
         onCloseFolder$={headerWs.closeFolder$}
         buildInstalled={headerWs.buildInstalled.value}
         recentFolders={headerWs.recentFolders.value}

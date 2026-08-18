@@ -28,6 +28,13 @@ import {
   type RememberSurface,
 } from "../../utils/rememberText";
 import { isMemoryPaused, setMemoryPaused } from "../../utils/memory";
+import {
+  AUTO_PERMISSIONS_COPY,
+  defaultPermissionMode,
+  judgeEnabled,
+  setDefaultPermissionMode,
+  setJudgeEnabled,
+} from "../../utils/agentPermissions";
 import { LuChevronDown } from "@qwikest/icons/lucide";
 
 /** One "which online model answers" row: label + recommended-or-override
@@ -129,6 +136,7 @@ const SECTIONS = [
   { id: "settings-behavior", label: "AI behavior" },
   { id: "settings-memory", label: "Memory" },
   { id: "settings-routing", label: "Routing" },
+  { id: "settings-agent", label: "Agent" },
   { id: "settings-components", label: "Components" },
   { id: "settings-engines", label: "Engines" },
   { id: "settings-external", label: "External access" },
@@ -254,6 +262,9 @@ export default component$(() => {
   const showChatModelChip = useSignal(true);
   const showHelpTips = useSignal(true);
   const allowAttachmentsOnline = useSignal(false);
+  // Agent: auto permissions default for new projects + the model judge - both off unless set.
+  const agentAutoDefault = useSignal(false);
+  const agentJudge = useSignal(false);
   const groundDocumentsAuto = useSignal(false);
   const smartModeDetection = useSignal(true);
   // Same key the working box's brain icon toggles - one setting, two doors.
@@ -305,6 +316,8 @@ export default component$(() => {
     showHelpTips.value = helpTipsEnabled();
     allowAttachmentsOnline.value =
       localStorage.getItem("allowAttachmentsOnline") === "true";
+    agentAutoDefault.value = defaultPermissionMode() === "auto";
+    agentJudge.value = judgeEnabled();
     groundDocumentsAuto.value =
       localStorage.getItem("groundDocumentsAuto") === "true";
     smartModeDetection.value =
@@ -426,6 +439,15 @@ export default component$(() => {
   const toggleHelpTips = $(() => {
     showHelpTips.value = !showHelpTips.value;
     setHelpTipsEnabled(showHelpTips.value);
+  });
+
+  const toggleAgentAutoDefault = $(() => {
+    agentAutoDefault.value = !agentAutoDefault.value;
+    setDefaultPermissionMode(agentAutoDefault.value ? "auto" : "ask");
+  });
+  const toggleAgentJudge = $(() => {
+    agentJudge.value = !agentJudge.value;
+    setJudgeEnabled(agentJudge.value);
   });
 
   const toggleAttachmentsOnline = $(async () => {
@@ -596,6 +618,7 @@ export default component$(() => {
         currentModel={currentModel.value}
         folderPath={headerWs.folderPath.value}
         folderStatus={headerWs.folderStatus.value}
+        permissionMode={headerWs.permissionMode.value}
         onCloseFolder$={headerWs.closeFolder$}
         buildInstalled={headerWs.buildInstalled.value}
         recentFolders={headerWs.recentFolders.value}
@@ -1067,6 +1090,44 @@ export default component$(() => {
                 )}
                 </>
                 )}
+              </section>
+
+              {/* Agent - how the coding/project agent asks before it acts.
+                  Both switches are OFF unless the user turns them on: the
+                  cautious default. Per-project choice lives on the project
+                  chip in the header and wins over the default here. */}
+              <section
+                id="settings-agent"
+                class="scroll-mt-4 bg-[var(--bg-card)] rounded-2xl p-6 border border-[var(--border-subtle)]"
+              >
+                <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela mb-2">
+                  Agent
+                </h2>
+                <p class="text-sm text-[var(--text-secondary)] mb-4">
+                  When your AI works in a project folder it asks before it runs
+                  commands or changes files. These set the default for projects
+                  you open from now on; each project can choose its own from the
+                  project chip in the header. Everything the agent is allowed to
+                  do - by you, or by these settings - is written to your records.
+                </p>
+                <div class="space-y-5">
+                  <SettingToggle
+                    title={AUTO_PERMISSIONS_COPY.title}
+                    checked={agentAutoDefault}
+                    onToggle$={toggleAgentAutoDefault}
+                  >
+                    {AUTO_PERMISSIONS_COPY.body} Off (default): your AI asks
+                    every time.
+                  </SettingToggle>
+                  <SettingToggle
+                    title={AUTO_PERMISSIONS_COPY.judgeTitle}
+                    checked={agentJudge}
+                    onToggle$={toggleAgentJudge}
+                  >
+                    {AUTO_PERMISSIONS_COPY.judgeBody} Only matters when auto
+                    permissions are on.
+                  </SettingToggle>
+                </div>
               </section>
 
               {/* On-demand capability models (memory recall, etc.) */}

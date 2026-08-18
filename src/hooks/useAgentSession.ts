@@ -26,8 +26,15 @@ import type {
   AgentActionDiff,
   AgentPermission,
   Message,
+  PermissionLedger,
   SelectedAiModel,
 } from "../types";
+import {
+  judgeEnabled,
+  permissionModeForFolder,
+  setPermissionModeForFolder,
+  type AgentPermissionMode,
+} from "../utils/agentPermissions";
 import { computeLineDiff } from "../utils/lineDiff";
 import {
   getWorkspaceMemory,
@@ -67,6 +74,9 @@ export interface AgentSessionState {
   /** Set when a turn died on an overloaded upstream model: the explicit
    *  switch offer ("use <alt> for this session?"). Never a silent reroute. */
   overloadOffer: { failedName: string; alt: string; altName: string } | null;
+  /** This session's permission mode: ask (default) or auto (ordinary
+   *  project work runs unasked; every decision still recorded). */
+  permissionMode: AgentPermissionMode;
 }
 
 /** Upstream-refusal signatures worth an offer: provider overload / rate
@@ -350,6 +360,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     waitingOn: "",
     touchedFiles: [],
     overloadOffer: null,
+    permissionMode: "ask",
   });
 
   // A prompt waiting for the session: typed before the handshake finished,
@@ -573,8 +584,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
         ? { routing_reason: bubble.routingReason, routing_task: "agent" }
         : undefined,
       {
-        agentLog: items.length
-          ? { items, stats: bubble.agentStats }
+        agentLog: items.length || bubble.permissionLedger
+          ? { items, stats: bubble.agentStats, permissions: bubble.permissionLedger }
           : undefined,
         folderPath: state.folderPath ?? undefined,
       },
@@ -815,6 +826,9 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.status = "starting";
     state.statusNote = "Starting the agent...";
     state.touchedFiles = [];
+    // This folder's permission mode (its own choice, else the Settings
+    // default; off unless the user turned it on) - the session opens with it.
+    state.permissionMode = permissionModeForFolder(path);
     recordRecentFolder(path);
     try {
       await invokeTauri("start_build_agent", {
@@ -830,6 +844,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
         // saves deliberately are written to THIS AI's chain, labeled.
         agentKey: props.selectedAi.value.aiConfig?.agentPubKey ?? null,
         aiLabel: props.selectedAi.value.label ?? null,
+        autoPermissions: state.permissionMode === "auto",
+        autoJudge: judgeEnabled(),
       });
     } catch (err) {
       state.status = "idle";
@@ -886,6 +902,21 @@ export function useAgentSession(props: UseAgentSessionProps) {
       });
     },
   );
+
+  /** Switch this project's permission mode (remembered for the folder) and
+   *  apply it to the open session live - the harness honours it from the
+   *  next ask. */
+  const setPermissionMode$ = $(async (mode: AgentPermissionMode) => {
+    state.permissionMode = mode;
+    if (state.folderPath) setPermissionModeForFolder(state.folderPath, mode);
+    if (state.status !== "idle" && state.status !== "stopped") {
+      try {
+        await invokeTauri("set_agent_auto_permissions", { enabled: mode === "auto" });
+      } catch (err) {
+        console.warn("[Agent] permission mode switch did not reach the agent:", err);
+      }
+    }
+  });
 
   /** Answer the pending permission card with a button. `always` upgrades to
    *  the agent's always-variant option when it offers one. */
@@ -1391,6 +1422,12 @@ export function useAgentSession(props: UseAgentSessionProps) {
           kind: o.kind,
         })),
         state: "pending",
+        // Why this ask reached the user (the harness's prompt trigger) -
+        // meaningful under Auto: "Auto stopped here because ..".
+        promptReason:
+          typeof params._meta?.["flowsta/promptReason"] === "string"
+            ? params._meta["flowsta/promptReason"]
+            : undefined,
       };
       state.pendingPermissionId = permission.requestId;
       state.pendingCardOffscreen = false;
@@ -1458,6 +1495,82 @@ export function useAgentSession(props: UseAgentSessionProps) {
             { id: `perm-${permission.requestId}`, type: "permission", permission },
           ],
         };
+      });
+    });
+
+    // Every permission decision the harness made, live (fork notification
+    // `flowsta/permission_decided`, teed off its PermissionEvent stream).
+    // Auto-approved actions become answered permission items (via "auto",
+    // with which judge allowed them) so the rail shows a receipt and the
+    // record holds the decision; everything else - policy-allowed reads,
+    // earlier grants, the prompted ones (which already have their card) -
+    // rolls into the turn's compact ledger.
+    const unDecided = await listen<any>("agent-permission-decided", (e) => {
+      const ev = e.payload?.event;
+      if (!ev || typeof ev !== "object") return;
+      const reason: string = String(ev.decision_reason ?? "");
+      const autoApproved = !!ev.auto_approved;
+      const prompted = !!ev.user_prompted;
+      mutateTurn((m) => {
+        const prev: PermissionLedger = m.permissionLedger ?? {
+          byReason: {},
+          total: 0,
+          autoApproved: 0,
+          prompted: 0,
+        };
+        const byReason = { ...prev.byReason, [reason || "unknown"]: (prev.byReason[reason || "unknown"] ?? 0) + 1 };
+        const ledger: PermissionLedger = {
+          byReason,
+          total: prev.total + 1,
+          autoApproved: prev.autoApproved + (autoApproved ? 1 : 0),
+          prompted: prev.prompted + (prompted ? 1 : 0),
+          mode: typeof ev.permission_mode === "string" ? ev.permission_mode : prev.mode,
+        };
+        let agentLog = m.agentLog;
+        if (autoApproved && !prompted && String(ev.decision) === "allow") {
+          const toolCallId = typeof ev.tool_id === "string" ? ev.tool_id : undefined;
+          const requestId = -1 - (prev.total + 1); // negative: never collides with ACP ids
+          const detail: string | undefined =
+            typeof ev.access_detail === "string" && ev.access_detail.trim()
+              ? ev.access_detail.slice(0, 500)
+              : undefined;
+          const autoReason: AgentPermission["autoReason"] =
+            reason === "auto_fast_path"
+              ? "fast_path"
+              : reason === "auto_classifier_allow"
+                ? judgeEnabled()
+                  ? "model"
+                  : "heuristic"
+                : "app_policy";
+          const subject = detail ?? String(ev.tool_name ?? "an action");
+          const why =
+            autoReason === "fast_path"
+              ? "routine work in the project"
+              : autoReason === "model"
+                ? "judged ordinary work by the AI"
+                : "on the routine list";
+          const permission: AgentPermission = {
+            requestId,
+            toolCallId,
+            title: String(ev.tool_name ?? "action"),
+            kind: typeof ev.access_kind === "string" ? ev.access_kind : undefined,
+            command: typeof ev.access_kind === "string" && ev.access_kind.toLowerCase().includes("bash") ? detail : undefined,
+            detail: typeof ev.access_kind === "string" && ev.access_kind.toLowerCase().includes("bash") ? undefined : detail,
+            options: [],
+            state: "answered",
+            receipt: `Auto: ${subject.length > 80 ? subject.slice(0, 80) + ".." : subject} - ${why}`,
+            decision: "allow",
+            scope: "once",
+            answeredAt: typeof ev.timestamp === "string" ? ev.timestamp : new Date().toISOString(),
+            via: "auto",
+            autoReason,
+          };
+          agentLog = [
+            ...(agentLog ?? []),
+            { id: `perm-auto-${toolCallId ?? requestId}`, type: "permission", permission },
+          ];
+        }
+        return { ...m, permissionLedger: ledger, agentLog };
       });
     });
 
@@ -1693,6 +1806,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       unUpdate();
       unPermission();
       unPermissionAuto();
+      unDecided();
       unHint();
       unRoute();
       unTurn();
@@ -1711,5 +1825,6 @@ export function useAgentSession(props: UseAgentSessionProps) {
     answerPermissionByReply$,
     acceptOverloadOffer$,
     dismissOverloadOffer$,
+    setPermissionMode$,
   };
 }

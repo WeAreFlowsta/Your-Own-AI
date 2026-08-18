@@ -581,6 +581,7 @@ pub fn run() {
             agent_bridge::send_agent_prompt,
             agent_bridge::cancel_agent_turn,
             agent_bridge::respond_agent_permission,
+            agent_bridge::set_agent_auto_permissions,
             agent_bridge::stop_build_agent,
             agent_bridge::build_agent_status,
             agent_bridge::read_agent_task_logs,

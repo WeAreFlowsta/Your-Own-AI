@@ -80,6 +80,11 @@ interface AppHeaderProps {
   folderStatus?: 'starting' | 'ready' | 'working' | 'stopped';
   /** Close the workspace (the route confirms first if the agent is mid-task). */
   onCloseFolder$?: QRL<() => void>;
+  /** This project's permission mode (ask = default; auto = ordinary project
+   *  work runs unasked, every decision still recorded). */
+  permissionMode?: 'ask' | 'auto';
+  /** Switch this project's permission mode (remembered for the folder). */
+  onSetPermissionMode$?: QRL<(mode: 'ask' | 'auto') => void>;
   /** Build is installed - the workspace slot only exists then. */
   buildInstalled?: boolean;
   /** Recent workspaces, most-recent-first, for the slot's menu. */
@@ -108,6 +113,8 @@ export default component$<AppHeaderProps>(
     folderPath = null,
     folderStatus,
     onCloseFolder$,
+    permissionMode = 'ask',
+    onSetPermissionMode$,
     buildInstalled = false,
     recentFolders = [],
     onOpenFolder$,
@@ -301,6 +308,14 @@ export default component$<AppHeaderProps>(
                 >
                   {'‎' + displayPath(folderPath)}
                 </span>
+                {permissionMode === 'auto' && (
+                  <span
+                    class="shrink-0 rounded-full border border-[var(--border-subtle)] px-1.5 text-[10px] uppercase tracking-wide text-[var(--text-muted)]"
+                    title="Auto permissions: ordinary work inside this folder runs without asking; every decision is in your records"
+                  >
+                    auto
+                  </span>
+                )}
                 {folderStatus === 'stopped' && (
                   <span class="text-red-500 font-medium shrink-0">stopped</span>
                 )}
@@ -342,6 +357,37 @@ export default component$<AppHeaderProps>(
                         <LuBrain class="h-4 w-4 shrink-0 opacity-70" />
                         Project memory
                       </button>
+                      {onSetPermissionMode$ && (
+                        <span class="block border-t border-[var(--border-subtle)] px-3 py-2">
+                          <span class="block text-xs text-[var(--text-muted)] mb-1.5">
+                            Permissions in this project
+                          </span>
+                          <span class="grid grid-cols-2 gap-1.5">
+                            {(['ask', 'auto'] as const).map((mode) => (
+                              <button
+                                key={mode}
+                                type="button"
+                                onClick$={(e) => {
+                                  e.stopPropagation();
+                                  onSetPermissionMode$(mode);
+                                }}
+                                class={`rounded-full border px-2 py-1 text-xs ${
+                                  permissionMode === mode
+                                    ? 'border-[var(--text-secondary)] text-[var(--text-primary)] font-medium'
+                                    : 'border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                                }`}
+                                title={
+                                  mode === 'ask'
+                                    ? 'Your AI asks before it runs commands or changes files.'
+                                    : 'Ordinary work inside this folder runs without asking - reading, editing project files, building, testing, routine git. Anything beyond the folder, irreversible, or unclear still asks. Every decision is written to your records.'
+                                }
+                              >
+                                {mode === 'ask' ? 'Ask' : 'Auto'}
+                              </button>
+                            ))}
+                          </span>
+                        </span>
+                      )}
                       {onCloseFolder$ && (
                         <button
                           type="button"

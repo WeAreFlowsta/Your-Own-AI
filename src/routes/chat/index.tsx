@@ -154,6 +154,7 @@ export default component$(() => {
     answerPermissionByReply$,
     acceptOverloadOffer$,
     dismissOverloadOffer$,
+    setPermissionMode$,
   } = useAgentSession({ chatState, selectedAi });
   const showCloseFolderConfirm = useSignal(false);
   // The header workspace slot: exists only when Build is installed.
@@ -1121,6 +1122,8 @@ export default component$(() => {
             agentState.status === "idle" ? undefined : agentState.status
           }
           onCloseFolder$={handleCloseFolder}
+          permissionMode={agentState.permissionMode}
+          onSetPermissionMode$={setPermissionMode$}
           buildInstalled={buildInstalled.value}
           recentFolders={recentFolders.value}
           onOpenFolder$={openFolderGuarded}

@@ -57,6 +57,7 @@ export default component$(() => {
           currentModel={currentModel.value}
           folderPath={headerWs.folderPath.value}
           folderStatus={headerWs.folderStatus.value}
+        permissionMode={headerWs.permissionMode.value}
           onCloseFolder$={headerWs.closeFolder$}
           buildInstalled={headerWs.buildInstalled.value}
           recentFolders={headerWs.recentFolders.value}

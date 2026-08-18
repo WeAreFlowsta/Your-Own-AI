@@ -7,6 +7,7 @@
  * flags the chat route consumes on mount.
  */
 import { $, useSignal, useVisibleTask$ } from "@builder.io/qwik";
+import { permissionModeForFolder } from "../utils/agentPermissions";
 import { useNavigate } from "@builder.io/qwik-city";
 import { readRecentFolders, resolveBinaryPath } from "./useAgentSession";
 
@@ -16,6 +17,9 @@ export function useHeaderWorkspace() {
   const recentFolders = useSignal<string[]>([]);
   const folderPath = useSignal<string | null>(null);
   const folderStatus = useSignal<"starting" | "ready" | "stopped" | undefined>(undefined);
+  // The open project's permission mode (per-folder choice, else the Settings
+  // default) - display only here; the chat route owns switching it.
+  const permissionMode = useSignal<"ask" | "auto">("ask");
 
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async ({ cleanup }) => {
@@ -31,6 +35,7 @@ export function useHeaderWorkspace() {
         folder: string | null;
       }>("build_agent_status");
       folderPath.value = status.folder;
+    permissionMode.value = status.folder ? permissionModeForFolder(status.folder) : "ask";
       // Running without a session id = still starting (the orange state
       // must survive navigation - the session lives in Rust, not the page).
       folderStatus.value = status.folder
@@ -107,6 +112,7 @@ export function useHeaderWorkspace() {
     recentFolders,
     folderPath,
     folderStatus,
+    permissionMode,
     openConversations$,
     openFolder$,
     browseFolder$,

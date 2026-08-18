@@ -28,6 +28,23 @@ interface AgentPermissionCardProps {
 
 const DIFF_PREVIEW_LINES = 8;
 
+/** Why an ask reached the user while Auto permissions were on - the
+ *  harness's prompt trigger, in the user's words. Undefined = no line. */
+function autoStopReason(reason?: string): string | undefined {
+  switch (reason) {
+    case "auto_classifier_block":
+      return "not on the routine list";
+    case "auto_outside_workspace":
+      return "reaches outside the project folder";
+    case "policy_ask":
+      return "your rules say ask";
+    case "needs_user":
+      return "needs your say";
+    default:
+      return undefined;
+  }
+}
+
 function verbFor(kind?: string): string {
   switch (kind) {
     case "execute":
@@ -142,6 +159,14 @@ export const AgentPermissionCard = component$<AgentPermissionCardProps>(
           <div class="flex items-center gap-2 text-sm font-medium text-[var(--text-primary)]">
             <Icon class="h-4 w-4 shrink-0" />
             {verbFor(permission.kind)}
+            {autoStopReason(permission.promptReason) && (
+              <span
+                class="ml-auto shrink-0 rounded-full border border-[var(--border-subtle)] px-2 py-0.5 text-xs font-normal text-[var(--text-muted)]"
+                title="Auto permissions are on for this project; this one still needs you"
+              >
+                Auto stopped here: {autoStopReason(permission.promptReason)}
+              </span>
+            )}
           </div>
 
           {/* The exact ask - a command (or tool payload) is NEVER

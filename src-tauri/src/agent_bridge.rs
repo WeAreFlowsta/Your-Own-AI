@@ -230,6 +230,57 @@ fn ensure_agent_model_entry(
         .map_err(|e| format!("cannot write agent config: {}", e))
 }
 
+/// Replace ONE key inside a TOML table (`[header]`), keeping every other key
+/// the user set; creates the table when absent. Same keep-the-rest splice as
+/// the `[features]` block above, generalized.
+fn splice_toml_key(content: &str, header: &str, key: &str, line: &str) -> String {
+    if let Some(start) = content.find(header) {
+        let after = &content[start + header.len()..];
+        let end = after
+            .find("\n[")
+            .map(|i| start + header.len() + i + 1)
+            .unwrap_or(content.len());
+        let block = &content[start..end];
+        let kept: Vec<&str> = block
+            .lines()
+            .skip(1)
+            .filter(|l| !l.trim_start().starts_with(key))
+            .collect();
+        let rebuilt = if kept.is_empty() {
+            format!("{header}\n{line}\n")
+        } else {
+            format!("{header}\n{line}\n{}\n", kept.join("\n"))
+        };
+        format!("{}{}{}", &content[..start], rebuilt, &content[end..])
+    } else {
+        format!("{content}\n{header}\n{line}\n")
+    }
+}
+
+/// Auto-permission knobs the app owns in the agent's config.toml, written at
+/// every session open. `[ui] permission_mode = "ask"` pins the harness's
+/// default to asking - Auto is only ever requested per session (`_meta.autoMode`)
+/// or flipped live, never left on in a file. `[auto_mode] classifier` is the
+/// user's "let the AI judge grey areas" choice (heuristic = the built-in
+/// rule-based judge only, unknown => ask); `prompt_type = "just_command"` so a
+/// model judge, when chosen, sees the command alone - never the transcript.
+fn ensure_agent_permission_config(home: &std::path::Path, judge_with_model: bool) -> Result<(), String> {
+    let config_path = home.join(".your-own-ai-build").join("config.toml");
+    let content = std::fs::read_to_string(&config_path).unwrap_or_default();
+    let content = splice_toml_key(&content, "[ui]", "permission_mode", "permission_mode = \"ask\"");
+    let content = splice_toml_key(
+        &content,
+        "[auto_mode]",
+        "classifier",
+        &format!("classifier = \"{}\"", if judge_with_model { "model" } else { "heuristic" }),
+    );
+    let content = splice_toml_key(&content, "[auto_mode]", "prompt_type", "prompt_type = \"just_command\"");
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("cannot create agent config dir: {}", e))?;
+    }
+    std::fs::write(&config_path, content).map_err(|e| format!("cannot write agent config: {}", e))
+}
+
 async fn write_line(state: &AgentBridgeState, value: &Value) -> Result<(), String> {
     let mut guard = state.child.lock().await;
     let child = guard.as_mut().ok_or("agent is not running")?;
@@ -251,6 +302,10 @@ pub async fn start_build_agent(
     eagerness: Option<String>,
     agent_key: Option<String>,
     ai_label: Option<String>,
+    // Auto permissions for THIS session (the folder's setting, off unless the
+    // user turned it on) and whether a model may judge grey areas.
+    auto_permissions: Option<bool>,
+    auto_judge: Option<bool>,
 ) -> Result<(), String> {
     // One agent at a time: replace any previous instance. Bumping the
     // generation FIRST makes the old process's reader stand down - its
@@ -301,7 +356,13 @@ pub async fn start_build_agent(
             if web_allowed { "allowed" } else { "off (offline-only AI)" }
         );
         ensure_agent_model_entry(&home, slug, agent_ctx, plan_ctx, device_workers, web_allowed)?;
+        ensure_agent_permission_config(&home, auto_judge.unwrap_or(false))?;
     }
+    let auto_mode = auto_permissions.unwrap_or(false);
+    log::info!(
+        "[agent] permissions for this session: {}",
+        if auto_mode { "auto (ordinary project work runs unasked)" } else { "ask" }
+    );
 
     let (mut rx, child) = app_handle
         .shell()
@@ -322,6 +383,7 @@ pub async fn start_build_agent(
         agent_key.clone().unwrap_or_default(),
         ai_label.clone().unwrap_or_default(),
     );
+    let session_auto_mode = auto_mode;
     let reader_app = app_handle.clone();
     tauri::async_runtime::spawn(async move {
         let mut exit_code: Option<i32> = None;
@@ -337,7 +399,7 @@ pub async fn start_build_agent(
                     let Ok(msg) = serde_json::from_str::<Value>(&text) else {
                         continue;
                     };
-                    handle_agent_message(&reader_app, &workspace, &session_model, &memory_identity, msg).await;
+                    handle_agent_message(&reader_app, &workspace, &session_model, &memory_identity, session_auto_mode, msg).await;
                 }
                 CommandEvent::Stderr(line) => {
                     if !stale {
@@ -393,6 +455,7 @@ async fn handle_agent_message(
     workspace: &str,
     session_model: &Option<String>,
     memory_identity: &(String, String),
+    session_auto_mode: bool,
     msg: Value,
 ) {
     let state = app.state::<AgentBridgeState>();
@@ -452,6 +515,11 @@ async fn handle_agent_message(
             }
             let _ = app.emit("agent-permission", &msg);
         }
+        // Every permission decision the harness made this session - auto-
+        // approved, policy-allowed, prompted, denied - for the user's record.
+        (Some("flowsta/permission_decided"), None) => {
+            let _ = app.emit("agent-permission-decided", msg.get("params").cloned().unwrap_or(Value::Null));
+        }
         // Notifications: session updates and agent housekeeping.
         (Some(_), None) => {
             let _ = app.emit("agent-update", &msg);
@@ -484,7 +552,10 @@ async fn handle_agent_message(
                 "params": {
                     "cwd": workspace,
                     "mcpServers": mcp_servers,
-                    "_meta": { "clientIdentifier": CLIENT_IDENTIFIER }
+                    // autoMode = this session's permission mode. The harness
+                    // reads it on session/new; false is explicit so a config
+                    // default can never turn Auto on behind the user's back.
+                    "_meta": { "clientIdentifier": CLIENT_IDENTIFIER, "autoMode": session_auto_mode }
                 }
             });
             let _ = write_line(&state, &request).await;
@@ -620,6 +691,29 @@ pub async fn respond_agent_permission(
             "jsonrpc": "2.0",
             "id": request_id,
             "result": { "outcome": outcome }
+        }),
+    )
+    .await
+}
+
+/// Flip auto permissions for the OPEN session without a restart. The harness
+/// applies it to the next ask (a card already showing keeps its answer).
+#[tauri::command]
+pub async fn set_agent_auto_permissions(
+    state: State<'_, AgentBridgeState>,
+    enabled: bool,
+) -> Result<(), String> {
+    log::info!("[agent] permissions switched to {}", if enabled { "auto" } else { "ask" });
+    write_line(
+        &state,
+        &json!({
+            "jsonrpc": "2.0",
+            "method": "x.ai/yolo_mode_changed",
+            "params": {
+                "clientIdentifier": CLIENT_IDENTIFIER,
+                "auto_mode": enabled,
+                "permission_mode": if enabled { "auto" } else { "ask" }
+            }
         }),
     )
     .await

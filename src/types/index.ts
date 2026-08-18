@@ -173,6 +173,8 @@ export interface Message {
   /** Turn-level stats from the agent's turn_completed usage - drives the
    *  collapsed stub ("6 steps - 5 files - 40s") and the Tokens panel. */
   agentStats?: { durationMs?: number; modelCalls?: number };
+  /** Every permission decision of the turn, compactly (see PermissionLedger). */
+  permissionLedger?: PermissionLedger;
   /** An agent permission request (folder open). Renders as an inline card;
    *  once answered it collapses to a one-line receipt. */
   agentPermission?: AgentPermission;
@@ -276,6 +278,27 @@ export interface AgentPermission {
   /** How it was answered: a card button, a typed reply (= decline once),
    *  the app's own policy (auto), or never (expired with the turn). */
   via?: 'button' | 'reply' | 'auto' | 'expired';
+  /** For via "auto": which judge allowed it - the harness's routine
+   *  fast path, its rule-based classifier, a model, or the app's own policy. */
+  autoReason?: 'fast_path' | 'heuristic' | 'model' | 'app_policy';
+  /** Why an ask reached the user while Auto was on (from the harness's
+   *  prompt trigger on the request) - shown on the card. */
+  promptReason?: string;
+}
+
+/** Compact per-turn ledger of EVERY permission decision the harness made -
+ *  including the ones no card ever showed (reads allowed by policy, grants
+ *  the user made earlier). Recorded with the turn; not rendered row by row. */
+export interface PermissionLedger {
+  /** Decisions by reason, e.g. { static_allowlist: 40, auto_fast_path: 12 }. */
+  byReason: Record<string, number>;
+  /** Total decisions this turn. */
+  total: number;
+  /** How many were auto-approved (fast path or classifier) vs prompted. */
+  autoApproved: number;
+  prompted: number;
+  /** The permission mode the harness reported for the turn. */
+  mode?: string;
 }
 
 export type ChatAction = 'Write a report...' | 'Write code...' | null;
