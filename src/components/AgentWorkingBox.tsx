@@ -230,6 +230,24 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
       return { steps, files: files.size };
     });
 
+    // A backgrounded task from this turn that is still writing after the
+    // turn ended: the tailer keeps its liveLine fresh while the log grows
+    // and clears it when the log goes quiet, so "still running" here is
+    // never a stale claim. The folded stub must say so - the agent's
+    // closing words ("the run is underway") are otherwise the only sign.
+    const stillRunning = useComputed$(() => {
+      for (let i = log.length - 1; i >= 0; i--) {
+        const item = log[i];
+        if (item.type === "action" && item.action.liveLine) {
+          const label = item.action.waitFor?.length
+            ? "background task"
+            : item.action.label.replace(/^Running /, "");
+          return { label, line: item.action.liveLine.slice(0, 90) };
+        }
+      }
+      return null;
+    });
+
     const expanded = working || railOpen.value;
 
     return (
@@ -240,16 +258,29 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
             onClick$={() => (railOpen.value = !railOpen.value)}
             class="flex items-center gap-2.5 py-1 mb-1 text-left font-mono text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] bg-transparent border-none cursor-pointer"
           >
-            <LuCheck class="h-3.5 w-3.5 shrink-0 text-green-600 dark:text-green-400" />
+            {stillRunning.value ? (
+              <span
+                class="inline-block h-3 w-3 shrink-0 rounded-full border-2 border-[var(--border-subtle)] border-t-[var(--text-secondary)] animate-spin"
+                title="A background task from this turn is still running"
+              />
+            ) : (
+              <LuCheck class="h-3.5 w-3.5 shrink-0 text-green-600 dark:text-green-400" />
+            )}
             <span
               class="inline-block w-6 h-[2px] rounded-full opacity-60 shrink-0"
               style={{ background: METAL_H }}
             />
-            <span>
+            <span class="min-w-0 truncate">
               {stats.value.steps} step{stats.value.steps === 1 ? "" : "s"}
               {stats.value.files > 0 &&
                 ` - ${stats.value.files} file${stats.value.files === 1 ? "" : "s"}`}
               {formatDuration(durationMs) ? ` - ${formatDuration(durationMs)}` : ""}
+              {stillRunning.value && (
+                <span class="text-[var(--text-secondary)]">
+                  {" - still running: "}{stillRunning.value.label}
+                  <span class="text-[var(--text-muted)]">{" · "}{stillRunning.value.line}</span>
+                </span>
+              )}
             </span>
             <span class="shrink-0 text-[var(--text-link)]">
               <LuChevronRight class={`h-3 w-3 ${railOpen.value ? "hidden" : ""}`} />

@@ -744,9 +744,13 @@ export function useAgentSession(props: UseAgentSessionProps) {
         for (const [id, text] of Object.entries(logs)) {
           const prev = seen.get(id) ?? -1;
           if (text.length !== prev) {
-            anyGrew = anyGrew || prev !== -1;
+            // First sight of a log proves nothing about liveness (a
+            // finished task's log is "new" to a freshly armed tailer) -
+            // count it alive only while the turn is working; after that,
+            // only real growth between ticks does.
+            if (prev !== -1) { anyGrew = true; alive.add(id); }
+            else if (working) alive.add(id);
             seen.set(id, text.length);
-            alive.add(id);
           }
         }
         // Not working and nothing has grown for a while: the background
