@@ -551,6 +551,17 @@ async fn chat_completions(
         match crate::router::route(&app, route_mode, &query, eagerness, task, difficulty, lean, &picks, None, agent_routing, plan_routing).await {
             Ok(r) => {
                 log::info!("[inference] router ({}): {mode} task={task} diff={difficulty} eag={eagerness} -> {} ({})", ai.name, r.model, r.reason);
+                // The rail's pearl needs to know WHAT it is waiting on: a
+                // silent minute is "thinking" on a local model and "no reply
+                // yet from gpt-5.6-sol" on an online one - the honest words
+                // differ, and only this side knows the pick.
+                if agent_routing {
+                    use tauri::Emitter as _;
+                    let _ = app.emit(
+                        "agent-route",
+                        json!({ "ai": ai.name, "model": r.model, "online": r.model.starts_with("online:") }),
+                    );
+                }
                 ai.model = r.model;
             }
             Err(e) => {

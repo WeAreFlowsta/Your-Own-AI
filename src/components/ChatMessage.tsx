@@ -153,6 +153,8 @@ interface ChatMessageProps {
   onOpenTerminal$?: QRL<(command: string) => void>;
   /** Live retry text for the active agent turn's pearl. */
   agentRetryStatus?: string;
+  /** Online model the agent's current call is waiting on (bare id), if any. */
+  agentWaitingOn?: string;
   isDesktop: boolean;
   theme: 'light' | 'dark';
   isSidePanelVisible: boolean;
@@ -1266,6 +1268,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
                     tipHere={props.isLast !== false}
                     railOpen={agentRailOpen}
                     retryStatus={props.isLast ? props.agentRetryStatus : undefined}
+                    waitingOn={props.isLast ? props.agentWaitingOn : undefined}
                     durationMs={props.message.agentStats?.durationMs}
                     onPermissionRespond$={props.onPermissionRespond$}
                     onPermissionOffscreen$={props.onPermissionOffscreen$}

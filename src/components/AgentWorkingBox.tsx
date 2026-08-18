@@ -40,6 +40,8 @@ interface AgentWorkingBoxProps {
    *  over everything on the pearl: a retry loop must never look like a
    *  hang behind a stale action label. */
   retryStatus?: string;
+  /** Bare id of the online model the current call is waiting on, if online. */
+  waitingOn?: string;
   onPermissionRespond$?: QRL<
     (requestId: number, decision: "allow" | "reject", always: boolean) => void
   >;
@@ -110,7 +112,7 @@ const LiveLogPanel = component$<{ text: string; live: boolean }>(({ text, live }
 });
 
 export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
-  ({ log, working, tipHere = true, railOpen, durationMs, retryStatus, onPermissionRespond$, onPermissionOffscreen$ }) => {
+  ({ log, working, tipHere = true, railOpen, durationMs, retryStatus, waitingOn, onPermissionRespond$, onPermissionOffscreen$ }) => {
     const showThoughts = useSignal(true);
     const openOutputs = useSignal<Record<string, boolean>>({});
 
@@ -216,6 +218,17 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
       if (!working || !lastChangeAt.value) return 0;
       const s = Math.floor((nowTick.value - lastChangeAt.value) / 1000);
       return s >= 6 ? s : 0;
+    });
+    // Silence on an ONLINE call is not thinking we can see - it is a
+    // provider that has not answered yet. Say so after 15s, so a stalled
+    // request (which the agent retries on its own) is not mistaken for deep
+    // work. Derived AFTER stillSecs and never fed back into lastChangeAt,
+    // so crossing the threshold cannot reset the counter it depends on.
+    const shownStatus = useComputed$(() => {
+      if (status.value === "Thinking.." && waitingOn && stillSecs.value >= 15) {
+        return `Waiting on ${waitingOn} - no reply yet..`;
+      }
+      return status.value;
     });
 
     const stats = useComputed$(() => {
@@ -469,7 +482,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                 style={{ boxShadow: "0 0 10px 1px rgba(89,201,255,0.55)" }}
               />
               <span class="min-w-0 truncate whitespace-nowrap font-mono text-xs font-semibold animate-pulse-text status-text-gradient">
-                {status.value}
+                {shownStatus.value}
                 {stillSecs.value > 0 ? ` ${stillSecs.value}s` : ""}
               </span>
               <button

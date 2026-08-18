@@ -1187,6 +1187,7 @@ export default component$(() => {
               }
               liveStatus={agentState.liveStatus}
               agentRetryStatus={agentState.retryStatus || undefined}
+              agentWaitingOn={agentState.waitingOn || undefined}
               onPermissionJump$={$(() => {
                 // Jump to the CARD, not the bottom of the chat - content
                 // rendered below the card made "end" overshoot past it.

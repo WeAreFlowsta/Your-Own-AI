@@ -57,6 +57,11 @@ export interface AgentSessionState {
    *  - context size exceeded..") - the rail's pearl shows this instead of a
    *  stale action label, so a retry loop never looks like a hang. */
   retryStatus: string;
+  /** The model the local server routed the current agent call to (bare id,
+   *  e.g. "gpt-5.6-sol") when it is ONLINE - so a silent stretch can be
+   *  named for what it is: waiting on a provider, not local thinking. Empty
+   *  for offline picks. */
+  waitingOn: string;
   /** Every file path the agent touched this session (viewer feed). */
   touchedFiles: string[];
   /** Set when a turn died on an overloaded upstream model: the explicit
@@ -342,6 +347,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     pendingCardOffscreen: false,
     liveStatus: "",
     retryStatus: "",
+    waitingOn: "",
     touchedFiles: [],
     overloadOffer: null,
   });
@@ -1294,6 +1300,13 @@ export function useAgentSession(props: UseAgentSessionProps) {
       }
     });
 
+    // Which model the local server just routed an agent call to - the
+    // pearl names online waits after it ("Waiting on gpt-5.6-sol..").
+    const unRoute = await listen<any>("agent-route", (e) => {
+      const model = typeof e.payload?.model === "string" ? e.payload.model : "";
+      state.waitingOn = e.payload?.online ? model.replace(/^online:/, "") : "";
+    });
+
     // App-side hints about the agent's work that the agent itself may not
     // word for the user - today: a web search refused because the AI is
     // offline-only, with how to turn it on. Rendered as narration in the
@@ -1604,6 +1617,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       unUpdate();
       unPermission();
       unHint();
+      unRoute();
       unTurn();
       unLog();
       unExit();

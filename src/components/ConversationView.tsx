@@ -13,6 +13,7 @@ interface ConversationViewProps {
   onOpenTerminal$?: QRL<(command: string) => void>;
   /** Live retry text for the active agent turn. */
   agentRetryStatus?: string;
+  agentWaitingOn?: string;
   /** True while a folder-agent turn is streaming. Reserves scroll space once
    *  for the whole turn (agent bubbles skip the per-bubble reservation), so
    *  the question can anchor to the top without the view bouncing as
@@ -42,6 +43,7 @@ export default component$<ConversationViewProps>(({
   onPermissionOffscreen$,
   onOpenTerminal$,
   agentRetryStatus,
+  agentWaitingOn,
   agentStreaming,
   tipRef,
   retry$,
@@ -68,6 +70,7 @@ export default component$<ConversationViewProps>(({
           onPermissionOffscreen$={onPermissionOffscreen$}
           onOpenTerminal$={onOpenTerminal$}
           agentRetryStatus={agentRetryStatus}
+          agentWaitingOn={agentWaitingOn}
           onRetry$={message.id ? $(() => retry$(message.id!)) : undefined}
           onRouteRetry$={message.id ? $((target: 'online' | 'device') => retry$(message.id!, target)) : undefined}
           canRouteOnline={canRouteOnline}

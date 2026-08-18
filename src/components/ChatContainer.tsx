@@ -55,6 +55,7 @@ interface ChatContainerProps {
   onOpenTerminal$?: QRL<(command: string) => void>;
   /** Live retry text for the active agent turn. */
   agentRetryStatus?: string;
+  agentWaitingOn?: string;
   /** Hero continuity line: the last conversation, one click to re-enter. */
   lastConversationTitle?: string;
   continueWarming?: boolean;
@@ -169,6 +170,7 @@ export default component$<ChatContainerProps>((props) => {
           onPermissionOffscreen$={props.onPermissionOffscreen$}
           onOpenTerminal$={props.onOpenTerminal$}
           agentRetryStatus={props.agentRetryStatus}
+          agentWaitingOn={props.agentWaitingOn}
           agentStreaming={props.agentStreaming}
           tipRef={tipRef}
           retry$={props.retry$}
