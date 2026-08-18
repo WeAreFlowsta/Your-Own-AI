@@ -1372,6 +1372,25 @@ pub async fn embed_texts(
     }
     ensure_embedding_server(&app_handle, &state, &model).await?;
 
+    // The embedding model runs with a 512-token context and llama-server
+    // rejects the WHOLE request when one input is longer ("input (1756
+    // tokens) is too large to process") - a long user message embedded as
+    // a recall query used to sink every recall in the batch, silently. Cap
+    // each text at a token-safe length; for a query the opening carries the
+    // meaning, and stored documents are already short chunks/facts.
+    const EMBED_MAX_CHARS: usize = 1400;
+    let texts: Vec<String> = texts
+        .into_iter()
+        .map(|t| {
+            if t.chars().count() > EMBED_MAX_CHARS {
+                log::debug!("[embed] truncating a {}-char input to {}", t.chars().count(), EMBED_MAX_CHARS);
+                t.chars().take(EMBED_MAX_CHARS).collect()
+            } else {
+                t
+            }
+        })
+        .collect();
+
     let client = reqwest::Client::new();
     let resp = client
         .post(format!("http://localhost:{}/v1/embeddings", EMBED_PORT))
