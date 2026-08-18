@@ -3,6 +3,38 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [Unreleased]
+
+### Auto permissions for the agent (off by default)
+
+- **New: your AI can run ordinary project work without asking** - reading
+  and searching, editing files inside the project folder, building,
+  testing, routine git. Anything that reaches beyond the folder, cannot
+  be undone, or that it isn't sure about still asks, and the card says
+  why. Off unless you turn it on: Settings > Agent sets the default for
+  new projects; the project chip in the header switches it for one
+  project (remembered per folder, applied live).
+- Judged on your machine: the routine list is a rule-based check that
+  never calls a model. A separate switch lets the AI's model judge grey
+  areas - for an online AI that sends the command to the provider, so it
+  is its own choice.
+- **Every decision is in your records** - actions allowed automatically
+  show as receipts on the rail (with which judge allowed them), and each
+  turn keeps a compact ledger of everything the agent was allowed to do,
+  written into your records with the turn. Permission answers now carry
+  the decision, its scope, when and how it was answered; the app's own
+  automatic allow of project-memory reads is recorded too.
+
+### Fixes
+
+- The hero "Continue" line shows its state the moment you click - a
+  spinner while it opens, and the records-warming message when your
+  records are still loading after launch - instead of nothing for up
+  to ten seconds on a slow machine.
+- Online chat turns send a per-conversation cache key, so consecutive
+  turns reuse the provider's cache and bill at the cached-input rate;
+  Online Models shows that rate.
+
 ## [0.4.1] - 2026-08-16
 
 ### Offline models load on every Windows install
