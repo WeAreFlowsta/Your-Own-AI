@@ -490,7 +490,7 @@ impl OnlinePicks {
 /// is missing (the catalog moved on) selection falls back to the capability
 /// registry, so routing never breaks. The Settings page names these same
 /// models as "Recommended" - keep the two in sync.
-const DEFAULT_FRESH: &str = "online:grok-4.6-search";
+pub(crate) const DEFAULT_FRESH: &str = "online:grok-4.6-search";
 const DEFAULT_HARD_CODE: &str = "online:gpt-5.6-sol";
 const DEFAULT_HARD_GENERAL: &str = "online:gpt-5.6-terra";
 /// The agent slot: the strongest proven tool-driver. Sol runs tools

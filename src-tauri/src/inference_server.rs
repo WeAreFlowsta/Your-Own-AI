@@ -213,6 +213,7 @@ pub fn spawn(app: AppHandle, pre_bound: Option<std::net::TcpListener>) {
             .route("/health", get(|| async { Json(json!({ "status": "ok", "app": "your-own-ai" })) }))
             .route("/v1/models", get(list_models))
             .route("/v1/chat/completions", post(chat_completions))
+            .route("/v1/responses", post(responses_web_search))
             .route("/mcp", post(mcp_post).get(mcp_get))
             .route("/internal/route-preview", get(route_preview))
             .layer(axum::middleware::from_fn_with_state(app.clone(), lan_guard))
@@ -1245,6 +1246,165 @@ async fn mcp_post(
         // notifications/initialized and anything else: acknowledge quietly.
         _ => StatusCode::ACCEPTED.into_response(),
     }
+}
+
+/// `POST /v1/responses` - the Build agent's web_search tool speaks the
+/// OpenAI Responses shape (`model`, `input`, `tools: [{type: web_search}]`)
+/// at this server. Until now nothing answered and the agent saw a bare 404
+/// and quietly fell back to fetching pages by hand. Now: an AI that may go
+/// online (a pinned online model, or Auto - Online and Offline) gets the
+/// search routed to the online search model through the Flowsta proxy, billed
+/// per call like any other online turn; an offline-only AI gets a plain
+/// refusal it can act on (fetch a known URL, or ask the user to switch the
+/// AI's model) instead of a mystery.
+async fn responses_web_search(
+    State(app): State<AppHandle>,
+    Json(body): Json<Value>,
+) -> Response {
+    let model = body.get("model").and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let Some(ai) = resolve_ai(&app, &model) else {
+        return err(
+            StatusCode::NOT_FOUND,
+            &format!("No AI matches model '{model}'. Use one from GET /v1/models."),
+            "model_not_found",
+        );
+    };
+    // The query: `input` is a string, or an array of messages / content parts.
+    let query: String = match body.get("input") {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|it| {
+                if let Some(s) = it.as_str() { return Some(s.to_string()); }
+                match it.get("content") {
+                    Some(Value::String(s)) => Some(s.clone()),
+                    Some(Value::Array(parts)) => Some(
+                        parts.iter().filter_map(|p| p.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join(" "),
+                    ),
+                    _ => it.get("text").and_then(Value::as_str).map(str::to_string),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    };
+    if query.trim().is_empty() {
+        return err(StatusCode::BAD_REQUEST, "No search query in `input`.", "invalid_request");
+    }
+    // May THIS AI go online? Its own model setting is the consent: a pinned
+    // online model, or the automatic mode that is allowed to reach out. Any
+    // offline setting means web search is off for it - a web search is by
+    // definition an online act, so no header or heuristic overrides this.
+    let may_go_online = ai.model.starts_with("online:") || ai.model == "auto:online-offline";
+    if !may_go_online {
+        log::info!("[inference] web search refused for {} - AI is offline-only ({})", ai.name, ai.model);
+        return err(
+            StatusCode::FORBIDDEN,
+            &format!(
+                "Web search is off for '{}': this AI is set to stay offline. Fetch a specific URL you already know instead, or ask the user to set the AI to Auto - Online and Offline (or an online model) if live web results are needed.",
+                ai.name
+            ),
+            "web_search_offline",
+        );
+    }
+    let token = match crate::flowsta::get_access_token(&app).await {
+        Ok(t) => t,
+        Err(_) => {
+            return err(
+                StatusCode::UNAUTHORIZED,
+                "Web search needs the online models: sign in with Flowsta in the app to enable it.",
+                "auth_required",
+            )
+        }
+    };
+    let search_model = crate::router::DEFAULT_FRESH.trim_start_matches("online:");
+    log::info!("[inference] web search for {} via {} ({} chars)", ai.name, search_model, query.len());
+    let upstream = reqwest::Client::new()
+        .post(format!("{}/v1/chat/completions", crate::flowsta::proxy_url()))
+        .bearer_auth(token)
+        .json(&json!({
+            "model": search_model,
+            "messages": [
+                { "role": "system", "content": "You are a web search assistant. Search the web for the user's query and answer concisely with the facts found, citing sources." },
+                { "role": "user", "content": query }
+            ],
+            "stream": true,
+            "max_tokens": 4096
+        }))
+        .send()
+        .await;
+    let upstream = match upstream {
+        Ok(r) => r,
+        Err(e) => return err(StatusCode::BAD_GATEWAY, &format!("Search upstream error: {e}"), "upstream_error"),
+    };
+    let status = upstream.status();
+    let text = upstream.text().await.unwrap_or_default();
+    if !status.is_success() {
+        // Pass the proxy's own reason through (entitlement_required, allowance..)
+        // so the agent's message names the real block.
+        let reason = serde_json::from_str::<Value>(&text)
+            .ok()
+            .and_then(|v| v.pointer("/error/message").and_then(Value::as_str).map(str::to_string))
+            .unwrap_or_else(|| text.chars().take(300).collect());
+        return err(
+            StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
+            &format!("Web search unavailable: {reason}"),
+            "upstream_error",
+        );
+    }
+    // The proxy always streams SSE: gather the answer text and the search
+    // results (title + url) it sends with the final chunk.
+    let mut answer = String::new();
+    let mut sources: Vec<(String, String)> = Vec::new();
+    for line in text.lines() {
+        let Some(data) = line.strip_prefix("data:") else { continue };
+        let data = data.trim();
+        if data.is_empty() || data == "[DONE]" { continue; }
+        let Ok(chunk) = serde_json::from_str::<Value>(data) else { continue };
+        if let Some(c) = chunk.pointer("/choices/0/delta/content").and_then(Value::as_str) {
+            answer.push_str(c);
+        }
+        if let Some(results) = chunk.get("search_results").and_then(Value::as_array) {
+            let found: Vec<(String, String)> = results
+                .iter()
+                .filter_map(|r| {
+                    let url = r["url"].as_str()?.to_string();
+                    let title = r["title"].as_str().unwrap_or(&url).to_string();
+                    Some((title, url))
+                })
+                .collect();
+            if !found.is_empty() { sources = found; }
+        }
+    }
+    let mut out = answer.trim().to_string();
+    if !sources.is_empty() {
+        out.push_str("\n\nSources:\n");
+        for (t, u) in &sources {
+            out.push_str(&format!("- {t}: {u}\n"));
+        }
+    }
+    let annotations: Vec<Value> = sources
+        .iter()
+        .map(|(t, u)| json!({ "type": "url_citation", "title": t, "url": u }))
+        .collect();
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_micros()).unwrap_or(0);
+    let id = format!("resp_{stamp}");
+    // Responses-shaped reply: one output message with the text and citations.
+    Json(json!({
+        "id": id,
+        "object": "response",
+        "model": search_model,
+        "status": "completed",
+        "output": [{
+            "type": "message",
+            "id": format!("msg_{stamp}"),
+            "role": "assistant",
+            "status": "completed",
+            "content": [{ "type": "output_text", "text": out, "annotations": annotations }]
+        }],
+        "output_text": out
+    }))
+    .into_response()
 }
 
 /// Project-memory writes from the MCP tool run in the background; this keeps
