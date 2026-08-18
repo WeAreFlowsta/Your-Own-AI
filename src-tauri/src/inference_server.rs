@@ -1401,6 +1401,12 @@ async fn responses_web_search(
             if !found.is_empty() { sources = found; }
         }
     }
+    // The search model thinks out loud in <think> tags - that is not part of
+    // the answer the agent should read back to the user.
+    let mut answer = answer;
+    while let (Some(a), Some(b)) = (answer.find("<think>"), answer.find("</think>")) {
+        if b > a { answer.replace_range(a..b + "</think>".len(), ""); } else { break; }
+    }
     let mut out = answer.trim().to_string();
     if !sources.is_empty() {
         out.push_str("\n\nSources:\n");
@@ -1408,16 +1414,28 @@ async fn responses_web_search(
             out.push_str(&format!("- {t}: {u}\n"));
         }
     }
+    // Citations in the OpenAI Responses shape the agent parses strictly:
+    // start/end are the URL's character span in the text (required fields).
+    let out_chars: Vec<char> = out.chars().collect();
+    let char_index_of = |needle: &str| -> Option<usize> {
+        out.find(needle).map(|b| out[..b].chars().count())
+    };
     let annotations: Vec<Value> = sources
         .iter()
-        .map(|(t, u)| json!({ "type": "url_citation", "title": t, "url": u }))
+        .map(|(t, u)| {
+            let start = char_index_of(u).unwrap_or(0);
+            let end = (start + u.chars().count()).min(out_chars.len());
+            json!({ "type": "url_citation", "title": t, "url": u, "start_index": start as u32, "end_index": end as u32 })
+        })
         .collect();
-    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_micros()).unwrap_or(0);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let stamp = now.as_micros();
     let id = format!("resp_{stamp}");
     // Responses-shaped reply: one output message with the text and citations.
     Json(json!({
         "id": id,
         "object": "response",
+        "created_at": now.as_secs(),
         "model": search_model,
         "status": "completed",
         "output": [{
