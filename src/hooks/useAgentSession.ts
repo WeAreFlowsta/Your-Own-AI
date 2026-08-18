@@ -230,7 +230,7 @@ const basename = (p: string) => p.split("/").filter(Boolean).pop() || p;
 /** Humanized step label + expandable detail from the tool call's real
  *  input (the `x.ai/tool` meta carries name/kind/label/input; rawInput is
  *  the fallback). "List `.`" becomes "Looking through the folder". */
-function humanizeAction(update: any): { label: string; kind?: string; detail?: string } {
+function humanizeAction(update: any): { label: string; kind?: string; detail?: string; waitFor?: string[] } {
   const meta = update?._meta?.["x.ai/tool"] ?? {};
   const input = { ...(update.rawInput ?? {}), ...(meta.input ?? {}) };
   const kind: string | undefined = meta.kind || update.kind;
@@ -269,6 +269,23 @@ function humanizeAction(update: any): { label: string; kind?: string; detail?: s
     case "fetch":
       return { kind, label: input.url ? `Fetching ${input.url}` : "Fetching from the web", detail: input.url };
     default: {
+      // The agent's "get output / wait" step (title "Background Task") is
+      // the WAIT, not the command: it blocks on task_ids that are the
+      // tool-call ids of earlier backgrounded execute steps - and those ids
+      // are exactly the terminal log filenames. Name it as a wait and carry
+      // the ids so the tailer can show the awaited task's live line HERE,
+      // where the eye is, instead of a bare "Background Task..".
+      const taskIds: string[] = Array.isArray(input.task_ids)
+        ? input.task_ids.filter((t: unknown) => typeof t === "string")
+        : typeof input.task_id === "string" ? [input.task_id] : [];
+      if (taskIds.length) {
+        return {
+          kind: "wait",
+          label: "Waiting for a background task",
+          detail: taskIds.length > 1 ? `${taskIds.length} tasks` : undefined,
+          waitFor: taskIds,
+        };
+      }
       // `use_tool` is the agent's dispatch for MCP tools: the real tool
       // lives in input.tool_name ("project-memory__remember_for_project"),
       // while the title is just "Use Tool" - which the rail showed verbatim,
@@ -704,12 +721,18 @@ export function useAgentSession(props: UseAgentSessionProps) {
       const bubbles = props.chatState.messages
         .filter((m) => m.role === "assistant" && (m.agentLog?.length ?? 0) > 0)
         .slice(-3);
-      const ids = bubbles
+      // Execute steps by their own id, plus every id a wait step is
+      // blocked on (the awaited task IS an execute step, possibly from a
+      // previous turn) - both read the same terminal log.
+      const ids = Array.from(new Set(bubbles
         .flatMap((b) => b.agentLog ?? [])
-        .filter((i) => i.type === "action" && i.action.kind === "execute")
-        .map((i) => (i.type === "action" ? i.action.toolCallId : ""))
-        .filter(Boolean)
-        .slice(-8);
+        .flatMap((i) => {
+          if (i.type !== "action") return [];
+          if (i.action.kind === "execute") return [i.action.toolCallId];
+          if (i.action.waitFor?.length) return i.action.waitFor;
+          return [];
+        })
+        .filter(Boolean))).slice(-8);
       if (!ids.length) return;
       try {
         const logs = (await invokeTauri("read_agent_task_logs", {
@@ -735,7 +758,10 @@ export function useAgentSession(props: UseAgentSessionProps) {
             ...m,
             agentLog: (m.agentLog ?? []).map((i) => {
               if (i.type !== "action") return i;
-              const tail = logs[i.action.toolCallId];
+              // A wait step reads the log of the task it is blocked on; an
+              // execute step reads its own.
+              const logId = i.action.waitFor?.length ? i.action.waitFor[0] : i.action.toolCallId;
+              const tail = logs[logId];
               if (tail === undefined) return i;
               const lines = tail.split("\n").map((l) => l.trim()).filter(Boolean);
               // liveLine only while the log is still growing: a finished
@@ -746,7 +772,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
                   ...i.action,
                   output: tail.trim(),
                   outputLines: lines.length,
-                  liveLine: alive.has(i.action.toolCallId) ? lines[lines.length - 1] : undefined,
+                  liveLine: alive.has(logId) ? lines[lines.length - 1] : undefined,
                 },
               };
             }),
@@ -1239,6 +1265,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
                 output: out.output ?? prev.output,
                 outputLines: out.outputLines ?? prev.outputLines,
                 diff: diff ?? prev.diff,
+                waitFor: human.waitFor ?? prev.waitFor,
               },
             };
           } else {
@@ -1253,6 +1280,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
                 locations,
                 detail: human.detail,
                 diff,
+                waitFor: human.waitFor,
                 ...out,
               },
             });
@@ -1286,8 +1314,12 @@ export function useAgentSession(props: UseAgentSessionProps) {
           if (!input || typeof input !== "object" || typeof input.command === "string") {
             return undefined;
           }
-          if (typeof input.note === "string") return input.note;
-          const strings = Object.entries(input).filter(
+          // use_tool dispatch: the ask's real payload is tool_input (the
+          // note being remembered), never the tool_name string.
+          const payload =
+            input.tool_input && typeof input.tool_input === "object" ? input.tool_input : input;
+          if (typeof payload.note === "string") return payload.note;
+          const strings = Object.entries(payload).filter(
             ([, v]) => typeof v === "string" && (v as string).trim(),
           );
           if (strings.length === 1) return strings[0][1] as string;

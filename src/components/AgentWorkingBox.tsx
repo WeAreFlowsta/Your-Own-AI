@@ -168,6 +168,10 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
       for (let i = log.length - 1; i >= 0; i--) {
         const item = log[i];
         if (item.type === "action" && (item.action.status === "in_progress" || item.action.status === "pending")) {
+          // A wait step that has the awaited task's live line shows THAT
+          // (in full detail) - the script's own last line is what the
+          // reader wants, not "Waiting for a background task..".
+          if (item.action.liveLine && showThoughts.value) return item.action.liveLine.slice(0, 120);
           return `${item.action.label}..`;
         }
       }

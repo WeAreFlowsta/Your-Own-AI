@@ -229,6 +229,9 @@ export interface AgentAction {
    *  agent's terminal logs while the turn runs). Display-only - never
    *  persisted. */
   liveLine?: string;
+  /** For a wait step: the tool-call ids of the backgrounded tasks it is
+   *  blocked on - the terminal logs the tailer should read for it. */
+  waitFor?: string[];
 }
 
 export interface AgentActionDiff {
