@@ -203,14 +203,23 @@ export const AgentPermissionCard = component$<AgentPermissionCardProps>(
           )}
 
           {alwaysOption && (
-            <label class="flex items-center gap-2 text-sm text-[var(--text-muted)] cursor-pointer select-none">
+            // A real control, not a footnote: big box, full-row hit target,
+            // and a visible checked state - the small default box was easy
+            // to miss and hard to hit.
+            <label
+              class={`flex items-center gap-3 rounded-lg border px-3 py-2.5 text-sm cursor-pointer select-none transition-colors ${
+                always.value
+                  ? "border-[var(--text-link)]/60 bg-[var(--text-link)]/10 text-[var(--text-primary)]"
+                  : "border-[var(--border-subtle)] text-[var(--text-secondary)] hover:bg-[var(--bg-main)]"
+              }`}
+            >
               <input
                 type="checkbox"
                 checked={always.value}
                 onChange$={(_, el) => (always.value = el.checked)}
-                class="rounded"
+                class="h-5 w-5 shrink-0 rounded accent-[var(--text-link)] cursor-pointer"
               />
-              {alwaysLabel}
+              <span>{alwaysLabel}</span>
             </label>
           )}
 
