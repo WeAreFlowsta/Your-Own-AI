@@ -90,6 +90,7 @@ fn ensure_agent_model_entry(
     agent_ctx: u64,
     plan_ctx: u64,
     device_workers: bool,
+    web_allowed: bool,
 ) -> Result<(), String> {
     let config_path = home.join(".your-own-ai-build").join("config.toml");
     let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
@@ -191,6 +192,36 @@ fn ensure_agent_model_entry(
     } else {
         format!("{}\n{}", content, roles)
     };
+    // "Offline only" means nothing leaves the machine - and web_fetch is an
+    // outbound request from the user's machine, however innocent the URL.
+    // The harness's feature switch turns the tool off before any network
+    // I/O; web_search is refused separately by the local server (which also
+    // catches a mid-session model change). Written at every session open
+    // from the AI's model setting at that moment.
+    let features_header = "[features]";
+    let features = format!("{features_header}\nweb_fetch = {}\n", if web_allowed { "true" } else { "false" });
+    let content = if let Some(start) = content.find(features_header) {
+        let after = &content[start + features_header.len()..];
+        let end = after
+            .find("\n[")
+            .map(|i| start + features_header.len() + i + 1)
+            .unwrap_or(content.len());
+        // Keep any other feature keys the user set; only web_fetch is ours.
+        let block = &content[start..end];
+        let kept: Vec<&str> = block
+            .lines()
+            .skip(1)
+            .filter(|l| !l.trim_start().starts_with("web_fetch"))
+            .collect();
+        let rebuilt = if kept.is_empty() {
+            features
+        } else {
+            format!("{}{}\n", features, kept.join("\n"))
+        };
+        format!("{}{}{}", &content[..start], rebuilt, &content[end..])
+    } else {
+        format!("{}\n{}", content, features)
+    };
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create agent config dir: {}", e))?;
@@ -254,14 +285,22 @@ pub async fn start_build_agent(
             }
         };
         let device_workers = crate::router::device_subagents_enabled(&app_handle).await;
+        // The AI's own model setting is the consent to go online: a pinned
+        // online model or Auto - Online and Offline may reach the web; every
+        // offline setting keeps the session off it entirely.
+        let web_allowed = ai_model
+            .as_deref()
+            .map(|m| m.starts_with("online:") || m == "auto:online-offline")
+            .unwrap_or(false);
         log::info!(
-            "[agent] model entries for {}: agent ctx {} / planning ctx {} / device workers {}",
+            "[agent] model entries for {}: agent ctx {} / planning ctx {} / device workers {} / web {}",
             slug,
             agent_ctx,
             plan_ctx,
-            device_workers
+            device_workers,
+            if web_allowed { "allowed" } else { "off (offline-only AI)" }
         );
-        ensure_agent_model_entry(&home, slug, agent_ctx, plan_ctx, device_workers)?;
+        ensure_agent_model_entry(&home, slug, agent_ctx, plan_ctx, device_workers, web_allowed)?;
     }
 
     let (mut rx, child) = app_handle

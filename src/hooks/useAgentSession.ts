@@ -1294,6 +1294,23 @@ export function useAgentSession(props: UseAgentSessionProps) {
       }
     });
 
+    // App-side hints about the agent's work that the agent itself may not
+    // word for the user - today: a web search refused because the AI is
+    // offline-only, with how to turn it on. Rendered as narration in the
+    // rail at its true position.
+    const unHint = await listen<any>("agent-hint", (e) => {
+      const text = typeof e.payload?.text === "string" ? e.payload.text : "";
+      if (!text) return;
+      mutateTurn((m) => {
+        const log = [...(m.agentLog ?? [])];
+        // Once per turn per hint kind - the agent may retry the tool.
+        const kind = String(e.payload?.kind ?? "");
+        if (kind && log.some((i) => i.id === `hint-${kind}`)) return m;
+        log.push({ id: kind ? `hint-${kind}` : uuidv4(), type: "narration", text });
+        return { ...m, agentLog: log };
+      });
+    });
+
     const unPermission = await listen<any>("agent-permission", (e) => {
       const params = e.payload?.params ?? {};
       const tc = params.toolCall ?? {};
@@ -1586,6 +1603,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       unReady();
       unUpdate();
       unPermission();
+      unHint();
       unTurn();
       unLog();
       unExit();

@@ -1298,6 +1298,20 @@ async fn responses_web_search(
     let may_go_online = ai.model.starts_with("online:") || ai.model == "auto:online-offline";
     if !may_go_online {
         log::info!("[inference] web search refused for {} - AI is offline-only ({})", ai.name, ai.model);
+        // Tell the rail, so the person sees WHY and how to turn it on -
+        // the agent's own wording of the refusal is not guaranteed.
+        use tauri::Emitter as _;
+        let _ = app.emit(
+            "agent-hint",
+            json!({
+                "kind": "web_search_offline",
+                "ai": ai.name,
+                "text": format!(
+                    "{} stays offline, so it can't search the web. To allow that, set its model to Auto - Online and Offline or an online model (the model chip beside Ask, or the AI's card).",
+                    ai.name
+                )
+            }),
+        );
         return err(
             StatusCode::FORBIDDEN,
             &format!(
