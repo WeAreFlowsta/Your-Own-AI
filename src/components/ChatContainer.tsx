@@ -58,7 +58,7 @@ interface ChatContainerProps {
   agentWaitingOn?: string;
   /** Hero continuity line: the last conversation, one click to re-enter. */
   lastConversationTitle?: string;
-  continueWarming?: boolean;
+  continueState?: "idle" | "opening" | "warming";
   onContinueLast$?: QRL<() => void>;
 }
 
@@ -150,7 +150,7 @@ export default component$<ChatContainerProps>((props) => {
           onAttachFiles$={props.onAttachFiles$}
           onOpenFolder$={props.onOpenFolder$}
           lastConversationTitle={props.lastConversationTitle}
-          continueWarming={props.continueWarming}
+          continueState={props.continueState}
           onContinueLast$={props.onContinueLast$}
           theme={props.theme}
         />

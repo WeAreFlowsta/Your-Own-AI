@@ -230,7 +230,13 @@ export default component$(() => {
   const resumeFolderAsk = useSignal<string | null>(null);
   // A resume that is waiting out the records warmup (drives the hero
   // Continue line's state so the click never looks dead).
-  const resumeWarming = useSignal(false);
+  /** Hero "Continue" line state. Set on the CLICK itself - the resume then
+   *  waits on the conductor and a first transcript read, which on a slow
+   *  machine can take ten seconds or more; a button that shows nothing for
+   *  that long reads as broken. "warming" inside the launch records window
+   *  (utils/recordsWarmup), "opening" otherwise; the poll loop below
+   *  upgrades opening -> warming if reads come back empty in the window. */
+  const resumeState = useSignal<"idle" | "opening" | "warming">("idle");
 
   // Folder guard: opening a workspace with an AI whose model can't drive
   // agent work offers a switch - the folder still opens (workspace is
@@ -311,32 +317,39 @@ export default component$(() => {
    *  keep appending to the same hash. */
   const resumeConversation = $(
     async (target: { hash: string; agentKey: string; aiId?: string }) => {
-      if (chatState.isLoading) return;
+      if (chatState.isLoading || resumeState.value !== "idle") return;
+      // Visible state FIRST - everything below can take seconds.
+      resumeState.value = emptyMayBeWarmup() ? "warming" : "opening";
       conversationsOpen.value = false;
-      // Match the AI by agent key first (robust), then by id.
-      const ai =
-        dynamicModelOptions.value.find(
-          (o) => o.aiConfig?.agentPubKey === target.agentKey,
-        ) ??
-        dynamicModelOptions.value.find((o) => o.id === target.aiId) ??
-        selectedAi.value;
-      selectedAi.value = ai;
-      resetChat();
-      // A resume fired right after launch (the Memory-page handoff or the
-      // hero Continue line) can outrun the conductor - reads would come
-      // back empty and the conversation would look blank or unanswered.
-      await waitForHolochainReady();
-      // "Up" is not "warm": inside the launch grace window a read can
-      // SUCCEED empty while the cell loads its records. Bailing silently
-      // there made "Continue" a dead click - poll through the window with
-      // a visible state instead (utils/recordsWarmup).
-      let loaded = await loadConversationMessages(target.agentKey, target.hash, ai);
-      while (loaded.messages.length === 0 && emptyMayBeWarmup()) {
-        resumeWarming.value = true;
-        await new Promise((r) => setTimeout(r, WARMUP_POLL_MS));
+      let loaded: Awaited<ReturnType<typeof loadConversationMessages>>;
+      let ai = selectedAi.value;
+      try {
+        // Match the AI by agent key first (robust), then by id.
+        ai =
+          dynamicModelOptions.value.find(
+            (o) => o.aiConfig?.agentPubKey === target.agentKey,
+          ) ??
+          dynamicModelOptions.value.find((o) => o.id === target.aiId) ??
+          selectedAi.value;
+        selectedAi.value = ai;
+        resetChat();
+        // A resume fired right after launch (the Memory-page handoff or the
+        // hero Continue line) can outrun the conductor - reads would come
+        // back empty and the conversation would look blank or unanswered.
+        await waitForHolochainReady();
+        // "Up" is not "warm": inside the launch grace window a read can
+        // SUCCEED empty while the cell loads its records. Bailing silently
+        // there made "Continue" a dead click - poll through the window with
+        // a visible state instead (utils/recordsWarmup).
         loaded = await loadConversationMessages(target.agentKey, target.hash, ai);
+        while (loaded.messages.length === 0 && emptyMayBeWarmup()) {
+          resumeState.value = "warming";
+          await new Promise((r) => setTimeout(r, WARMUP_POLL_MS));
+          loaded = await loadConversationMessages(target.agentKey, target.hash, ai);
+        }
+      } finally {
+        resumeState.value = "idle";
       }
-      resumeWarming.value = false;
       const { messages, nextSequence, folderPath } = loaded;
       if (messages.length > 0) noteRecordsSeen();
       if (messages.length === 0) return;
@@ -1170,10 +1183,10 @@ export default component$(() => {
                     sanitizeTitle(lastConversation.value.title)
                   : undefined
               }
-              continueWarming={resumeWarming.value}
+              continueState={resumeState.value}
               onContinueLast$={$(() => {
                 const last = lastConversation.value;
-                if (last && !resumeWarming.value) resumeConversation(last);
+                if (last && resumeState.value === "idle") resumeConversation(last);
               })}
               onPermissionRespond$={respondPermission$}
               onPermissionOffscreen$={$((off: boolean) => {
