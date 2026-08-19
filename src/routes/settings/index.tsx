@@ -830,7 +830,11 @@ export default component$(() => {
                   </button>
                   {routingExplainerOpen.value && (
                     <div class="px-4 pb-4 text-sm text-[var(--text-secondary)] space-y-2">
-                      <p>Health questions never leave your device.</p>
+                      <p>
+                        Health questions go to the model you chose under
+                        Health questions below - on your device by default,
+                        and never online without asking you first.
+                      </p>
                       <p>Questions that need current information go to a live-web model, at the eagerness you set below.</p>
                       <p>Genuinely hard questions can be passed to a stronger online model (Auto - Online and Offline only).</p>
                       <p>Plain conversation asks a model for quick, light thinking; reports, code, and genuinely hard questions get the deep kind - online and on your device alike.</p>
