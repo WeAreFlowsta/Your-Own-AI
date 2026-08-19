@@ -25,14 +25,16 @@ export const UpdateAvailableCallout = component$(() => {
       class="mt-4"
     >
       A newer version is ready.{" "}
-      <a
-        href={`https://yourownai.net/download/`}
-        target="_blank"
-        rel="noopener"
+      <button
+        type="button"
         class="underline"
+        onClick$={async () => {
+          const { openUrl } = await import("@tauri-apps/plugin-opener");
+          await openUrl("https://yourownai.net/download/");
+        }}
       >
         See what's new and download it
-      </a>{" "}
+      </button>{" "}
       whenever suits - nothing updates by itself.
     </Callout>
   );
