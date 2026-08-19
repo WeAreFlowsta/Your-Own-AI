@@ -244,6 +244,10 @@ export default component$(() => {
   // banner, NEVER as a silently blank conversation (which reads as
   // data loss, the one message a records product must never send).
   const resumeWarning = useSignal<string | null>(null);
+  // The title of the conversation being opened RIGHT NOW - the hero line
+  // otherwise shows the last-conversation pointer's title, which is wrong
+  // when resuming an older conversation from the drawer.
+  const openingTitle = useSignal<string | null>(null);
 
   // Folder guard: opening a workspace with an AI whose model can't drive
   // agent work offers a switch - the folder still opens (workspace is
@@ -359,9 +363,10 @@ export default component$(() => {
   });
 
   const resumeConversation = $(
-    async (target: { hash: string; agentKey: string; aiId?: string }) => {
+    async (target: { hash: string; agentKey: string; aiId?: string; title?: string }) => {
       if (chatState.isLoading || resumeState.value !== "idle") return;
       // Visible state FIRST - everything below can take seconds.
+      openingTitle.value = target.title ?? null;
       resumeState.value = emptyMayBeWarmup() ? "warming" : "opening";
       conversationsOpen.value = false;
       let loaded: Awaited<ReturnType<typeof loadConversationMessages>>;
@@ -392,6 +397,7 @@ export default component$(() => {
         }
       } finally {
         resumeState.value = "idle";
+        openingTitle.value = null;
       }
       const { messages, nextSequence, folderPath } = loaded;
       if (messages.length > 0) noteRecordsSeen();
@@ -1272,10 +1278,11 @@ export default component$(() => {
               onOpenFolder$={openFolder$}
               onOpenTerminal$={handleOpenTerminal}
               lastConversationTitle={
-                lastConversation.value
+                openingTitle.value ??
+                (lastConversation.value
                   ? getConversationTitleOverride(lastConversation.value.hash) ??
                     sanitizeTitle(lastConversation.value.title)
-                  : undefined
+                  : undefined)
               }
               continueState={resumeState.value}
               onContinueLast$={$(() => {
@@ -1729,6 +1736,7 @@ export default component$(() => {
             hash: item.conversation.hash,
             agentKey: item.conversation.agent_key,
             aiId: item.aiId,
+            title: item.title,
           }),
         )}
         onRename$={$((hash: string, title: string) => {
