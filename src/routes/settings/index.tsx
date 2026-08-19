@@ -569,6 +569,30 @@ export default component$(() => {
   const cellReportText = useSignal("");
   const cellReportPath = useSignal("");
   const cellReportError = useSignal("");
+  const cellCleanupBusy = useSignal(false);
+  const cellCleanupText = useSignal("");
+  const cellCleanupError = useSignal("");
+  const runCellCleanup = $(async () => {
+    if (cellCleanupBusy.value) return;
+    cellCleanupBusy.value = true;
+    cellCleanupError.value = "";
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const r = (await invoke("cell_cleanup")) as {
+        summary: { disabled: number; kept: number; errors: number };
+        path: string;
+      };
+      cellCleanupText.value =
+        `Turned off ${r.summary.disabled} empty storage areas; ` +
+        `${r.summary.kept} kept` +
+        (r.summary.errors ? `; ${r.summary.errors} could not be changed` : "") +
+        ". Restart the app to feel the difference.";
+    } catch (e) {
+      cellCleanupError.value = `Tidying couldn't finish: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      cellCleanupBusy.value = false;
+    }
+  });
   const runCellReport = $(async () => {
     if (cellReportBusy.value) return;
     cellReportBusy.value = true;
@@ -1472,6 +1496,33 @@ export default component$(() => {
                   )}
                   {cellReportError.value && (
                     <p class="mt-3 text-xs text-red-400">{cellReportError.value}</p>
+                  )}
+                  {cellReportText.value && (
+                    <div class="mt-4">
+                      <p class="text-sm text-[var(--text-secondary)] mb-3">
+                        <span class="font-semibold text-[var(--text-primary)]">
+                          Tidy records storage
+                        </span>{" "}
+                        - turns off the empty storage areas the check found.
+                        Nothing is deleted and nothing with conversations is
+                        touched; an area can be turned back on if ever needed.
+                      </p>
+                      <LiquidMetalButton
+                        variant="secondary"
+                        onClick$={runCellCleanup}
+                        class="px-4 py-2 text-sm"
+                      >
+                        {cellCleanupBusy.value ? "Tidying.." : "Tidy records storage"}
+                      </LiquidMetalButton>
+                      {cellCleanupText.value && !cellCleanupBusy.value && (
+                        <p class="mt-3 text-xs text-[var(--text-muted)]">
+                          {cellCleanupText.value}
+                        </p>
+                      )}
+                      {cellCleanupError.value && (
+                        <p class="mt-3 text-xs text-red-400">{cellCleanupError.value}</p>
+                      )}
+                    </div>
                   )}
                 </div>
               </section>
