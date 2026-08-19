@@ -465,13 +465,19 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
           })}
 
         {/* The words being said right now - same register as settled text
-            and the final answer, streaming outside the keyed list. */}
-        {trailingNarration.value && (
-          <div
-            class="markdown-content text-[var(--text-primary)] text-base leading-relaxed py-1.5 break-words overflow-hidden"
-            dangerouslySetInnerHTML={renderMarkdown(trailingNarration.value.text)}
-          />
-        )}
+            and the final answer. The streaming innerHTML node lives inside
+            its OWN stable wrapper: Qwik's diffing of a churning innerHTML
+            node corrupts SIBLINGS (the long-standing duplicated brain-
+            toggle sightings on the pearl row) - the wrapper absorbs the
+            churn so nothing outside it is ever that node's neighbor. */}
+        <div key="trailing-narration-wrap">
+          {trailingNarration.value && (
+            <div
+              class="markdown-content text-[var(--text-primary)] text-base leading-relaxed py-1.5 break-words overflow-hidden"
+              dangerouslySetInnerHTML={renderMarkdown(trailingNarration.value.text)}
+            />
+          )}
+        </div>
         {/* The pearl - the turn's one point of life. Its OWN element at the
             very END of the flow - after streaming speech too - so it is
             always at the visible tip no matter what the rail ends with. It
@@ -480,7 +486,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
             was a small dot buried above text already read, and the turn
             looked dead exactly when the model was working hardest. */}
         {working && tipHere && (
-          <div class="relative pl-7 my-1.5">
+          <div key="live-pearl" class="relative pl-7 my-1.5">
             <div
               class="absolute left-[8px] top-0 bottom-1 w-[2px] rounded-full opacity-50"
               style={{ background: METAL }}
