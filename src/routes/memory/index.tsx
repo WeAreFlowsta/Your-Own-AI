@@ -9,7 +9,6 @@ import {
   component$,
   useContext,
   useSignal,
-  useTask$,
   useVisibleTask$,
   $,
   type Signal,
