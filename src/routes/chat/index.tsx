@@ -324,10 +324,29 @@ export default component$(() => {
    *  guarded follow below owns the viewport from then on. Two passes: one
    *  after render, one after late layout (thumbnails, code blocks). */
   const jumpToLatest = $(() => {
-    const jump = () =>
-      messagesEndRef.value?.scrollIntoView({ behavior: "instant" as ScrollBehavior, block: "end" });
+    // "auto" (non-animated) - the newer "instant" enum THROWS a TypeError on
+    // webviews that predate it, silently killing the jump. Retry until the
+    // end sentinel exists and the container has actually reached the bottom
+    // (a long thread renders in waves on modest hardware), capped at ~2.5s.
+    let tries = 0;
+    const jump = () => {
+      tries++;
+      const end = messagesEndRef.value;
+      if (end) {
+        try {
+          end.scrollIntoView({ behavior: "auto", block: "end" });
+        } catch {
+          /* keep retrying */
+        }
+        const container = end.closest(".overflow-y-auto") as HTMLElement | null;
+        const atBottom =
+          !container ||
+          container.scrollHeight - container.scrollTop - container.clientHeight < 40;
+        if (atBottom && tries > 2) return; // settled
+      }
+      if (tries < 17) setTimeout(jump, 150);
+    };
     setTimeout(jump, 0);
-    setTimeout(jump, 250);
   });
 
   const resumeConversation = $(

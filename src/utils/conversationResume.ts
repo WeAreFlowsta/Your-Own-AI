@@ -88,10 +88,28 @@ export async function loadConversationMessages(
         model: "user",
       };
     }
+    // A recorded agent turn whose model spoke its conclusion mid-way and
+    // finished on silent tool steps has EMPTY content with the words inside
+    // the log (turns recorded before the 0.5.0 promotion fix, and any log
+    // shape that slips through) - promote the last substantial spoken
+    // passage for display so history never shows a wordless fold.
+    let content = e.content;
+    let logItems = e.agent_log?.items?.length ? e.agent_log.items : undefined;
+    if (content === "" && logItems) {
+      for (let i = logItems.length - 1; i >= 0; i--) {
+        const item = logItems[i] as { type?: string; id?: string; text?: string };
+        if (item.type !== "narration") continue;
+        if (item.id?.startsWith("hint-") || item.id === "log-trimmed") continue;
+        if (!item.text || item.text.trim().length < 40) continue;
+        content = item.text;
+        logItems = [...logItems.slice(0, i), ...logItems.slice(i + 1)];
+        break;
+      }
+    }
     return {
       id: uuidv4(),
       role: "assistant",
-      content: e.content,
+      content,
       model: ai.id,
       aiLabel: ai.label,
       aiImageUrl: ai.imageUrl || undefined,
@@ -115,7 +133,7 @@ export async function loadConversationMessages(
       // stored working log, expandable to the full story (step outputs
       // are not persisted - those rows simply are not expandable).
       agentTurn: e.agent_log?.items?.length ? true : undefined,
-      agentLog: e.agent_log?.items?.length ? e.agent_log.items : undefined,
+      agentLog: logItems,
       agentStats: e.agent_log?.stats ?? undefined,
     };
   });
