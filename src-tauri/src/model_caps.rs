@@ -85,6 +85,19 @@ pub fn known_caps(model_name: &str) -> Option<Caps> {
     if n.contains("deepseek") || n.contains("-r1") || n.contains("qwq") {
         return Some(Caps { overall: 8, coding: 6, reasoning: 9, math: 9, vision: 0, medical: 3 });
     }
+    // Empero's Qwen 3.8 distills (Aug 2026): the flagship's knowledge pressed
+    // into 2B/4B/9B on the Qwen3.5 arch - strong FOR SIZE, text-only. Must
+    // precede the flagship arm below or a 2B would score like a frontier 27B
+    // and hijack Auto's rankings.
+    if n.contains("qwen3.8-9b") {
+        return Some(Caps { overall: 8, coding: 7, reasoning: 8, math: 8, vision: 0, medical: 3 });
+    }
+    if n.contains("qwen3.8-4b") {
+        return Some(Caps { overall: 7, coding: 6, reasoning: 7, math: 7, vision: 0, medical: 3 });
+    }
+    if n.contains("qwen3.8-2b") {
+        return Some(Caps { overall: 6, coding: 5, reasoning: 6, math: 6, vision: 0, medical: 3 });
+    }
     // Qwen 3.8 (Aug 2026): frontier-class dense 27B with native vision.
     // Must precede the generic qwen3 arm ("qwen3.8" contains "qwen3").
     if n.contains("qwen3.8") || n.contains("qwen-3.8") {
@@ -137,6 +150,11 @@ pub fn agent_caps(model_name: &str) -> u8 {
     }
     if n.contains("coder") || n.contains("-code") || n.contains("codestral") || n.contains("devstral") {
         return 8;
+    }
+    // The 2B/4B/9B distills are Qwen3.5-ARCH (its chat template, not the
+    // flagship's Developer-role format) - the generic qwen3 tier fits them.
+    if n.contains("qwen3.8-9b") || n.contains("qwen3.8-4b") || n.contains("qwen3.8-2b") {
+        return 7;
     }
     // Qwen 3.8 shipped a dedicated tool-call format ("Developer role") and
     // upstream llama.cpp grew a qwen3 parser for it. Above generic qwen3.
@@ -370,6 +388,16 @@ mod tests {
 #[cfg(test)]
 mod specialist_tests {
     use super::is_specialist;
+
+    #[test]
+    fn qwen38_distills_score_below_the_flagship() {
+        let flagship = super::caps_for("Qwen3.8-27B-Q4_K_M.gguf");
+        let d9 = super::caps_for("Qwen3.8-9B-Q4_K_M.gguf");
+        let d2 = super::caps_for("Qwen3.8-2B-Q4_K_M.gguf");
+        assert!(d9.overall < flagship.overall, "9B distill must rank below the 27B");
+        assert!(d2.overall < d9.overall, "2B must rank below 9B");
+        assert_eq!(d9.vision, 0, "distills are text-only");
+    }
 
     #[test]
     fn medgemma_is_a_specialist_generalists_are_not() {

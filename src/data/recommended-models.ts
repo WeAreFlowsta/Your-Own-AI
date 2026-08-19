@@ -311,10 +311,10 @@ export const VISION_PROJECTORS: CapabilityModel[] = [
     description:
       'Lets the Qwythos 9B model see images you attach — diagrams, screenshots, photos. Needs the Qwythos 9B model downloaded.',
     // Filename must prefix the model file so the conductor pairs them (find_projector_for).
-    filename: 'Qwythos-9B-Claude-Mythos-5-1M-mmproj-F16.gguf',
+    filename: 'Qwythos-9B-v2-mmproj-BF16.gguf',
     downloadUrl:
-      'https://huggingface.co/empero-ai/Qwythos-9B-Claude-Mythos-5-1M-GGUF/resolve/main/mmproj-Qwythos-9B-Claude-Mythos-5-1M-F16.gguf',
-    size: 0.9, // ~900 MB
+      'https://huggingface.co/empero-ai/Qwythos-9B-v2-GGUF/resolve/main/mmproj-Qwythos-9B-v2-BF16.gguf',
+    size: 0.9, // ~920 MB
   },
 ];
 
@@ -845,11 +845,48 @@ export const modelFamilies: ModelFamily[] = [
     ],
   },
   {
+    id: 'qwen-3.8-distilled',
+    contextWindow: 262144,
+    released: '2026-08-16',
+    name: 'Qwen 3.8 Distilled',
+    description: "Empero's full-parameter distillations of the Qwen 3.8 flagship into small, fast sizes - a big knowledge jump over same-size models (the 9B scores near the giants on broad knowledge), with step-by-step reasoning. Text only.",
+    category: 'specialist',
+    recommended: false,
+    capabilities: ['reasoning', 'analysis', 'writing', 'chat'],
+    traits: ['new', 'distilled', 'thinking'],
+    variants: [
+      {
+        parameterCount: '2B',
+        size: 1.3,
+        minRAM: 4,
+        downloadUrl: 'https://huggingface.co/empero-ai/Qwen3.8-2B-GGUF/resolve/main/Qwen3.8-2B-Q4_K_M.gguf',
+        filename: 'Qwen3.8-2B-Q4_K_M.gguf',
+        quantization: 'Q4_K_M'
+      },
+      {
+        parameterCount: '4B',
+        size: 2.8,
+        minRAM: 8,
+        downloadUrl: 'https://huggingface.co/empero-ai/Qwen3.8-4B-GGUF/resolve/main/Qwen3.8-4B-Q4_K_M.gguf',
+        filename: 'Qwen3.8-4B-Q4_K_M.gguf',
+        quantization: 'Q4_K_M'
+      },
+      {
+        parameterCount: '9B',
+        size: 5.8,
+        minRAM: 16,
+        downloadUrl: 'https://huggingface.co/empero-ai/Qwen3.8-9B-GGUF/resolve/main/Qwen3.8-9B-Q4_K_M.gguf',
+        filename: 'Qwen3.8-9B-Q4_K_M.gguf',
+        quantization: 'Q4_K_M'
+      }
+    ]
+  },
+  {
     id: 'qwythos-9b',
     contextWindow: 1048576,
-    released: '2026-06-19',
+    released: '2026-07-12',
     name: 'Qwythos 9B',
-    description: 'A community Qwen 3.5-based merge — uncensored and multimodal (it can see images you attach), with step-by-step reasoning and tool use. A creative, unfiltered generalist.',
+    description: 'A community Qwen 3.5-based merge — uncensored and multimodal (it can see images you attach), with step-by-step reasoning and tool use. A creative, unfiltered generalist. v2 trains out the repetition loops of the original.',
     category: 'specialist',
     recommended: false,
     capabilities: ['reasoning', 'agentic', 'writing', 'long-context'],
@@ -858,10 +895,10 @@ export const modelFamilies: ModelFamily[] = [
     variants: [
       {
         parameterCount: '9B',
-        size: 5.6,
+        size: 5.4,
         minRAM: 16,
-        downloadUrl: 'https://huggingface.co/empero-ai/Qwythos-9B-Claude-Mythos-5-1M-GGUF/resolve/main/Qwythos-9B-Claude-Mythos-5-1M-Q4_K_M.gguf',
-        filename: 'Qwythos-9B-Claude-Mythos-5-1M-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/empero-ai/Qwythos-9B-v2-GGUF/resolve/main/Qwythos-9B-v2-Q4_K_M.gguf',
+        filename: 'Qwythos-9B-v2-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       }
     ]
