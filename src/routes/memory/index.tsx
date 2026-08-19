@@ -268,7 +268,12 @@ export default component$(() => {
   const memoryFolder = useContext(ProjectMemoryContext);
 
   const workspacesWarming = useSignal(false);
-  useTask$(async ({ track, cleanup }) => {
+  // useVisibleTask$, NOT useTask$ (gotcha #21): a tracked useTask$ that
+  // awaits blocks the component's re-renders until it settles - and
+  // readThroughWarmup deliberately polls for minutes during records
+  // warmup, which froze every tab switch on this page.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async ({ track, cleanup }) => {
     const tab = track(() => activeTab.value);
     const reopened = track(() => memoryFolder.value);
     if (tab !== "workspaces" || reopened) return;
