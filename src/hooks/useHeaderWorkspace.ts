@@ -19,7 +19,7 @@ export function useHeaderWorkspace() {
   const folderStatus = useSignal<"starting" | "ready" | "stopped" | undefined>(undefined);
   // The open project's permission mode (per-folder choice, else the Settings
   // default) - display only here; the chat route owns switching it.
-  const permissionMode = useSignal<"ask" | "auto">("ask");
+  const permissionMode = useSignal<"ask" | "auto" | "all">("ask");
 
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async ({ cleanup }) => {

@@ -82,9 +82,9 @@ interface AppHeaderProps {
   onCloseFolder$?: QRL<() => void>;
   /** This project's permission mode (ask = default; auto = ordinary project
    *  work runs unasked, every decision still recorded). */
-  permissionMode?: 'ask' | 'auto';
+  permissionMode?: 'ask' | 'auto' | 'all';
   /** Switch this project's permission mode (remembered for the folder). */
-  onSetPermissionMode$?: QRL<(mode: 'ask' | 'auto') => void>;
+  onSetPermissionMode$?: QRL<(mode: 'ask' | 'auto' | 'all') => void>;
   /** Installed agent supports Auto (v0.2.0+); false disables the Auto
    *  button and points at the update card in Settings > Components. */
   autoPermissionsSupported?: boolean;
@@ -315,12 +315,16 @@ export default component$<AppHeaderProps>(
                 >
                   {'‎' + displayPath(folderPath)}
                 </span>
-                {permissionMode === 'auto' && (
+                {permissionMode !== 'ask' && (
                   <span
                     class="shrink-0 rounded-full border border-[var(--border-subtle)] px-1.5 text-[10px] uppercase tracking-wide text-[var(--text-muted)]"
-                    title="Auto permissions: ordinary work inside this folder runs without asking; every decision is in your records"
+                    title={
+                      permissionMode === 'all'
+                        ? 'Approve everything: nothing asks; every action is in your records'
+                        : 'Auto permissions: ordinary work inside this folder runs without asking; every decision is in your records'
+                    }
                   >
-                    auto
+                    {permissionMode === 'all' ? 'all' : 'auto'}
                   </span>
                 )}
                 {folderStatus === 'stopped' && (
@@ -369,18 +373,18 @@ export default component$<AppHeaderProps>(
                           <span class="block text-xs text-[var(--text-muted)] mb-1.5">
                             Permissions in this project
                           </span>
-                          <span class="grid grid-cols-2 gap-1.5">
-                            {(['ask', 'auto'] as const).map((mode) => (
+                          <span class="grid grid-cols-3 gap-1.5">
+                            {(['ask', 'auto', 'all'] as const).map((mode) => (
                               <button
                                 key={mode}
                                 type="button"
-                                disabled={mode === 'auto' && !autoPermissionsSupported}
+                                disabled={mode !== 'ask' && !autoPermissionsSupported}
                                 onClick$={(e) => {
                                   e.stopPropagation();
                                   onSetPermissionMode$(mode);
                                 }}
                                 class={`rounded-full border px-2 py-1 text-xs ${
-                                  mode === 'auto' && !autoPermissionsSupported
+                                  mode !== 'ask' && !autoPermissionsSupported
                                     ? 'border-[var(--border-subtle)] text-[var(--text-muted)] opacity-60 cursor-not-allowed'
                                     : permissionMode === mode
                                       ? 'border-[var(--text-secondary)] text-[var(--text-primary)] font-medium'
@@ -388,13 +392,15 @@ export default component$<AppHeaderProps>(
                                 }`}
                                 title={
                                   mode === 'ask'
-                                    ? 'Your AI asks before it runs commands or changes files.'
-                                    : autoPermissionsSupported
-                                      ? 'Ordinary work inside this folder runs without asking - reading, editing project files, building, testing, routine git. Anything beyond the folder, irreversible, or unclear still asks. Every decision is written to your records.'
-                                      : 'Needs a newer Your Own AI Build - update it in Settings > Components, then reopen the project.'
+                                    ? 'Your AI asks before every command and file change.'
+                                    : !autoPermissionsSupported
+                                      ? 'Needs a newer Your Own AI Build - update it in Settings > Components, then reopen the project.'
+                                      : mode === 'auto'
+                                        ? 'Ordinary work in this folder runs without asking; risky, irreversible, or outside-the-folder actions ask.'
+                                        : 'Nothing asks. Every action is still written to your records.'
                                 }
                               >
-                                {mode === 'ask' ? 'Ask' : 'Auto'}
+                                {mode === 'ask' ? 'Ask' : mode === 'auto' ? 'Auto' : 'Everything'}
                               </button>
                             ))}
                           </span>

@@ -280,7 +280,7 @@ export interface AgentPermission {
   via?: 'button' | 'reply' | 'auto' | 'expired';
   /** For via "auto": which judge allowed it - the harness's routine
    *  fast path, its rule-based classifier, a model, or the app's own policy. */
-  autoReason?: 'fast_path' | 'heuristic' | 'model' | 'app_policy';
+  autoReason?: 'fast_path' | 'heuristic' | 'model' | 'app_policy' | 'always';
   /** Why an ask reached the user while Auto was on (from the harness's
    *  prompt trigger on the request) - shown on the card. */
   promptReason?: string;

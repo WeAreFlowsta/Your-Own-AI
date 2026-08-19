@@ -31,7 +31,6 @@ import type {
 } from "../types";
 import {
   buildSupportsAutoPermissions,
-  judgeEnabled,
   permissionModeForFolder,
   setPermissionModeForFolder,
   type AgentPermissionMode,
@@ -863,8 +862,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         // saves deliberately are written to THIS AI's chain, labeled.
         agentKey: props.selectedAi.value.aiConfig?.agentPubKey ?? null,
         aiLabel: props.selectedAi.value.label ?? null,
-        autoPermissions: state.permissionMode === "auto",
-        autoJudge: judgeEnabled(),
+        permissionMode: state.permissionMode,
       });
     } catch (err) {
       state.status = "idle";
@@ -926,12 +924,12 @@ export function useAgentSession(props: UseAgentSessionProps) {
    *  apply it to the open session live - the harness honours it from the
    *  next ask. */
   const setPermissionMode$ = $(async (mode: AgentPermissionMode) => {
-    if (mode === "auto" && !state.autoPermissionsSupported) return;
+    if (mode !== "ask" && !state.autoPermissionsSupported) return;
     state.permissionMode = mode;
     if (state.folderPath) setPermissionModeForFolder(state.folderPath, mode);
     if (state.status !== "idle" && state.status !== "stopped") {
       try {
-        await invokeTauri("set_agent_auto_permissions", { enabled: mode === "auto" });
+        await invokeTauri("set_agent_permission_mode", { mode });
       } catch (err) {
         console.warn("[Agent] permission mode switch did not reach the agent:", err);
       }
@@ -1558,17 +1556,19 @@ export function useAgentSession(props: UseAgentSessionProps) {
             reason === "auto_fast_path"
               ? "fast_path"
               : reason === "auto_classifier_allow"
-                ? judgeEnabled()
-                  ? "model"
-                  : "heuristic"
-                : "app_policy";
+                ? "model"
+                : reason === "yolo"
+                  ? "always"
+                  : "app_policy";
           const subject = detail ?? String(ev.tool_name ?? "an action");
           const why =
             autoReason === "fast_path"
               ? "routine work in the project"
               : autoReason === "model"
                 ? "judged ordinary work by the AI"
-                : "on the routine list";
+                : autoReason === "always"
+                  ? "your approve-everything setting"
+                  : "on the routine list";
           const permission: AgentPermission = {
             requestId,
             toolCallId,

@@ -38,11 +38,10 @@ import {
 } from "../../utils/medicalModel";
 import { modelManager } from "../../utils/modelManager";
 import {
-  AUTO_PERMISSIONS_COPY,
+  PERMISSION_MODE_COPY,
   defaultPermissionMode,
-  judgeEnabled,
   setDefaultPermissionMode,
-  setJudgeEnabled,
+  type AgentPermissionMode,
 } from "../../utils/agentPermissions";
 import { LuChevronDown } from "@qwikest/icons/lucide";
 
@@ -271,10 +270,9 @@ export default component$(() => {
   const showChatModelChip = useSignal(true);
   const showHelpTips = useSignal(true);
   const allowAttachmentsOnline = useSignal(false);
-  // Agent: auto permissions default for new projects + the model judge - both off unless set.
-  const agentAutoDefault = useSignal(false);
+  // Agent: the permission default for new projects - ask unless set.
+  const agentPermMode = useSignal<AgentPermissionMode>("ask");
   const checkUpdates = useSignal(true);
-  const agentJudge = useSignal(false);
   // Health questions: which installed model answers them (always offline).
   const medicalModel = useSignal<string>("");
   const installedChatModels = useSignal<string[]>([]);
@@ -332,9 +330,8 @@ export default component$(() => {
     showHelpTips.value = helpTipsEnabled();
     allowAttachmentsOnline.value =
       localStorage.getItem("allowAttachmentsOnline") === "true";
-    agentAutoDefault.value = defaultPermissionMode() === "auto";
+    agentPermMode.value = defaultPermissionMode();
     checkUpdates.value = updateChecksEnabled();
-    agentJudge.value = judgeEnabled();
     (async () => {
       try {
         installedChatModels.value = (await modelManager.listModels()).map((m) => m.name);
@@ -478,25 +475,12 @@ export default component$(() => {
     checkUpdates.value = !checkUpdates.value;
     setUpdateChecksEnabled(checkUpdates.value);
   });
-  const toggleAgentAutoDefault = $(() => {
-    agentAutoDefault.value = !agentAutoDefault.value;
-    setDefaultPermissionMode(agentAutoDefault.value ? "auto" : "ask");
-  });
-  const toggleAgentJudge = $(async () => {
-    agentJudge.value = !agentJudge.value;
-    setJudgeEnabled(agentJudge.value);
-    // Apply immediately: rewrite the harness config and rewire an open
-    // session - and verify the write stuck (a lost click here once cost a
+  const setAgentPermMode = $((mode: AgentPermissionMode) => {
+    agentPermMode.value = mode;
+    setDefaultPermissionMode(mode);
+    // Retry once if the write was swallowed (a lost click here once cost a
     // whole session of unexpected asks).
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("set_agent_judge", { enabled: agentJudge.value });
-    } catch (err) {
-      console.warn("[agent] judge apply failed:", err);
-    }
-    if (judgeEnabled() !== agentJudge.value) {
-      setJudgeEnabled(agentJudge.value); // one retry on a swallowed write
-    }
+    if (defaultPermissionMode() !== mode) setDefaultPermissionMode(mode);
   });
 
   const toggleAttachmentsOnline = $(async () => {
@@ -1273,22 +1257,32 @@ export default component$(() => {
                   The default for projects you open from now on - each project
                   can choose its own from the project chip in the header.
                 </p>
-                <div class="space-y-5">
-                  <SettingToggle
-                    title={AUTO_PERMISSIONS_COPY.title}
-                    checked={agentAutoDefault}
-                    onToggle$={toggleAgentAutoDefault}
-                  >
-                    {AUTO_PERMISSIONS_COPY.body} Off: it asks every time.
-                  </SettingToggle>
-                  <SettingToggle
-                    title={AUTO_PERMISSIONS_COPY.judgeTitle}
-                    checked={agentJudge}
-                    onToggle$={toggleAgentJudge}
-                  >
-                    {AUTO_PERMISSIONS_COPY.judgeBody}
-                  </SettingToggle>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {(["ask", "auto", "all"] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      onClick$={() => setAgentPermMode(mode)}
+                      class={`text-left rounded-xl p-3 border transition-colors ${
+                        agentPermMode.value === mode
+                          ? "bg-[var(--bg-button-primary)] text-[var(--text-button-primary)] border-[var(--border-subtle)]"
+                          : "bg-[var(--bg-main)] text-[var(--text-primary)] border-[var(--border-subtle)] hover:opacity-90"
+                      }`}
+                      aria-pressed={agentPermMode.value === mode}
+                    >
+                      <div class="font-semibold text-sm">{PERMISSION_MODE_COPY[mode].label}</div>
+                      <div
+                        class={`text-xs mt-1 ${
+                          agentPermMode.value === mode ? "" : "text-[var(--text-secondary)]"
+                        }`}
+                      >
+                        {PERMISSION_MODE_COPY[mode].hint}
+                      </div>
+                    </button>
+                  ))}
                 </div>
+                <p class="text-xs text-[var(--text-muted)] mt-2">
+                  Whatever you choose, every action goes in your records.
+                </p>
               </section>
 
               {/* On-demand capability models (memory recall, etc.) */}
