@@ -482,9 +482,21 @@ export default component$(() => {
     agentAutoDefault.value = !agentAutoDefault.value;
     setDefaultPermissionMode(agentAutoDefault.value ? "auto" : "ask");
   });
-  const toggleAgentJudge = $(() => {
+  const toggleAgentJudge = $(async () => {
     agentJudge.value = !agentJudge.value;
     setJudgeEnabled(agentJudge.value);
+    // Apply immediately: rewrite the harness config and rewire an open
+    // session - and verify the write stuck (a lost click here once cost a
+    // whole session of unexpected asks).
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("set_agent_judge", { enabled: agentJudge.value });
+    } catch (err) {
+      console.warn("[agent] judge apply failed:", err);
+    }
+    if (judgeEnabled() !== agentJudge.value) {
+      setJudgeEnabled(agentJudge.value); // one retry on a swallowed write
+    }
   });
 
   const toggleAttachmentsOnline = $(async () => {

@@ -360,8 +360,9 @@ pub async fn start_build_agent(
     }
     let auto_mode = auto_permissions.unwrap_or(false);
     log::info!(
-        "[agent] permissions for this session: {}",
-        if auto_mode { "auto (ordinary project work runs unasked)" } else { "ask" }
+        "[agent] permissions for this session: {} (judge: {})",
+        if auto_mode { "auto (ordinary project work runs unasked)" } else { "ask" },
+        if auto_judge.unwrap_or(false) { "model" } else { "heuristic" }
     );
 
     let (mut rx, child) = app_handle
@@ -694,6 +695,39 @@ pub async fn respond_agent_permission(
         }),
     )
     .await
+}
+
+/// Apply the grey-area judge choice immediately: rewrite the harness config
+/// and, when a session is open, bounce auto mode so the classifier rewires
+/// (the harness reads the config at wire time). Without this the Settings
+/// toggle only took effect at the NEXT project open.
+#[tauri::command]
+pub async fn set_agent_judge(
+    app_handle: AppHandle,
+    state: State<'_, AgentBridgeState>,
+    enabled: bool,
+) -> Result<(), String> {
+    let home = app_handle
+        .path()
+        .home_dir()
+        .map_err(|e| format!("cannot resolve home dir: {}", e))?;
+    ensure_agent_permission_config(&home, enabled)?;
+    log::info!("[agent] grey-area judge set to {}", if enabled { "model" } else { "heuristic" });
+    // Rewire a live session by bouncing auto off/on; harmless when the
+    // session is in ask mode (enabled=false arrives twice).
+    if state.session_id.lock().await.is_some() {
+        let off = json!({
+            "jsonrpc": "2.0", "method": "x.ai/yolo_mode_changed",
+            "params": { "clientIdentifier": CLIENT_IDENTIFIER, "auto_mode": false, "permission_mode": "ask" }
+        });
+        let on = json!({
+            "jsonrpc": "2.0", "method": "x.ai/yolo_mode_changed",
+            "params": { "clientIdentifier": CLIENT_IDENTIFIER, "auto_mode": true, "permission_mode": "auto" }
+        });
+        let _ = write_line(&state, &off).await;
+        let _ = write_line(&state, &on).await;
+    }
+    Ok(())
 }
 
 /// Flip auto permissions for the OPEN session without a restart. The harness
