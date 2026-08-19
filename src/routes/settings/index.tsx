@@ -1254,8 +1254,10 @@ export default component$(() => {
                   Agent
                 </h2>
                 <p class="text-sm text-[var(--text-secondary)] mb-4">
-                  The default for projects you open from now on - each project
-                  can choose its own from the project chip in the header.
+                  The default for projects you open from now on. Each project
+                  can choose its own from the project chip in the header - and
+                  a project that has chosen keeps its choice, whatever changes
+                  here.
                 </p>
                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   {(["ask", "auto", "all"] as const).map((mode) => (
