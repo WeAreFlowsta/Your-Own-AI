@@ -280,6 +280,7 @@ export default component$(() => {
   const installedChatModels = useSignal<string[]>([]);
   const onlineModelIds = useSignal<{ id: string; name: string }[]>([]);
   const medicalOnlineAlwaysSig = useSignal(false);
+  const medicalPickerOpen = useSignal(false);
   const groundDocumentsAuto = useSignal(false);
   const smartModeDetection = useSignal(true);
   // Same key the working box's brain icon toggles - one setting, two doors.
@@ -1017,31 +1018,75 @@ export default component$(() => {
                       an online model is possible too: each health question
                       then asks before anything leaves your device.
                     </p>
-                    <select
-                      class="w-full sm:w-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2 text-sm text-[var(--text-primary)] mb-2"
-                      value={medicalModel.value}
-                      onChange$={async (_, el) => {
-                        medicalModel.value = el.value;
-                        await setMedicalModel(el.value);
-                      }}
-                    >
-                      <optgroup label="On your device">
-                        {installedChatModels.value.map((name) => (
-                          <option key={name} value={name} selected={name === medicalModel.value}>
-                            {name.replace(/\.gguf$/i, "") + (isMedicalSpecialist(name) ? "  (medical)" : "")}
-                          </option>
-                        ))}
-                      </optgroup>
-                      {onlineModelIds.value.length > 0 && (
-                        <optgroup label="Online - asks before each question">
-                          {onlineModelIds.value.map((m) => (
-                            <option key={m.id} value={m.id} selected={m.id === medicalModel.value}>
-                              {m.name}
-                            </option>
-                          ))}
-                        </optgroup>
+                    <div class="relative inline-block mb-2">
+                      <button
+                        type="button"
+                        onClick$={() => { medicalPickerOpen.value = !medicalPickerOpen.value; }}
+                        class="flex items-center justify-between gap-2 min-w-[16rem] px-3 py-2 rounded-xl text-sm bg-[var(--bg-main)] text-[var(--text-primary)] border border-[var(--border-subtle)] hover:opacity-90 focus:outline-none"
+                      >
+                        <span class="truncate">
+                          {medicalModel.value.startsWith("online:")
+                            ? (onlineModelIds.value.find((m) => m.id === medicalModel.value)?.name ??
+                              medicalModel.value.replace(/^online:/, "")) + " (online)"
+                            : medicalModel.value.replace(/\.gguf$/i, "") +
+                              (isMedicalSpecialist(medicalModel.value) ? " (medical)" : "")}
+                        </span>
+                        <LuChevronDown class="w-4 h-4 text-[var(--text-muted)] flex-shrink-0" />
+                      </button>
+                      {medicalPickerOpen.value && (
+                        <>
+                          <div class="fixed inset-0 z-40" onClick$={() => { medicalPickerOpen.value = false; }} />
+                          <div class="absolute left-0 top-full mt-1 min-w-[16rem] max-h-64 overflow-y-auto z-50 rounded-lg bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] shadow-xl py-1">
+                            <div class="px-3 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                              On your device
+                            </div>
+                            {installedChatModels.value.map((name) => (
+                              <button
+                                key={name}
+                                type="button"
+                                onClick$={async () => {
+                                  medicalModel.value = name;
+                                  medicalPickerOpen.value = false;
+                                  await setMedicalModel(name);
+                                }}
+                                class={`block w-full text-left px-3 py-1.5 text-sm hover:bg-[var(--bg-card)] transition-colors ${
+                                  medicalModel.value === name
+                                    ? "text-[var(--text-primary)] font-medium"
+                                    : "text-[var(--text-secondary)]"
+                                }`}
+                              >
+                                {name.replace(/\.gguf$/i, "") + (isMedicalSpecialist(name) ? "  (medical)" : "")}
+                              </button>
+                            ))}
+                            {onlineModelIds.value.length > 0 && (
+                              <>
+                                <div class="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)] border-t border-[var(--border-subtle)] mt-1">
+                                  Online - asks before each question
+                                </div>
+                                {onlineModelIds.value.map((m) => (
+                                  <button
+                                    key={m.id}
+                                    type="button"
+                                    onClick$={async () => {
+                                      medicalModel.value = m.id;
+                                      medicalPickerOpen.value = false;
+                                      await setMedicalModel(m.id);
+                                    }}
+                                    class={`block w-full text-left px-3 py-1.5 text-sm hover:bg-[var(--bg-card)] transition-colors ${
+                                      medicalModel.value === m.id
+                                        ? "text-[var(--text-primary)] font-medium"
+                                        : "text-[var(--text-secondary)]"
+                                    }`}
+                                  >
+                                    {m.name}
+                                  </button>
+                                ))}
+                              </>
+                            )}
+                          </div>
+                        </>
                       )}
-                    </select>
+                    </div>
                     {medicalModel.value.startsWith("online:") && (
                       <p class="text-xs text-[var(--text-muted)] mb-5">
                         {medicalOnlineAlwaysSig.value ? (
