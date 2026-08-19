@@ -175,6 +175,7 @@ export default component$<AppHeaderProps>(
     const buildError = useSignal<string | null>(null);
   const buildUpdateAvailable = useSignal(false);
   const buildInstalledVersion = useSignal<string | null>(null);
+  const buildPinnedVersion = useSignal<string>("");
 
     // eslint-disable-next-line qwik/no-use-visible-task
     useVisibleTask$(async ({ cleanup }) => {
@@ -432,12 +433,14 @@ export default component$<AppHeaderProps>(
                           error: string | null;
                           update_available: boolean;
                           installed_version: string | null;
+                          pinned_version: string;
                         };
                         buildReady.value = s.installed || buildInstalled;
                         buildDownloading.value = s.downloading;
                         buildError.value = s.error;
                         buildUpdateAvailable.value = s.installed && s.update_available;
                         buildInstalledVersion.value = s.installed_version;
+                        buildPinnedVersion.value = s.pinned_version.replace(/^v/, "");
                       } catch {
                         buildReady.value = buildInstalled;
                       }
@@ -524,40 +527,64 @@ export default component$<AppHeaderProps>(
 
                       {/* Installed but behind the version this app ships:
                           the update lives HERE too - the folder menu is where
-                          project users look, same spot as the original
-                          install message. Same downloader; it replaces the
-                          old binary with the pinned release. */}
+                          project users look, same alert treatment as the
+                          original install message. Same downloader; it
+                          replaces the old binary with the pinned release. */}
                       {buildReady.value && buildUpdateAvailable.value && !buildDownloading.value && (
-                        <span class="block mt-3 rounded-xl border border-[var(--border-subtle)] p-3">
-                          <span class="block text-xs text-[var(--text-secondary)]">
-                            Update available for Your Own AI Build
-                            {buildInstalledVersion.value ? ` - you have ${buildInstalledVersion.value}` : ''}.
-                            Auto permissions and the newest agent improvements need it.
+                        <span class="block mt-3">
+                          <Callout intent="info" title="Update available">
+                            A newer Your Own AI Build is ready
+                            {buildPinnedVersion.value ? ` - version ${buildPinnedVersion.value}` : ''}
+                            {buildInstalledVersion.value ? ` (you have ${buildInstalledVersion.value})` : ''}.
+                            It brings auto permissions and the newest agent
+                            improvements. Update below.
+                          </Callout>
+                          <span class="block mt-2">
+                            {buildError.value && (
+                              <span class="block px-1 pb-1 text-xs text-red-500 dark:text-red-400">
+                                The download hit a problem: {buildError.value}
+                              </span>
+                            )}
+                            <LiquidMetalButton
+                              class="w-full px-4 py-2 text-sm"
+                              onClick$={async () => {
+                                buildError.value = null;
+                                buildDownloading.value = true;
+                                buildProgress.value = 0;
+                                buildUpdateAvailable.value = false;
+                                try {
+                                  const { invoke } = await import("@tauri-apps/api/core");
+                                  invoke("download_build_agent").catch(() => {
+                                    /* failure arrives via its event */
+                                  });
+                                } catch {
+                                  buildDownloading.value = false;
+                                }
+                              }}
+                            >
+                              {buildError.value
+                                ? "Try the update again"
+                                : `Update Your Own AI Build${buildPinnedVersion.value ? ` to ${buildPinnedVersion.value}` : ''}`}
+                            </LiquidMetalButton>
                           </span>
-                          <LiquidMetalButton
-                            class="mt-2 w-full px-4 py-1.5 text-sm"
-                            onClick$={async () => {
-                              buildError.value = null;
-                              buildDownloading.value = true;
-                              buildProgress.value = 0;
-                              buildUpdateAvailable.value = false;
-                              try {
-                                const { invoke } = await import("@tauri-apps/api/core");
-                                invoke("download_build_agent").catch(() => {
-                                  /* failure arrives via its event */
-                                });
-                              } catch {
-                                buildDownloading.value = false;
-                              }
-                            }}
-                          >
-                            Update Your Own AI Build
-                          </LiquidMetalButton>
                         </span>
                       )}
                       {buildReady.value && buildDownloading.value && (
-                        <span class="block mt-3 text-xs text-[var(--text-secondary)]">
-                          Updating Your Own AI Build.. {buildProgress.value}%
+                        <span class="block mt-3 px-1">
+                          <span class="flex items-center justify-between text-xs text-[var(--text-secondary)] mb-1">
+                            <span>Updating Your Own AI Build..</span>
+                            <span>{buildProgress.value}%</span>
+                          </span>
+                          <span class="block h-1.5 rounded-full bg-[var(--border-subtle)] overflow-hidden">
+                            <span
+                              class="block h-full rounded-full bg-[var(--text-link)] transition-all"
+                              style={{ width: `${buildProgress.value}%` }}
+                            />
+                          </span>
+                          <span class="block mt-1 text-[11px] text-[var(--text-muted)]">
+                            Keep using the app - this continues in the
+                            background.
+                          </span>
                         </span>
                       )}
                       {/* Not installed yet: what projects are + the one step. */}
