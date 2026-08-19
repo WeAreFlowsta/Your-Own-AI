@@ -1,4 +1,4 @@
-import { component$, useSignal, useTask$, $, type Signal } from "@builder.io/qwik";
+import { component$, useSignal, useVisibleTask$, $, type Signal } from "@builder.io/qwik";
 import { LuX, LuPencil, LuTrash2, LuPlus, LuCheck } from "@qwikest/icons/lucide";
 import LiquidMetalButton from "./LiquidMetalButton";
 import {
@@ -28,20 +28,30 @@ export const WorkspaceMemoryModal = component$<{
   const adding = useSignal(false);
   const dirty = useSignal(false);
   const saving = useSignal(false);
+  const slowLoad = useSignal(false);
 
-  useTask$(async ({ track }) => {
+  // useVisibleTask$, NOT useTask$: an async useTask$ blocks the first
+  // render until it resolves, so the modal painted NOTHING while the
+  // records read ran (long just after launch, while records warm up).
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async ({ track, cleanup }) => {
     const folder = track(() => folderPath.value);
     if (!folder) return;
     loading.value = true;
+    slowLoad.value = false;
     dirty.value = false;
     editingIdx.value = null;
     adding.value = false;
+    // Patience message once the read outlives a normal one.
+    const slowTimer = setTimeout(() => (slowLoad.value = true), 4000);
+    cleanup(() => clearTimeout(slowTimer));
     try {
       const m = await getWorkspaceMemory(folder);
       rows.value = memoryRows(m.content);
       updatedAt.value = m.updatedAt;
       revisions.value = m.revisions;
     } finally {
+      clearTimeout(slowTimer);
       loading.value = false;
     }
   });
@@ -93,7 +103,9 @@ export const WorkspaceMemoryModal = component$<{
               Project memory - {folderLeaf}
             </h2>
             <p class="text-xs text-[var(--text-muted)] truncate">
-              {revisions.value > 0
+              {loading.value
+                ? "Reading from your records.."
+                : revisions.value > 0
                 ? `${rows.value.length} note${rows.value.length === 1 ? "" : "s"}${
                     rows.value.length >= MEMORY_MAX_LINES * 0.8
                       ? ` (of ${MEMORY_MAX_LINES} - older notes make room for new ones)`
@@ -112,7 +124,14 @@ export const WorkspaceMemoryModal = component$<{
 
         <div class="flex-1 overflow-y-auto px-5 py-3">
           {loading.value && (
-            <p class="text-sm text-[var(--text-muted)] py-2">Loading from your records..</p>
+            <div class="flex items-start gap-3 py-2 text-sm text-[var(--text-muted)]">
+              <span class="mt-0.5 inline-block h-4 w-4 flex-shrink-0 rounded-full border-2 border-[var(--border-subtle)] border-t-[var(--text-secondary)] animate-spin" />
+              <span>
+                {slowLoad.value
+                  ? "Your records are warming up - just after launch, project memory takes a moment to be ready."
+                  : "Loading from your records.."}
+              </span>
+            </div>
           )}
           {!loading.value &&
             rows.value.map((row, idx) => (
