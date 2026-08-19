@@ -83,12 +83,12 @@ export function setPermissionModeForFolder(path: string, mode: AgentPermissionMo
 
 /** Copy shared by Settings and the first-switch Callout. */
 export const AUTO_PERMISSIONS_COPY = {
-  title: "Run ordinary project work without asking",
+  title: "Auto permissions",
   body:
-    "Your AI reads, searches, edits files inside the project folder, builds, tests, and runs routine git without asking. Anything that reaches beyond the folder, cannot be undone, or that it isn't sure about still asks. Every decision is written to your records.",
-  judgeTitle: "Let the AI judge grey areas",
+    "Routine work inside the project folder - reading, edits, builds, tests, everyday git - runs without asking. Anything risky, irreversible, or outside the folder still asks. Every decision goes in your records.",
+  judgeTitle: "Let the AI judge unusual commands",
   judgeBody:
-    "When a command isn't on the routine list, ask the AI's model whether it is ordinary project work before asking you. Off: anything not on the list asks you. For an online AI this sends the command to the provider - a small call each time.",
+    "When a command isn't clearly routine, the AI's model decides whether it's ordinary work before falling back to asking you. An online AI sends the command to its provider to decide.",
 };
 
 /** Auto permissions need harness v0.2.0+ (folder-bounded edits, decision

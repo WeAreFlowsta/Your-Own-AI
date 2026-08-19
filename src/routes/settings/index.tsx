@@ -1258,11 +1258,8 @@ export default component$(() => {
                   Agent
                 </h2>
                 <p class="text-sm text-[var(--text-secondary)] mb-4">
-                  When your AI works in a project folder it asks before it runs
-                  commands or changes files. These set the default for projects
-                  you open from now on; each project can choose its own from the
-                  project chip in the header. Everything the agent is allowed to
-                  do - by you, or by these settings - is written to your records.
+                  The default for projects you open from now on - each project
+                  can choose its own from the project chip in the header.
                 </p>
                 <div class="space-y-5">
                   <SettingToggle
@@ -1270,16 +1267,14 @@ export default component$(() => {
                     checked={agentAutoDefault}
                     onToggle$={toggleAgentAutoDefault}
                   >
-                    {AUTO_PERMISSIONS_COPY.body} Off (default): your AI asks
-                    every time.
+                    {AUTO_PERMISSIONS_COPY.body} Off: it asks every time.
                   </SettingToggle>
                   <SettingToggle
                     title={AUTO_PERMISSIONS_COPY.judgeTitle}
                     checked={agentJudge}
                     onToggle$={toggleAgentJudge}
                   >
-                    {AUTO_PERMISSIONS_COPY.judgeBody} Only matters when auto
-                    permissions are on.
+                    {AUTO_PERMISSIONS_COPY.judgeBody}
                   </SettingToggle>
                 </div>
               </section>
