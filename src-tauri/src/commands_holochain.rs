@@ -859,48 +859,15 @@ pub async fn cell_cleanup(
     app: tauri::AppHandle,
     hc_state: State<'_, Arc<HolochainState>>,
 ) -> Result<serde_json::Value, String> {
-    use tauri::Manager;
-    use tauri_plugin_store::StoreExt;
-    let manager = hc_state.get()?;
-
-    let mut live: Vec<(String, String)> = Vec::new();
-    if let Ok(store) = app.store("ai-data.json") {
-        if let Some(serde_json::Value::Array(arr)) = store.get("custom-ais") {
-            for ai in arr {
-                let key = ai
-                    .get("agentPubKey")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let name = ai.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-                if !key.is_empty() {
-                    live.push((key.to_string(), name.to_string()));
-                }
-            }
-        }
-    }
-    // Refuse to run with no live AIs resolved - a store read hiccup must
-    // never classify every cell as a zombie.
-    if live.is_empty() {
-        return Err("No AIs with agent keys found in the store - not cleaning".into());
-    }
-
-    let result = manager.cell_cleanup(&live).await?;
-
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("No app data dir: {}", e))?;
-    let path = dir.join("cell-cleanup-report.json");
-    std::fs::write(
-        &path,
-        serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| format!("Failed to write report: {}", e))?;
-
-    Ok(serde_json::json!({
-        "summary": result["summary"],
-        "path": path.to_string_lossy(),
-    }))
+    // DISARMED 2026-08-19 night: the census this relied on counted
+    // conversations inside the records-warmup window (cells answer empty
+    // before their records load), and disabling lineage links severs
+    // history lookup. It disabled cells holding real conversations and
+    // had to be undone live. Do not re-arm until the census verifies
+    // per-cell WARMTH and lineage walking is re-based on list_apps.
+    // (CELL_LINEAGE_RECOVERY.md has the rework spec.)
+    let _ = (app, hc_state);
+    Err("Records tidying is disabled in this build.".into())
 }
 
 /// Is the conductor up? The transcript surface reads empty during startup,
