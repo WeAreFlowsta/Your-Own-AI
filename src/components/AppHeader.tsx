@@ -442,7 +442,7 @@ export default component$<AppHeaderProps>(
                                     class={`flex-1 py-1.5 text-xs ${i > 0 ? 'border-l border-[var(--border-subtle)]' : ''} ${
                                       permissionMode === mode
                                         ? 'bg-[var(--bg-dropdown-hover)] text-[var(--text-primary)] font-medium'
-                                        : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer'
+                                        : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] active:bg-[var(--bg-dropdown-hover)] cursor-pointer'
                                     }`}
                                   >
                                     {mode === 'ask' ? 'Ask' : mode === 'auto' ? 'Auto' : 'Everything'}
@@ -471,7 +471,7 @@ export default component$<AppHeaderProps>(
                             workspaceMenuOpen.value = false;
                             memoryFolder.value = folderPath;
                           }}
-                          class={`flex flex-col items-center justify-center gap-1.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-3.5 text-xs text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)] cursor-pointer ${onCloseFolder$ ? '' : 'col-span-2'}`}
+                          class={`flex flex-col items-center justify-center gap-1.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-3.5 text-xs text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)] active:scale-[0.98] cursor-pointer ${onCloseFolder$ ? '' : 'col-span-2'}`}
                         >
                           <LuBrain class="h-5 w-5 opacity-70" />
                           Project memory
@@ -483,7 +483,7 @@ export default component$<AppHeaderProps>(
                               workspaceMenuOpen.value = false;
                               onCloseFolder$();
                             }}
-                            class="flex flex-col items-center justify-center gap-1.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-3.5 text-xs text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)] hover:text-red-500 hover:border-red-500/40 cursor-pointer"
+                            class="flex flex-col items-center justify-center gap-1.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-3.5 text-xs text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)] hover:text-red-500 hover:border-red-500/40 active:scale-[0.98] cursor-pointer"
                           >
                             <LuX class="h-5 w-5 opacity-70" />
                             Close project
