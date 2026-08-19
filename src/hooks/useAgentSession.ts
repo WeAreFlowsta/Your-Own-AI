@@ -30,6 +30,7 @@ import type {
   SelectedAiModel,
 } from "../types";
 import {
+  buildSupportsAutoPermissions,
   judgeEnabled,
   permissionModeForFolder,
   setPermissionModeForFolder,
@@ -77,6 +78,9 @@ export interface AgentSessionState {
   /** This session's permission mode: ask (default) or auto (ordinary
    *  project work runs unasked; every decision still recorded). */
   permissionMode: AgentPermissionMode;
+  /** Installed harness supports auto permissions (v0.2.0+). When false the
+   *  Auto controls are disabled and point at the update card. */
+  autoPermissionsSupported: boolean;
 }
 
 /** Upstream-refusal signatures worth an offer: provider overload / rate
@@ -361,6 +365,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     touchedFiles: [],
     overloadOffer: null,
     permissionMode: "ask",
+    autoPermissionsSupported: true,
   });
 
   // A prompt waiting for the session: typed before the handshake finished,
@@ -828,7 +833,21 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.touchedFiles = [];
     // This folder's permission mode (its own choice, else the Settings
     // default; off unless the user turned it on) - the session opens with it.
-    state.permissionMode = permissionModeForFolder(path);
+    // An old harness (< v0.2.0) cannot honor our Auto semantics (folder
+    // boundary, decision records): force Ask and disable the toggle.
+    try {
+      const st = (await invokeTauri("build_install_status")) as {
+        installed: boolean;
+        installed_version: string | null;
+      };
+      state.autoPermissionsSupported =
+        !st.installed || buildSupportsAutoPermissions(st.installed_version);
+    } catch {
+      state.autoPermissionsSupported = true;
+    }
+    state.permissionMode = state.autoPermissionsSupported
+      ? permissionModeForFolder(path)
+      : "ask";
     recordRecentFolder(path);
     try {
       await invokeTauri("start_build_agent", {
@@ -907,6 +926,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
    *  apply it to the open session live - the harness honours it from the
    *  next ask. */
   const setPermissionMode$ = $(async (mode: AgentPermissionMode) => {
+    if (mode === "auto" && !state.autoPermissionsSupported) return;
     state.permissionMode = mode;
     if (state.folderPath) setPermissionModeForFolder(state.folderPath, mode);
     if (state.status !== "idle" && state.status !== "stopped") {

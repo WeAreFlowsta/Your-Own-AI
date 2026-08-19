@@ -1124,6 +1124,7 @@ export default component$(() => {
           onCloseFolder$={handleCloseFolder}
           permissionMode={agentState.permissionMode}
           onSetPermissionMode$={setPermissionMode$}
+          autoPermissionsSupported={agentState.autoPermissionsSupported}
           buildInstalled={buildInstalled.value}
           recentFolders={recentFolders.value}
           onOpenFolder$={openFolderGuarded}

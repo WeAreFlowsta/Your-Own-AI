@@ -85,6 +85,9 @@ interface AppHeaderProps {
   permissionMode?: 'ask' | 'auto';
   /** Switch this project's permission mode (remembered for the folder). */
   onSetPermissionMode$?: QRL<(mode: 'ask' | 'auto') => void>;
+  /** Installed agent supports Auto (v0.2.0+); false disables the Auto
+   *  button and points at the update card in Settings > Components. */
+  autoPermissionsSupported?: boolean;
   /** Build is installed - the workspace slot only exists then. */
   buildInstalled?: boolean;
   /** Recent workspaces, most-recent-first, for the slot's menu. */
@@ -115,6 +118,7 @@ export default component$<AppHeaderProps>(
     onCloseFolder$,
     permissionMode = 'ask',
     onSetPermissionMode$,
+    autoPermissionsSupported = true,
     buildInstalled = false,
     recentFolders = [],
     onOpenFolder$,
@@ -367,19 +371,24 @@ export default component$<AppHeaderProps>(
                               <button
                                 key={mode}
                                 type="button"
+                                disabled={mode === 'auto' && !autoPermissionsSupported}
                                 onClick$={(e) => {
                                   e.stopPropagation();
                                   onSetPermissionMode$(mode);
                                 }}
                                 class={`rounded-full border px-2 py-1 text-xs ${
-                                  permissionMode === mode
-                                    ? 'border-[var(--text-secondary)] text-[var(--text-primary)] font-medium'
-                                    : 'border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                                  mode === 'auto' && !autoPermissionsSupported
+                                    ? 'border-[var(--border-subtle)] text-[var(--text-muted)] opacity-60 cursor-not-allowed'
+                                    : permissionMode === mode
+                                      ? 'border-[var(--text-secondary)] text-[var(--text-primary)] font-medium'
+                                      : 'border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
                                 }`}
                                 title={
                                   mode === 'ask'
                                     ? 'Your AI asks before it runs commands or changes files.'
-                                    : 'Ordinary work inside this folder runs without asking - reading, editing project files, building, testing, routine git. Anything beyond the folder, irreversible, or unclear still asks. Every decision is written to your records.'
+                                    : autoPermissionsSupported
+                                      ? 'Ordinary work inside this folder runs without asking - reading, editing project files, building, testing, routine git. Anything beyond the folder, irreversible, or unclear still asks. Every decision is written to your records.'
+                                      : 'Needs a newer Your Own AI Build - update it in Settings > Components, then reopen the project.'
                                 }
                               >
                                 {mode === 'ask' ? 'Ask' : 'Auto'}

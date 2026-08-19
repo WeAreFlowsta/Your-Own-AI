@@ -90,3 +90,18 @@ export const AUTO_PERMISSIONS_COPY = {
   judgeBody:
     "When a command isn't on the routine list, ask the AI's model whether it is ordinary project work before asking you. Off: anything not on the list asks you. For an online AI this sends the command to the provider - a small call each time.",
 };
+
+/** Auto permissions need harness v0.2.0+ (folder-bounded edits, decision
+ *  records, card reasons). On an older install the toggles stay off with a
+ *  pointer at the update card - Auto on v0.1.0 would mean upstream's
+ *  semantics: edits allowed anywhere, no records. Dev builds (a manually
+ *  set binary path with no install record) are treated as current. */
+export const AUTO_PERMISSIONS_MIN_BUILD = "0.2.0";
+
+export function buildSupportsAutoPermissions(installedVersion: string | null | undefined): boolean {
+  if (!installedVersion) return true; // dev override path: no install record
+  const parse = (v: string) => v.split(".").map((n) => parseInt(n, 10) || 0);
+  const [a, b, c] = parse(installedVersion);
+  const [x, y, z] = parse(AUTO_PERMISSIONS_MIN_BUILD);
+  return a !== x ? a > x : b !== y ? b > y : c >= z;
+}
