@@ -31,7 +31,9 @@ import { isMemoryPaused, setMemoryPaused } from "../../utils/memory";
 import {
   ensureMedicalModel,
   isMedicalSpecialist,
+  medicalOnlineAlways,
   setMedicalModel,
+  setMedicalOnlineAlways,
 } from "../../utils/medicalModel";
 import { modelManager } from "../../utils/modelManager";
 import {
@@ -274,6 +276,8 @@ export default component$(() => {
   // Health questions: which installed model answers them (always offline).
   const medicalModel = useSignal<string>("");
   const installedChatModels = useSignal<string[]>([]);
+  const onlineModelIds = useSignal<{ id: string; name: string }[]>([]);
+  const medicalOnlineAlwaysSig = useSignal(false);
   const groundDocumentsAuto = useSignal(false);
   const smartModeDetection = useSignal(true);
   // Same key the working box's brain icon toggles - one setting, two doors.
@@ -331,8 +335,16 @@ export default component$(() => {
       try {
         installedChatModels.value = (await modelManager.listModels()).map((m) => m.name);
         medicalModel.value = (await ensureMedicalModel()) ?? "";
+        medicalOnlineAlwaysSig.value = medicalOnlineAlways();
       } catch {
         /* models list not reachable = leave the picker empty */
+      }
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const online = await invoke<{ id: string; display_name?: string }[]>("list_online_models");
+        onlineModelIds.value = online.map((m) => ({ id: m.id, name: m.display_name ?? m.id.replace(/^online:/, "") }));
+      } catch {
+        /* offline / signed out = no online options */
       }
     })();
     groundDocumentsAuto.value =
@@ -988,25 +1000,62 @@ export default component$(() => {
                       Health questions
                     </h4>
                     <p class="text-sm text-[var(--text-secondary)] mt-1 mb-2">
-                      Health questions are always answered on your device,
-                      never online. This chooses which of your installed
-                      models answers them - a medical model gives more
-                      grounded health answers when you have one.
+                      Health questions stay on your device by default. This
+                      chooses which model answers them - a medical model gives
+                      more grounded health answers when you have one. Choosing
+                      an online model is possible too: each health question
+                      then asks before anything leaves your device.
                     </p>
                     <select
-                      class="w-full sm:w-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2 text-sm text-[var(--text-primary)] mb-5"
+                      class="w-full sm:w-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2 text-sm text-[var(--text-primary)] mb-2"
                       value={medicalModel.value}
                       onChange$={async (_, el) => {
                         medicalModel.value = el.value;
                         await setMedicalModel(el.value);
                       }}
                     >
-                      {installedChatModels.value.map((name) => (
-                        <option key={name} value={name} selected={name === medicalModel.value}>
-                          {name.replace(/\.gguf$/i, "") + (isMedicalSpecialist(name) ? "  (medical)" : "")}
-                        </option>
-                      ))}
+                      <optgroup label="On your device">
+                        {installedChatModels.value.map((name) => (
+                          <option key={name} value={name} selected={name === medicalModel.value}>
+                            {name.replace(/\.gguf$/i, "") + (isMedicalSpecialist(name) ? "  (medical)" : "")}
+                          </option>
+                        ))}
+                      </optgroup>
+                      {onlineModelIds.value.length > 0 && (
+                        <optgroup label="Online - asks before each question">
+                          {onlineModelIds.value.map((m) => (
+                            <option key={m.id} value={m.id} selected={m.id === medicalModel.value}>
+                              {m.name}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
                     </select>
+                    {medicalModel.value.startsWith("online:") && (
+                      <p class="text-xs text-[var(--text-muted)] mb-5">
+                        {medicalOnlineAlwaysSig.value ? (
+                          <>
+                            Sending health questions online without asking
+                            (you chose "always").{" "}
+                            <button
+                              class="underline"
+                              onClick$={() => {
+                                setMedicalOnlineAlways(false);
+                                medicalOnlineAlwaysSig.value = false;
+                              }}
+                            >
+                              Ask again each time
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            Each health question shows a card before it goes
+                            online - answer on your device stays one tap away.
+                          </>
+                        )}
+                      </p>
+                    )}
+                    {!medicalModel.value.startsWith("online:") && <span class="block mb-3" />}
                   </>
                 )}
 

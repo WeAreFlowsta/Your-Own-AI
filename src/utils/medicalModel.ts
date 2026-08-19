@@ -18,6 +18,32 @@ export function isMedicalSpecialist(filename: string): boolean {
   return filename.toLowerCase().includes("medgemma");
 }
 
+/** An `online:<id>` preference - health questions may go online, each one
+ *  asked first (or standing, once the user chooses "always"). */
+export function isOnlineMedicalChoice(pref: string | null | undefined): boolean {
+  return !!pref?.startsWith("online:");
+}
+
+const ONLINE_ALWAYS_KEY = "medicalOnlineAlways";
+
+/** The user chose "always send health questions online" on the consent card. */
+export function medicalOnlineAlways(): boolean {
+  try {
+    return localStorage.getItem(ONLINE_ALWAYS_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function setMedicalOnlineAlways(on: boolean): void {
+  try {
+    if (on) localStorage.setItem(ONLINE_ALWAYS_KEY, "true");
+    else localStorage.removeItem(ONLINE_ALWAYS_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 export function getMedicalModel(): string | null {
   try {
     return localStorage.getItem(KEY);
@@ -71,6 +97,8 @@ export function setMedicalPromptDone(): void {
 export async function ensureMedicalModel(): Promise<string | null> {
   const existing = getMedicalModel();
   if (existing) {
+    // An online choice needs no file on disk.
+    if (isOnlineMedicalChoice(existing)) return existing;
     // A deleted model must not keep answering health questions from the
     // settings file - fall back to initialization.
     if (await modelManager.isModelDownloaded(existing)) return existing;

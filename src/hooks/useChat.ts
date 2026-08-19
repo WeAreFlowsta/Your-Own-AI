@@ -32,6 +32,11 @@ import { responseLengthOptions } from "../data/response-lengths";
 import { getArchetypeById } from "../data/bundled-archetypes";
 import { MISSION_CORE } from "../data/missionCore";
 import { extractOnlineError } from "../utils/onlineErrors";
+import {
+  getMedicalModel,
+  isOnlineMedicalChoice,
+  medicalOnlineAlways,
+} from "../utils/medicalModel";
 
 /** Hex SHA-256 of a UTF-8 string (provenance for attached context). */
 async function sha256Hex(text: string): Promise<string> {
@@ -645,6 +650,48 @@ export function useChat(props: UseChatProps) {
         } catch (e) {
           console.warn("[Router] resolve failed:", e);
           // Leaves the auto: sentinel → surfaces as NO_MODELS_AVAILABLE below.
+        }
+      }
+
+      // Health questions with an ONLINE preference (Settings > Routing):
+      // the choice never fires silently - each health turn asks first, like
+      // an attachment going online, unless the user chose "always". Only in
+      // the auto modes or on an already-online AI: a hard-pinned offline AI
+      // stays offline entirely (pinning is explicit). Declining answers on
+      // the device via normal routing.
+      if (!modelOverride && (isAutoMode || preferredModel?.startsWith("online:"))) {
+        const medPref = getMedicalModel();
+        if (isOnlineMedicalChoice(medPref)) {
+          try {
+            const { invoke } = await import("@tauri-apps/api/core");
+            const qv = await queryVecPromise;
+            const isMed = await invoke<boolean>("is_medical_query", {
+              query: userInput,
+              queryVec: qv ?? undefined,
+            });
+            if (isMed) {
+              if (medicalOnlineAlways() && medPref) {
+                preferredModel = medPref;
+              } else {
+                state.pendingTurn = {
+                  userInput,
+                  chatAction,
+                  images,
+                  fileContext,
+                  visionModel: "",
+                };
+                abortWith(
+                  JSON.stringify({
+                    code: "medical_consent",
+                    onlineModel: medPref,
+                  }),
+                );
+                return;
+              }
+            }
+          } catch (e) {
+            console.warn("[Medical] online-choice check failed - staying offline:", e);
+          }
         }
       }
 

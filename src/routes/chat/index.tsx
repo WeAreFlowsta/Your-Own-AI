@@ -12,6 +12,7 @@ import {
 } from "@builder.io/qwik";
 import { type DocumentHead, useNavigate } from "@builder.io/qwik-city";
 import { invoke } from "@tauri-apps/api/core";
+import { setMedicalOnlineAlways } from "../../utils/medicalModel";
 
 import { ThemeContext } from "../layout";
 import { useAiData, useAiDataActions } from "../../contexts/AiDataContext";
@@ -1331,6 +1332,62 @@ export default component$(() => {
                             class="text-sm text-yellow-700 dark:text-yellow-300 hover:underline"
                           >
                             Not now
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  if (online?.code === "medical_consent") {
+                    const m = online as { onlineModel?: string };
+                    const label = (m.onlineModel ?? "").replace(/^online:/, "");
+                    return (
+                      <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-700 rounded-lg p-4">
+                        <p class="text-sm font-medium text-yellow-800 dark:text-yellow-200 mb-3">
+                          Send this health question to an online model?
+                        </p>
+                        <p class="text-sm text-yellow-700 dark:text-yellow-300 mb-4">
+                          Your Routing settings choose {label} for health
+                          questions. It would leave your device: your identity
+                          is stripped and nothing is stored on the way through,
+                          but the provider receives the question under its own
+                          policies. Answering on your device keeps it here
+                          entirely.
+                        </p>
+                        <div class="flex items-center gap-3 flex-wrap">
+                          <LiquidMetalButton
+                            onClick$={async () => {
+                              const t = chatState.pendingTurn;
+                              chatState.error = null;
+                              if (t)
+                                await sendMessage(t.userInput, t.chatAction, t.fileContext, t.images, m.onlineModel, true);
+                            }}
+                            class="px-4 py-2 text-sm"
+                          >
+                            Send online once
+                          </LiquidMetalButton>
+                          <button
+                            onClick$={async () => {
+                              setMedicalOnlineAlways(true);
+                              const t = chatState.pendingTurn;
+                              chatState.error = null;
+                              if (t)
+                                await sendMessage(t.userInput, t.chatAction, t.fileContext, t.images, m.onlineModel, true);
+                            }}
+                            class="text-sm text-yellow-700 dark:text-yellow-300 hover:underline"
+                          >
+                            Always send health questions online
+                          </button>
+                          <button
+                            onClick$={async () => {
+                              const t = chatState.pendingTurn;
+                              chatState.error = null;
+                              if (t)
+                                await sendMessage(t.userInput, t.chatAction, t.fileContext, t.images);
+                            }}
+                            class="text-sm text-yellow-700 dark:text-yellow-300 hover:underline"
+                          >
+                            Answer on my device
                           </button>
                         </div>
                       </div>
