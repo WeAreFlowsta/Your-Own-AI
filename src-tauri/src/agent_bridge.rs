@@ -574,7 +574,12 @@ async fn handle_agent_message(
                     log::info!("[agent] session created in {}ms", startup_ms(app));
                     *state.session_id.lock().await = Some(sid.clone());
                     if session_approve_all {
-                        // The harness's always-approve, by its wire name.
+                        // The harness's always-approve, by its wire name -
+                        // with ACP's extension prefix: the underscore is
+                        // stripped by the protocol layer before dispatch,
+                        // and WITHOUT it the method is silently
+                        // method_not_found (a notification's error goes
+                        // nowhere - this no-oped for a whole afternoon).
                         // Unscoped on purpose: the harness matches a
                         // clientIdentifier against GROK_CLIENT_NAME-derived
                         // identity (not our registered one), so a scoped
@@ -585,7 +590,7 @@ async fn handle_agent_message(
                             &state,
                             &json!({
                                 "jsonrpc": "2.0",
-                                "method": "x.ai/yolo_mode_changed",
+                                "method": "_x.ai/yolo_mode_changed",
                                 "params": { "yolo_mode": true }
                             }),
                         )
@@ -740,7 +745,7 @@ pub async fn set_agent_permission_mode(
         &state,
         &json!({
             "jsonrpc": "2.0",
-            "method": "x.ai/yolo_mode_changed",
+            "method": "_x.ai/yolo_mode_changed",
             "params": {
                 "yolo_mode": approve_all,
                 "auto_mode": auto,
