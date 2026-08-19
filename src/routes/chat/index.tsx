@@ -317,6 +317,19 @@ export default component$(() => {
 
   /** Re-enter a conversation: rebuild the messages from its transcript and
    *  keep appending to the same hash. */
+  /** Unconditional instant jump to the newest message - for OPENING a
+   *  conversation, where "continue where I left off" lives at the bottom.
+   *  Fires once per open, before the user starts reading, so it does not
+   *  conflict with the deliberate-scroll rule (never yank a reader); the
+   *  guarded follow below owns the viewport from then on. Two passes: one
+   *  after render, one after late layout (thumbnails, code blocks). */
+  const jumpToLatest = $(() => {
+    const jump = () =>
+      messagesEndRef.value?.scrollIntoView({ behavior: "instant" as ScrollBehavior, block: "end" });
+    setTimeout(jump, 0);
+    setTimeout(jump, 250);
+  });
+
   const resumeConversation = $(
     async (target: { hash: string; agentKey: string; aiId?: string }) => {
       if (chatState.isLoading || resumeState.value !== "idle") return;
@@ -359,6 +372,8 @@ export default component$(() => {
       chatState.conversationHash = target.hash;
       chatState.cacheKey = target.hash;
       chatState.messageSequence = nextSequence;
+      // Land on the last message - it's where continuing happens.
+      jumpToLatest();
       const firstUser = messages.find((m) => m.role === "user");
       rememberLastConversation({
         hash: target.hash,
