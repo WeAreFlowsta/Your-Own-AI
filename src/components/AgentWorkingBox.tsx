@@ -252,9 +252,11 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
       for (let i = log.length - 1; i >= 0; i--) {
         const item = log[i];
         if (item.type === "action" && item.action.liveLine) {
+          // Labels for terminal actions carry the whole command - cap it,
+          // the layout guards below are the second line of defense only.
           const label = item.action.waitFor?.length
             ? "background task"
-            : item.action.label.replace(/^Running /, "");
+            : item.action.label.replace(/^Running /, "").slice(0, 70);
           return { label, line: item.action.liveLine.slice(0, 90) };
         }
       }
@@ -269,8 +271,13 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
         {!working && (
           <button
             onClick$={() => (railOpen.value = !railOpen.value)}
-            class="flex items-center gap-2.5 py-1 mb-1 text-left font-mono text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] bg-transparent border-none cursor-pointer"
+            // block + inner flex div, NOT a flex button: WebKitGTK's
+            // anonymous box on <button> flex containers never lets children
+            // shrink, so truncate on the spans silently fails and long
+            // "still running" commands run past the window edge.
+            class="block w-full max-w-full overflow-hidden py-1 mb-1 text-left font-mono text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] bg-transparent border-none cursor-pointer"
           >
+            <div class="flex min-w-0 items-center gap-2.5">
             {stillRunning.value ? (
               <span
                 class="inline-block h-3 w-3 shrink-0 rounded-full border-2 border-[var(--border-subtle)] border-t-[var(--text-secondary)] animate-spin"
@@ -299,6 +306,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
               <LuChevronRight class={`h-3 w-3 ${railOpen.value ? "hidden" : ""}`} />
               <LuChevronDown class={`h-3 w-3 ${railOpen.value ? "" : "hidden"}`} />
             </span>
+            </div>
           </button>
         )}
 
@@ -408,7 +416,13 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                             [a.toolCallId]: !open,
                           };
                         }}
-                        class={`relative flex w-full items-baseline gap-2 py-0.5 text-left font-mono text-xs text-[var(--text-muted)] bg-transparent border-none ${hasOutput ? "hover:text-[var(--text-secondary)] cursor-pointer" : "cursor-default"}`}
+                        // block + inner flex div, NOT a flex button: see
+                        // the folded-stub comment above (WebKitGTK never
+                        // shrinks a flex button's children, so truncate on
+                        // long command labels silently fails). The thread
+                        // dot stays a direct child - the inner div clips,
+                        // the button must not, or the dot vanishes.
+                        class={`relative block w-full max-w-full py-0.5 text-left font-mono text-xs text-[var(--text-muted)] bg-transparent border-none ${hasOutput ? "hover:text-[var(--text-secondary)] cursor-pointer" : "cursor-default"}`}
                       >
                         {/* Node on the thread - class flips only, never
                             element swaps, in this streaming list. */}
@@ -421,6 +435,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                                 : "bg-[var(--text-link)] animate-pulse"
                           }`}
                         />
+                        <div class="flex min-w-0 max-w-full overflow-hidden items-baseline gap-2">
                         <span class="min-w-0 truncate whitespace-nowrap">
                           {a.label}
                         </span>
@@ -440,6 +455,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                             <LuChevronDown class={`h-3 w-3 ${open ? "" : "hidden"}`} />
                           </span>
                         )}
+                        </div>
                       </button>
                       {open && hasDiff && (
                         <div class="mt-1 mb-1.5 max-h-64 overflow-y-auto">
