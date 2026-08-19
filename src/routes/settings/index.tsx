@@ -29,6 +29,12 @@ import {
 } from "../../utils/rememberText";
 import { isMemoryPaused, setMemoryPaused } from "../../utils/memory";
 import {
+  ensureMedicalModel,
+  isMedicalSpecialist,
+  setMedicalModel,
+} from "../../utils/medicalModel";
+import { modelManager } from "../../utils/modelManager";
+import {
   AUTO_PERMISSIONS_COPY,
   defaultPermissionMode,
   judgeEnabled,
@@ -265,6 +271,9 @@ export default component$(() => {
   // Agent: auto permissions default for new projects + the model judge - both off unless set.
   const agentAutoDefault = useSignal(false);
   const agentJudge = useSignal(false);
+  // Health questions: which installed model answers them (always offline).
+  const medicalModel = useSignal<string>("");
+  const installedChatModels = useSignal<string[]>([]);
   const groundDocumentsAuto = useSignal(false);
   const smartModeDetection = useSignal(true);
   // Same key the working box's brain icon toggles - one setting, two doors.
@@ -318,6 +327,14 @@ export default component$(() => {
       localStorage.getItem("allowAttachmentsOnline") === "true";
     agentAutoDefault.value = defaultPermissionMode() === "auto";
     agentJudge.value = judgeEnabled();
+    (async () => {
+      try {
+        installedChatModels.value = (await modelManager.listModels()).map((m) => m.name);
+        medicalModel.value = (await ensureMedicalModel()) ?? "";
+      } catch {
+        /* models list not reachable = leave the picker empty */
+      }
+    })();
     groundDocumentsAuto.value =
       localStorage.getItem("groundDocumentsAuto") === "true";
     smartModeDetection.value =
@@ -960,6 +977,38 @@ export default component$(() => {
                     </button>
                   ))}
                 </div>
+
+                {/* Health questions: always answered on the device; this
+                    picks WHICH installed model answers them. Starts as the
+                    first model downloaded; installing a medical specialist
+                    asks once whether to switch (never a silent hijack). */}
+                {installedChatModels.value.length > 0 && (
+                  <>
+                    <h4 class="text-base font-semibold text-[var(--text-primary)] mt-5">
+                      Health questions
+                    </h4>
+                    <p class="text-sm text-[var(--text-secondary)] mt-1 mb-2">
+                      Health questions are always answered on your device,
+                      never online. This chooses which of your installed
+                      models answers them - a medical model gives more
+                      grounded health answers when you have one.
+                    </p>
+                    <select
+                      class="w-full sm:w-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2 text-sm text-[var(--text-primary)] mb-5"
+                      value={medicalModel.value}
+                      onChange$={async (_, el) => {
+                        medicalModel.value = el.value;
+                        await setMedicalModel(el.value);
+                      }}
+                    >
+                      {installedChatModels.value.map((name) => (
+                        <option key={name} value={name} selected={name === medicalModel.value}>
+                          {name.replace(/\.gguf$/i, "") + (isMedicalSpecialist(name) ? "  (medical)" : "")}
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                )}
 
                 {/* Per-slot online model picks. Escalation itself has no
                     toggle: choosing online-offline mode IS the consent to go

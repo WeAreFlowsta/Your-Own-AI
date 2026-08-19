@@ -32,6 +32,16 @@ import {
   capabilityInfo,
 } from '../data/recommended-models';
 import { modelManager, type DownloadProgress } from '../utils/modelManager';
+import ConfirmModal from './ConfirmModal';
+import {
+  ensureMedicalModel,
+  getMedicalModel,
+  isMedicalSpecialist,
+  medicalPromptDone,
+  pinCurrentNonSpecialist,
+  setMedicalModel,
+  setMedicalPromptDone,
+} from '../utils/medicalModel';
 import {
   LuHardDriveDownload,
   LuCheck,
@@ -161,6 +171,10 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     error: null as string | null,
     modelsDirectory: '',
     successMessage: null as string | null,
+    // A medical specialist just finished downloading and the user's health
+    // model is something else: ask ONCE whether to switch (visible choice,
+    // never a silent hijack).
+    medicalOffer: null as string | null,
     selectedVariants: {} as Record<string, ModelVariant>,
     deleteModalOpen: false,
     modelToDelete: null as { filename: string; displayName: string } | null,
@@ -353,6 +367,14 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     }
 
     store.successMessage = displayName;
+    if (isMedicalSpecialist(filename) && !medicalPromptDone()) {
+      const current = getMedicalModel() ?? (await ensureMedicalModel());
+      if (!current || !isMedicalSpecialist(current)) {
+        store.medicalOffer = filename;
+      } else {
+        setMedicalPromptDone();
+      }
+    }
     localStorage.setItem('completedModelDownload', JSON.stringify({ modelName: displayName, timestamp: Date.now() }));
     localStorage.removeItem(ACTIVE_DOWNLOAD_KEY);
     store.downloading = null;
@@ -1515,6 +1537,26 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
           </div>
         );
       })()}
+      <ConfirmModal
+        isOpen={store.medicalOffer !== null}
+        title="Use it for health questions?"
+        message="You've installed a medical model. Health questions always stay on your device - would you like this model to answer them from now on? You can change this any time in Settings > Routing."
+        confirmLabel="Yes, use the medical model"
+        cancelLabel="Keep my current model"
+        onConfirm$={async () => {
+          const chosen = store.medicalOffer;
+          store.medicalOffer = null;
+          setMedicalPromptDone();
+          if (chosen) await setMedicalModel(chosen);
+        }}
+        onCancel$={async () => {
+          store.medicalOffer = null;
+          setMedicalPromptDone();
+          // An explicit "keep" pins the current NON-specialist so the
+          // specialist does not win by ranking anyway.
+          await pinCurrentNonSpecialist();
+        }}
+      />
     </div>
   );
 });

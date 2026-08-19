@@ -396,6 +396,20 @@ async fn pick_offline(app: &AppHandle, task: &str, lean: &str, agent_only: bool)
         if unpaused.is_empty() { pool } else { unpaused }
     };
 
+    // Health questions honor the user's explicit model choice (Settings >
+    // Routing) before any ranking: their pick answers whenever it is
+    // installed, runnable, and not paused (= in the pool). Absent or not
+    // usable right now, ranking decides exactly as before - the specialist
+    // wins by capability. The choice is a preference, never a wall.
+    if task == "medical" {
+        if let Some(pref) = medical_preferred_model(app) {
+            if let Some(chosen) = pool.iter().find(|f| f.name == pref) {
+                log::info!("[router] medical turn -> user's preferred model {}", chosen.name);
+                return Ok(chosen.name.clone());
+            }
+        }
+    }
+
     let rank = |f: &crate::fit::ModelFit| OfflineRank {
         cap: cap(&f.name),
         tier: tier(f),
@@ -685,6 +699,18 @@ pub async fn device_subagents_enabled(app: &AppHandle) -> bool {
 /// frontend's localStorage into the store on every change + at launch).
 /// Pause hides a model from every chooser; the router honors it too -
 /// "hide it from me" and "don't hand it to me" are the same intent.
+/// The user's preferred offline model for health questions (Settings >
+/// Routing). Empty/absent = no explicit choice - ranking decides (the
+/// medical specialist wins by capability when installed).
+fn medical_preferred_model(app: &AppHandle) -> Option<String> {
+    use tauri_plugin_store::StoreExt;
+    let store = app.store("settings.json").ok()?;
+    store
+        .get("medicalPreferredModel")
+        .and_then(|v| v.as_str().map(str::to_string))
+        .filter(|s| !s.is_empty())
+}
+
 fn paused_models(app: &AppHandle) -> std::collections::HashSet<String> {
     use tauri_plugin_store::StoreExt;
     let Ok(store) = app.store("settings.json") else { return Default::default() };
