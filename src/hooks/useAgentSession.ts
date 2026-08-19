@@ -1526,7 +1526,9 @@ export function useAgentSession(props: UseAgentSessionProps) {
     const unDecided = await listen<any>("agent-permission-decided", (e) => {
       const ev = e.payload?.event;
       if (!ev || typeof ev !== "object") return;
-      const reason: string = String(ev.decision_reason ?? "");
+      // Our vocabulary in the user's records, not the wire protocol's.
+      const rawReason: string = String(ev.decision_reason ?? "");
+      const reason = rawReason === "yolo" ? "approve_everything" : rawReason;
       const autoApproved = !!ev.auto_approved;
       const prompted = !!ev.user_prompted;
       mutateTurn((m) => {
@@ -1557,7 +1559,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
               ? "fast_path"
               : reason === "auto_classifier_allow"
                 ? "model"
-                : reason === "yolo"
+                : reason === "approve_everything"
                   ? "always"
                   : "app_policy";
           const subject = detail ?? String(ev.tool_name ?? "an action");
