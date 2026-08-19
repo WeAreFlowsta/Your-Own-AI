@@ -558,7 +558,7 @@ async fn handle_agent_message(
                     // reads it on session/new; false is explicit so a config
                     // default can never turn Auto on behind the user's back.
                     // "Approve everything" arrives right after session/new
-                    // as the runtime yolo notification (see below).
+                    // as the harness's always-approve notification (below).
                     "_meta": { "clientIdentifier": CLIENT_IDENTIFIER, "autoMode": session_auto_mode }
                 }
             });
@@ -574,6 +574,7 @@ async fn handle_agent_message(
                     log::info!("[agent] session created in {}ms", startup_ms(app));
                     *state.session_id.lock().await = Some(sid.clone());
                     if session_approve_all {
+                        // The harness's always-approve, by its wire name.
                         // Unscoped on purpose: the harness matches a
                         // clientIdentifier against GROK_CLIENT_NAME-derived
                         // identity (not our registered one), so a scoped
@@ -726,22 +727,24 @@ pub async fn set_agent_permission_mode(
     mode: String,
 ) -> Result<(), String> {
     log::info!("[agent] permissions switched to {}", mode);
-    let (auto, yolo) = match mode.as_str() {
+    let (auto, approve_all) = match mode.as_str() {
         "auto" => (true, false),
         "all" => (false, true),
         _ => (false, false),
     };
-    // Unscoped on purpose - see the session-create send: a clientIdentifier
-    // here matches against env-derived identity and silently no-ops.
+    // The method and field names are the harness's wire protocol for its
+    // always-approve mode - they must match byte-for-byte. Unscoped on
+    // purpose - see the session-create send: a clientIdentifier here
+    // matches against env-derived identity and silently no-ops.
     write_line(
         &state,
         &json!({
             "jsonrpc": "2.0",
             "method": "x.ai/yolo_mode_changed",
             "params": {
-                "yolo_mode": yolo,
+                "yolo_mode": approve_all,
                 "auto_mode": auto,
-                "permission_mode": if auto { "auto" } else if yolo { "always-approve" } else { "ask" }
+                "permission_mode": if auto { "auto" } else if approve_all { "always-approve" } else { "ask" }
             }
         }),
     )
