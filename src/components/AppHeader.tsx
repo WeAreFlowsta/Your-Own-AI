@@ -24,6 +24,8 @@ import {
   LuBrain,
   LuDownload,
   LuCloud,
+  LuX,
+  LuRotateCw,
 } from "@qwikest/icons/lucide";
 
 import { ThemeContext, ProjectMemoryContext, type AppTheme } from "../routes/layout";
@@ -104,6 +106,20 @@ interface AppHeaderProps {
 function displayPath(p: string): string {
   return p.replace(/^\/(home|Users)\/[^/]+/, '~');
 }
+
+/** The project's leaf name - how people think of it ("Website"). */
+function leafName(p: string): string {
+  return p.split(/[\\/]/).filter(Boolean).pop() ?? p;
+}
+
+/** The agent rail's metal gradient - ties this menu to the same family. */
+const METAL_H = "linear-gradient(90deg, #cfd8dc 0%, #59c9ff 45%, #7e99a6 100%)";
+
+const PERMISSION_HINTS: Record<'ask' | 'auto' | 'all', string> = {
+  ask: 'Your AI asks before every command and file change.',
+  auto: 'Ordinary work in this folder runs without asking; risky, irreversible, or outside-the-folder actions ask.',
+  all: 'Nothing asks. Every action is still written to your records.',
+};
 
 export default component$<AppHeaderProps>(
   ({
@@ -352,74 +368,128 @@ export default component$<AppHeaderProps>(
                         workspaceMenuOpen.value = false;
                       }}
                     />
-                    <span class="absolute right-0 top-full mt-2 w-72 rounded-2xl bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] py-1 shadow-lg z-50 overflow-hidden block cursor-default text-left">
-                      <span class="block px-3 py-2 text-xs text-[var(--text-muted)] break-all border-b border-[var(--border-subtle)]">
-                        {folderPath}
-                      </span>
-                      <button
-                        type="button"
-                        onClick$={(e) => {
-                          e.stopPropagation();
-                          workspaceMenuOpen.value = false;
-                          memoryFolder.value = folderPath;
-                        }}
-                        class="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)]"
-                      >
-                        <LuBrain class="h-4 w-4 shrink-0 opacity-70" />
-                        Project memory
-                      </button>
-                      {onSetPermissionMode$ && (
-                        <span class="block border-t border-[var(--border-subtle)] px-3 py-2">
-                          <span class="block text-xs text-[var(--text-muted)] mb-1.5">
-                            Permissions in this project
-                          </span>
-                          <span class="grid grid-cols-3 gap-1.5">
-                            {(['ask', 'auto', 'all'] as const).map((mode) => (
-                              <button
-                                key={mode}
-                                type="button"
-                                disabled={mode !== 'ask' && !autoPermissionsSupported}
-                                onClick$={(e) => {
-                                  e.stopPropagation();
-                                  onSetPermissionMode$(mode);
-                                }}
-                                class={`rounded-full border px-2 py-1 text-xs ${
-                                  mode !== 'ask' && !autoPermissionsSupported
-                                    ? 'border-[var(--border-subtle)] text-[var(--text-muted)] opacity-60 cursor-not-allowed'
-                                    : permissionMode === mode
-                                      ? 'border-[var(--text-secondary)] text-[var(--text-primary)] font-medium'
-                                      : 'border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-                                }`}
-                                title={
-                                  mode === 'ask'
-                                    ? 'Your AI asks before every command and file change.'
-                                    : !autoPermissionsSupported
-                                      ? 'Needs a newer Your Own AI Build - update it in Settings > Components, then reopen the project.'
-                                      : mode === 'auto'
-                                        ? 'Ordinary work in this folder runs without asking; risky, irreversible, or outside-the-folder actions ask.'
-                                        : 'Nothing asks. Every action is still written to your records.'
-                                }
-                              >
-                                {mode === 'ask' ? 'Ask' : mode === 'auto' ? 'Auto' : 'Everything'}
-                              </button>
-                            ))}
+                    <span
+                      class="absolute right-0 top-full mt-2 w-80 rounded-2xl bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] shadow-lg z-50 overflow-hidden block cursor-default text-left"
+                      onClick$={(e) => e.stopPropagation()}
+                    >
+                      {/* Identity: the project as a thing - leaf name first,
+                          path second, status in words (the chip's dot alone
+                          explains nothing). */}
+                      <span class="block px-4 pt-3.5 pb-3">
+                        <span class="flex items-center gap-2.5">
+                          <LuFolderOpen class="h-5 w-5 shrink-0 opacity-70 text-[var(--text-secondary)]" />
+                          <span class="block min-w-0 flex-1">
+                            <span class="block truncate text-sm font-semibold text-[var(--text-primary)]">
+                              {leafName(folderPath)}
+                            </span>
+                            <span dir="rtl" class="block truncate text-[11px] text-[var(--text-muted)]">
+                              {'\u200e' + displayPath(folderPath)}
+                            </span>
                           </span>
                         </span>
+                        <span class="mt-2 flex items-center gap-2 text-xs text-[var(--text-secondary)]">
+                          <span
+                            class={`w-2 h-2 rounded-full shrink-0 ${
+                              folderStatus === 'stopped'
+                                ? 'bg-red-500'
+                                : folderStatus === 'starting'
+                                  ? 'bg-orange-500 animate-pulse'
+                                  : folderStatus === 'working'
+                                    ? 'bg-green-500 animate-pulse'
+                                    : 'bg-green-500'
+                            }`}
+                          />
+                          <span>
+                            {folderStatus === 'stopped'
+                              ? 'Stopped - reopen to keep working'
+                              : folderStatus === 'starting'
+                                ? 'Starting up - ready in a few seconds'
+                                : folderStatus === 'working'
+                                  ? 'Working in this folder right now'
+                                  : 'Ready - your AI can read and change files here'}
+                          </span>
+                        </span>
+                        {folderStatus === 'stopped' && onOpenFolder$ && (
+                          <LiquidMetalButton
+                            class="mt-2.5 flex w-full items-center justify-center gap-1.5 px-3 py-1.5 text-xs"
+                            onClick$={() => {
+                              workspaceMenuOpen.value = false;
+                              onOpenFolder$(folderPath);
+                            }}
+                          >
+                            <LuRotateCw class="h-3.5 w-3.5" />
+                            Reopen project
+                          </LiquidMetalButton>
+                        )}
+                      </span>
+                      <span
+                        class="block h-[2px] opacity-60"
+                        style={{ background: METAL_H }}
+                      />
+                      {onSetPermissionMode$ && (
+                        <span class="block px-4 py-3 border-b border-[var(--border-subtle)]">
+                          <span class="block text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-1.5">
+                            Permissions
+                          </span>
+                          {autoPermissionsSupported ? (
+                            <>
+                              <span class="flex rounded-full border border-[var(--border-subtle)] overflow-hidden">
+                                {(['ask', 'auto', 'all'] as const).map((mode, i) => (
+                                  <button
+                                    key={mode}
+                                    type="button"
+                                    onClick$={() => onSetPermissionMode$(mode)}
+                                    class={`flex-1 py-1.5 text-xs ${i > 0 ? 'border-l border-[var(--border-subtle)]' : ''} ${
+                                      permissionMode === mode
+                                        ? 'bg-[var(--bg-dropdown-hover)] text-[var(--text-primary)] font-medium'
+                                        : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer'
+                                    }`}
+                                  >
+                                    {mode === 'ask' ? 'Ask' : mode === 'auto' ? 'Auto' : 'Everything'}
+                                  </button>
+                                ))}
+                              </span>
+                              {/* The ACTIVE mode's one-liner, always visible -
+                                  this used to hide in hover tooltips. */}
+                              <span class="block mt-1.5 text-[11px] leading-snug text-[var(--text-muted)]">
+                                {PERMISSION_HINTS[permissionMode]}
+                              </span>
+                            </>
+                          ) : (
+                            <span class="block text-[11px] leading-snug text-[var(--text-muted)]">
+                              Ask is on. Auto needs a newer Your Own AI Build -
+                              update it in Settings &gt; Components, then reopen
+                              the project.
+                            </span>
+                          )}
+                        </span>
                       )}
-                      {onCloseFolder$ && (
+                      <span class="grid grid-cols-2 gap-2 p-3">
                         <button
                           type="button"
-                          onClick$={(e) => {
-                            e.stopPropagation();
+                          onClick$={() => {
                             workspaceMenuOpen.value = false;
-                            onCloseFolder$();
+                            memoryFolder.value = folderPath;
                           }}
-                          class="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)]"
+                          class={`flex flex-col items-center justify-center gap-1.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-3.5 text-xs text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)] cursor-pointer ${onCloseFolder$ ? '' : 'col-span-2'}`}
                         >
-                          <span class="w-4 text-center leading-none">&times;</span>
-                          Close project
+                          <LuBrain class="h-5 w-5 opacity-70" />
+                          Project memory
                         </button>
-                      )}
+                        {onCloseFolder$ && (
+                          <button
+                            type="button"
+                            onClick$={() => {
+                              workspaceMenuOpen.value = false;
+                              onCloseFolder$();
+                            }}
+                            class="flex flex-col items-center justify-center gap-1.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-3.5 text-xs text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)] hover:text-red-500 hover:border-red-500/40 cursor-pointer"
+                          >
+                            <LuX class="h-5 w-5 opacity-70" />
+                            Close project
+                          </button>
+                        )}
+                      </span>
                     </span>
                   </>
                 )}
