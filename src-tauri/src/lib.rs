@@ -586,6 +586,7 @@ pub fn run() {
             agent_bridge::build_agent_status,
             agent_bridge::read_agent_task_logs,
             build_install::build_install_status,
+            build_install::check_app_update,
             build_install::download_build_agent,
             build_install::uninstall_build_agent,
             agent_bridge::path_is_dir,

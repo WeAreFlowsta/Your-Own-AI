@@ -249,3 +249,26 @@ pub async fn uninstall_build_agent(
     log::info!("[build] uninstalled Your Own AI Build");
     Ok(())
 }
+
+/// The optional update check: fetch the site's static version file and
+/// return the latest published app version. The request carries nothing
+/// about this install - no version, no id, a plain GET for a public file.
+/// The frontend calls this at most once a day and only while the setting
+/// is on; failures are silent (no network = no message).
+#[tauri::command]
+pub async fn check_app_update() -> Result<Option<String>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get("https://yourownai.net/version.json")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Ok(None);
+    }
+    let v: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(v.get("version").and_then(|x| x.as_str()).map(str::to_string))
+}

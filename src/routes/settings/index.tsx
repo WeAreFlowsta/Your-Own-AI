@@ -28,6 +28,7 @@ import {
   type RememberSurface,
 } from "../../utils/rememberText";
 import { isMemoryPaused, setMemoryPaused } from "../../utils/memory";
+import { setUpdateChecksEnabled, updateChecksEnabled } from "../../utils/updateCheck";
 import {
   ensureMedicalModel,
   isMedicalSpecialist,
@@ -272,6 +273,7 @@ export default component$(() => {
   const allowAttachmentsOnline = useSignal(false);
   // Agent: auto permissions default for new projects + the model judge - both off unless set.
   const agentAutoDefault = useSignal(false);
+  const checkUpdates = useSignal(true);
   const agentJudge = useSignal(false);
   // Health questions: which installed model answers them (always offline).
   const medicalModel = useSignal<string>("");
@@ -330,6 +332,7 @@ export default component$(() => {
     allowAttachmentsOnline.value =
       localStorage.getItem("allowAttachmentsOnline") === "true";
     agentAutoDefault.value = defaultPermissionMode() === "auto";
+    checkUpdates.value = updateChecksEnabled();
     agentJudge.value = judgeEnabled();
     (async () => {
       try {
@@ -470,6 +473,10 @@ export default component$(() => {
     setHelpTipsEnabled(showHelpTips.value);
   });
 
+  const toggleCheckUpdates = $(() => {
+    checkUpdates.value = !checkUpdates.value;
+    setUpdateChecksEnabled(checkUpdates.value);
+  });
   const toggleAgentAutoDefault = $(() => {
     agentAutoDefault.value = !agentAutoDefault.value;
     setDefaultPermissionMode(agentAutoDefault.value ? "auto" : "ask");
@@ -1286,6 +1293,16 @@ export default component$(() => {
                     >
                       Show dismissed tips again
                     </button>
+                  </SettingToggle>
+                  <SettingToggle
+                    title="Check for updates"
+                    checked={checkUpdates}
+                    onToggle$={toggleCheckUpdates}
+                  >
+                    Once a day the app asks yourownai.net for the latest
+                    version number so it can tell you when an update exists.
+                    The request carries nothing about you - not even your
+                    current version - and nothing ever installs by itself.
                   </SettingToggle>
                 </div>
               </section>
