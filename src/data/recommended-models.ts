@@ -247,6 +247,19 @@ export const VISION_PROJECTORS: CapabilityModel[] = [
     size: 0.93,
   },
   {
+    id: 'qwen-3.8-uncensored-vision',
+    name: 'Qwen 3.8 Uncensored vision',
+    role: 'vision-projector',
+    description:
+      'Lets Qwen 3.8 Uncensored see images you attach. Needs the Qwen 3.8 Uncensored model downloaded.',
+    // Saved under OUR model-first mmproj name (upstream calls it "vision"):
+    // key "qwen3.8-27b-uncensored" prefixes the model filename for pairing.
+    filename: 'Qwen3.8-27B-Uncensored-mmproj-F16.gguf',
+    downloadUrl:
+      'https://huggingface.co/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF/resolve/main/Qwen3.8-27B-Uncensored-vision-f16.gguf',
+    size: 0.93,
+  },
+  {
     id: 'muse-glimmer-vision',
     name: 'Muse Glimmer vision',
     role: 'vision-projector',
@@ -877,6 +890,28 @@ export const modelFamilies: ModelFamily[] = [
         minRAM: 16,
         downloadUrl: 'https://huggingface.co/empero-ai/Qwen3.8-9B-GGUF/resolve/main/Qwen3.8-9B-Q4_K_M.gguf',
         filename: 'Qwen3.8-9B-Q4_K_M.gguf',
+        quantization: 'Q4_K_M'
+      }
+    ]
+  },
+  {
+    id: 'qwen-3.8-uncensored',
+    contextWindow: 262144,
+    released: '2026-08-16',
+    name: 'Qwen 3.8 Uncensored',
+    description: "The Qwen 3.8 flagship with refusal behavior substantially reduced (openly documented - reduced, not eliminated). Same frontier coding, math, and reasoning, and it can see images with its vision add-on. For 24GB-class graphics cards.",
+    category: 'specialist',
+    recommended: false,
+    capabilities: ['coding', 'agentic', 'math', 'reasoning', 'multilingual', 'chat'],
+    traits: ['new', 'uncensored', 'thinking'],
+    modality: { in: ['text', 'vision'], out: ['text'] },
+    variants: [
+      {
+        parameterCount: '27B',
+        size: 16.5,
+        minRAM: 32,
+        downloadUrl: 'https://huggingface.co/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF/resolve/main/Qwen3.8-27B-Uncensored-noMTP-Q4_K_M.gguf',
+        filename: 'Qwen3.8-27B-Uncensored-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       }
     ]
