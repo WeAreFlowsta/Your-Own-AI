@@ -239,6 +239,10 @@ export default component$(() => {
    *  (utils/recordsWarmup), "opening" otherwise; the poll loop below
    *  upgrades opening -> warming if reads come back empty in the window. */
   const resumeState = useSignal<"idle" | "opening" | "warming">("idle");
+  // A resume whose records read came back empty/failed - shown as a
+  // banner, NEVER as a silently blank conversation (which reads as
+  // data loss, the one message a records product must never send).
+  const resumeWarning = useSignal<string | null>(null);
 
   // Folder guard: opening a workspace with an AI whose model can't drive
   // agent work offers a switch - the folder still opens (workspace is
@@ -390,7 +394,16 @@ export default component$(() => {
       }
       const { messages, nextSequence, folderPath } = loaded;
       if (messages.length > 0) noteRecordsSeen();
-      if (messages.length === 0) return;
+      if (messages.length === 0) {
+        // The read didn't answer (slow or unwell records cell) - say so.
+        // Nothing is lost; the records are still on this device.
+        resumeWarning.value =
+          `${ai.label}'s records didn't answer just now, so the conversation ` +
+          `couldn't open. Nothing is lost - it's still in your records. ` +
+          `Try again in a moment.`;
+        return;
+      }
+      resumeWarning.value = null;
       chatState.messages = messages;
       chatState.conversationHash = target.hash;
       chatState.cacheKey = target.hash;
@@ -1122,6 +1135,21 @@ export default component$(() => {
             class="shrink-0 text-amber-300 hover:text-amber-100"
             aria-label="Dismiss"
             onClick$={() => (aiDataState.startupRestoreWarning = null)}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+      {/* A conversation open whose records read didn't answer: without
+          this banner the wiped chat looks like lost records. */}
+      {resumeWarning.value && (
+        <div class="relative z-30 flex items-start gap-3 border-b border-amber-700/60 bg-amber-900/30 px-4 py-2.5 text-xs text-amber-200">
+          <span class="min-w-0 flex-1">{resumeWarning.value}</span>
+          <button
+            type="button"
+            class="shrink-0 text-amber-300 hover:text-amber-100"
+            aria-label="Dismiss"
+            onClick$={() => (resumeWarning.value = null)}
           >
             ✕
           </button>
