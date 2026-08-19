@@ -35,3 +35,44 @@ export function emptyMayBeWarmup(): boolean {
 
 /** Poll delay while warming (ms). */
 export const WARMUP_POLL_MS = 3_000;
+
+/** Warmup-aware records read for surfaces whose reads silently return []
+ *  while the conductor starts (their utils catch and swallow the error).
+ *
+ *  Polls holochain_ready first - "the conductor says it's starting" is a
+ *  fact, not a guess - then reads; an empty result inside the grace
+ *  window keeps polling. Resolves with the first trustworthy result:
+ *  non-empty, or empty once warming is genuinely over. `onWarming`
+ *  drives the caller's "records are warming up" line; `alive` lets an
+ *  unmounting component stop the loop. Deadline-capped so a conductor
+ *  that never comes up can't poll forever.
+ */
+export async function readThroughWarmup<T>(
+  read: () => Promise<T[]>,
+  onWarming: (warming: boolean) => void,
+  alive: () => boolean = () => true,
+): Promise<T[]> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  const deadline = Date.now() + 5 * 60_000;
+  let last: T[] = [];
+  while (alive() && Date.now() < deadline) {
+    // Outside Tauri (plain-browser dev) the probe throws - treat as ready.
+    const ready = await invoke<boolean>("holochain_ready").catch(() => true);
+    if (ready) {
+      last = await read();
+      if (last.length > 0) {
+        noteRecordsSeen();
+        onWarming(false);
+        return last;
+      }
+      if (!emptyMayBeWarmup()) {
+        onWarming(false);
+        return last;
+      }
+    }
+    onWarming(true);
+    await new Promise((r) => setTimeout(r, WARMUP_POLL_MS));
+  }
+  onWarming(false);
+  return last;
+}

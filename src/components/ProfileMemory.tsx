@@ -9,6 +9,7 @@
  *    back here instead of duplicating the controls.
  */
 import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
+import { readThroughWarmup } from "../utils/recordsWarmup";
 import { Link } from "@builder.io/qwik-city";
 import {
   LuUser,
@@ -102,6 +103,7 @@ export default component$<ProfileMemoryProps>(
     const addValue = useSignal("");
     const relOpen = useSignal(false);
 
+    const factsWarming = useSignal(false);
     const activeFacts$ = $(async () => {
       facts.value = (await getFacts())
         .filter((f) => f.valid_to == null)
@@ -110,8 +112,19 @@ export default component$<ProfileMemoryProps>(
 
     // eslint-disable-next-line qwik/no-use-visible-task
     useVisibleTask$(async ({ cleanup }) => {
+      let alive = true;
+      cleanup(() => (alive = false));
       memoryPaused.value = isMemoryPaused();
-      await activeFacts$();
+      // Facts read through the conductor - hold the line through its
+      // startup rather than declare "nothing learned yet" falsely.
+      facts.value = await readThroughWarmup(
+        async () =>
+          (await getFacts())
+            .filter((f) => f.valid_to == null)
+            .sort((a, b) => b.confidence - a.confidence),
+        (w) => (factsWarming.value = w),
+        () => alive,
+      );
       factsLoading.value = false;
       // A fact from the turn the user just sent may still be saving (extraction
       // is fire-and-forget). Wait for it, then refresh — so the list isn't
@@ -362,7 +375,11 @@ export default component$<ProfileMemoryProps>(
         {factsLoading.value ? (
           <div class="text-center py-16">
             <div class="inline-block w-8 h-8 border-4 border-[var(--border-subtle)] border-t-[var(--bg-button-primary)] rounded-full animate-spin"></div>
-            <p class="mt-4 text-[var(--text-secondary)]">Loading…</p>
+            <p class="mt-4 text-[var(--text-secondary)]">
+              {factsWarming.value
+                ? "Your records are warming up - just after launch, what it has learned takes a moment to be ready."
+                : "Loading…"}
+            </p>
           </div>
         ) : facts.value.length === 0 ? (
           <div class="text-center py-16 rounded-2xl border border-dashed border-[var(--border-subtle)]">

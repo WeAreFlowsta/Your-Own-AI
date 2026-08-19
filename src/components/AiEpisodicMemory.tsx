@@ -5,6 +5,7 @@
  * the chat recall uses (transcriptMemory.ts).
  */
 import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
+import { readThroughWarmup } from "../utils/recordsWarmup";
 import { LuBrain, LuTrash2, LuDownload } from "@qwikest/icons/lucide";
 import {
   getAiMemories,
@@ -42,16 +43,27 @@ export default component$<Props>(({ aiId, aiName }) => {
   const modelReady = useSignal(true);
   const showClear = useSignal(false);
 
+  const warming = useSignal(false);
   // eslint-disable-next-line qwik/no-use-visible-task
-  useVisibleTask$(async ({ track }) => {
+  useVisibleTask$(async ({ track, cleanup }) => {
     const id = track(() => aiId);
     if (!id) {
       loading.value = false;
       return;
     }
+    let alive = true;
+    cleanup(() => (alive = false));
     loading.value = true;
     modelReady.value = await isEmbeddingModelReady();
-    items.value = await getAiMemories(id);
+    // Memories decrypt with a key the conductor holds - reads silently
+    // come back empty while it starts, and "no memories" against a
+    // history the user knows exists is the one message this surface
+    // must never send by accident.
+    items.value = await readThroughWarmup(
+      () => getAiMemories(id),
+      (w) => (warming.value = w),
+      () => alive,
+    );
     loading.value = false;
   });
 
@@ -91,6 +103,11 @@ export default component$<Props>(({ aiId, aiName }) => {
         {loading.value ? (
           <div class="text-center py-10">
             <div class="inline-block w-6 h-6 border-4 border-[var(--border-subtle)] border-t-[var(--bg-button-primary)] rounded-full animate-spin"></div>
+            {warming.value && (
+              <p class="mt-3 text-sm text-[var(--text-muted)] max-w-md mx-auto">
+                Your records are warming up - just after launch, its memories take a moment to be ready.
+              </p>
+            )}
           </div>
         ) : items.value.length === 0 ? (
           <div class="text-center py-12 rounded-2xl border border-dashed border-[var(--border-subtle)]">

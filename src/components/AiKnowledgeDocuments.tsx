@@ -1,4 +1,5 @@
 import { component$, $, useSignal, useVisibleTask$ } from '@builder.io/qwik';
+import { readThroughWarmup } from '../utils/recordsWarmup';
 import { LuFileText, LuTrash2, LuPlus, LuLoader2 } from '@qwikest/icons/lucide';
 import LiquidMetalButton from './LiquidMetalButton';
 import {
@@ -30,9 +31,19 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
   const error = useSignal('');
 
   // eslint-disable-next-line qwik/no-use-visible-task
-  useVisibleTask$(async ({ track }) => {
+  const warming = useSignal(false);
+  useVisibleTask$(async ({ track, cleanup }) => {
     track(() => props.aiId);
-    if (props.aiId) docs.value = await listKnowledgeDocuments(props.aiId);
+    if (!props.aiId) return;
+    let alive = true;
+    cleanup(() => (alive = false));
+    // Same conductor-held key as the rest of knowledge - an early empty
+    // is "not yet", not "no documents".
+    docs.value = await readThroughWarmup(
+      () => listKnowledgeDocuments(props.aiId),
+      (w) => (warming.value = w),
+      () => alive,
+    );
   });
 
   const addDocuments = $(async () => {
@@ -85,7 +96,11 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
         <p class="text-xs text-red-600 dark:text-red-400 mb-2">{error.value}</p>
       )}
 
-      {docs.value.length === 0 ? (
+      {warming.value ? (
+        <p class="text-sm text-[var(--text-muted)]">
+          Your records are warming up - just after launch, its documents take a moment to be ready.
+        </p>
+      ) : docs.value.length === 0 ? (
         <p class="text-sm text-[var(--text-muted)]">
           No documents yet. Add files here (or in the Knowledge tab when editing{' '}
           {name}) and it will draw on them whenever they're relevant.

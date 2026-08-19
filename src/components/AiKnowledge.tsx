@@ -6,6 +6,7 @@
  * shareable "pack". Lives in the Remembers tab.
  */
 import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
+import { readThroughWarmup } from "../utils/recordsWarmup";
 import { invoke } from "@tauri-apps/api/core";
 import {
   LuBookOpen,
@@ -64,13 +65,20 @@ export default component$<Props>(({ aiId, aiName }) => {
   const importVerify = useSignal<VerifyState | null>(null);
   const importing = useSignal(false);
 
+  const warming = useSignal(false);
   const load = $(async () => {
     if (!aiId) {
       loading.value = false;
       return;
     }
     modelReady.value = await isEmbeddingModelReady();
-    items.value = await getAiKnowledge(aiId);
+    // Knowledge decrypts with a key the conductor holds - early reads
+    // come back empty while it starts; hold the line rather than show
+    // a false "nothing yet".
+    items.value = await readThroughWarmup(
+      () => getAiKnowledge(aiId),
+      (w) => (warming.value = w),
+    );
     loading.value = false;
   });
 
@@ -342,6 +350,11 @@ export default component$<Props>(({ aiId, aiName }) => {
       {loading.value ? (
         <div class="text-center py-8">
           <div class="inline-block w-6 h-6 border-4 border-[var(--border-subtle)] border-t-[var(--bg-button-primary)] rounded-full animate-spin"></div>
+          {warming.value && (
+            <p class="mt-3 text-sm text-[var(--text-muted)] max-w-md mx-auto">
+              Your records are warming up - just after launch, its knowledge takes a moment to be ready.
+            </p>
+          )}
         </div>
       ) : !modelReady.value ? (
         <div class="text-center py-10 rounded-2xl border border-dashed border-[var(--border-subtle)]">

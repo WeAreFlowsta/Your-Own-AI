@@ -904,3 +904,33 @@ main {
   33% { color: #484050; }
   66% { color: #585060; }
 }
+
+/* Looping animations must live on their own compositor layers.
+   WebKitGTK on Wayland otherwise renders them on the main thread -
+   layout + paint every frame - and a minutes-long loading spinner
+   (records warming after launch) saturates rendering so badly that
+   clicks queue for tens of seconds (field-diagnosed via the Timelines
+   profiler + document.getAnimations() pause test, 2026-08-19: pausing
+   the animations alone made a frozen page instantly responsive).
+   will-change promotes the layer; contain stops each frame's
+   invalidation from propagating layout to the rest of the page. */
+.animate-spin,
+.animate-pulse {
+  will-change: transform, opacity;
+  contain: layout paint;
+}
+
+/* Looping animations must live on their own compositor layers.
+   WebKitGTK on Wayland otherwise renders them on the main thread -
+   layout + paint every frame - and a minutes-long loading spinner
+   (records warming after launch) saturates rendering so badly that
+   clicks queue for tens of seconds. Field-diagnosed 2026-08-19 with
+   the Timelines profiler (CPU ~110%, dense Layout & Rendering, empty
+   JavaScript track) and proven by document.getAnimations() pause
+   making a frozen page instantly responsive. will-change promotes the
+   layer; contain keeps each frame's invalidation out of page layout. */
+.animate-spin,
+.animate-pulse {
+  will-change: transform, opacity;
+  contain: layout paint;
+}

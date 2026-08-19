@@ -49,7 +49,7 @@ import AiKnowledge from "../../components/AiKnowledge";
 import { RememberEntryButton } from "../../components/RememberEntryButton";
 import AiKnowledgeDocuments from "../../components/AiKnowledgeDocuments";
 import { Callout } from "../../components/Callout";
-import { emptyMayBeWarmup, noteRecordsSeen, WARMUP_POLL_MS } from "../../utils/recordsWarmup";
+import { emptyMayBeWarmup, noteRecordsSeen, readThroughWarmup, WARMUP_POLL_MS } from "../../utils/recordsWarmup";
 
 /**
  * Header subtitle in its own component so the signal reads get a clean
@@ -267,13 +267,22 @@ export default component$(() => {
   // would bury it) - this shared signal opens it.
   const memoryFolder = useContext(ProjectMemoryContext);
 
-  useTask$(async ({ track }) => {
+  const workspacesWarming = useSignal(false);
+  useTask$(async ({ track, cleanup }) => {
     const tab = track(() => activeTab.value);
     const reopened = track(() => memoryFolder.value);
     if (tab !== "workspaces" || reopened) return;
+    let alive = true;
+    cleanup(() => (alive = false));
     workspacesLoading.value = true;
     try {
-      workspaceMemories.value = await listWorkspaceMemories();
+      // Project memories read through the conductor - an early empty is
+      // "not yet", not "none" (readThroughWarmup holds the line).
+      workspaceMemories.value = await readThroughWarmup(
+        listWorkspaceMemories,
+        (w) => (workspacesWarming.value = w),
+        () => alive,
+      );
     } finally {
       workspacesLoading.value = false;
     }
@@ -402,7 +411,11 @@ export default component$(() => {
                 by all your AIs, yours to edit.
               </p>
               {workspacesLoading.value && (
-                <p class="text-sm text-[var(--text-muted)]">Loading from your records..</p>
+                <p class="text-sm text-[var(--text-muted)]">
+                  {workspacesWarming.value
+                    ? "Your records are warming up - just after launch, project memories take a moment to be ready."
+                    : "Loading from your records.."}
+                </p>
               )}
               {!workspacesLoading.value && workspaceMemories.value.length === 0 && (
                 <p class="text-sm text-[var(--text-muted)]">
