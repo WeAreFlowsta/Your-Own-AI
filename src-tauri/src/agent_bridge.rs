@@ -574,15 +574,18 @@ async fn handle_agent_message(
                     log::info!("[agent] session created in {}ms", startup_ms(app));
                     *state.session_id.lock().await = Some(sid.clone());
                     if session_approve_all {
+                        // Unscoped on purpose: the harness matches a
+                        // clientIdentifier against GROK_CLIENT_NAME-derived
+                        // identity (not our registered one), so a scoped
+                        // notification matches ZERO sessions and silently
+                        // no-ops. This process runs exactly one session -
+                        // "all sessions" is exactly ours.
                         let _ = write_line(
                             &state,
                             &json!({
                                 "jsonrpc": "2.0",
                                 "method": "x.ai/yolo_mode_changed",
-                                "params": {
-                                    "clientIdentifier": CLIENT_IDENTIFIER,
-                                    "yolo_mode": true
-                                }
+                                "params": { "yolo_mode": true }
                             }),
                         )
                         .await;
@@ -728,13 +731,14 @@ pub async fn set_agent_permission_mode(
         "all" => (false, true),
         _ => (false, false),
     };
+    // Unscoped on purpose - see the session-create send: a clientIdentifier
+    // here matches against env-derived identity and silently no-ops.
     write_line(
         &state,
         &json!({
             "jsonrpc": "2.0",
             "method": "x.ai/yolo_mode_changed",
             "params": {
-                "clientIdentifier": CLIENT_IDENTIFIER,
                 "yolo_mode": yolo,
                 "auto_mode": auto,
                 "permission_mode": if auto { "auto" } else if yolo { "always-approve" } else { "ask" }
