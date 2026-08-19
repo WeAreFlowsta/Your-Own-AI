@@ -607,6 +607,7 @@ pub fn run() {
             get_context_window_size,
             // Holochain transcript commands
             commands_holochain::provision_ai_agent,
+            commands_holochain::cell_lineage_report,
             commands_holochain::provision_all_agents,
             commands_holochain::start_conversation,
             commands_holochain::record_transcript_entry,

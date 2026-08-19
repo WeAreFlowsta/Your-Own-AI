@@ -247,6 +247,189 @@ impl HolochainManager {
         Ok(key_hex)
     }
 
+    /// Phase A of cell-lineage recovery (CELL_LINEAGE_RECOVERY.md): a
+    /// read-only census of every transcript cell on the conductor.
+    /// Connects - and adopts into the live map - any cell it can reach,
+    /// which is exactly what startup reconnect does; it changes no cell
+    /// state and writes nothing to any chain.
+    ///
+    /// `live` = (agent key hex, AI name) for every AI in the store.
+    pub async fn cell_lineage_report(
+        &self,
+        live: &[(String, String)],
+    ) -> Result<serde_json::Value, String> {
+        let admin_ws = holochain_client::AdminWebsocket::connect(
+            format!("localhost:{}", self.handle.admin_port),
+            Some("your-own-ai".to_string()),
+        )
+        .await
+        .map_err(|e| format!("Failed to connect to admin WebSocket: {}", e))?;
+        let apps = admin_ws
+            .list_apps(None)
+            .await
+            .map_err(|e| format!("Failed to list apps: {}", e))?;
+
+        struct Row {
+            app_id: String,
+            key_hex: String,
+            parent: String,
+            status: String,
+            connected: bool,
+            conversations: Option<u64>,
+        }
+        let mut rows: Vec<Row> = Vec::new();
+
+        for app in apps
+            .iter()
+            .filter(|a| a.installed_app_id.starts_with(dna::APP_ID_PREFIX))
+        {
+            let key_hex = hex::encode(app.agent_pub_key.get_raw_39());
+            let parent = app
+                .installed_app_id
+                .strip_prefix(dna::APP_ID_PREFIX)
+                .unwrap_or("")
+                .to_string();
+
+            // Reach the cell: reuse an existing connection, else connect
+            // and adopt (same as the reconnect sweep).
+            let already = { self.agents.lock().await.contains_key(&key_hex) };
+            let connected = if already {
+                true
+            } else {
+                match dna::connect_app_websocket(
+                    self.handle.admin_port,
+                    self.handle.app_port,
+                    &app.installed_app_id,
+                )
+                .await
+                {
+                    Ok(app_client) => {
+                        self.agents.lock().await.insert(
+                            key_hex.clone(),
+                            AiAgent {
+                                installed_app_id: app.installed_app_id.clone(),
+                                agent_pub_key: app.agent_pub_key.clone(),
+                                app_client,
+                            },
+                        );
+                        true
+                    }
+                    Err(_) => false,
+                }
+            };
+
+            // Count conversations - a decode-only read, no decryption.
+            let conversations = if connected {
+                let payload = holochain_types::prelude::ExternIO::encode(())
+                    .map_err(|e| format!("Failed to encode: {}", e))?;
+                match self
+                    .call_zome(&key_hex, "transcript", "get_all_conversations", payload)
+                    .await
+                {
+                    Ok(r) => holochain_types::prelude::ExternIO::decode::<
+                        Vec<holochain_types::prelude::Record>,
+                    >(&r)
+                    .ok()
+                    .map(|v| v.len() as u64),
+                    Err(_) => None,
+                }
+            } else {
+                None
+            };
+
+            rows.push(Row {
+                app_id: app.installed_app_id.clone(),
+                key_hex,
+                parent,
+                status: format!("{:?}", app.status),
+                connected,
+                conversations,
+            });
+        }
+
+        // Walk each live AI's chain: a generation's app-id suffix is the
+        // id it was installed under = the previous generation's key (or
+        // the original local id at the root). Every generation - even an
+        // empty one - is a LINK; severing one hides everything older.
+        use std::collections::{HashMap, HashSet};
+        let by_key: HashMap<String, usize> = rows
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.key_hex.clone(), i))
+            .collect();
+        let live_keys: HashSet<&str> = live.iter().map(|(k, _)| k.as_str()).collect();
+        let mut on_live_chain: HashSet<String> = HashSet::new();
+        let mut chains = serde_json::Map::new();
+        for (key, name) in live {
+            let mut chain: Vec<String> = Vec::new();
+            let mut cur = key.clone();
+            while let Some(&i) = by_key.get(&cur) {
+                if chain.contains(&rows[i].key_hex) {
+                    break; // cycle guard
+                }
+                chain.push(rows[i].key_hex.clone());
+                on_live_chain.insert(rows[i].key_hex.clone());
+                cur = rows[i].parent.clone();
+            }
+            chains.insert(
+                name.clone(),
+                serde_json::json!({ "generations": chain.len(), "chain": chain }),
+            );
+        }
+
+        let mut n_live = 0u64;
+        let mut n_link = 0u64;
+        let mut n_data = 0u64;
+        let mut n_orphan_empty = 0u64;
+        let mut n_unreachable = 0u64;
+        let cells: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|r| {
+                let is_live = live_keys.contains(r.key_hex.as_str());
+                let has_data = r.conversations.unwrap_or(0) > 0;
+                let class = if is_live {
+                    n_live += 1;
+                    "live"
+                } else if !r.connected {
+                    n_unreachable += 1;
+                    "unreachable"
+                } else if has_data {
+                    n_data += 1;
+                    "stranded_data"
+                } else if on_live_chain.contains(&r.key_hex) {
+                    n_link += 1;
+                    "empty_link_on_live_chain"
+                } else {
+                    n_orphan_empty += 1;
+                    "empty_orphan"
+                };
+                serde_json::json!({
+                    "app_id": r.app_id,
+                    "agent_key": r.key_hex,
+                    "parent_id": r.parent,
+                    "status": r.status,
+                    "connected": r.connected,
+                    "conversations": r.conversations,
+                    "class": class,
+                })
+            })
+            .collect();
+
+        Ok(serde_json::json!({
+            "summary": {
+                "total_cells": rows.len(),
+                "live": n_live,
+                "stranded_data": n_data,
+                "empty_link_on_live_chain": n_link,
+                "empty_orphan": n_orphan_empty,
+                "unreachable": n_unreachable,
+                "live_ais": live.len(),
+            },
+            "chains": chains,
+            "cells": cells,
+        }))
+    }
+
     /// Check if an agent is provisioned (by pub key hex).
     pub async fn is_provisioned(&self, agent_key: &str) -> bool {
         let agents = self.agents.lock().await;

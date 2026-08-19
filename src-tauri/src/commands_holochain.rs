@@ -798,6 +798,59 @@ pub async fn project_memory_append_note(
     Ok(())
 }
 
+/// Phase A of cell-lineage recovery: build the read-only cell census
+/// (CELL_LINEAGE_RECOVERY.md) and save it next to the app data so it can
+/// be reviewed. Changes no cell state.
+#[tauri::command]
+pub async fn cell_lineage_report(
+    app: tauri::AppHandle,
+    hc_state: State<'_, Arc<HolochainState>>,
+) -> Result<serde_json::Value, String> {
+    use tauri::Manager;
+    use tauri_plugin_store::StoreExt;
+    let manager = hc_state.get()?;
+
+    // Live AIs = the store's custom AIs that carry an agent key.
+    let mut live: Vec<(String, String)> = Vec::new();
+    if let Ok(store) = app.store("ai-data.json") {
+        if let Some(serde_json::Value::Array(arr)) = store.get("custom-ais") {
+            for ai in arr {
+                let key = ai
+                    .get("agentPubKey")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let name = ai.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+                if !key.is_empty() {
+                    live.push((key.to_string(), name.to_string()));
+                }
+            }
+        }
+    }
+
+    let report = manager.cell_lineage_report(&live).await?;
+
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("No app data dir: {}", e))?;
+    let path = dir.join("cell-lineage-report.json");
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("Failed to write report: {}", e))?;
+    log::info!(
+        "[cells] lineage report written to {} - {}",
+        path.display(),
+        report["summary"].to_string()
+    );
+
+    Ok(serde_json::json!({
+        "summary": report["summary"],
+        "path": path.to_string_lossy(),
+    }))
+}
+
 /// Is the conductor up? The transcript surface reads empty during startup,
 /// which is indistinguishable from "no conversations" - callers that would
 /// show an empty state poll this first and keep their spinner up instead.
