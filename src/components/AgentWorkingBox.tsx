@@ -464,12 +464,21 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
             );
           })}
 
-        {/* The pearl - the turn's one point of life. Its OWN element after
-            the flow, so it exists no matter what the rail ends with: a step
-            group, an answered permission receipt, or spoken text. It used to
-            live inside the last group only - a turn whose tail was a
-            permission receipt had NO live indicator at all, which made every
-            Allow before a long reasoning stretch look dead. */}
+        {/* The words being said right now - same register as settled text
+            and the final answer, streaming outside the keyed list. */}
+        {trailingNarration.value && (
+          <div
+            class="markdown-content text-[var(--text-primary)] text-base leading-relaxed py-1.5 break-words overflow-hidden"
+            dangerouslySetInnerHTML={renderMarkdown(trailingNarration.value.text)}
+          />
+        )}
+        {/* The pearl - the turn's one point of life. Its OWN element at the
+            very END of the flow - after streaming speech too - so it is
+            always at the visible tip no matter what the rail ends with. It
+            used to render BEFORE the trailing narration: once the agent
+            finished a paragraph and went into a long think, the only life
+            was a small dot buried above text already read, and the turn
+            looked dead exactly when the model was working hardest. */}
         {working && tipHere && (
           <div class="relative pl-7 my-1.5">
             <div
@@ -506,14 +515,6 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
           </div>
         )}
 
-        {/* The words being said right now - same register as settled text
-            and the final answer, streaming outside the keyed list. */}
-        {trailingNarration.value && (
-          <div
-            class="markdown-content text-[var(--text-primary)] text-base leading-relaxed py-1.5 break-words overflow-hidden"
-            dangerouslySetInnerHTML={renderMarkdown(trailingNarration.value.text)}
-          />
-        )}
       </>
     );
   },

@@ -1599,6 +1599,25 @@ export function useAgentSession(props: UseAgentSessionProps) {
     // that flips the loading flag early must never cost the chain its
     // entry ("Holochain holds everything" - a lost answer reads as "this
     // question never got an answer" on resume).
+
+  /** The turn's answer when the model never spoke AFTER its last steps: the
+   *  last SUBSTANTIAL spoken passage anywhere in the log (rail hints and
+   *  trim markers are not speech). Returns [content, logWithoutIt] or null. */
+  const promoteLastSpeech = (
+    content: string,
+    log: NonNullable<Message["agentLog"]>,
+  ): { content: string; log: NonNullable<Message["agentLog"]> } | null => {
+    if (content !== "") return null;
+    for (let i = log.length - 1; i >= 0; i--) {
+      const item = log[i];
+      if (item.type !== "narration") continue;
+      if (item.id.startsWith("hint-") || item.id === "log-trimmed") continue;
+      if (item.text.trim().length < 40) continue;
+      return { content: item.text, log: [...log.slice(0, i), ...log.slice(i + 1)] };
+    }
+    return null;
+  };
+
     const recordedTurnIds = new Set<string>();
 
     const recordTurnOnce = (id: string | null) => {
@@ -1606,12 +1625,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
       // An early finish (or a late-arriving trailing chunk) can leave the
       // answer stuck in the log as narration - promote it first.
       mutateTurn((m) => {
-        const log = m.agentLog ?? [];
-        const last = log[log.length - 1];
-        if (m.content === "" && last?.type === "narration") {
-          return { ...m, content: last.text, agentLog: log.slice(0, -1) };
-        }
-        return m;
+        const promoted = promoteLastSpeech(m.content, m.agentLog ?? []);
+        return promoted ? { ...m, content: promoted.content, agentLog: promoted.log } : m;
       });
       const bubble = props.chatState.messages.find((m) => m.id === id);
       if (!bubble || (!bubble.content && !(bubble.agentLog ?? []).length)) return;
@@ -1638,14 +1653,16 @@ export function useAgentSession(props: UseAgentSessionProps) {
               }
             : i,
         );
-        // The turn's last words ARE the answer: promote the trailing
-        // narration into the bubble body (content goes "" -> answer exactly
-        // once - it must never shrink). Earlier narration stays in the box.
+        // The turn's last words ARE the answer: promote the last spoken
+        // passage into the bubble body (content goes "" -> answer exactly
+        // once - it must never shrink). WHEREVER it sits: a turn that speaks
+        // its conclusion mid-way and then finishes on silent tool steps used
+        // to fold everything into the stub and show nothing until a click.
         let content = m.content;
-        const last = log[log.length - 1];
-        if (content === "" && last?.type === "narration") {
-          content = last.text;
-          log = log.slice(0, -1);
+        const promoted = promoteLastSpeech(content, log);
+        if (promoted) {
+          content = promoted.content;
+          log = promoted.log;
         }
         return { ...m, isLoading: false, error: errorText ?? m.error, content, agentLog: log };
       });
