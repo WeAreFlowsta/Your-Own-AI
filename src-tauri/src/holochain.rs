@@ -102,6 +102,65 @@ impl HolochainManager {
             }
         }
 
+        // The map above is incomplete whenever a reconnect lost the
+        // CellDisabled race at startup, and silently minting a NEW
+        // generation for an id the conductor already knows strands that
+        // AI's records and grows the cell population every launch (the
+        // 151-cells-for-12-AIs incident, 2026-08-19). So before minting,
+        // ask the conductor itself.
+        {
+            let admin_ws = holochain_client::AdminWebsocket::connect(
+                format!("localhost:{}", self.handle.admin_port),
+                Some("your-own-ai".to_string()),
+            )
+            .await
+            .map_err(|e| format!("Failed to connect to admin WebSocket: {}", e))?;
+            let apps = admin_ws
+                .list_apps(None)
+                .await
+                .map_err(|e| format!("Failed to list apps: {}", e))?;
+            let known = apps.iter().find(|app| {
+                app.installed_app_id.starts_with(dna::APP_ID_PREFIX)
+                    && (hex::encode(app.agent_pub_key.get_raw_39()) == ai_id
+                        || app.installed_app_id.ends_with(ai_id))
+            });
+            if let Some(app) = known {
+                // The cell exists - adopt it. If its websocket can't
+                // connect yet (enable wave still running), FAIL rather
+                // than mint: the caller's retry ladder rides out
+                // CellDisabled and calls again.
+                let key_hex = hex::encode(app.agent_pub_key.get_raw_39());
+                log::info!(
+                    "AI id {} already installed on the conductor as {} (key: {}) - adopting, not minting",
+                    ai_id,
+                    app.installed_app_id,
+                    key_hex
+                );
+                let app_client = dna::connect_app_websocket(
+                    self.handle.admin_port,
+                    self.handle.app_port,
+                    &app.installed_app_id,
+                )
+                .await
+                .map_err(|e| {
+                    format!(
+                        "AI {} exists on the conductor but isn't reachable yet: {}",
+                        ai_id, e
+                    )
+                })?;
+                let mut agents = self.agents.lock().await;
+                agents.insert(
+                    key_hex.clone(),
+                    AiAgent {
+                        installed_app_id: app.installed_app_id.clone(),
+                        agent_pub_key: app.agent_pub_key.clone(),
+                        app_client,
+                    },
+                );
+                return Ok(key_hex);
+            }
+        }
+
         log::info!("Provisioning Holochain agent for AI: {}", ai_id);
 
         // 1. Get or create a lair seed for this AI personality.
@@ -359,6 +418,8 @@ impl HolochainManager {
             .map_err(|e| format!("Failed to list apps: {}", e))?;
 
         let mut reconnected = 0;
+        let mut failed: Vec<(String, String, holochain_types::prelude::AgentPubKey)> =
+            Vec::new();
         for app in &apps {
             if app.installed_app_id.starts_with(dna::APP_ID_PREFIX) {
                 let agent_pub_key = app.agent_pub_key.clone();
@@ -395,6 +456,54 @@ impl HolochainManager {
                     }
                     Err(e) => {
                         log::warn!("Failed to reconnect agent {}: {}", key_hex, e);
+                        failed.push((
+                            app.installed_app_id.clone(),
+                            key_hex.clone(),
+                            agent_pub_key.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Second sweep: a connect that failed early in the pass almost
+        // always lost the CellDisabled enable-wave race - and the wave has
+        // had the whole (long) sequential pass to catch up. One retry per
+        // failure recovers most of them; whatever still fails is protected
+        // from generation-forking by the adopt-don't-mint guard in
+        // provision_agent.
+        if !failed.is_empty() {
+            log::info!(
+                "Retrying {} agent reconnects that lost the enable race",
+                failed.len()
+            );
+            for app_id in failed {
+                match dna::connect_app_websocket(
+                    self.handle.admin_port,
+                    self.handle.app_port,
+                    &app_id.0,
+                )
+                .await
+                {
+                    Ok(app_client) => {
+                        let mut agents = self.agents.lock().await;
+                        agents.insert(
+                            app_id.1.clone(),
+                            AiAgent {
+                                installed_app_id: app_id.0.clone(),
+                                agent_pub_key: app_id.2.clone(),
+                                app_client,
+                            },
+                        );
+                        reconnected += 1;
+                        log::info!("Reconnected agent on retry (key: {})", app_id.1);
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "Agent {} still unreachable after retry: {}",
+                            app_id.1,
+                            e
+                        );
                     }
                 }
             }
