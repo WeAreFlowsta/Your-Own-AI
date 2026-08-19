@@ -173,6 +173,8 @@ export default component$<AppHeaderProps>(
     const buildDownloading = useSignal(false);
     const buildProgress = useSignal(0);
     const buildError = useSignal<string | null>(null);
+  const buildUpdateAvailable = useSignal(false);
+  const buildInstalledVersion = useSignal<string | null>(null);
 
     // eslint-disable-next-line qwik/no-use-visible-task
     useVisibleTask$(async ({ cleanup }) => {
@@ -428,10 +430,14 @@ export default component$<AppHeaderProps>(
                           installed: boolean;
                           downloading: boolean;
                           error: string | null;
+                          update_available: boolean;
+                          installed_version: string | null;
                         };
                         buildReady.value = s.installed || buildInstalled;
                         buildDownloading.value = s.downloading;
                         buildError.value = s.error;
+                        buildUpdateAvailable.value = s.installed && s.update_available;
+                        buildInstalledVersion.value = s.installed_version;
                       } catch {
                         buildReady.value = buildInstalled;
                       }
@@ -516,6 +522,44 @@ export default component$<AppHeaderProps>(
                         </span>
                       </span>
 
+                      {/* Installed but behind the version this app ships:
+                          the update lives HERE too - the folder menu is where
+                          project users look, same spot as the original
+                          install message. Same downloader; it replaces the
+                          old binary with the pinned release. */}
+                      {buildReady.value && buildUpdateAvailable.value && !buildDownloading.value && (
+                        <span class="block mt-3 rounded-xl border border-[var(--border-subtle)] p-3">
+                          <span class="block text-xs text-[var(--text-secondary)]">
+                            Update available for Your Own AI Build
+                            {buildInstalledVersion.value ? ` - you have ${buildInstalledVersion.value}` : ''}.
+                            Auto permissions and the newest agent improvements need it.
+                          </span>
+                          <LiquidMetalButton
+                            class="mt-2 w-full px-4 py-1.5 text-sm"
+                            onClick$={async () => {
+                              buildError.value = null;
+                              buildDownloading.value = true;
+                              buildProgress.value = 0;
+                              buildUpdateAvailable.value = false;
+                              try {
+                                const { invoke } = await import("@tauri-apps/api/core");
+                                invoke("download_build_agent").catch(() => {
+                                  /* failure arrives via its event */
+                                });
+                              } catch {
+                                buildDownloading.value = false;
+                              }
+                            }}
+                          >
+                            Update Your Own AI Build
+                          </LiquidMetalButton>
+                        </span>
+                      )}
+                      {buildReady.value && buildDownloading.value && (
+                        <span class="block mt-3 text-xs text-[var(--text-secondary)]">
+                          Updating Your Own AI Build.. {buildProgress.value}%
+                        </span>
+                      )}
                       {/* Not installed yet: what projects are + the one step. */}
                       {!buildReady.value && (
                         <span class="block mt-3">
