@@ -130,6 +130,27 @@ impl HolochainManager {
                 // than mint: the caller's retry ladder rides out
                 // CellDisabled and calls again.
                 let key_hex = hex::encode(app.agent_pub_key.get_raw_39());
+                // A tidied (disabled) cell that provisioning asks for by
+                // id is wanted again - turn it back on first.
+                if !matches!(
+                    app.status,
+                    holochain_types::app::AppStatus::Enabled
+                ) {
+                    admin_ws
+                        .enable_app(app.installed_app_id.clone())
+                        .await
+                        .map_err(|e| {
+                            format!(
+                                "AI {} exists but couldn't be re-enabled: {}",
+                                ai_id, e
+                            )
+                        })?;
+                    log::info!(
+                        "Re-enabled tidied cell {} for AI {}",
+                        app.installed_app_id,
+                        ai_id
+                    );
+                }
                 log::info!(
                     "AI id {} already installed on the conductor as {} (key: {}) - adopting, not minting",
                     ai_id,
@@ -290,11 +311,18 @@ impl HolochainManager {
                 .unwrap_or("")
                 .to_string();
 
+            let enabled = matches!(
+                app.status,
+                holochain_types::app::AppStatus::Enabled
+            );
             // Reach the cell: reuse an existing connection, else connect
-            // and adopt (same as the reconnect sweep).
+            // and adopt (same as the reconnect sweep). Disabled cells are
+            // never dialed - each attempt is a slow authorize failure.
             let already = { self.agents.lock().await.contains_key(&key_hex) };
             let connected = if already {
                 true
+            } else if !enabled {
+                false
             } else {
                 match dna::connect_app_websocket(
                     self.handle.admin_port,
@@ -382,6 +410,7 @@ impl HolochainManager {
         let mut n_data = 0u64;
         let mut n_orphan_empty = 0u64;
         let mut n_unreachable = 0u64;
+        let mut n_disabled = 0u64;
         let cells: Vec<serde_json::Value> = rows
             .iter()
             .map(|r| {
@@ -390,6 +419,9 @@ impl HolochainManager {
                 let class = if is_live {
                     n_live += 1;
                     "live"
+                } else if r.status.starts_with("Disabled") {
+                    n_disabled += 1;
+                    "disabled"
                 } else if !r.connected {
                     n_unreachable += 1;
                     "unreachable"
@@ -423,6 +455,7 @@ impl HolochainManager {
                 "empty_link_on_live_chain": n_link,
                 "empty_orphan": n_orphan_empty,
                 "unreachable": n_unreachable,
+                "disabled": n_disabled,
                 "live_ais": live.len(),
             },
             "chains": chains,
@@ -452,7 +485,11 @@ impl HolochainManager {
         // Live + data-bearing cells always stay.
         for c in cells {
             let class = c["class"].as_str().unwrap_or("");
-            if class == "live" || class == "stranded_data" || class == "unreachable" {
+            if class == "live"
+                || class == "stranded_data"
+                || class == "unreachable"
+                || class == "disabled"
+            {
                 keep.insert(c["agent_key"].as_str().unwrap_or("").to_string());
             }
         }
@@ -695,10 +732,20 @@ impl HolochainManager {
             .map_err(|e| format!("Failed to list apps: {}", e))?;
 
         let mut reconnected = 0;
+        let mut skipped_disabled = 0u32;
         let mut failed: Vec<(String, String, holochain_types::prelude::AgentPubKey)> =
             Vec::new();
         for app in &apps {
             if app.installed_app_id.starts_with(dna::APP_ID_PREFIX) {
+                // Tidied (disabled) cells stay installed but must not be
+                // dialed - every attempt is a slow authorize failure.
+                if !matches!(
+                    app.status,
+                    holochain_types::app::AppStatus::Enabled
+                ) {
+                    skipped_disabled += 1;
+                    continue;
+                }
                 let agent_pub_key = app.agent_pub_key.clone();
                 let key_hex = hex::encode(agent_pub_key.get_raw_39());
 
@@ -788,6 +835,12 @@ impl HolochainManager {
 
         if reconnected > 0 {
             log::info!("Reconnected {} existing AI agents", reconnected);
+        }
+        if skipped_disabled > 0 {
+            log::info!(
+                "Skipped {} disabled (tidied) transcript cells",
+                skipped_disabled
+            );
         }
 
         Ok(())
