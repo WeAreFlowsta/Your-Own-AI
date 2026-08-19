@@ -248,6 +248,36 @@ export default component$(() => {
   const projectMemoryFolder = useSignal<string | null>(null);
   useContextProvider(ProjectMemoryContext, projectMemoryFolder);
 
+  // UI-stall watchdog. CSS spinners animate on the compositor thread, so
+  // the app can look alive while the main thread - which handles every
+  // click - is frozen; "the page ignored me" field reports can't tell a
+  // freeze from slow handlers. Record main-thread gaps so diagnostics
+  // can: console.warn + the last 20 in localStorage("uiStalls").
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ cleanup }) => {
+    let last = performance.now();
+    let raf = 0;
+    const tick = () => {
+      const now = performance.now();
+      const gap = now - last;
+      // Hidden windows throttle rAF legitimately - not a stall.
+      if (gap > 1000 && !document.hidden) {
+        console.warn(`[ui] main thread stalled ${Math.round(gap)}ms on ${location.pathname}`);
+        try {
+          const prev = JSON.parse(localStorage.getItem("uiStalls") || "[]");
+          prev.push({ ms: Math.round(gap), at: Date.now(), path: location.pathname });
+          localStorage.setItem("uiStalls", JSON.stringify(prev.slice(-20)));
+        } catch {
+          /* diagnostics only - never let the watchdog hurt the app */
+        }
+      }
+      last = now;
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    cleanup(() => cancelAnimationFrame(raf));
+  });
+
   return (
     <ModeProvider>
       <AiDataProvider>
