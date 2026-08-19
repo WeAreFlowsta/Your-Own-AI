@@ -44,7 +44,19 @@ export async function listAllConversations(
     ais
       .filter((ai) => ai.aiConfig?.agentPubKey)
       .map(async (ai) => {
-        const conversations = await getConversations(ai.aiConfig.agentPubKey!);
+        // One sick cell must never hold the whole list hostage - a zome
+        // read that outlives 20s yields an empty slot for that AI this
+        // pass (seen live: a cell timing out reads at 60s apiece kept
+        // the drawer on "Loading" forever).
+        const conversations = await Promise.race([
+          getConversations(ai.aiConfig.agentPubKey!),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("conversation read timed out")), 20000),
+          ),
+        ]).catch((e) => {
+          console.warn(`[Conversations] ${ai.label}'s records are slow to answer:`, e);
+          return [] as Awaited<ReturnType<typeof getConversations>>;
+        });
         for (const conversation of conversations) {
           // External-API conversations (source set - e.g. the Build agent's
           // own model calls through the local server) are records, not
