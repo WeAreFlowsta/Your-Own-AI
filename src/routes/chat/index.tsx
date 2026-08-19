@@ -21,6 +21,7 @@ import { useAgentSession, readRecentFolders, resolveBinaryPath } from "../../hoo
 import { ConversationsDrawer } from "../../components/ConversationsDrawer";
 import {
   listAllConversations,
+  listAllConversationsCached,
   loadConversationMessages,
   getConversationFolder,
   rememberLastConversation,
@@ -429,11 +430,22 @@ export default component$(() => {
 
   const openConversations = $(async () => {
     conversationsOpen.value = true;
-    // Inside the launch grace window the drawer opens straight into the
-    // warmup state - one message for one wait, not "Loading" flipping to
-    // "warming" a moment later. Past the window it is a plain load.
-    conversationsWarming.value = emptyMayBeWarmup();
-    conversationsLoading.value = !conversationsWarming.value;
+    // Cached-first: the last-known-good list opens instantly (local
+    // encrypted files, no conductor involved), then the live read
+    // refreshes it below. A big AI whose live read is struggling still
+    // shows its history this way.
+    const cached = await listAllConversationsCached(dynamicModelOptions.value);
+    if (cached.length > 0) {
+      conversationItems.value = cached;
+      conversationsLoading.value = false;
+      conversationsWarming.value = false;
+    } else {
+      // Inside the launch grace window the drawer opens straight into the
+      // warmup state - one message for one wait, not "Loading" flipping to
+      // "warming" a moment later. Past the window it is a plain load.
+      conversationsWarming.value = emptyMayBeWarmup();
+      conversationsLoading.value = !conversationsWarming.value;
+    }
     try {
       // Right after app launch the conductor is still starting and reads
       // come back empty - hold the spinner until it's actually up, so the
@@ -445,7 +457,18 @@ export default component$(() => {
       for (;;) {
         const items = await listAllConversations(dynamicModelOptions.value);
         if (items.length > 0) noteRecordsSeen();
-        conversationItems.value = items;
+        // A live result never DOWNGRADES what the user is looking at:
+        // merge per AI - an AI whose live read failed (timed out -> no
+        // rows) keeps its cached rows instead of vanishing.
+        if (items.length > 0 && conversationItems.value.length > 0) {
+          const liveAis = new Set(items.map((i) => i.aiId));
+          const kept = conversationItems.value.filter((i) => !liveAis.has(i.aiId));
+          const merged = [...items, ...kept];
+          merged.sort((a, b) => b.conversation.started_at - a.conversation.started_at);
+          conversationItems.value = merged;
+        } else if (items.length > 0 || conversationItems.value.length === 0) {
+          conversationItems.value = items;
+        }
         if (items.length === 0 && emptyMayBeWarmup() && conversationsOpen.value) {
           conversationsWarming.value = true;
           conversationsLoading.value = false;

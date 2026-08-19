@@ -129,6 +129,20 @@ export async function waitForHolochainReady(timeoutMs = 20000): Promise<boolean>
 /**
  * Get all conversations for an AI agent.
  */
+/** The last-known-good cached list - instant, works even while the
+ *  conductor starts. Empty when nothing has been cached yet. */
+export async function getConversationsCached(
+  agentKey: string,
+): Promise<HolochainConversation[]> {
+  try {
+    return await invoke<HolochainConversation[]>("get_conversations_cached", {
+      agentKey,
+    });
+  } catch {
+    return [];
+  }
+}
+
 export async function getConversations(
   agentKey: string,
 ): Promise<HolochainConversation[]> {

@@ -1,6 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod conversation_cache;   // last-known-good conversation lists (encrypted)
 mod conversation_import;  // bring-your-history: parse + archive exported chats
 mod diagnostics;          // one-click diagnostic report (Settings > Help & diagnostics)
 mod llm;                  // llama-server module
@@ -608,6 +609,7 @@ pub fn run() {
             // Holochain transcript commands
             commands_holochain::provision_ai_agent,
             commands_holochain::cell_lineage_report,
+            commands_holochain::get_conversations_cached,
             commands_holochain::cell_cleanup,
             commands_holochain::provision_all_agents,
             commands_holochain::start_conversation,

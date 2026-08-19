@@ -152,6 +152,16 @@ export default component$(() => {
 
     loading.value = true;
     warming.value = false;
+    // Cached-first: the last-known-good list shows instantly while the
+    // live read below refreshes it (a big AI's live read can be slow).
+    const { getConversationsCached } = await import(
+      "../../utils/holochainTranscripts"
+    );
+    const cached = await getConversationsCached(key);
+    if (cached.length > 0) {
+      conversations.value = cached;
+      loading.value = false;
+    }
     // Retry a few times in case conductor is still starting - and keep
     // polling through the warmup window when the read SUCCEEDS but empty
     // (the cell is up before its records are; an early empty is "not
@@ -160,7 +170,11 @@ export default component$(() => {
       try {
         const result = await getConversations(key);
         if (result.length > 0) noteRecordsSeen();
-        conversations.value = result;
+        // A live result never blanks a shown cached list - an AI whose
+        // live read failed keeps its last-known-good rows.
+        if (result.length > 0 || conversations.value.length === 0) {
+          conversations.value = result;
+        }
         loading.value = false;
         if (result.length === 0 && emptyMayBeWarmup()) {
           warming.value = true;

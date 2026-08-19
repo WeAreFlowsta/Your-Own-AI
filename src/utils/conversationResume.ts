@@ -5,7 +5,7 @@
  * as living navigation.
  */
 import { v4 as uuidv4 } from "uuid";
-import { getConversations, getTranscript } from "./holochainTranscripts";
+import { getConversations, getConversationsCached, getTranscript } from "./holochainTranscripts";
 import type {
   HolochainConversation,
   HolochainTranscriptEntry,
@@ -63,6 +63,36 @@ export async function listAllConversations(
           // places - they live on the Memory page, not here. Imported
           // history is the exception: an adopted conversation IS a place -
           // the user can pick up where they left off with their old app.
+          if (conversation.source && !conversation.source.startsWith("import:")) continue;
+          out.push({
+            conversation,
+            title:
+              getConversationTitleOverride(conversation.hash) ??
+              sanitizeTitle(conversation.title),
+            aiId: ai.id,
+            aiLabel: ai.label,
+            aiImageUrl: ai.imageUrl,
+            folderPath: getConversationFolder(conversation.hash),
+          });
+        }
+      }),
+  );
+  out.sort((a, b) => b.conversation.started_at - a.conversation.started_at);
+  return out;
+}
+
+/** The cached view of the same list - instant (local encrypted files),
+ *  served while live reads are slow or the conductor is starting. */
+export async function listAllConversationsCached(
+  ais: SelectedAiModel[],
+): Promise<ConversationListItem[]> {
+  const out: ConversationListItem[] = [];
+  await Promise.all(
+    ais
+      .filter((ai) => ai.aiConfig?.agentPubKey)
+      .map(async (ai) => {
+        const conversations = await getConversationsCached(ai.aiConfig.agentPubKey!);
+        for (const conversation of conversations) {
           if (conversation.source && !conversation.source.startsWith("import:")) continue;
           out.push({
             conversation,

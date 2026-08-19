@@ -35,7 +35,7 @@ impl HolochainState {
 }
 
 /// Conversation record returned to the frontend.
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct ConversationInfo {
     pub hash: String,
     pub ai_personality_id: String,
@@ -315,11 +315,12 @@ pub async fn start_conversation(
     // Phase A: conversation metadata is encrypted with the user data key
     // before it ever reaches the zome. `source` names the external app for
     // API-driven conversations (None = the in-app chat).
+    let started_at = now_micros();
     let plain = serde_json::json!({
         "ai_personality_id": agent_key,
         "ai_personality_name": ai_name,
         "model_used": model,
-        "started_at": now_micros(),
+        "started_at": started_at,
         "title": title,
         "source": source,
     });
@@ -341,6 +342,22 @@ pub async fn start_conversation(
     crate::vault_escrow::schedule_full_backup(&app);
     let raw = hash.get_raw_39();
     let hex_hash = hex::encode(raw);
+    // Write-through: the new conversation is visible in cached lists
+    // immediately, even if full reads are struggling on a loaded box.
+    crate::conversation_cache::append_to_cache(
+        &app,
+        &agent_key,
+        ConversationInfo {
+            hash: hex_hash.clone(),
+            ai_personality_id: agent_key.clone(),
+            ai_personality_name: ai_name.clone(),
+            model_used: model.clone(),
+            started_at,
+            title: title.clone(),
+            source: source.clone(),
+            agent_key: agent_key.clone(),
+        },
+    );
     if source.as_deref() == Some(WORKSPACE_MEMORY_SOURCE) {
         if let Some(folder) = title.as_deref() {
             project_memory_index_add(&app, folder, &agent_key, &hex_hash);
@@ -677,7 +694,7 @@ pub async fn project_memory_read(
     let mut best = String::new();
     let mut found: Vec<(String, String)> = Vec::new();
     for key in agent_keys {
-        let Ok(conversations) = get_conversations(key.clone(), app.state()).await else {
+        let Ok(conversations) = get_conversations(app.clone(), key.clone(), app.state()).await else {
             continue;
         };
         for c in conversations {
@@ -751,7 +768,7 @@ pub async fn project_memory_append_note(
     let content = lines.join("\n");
 
     // Reuse the writer's memory conversation for this folder, else start one.
-    let conversations = get_conversations(writer_key.to_string(), app.state()).await?;
+    let conversations = get_conversations(app.clone(), writer_key.to_string(), app.state()).await?;
     let existing = conversations.into_iter().find(|c| {
         c.source.as_deref() == Some(WORKSPACE_MEMORY_SOURCE) && c.title.as_deref() == Some(folder)
     });
@@ -882,6 +899,7 @@ pub fn holochain_ready(hc_state: State<'_, Arc<HolochainState>>) -> bool {
 /// `agent_key` is the hex-encoded agent pub key.
 #[tauri::command]
 pub async fn get_conversations(
+    app: tauri::AppHandle,
     agent_key: String,
     hc_state: State<'_, Arc<HolochainState>>,
 ) -> Result<Vec<ConversationInfo>, String> {
@@ -949,7 +967,23 @@ pub async fn get_conversations(
     // Newest first across all generations.
     conversations.sort_by(|a, b| b.started_at.cmp(&a.started_at));
 
+    // Last-known-good cache: served instantly by get_conversations_cached
+    // while live reads are slow or the conductor is still starting.
+    if let Err(e) = crate::conversation_cache::write_cache(&app, &agent_key, &conversations) {
+        log::warn!("[conv-cache] write failed: {}", e);
+    }
+
     Ok(conversations)
+}
+
+/// The cached (last-known-good) conversation list for an AI - instant,
+/// works even while the conductor starts. Empty when nothing cached yet.
+#[tauri::command]
+pub fn get_conversations_cached(
+    app: tauri::AppHandle,
+    agent_key: String,
+) -> Vec<ConversationInfo> {
+    crate::conversation_cache::read_cache(&app, &agent_key).unwrap_or_default()
 }
 
 /// Get all messages in a conversation.
