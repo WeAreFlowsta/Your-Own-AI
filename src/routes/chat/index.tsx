@@ -333,18 +333,22 @@ export default component$(() => {
       tries++;
       const end = messagesEndRef.value;
       if (end) {
+        // Belt and braces: drive the container's scrollTop directly AND ask
+        // the sentinel to scroll into view - webkit builds differ on which
+        // of the two actually moves a freshly-rendered list.
+        const container = end.closest(".overflow-y-auto") as HTMLElement | null;
+        if (container) container.scrollTop = container.scrollHeight;
         try {
           end.scrollIntoView({ behavior: "auto", block: "end" });
         } catch {
           /* keep retrying */
         }
-        const container = end.closest(".overflow-y-auto") as HTMLElement | null;
         const atBottom =
           !container ||
           container.scrollHeight - container.scrollTop - container.clientHeight < 40;
-        if (atBottom && tries > 2) return; // settled
+        if (atBottom && tries > 3) return; // settled across two passes
       }
-      if (tries < 17) setTimeout(jump, 150);
+      if (tries < 34) setTimeout(jump, 150);
     };
     setTimeout(jump, 0);
   });
