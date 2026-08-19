@@ -660,6 +660,7 @@ export default component$(() => {
                                 JSON.stringify({
                                   hash: conv.hash,
                                   agentKey: conv.agent_key,
+                                  title: conv.title ?? undefined,
                                 }),
                               );
                             } catch {
