@@ -14,7 +14,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 /// Pinned release: the app version and the agent it installs move together
 /// (same discipline as the engine downloads).
-const BUILD_RELEASE_TAG: &str = "v0.1.0";
+const BUILD_RELEASE_TAG: &str = "v0.2.0";
 const BUILD_REPO: &str = "WeAreFlowsta/Your-Own-AI-Build";
 
 static DOWNLOADING: AtomicBool = AtomicBool::new(false);
