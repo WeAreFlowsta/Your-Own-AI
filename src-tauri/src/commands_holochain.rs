@@ -1027,6 +1027,7 @@ pub async fn delete_conversation(
         &conversation_hash[..12.min(conversation_hash.len())],
         deleted
     );
+    crate::conversation_cache::remove_from_cache(&app, &agent_key, &conversation_hash);
     // The chain changed shape - refresh the escrow backup like other writes.
     crate::vault_escrow::schedule_full_backup(&app);
     Ok(deleted)

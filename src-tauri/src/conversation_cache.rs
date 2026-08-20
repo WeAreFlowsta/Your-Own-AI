@@ -105,6 +105,26 @@ pub(crate) fn write_cache(
     Ok(())
 }
 
+/// Remove one conversation from the cached list - a deleted conversation
+/// must not linger in the drawer until a successful live read (slow on a
+/// large chain) confirms the removal. Deleting the last row removes the
+/// file itself, since write_cache refuses empty lists by design.
+pub(crate) fn remove_from_cache(app: &tauri::AppHandle, agent_key: &str, hash: &str) {
+    let Ok(mut list) = read_cache(app, agent_key) else { return };
+    let before = list.len();
+    list.retain(|c| c.hash != hash);
+    if list.len() == before {
+        return;
+    }
+    if list.is_empty() {
+        if let Ok(path) = path_for(app, agent_key) {
+            let _ = std::fs::remove_file(path);
+        }
+    } else if let Err(e) = write_cache(app, agent_key, &list) {
+        log::warn!("[conv-cache] remove failed: {}", e);
+    }
+}
+
 /// Write-through for a conversation that just started: the cache stays
 /// fresh even while full reads are failing on a loaded machine.
 pub(crate) fn append_to_cache(app: &tauri::AppHandle, agent_key: &str, info: ConversationInfo) {
