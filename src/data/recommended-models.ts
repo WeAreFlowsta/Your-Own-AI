@@ -247,6 +247,19 @@ export const VISION_PROJECTORS: CapabilityModel[] = [
     size: 0.93,
   },
   {
+    id: 'ornith-1.5-vision',
+    name: 'Ornith 1.5 vision',
+    role: 'vision-projector',
+    description:
+      'Lets Ornith 1.5 35B see images you attach - screenshots, charts, documents. Needs the Ornith 1.5 35B model downloaded.',
+    // Saved under OUR model-first name (upstream is mmproj-first):
+    // key "ornith-1.5-35b" prefixes the model filename for pairing.
+    filename: 'Ornith-1.5-35B-mmproj-BF16.gguf',
+    downloadUrl:
+      'https://huggingface.co/ornith-ai/Ornith-1.5-35B-A3B-GGUF/resolve/main/mmproj-Ornith-1.5-35B-BF16.gguf',
+    size: 0.9,
+  },
+  {
     id: 'qwen-3.8-uncensored-vision',
     name: 'Qwen 3.8 Uncensored vision',
     role: 'vision-projector',
@@ -661,9 +674,9 @@ export const modelFamilies: ModelFamily[] = [
   {
     id: 'ornith-1',
     contextWindow: 262144,
-    released: '2026-06-25',
-    name: 'Ornith 1.0',
-    description: 'DeepReinforce\'s agentic coding model, built on Qwen 3.5 and self-improved with RL. State-of-the-art among open coders at its size — purpose-built for terminal coding agents and tool use. The 9B runs on modest machines.',
+    released: '2026-08-20',
+    name: 'Ornith 1.5',
+    description: 'DeepReinforce\'s agentic coding model, self-improved with RL - 1.5 extends the loop to generating its own training tasks. State-of-the-art among open coders at its size, purpose-built for terminal coding agents and tool use. The 9B runs on modest machines; the 35B adds vision.',
     category: 'quality',
     recommended: false,
     capabilities: ['coding', 'agentic', 'reasoning'],
@@ -673,16 +686,16 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '9B',
         size: 5.6,
         minRAM: 16,
-        downloadUrl: 'https://huggingface.co/deepreinforce-ai/Ornith-1.0-9B-GGUF/resolve/main/ornith-1.0-9b-Q4_K_M.gguf',
-        filename: 'ornith-1.0-9b-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/ornith-ai/Ornith-1.5-9B-GGUF/resolve/main/Ornith-1.5-9B-Q4_K_M.gguf',
+        filename: 'Ornith-1.5-9B-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       },
       {
         parameterCount: '35B',
-        size: 21.2,
+        size: 21.7,
         minRAM: 32,
-        downloadUrl: 'https://huggingface.co/deepreinforce-ai/Ornith-1.0-35B-GGUF/resolve/main/ornith-1.0-35b-Q4_K_M.gguf',
-        filename: 'ornith-1.0-35b-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/ornith-ai/Ornith-1.5-35B-A3B-GGUF/resolve/main/Ornith-1.5-35B-Q4_K_M.gguf',
+        filename: 'Ornith-1.5-35B-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       }
     ]

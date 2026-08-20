@@ -50,6 +50,10 @@ pub fn known_caps(model_name: &str) -> Option<Caps> {
     }
     // Agentic coders built on a reasoning base (coding-first, also strong reasoning).
     // Listed before the generic coder rule so they keep their higher reasoning score.
+    // 1.5's 35B carries a vision projector; the 9B does not.
+    if n.contains("ornith-1.5-35b") {
+        return Some(Caps { overall: 8, coding: 9, reasoning: 8, math: 7, vision: 7, medical: 3 });
+    }
     if n.contains("ornith") {
         return Some(Caps { overall: 8, coding: 9, reasoning: 8, math: 7, vision: 0, medical: 3 });
     }
