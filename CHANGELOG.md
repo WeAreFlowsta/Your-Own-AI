@@ -69,11 +69,25 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 
 ### Models
 
-- New in the offline catalog: the Qwen 3.8 Distilled family (2B, 4B,
-  and 9B - strong small models for modest hardware), Qwythos v2 (the
-  repetition fixes), and Qwen 3.8 Uncensored (27B, with the vision
-  add-on).
+- **The offline models page opens with "Best for this computer"** - one
+  pick per activity (coding with you, everyday chat, seeing images,
+  health questions), each chosen from what your machine can actually
+  run, with download in place. The health pick can become your
+  health-questions model in one tap. Downloaded models are now a
+  compact list with your disk total, collapsible out of the way.
+- **Every model card says who made the weights** - the maker, who
+  packaged the files, and for community builds, what they are based on
+  and how they differ.
+- Recorded conversations now carry a fingerprint of the exact model
+  file that answered, alongside its name - proof of which weights
+  produced a response, sealed in your records.
+- New in the offline catalog: Ornith 1.5 (the 35B now sees images),
+  the Qwen 3.8 Distilled family (2B, 4B, and 9B - strong small models
+  for modest hardware), Qwythos v2 (the repetition fixes), and Qwen
+  3.8 Uncensored (27B, with the vision add-on).
 - New online: GLM-5.3.
+- Fixed: the Qwen 3.8 27B download had stopped working after its
+  publisher renamed the file.
 - Online chat turns send a per-conversation cache key, so consecutive
   turns reuse the provider's cache and bill at the cached-input rate;
   Online Models shows that rate.
