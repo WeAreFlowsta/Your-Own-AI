@@ -83,6 +83,11 @@ interface ActiveDownload {
 
 const ACTIVE_DOWNLOAD_KEY = 'activeModelDownload';
 
+// One finalize per file: the downloading path's own completion and the
+// resume path's listener can both fire for a single download (navigate
+// away and back mid-download) - the duplicate must be a no-op.
+const finalizeInFlight = new Set<string>();
+
 export interface SystemInfo {
   /** True when the GPU shares system RAM (Intel/AMD integrated) - sized as CPU. */
   gpu_integrated?: boolean;
@@ -354,6 +359,9 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
 
   // Post-download setup: load model, update AIs if first model, show success
   const finalizeDownload = $(async (filename: string, displayName: string, isFirstModel: boolean) => {
+    if (finalizeInFlight.has(filename)) return;
+    finalizeInFlight.add(filename);
+    try {
     await loadModels();
 
     if (isFirstModel) {
@@ -386,6 +394,9 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     store.downloadProgress = null;
 
     setTimeout(() => { store.successMessage = null; }, 10000);
+    } finally {
+      finalizeInFlight.delete(filename);
+    }
   });
 
   // On mount: check for completed or in-progress downloads

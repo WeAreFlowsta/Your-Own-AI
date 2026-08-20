@@ -2203,6 +2203,27 @@ pub async fn load_model(
         "[LLM] load_model '{}' — reason: {} (with_vision={})",
         filename, reason, with_vision
     );
+
+    // ONE load at a time - ever. Two concurrent load_models used to fight
+    // over the chat port with stop/force-kill, each killing the other's
+    // freshly spawned child: the survivor waited on a server that no
+    // longer existed and the caller never got an answer (field case: a
+    // download's finalize racing its own resume path - the whole models
+    // page wedged). The gate serializes callers; the short-circuit below
+    // makes the duplicate a no-op instead of a pointless reload.
+    static LOAD_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _load_gate = LOAD_GATE.lock().await;
+    {
+        let current = state.current_model.lock().await.clone();
+        if current.as_deref() == Some(filename.as_str())
+            && (!with_vision || state.current_mmproj.lock().await.is_some())
+            && chat_server_health_ok().await
+        {
+            log::info!("[LLM] '{}' already loaded and healthy — nothing to do", filename);
+            return Ok(());
+        }
+    }
+
     let models_dir = get_models_dir(&app_handle)?;
     let model_path = models_dir.join(&filename);
 
