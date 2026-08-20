@@ -109,6 +109,11 @@ fn note_file_blocking(app: &tauri::AppHandle, filename: &str) -> Result<(), Stri
 /// time. Cheap when everything is already hashed (metadata reads only).
 pub(crate) fn backfill_async(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
+        // Never race the engine for the disk: the most likely moment for
+        // this to run is right after a download, exactly when the user's
+        // first question is loading that same multi-GB file. Waiting out
+        // the load window costs nothing - the hash's value is durable.
+        tokio::time::sleep(std::time::Duration::from_secs(90)).await;
         let _ = tauri::async_runtime::spawn_blocking(move || {
             let Ok(dir) = crate::llm::get_models_dir(&app) else {
                 return;
