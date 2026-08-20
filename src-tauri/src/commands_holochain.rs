@@ -1206,6 +1206,7 @@ mod size_guard_tests {
     fn plain_with(content: &str, log: Option<serde_json::Value>) -> MessagePlain {
         MessagePlain {
             role: "assistant".into(),
+            model_hash: None,
             content: content.into(),
             sequence: 1,
             timestamp: 0,
