@@ -416,9 +416,12 @@ export const modelFamilies: ModelFamily[] = [
       // huge contexts.
       {
         parameterCount: '27B',
-        size: 17.1,
+        size: 16.5,
         minRAM: 32,
-        downloadUrl: 'https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-Q4_K_M.gguf',
+        // Unsloth's Dynamic 3.0 requant renamed the file (the old
+        // Q4_K_M URL 404s). Local filename stays the same - existing
+        // installs, capability tiers, and routing key off it.
+        downloadUrl: 'https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q4_K_M.gguf',
         filename: 'Qwen3.8-27B-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       }
