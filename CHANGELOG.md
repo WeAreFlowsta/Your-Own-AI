@@ -30,22 +30,33 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - Needs the Your Own AI Build update offered in the folder menu and in
   Settings > Components.
 
-### Projects
+### Projects: the working session, reworked front to back
 
-- The project menu is rebuilt: the project's name and live status in
-  plain words, permissions as one control with its meaning always
+Working in a project with your AI got the deepest pass of this
+release. The goal, in one line: you always know what your AI is doing,
+and nothing it does makes you wait.
+
+- **The rail always shows life.** The activity indicator sits at the
+  true tip of the turn, so a long think after a spoken paragraph never
+  looks dead. A conclusion your AI speaks mid-turn is never buried
+  behind silent steps - it becomes the answer. A finished turn's
+  summary says when its background task is still running, and the rail
+  shows what that task is doing while the agent waits on it.
+- **Nothing holds up your turn.** Remembering something for a project
+  happens in the background, project memory opens instantly with
+  cached and indexed reads, and reading the project's own memory no
+  longer asks permission.
+- **The project menu is rebuilt**: the project's name and live status
+  in plain words, permissions as one control with its meaning always
   visible, and memory and close as clear tiles. A stopped project can
   be reopened right there.
-- Project memory opens instantly and reads are cached and indexed -
-  and reading the project's own memory no longer asks permission.
-- Remembering something for a project no longer holds up the turn, and
-  the rail shows what a background task is doing while the agent waits
-  on it - a turn's folded summary says when its background task is
-  still running.
-- The Build agent's web search works through the AI's own routing - an
-  offline-only AI stays off the web in project sessions, and says so.
-- A silent online call is named for what it is: waiting on the
-  provider.
+- **Web, on your terms.** The Build agent's web search works through
+  the AI's own routing - an offline-only AI stays off the web in
+  project sessions, and says so. A silent online call is named for
+  what it is: waiting on the provider.
+- Opening a project conversation lands on its last message, and its
+  history is whole - a conclusion spoken before silent steps shows as
+  the answer even for conversations recorded before this release.
 
 ### Your records, fast and honest
 
