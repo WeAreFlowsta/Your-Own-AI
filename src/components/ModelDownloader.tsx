@@ -1248,7 +1248,13 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                   <p class="text-xs text-[var(--text-secondary)] flex-1">
                     {a.blurb} {v.size} GB.
                   </p>
-                  {!downloaded && !inFlight && (
+                  {store.loadingModels && (
+                    <p class="flex items-center justify-center gap-2 text-xs text-[var(--text-muted)] py-1.5">
+                      <span class="inline-block h-3 w-3 rounded-full border-2 border-[var(--border-subtle)] border-t-[var(--text-secondary)] animate-spin" />
+                      Checking your models..
+                    </p>
+                  )}
+                  {!store.loadingModels && !downloaded && !inFlight && (
                     <span
                       class="contents"
                       data-pick-action="download"
@@ -1265,12 +1271,12 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                       Downloading{store.downloadProgress ? ` - ${Math.round(store.downloadProgress.percent ?? 0)}%` : '..'}
                     </p>
                   )}
-                  {downloaded && a.key !== 'medical' && (
+                  {!store.loadingModels && downloaded && a.key !== 'medical' && (
                     <p class="text-xs text-emerald-500 dark:text-emerald-400 py-1.5 text-center font-medium">
                       Downloaded ✓
                     </p>
                   )}
-                  {downloaded && a.key === 'medical' && (
+                  {!store.loadingModels && downloaded && a.key === 'medical' && (
                     isHealthChoice ? (
                       <p class="text-xs text-emerald-500 dark:text-emerald-400 py-1.5 text-center font-medium">
                         Your health model ✓
