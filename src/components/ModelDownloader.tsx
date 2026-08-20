@@ -192,6 +192,10 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     // True until the first listModels() resolves, so the section can show a spinner
     // instead of popping in late. Only the initial load flips this (set in finally).
     loadingModels: true,
+    /** The user's chosen health-questions model (mirror of medicalModel.ts). */
+    medicalChoice: null as string | null,
+    /** Downloaded-models inventory expanded/collapsed. */
+    inventoryOpen: true,
   });
 
   const successBannerRef = useSignal<HTMLDivElement>();
@@ -231,6 +235,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
 
   // Load downloaded models and models directory
   const loadModels = $(async () => {
+    store.medicalChoice = getMedicalModel();
     try {
       const models = await modelManager.listModels();
       store.downloadedModels = models;
@@ -721,6 +726,91 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     return candidates[0] || null;
   })();
 
+  // "Best for this computer" - one honest pick per activity. Candidates
+  // are fit-filtered FIRST (getBestVariantForSystem returns null when
+  // nothing fits), so a small machine is never sold a model it can't
+  // run; ranking then follows the catalog's own relevance data.
+  const catRank: Record<string, number> = { quality: 0, balanced: 1, specialist: 2, fast: 3 };
+  const pickFor = (
+    match: (f: ModelFamily) => boolean,
+    preferId?: string,
+    catOrder?: Record<string, number>,
+  ) => {
+    const order = catOrder ?? catRank;
+    const candidates = modelFamilies
+      .filter(match)
+      .map(f => ({ f, v: getBestVariantForSystem(f, totalRAM, totalVRAM, freeRAM) }))
+      .filter((x): x is { f: ModelFamily; v: ModelVariant } => x.v !== null);
+    candidates.sort((a, b) => {
+      if (preferId) {
+        const ap = a.f.id === preferId ? 0 : 1;
+        const bp = b.f.id === preferId ? 0 : 1;
+        if (ap !== bp) return ap - bp;
+      }
+      const ac = order[a.f.category] ?? 9;
+      const bc = order[b.f.category] ?? 9;
+      if (ac !== bc) return ac - bc;
+      const ar = a.f.released ?? '', br = b.f.released ?? '';
+      if (ar !== br) return ar > br ? -1 : 1;
+      return a.f.name.localeCompare(b.f.name);
+    });
+    return candidates[0] ?? null;
+  };
+  const medicalPick =
+    pickFor(f => f.capabilities.includes('medical'), 'medgemma',
+      { specialist: 0, quality: 1, balanced: 2, fast: 3 }) ??
+    pickFor(f => f.capabilities.includes('reasoning') || f.capabilities.includes('chat'));
+  const medicalIsSpecialist = medicalPick !== null && medicalPick.f.capabilities.includes('medical');
+  const activityPicks = [
+    {
+      key: 'coding',
+      title: 'Codes with you',
+      blurb: 'The strongest project agent that fits this machine.',
+      pick: pickFor(f => f.capabilities.includes('agentic') || f.capabilities.includes('coding')),
+    },
+    {
+      key: 'chat',
+      title: 'Everyday chat',
+      blurb: 'The best all-rounder for your memory.',
+      pick: pickFor(f => f.capabilities.includes('chat')),
+    },
+    {
+      key: 'vision',
+      title: 'Sees images',
+      blurb: 'Reads screenshots and documents you attach.',
+      pick: pickFor(f => getModality(f).in.includes('vision')),
+    },
+    {
+      key: 'medical',
+      title: 'Health questions',
+      blurb: medicalIsSpecialist
+        ? 'A medical specialist - and health questions always stay on your device.'
+        : 'The medical specialist needs more memory than this machine has - this is your strongest general model instead.',
+      pick: medicalPick,
+    },
+  ].filter(a => a.pick !== null);
+
+  // One delegated handler for the panel (Qwik closures inside .map are
+  // unreliable - same data-attr pattern as the variant picker below).
+  const panelAction$ = $(async (e: Event) => {
+    const el = (e.target as HTMLElement).closest('[data-pick-action]') as HTMLElement | null;
+    if (!el) return;
+    const action = el.getAttribute('data-pick-action');
+    const familyId = el.getAttribute('data-pick-family') ?? '';
+    const filename = el.getAttribute('data-pick-file') ?? '';
+    if (action === 'download') {
+      const family = modelFamilies.find(f => f.id === familyId);
+      const variant = family?.variants.find(v => v.filename === filename);
+      if (!family || !variant) return;
+      store.selectedVariants[familyId] = variant;
+      await handleDownload$(familyId);
+    } else if (action === 'set-medical') {
+      await setMedicalModel(filename);
+      setMedicalPromptDone();
+      store.medicalChoice = filename;
+    }
+  });
+
   // Families for the current tab, in the user's chosen sort order. 'Size' uses the
   // smallest variant (the floor to run it). 'Newest' floats New-tagged models up,
   // then alphabetical. The runnable / "needs more memory" split happens after.
@@ -1115,38 +1205,126 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
         </div>
       )}
 
+      {/* Best for this computer - the decision most people came to make,
+          answered first: one fit-checked pick per activity. */}
+      {activityPicks.length > 0 && (
+        <div class="mb-8">
+          <div class="flex items-baseline justify-between mb-4 border-b border-[var(--border-subtle)] pb-2">
+            <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela">
+              Best for this computer
+            </h2>
+            <span class="text-xs text-[var(--text-muted)]">
+              {totalRAM.toFixed(0)} GB memory{totalVRAM ? ` · ${totalVRAM.toFixed(0)} GB graphics` : ''}
+            </span>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" onClick$={panelAction$}>
+            {activityPicks.map((a) => {
+              const { f, v } = a.pick!;
+              const downloaded = store.downloadedModels.some((m) => m.name === v.filename);
+              const inFlight = store.downloading === f.id;
+              const isHealthChoice = store.medicalChoice === v.filename;
+              return (
+                <div
+                  key={a.key}
+                  class="generic-container rounded-2xl p-4 flex flex-col gap-2"
+                >
+                  <p class="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                    {a.title}
+                  </p>
+                  <p class="text-base font-semibold text-[var(--text-primary)] leading-tight">
+                    {f.name} {v.parameterCount}
+                  </p>
+                  <p class="text-xs text-[var(--text-secondary)] flex-1">
+                    {a.blurb} {v.size} GB.
+                  </p>
+                  {!downloaded && !inFlight && (
+                    <LiquidMetalButton
+                      class="w-full px-3 py-1.5 text-sm"
+                      data-pick-action="download"
+                      data-pick-family={f.id}
+                      data-pick-file={v.filename}
+                    >
+                      Download
+                    </LiquidMetalButton>
+                  )}
+                  {inFlight && (
+                    <p class="text-xs text-[var(--text-muted)] py-1.5 text-center">
+                      Downloading{store.downloadProgress ? ` - ${Math.round(store.downloadProgress.percent ?? 0)}%` : '..'}
+                    </p>
+                  )}
+                  {downloaded && a.key !== 'medical' && (
+                    <p class="text-xs text-emerald-500 dark:text-emerald-400 py-1.5 text-center font-medium">
+                      Downloaded ✓
+                    </p>
+                  )}
+                  {downloaded && a.key === 'medical' && (
+                    isHealthChoice ? (
+                      <p class="text-xs text-emerald-500 dark:text-emerald-400 py-1.5 text-center font-medium">
+                        Your health model ✓
+                      </p>
+                    ) : (
+                      <LiquidMetalButton
+                        variant="secondary"
+                        class="w-full px-3 py-1.5 text-sm"
+                        data-pick-action="set-medical"
+                        data-pick-file={v.filename}
+                      >
+                        Use for health questions
+                      </LiquidMetalButton>
+                    )
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Downloaded Models */}
       {(store.loadingModels || store.downloadedModels.length > 0) && (
         <div class="mb-8">
-          <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela mb-4 border-b border-[var(--border-subtle)] pb-2">
-            Downloaded Models{store.loadingModels ? '' : ` (${store.downloadedModels.length})`}
-          </h2>
+          {/* Inventory, not a showroom: compact rows (the catalog below has
+              the rich cards), collapsible header with the disk total. */}
+          <button
+            type="button"
+            onClick$={() => (store.inventoryOpen = !store.inventoryOpen)}
+            class="flex w-full items-center justify-between mb-4 border-b border-[var(--border-subtle)] pb-2 bg-transparent border-x-0 border-t-0 cursor-pointer text-left"
+          >
+            <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela">
+              Downloaded Models
+              {store.loadingModels
+                ? ''
+                : ` (${store.downloadedModels.length}${(() => {
+                    const gb = store.downloadedModels.reduce((t, m) => {
+                      const n = parseFloat(String(m.size));
+                      return Number.isFinite(n) ? t + n : t;
+                    }, 0);
+                    return gb > 0 ? ` · ${gb.toFixed(1)} GB` : '';
+                  })()})`}
+            </h2>
+            <LuChevronDown
+              class={`h-5 w-5 text-[var(--text-muted)] transition-transform ${store.inventoryOpen ? '' : '-rotate-90'}`}
+            />
+          </button>
           {store.loadingModels ? (
             <div class="flex items-center justify-center gap-3 py-12 text-[var(--text-secondary)]">
               <div class="w-5 h-5 border-2 border-[var(--text-muted)] border-t-transparent rounded-full animate-spin" />
               <span class="text-sm">Loading your models…</span>
             </div>
-          ) : (
-          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          ) : store.inventoryOpen && (
+          <div class="generic-container rounded-2xl divide-y divide-[var(--border-subtle)]">
             {store.downloadedModels.map((model) => {
-              // Match against catalog for rich metadata
               const catalogMatch = modelFamilies.reduce<{ family: ModelFamily; variant: ModelVariant } | null>((found, family) => {
                 if (found) return found;
                 const variant = family.variants.find(v => v.filename === model.name);
                 return variant ? { family, variant } : null;
               }, null);
-
               const displayName = catalogMatch
                 ? `${catalogMatch.family.name} ${catalogMatch.variant.parameterCount}`
                 : formatModelDisplayName(model.name);
-
-              const paramSize = catalogMatch?.variant.parameterCount || model.parameter_size;
               const quantization = catalogMatch?.variant.quantization || model.quantization;
-              const description = catalogMatch?.family.description || null;
               const isPaused = store.pausedModels.includes(model.name);
               const fitInfo = store.modelFits[model.name];
-              // Grade labels stay honest about the consequence, not the
-              // mechanism: green = whole model in graphics memory.
               const fitBadge = fitInfo
                 ? {
                     green: {
@@ -1166,77 +1344,59 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                     },
                   }[fitInfo.fit]
                 : null;
-
               return (
                 <div
                   key={model.name}
-                  class={`generic-container rounded-2xl overflow-hidden flex flex-col justify-between transition-all hover:shadow-2xl transform hover:-translate-y-1 ${
-                    isPaused ? 'opacity-60' : ''
-                  }`}
+                  class={`flex items-center gap-3 px-4 py-2.5 ${isPaused ? 'opacity-60' : ''}`}
                 >
-                  <div class="p-5">
-                    <div class="flex items-center gap-2 mb-1">
-                      <h3 class="text-lg font-semibold text-[var(--text-primary)]">
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center gap-2">
+                      <span class="text-sm font-semibold text-[var(--text-primary)] truncate">
                         {displayName}
-                      </h3>
+                      </span>
                       {isPaused && (
-                        <span class="px-2 py-0.5 bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] text-[var(--text-muted)] text-[10px] rounded-full font-semibold whitespace-nowrap">
+                        <span class="shrink-0 px-2 py-0.5 bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] text-[var(--text-muted)] text-[10px] rounded-full font-semibold whitespace-nowrap">
                           Paused
                         </span>
                       )}
                       {fitBadge && (
                         <span
                           title={fitBadge.tip}
-                          class={`px-2 py-0.5 border text-[10px] rounded-full font-semibold whitespace-nowrap ${fitBadge.cls}`}
+                          class={`shrink-0 px-2 py-0.5 border text-[10px] rounded-full font-semibold whitespace-nowrap ${fitBadge.cls}`}
                         >
                           {fitBadge.label}
                         </span>
                       )}
                     </div>
-                    <p class="text-sm text-[var(--text-secondary)] mb-2">
-                      {paramSize} • {quantization} • {model.size}
+                    <p
+                      class="text-xs text-[var(--text-muted)] truncate"
+                      title="Trained context = what the model was built to handle. 'Runs at' = the context Your Own AI starts it with on this machine."
+                    >
+                      {quantization} · {model.size}
+                      {fitInfo && fitInfo.context_runtime > 0
+                        ? ` · runs at ${formatContext(fitInfo.context_runtime)}${fitInfo.agent_template_ok ? ' · works in projects' : ''}`
+                        : ''}
                     </p>
-                    {fitInfo && fitInfo.context_runtime > 0 && (
-                      <p
-                        class="text-xs text-[var(--text-muted)] mb-2"
-                        title="Trained context = what the model was built to handle. 'Runs at' = the context Your Own AI starts it with on this machine, chosen from your graphics card and memory."
-                      >
-                        {fitInfo.context_max > 0
-                          ? `${formatContext(fitInfo.context_max)} context trained`
-                          : 'Context'}{' '}
-                        · runs at {formatContext(fitInfo.context_runtime)} here
-                        {fitInfo.agent_template_ok ? ' · works in projects' : ''}
-                      </p>
-                    )}
-                    {description && (
-                      <p class="text-xs text-[var(--text-muted)] line-clamp-2">
-                        {description}
-                      </p>
-                    )}
                   </div>
-                  <div class="px-5 py-3 mt-auto">
-                    <div class="flex justify-end items-center gap-2">
-                      <LiquidMetalButton
-                        variant="secondary"
-                        onClick$={() => handleTogglePause$(model.name)}
-                        title={isPaused ? 'Resume - offer this model again when you choose a model for an AI, and let automatic routing pick it' : 'Pause - hide this model wherever you choose a model for an AI, and keep automatic routing from picking it. It stays downloaded, and any AI already set to it keeps it.'}
-                        class="p-2 transition-colors"
-                      >
-                        {isPaused ? (
-                          <LuPlayCircle class="w-[18px] h-[18px]" />
-                        ) : (
-                          <LuPauseCircle class="w-[18px] h-[18px]" />
-                        )}
-                      </LiquidMetalButton>
-                      <LiquidMetalButton
-                        variant="danger"
-                        onClick$={() => handleDeleteClick$(model.name)}
-                        class="p-2 transition-colors"
-                      >
-                        <LuTrash2 class="w-4 h-4" />
-                      </LiquidMetalButton>
-                    </div>
-                  </div>
+                  <LiquidMetalButton
+                    variant="secondary"
+                    onClick$={() => handleTogglePause$(model.name)}
+                    title={isPaused ? 'Resume - offer this model again when you choose a model for an AI, and let automatic routing pick it' : 'Pause - hide this model wherever you choose a model for an AI, and keep automatic routing from picking it. It stays downloaded, and any AI already set to it keeps it.'}
+                    class="p-2 shrink-0 transition-colors"
+                  >
+                    {isPaused ? (
+                      <LuPlayCircle class="w-[18px] h-[18px]" />
+                    ) : (
+                      <LuPauseCircle class="w-[18px] h-[18px]" />
+                    )}
+                  </LiquidMetalButton>
+                  <LiquidMetalButton
+                    variant="danger"
+                    onClick$={() => handleDeleteClick$(model.name)}
+                    class="p-2 shrink-0 transition-colors"
+                  >
+                    <LuTrash2 class="w-4 h-4" />
+                  </LiquidMetalButton>
                 </div>
               );
             })}
@@ -1557,7 +1717,10 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
           const chosen = store.medicalOffer;
           store.medicalOffer = null;
           setMedicalPromptDone();
-          if (chosen) await setMedicalModel(chosen);
+          if (chosen) {
+            await setMedicalModel(chosen);
+            store.medicalChoice = chosen;
+          }
         }}
         onCancel$={async () => {
           store.medicalOffer = null;
