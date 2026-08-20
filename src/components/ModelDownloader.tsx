@@ -851,6 +851,16 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
             {family.description}
           </p>
 
+          {/* Provenance - who made the weights, who packaged them, what a
+              derivative is based on. Records deserve to know their maker. */}
+          {family.maker && (
+            <p class="text-xs text-[var(--text-muted)] -mt-1">
+              {family.community
+                ? `Community build by ${family.maker}${family.derivedFrom ? ` - ${family.derivedFrom.toLowerCase().charAt(0) + family.derivedFrom.slice(1)}` : ''}`
+                : `Official ${family.maker} weights${family.quantizedBy ? `, packaged by ${family.quantizedBy}` : ''}${family.derivedFrom ? ` - ${family.derivedFrom.toLowerCase().charAt(0) + family.derivedFrom.slice(1)}` : ''}`}
+            </p>
+          )}
+
           {/* Size variant dropdown */}
           {family.variants.length > 1 && (
             <div>

@@ -131,6 +131,15 @@ export interface ModelFamily {
   capabilities: Capability[]; // Routing signal + "good for" chips, most-relevant first
   traits: Trait[];         // Surfaced badges
   modality?: { in: Modality[]; out: Modality[] }; // Defaults to text→text (see getModality)
+  /** Provenance, shown on the card. `maker` = who made the weights.
+   *  `quantizedBy` = who packaged the UNMODIFIED weights we download
+   *  (format conversion, not modification). `derivedFrom` = for
+   *  derivatives: what this model is based on and how it differs.
+   *  `community` marks third-party builds (vs the maker's own work). */
+  maker?: string;
+  quantizedBy?: string;
+  derivedFrom?: string;
+  community?: boolean;
   role?: ModelRole;        // Defaults to 'chat' (see getRole). Non-chat = a capability component.
   /** Some model publishers require users to accept terms before download
    *  (e.g. Google's Health AI Developer Foundations). When set, the download
@@ -379,6 +388,8 @@ export const modelFamilies: ModelFamily[] = [
     // treat field reports accordingly. Template verified tool-capable +
     // blessed (gguf.rs test); reasoning_strength dial wired in llm.rs.
     id: 'muse-glimmer',
+    maker: 'Meta',
+    quantizedBy: 'Unsloth',
     contextWindow: 131072,
     released: '2026-08-10',
     name: 'Muse Glimmer',
@@ -412,6 +423,8 @@ export const modelFamilies: ModelFamily[] = [
   },
   {
     id: 'qwen-3.8',
+    maker: "Alibaba's Qwen team",
+    quantizedBy: 'Unsloth',
     contextWindow: 262144,
     released: '2026-08-14',
     name: 'Qwen 3.8',
@@ -442,6 +455,8 @@ export const modelFamilies: ModelFamily[] = [
   },
   {
     id: 'qwen-3.6',
+    maker: "Alibaba's Qwen team",
+    quantizedBy: 'Unsloth',
     contextWindow: 262144,
     released: '2026-04-22',
     name: 'Qwen 3.6',
@@ -471,6 +486,8 @@ export const modelFamilies: ModelFamily[] = [
   },
   {
     id: 'gemma-4',
+    maker: 'Google',
+    quantizedBy: 'Google and Unsloth',
     contextWindow: 131072,
     released: '2026-04-01',
     name: 'Gemma 4',
@@ -534,6 +551,8 @@ export const modelFamilies: ModelFamily[] = [
   },
   {
     id: 'ministral-3',
+    maker: 'Mistral AI',
+    quantizedBy: 'Unsloth',
     contextWindow: 262144,
     released: '2025-12-02',
     name: 'Ministral 3',
@@ -573,6 +592,8 @@ export const modelFamilies: ModelFamily[] = [
   // ─── Fast & Light ──────────────────────────────────────────────────────
   {
     id: 'phi-4-mini',
+    maker: 'Microsoft',
+    quantizedBy: 'Unsloth',
     contextWindow: 131072,
     released: '2025-02-28',
     name: 'Phi-4 Mini',
@@ -596,6 +617,8 @@ export const modelFamilies: ModelFamily[] = [
   // ─── Quality / Reasoning ───────────────────────────────────────────────
   {
     id: 'gpt-oss',
+    maker: 'OpenAI',
+    quantizedBy: 'Unsloth',
     contextWindow: 131072,
     released: '2025-08-05',
     name: 'GPT-OSS (OpenAI)',
@@ -630,6 +653,9 @@ export const modelFamilies: ModelFamily[] = [
   },
   {
     id: 'deepseek-r1',
+    maker: 'DeepSeek',
+    quantizedBy: 'Unsloth',
+    derivedFrom: 'R1 reasoning distilled onto a Qwen3 8B base by DeepSeek themselves',
     contextWindow: 131072,
     released: '2025-05-29',
     name: 'DeepSeek R1 0528',
@@ -652,6 +678,8 @@ export const modelFamilies: ModelFamily[] = [
 
   {
     id: 'devstral-small-2',
+    maker: 'Mistral AI',
+    quantizedBy: 'Unsloth',
     contextWindow: 393216,
     released: '2025-12-10',
     name: 'Devstral Small 2',
@@ -673,6 +701,8 @@ export const modelFamilies: ModelFamily[] = [
   },
   {
     id: 'ornith-1',
+    maker: 'DeepReinforce',
+    derivedFrom: 'Built on Qwen 3.5',
     contextWindow: 262144,
     released: '2026-08-20',
     name: 'Ornith 1.5',
@@ -702,6 +732,8 @@ export const modelFamilies: ModelFamily[] = [
   },
   {
     id: 'glm-4.7-flash',
+    maker: 'Zhipu (Z.ai)',
+    quantizedBy: 'Unsloth',
     contextWindow: 202752,
     released: '2026-01-20',
     name: 'GLM-4.7 Flash',
@@ -723,6 +755,8 @@ export const modelFamilies: ModelFamily[] = [
   },
   {
     id: 'qwen3-coder',
+    maker: "Alibaba's Qwen team",
+    quantizedBy: 'Unsloth',
     contextWindow: 262144,
     released: '2025-07-31',
     name: 'Qwen3-Coder',
@@ -746,6 +780,9 @@ export const modelFamilies: ModelFamily[] = [
   // ─── Specialist ────────────────────────────────────────────────────────
   {
     id: 'qwen-3.5-opus-distilled',
+    maker: 'Jackrong',
+    derivedFrom: 'Qwen 3.5 distilled with Claude Opus reasoning traces',
+    community: true,
     contextWindow: 262144,
     released: '2026-03-18',
     name: 'Qwen 3.5 Opus Distilled',
@@ -783,6 +820,9 @@ export const modelFamilies: ModelFamily[] = [
   },
   {
     id: 'qwen-3.5-uncensored',
+    maker: 'HauhauCS',
+    derivedFrom: 'Qwen 3.5 with safety training removed',
+    community: true,
     contextWindow: 262144,
     released: '2026-03-05',
     name: 'Qwen 3.5 Uncensored',
@@ -830,6 +870,8 @@ export const modelFamilies: ModelFamily[] = [
   },
   {
     id: 'medgemma',
+    maker: 'Google',
+    quantizedBy: 'Unsloth',
     contextWindow: 131072,
     released: '2026-01-14',
     name: 'MedGemma',
@@ -875,6 +917,9 @@ export const modelFamilies: ModelFamily[] = [
   },
   {
     id: 'qwen-3.8-distilled',
+    maker: 'empero-ai',
+    derivedFrom: 'Distilled from Qwen 3.8',
+    community: true,
     contextWindow: 262144,
     released: '2026-08-16',
     name: 'Qwen 3.8 Distilled',
@@ -912,6 +957,9 @@ export const modelFamilies: ModelFamily[] = [
   },
   {
     id: 'qwen-3.8-uncensored',
+    maker: 'orcarouter',
+    derivedFrom: 'Qwen 3.8 with safety training removed',
+    community: true,
     contextWindow: 262144,
     released: '2026-08-16',
     name: 'Qwen 3.8 Uncensored',
@@ -934,6 +982,9 @@ export const modelFamilies: ModelFamily[] = [
   },
   {
     id: 'qwythos-9b',
+    maker: 'empero-ai',
+    derivedFrom: 'A Qwen 3.5-based merge',
+    community: true,
     contextWindow: 1048576,
     released: '2026-07-12',
     name: 'Qwythos 9B',
