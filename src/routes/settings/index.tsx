@@ -563,44 +563,6 @@ export default component$(() => {
         : "your system's crash journal entries for this app";
   });
   const diagBusy = useSignal(false);
-  // Records health census (Phase A of cell-lineage recovery): read-only,
-  // writes a reviewable report file next to the app data.
-  const cellReportBusy = useSignal(false);
-  const cellReportText = useSignal("");
-  const cellReportPath = useSignal("");
-  const cellReportError = useSignal("");
-  const runCellReport = $(async () => {
-    if (cellReportBusy.value) return;
-    cellReportBusy.value = true;
-    cellReportError.value = "";
-    cellReportText.value = "";
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const r = (await invoke("cell_lineage_report")) as {
-        summary: {
-          total_cells: number;
-          live: number;
-          stranded_data: number;
-          empty_link_on_live_chain: number;
-          empty_orphan: number;
-          unreachable: number;
-          live_ais: number;
-        };
-        path: string;
-      };
-      const sm = r.summary;
-      cellReportText.value =
-        `${sm.total_cells} record stores for ${sm.live_ais} AIs - ` +
-        `${sm.live} in use, ${sm.stranded_data} holding older conversations, ` +
-        `${sm.empty_link_on_live_chain + sm.empty_orphan} empty, ` +
-        `${sm.unreachable} unreachable.`;
-      cellReportPath.value = r.path;
-    } catch (e) {
-      cellReportError.value = `The check couldn't finish: ${e instanceof Error ? e.message : String(e)}`;
-    } finally {
-      cellReportBusy.value = false;
-    }
-  });
   const diagSavedPath = useSignal("");
   const diagError = useSignal("");
   const diagCopied = useSignal(false);
@@ -1449,31 +1411,6 @@ export default component$(() => {
                 {diagError.value && (
                   <p class="mt-3 text-xs text-red-400">{diagError.value}</p>
                 )}
-                <div class="mt-5 pt-4 border-t border-[var(--border-subtle)]">
-                  <p class="text-sm text-[var(--text-secondary)] mb-3">
-                    <span class="font-semibold text-[var(--text-primary)]">
-                      Check records storage
-                    </span>{" "}
-                    - counts the storage areas your AIs' records live in and
-                    saves a detailed report file. Read-only: it changes
-                    nothing. Can take a minute the first time after launch.
-                  </p>
-                  <LiquidMetalButton
-                    variant="secondary"
-                    onClick$={runCellReport}
-                    class="px-4 py-2 text-sm"
-                  >
-                    {cellReportBusy.value ? "Checking.." : "Check records storage"}
-                  </LiquidMetalButton>
-                  {cellReportText.value && !cellReportBusy.value && (
-                    <p class="mt-3 text-xs text-[var(--text-muted)]">
-                      {cellReportText.value} Full report: {cellReportPath.value}
-                    </p>
-                  )}
-                  {cellReportError.value && (
-                    <p class="mt-3 text-xs text-red-400">{cellReportError.value}</p>
-                  )}
-                </div>
               </section>
 
               {/* Reset to defaults */}

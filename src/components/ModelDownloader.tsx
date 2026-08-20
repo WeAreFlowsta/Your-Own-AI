@@ -1238,14 +1238,16 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                     {a.blurb} {v.size} GB.
                   </p>
                   {!downloaded && !inFlight && (
-                    <LiquidMetalButton
-                      class="w-full px-3 py-1.5 text-sm"
+                    <span
+                      class="contents"
                       data-pick-action="download"
                       data-pick-family={f.id}
                       data-pick-file={v.filename}
                     >
-                      Download
-                    </LiquidMetalButton>
+                      <LiquidMetalButton class="w-full px-3 py-1.5 text-sm">
+                        Download
+                      </LiquidMetalButton>
+                    </span>
                   )}
                   {inFlight && (
                     <p class="text-xs text-[var(--text-muted)] py-1.5 text-center">
@@ -1263,14 +1265,18 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                         Your health model ✓
                       </p>
                     ) : (
-                      <LiquidMetalButton
-                        variant="secondary"
-                        class="w-full px-3 py-1.5 text-sm"
+                      <span
+                        class="contents"
                         data-pick-action="set-medical"
                         data-pick-file={v.filename}
                       >
-                        Use for health questions
-                      </LiquidMetalButton>
+                        <LiquidMetalButton
+                          variant="secondary"
+                          class="w-full px-3 py-1.5 text-sm"
+                        >
+                          Use for health questions
+                        </LiquidMetalButton>
+                      </span>
                     )
                   )}
                 </div>
