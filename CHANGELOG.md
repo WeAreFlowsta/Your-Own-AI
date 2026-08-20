@@ -5,35 +5,95 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 
 ## [Unreleased]
 
-### Auto permissions for the agent (off by default)
+### Your health questions, your choice of model
 
-- **New: your AI can run ordinary project work without asking** - reading
-  and searching, editing files inside the project folder, building,
-  testing, routine git. Anything that reaches beyond the folder, cannot
-  be undone, or that it isn't sure about still asks, and the card says
-  why. Off unless you turn it on: Settings > Agent sets the default for
-  new projects; the project chip in the header switches it for one
-  project (remembered per folder, applied live).
-- Judged on your machine: the routine list is a rule-based check that
-  never calls a model. A separate switch lets the AI's model judge grey
-  areas - for an online AI that sends the command to the provider, so it
-  is its own choice.
-- **Every decision is in your records** - actions allowed automatically
-  show as receipts on the rail (with which judge allowed them), and each
-  turn keeps a compact ledger of everything the agent was allowed to do,
-  written into your records with the turn. Permission answers now carry
-  the decision, its scope, when and how it was answered; the app's own
-  automatic allow of project-memory reads is recorded too.
+- Health questions are answered on your device by default, and you now
+  choose which of your downloaded models answers them - Settings >
+  Routing. Downloading a medical specialist offers the switch once.
+- If you prefer an online model for health questions, that is your
+  choice too - and the app asks before each question leaves your
+  device, every time, unless you tell it to stop asking. Health images
+  never go online.
+
+### Agent permissions: one simple choice
+
+- **Your AI can run ordinary project work without asking.** One
+  three-level choice: Ask every time, Auto - ordinary work inside the
+  project folder runs unasked while risky, irreversible, or
+  outside-the-folder actions still ask - or Approve everything.
+  Settings > Agent sets the default; the project chip in the header
+  switches one project live, and a project's own choice sticks.
+- Whatever you choose, every action goes in your records: automatic
+  allows show as receipts on the rail, and each turn keeps a ledger of
+  everything the agent was allowed to do. Permission answers record
+  the decision, its scope, and how it was answered.
+- Needs the Your Own AI Build update offered in the folder menu and in
+  Settings > Components.
+
+### Projects
+
+- The project menu is rebuilt: the project's name and live status in
+  plain words, permissions as one control with its meaning always
+  visible, and memory and close as clear tiles. A stopped project can
+  be reopened right there.
+- Project memory opens instantly and reads are cached and indexed -
+  and reading the project's own memory no longer asks permission.
+- Remembering something for a project no longer holds up the turn, and
+  the rail shows what a background task is doing while the agent waits
+  on it - a turn's folded summary says when its background task is
+  still running.
+- The Build agent's web search works through the AI's own routing - an
+  offline-only AI stays off the web in project sessions, and says so.
+- A silent online call is named for what it is: waiting on the
+  provider.
+
+### Your records, fast and honest
+
+- **The conversations drawer opens instantly.** Every AI's conversation
+  list is kept as an encrypted local copy that shows immediately - even
+  right after launch - while live reads refresh it in the background. A
+  slow read never blanks what you can see, and deleting a conversation
+  disappears from the list at once.
+- An AI now always finds and keeps its existing records after launch -
+  previously a slow start could leave an AI beginning a fresh set,
+  with its earlier conversations present but out of view.
+- Opening a conversation lands on its last message, names the
+  conversation it is opening, and if your records don't answer in
+  time it says so - nothing is lost - instead of showing an empty
+  chat.
+- Every memory surface says your records are warming up after launch
+  instead of claiming "nothing yet" about records that exist.
+- Loading spinners no longer slow the app down on machines where
+  animations are expensive - pages stay responsive through the whole
+  warmup.
+
+### Models
+
+- New in the offline catalog: the Qwen 3.8 Distilled family (2B, 4B,
+  and 9B - strong small models for modest hardware), Qwythos v2 (the
+  repetition fixes), and Qwen 3.8 Uncensored (27B, with the vision
+  add-on).
+- New online: GLM-5.3.
+- Online chat turns send a per-conversation cache key, so consecutive
+  turns reuse the provider's cache and bill at the cached-input rate;
+  Online Models shows that rate.
+
+### App updates
+
+- The app can now tell you when a new version is out - a quiet note on
+  the home screen linking to the download page, once per release.
+  Nothing about you or your machine is sent; it reads one public file.
+  Turn it off in Settings > Help & diagnostics.
 
 ### Fixes
 
 - The hero "Continue" line shows its state the moment you click - a
   spinner while it opens, and the records-warming message when your
-  records are still loading after launch - instead of nothing for up
-  to ten seconds on a slow machine.
-- Online chat turns send a per-conversation cache key, so consecutive
-  turns reuse the provider's cache and bill at the cached-input rate;
-  Online Models shows that rate.
+  records are still loading after launch.
+- Long command lines in a turn's summary stay inside the window.
+- The working rail's thinking indicator no longer occasionally doubles.
+- Embedding inputs are capped to the model's context so one long query
+  cannot fail a whole recall batch.
 
 ## [0.4.1] - 2026-08-16
 
