@@ -220,6 +220,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "sysinfo 0.33.1",
  "tauri",
  "tauri-build",

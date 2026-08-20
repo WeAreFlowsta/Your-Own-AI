@@ -2127,6 +2127,10 @@ pub async fn download_model(
         "path": file_path.to_string_lossy().to_string()
     }));
 
+    // Hash the fresh artifact in the background so this model's turns
+    // can carry provenance from its first answer (model_hash module).
+    crate::model_hash::backfill_async(app_handle.clone());
+
     Ok(())
 }
 

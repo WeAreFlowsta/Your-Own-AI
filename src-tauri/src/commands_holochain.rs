@@ -69,6 +69,7 @@ pub struct TranscriptEntryInfo {
     pub sequence: u32,
     pub timestamp: i64,
     pub model: String,
+    pub model_hash: Option<String>,
     pub thinking: Option<String>,
     pub tokens: Option<TokenUsage>,
     pub sources: Option<Vec<SourceRef>>,
@@ -203,6 +204,11 @@ struct MessagePlain {
     pub sequence: u32,
     pub timestamp: i64,
     pub model: String,
+    /// sha256 of the exact model artifact that answered - provenance a
+    /// filename alone cannot prove. Absent for online models and files
+    /// not yet hashed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_hash: Option<String>,
     pub thinking: Option<String>,
     pub tokens: Option<TokenUsage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -474,12 +480,14 @@ pub async fn record_transcript_entry(
 
     // Phase A: message content is encrypted with the user data key.
     let prov = provenance.unwrap_or_default();
+    let model_hash = crate::model_hash::get(&app, &model);
     let plain = MessagePlain {
         role,
         content,
         sequence,
         timestamp: now_micros(),
         model,
+        model_hash,
         thinking,
         tokens,
         sources: prov.sources,
@@ -1097,6 +1105,7 @@ pub async fn get_conversation_transcript(
                     content: e.content,
                     sequence: e.sequence,
                     timestamp: e.timestamp,
+                    model_hash: e.model_hash,
                     model: e.model,
                     thinking: e.thinking,
                     tokens: e.tokens,

@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod conversation_cache;   // last-known-good conversation lists (encrypted)
+mod model_hash;           // sha256 per model artifact (provenance for records)
 mod conversation_import;  // bring-your-history: parse + archive exported chats
 mod diagnostics;          // one-click diagnostic report (Settings > Help & diagnostics)
 mod llm;                  // llama-server module
@@ -643,6 +644,16 @@ pub fn run() {
             conversation_import::import_archive_delete,
         ])
         .setup(|app| {
+            // Backfill model-artifact hashes for files downloaded before
+            // hashing existed - delayed well past the launch grind, one
+            // file at a time (model_hash module; provenance in records).
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(180)).await;
+                    crate::model_hash::backfill_async(handle);
+                });
+            }
             // Surface which online-model endpoint is in use (prod vs a dev
             // override) so it's obvious at a glance in dev logs.
             log::info!(
