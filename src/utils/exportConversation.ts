@@ -200,7 +200,7 @@ export function describeSignError(e: string): string {
     case "vault_outdated":
       return "Your Flowsta Vault needs an update before apps can publish signatures.";
     case "vault_not_linked":
-      return "Link Your Own AI to your Vault first (Settings > Account), then sign.";
+      return "The Vault didn't recognize this app's link. Approve the link in the Vault when it asks, then sign again.";
     case "user_denied":
       return "Signing was declined in the Vault.";
     case "quota_exceeded":

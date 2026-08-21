@@ -37,10 +37,7 @@ export const ExportConversationModal = component$<ExportConversationModalProps>(
   const signWithSignIt = useSignal(false);
   /** null = still checking; the checkbox enables only on a running, unlocked Vault. */
   const vaultReady = useSignal<boolean | null>(null);
-  /** Publishing a signature needs this app LINKED to the Vault (the one-time
-   *  link ceremony) - an unlinked app is refused by the Vault, so the option
-   *  must not be offered before the link exists. null = still checking. */
-  const vaultLinked = useSignal<boolean | null>(null);
+
 
   // Reset to the safe defaults whenever the dialog opens, and probe the Vault
   // (isOpen only turns true in the browser, so the invoke never runs in SSG).
@@ -54,10 +51,7 @@ export const ExportConversationModal = component$<ExportConversationModalProps>(
       invoke<{ installed: boolean; unlocked: boolean }>('flowsta_vault_status')
         .then((s) => (vaultReady.value = !!s.unlocked))
         .catch(() => (vaultReady.value = false));
-      vaultLinked.value = null;
-      invoke<{ signed_in: boolean; linked: boolean | null }>('flowsta_session')
-        .then((s) => (vaultLinked.value = !!s.linked))
-        .catch(() => (vaultLinked.value = false));
+
     }
   });
 
@@ -154,14 +148,14 @@ export const ExportConversationModal = component$<ExportConversationModalProps>(
         <div class="mb-6">
           <label
             class={`flex items-start gap-3 text-sm text-[var(--text-secondary)] ${
-              vaultReady.value && vaultLinked.value ? 'cursor-pointer' : 'opacity-60'
+              vaultReady.value ? 'cursor-pointer' : 'opacity-60'
             }`}
           >
             <input
               type="checkbox"
               class="mt-0.5"
               checked={signWithSignIt.value}
-              disabled={!vaultReady.value || !vaultLinked.value}
+              disabled={!vaultReady.value}
               onChange$={(_, el) => (signWithSignIt.value = el.checked)}
             />
             <span>
@@ -173,27 +167,6 @@ export const ExportConversationModal = component$<ExportConversationModalProps>(
           {vaultReady.value === false && (
             <p class="text-xs text-[var(--text-muted)] mt-1.5 ml-7">
               Needs your Flowsta Vault running and unlocked.
-            </p>
-          )}
-          {vaultReady.value && vaultLinked.value === false && (
-            <p class="text-xs text-[var(--text-muted)] mt-1.5 ml-7">
-              Link Your Own AI to your Vault first - a one-time step.{' '}
-              <button
-                type="button"
-                class="text-[var(--text-link)] hover:underline bg-transparent border-none p-0 cursor-pointer"
-                onClick$={async () => {
-                  try {
-                    const url = await invoke<string>('flowsta_link_url');
-                    const { openUrl } = await import('@tauri-apps/plugin-opener');
-                    await openUrl(url);
-                  } catch {
-                    /* the Account page in Settings has the same link */
-                  }
-                }}
-              >
-                Link now
-              </button>{' '}
-              (also in Settings &gt; Account).
             </p>
           )}
         </div>

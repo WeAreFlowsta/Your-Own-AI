@@ -1013,41 +1013,56 @@ pub async fn vault_sign_document(
     let client = http();
     ensure_linked(&app, &client, port).await?;
 
-    let resp = client
-        .post(format!("http://127.0.0.1:{}/sign-document", port))
-        .header("Origin", VAULT_ORIGIN)
-        .json(&serde_json::json!({
-            "file_hash": file_hash_hex,
-            "label": label,
-            "comment": comment,
-            "app_name": "Your Own AI",
-            "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
-            "intent": "receipt",
-            "ai_generation": "assisted",
-            "commit": true,
-            "job": true,
-        }))
-        .send()
-        .await
-        .map_err(|_| "vault_interrupted".to_string())?;
-    if !resp.status().is_success() {
+    // Publishing needs the Vault's trust gate to recognize this app by
+    // ORIGIN + client_id. /link-status answers by app key, so a link can
+    // read as active and still fail that gate (a legacy or origin-less
+    // link entry). If the Vault refuses with its "linked apps only"
+    // answer, force the link ceremony again - the Vault shows its own
+    // approval dialog - and retry once; only then is it a real refusal.
+    let mut relinked = false;
+    let resp = loop {
+        let resp = client
+            .post(format!("http://127.0.0.1:{}/sign-document", port))
+            .header("Origin", VAULT_ORIGIN)
+            .json(&serde_json::json!({
+                "file_hash": file_hash_hex,
+                "label": label,
+                "comment": comment,
+                "app_name": "Your Own AI",
+                "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
+                "intent": "receipt",
+                "ai_generation": "assisted",
+                "commit": true,
+                "job": true,
+            }))
+            .send()
+            .await
+            .map_err(|_| "vault_interrupted".to_string())?;
+        if resp.status().is_success() {
+            break resp;
+        }
         let body: serde_json::Value = resp.json().await.unwrap_or_default();
         let err = body["error"].as_str().unwrap_or("sign_failed");
-        // tier_forbidden = the Vault refused to publish for this origin:
-        // a current Vault says so when this app is NOT LINKED (the
-        // one-time link ceremony); a Vault from before linked-app
-        // publishing says it for every non-Flowsta origin. The Vault's
-        // own description tells them apart - pass it through so the
-        // dialog can say "link first" rather than "update your Vault".
         if err == "tier_forbidden" {
             let desc = body["description"].as_str().unwrap_or("");
             if desc.contains("linked apps") {
+                if !relinked {
+                    relinked = true;
+                    if let Ok(store) = app.store(AUTH_STORE) {
+                        store.delete("link_done");
+                        let _ = store.save();
+                    }
+                    ensure_linked(&app, &client, port).await?;
+                    continue;
+                }
                 return Err("vault_not_linked".into());
             }
+            // A Vault from before linked-app publishing refuses every
+            // non-Flowsta origin - that one needs an update.
             return Err("vault_outdated".into());
         }
         return Err(err.to_string());
-    }
+    };
     let v: serde_json::Value = resp
         .json()
         .await
