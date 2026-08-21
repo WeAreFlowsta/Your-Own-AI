@@ -63,13 +63,17 @@ pub struct StartupResult {
 
 /// Generate conductor-config.yaml for local-only use.
 ///
-/// INVARIANT — this conductor must NEVER be networked. Transcripts are
-/// plaintext entries on a DNA whose network seed is shared by every
-/// YOAI install; privacy comes entirely from the black-hole localhost
-/// network endpoints below. If cross-device sync is ever needed, it
-/// goes through Flowsta Vault's encrypted per-app namespace (see
-/// a later release), NOT by giving this conductor real
-/// bootstrap/signal/relay URLs.
+/// INVARIANT — this conductor must NEVER be networked. Transcript
+/// content is encrypted with the user's data key before it reaches the
+/// DNA (transcript_crypto), and the DNA's network seed is generated per
+/// user at first run (RecoveryMaterial) - so even a reachable peer would
+/// find an unjoinable network holding ciphertext. The black-hole
+/// localhost endpoints below are the third layer: nothing can discover
+/// or reach this node at all, so gossip simply never happens. If
+/// cross-device sync is ever needed, it goes through Flowsta Vault's
+/// encrypted per-app namespace, NOT by giving this conductor real
+/// bootstrap/signal/relay URLs. (Self-run nodes syncing a user's own
+/// records are possible in the open-source sense; not in the plan.)
 fn generate_conductor_config(
     conductor_dir: &Path,
     lair_connection_url: &str,
