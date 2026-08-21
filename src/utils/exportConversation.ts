@@ -199,6 +199,8 @@ export function describeSignError(e: string): string {
       return "Your Flowsta Vault is locked - unlock it and try again.";
     case "vault_outdated":
       return "Your Flowsta Vault needs an update before apps can publish signatures.";
+    case "vault_not_linked":
+      return "Link Your Own AI to your Vault first (Settings > Account), then sign.";
     case "user_denied":
       return "Signing was declined in the Vault.";
     case "quota_exceeded":

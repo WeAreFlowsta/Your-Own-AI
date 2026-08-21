@@ -1033,9 +1033,17 @@ pub async fn vault_sign_document(
     if !resp.status().is_success() {
         let body: serde_json::Value = resp.json().await.unwrap_or_default();
         let err = body["error"].as_str().unwrap_or("sign_failed");
-        // A Vault from before linked-app publishing refuses commit for
-        // non-Flowsta origins - surface that as "update your Vault".
+        // tier_forbidden = the Vault refused to publish for this origin:
+        // a current Vault says so when this app is NOT LINKED (the
+        // one-time link ceremony); a Vault from before linked-app
+        // publishing says it for every non-Flowsta origin. The Vault's
+        // own description tells them apart - pass it through so the
+        // dialog can say "link first" rather than "update your Vault".
         if err == "tier_forbidden" {
+            let desc = body["description"].as_str().unwrap_or("");
+            if desc.contains("linked apps") {
+                return Err("vault_not_linked".into());
+            }
             return Err("vault_outdated".into());
         }
         return Err(err.to_string());
