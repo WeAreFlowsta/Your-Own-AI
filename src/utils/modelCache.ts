@@ -64,5 +64,13 @@ export async function refreshOnlineModels(): Promise<OnlineModel[]> {
 export function prefetchModels(): void {
   void refreshLocalModels().catch(() => {});
   void refreshFits().catch(() => {});
-  void refreshOnlineModels().catch(() => {});
+  // The online catalog warms ONLY for a signed-in session. Signed out,
+  // online models cannot be used, so the warm-up was a pointless launch
+  // request to the relay - identity-free, but still "an install woke
+  // up". The catalog now loads on demand (Online Models page, pickers,
+  // routing) or once signed in. Online is a choice, and the network
+  // traffic should say the same.
+  void invoke<{ signed_in: boolean }>("flowsta_session")
+    .then((s) => (s.signed_in ? refreshOnlineModels() : undefined))
+    .catch(() => {});
 }
