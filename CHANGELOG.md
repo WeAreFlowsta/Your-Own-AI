@@ -3,6 +3,28 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.5.1] - 2026-08-21
+
+### Quieter at launch
+
+- Signed out, the app no longer contacts Flowsta's relay at launch. The
+  online model catalog loads when you open Online Models or a model
+  picker, or when you sign in - online is a choice you make, and the
+  network traffic now says the same.
+
+### Signing exports
+
+- Signing an exported conversation with your Flowsta identity now
+  handles the app's link to your Vault right in the flow: if the Vault
+  doesn't recognize the app yet, it asks you to approve the link, then
+  signs. Previously an unlinked install was refused with the Vault's
+  policy message and the receipt saved unsigned.
+
+### Fixes
+
+- A model load can no longer leave the app showing "loading" forever -
+  a load that doesn't finish reports itself and lets you carry on.
+
 ## [0.5.0] - 2026-08-20
 
 ### Your health questions, your choice of model
