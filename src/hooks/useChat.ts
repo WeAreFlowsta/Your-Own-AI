@@ -717,7 +717,6 @@ export function useChat(props: UseChatProps) {
           );
         }
         try {
-          const { invoke } = await import("@tauri-apps/api/core");
           props.modelLoadTime.value = Date.now();
           // Vision-capable models load with their projector already attached (the
           // backend pairs it whenever one exists), so an image turn never triggers a
