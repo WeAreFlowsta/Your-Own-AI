@@ -1,0 +1,40 @@
+name: Catalog URLs
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # weekly, Monday 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: HEAD-check every catalog download URL
+        id: sweep
+        run: node scripts/check-catalog-urls.mjs 2>&1 | tee sweep.txt
+        continue-on-error: true
+      - name: Open an issue when a URL is broken
+        if: steps.sweep.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing=$(gh issue list --label catalog-urls --state open --json number --jq 'length')
+          if [ "$existing" = "0" ]; then
+            gh issue create \
+              --title "Catalog download URL broken (weekly sweep)" \
+              --label catalog-urls \
+              --body-file sweep.txt
+          else
+            echo "open catalog-urls issue already exists; not duplicating"
+          fi
+      - name: Fail the run when a URL is broken
+        if: steps.sweep.outcome == 'failure'
+        run: exit 1

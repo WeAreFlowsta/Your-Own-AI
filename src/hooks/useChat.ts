@@ -724,7 +724,8 @@ export function useChat(props: UseChatProps) {
           // mid-conversation reload. `withVision` is passed for completeness.
           // load_model blocks until the server reports healthy - no settle
           // delay needed (and the stream path health-checks again anyway).
-          await invoke("load_model", { filename: preferredModel, withVision: needsVision, reason: "chat-switch" });
+          const { loadModelBounded } = await import("../utils/loadModelBounded");
+          await loadModelBounded({ filename: preferredModel, withVision: needsVision, reason: "chat-switch" });
           props.currentModel.value = preferredModel;
           props.modelTooBig.value = false;
         } catch (error) {
@@ -811,7 +812,8 @@ export function useChat(props: UseChatProps) {
             // Reload the resolved model to pair its own projector, if it has one.
             props.isModelLoading.value = true;
             await sayLoading(preferredModel!);
-            await invoke("load_model", { filename: preferredModel, withVision: true, reason: "vision-reload" });
+            const { loadModelBounded } = await import("../utils/loadModelBounded");
+            await loadModelBounded({ filename: preferredModel, withVision: true, reason: "vision-reload" });
             props.currentModel.value = preferredModel;
             visionReady = await invoke<boolean>("is_vision_ready");
           }
@@ -824,7 +826,8 @@ export function useChat(props: UseChatProps) {
             console.log(`[Vision] auto-switch candidate: ${pick?.model ?? "none"}`);
             if (pick) {
               await sayLoading(pick.model);
-              await invoke("load_model", { filename: pick.model, withVision: true, reason: "vision-auto-switch" });
+              const { loadModelBounded } = await import("../utils/loadModelBounded");
+              await loadModelBounded({ filename: pick.model, withVision: true, reason: "vision-auto-switch" });
               props.currentModel.value = pick.model;
               preferredModel = pick.model;
               routedReason = pick.reason;

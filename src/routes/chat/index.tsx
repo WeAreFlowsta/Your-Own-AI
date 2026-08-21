@@ -19,6 +19,7 @@ import { useAiData, useAiDataActions } from "../../contexts/AiDataContext";
 import { useChat } from "../../hooks/useChat";
 import { useAgentSession, readRecentFolders, resolveBinaryPath } from "../../hooks/useAgentSession";
 import { ConversationsDrawer } from "../../components/ConversationsDrawer";
+import { loadModelBounded } from "../../utils/loadModelBounded";
 import {
   listAllConversations,
   listAllConversationsCached,
@@ -690,7 +691,7 @@ export default component$(() => {
         isModelLoading.value = true;
         modelLoadTime.value = Date.now();
         try {
-          await invoke("load_model", { filename: targetModel, withVision: false, reason: "page-ensure" });
+          await loadModelBounded({ filename: targetModel, withVision: false, reason: "page-ensure" });
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           if (msg.includes("MODEL_TOO_LARGE") || msg.includes("MODEL_LOAD_CRASHED") || msg.includes("MODEL_FILE_UNREADABLE")) {

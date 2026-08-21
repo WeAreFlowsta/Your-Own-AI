@@ -374,7 +374,8 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     }
 
     try {
-      await invoke('load_model', { filename, withVision: false, reason: "post-download" });
+      const { loadModelBounded } = await import('../utils/loadModelBounded');
+      await loadModelBounded({ filename, withVision: false, reason: "post-download" });
     } catch (e) {
       console.error('[ModelDownloader] Failed to load model:', e);
     }
