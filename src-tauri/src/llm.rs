@@ -368,6 +368,14 @@ fn parse_gpu_devices(text: &str) -> Vec<GpuDevice> {
 ///   add `--tensor-split` weighted by free VRAM to pool them.
 /// - Otherwise — integrated-only, a single Metal GPU on macOS, or no GPU — we
 ///   return no args and let llama.cpp's default behaviour stand.
+/// True when the device args put every layer on the CPU (`-ngl 0` /
+/// `--device none`) - there is no graphics memory to split against.
+fn args_force_cpu(args: &[String]) -> bool {
+    args.windows(2).any(|w| {
+        (w[0] == "-ngl" && w[1] == "0") || (w[0] == "--device" && w[1] == "none")
+    })
+}
+
 async fn select_gpu_device_args(app_handle: &AppHandle) -> Vec<String> {
     // Escape hatch: force CPU-only inference with FLOWSTA_CPU_ONLY=1. Some
     // setups (notably NVIDIA + Wayland + Vulkan compute) hard-hang the whole
@@ -869,12 +877,12 @@ pub async fn start_llama_server(
         let size_bytes = std::fs::metadata(&path).ok()?.len();
         Some((meta, size_bytes))
     });
-    let ctx_size: u64 = match header {
+    let ctx_size: u64 = match &header {
         Some((meta, size_bytes)) => {
             let free_vram_gb = available_vram_mib(&app_handle)
                 .await
                 .map(|mib| mib as f64 / 1024.0);
-            crate::fit::choose_ctx(&meta, size_bytes, total_ram_gb, free_vram_gb)
+            crate::fit::choose_ctx(meta, *size_bytes, total_ram_gb, free_vram_gb)
         }
         None => crate::fit::ram_tier_ctx(total_ram_gb, small_model),
     };
@@ -973,6 +981,31 @@ pub async fn start_llama_server(
     // honest stop, and small-GPU is the case we optimise for. A machine with no
     // discrete GPU gets `-ngl 0` from here and runs on the CPU (its only path).
     args.extend(select_gpu_device_args(&app_handle).await);
+
+    // Mixture-of-experts models that do not fit the graphics card run with
+    // their expert tensors pinned to the CPU (`--cpu-moe`): attention, the
+    // shared layers and the KV cache stay on the GPU, the experts - most of
+    // the file, few of them active per token - are served from main memory.
+    // Measured on an 8 GB RTX 4060 Ti: Qwen3.6-35B-A3B 5.9 -> 26 tok/s,
+    // gpt-oss-20b 14 -> 23 tok/s, and a load that takes seconds instead of
+    // most of a minute - because without this, a model that "fits" only
+    // through the driver silently paging VRAM over PCIe crawls below what
+    // the CPU alone would do. Never on a CPU-forced spawn (nothing to split).
+    if let Some((meta, size_bytes)) = &header {
+        if meta.is_moe() && !args_force_cpu(&args) {
+            if let Some(free_mib) = available_vram_mib(&app_handle).await {
+                let free_gb = free_mib as f64 / 1024.0;
+                let (_, _, need_gb) = crate::fit::model_need(meta, *size_bytes, ctx_size);
+                if crate::fit::moe_offload_wanted(need_gb, free_gb) {
+                    log::info!(
+                        "[LLM] MoE offload: experts on CPU (--cpu-moe) - needs {:.1} GB, {:.1} GB of graphics memory free",
+                        need_gb, free_gb
+                    );
+                    args.push("--cpu-moe".to_string());
+                }
+            }
+        }
+    }
 
     // Start the chat server on the active engine backend (downloaded CUDA
     // build when installed, else the bundled sidecar). Clear the death-flag

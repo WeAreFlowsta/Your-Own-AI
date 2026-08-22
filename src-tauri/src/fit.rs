@@ -38,6 +38,10 @@ pub struct ModelFit {
     /// The context the server would actually start this model with on this
     /// machine right now (choose_ctx) - what "runs at" means in the UI.
     pub context_runtime: u64,
+    /// A mixture-of-experts model bigger than the graphics card that runs
+    /// with its experts in main memory (`--cpu-moe`): fits, and fast for its
+    /// size - graded yellow with this flag so the UI can say why.
+    pub moe_offload: bool,
 }
 
 /// The context sizes the server can start at.
@@ -123,6 +127,22 @@ pub fn model_need(meta: &GgufMeta, size_bytes: u64, ctx: u64) -> (f64, f64, f64)
         / GIB;
     let overhead_gb = 0.8;
     (weights_gb, kv_gb, weights_gb + kv_gb + overhead_gb)
+}
+
+/// Does this MoE model call for expert offload? Whenever its full footprint
+/// does not fit (90% of) free VRAM - the same bound that makes a model
+/// green. Above it, the only alternative is the driver paging VRAM over
+/// PCIe (slower than the CPU alone, measured) or an outright OOM.
+pub fn moe_offload_wanted(need_gb: f64, free_vram_gb: f64) -> bool {
+    need_gb > 0.9 * free_vram_gb
+}
+
+/// Can this MoE model run with its experts in main memory? The experts are
+/// (nearly) the whole file, so the file must fit free RAM; attention + KV
+/// ride on the card. A 32 GB box carries a 21 GB 35B-A3B; a 16 GB box does
+/// not, and the grade says so instead of promising a crawl.
+pub fn moe_offload_fits(weights_gb: f64, need_gb: f64, free_vram_gb: f64, free_ram_gb: f64) -> bool {
+    weights_gb <= free_ram_gb && need_gb <= free_ram_gb + 0.9 * free_vram_gb
 }
 
 /// Grade fit. GPU: GREEN fits in (90% of) free VRAM, YELLOW fits VRAM+RAM
@@ -248,10 +268,22 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
         } else {
             0.0
         };
+        let mut fit = grade(need_gb, free_vram_gb, free_ram_gb);
+        let mut moe_offload = false;
+        if meta.is_moe() {
+            if let Some(vram) = free_vram_gb {
+                if moe_offload_wanted(need_gb, vram)
+                    && moe_offload_fits(weights_gb, need_gb, vram, free_ram_gb)
+                {
+                    fit = Fit::Yellow;
+                    moe_offload = true;
+                }
+            }
+        }
         out.push(ModelFit {
             name: m.name,
             agent_template_ok: meta.agent_template_ok(),
-            fit: grade(need_gb, free_vram_gb, free_ram_gb),
+            fit,
             need_gb,
             weights_gb,
             kv_gb,
@@ -260,6 +292,7 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
             n_layers: meta.n_layers,
             context_max: meta.context_length,
             context_runtime: ctx,
+            moe_offload,
         });
     }
     out
@@ -302,6 +335,19 @@ mod tests {
         let (free, ram) = reclaim_adjust(free_raw, ram, 7.0);
         assert_eq!(grade(7.0, free, ram), Fit::Green);
         assert_eq!(grade(13.0, free, ram), Fit::Yellow);
+    }
+
+    /// The 2026-08-22 bench box: 8 GB card, 32 GB RAM (~26 free), the
+    /// 21 GB Qwen3.6-35B-A3B. Bigger than the card -> offload wanted; the
+    /// file fits RAM -> offload fits. The same file on a 16 GB box does not.
+    #[test]
+    fn moe_offload_rules() {
+        assert!(moe_offload_wanted(22.8, 7.8));
+        assert!(!moe_offload_wanted(4.0, 7.8));
+        assert!(moe_offload_fits(21.0, 22.8, 7.8, 26.0));
+        assert!(!moe_offload_fits(21.0, 22.8, 7.8, 12.0));
+        // gpt-oss-20b (12 GB) on the same box.
+        assert!(moe_offload_fits(12.0, 13.8, 7.8, 26.0));
     }
 
     #[test]

@@ -151,6 +151,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
         context_runtime: number;
         agent_template_ok: boolean;
         need_gb: number;
+        moe_offload?: boolean;
       }
     >,
     appVersion: '',
@@ -264,6 +265,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
           context_runtime: number;
           agent_template_ok: boolean;
           need_gb: number;
+          moe_offload?: boolean;
         }[]
       >('assess_model_fit');
       store.modelFits = Object.fromEntries(fits.map((f) => [f.name, f]));
@@ -923,6 +925,14 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                   Your GPU
                 </span>
               )}
+              {isSuitable && runMode === 'moe-split' && (
+                <span
+                  title="Bigger than your graphics card's memory. The model's less-used parts stay in main memory while the rest runs on the card - fast for its size."
+                  class="px-2 py-0.5 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/40 text-[10px] rounded-full font-semibold whitespace-nowrap"
+                >
+                  Runs here - split with main memory
+                </span>
+              )}
               {isSuitable && runMode === 'cpu' && systemInfo?.gpu_integrated && (
                 <span
                   title="Your graphics share system memory, so this model runs on the processor"
@@ -1335,6 +1345,14 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
               class={`h-5 w-5 text-[var(--text-muted)] transition-transform ${store.inventoryOpen ? '' : '-rotate-90'}`}
             />
           </button>
+          {!store.loadingModels && store.inventoryOpen &&
+            Object.values(store.modelFits).some((f) => f.moe_offload) && (
+            <Callout intent="info" id="moe-split" class="mb-4">
+              One of your models is bigger than your graphics memory. Your Own AI
+              splits the work - the model's less-used parts stay in main memory -
+              so replies stay quick.
+            </Callout>
+          )}
           {store.loadingModels ? (
             <div class="flex items-center justify-center gap-3 py-12 text-[var(--text-secondary)]">
               <div class="w-5 h-5 border-2 border-[var(--text-muted)] border-t-transparent rounded-full animate-spin" />
@@ -1354,7 +1372,19 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
               const quantization = catalogMatch?.variant.quantization || model.quantization;
               const isPaused = store.pausedModels.includes(model.name);
               const fitInfo = store.modelFits[model.name];
-              const fitBadge = fitInfo
+              const fitBadge = model.damaged
+                ? {
+                    label: 'Damaged file',
+                    cls: 'bg-red-500/10 border-red-500/25 text-red-400',
+                    tip: `This file is incomplete or corrupted and can't be used (${model.damaged}). Delete it and download the model again.`,
+                  }
+                : fitInfo?.moe_offload
+                ? {
+                    label: 'Runs here - split',
+                    cls: 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400',
+                    tip: "Bigger than your graphics card's memory. The model's less-used parts stay in main memory while the rest runs on the card - fast for its size.",
+                  }
+                : fitInfo
                 ? {
                     green: {
                       label: 'Full speed',

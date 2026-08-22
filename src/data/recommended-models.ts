@@ -1073,7 +1073,9 @@ export function getBestVariantForSystem(
   // fast-class (≤5GB) variant and only exceed it when nothing smaller exists.
   const onGpu = suitable.filter(v => getRunMode(v, totalRAM, totalVRAM, freeRamGb) === 'gpu');
   if (onGpu.length) return onGpu.sort((a, b) => b.size - a.size)[0];
-  const fast = suitable.filter(v => v.size <= 5);
+  const fast = suitable.filter(
+    v => v.size <= 5 || getRunMode(v, totalRAM, totalVRAM, freeRamGb) === 'moe-split',
+  );
   if (fast.length) return fast.sort((a, b) => b.size - a.size)[0];
   return suitable.sort((a, b) => a.size - b.size)[0];
 }
@@ -1093,7 +1095,16 @@ function reservedRamGb(totalRAM: number): number {
  * the load-time decision (the conductor uses the exact GGUF-header estimate once a
  * model is downloaded), so the label matches what actually happens.
  */
-export type RunMode = 'gpu' | 'cpu' | 'too-big';
+export type RunMode = 'gpu' | 'cpu' | 'moe-split' | 'too-big';
+
+/** A mixture-of-experts artifact: its experts (most of the file) can live in
+ *  main memory while attention and the KV cache use the graphics card, so it
+ *  runs on a card it does not fit in - fast for its size. Read off the
+ *  variant's own label ("35B-A3B (MoE)", "20B (3.6B active)"). */
+export function isMoeVariant(variant: ModelVariant): boolean {
+  const label = variant.parameterCount;
+  return /\bMoE\b/i.test(label) || /\bactive\b/i.test(label) || /\d+B-A\d+(\.\d+)?B/i.test(label);
+}
 
 /** Approx VRAM (GB) to load a model of `sizeGb` on the GPU. A pre-download estimate
  *  — the exact header-based number drives the real load decision. NB: sizing here
@@ -1136,7 +1147,14 @@ export function getRunMode(
   // the CPU is the only path, so RAM is what matters. Integrated GPUs share
   // system RAM - callers pass totalVRAM = null for them so they size as CPU.
   if (totalVRAM && totalVRAM > 0) {
-    return estimateVramGb(variant.size) <= totalVRAM ? 'gpu' : 'too-big';
+    if (estimateVramGb(variant.size) <= totalVRAM) return 'gpu';
+    // A mixture-of-experts model bigger than the card runs with its experts
+    // in main memory (the loader passes --cpu-moe): the gate is RAM, not
+    // VRAM. A 32 GB box carries the 21 GB 35B-A3B; a 16 GB box does not.
+    if (isMoeVariant(variant) && variant.size * 1.1 <= cpuBudgetGb(totalRAM, freeRamGb)) {
+      return 'moe-split';
+    }
+    return 'too-big';
   }
   return variant.size * 1.2 <= cpuBudgetGb(totalRAM, freeRamGb) ? 'cpu' : 'too-big';
 }
@@ -1169,7 +1187,9 @@ export function getBestFamilyForRAM(totalRAM: number, totalVRAM: number | null, 
     const v = getBestVariantForSystem(f, totalRAM, totalVRAM, freeRamGb);
     if (!v) return { mode: -1, size: 0 };
     const mode = getRunMode(v, totalRAM, totalVRAM, freeRamGb);
-    return { mode: mode === 'gpu' ? 2 : v.size <= 5 ? 1 : 0, size: v.size };
+    // moe-split runs fast for its size (experts in RAM, the rest on the
+    // card) - a fast-class pick, below a fully-on-GPU one.
+    return { mode: mode === 'gpu' ? 2 : mode === 'moe-split' || v.size <= 5 ? 1 : 0, size: v.size };
   };
   return recommended.sort((a, b) => {
     const ra = rank(a);
