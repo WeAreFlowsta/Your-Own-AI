@@ -14,8 +14,6 @@ import {
   LuArrowUpCircle,
   LuBot,
   LuFileText,
-  LuPanelRightClose,
-  LuPanelRightOpen,
 } from '@qwikest/icons/lucide';
 import CodePanel, { SHELL_LANGUAGES, commandText } from './CodePanel';
 import { AgentWorkingBox } from './AgentWorkingBox';
@@ -115,22 +113,6 @@ const BsTerminalIcon = component$(() => (
   </svg>
 ));
 
-// Also need a terminal icon with size prop for the code button
-const BsTerminalIconSized = component$<{ size?: number }>(({ size = 14 }) => (
-  <svg
-    fill="currentColor"
-    stroke="currentColor"
-    stroke-width="0"
-    viewBox="0 0 16 16"
-    height={`${size}px`}
-    width={`${size}px`}
-    class="md:mr-1.5"
-  >
-    <path d="M6 9a.5.5 0 0 1 .5-.5h3a.5.5 0 0 1 0 1h-3A.5.5 0 0 1 6 9zM3.854 4.146a.5.5 0 1 0-.708.708L4.793 6.5 3.146 8.146a.5.5 0 1 0 .708.708l2-2a.5.5 0 0 0 0-.708l-2-2z" />
-    <path d="M2 1a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V3a2 2 0 0 0-2-2H2zm12 1a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h12z" />
-  </svg>
-));
-
 interface ChatMessageProps {
   message: Message;
   isLast?: boolean;
@@ -185,29 +167,61 @@ function renderMarkdownWithCitations(text: string): string {
   return html;
 }
 
+// The first code block of a reply is lifted out of the prose into the code
+// panel. It is replaced IN PLACE by this token, which the rendered HTML turns
+// into a small inline chip ("python · 42 lines · Show code") - so the message
+// still reads as complete exactly where the code was written. A bare removal
+// read as a failed reply: people told the AI it had produced no code when it
+// was one click away.
+const CODE_ANCHOR_TOKEN = 'YOAICODEANCHOR7f3a';
+
 // Helper function to parse code blocks from markdown
 const parseCodeFromMarkdown = (
   markdown: string
-): { mainText: string; codeString: string; language: string } | null => {
+): { mainText: string; codeString: string; language: string; lineCount: number } | null => {
   const codeBlockRegex = /```(\w+)?\n([\s\S]+?)\n```/;
   const match = markdown.match(codeBlockRegex);
 
   if (match) {
-    const mainText = markdown.replace(codeBlockRegex, '').trim();
+    const mainText = markdown.replace(codeBlockRegex, `\n\n${CODE_ANCHOR_TOKEN}\n\n`).trim();
     const language = match[1] || 'plaintext';
     const codeString = match[2].trim();
-    return { mainText, codeString, language };
+    const lineCount = codeString.split('\n').length;
+    return { mainText, codeString, language, lineCount };
   }
 
   return null;
 };
 
-// Helper function to strip incomplete code blocks during streaming
+// Helper function to strip incomplete code blocks during streaming. The first
+// complete block keeps its anchor (it is already in the panel); later ones and
+// the still-open tail are held back until the reply is done.
 const stripIncompleteCodeBlocks = (text: string): string => {
-  let stripped = text.replace(/```(\w+)?\n[\s\S]+?\n```/g, '');
+  let stripped = text.replace(/```(\w+)?\n[\s\S]+?\n```/, `\n\n${CODE_ANCHOR_TOKEN}\n\n`);
+  stripped = stripped.replace(/```(\w+)?\n[\s\S]+?\n```/g, '');
   stripped = stripped.replace(/```[\s\S]*$/g, '');
   return stripped.trim();
 };
+
+const escapeHtml = (s: string): string =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+/** The inline chip that stands where the extracted code block was. Clicks are
+ *  handled by delegation on the message body (the chip lives in rendered HTML). */
+const codeAnchorHtml = (language: string, lineCount: number, open: boolean): string => {
+  const label = `${escapeHtml(language)} · ${lineCount} line${lineCount === 1 ? '' : 's'} · ${open ? 'Hide code' : 'Show code'}`;
+  return (
+    '<button type="button" data-code-anchor="1" class="code-anchor inline-flex items-center gap-1.5 my-1 px-2.5 py-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-dropdown)] text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)] transition-colors cursor-pointer">' +
+    '<svg fill="currentColor" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M6 9a.5.5 0 0 1 .5-.5h3a.5.5 0 0 1 0 1h-3A.5.5 0 0 1 6 9zM3.854 4.146a.5.5 0 1 0-.708.708L4.793 6.5 3.146 8.146a.5.5 0 1 0 .708.708l2-2a.5.5 0 0 0 0-.708l-2-2z"/><path d="M2 1a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V3a2 2 0 0 0-2-2H2zm12 1a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h12z"/></svg>' +
+    `<span>${label}</span></button>`
+  );
+};
+
+/** Swap the anchor token for the chip in rendered HTML. The token renders as
+ *  its own paragraph when the block stood alone; either way the chip takes
+ *  its place. */
+const placeCodeAnchor = (html: string, chip: string): string =>
+  html.replace(new RegExp(`<p>\\s*${CODE_ANCHOR_TOKEN}\\s*</p>`, 'g'), `<p>${chip}</p>`).replace(new RegExp(CODE_ANCHOR_TOKEN, 'g'), chip);
 
 // Helper function to check if we're currently inside an incomplete code block
 const isInsideIncompleteCodeBlock = (text: string): boolean => {
@@ -1153,14 +1167,22 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
   const isThisMessageActiveInSidePanel = props.sidePanelContent?.messageId === props.message.id;
 
   // Render markdown to HTML string
+  const codeAnchorOpen = props.isDesktop
+    ? isThisMessageActiveInSidePanel && props.isSidePanelVisible
+    : isCodePanelOpen.value;
   const renderedHtml =
     contentToRender && !hasError
-      ? renderMarkdownWithCitations(
-          contentToRender
-            .split('\n')
-            .slice(0, displayedLineCount.value)
-            .join('\n')
-        )
+      ? (() => {
+          const html = renderMarkdownWithCitations(
+            contentToRender
+              .split('\n')
+              .slice(0, displayedLineCount.value)
+              .join('\n')
+          );
+          return codeData
+            ? placeCodeAnchor(html, codeAnchorHtml(codeData.language, codeData.lineCount, codeAnchorOpen))
+            : html.split(CODE_ANCHOR_TOKEN).join('');
+        })()
       : '';
 
   // Render avatar
@@ -1281,62 +1303,40 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
                   // work) carry the hierarchy, not a card background.
                   class={`markdown-content ${props.message.agentTurn ? '' : 'bg-[var(--bg-assistant-message)]'} p-2 pr-2 pb-2 pt-2 pl-0 md:pl-10 lg:pl-10 rounded-lg text-[var(--text-primary)] text-base leading-relaxed ${props.message.thinking ? 'mt-2' : ''}`}
                   dangerouslySetInnerHTML={renderedHtml}
-                />
-              )}
-              {codeData && props.isDesktop && props.message.id && (
-                <div class="mt-2 pl-2 md:pl-10 lg:pl-10">
-                  <LiquidMetalButton
-                    onClick$={() => {
+                  // The inline code chip lives in the rendered HTML: handle
+                  // its click here by delegation. Desktop toggles the side
+                  // panel; narrow screens open the overlay below the message.
+                  onClick$={(ev) => {
+                    const target = ev.target as HTMLElement | null;
+                    if (!target?.closest?.('[data-code-anchor]') || !codeData) return;
+                    if (props.isDesktop && props.message.id) {
                       if (isThisMessageActiveInSidePanel && props.isSidePanelVisible) {
                         props.setIsSidePanelVisible$(false);
                       } else {
                         props.setSidePanelContent$({
-                          messageId: props.message.id!,
+                          messageId: props.message.id,
                           codeString: codeData.codeString,
                           language: codeData.language,
                         });
                         props.setIsSidePanelVisible$(true);
                       }
-                    }}
-                    class="px-3 py-1 text-xs flex items-center"
-                  >
-                    {props.isSidePanelVisible && isThisMessageActiveInSidePanel ? (
-                      <LuPanelRightClose class="md:mr-1.5" style={{ width: '14px', height: '14px' }} />
-                    ) : (
-                      <LuPanelRightOpen class="md:mr-1.5" style={{ width: '14px', height: '14px' }} />
-                    )}
-                    <span>
-                      {props.isSidePanelVisible && isThisMessageActiveInSidePanel
-                        ? 'Hide Code'
-                        : 'Show Code'}
-                    </span>
-                  </LiquidMetalButton>
-                </div>
+                    } else {
+                      isCodePanelOpen.value = !isCodePanelOpen.value;
+                    }
+                  }}
+                />
               )}
-              {codeData && !props.isDesktop && (
+              {codeData && !props.isDesktop && isCodePanelOpen.value && (
                 <div class="mt-2 pl-2 md:pl-10 lg:pl-10">
-                  {isCodePanelOpen.value ? (
-                    <CodePanel
-                      codeString={codeData.codeString}
-                      language={codeData.language}
-                      onClose$={() => {
-                        isCodePanelOpen.value = false;
-                      }}
-                      isOverlay={true}
-                      theme={props.theme}
-                    />
-                  ) : (
-                    <LiquidMetalButton
-                      onClick$={() => {
-                        isCodePanelOpen.value = true;
-                      }}
-                      class="px-3 py-1 text-xs flex items-center"
-                    >
-                      <BsTerminalIconSized size={14} />
-                      <span class="hidden md:inline">Show Code & Preview</span>
-                      <span class="md:hidden">Code</span>
-                    </LiquidMetalButton>
-                  )}
+                  <CodePanel
+                    codeString={codeData.codeString}
+                    language={codeData.language}
+                    onClose$={() => {
+                      isCodePanelOpen.value = false;
+                    }}
+                    isOverlay={true}
+                    theme={props.theme}
+                  />
                 </div>
               )}
             </>
