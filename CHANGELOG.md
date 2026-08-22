@@ -3,6 +3,64 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.5.2] - 2026-08-23
+
+### A damaged model file can't take the app down
+
+- A model file that is incomplete or corrupted (a browser download that
+  stopped early, a copy that went wrong) could crash the app at startup
+  while it looked through your models folder. Every model header is now
+  read within hard bounds; such a file is listed as "Damaged file" with a
+  delete button, is never loaded or offered, and downloading the same
+  model again replaces it.
+- A finished download is checked to read as a model before it gets its
+  final name.
+
+### Big mixture-of-experts models run on small graphics cards
+
+- A mixture-of-experts model bigger than your graphics memory now runs
+  with its rarely-used parts in main memory and the rest on the card,
+  instead of being refused or crawling. Measured on an 8 GB RTX 4060 Ti
+  with 32 GB of RAM: Qwen3.6 35B-A3B went from 6 to 26 tokens per second,
+  gpt-oss 20B from 14 to 23, and the 35B loads in seconds instead of most
+  of a minute. The gate is main memory: a 32 GB machine qualifies for the
+  35B, a 16 GB machine is told so honestly. Model cards say "Runs here -
+  split with main memory", and "Best for this computer" can recommend
+  these models.
+
+### Downloads
+
+- Several models can download at once, each card with its own progress
+  and button. Starting a second download used to make the first card look
+  idle.
+
+### Code in replies
+
+- When a reply's code is lifted into the code panel, a small chip now
+  stands exactly where the code was written ("python · 42 lines · Show
+  code"), so the reply reads as complete. The button at the bottom of the
+  message is gone.
+
+### Windows
+
+- The app's helper programs start with their console windows created
+  hidden: no flash, and no Windows Terminal error dialog on machines where
+  Windows Terminal is the default terminal. Helper programs left behind by
+  an earlier launch that did not finish are cleaned up more thoroughly at
+  the next start.
+
+### Your records
+
+- Replies from online models now record the provider's own fingerprint
+  for the backend that answered (when the provider sends one), alongside
+  the model name: the provider's claim, inside your encrypted record.
+  Offline replies already carry the hash of the exact model file.
+
+### Other
+
+- "Your AIs can now go online" shows once, the moment a plan activates.
+- Removed the disabled records-tidying command.
+
 ## [0.5.1] - 2026-08-21
 
 ### Quieter at launch
