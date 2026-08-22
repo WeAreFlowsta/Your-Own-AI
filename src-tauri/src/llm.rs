@@ -30,6 +30,12 @@ pub struct LocalModel {
     pub parameter_size: String,
     pub quantization: String,
     pub modified_at: Option<String>,
+    /// Set when the file does not read as a model (a half-copied download,
+    /// a corrupted file): the reason, for the UI's "this file is damaged"
+    /// card. A damaged file is never loaded, routed to, or offered in a
+    /// picker - only shown, so it can be deleted and fetched again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub damaged: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1810,10 +1816,19 @@ pub async fn list_local_models(
             if filename.to_lowercase().contains("mmproj") {
                 continue;
             }
-            if crate::gguf::read_meta(&path)
-                .map(|m| m.is_embedding())
-                .unwrap_or(false)
-            {
+            // One bounded header read decides everything below: a readable
+            // header upgrades the labels, a damaged file is listed AS damaged
+            // (so the user can see and delete it), an unsupported-but-intact
+            // file just keeps its filename labels.
+            let (meta, damaged) = match crate::gguf::read_meta_classified(&path) {
+                Ok(m) => (Some(m), None),
+                Err(crate::gguf::MetaError::Damaged(reason)) => {
+                    log::warn!("[LLM] damaged model file {filename}: {reason}");
+                    (None, Some(reason))
+                }
+                Err(crate::gguf::MetaError::Unsupported(_)) => (None, None),
+            };
+            if meta.as_ref().is_some_and(|m| m.is_embedding()) {
                 continue;
             }
 
@@ -1842,6 +1857,7 @@ pub async fn list_local_models(
                 parameter_size: param_size,
                 quantization: quant,
                 modified_at: metadata.modified().ok().map(|t| format!("{:?}", t)),
+                damaged,
             });
         }
     }
@@ -1985,9 +2001,21 @@ pub async fn download_model(
     // `.gguf`), which is what made an interrupted download look "corrupted".
     let part_path = models_dir.join(format!("{}.part", filename));
 
-    // Check if file already exists (fully downloaded)
+    // Check if file already exists (fully downloaded). A damaged file under
+    // the final name (a half-copied manual download, a corrupted file) is
+    // not a model - clear it so this download can replace it.
     if file_path.exists() {
-        return Err("Model already downloaded".to_string());
+        match crate::gguf::damage(&file_path) {
+            Some(reason) => {
+                log::warn!(
+                    "[LLM] replacing damaged model file {} ({reason})",
+                    file_path.display()
+                );
+                std::fs::remove_file(&file_path)
+                    .map_err(|e| format!("Cannot replace the damaged file: {}", e))?;
+            }
+            None => return Err("Model already downloaded".to_string()),
+        }
     }
     // NOTE: we deliberately do NOT delete an existing `.part` — a partial from a
     // dropped connection is RESUMED via an HTTP Range request below. HF model
@@ -2114,6 +2142,14 @@ pub async fn download_model(
         let _ = std::fs::remove_file(&part_path);
         return Err("Download corrupted (size mismatch). Please try again.".to_string());
     }
+    // The bytes must read as a model file: a stream that ended early
+    // without a length, or a server that answered with something other
+    // than the file, must never be published under a .gguf name.
+    if let Some(reason) = crate::gguf::damage(&part_path) {
+        log::error!("[LLM] downloaded bytes for {} do not read as a model: {reason}", filename);
+        let _ = std::fs::remove_file(&part_path);
+        return Err("Download corrupted (the file does not read as a model). Please try again.".to_string());
+    }
 
     // Atomically publish: only now does the model appear in list_local_models.
     std::fs::rename(&part_path, &file_path)
@@ -2175,7 +2211,9 @@ pub async fn is_model_downloaded(
 ) -> Result<bool, String> {
     let models_dir = get_models_dir(&app_handle)?;
     let file_path = models_dir.join(&filename);
-    Ok(file_path.exists())
+    // A damaged file (incomplete or corrupted) is not a downloaded model -
+    // the download surfaces offer to fetch it again.
+    Ok(file_path.exists() && crate::gguf::damage(&file_path).is_none())
 }
 
 /**

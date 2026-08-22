@@ -32,6 +32,10 @@ pub struct GgufMeta {
     pub key_length: u64,
     /// `general.file_type` enum → mapped to effective bits-per-weight below.
     pub file_type: u32,
+    /// `<arch>.expert_count` - number of experts per MoE layer (0 = dense).
+    pub n_experts: u64,
+    /// `<arch>.expert_used_count` - experts active per token (0 = dense).
+    pub n_experts_used: u64,
 }
 
 impl GgufMeta {
@@ -83,6 +87,13 @@ impl GgufMeta {
         weights + kv + OVERHEAD_MIB
     }
 
+    /// Mixture-of-experts model: most of its weights are expert tensors that
+    /// only a few of fire per token - the part llama.cpp can pin to the CPU
+    /// (`--cpu-moe`) when the whole file does not fit the graphics card.
+    pub fn is_moe(&self) -> bool {
+        self.n_experts > 1
+    }
+
     /// True for encoder/embedding models (BERT family — e.g. bge, nomic-bert,
     /// jina-bert). These can't do causal generation, so the chat router must
     /// never pick them (loading one into the chat server 500s with "context
@@ -95,24 +106,161 @@ impl GgufMeta {
 
 // ── readers ───────────────────────────────────────────────────────────────
 
-fn read_u32<R: Read>(r: &mut R) -> std::io::Result<u32> {
-    let mut b = [0u8; 4];
-    r.read_exact(&mut b)?;
-    Ok(u32::from_le_bytes(b))
+/// Largest metadata string we will ever materialize (keys, architecture,
+/// chat template). Real templates run to a few hundred KB; anything past
+/// this is garbage read from a damaged file, not a model.
+const MAX_STRING_BYTES: u64 = 16 * 1024 * 1024;
+/// Sanity ceilings for the header counts (the largest real models sit at a
+/// few thousand tensors and a few hundred KV pairs).
+const MAX_KV_COUNT: u64 = 1 << 16;
+const MAX_TENSOR_COUNT: u64 = 1 << 20;
+
+/// Why a file's metadata could not be read.
+#[derive(Debug, Clone)]
+pub enum MetaError {
+    /// The bytes do not read as a GGUF file: bad magic, a length or count
+    /// that points past the end of the file, truncated mid-field. A
+    /// half-copied download or a corrupted file - delete and re-download.
+    Damaged(String),
+    /// A well-formed file using a construct this reader does not handle.
+    Unsupported(String),
 }
 
-fn read_u64<R: Read>(r: &mut R) -> std::io::Result<u64> {
-    let mut b = [0u8; 8];
-    r.read_exact(&mut b)?;
-    Ok(u64::from_le_bytes(b))
+impl std::fmt::Display for MetaError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MetaError::Damaged(m) => write!(f, "damaged: {m}"),
+            MetaError::Unsupported(m) => write!(f, "unsupported: {m}"),
+        }
+    }
 }
 
-/// A GGUF string: u64 length + that many UTF-8 bytes.
-fn read_gstr<R: Read>(r: &mut R) -> std::io::Result<String> {
-    let len = read_u64(r)? as usize;
-    let mut buf = vec![0u8; len];
-    r.read_exact(&mut buf)?;
-    Ok(String::from_utf8_lossy(&buf).into_owned())
+fn damaged(msg: impl Into<String>) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, msg.into())
+}
+
+/// A bounded cursor over the file: every length and count read from the
+/// header is checked against the bytes that actually remain, so a damaged
+/// file can never make us allocate or loop on a garbage number.
+struct Bounded<R> {
+    r: R,
+    pos: u64,
+    len: u64,
+}
+
+impl<R: Read + Seek> Bounded<R> {
+    fn remaining(&self) -> u64 {
+        self.len.saturating_sub(self.pos)
+    }
+
+    fn read_exact(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
+        if (buf.len() as u64) > self.remaining() {
+            return Err(damaged("field runs past the end of the file"));
+        }
+        self.r.read_exact(buf)?;
+        self.pos += buf.len() as u64;
+        Ok(())
+    }
+
+    fn skip(&mut self, n: u64) -> std::io::Result<()> {
+        if n > self.remaining() {
+            return Err(damaged("value runs past the end of the file"));
+        }
+        self.r.seek(SeekFrom::Current(n as i64))?;
+        self.pos += n;
+        Ok(())
+    }
+
+    fn read_u32(&mut self) -> std::io::Result<u32> {
+        let mut b = [0u8; 4];
+        self.read_exact(&mut b)?;
+        Ok(u32::from_le_bytes(b))
+    }
+
+    fn read_u64(&mut self) -> std::io::Result<u64> {
+        let mut b = [0u8; 8];
+        self.read_exact(&mut b)?;
+        Ok(u64::from_le_bytes(b))
+    }
+
+    /// A GGUF string: u64 length + that many UTF-8 bytes. The length is
+    /// checked against the file before anything is allocated.
+    fn read_gstr(&mut self) -> std::io::Result<String> {
+        let len = self.read_u64()?;
+        if len > MAX_STRING_BYTES || len > self.remaining() {
+            return Err(damaged(format!("string length {len} is not plausible")));
+        }
+        let mut buf = vec![0u8; len as usize];
+        self.read_exact(&mut buf)?;
+        Ok(String::from_utf8_lossy(&buf).into_owned())
+    }
+
+    /// Skip a GGUF string without reading it.
+    fn skip_gstr(&mut self) -> std::io::Result<()> {
+        let len = self.read_u64()?;
+        self.skip(len)
+    }
+
+    /// Read an integer-valued scalar as u64 (for the count keys we care about).
+    fn read_int_value(&mut self, t: u32) -> std::io::Result<Option<u64>> {
+        Ok(match t {
+            0 | 1 => Some(self.read_n::<1>()?),
+            2 | 3 => Some(self.read_n::<2>()?),
+            4 | 5 => Some(self.read_n::<4>()?),
+            10 | 11 => Some(self.read_n::<8>()?),
+            _ => None,
+        })
+    }
+
+    fn read_n<const N: usize>(&mut self) -> std::io::Result<u64> {
+        let mut b = [0u8; N];
+        self.read_exact(&mut b)?;
+        let mut v = 0u64;
+        for (i, byte) in b.iter().enumerate() {
+            v |= (*byte as u64) << (8 * i);
+        }
+        Ok(v)
+    }
+
+    /// Advance the cursor past a value of type `t` without keeping it.
+    fn skip_value(&mut self, t: u32) -> std::io::Result<()> {
+        match t {
+            8 => self.skip_gstr(),
+            9 => {
+                // array: elem_type (u32), count (u64), then count elements
+                let elem_t = self.read_u32()?;
+                let count = self.read_u64()?;
+                if elem_t == 8 {
+                    // Every string costs at least its 8-byte length prefix.
+                    if count > self.remaining() / 8 {
+                        return Err(damaged(format!("array count {count} is not plausible")));
+                    }
+                    for _ in 0..count {
+                        self.skip_gstr()?;
+                    }
+                    Ok(())
+                } else if let Some(w) = scalar_width(elem_t) {
+                    let bytes = w
+                        .checked_mul(count)
+                        .ok_or_else(|| damaged("array size overflows"))?;
+                    self.skip(bytes)
+                } else {
+                    // nested array or unknown element type
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::Unsupported,
+                        "unsupported nested array in gguf metadata",
+                    ))
+                }
+            }
+            _ => {
+                if let Some(w) = scalar_width(t) {
+                    self.skip(w)
+                } else {
+                    Err(damaged(format!("unknown gguf value type {t}")))
+                }
+            }
+        }
+    }
 }
 
 /// Byte width of a fixed-size GGUF scalar type (None for string/array).
@@ -126,71 +274,24 @@ fn scalar_width(t: u32) -> Option<u64> {
     }
 }
 
-/// Read an integer-valued scalar as u64 (for the count keys we care about).
-fn read_int_value<R: Read>(r: &mut R, t: u32) -> std::io::Result<Option<u64>> {
-    Ok(match t {
-        0 => Some(read_n::<R, 1>(r)? as u64),
-        2 => Some(read_n::<R, 2>(r)? as u64),
-        4 => Some(read_n::<R, 4>(r)? as u64),
-        10 => Some(read_n::<R, 8>(r)?),
-        5 => Some(read_n::<R, 4>(r)? as u64), // i32 → treat as u64
-        11 => Some(read_n::<R, 8>(r)?),       // i64
-        _ => None,
-    })
-}
-
-fn read_n<R: Read, const N: usize>(r: &mut R) -> std::io::Result<u64> {
-    let mut b = [0u8; N];
-    r.read_exact(&mut b)?;
-    let mut v = 0u64;
-    for (i, byte) in b.iter().enumerate() {
-        v |= (*byte as u64) << (8 * i);
-    }
-    Ok(v)
-}
-
-/// Advance the cursor past a value of `t` without keeping it.
-fn skip_value<R: Read + Seek>(r: &mut R, t: u32) -> std::io::Result<()> {
-    match t {
-        8 => {
-            let len = read_u64(r)? as i64;
-            r.seek(SeekFrom::Current(len))?;
-        }
-        9 => {
-            // array: elem_type (u32), count (u64), then count elements
-            let elem_t = read_u32(r)?;
-            let count = read_u64(r)?;
-            if elem_t == 8 {
-                for _ in 0..count {
-                    let len = read_u64(r)? as i64;
-                    r.seek(SeekFrom::Current(len))?;
-                }
-            } else if let Some(w) = scalar_width(elem_t) {
-                r.seek(SeekFrom::Current((w * count) as i64))?;
-            } else {
-                // nested array or unknown — give up gracefully
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "unsupported nested array in gguf metadata",
-                ));
-            }
-        }
-        _ => {
-            if let Some(w) = scalar_width(t) {
-                r.seek(SeekFrom::Current(w as i64))?;
-            } else {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "unknown gguf value type",
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
 /// Read the GGUF metadata of `path`. Errors on a non-GGUF / malformed file.
 pub fn read_meta(path: &std::path::Path) -> Result<GgufMeta, String> {
+    read_meta_classified(path).map_err(|e| e.to_string())
+}
+
+/// Why this file cannot be used as a model, if it cannot: `Some(reason)`
+/// for a damaged file (truncated download, corrupted copy, not a GGUF at
+/// all). Files this reader merely does not understand are NOT damaged.
+pub fn damage(path: &std::path::Path) -> Option<String> {
+    match read_meta_classified(path) {
+        Err(MetaError::Damaged(reason)) => Some(reason),
+        _ => None,
+    }
+}
+
+/// Read the GGUF metadata with the failure classified (damaged vs
+/// unsupported). Successes are cached by (path, mtime, size).
+pub fn read_meta_classified(path: &std::path::Path) -> Result<GgufMeta, MetaError> {
     // Model files are immutable once downloaded, but their metadata blocks
     // (which include multi-MB tokenizer arrays) were re-parsed on every
     // call - and fit assessment reads every model several times per
@@ -201,7 +302,7 @@ pub fn read_meta(path: &std::path::Path) -> Result<GgufMeta, String> {
     use std::sync::Mutex;
     static META_CACHE: Mutex<Option<HashMap<(std::path::PathBuf, u64, u64), GgufMeta>>> =
         Mutex::new(None);
-    let stat = std::fs::metadata(path).map_err(|e| format!("stat: {e}"))?;
+    let stat = std::fs::metadata(path).map_err(|e| MetaError::Damaged(format!("stat: {e}")))?;
     let mtime = stat
         .modified()
         .ok()
@@ -217,7 +318,13 @@ pub fn read_meta(path: &std::path::Path) -> Result<GgufMeta, String> {
     {
         return Ok(hit.clone());
     }
-    let parsed = read_meta_uncached(path)?;
+    // The parse is bounds-checked end to end; catch_unwind is the belt
+    // under those braces so that no arithmetic slip on garbage bytes can
+    // ever take the whole app down during a models-directory scan.
+    let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        read_meta_uncached(path, stat.len())
+    }))
+    .unwrap_or_else(|_| Err(MetaError::Damaged("header parse panicked".into())))?;
     META_CACHE
         .lock()
         .unwrap()
@@ -226,18 +333,36 @@ pub fn read_meta(path: &std::path::Path) -> Result<GgufMeta, String> {
     Ok(parsed)
 }
 
-fn read_meta_uncached(path: &std::path::Path) -> Result<GgufMeta, String> {
-    let f = File::open(path).map_err(|e| format!("open: {e}"))?;
-    let mut r = BufReader::new(f);
+fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta, MetaError> {
+    let f = File::open(path).map_err(|e| MetaError::Damaged(format!("open: {e}")))?;
+    let mut r = Bounded { r: BufReader::new(f), pos: 0, len: file_len };
+    // Map reader errors: an `Unsupported` kind is a construct we do not
+    // parse; everything else (bad lengths, truncation, io) is damage.
+    let io = |e: std::io::Error| {
+        if e.kind() == std::io::ErrorKind::Unsupported {
+            MetaError::Unsupported(e.to_string())
+        } else {
+            MetaError::Damaged(e.to_string())
+        }
+    };
 
     let mut magic = [0u8; 4];
-    r.read_exact(&mut magic).map_err(|e| format!("read magic: {e}"))?;
+    r.read_exact(&mut magic)
+        .map_err(|e| MetaError::Damaged(format!("read magic: {e}")))?;
     if &magic != b"GGUF" {
-        return Err("not a GGUF file".to_string());
+        return Err(MetaError::Damaged("not a GGUF file".to_string()));
     }
-    let _version = read_u32(&mut r).map_err(|e| e.to_string())?;
-    let _tensor_count = read_u64(&mut r).map_err(|e| e.to_string())?;
-    let kv_count = read_u64(&mut r).map_err(|e| e.to_string())?;
+    let version = r.read_u32().map_err(io)?;
+    if !(1..=3).contains(&version) {
+        return Err(MetaError::Damaged(format!("gguf version {version} is not plausible")));
+    }
+    let tensor_count = r.read_u64().map_err(io)?;
+    let kv_count = r.read_u64().map_err(io)?;
+    if tensor_count > MAX_TENSOR_COUNT || kv_count > MAX_KV_COUNT {
+        return Err(MetaError::Damaged(format!(
+            "header counts are not plausible (tensors {tensor_count}, kv {kv_count})"
+        )));
+    }
 
     let mut m = GgufMeta {
         template_tools: false,
@@ -251,11 +376,15 @@ fn read_meta_uncached(path: &std::path::Path) -> Result<GgufMeta, String> {
         context_length: 0,
         key_length: 0,
         file_type: 0,
+        n_experts: 0,
+        n_experts_used: 0,
     };
 
     for _ in 0..kv_count {
-        let key = read_gstr(&mut r).map_err(|e| format!("read key: {e}"))?;
-        let vtype = read_u32(&mut r).map_err(|e| e.to_string())?;
+        let key = r
+            .read_gstr()
+            .map_err(|e| MetaError::Damaged(format!("read key: {e}")))?;
+        let vtype = r.read_u32().map_err(io)?;
 
         // Match the keys we need by SUFFIX (the arch prefix varies: llama.*,
         // gemma3.*, qwen3.* …). Check head_count_kv before head_count.
@@ -265,21 +394,28 @@ fn read_meta_uncached(path: &std::path::Path) -> Result<GgufMeta, String> {
             || key.ends_with(".attention.key_length")
             || key.ends_with(".embedding_length")
             || key.ends_with(".context_length")
+            || key.ends_with(".expert_count")
+            || key.ends_with(".expert_used_count")
             || key == "general.file_type";
 
         if key == "tokenizer.chat_template" && vtype == 8 {
-            let tpl = read_gstr(&mut r).map_err(|e| e.to_string())?;
+            let tpl = r.read_gstr().map_err(io)?;
             m.template_tools = tpl.contains("tools") || tpl.contains("tool_call");
             m.template_strict_alternation =
                 tpl.contains("raise_exception") && tpl.contains("alternate");
         } else if key == "general.architecture" && vtype == 8 {
-            m.architecture = read_gstr(&mut r).map_err(|e| e.to_string())?;
+            m.architecture = r.read_gstr().map_err(io)?;
         } else if key == "general.size_label" && vtype == 8 {
-            m.size_label = read_gstr(&mut r).map_err(|e| e.to_string())?;
-        } else if want_int {
-            let v = read_int_value(&mut r, vtype)
-                .map_err(|e| e.to_string())?
-                .unwrap_or(0);
+            m.size_label = r.read_gstr().map_err(io)?;
+        } else if want_int && scalar_width(vtype).is_some() {
+            let v = match r.read_int_value(vtype).map_err(io)? {
+                Some(v) => v,
+                None => {
+                    // f32/f64/bool under an integer key: not ours, skip it.
+                    r.skip_value(vtype).map_err(io)?;
+                    0
+                }
+            };
             if key.ends_with(".block_count") {
                 m.n_layers = v;
             } else if key.ends_with(".attention.head_count_kv") {
@@ -292,11 +428,15 @@ fn read_meta_uncached(path: &std::path::Path) -> Result<GgufMeta, String> {
                 m.embedding_length = v;
             } else if key.ends_with(".context_length") {
                 m.context_length = v;
+            } else if key.ends_with(".expert_used_count") {
+                m.n_experts_used = v;
+            } else if key.ends_with(".expert_count") {
+                m.n_experts = v;
             } else if key == "general.file_type" {
                 m.file_type = v as u32;
             }
         } else {
-            skip_value(&mut r, vtype).map_err(|e| e.to_string())?;
+            r.skip_value(vtype).map_err(io)?;
         }
     }
 
@@ -403,6 +543,111 @@ mod tests {
                 if est <= FREE_VRAM_MIB { "GPU" } else { "CPU" }
             );
         }
+    }
+
+    fn tmp_file(name: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("yoai-gguf-tests");
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join(name);
+        std::fs::write(&p, bytes).unwrap();
+        p
+    }
+
+    fn gguf_header(tensors: u64, kvs: u64) -> Vec<u8> {
+        let mut v = b"GGUF".to_vec();
+        v.extend_from_slice(&3u32.to_le_bytes());
+        v.extend_from_slice(&tensors.to_le_bytes());
+        v.extend_from_slice(&kvs.to_le_bytes());
+        v
+    }
+
+    fn gstr(s: &str) -> Vec<u8> {
+        let mut v = (s.len() as u64).to_le_bytes().to_vec();
+        v.extend_from_slice(s.as_bytes());
+        v
+    }
+
+    /// The field case: a truncated/garbage file must come back as Damaged -
+    /// never abort on a giant allocation, never spin on a giant count. Every
+    /// variant here finishes instantly.
+    #[test]
+    fn damaged_files_are_reported_not_fatal() {
+        // 1. Not a GGUF at all.
+        let p = tmp_file("garbage.gguf", b"this is not a model file at all, just bytes");
+        assert!(matches!(read_meta_classified(&p), Err(MetaError::Damaged(_))));
+        assert!(damage(&p).is_some());
+
+        // 2. Valid header, then a key whose length claims multi-GB (the
+        //    0.5.1 crash: read_gstr allocating a garbage length).
+        let mut b = gguf_header(100, 5);
+        b.extend_from_slice(&(5u64 << 30).to_le_bytes()); // 5 GiB "string"
+        b.extend_from_slice(b"junkjunkjunk");
+        let p = tmp_file("giant-string.gguf", &b);
+        assert!(matches!(read_meta_classified(&p), Err(MetaError::Damaged(_))));
+
+        // 3. A string array with an absurd count (would loop forever unbounded).
+        let mut b = gguf_header(100, 1);
+        b.extend_from_slice(&gstr("tokenizer.ggml.tokens"));
+        b.extend_from_slice(&9u32.to_le_bytes()); // array
+        b.extend_from_slice(&8u32.to_le_bytes()); // of strings
+        b.extend_from_slice(&u64::MAX.to_le_bytes()); // count
+        let p = tmp_file("giant-array.gguf", &b);
+        assert!(matches!(read_meta_classified(&p), Err(MetaError::Damaged(_))));
+
+        // 4. A scalar array whose byte size overflows / runs past EOF.
+        let mut b = gguf_header(100, 1);
+        b.extend_from_slice(&gstr("tokenizer.ggml.scores"));
+        b.extend_from_slice(&9u32.to_le_bytes());
+        b.extend_from_slice(&6u32.to_le_bytes()); // f32
+        b.extend_from_slice(&(u64::MAX / 2).to_le_bytes());
+        let p = tmp_file("overflow-array.gguf", &b);
+        assert!(matches!(read_meta_classified(&p), Err(MetaError::Damaged(_))));
+
+        // 5. Truncated mid-field: header promises 3 KV pairs, file ends after one.
+        let mut b = gguf_header(10, 3);
+        b.extend_from_slice(&gstr("general.architecture"));
+        b.extend_from_slice(&8u32.to_le_bytes());
+        b.extend_from_slice(&gstr("llama"));
+        b.extend_from_slice(&gstr("llama.block_cou")); // cut off
+        let p = tmp_file("truncated.gguf", &b);
+        assert!(matches!(read_meta_classified(&p), Err(MetaError::Damaged(_))));
+
+        // 6. Implausible header counts.
+        let p = tmp_file("counts.gguf", &gguf_header(u64::MAX, u64::MAX));
+        assert!(matches!(read_meta_classified(&p), Err(MetaError::Damaged(_))));
+
+        // 7. Empty file.
+        let p = tmp_file("empty.gguf", b"");
+        assert!(matches!(read_meta_classified(&p), Err(MetaError::Damaged(_))));
+    }
+
+    /// A well-formed synthetic header parses, including the MoE keys, and is
+    /// NOT flagged as damaged.
+    #[test]
+    fn synthetic_moe_header_parses() {
+        let mut b = gguf_header(10, 6);
+        let kv_u32 = |b: &mut Vec<u8>, k: &str, v: u32| {
+            b.extend_from_slice(&gstr(k));
+            b.extend_from_slice(&4u32.to_le_bytes());
+            b.extend_from_slice(&v.to_le_bytes());
+        };
+        b.extend_from_slice(&gstr("general.architecture"));
+        b.extend_from_slice(&8u32.to_le_bytes());
+        b.extend_from_slice(&gstr("qwen3moe"));
+        kv_u32(&mut b, "qwen3moe.block_count", 48);
+        kv_u32(&mut b, "qwen3moe.attention.head_count", 32);
+        kv_u32(&mut b, "qwen3moe.attention.head_count_kv", 4);
+        kv_u32(&mut b, "qwen3moe.expert_count", 128);
+        kv_u32(&mut b, "qwen3moe.expert_used_count", 8);
+        let p = tmp_file("moe.gguf", &b);
+        let m = read_meta_classified(&p).expect("parses");
+        assert_eq!(m.architecture, "qwen3moe");
+        assert_eq!(m.n_layers, 48);
+        assert_eq!(m.n_kv_heads, 4);
+        assert_eq!(m.n_experts, 128);
+        assert_eq!(m.n_experts_used, 8);
+        assert!(m.is_moe());
+        assert!(damage(&p).is_none());
     }
 
     /// Muse Glimmer's REAL chat template (extracted from the Unsloth GGUF

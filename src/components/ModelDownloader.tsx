@@ -242,7 +242,9 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
   const loadModels = $(async () => {
     store.medicalChoice = getMedicalModel();
     try {
-      const models = await modelManager.listModels();
+      // The inventory lists damaged files too (so they can be deleted);
+      // every other surface reads the usable list.
+      const models = await modelManager.listAllModels();
       store.downloadedModels = models;
     } catch (error) {
       console.error('Failed to load models:', error);
@@ -699,7 +701,10 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     ? null
     : systemInfo?.gpu_integrated ? null : (systemInfo?.total_vram_gb || null);
   const freeRAM = systemInfo ? Math.max(1, systemInfo.total_memory_gb - systemInfo.used_memory_gb) : null;
-  const downloadedFilenames = new Set(store.downloadedModels.map((m) => m.name));
+  // A damaged file is not a download - its card offers to fetch it again.
+  const downloadedFilenames = new Set(
+    store.downloadedModels.filter((m) => !m.damaged).map((m) => m.name),
+  );
   // Task filters — the capability axis users actually shop by ("what's it for").
   // Size is handled separately by the runnable / "needs more memory" split below,
   // so these tabs don't need to repeat it. Order = most-shopped first.
@@ -1396,12 +1401,15 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                       class="text-xs text-[var(--text-muted)] truncate"
                       title="Trained context = what the model was built to handle. 'Runs at' = the context Your Own AI starts it with on this machine."
                     >
-                      {quantization} · {model.size}
-                      {fitInfo && fitInfo.context_runtime > 0
+                      {model.damaged
+                        ? `${model.size} · incomplete or corrupted - delete it and download again`
+                        : `${quantization} · ${model.size}`}
+                      {!model.damaged && fitInfo && fitInfo.context_runtime > 0
                         ? ` · runs at ${formatContext(fitInfo.context_runtime)}${fitInfo.agent_template_ok ? ' · works in projects' : ''}`
                         : ''}
                     </p>
                   </div>
+                  {!model.damaged && (
                   <LiquidMetalButton
                     variant="secondary"
                     onClick$={() => handleTogglePause$(model.name)}

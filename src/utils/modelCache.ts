@@ -39,7 +39,8 @@ export function getCachedModels(): {
 }
 
 export async function refreshLocalModels(): Promise<LocalModel[]> {
-  const models = await invoke<LocalModel[]>("list_local_models");
+  // Damaged files (incomplete or corrupted downloads) are never a choice.
+  const models = (await invoke<LocalModel[]>("list_local_models")).filter((m) => !m.damaged);
   localCache = models;
   return models;
 }

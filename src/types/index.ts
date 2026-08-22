@@ -77,6 +77,9 @@ export interface LocalModel {
   size_bytes: number;
   parameter_size: string;  // e.g., "3B", "7B"
   quantization: string;    // e.g., "Q4_0"
+  /** Set when the file does not read as a model (incomplete or corrupted
+   *  download): the reason. Listed so it can be deleted, never offered. */
+  damaged?: string;
 }
 
 export type AppMode = 'local' | 'cloud';

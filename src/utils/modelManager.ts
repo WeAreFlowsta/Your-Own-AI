@@ -39,6 +39,17 @@ export class ModelManager {
    * List all downloaded models
    */
   async listModels(): Promise<LocalModel[]> {
+    // Usable chat models only: no capability dependencies (embedding, vision
+    // projectors) and no damaged files - those are inventory, not choices.
+    return (await this.listAllModels()).filter((m) => !m.damaged);
+  }
+
+  /**
+   * Every model file on disk, including damaged ones (incomplete or
+   * corrupted downloads) - for the inventory, where a damaged file must be
+   * visible so it can be deleted and fetched again.
+   */
+  async listAllModels(): Promise<LocalModel[]> {
     try {
       const all = await invoke<LocalModel[]>('list_local_models');
       // Hide capability dependencies (embedding, vision projectors) — they're in

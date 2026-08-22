@@ -332,6 +332,8 @@ mod tests {
             context_length: trained_ctx,
             key_length: head_dim,
             file_type: 0,
+            n_experts: 0,
+            n_experts_used: 0,
         }
     }
 
