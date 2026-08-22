@@ -17,6 +17,9 @@ export interface StreamUsageData {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+  /** Online turns: the provider's own fingerprint for the backend that
+   *  answered (`system_fingerprint`), when it sent one. */
+  provider_fingerprint?: string | null;
 }
 
 export interface StreamSource {

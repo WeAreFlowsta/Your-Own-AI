@@ -1009,7 +1009,12 @@ export function useChat(props: UseChatProps) {
         let updateCount = 0;
         let lastFlushAt = 0;
         let firstChunkTime: number | null = null;
-        let tokenUsage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null = null;
+        let tokenUsage: {
+          prompt_tokens: number;
+          completion_tokens: number;
+          total_tokens: number;
+          provider_fingerprint?: string | null;
+        } | null = null;
         let sources: { url: string; title: string }[] | null = null;
 
         // Thinking belongs to report mode (forces native reasoning via enable_thinking
@@ -1379,6 +1384,9 @@ export function useChat(props: UseChatProps) {
                 },
                 routing_reason: routedReason,
                 routing_task: routedTask,
+                // The provider's claim about the backend that answered - the
+                // online sibling of the offline model-file hash.
+                provider_fingerprint: tokenUsage?.provider_fingerprint || undefined,
               },
             );
             state.messageSequence++;

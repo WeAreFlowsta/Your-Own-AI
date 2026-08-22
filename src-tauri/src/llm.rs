@@ -2490,6 +2490,12 @@ struct StreamUsageData {
     prompt_tokens: u32,
     completion_tokens: u32,
     total_tokens: u32,
+    /// The provider's own fingerprint for the backend configuration that
+    /// produced this reply (`system_fingerprint` in the stream), when one
+    /// was sent. Recorded with the turn as the provider's claim - the
+    /// online sibling of the offline model-file hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider_fingerprint: Option<String>,
 }
 
 /// A web source returned by search-grounded online models (Perplexity/Sonar).
@@ -2832,6 +2838,7 @@ pub async fn stream_chat_completion(
     let mut sse_buffer = String::new();
     let mut content_buffer = String::new();
     let mut usage_data: Option<StreamUsageData> = None;
+    let mut provider_fingerprint: Option<String> = None;
     let mut sources: Vec<SourceItem> = Vec::new();
     let mut in_reasoning = false;
 
@@ -2891,6 +2898,16 @@ pub async fn stream_chat_completion(
 
                         // Parse JSON chunk
                         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                            // The provider's backend fingerprint rides on every
+                            // chunk (OpenAI-compatible `system_fingerprint`);
+                            // keep the first non-empty one for the record.
+                            if provider_fingerprint.is_none() {
+                                if let Some(fp) = parsed.get("system_fingerprint").and_then(|v| v.as_str()) {
+                                    if !fp.is_empty() {
+                                        provider_fingerprint = Some(fp.to_string());
+                                    }
+                                }
+                            }
                             // If the server streams reasoning_content (native thinking from
                             // reasoning models like Grok), always wrap it in <think> tags and
                             // forward it. The UI decides how to present it — expanded in report
@@ -2969,6 +2986,7 @@ pub async fn stream_chat_completion(
                                         prompt_tokens: prompt as u32,
                                         completion_tokens: completion as u32,
                                         total_tokens: total as u32,
+                                        provider_fingerprint: provider_fingerprint.clone(),
                                     });
                                 }
                             }

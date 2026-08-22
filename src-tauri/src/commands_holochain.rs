@@ -70,6 +70,7 @@ pub struct TranscriptEntryInfo {
     pub timestamp: i64,
     pub model: String,
     pub model_hash: Option<String>,
+    pub provider_fingerprint: Option<String>,
     pub thinking: Option<String>,
     pub tokens: Option<TokenUsage>,
     pub sources: Option<Vec<SourceRef>>,
@@ -188,6 +189,11 @@ pub struct Provenance {
     /// picked the model). Human-readable, shown in receipts.
     #[serde(default)]
     pub routing_reason: Option<String>,
+    /// Online turns: the provider's own fingerprint for the backend
+    /// configuration that answered (`system_fingerprint`), when it sent one.
+    /// The provider's claim - the online sibling of `model_hash`.
+    #[serde(default)]
+    pub provider_fingerprint: Option<String>,
     /// The classified routing task for this turn ("code" | "math" |
     /// "reasoning" | "general").
     #[serde(default)]
@@ -209,6 +215,9 @@ struct MessagePlain {
     /// not yet hashed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_hash: Option<String>,
+    /// Online turns: the provider's backend fingerprint, as it reported it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_fingerprint: Option<String>,
     pub thinking: Option<String>,
     pub tokens: Option<TokenUsage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -488,6 +497,7 @@ pub async fn record_transcript_entry(
         timestamp: now_micros(),
         model,
         model_hash,
+        provider_fingerprint: prov.provider_fingerprint,
         thinking,
         tokens,
         sources: prov.sources,
@@ -1087,6 +1097,7 @@ pub async fn get_conversation_transcript(
                     sequence: e.sequence,
                     timestamp: e.timestamp,
                     model_hash: e.model_hash,
+                    provider_fingerprint: e.provider_fingerprint,
                     model: e.model,
                     thinking: e.thinking,
                     tokens: e.tokens,
@@ -1188,6 +1199,7 @@ mod size_guard_tests {
         MessagePlain {
             role: "assistant".into(),
             model_hash: None,
+            provider_fingerprint: None,
             content: content.into(),
             sequence: 1,
             timestamp: 0,

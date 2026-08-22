@@ -75,6 +75,7 @@ export async function recordMessage(
     runtime?: { app_version: string; online: boolean; max_tokens?: number };
     routing_reason?: string;
     routing_task?: string;
+    provider_fingerprint?: string;
   },
   /** Agent turn extras: the working log (sanitized) + workspace folder.
    *  Client-side schema, encrypted before the zome sees it - no DNA change. */
