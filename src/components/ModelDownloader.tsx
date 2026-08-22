@@ -81,7 +81,47 @@ interface ActiveDownload {
   startedAt: number;
 }
 
-const ACTIVE_DOWNLOAD_KEY = 'activeModelDownload';
+/** In-flight downloads keyed by family id, persisted so the cards reattach
+ *  after navigating away. Several can run at once (the backend downloads
+ *  each file independently and reports progress per file). */
+const ACTIVE_DOWNLOADS_KEY = 'activeModelDownloads';
+/** The pre-0.5.2 single-slot record; folded into the map once, then gone. */
+const LEGACY_ACTIVE_DOWNLOAD_KEY = 'activeModelDownload';
+
+function readActiveDownloads(): Record<string, ActiveDownload> {
+  let map: Record<string, ActiveDownload> = {};
+  try {
+    map = JSON.parse(localStorage.getItem(ACTIVE_DOWNLOADS_KEY) || '{}') || {};
+  } catch {
+    map = {};
+  }
+  const legacy = localStorage.getItem(LEGACY_ACTIVE_DOWNLOAD_KEY);
+  if (legacy) {
+    try {
+      const a = JSON.parse(legacy) as ActiveDownload;
+      if (a?.familyId) map[a.familyId] = a;
+    } catch { /* unreadable - drop it */ }
+    localStorage.removeItem(LEGACY_ACTIVE_DOWNLOAD_KEY);
+  }
+  return map;
+}
+
+function writeActiveDownloads(map: Record<string, ActiveDownload>) {
+  if (Object.keys(map).length === 0) localStorage.removeItem(ACTIVE_DOWNLOADS_KEY);
+  else localStorage.setItem(ACTIVE_DOWNLOADS_KEY, JSON.stringify(map));
+}
+
+function rememberActiveDownload(a: ActiveDownload) {
+  const map = readActiveDownloads();
+  map[a.familyId] = a;
+  writeActiveDownloads(map);
+}
+
+function forgetActiveDownload(familyId: string) {
+  const map = readActiveDownloads();
+  delete map[familyId];
+  writeActiveDownloads(map);
+}
 
 // One finalize per file: the downloading path's own completion and the
 // resume path's listener can both fire for a single download (navigate
@@ -168,12 +208,12 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     betaFitOverride: false,
     engineBackend: '',
     systemInfoCopied: false,
-    downloading: null as string | null,
-    downloadProgress: null as DownloadProgress | null,
-    /** Which file of the download is in flight: the model, or the vision
-     *  projector that auto-follows a vision model. Drives the progress label
-     *  so the second file doesn't look like a stalled or repeated download. */
-    downloadStage: 'model' as 'model' | 'vision',
+    /** In-flight downloads keyed by family id ('custom' for a pasted URL).
+     *  Each card shows its own progress and only its own button locks -
+     *  downloads run side by side. `stage` says which file is in flight:
+     *  the model, or the vision projector that auto-follows a vision model
+     *  (so the second file doesn't read as a stalled or repeated download). */
+    downloads: {} as Record<string, { progress: DownloadProgress | null; stage: 'model' | 'vision' }>,
     error: null as string | null,
     modelsDirectory: '',
     successMessage: null as string | null,
@@ -362,7 +402,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
   });
 
   // Post-download setup: load model, update AIs if first model, show success
-  const finalizeDownload = $(async (filename: string, displayName: string, isFirstModel: boolean) => {
+  const finalizeDownload = $(async (familyId: string, filename: string, displayName: string, isFirstModel: boolean) => {
     if (finalizeInFlight.has(filename)) return;
     finalizeInFlight.add(filename);
     try {
@@ -394,9 +434,9 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
       }
     }
     localStorage.setItem('completedModelDownload', JSON.stringify({ modelName: displayName, timestamp: Date.now() }));
-    localStorage.removeItem(ACTIVE_DOWNLOAD_KEY);
-    store.downloading = null;
-    store.downloadProgress = null;
+    forgetActiveDownload(familyId);
+    const { [familyId]: _finished, ...stillRunning } = store.downloads;
+    store.downloads = stillRunning;
 
     setTimeout(() => { store.successMessage = null; }, 10000);
     } finally {
@@ -422,59 +462,54 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
       }
     }
 
-    // 2. Check if a download is still in progress (user navigated away mid-download)
-    const activeRaw = localStorage.getItem(ACTIVE_DOWNLOAD_KEY);
-    if (!activeRaw) return;
-
-    let active: ActiveDownload;
-    try {
-      active = JSON.parse(activeRaw);
-    } catch {
-      localStorage.removeItem(ACTIVE_DOWNLOAD_KEY);
-      return;
+    // 2. Reattach to downloads still in progress (user navigated away
+    //    mid-download). Stale records (older than 2 hours) are dropped.
+    const activeMap = readActiveDownloads();
+    const actives: ActiveDownload[] = [];
+    for (const a of Object.values(activeMap)) {
+      if (Date.now() - a.startedAt > 2 * 60 * 60 * 1000) forgetActiveDownload(a.familyId);
+      else actives.push(a);
     }
+    if (actives.length === 0) return;
 
-    // Stale check: if started more than 2 hours ago, assume it failed
-    if (Date.now() - active.startedAt > 2 * 60 * 60 * 1000) {
-      localStorage.removeItem(ACTIVE_DOWNLOAD_KEY);
-      return;
+    // Re-show each card's downloading state
+    const reattached: typeof store.downloads = {};
+    for (const a of actives) {
+      reattached[a.familyId] = { progress: null, stage: a.stage === 'vision' ? 'vision' : 'model' };
     }
+    store.downloads = { ...store.downloads, ...reattached };
+    const byFile = new Map(actives.map((a) => [a.filename, a]));
 
-    // Re-show downloading state
-    store.downloading = active.familyId;
-    store.downloadStage = active.stage === 'vision' ? 'vision' : 'model';
-
-    // Listen for progress events for this download
+    // Progress events are per file: route each to its card
     const unlistenProgress = listen<{ filename: string; downloaded: number; total: number; percent: number }>(
       'model-download-progress',
       (event) => {
-        if (event.payload.filename === active.filename) {
-          store.downloadProgress = event.payload;
-        }
+        const a = byFile.get(event.payload.filename);
+        if (!a) return;
+        const current = store.downloads[a.familyId];
+        if (!current) return;
+        store.downloads = { ...store.downloads, [a.familyId]: { ...current, progress: event.payload } };
       }
     );
 
-    // Listen for completion. Finalize with the MODEL file - during the vision
-    // stage `active.filename` is the projector, which must not be loaded as
-    // a chat model.
-    const modelFile = active.modelFilename ?? active.filename;
+    // Completion: finalize with the MODEL file - during the vision stage
+    // `filename` is the projector, which must not be loaded as a chat model.
     const unlistenComplete = listen<{ filename: string }>(
       'model-download-complete',
       (event) => {
-        if (event.payload.filename === active.filename) {
-          finalizeDownload(modelFile, active.familyName, active.isFirstModel);
-        }
+        const a = byFile.get(event.payload.filename);
+        if (a) finalizeDownload(a.familyId, a.modelFilename ?? a.filename, a.familyName, a.isFirstModel);
       }
     );
 
-    // Check if the file already appeared on disk (download finished while we
-    // were away). isModelDownloaded, not listModels: projectors are filtered
-    // out of the model list, so a finished vision stage would never match.
-    modelManager.isModelDownloaded(active.filename).then((alreadyDone) => {
-      if (alreadyDone) {
-        finalizeDownload(modelFile, active.familyName, active.isFirstModel);
-      }
-    });
+    // Files that already landed while we were away. isModelDownloaded, not
+    // listModels: projectors are filtered out of the model list, so a
+    // finished vision stage would never match.
+    for (const a of actives) {
+      modelManager.isModelDownloaded(a.filename).then((alreadyDone) => {
+        if (alreadyDone) finalizeDownload(a.familyId, a.modelFilename ?? a.filename, a.familyName, a.isFirstModel);
+      });
+    }
 
     cleanup(() => {
       unlistenProgress.then(fn => fn());
@@ -510,14 +545,15 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
       return;
     }
 
-    store.downloading = familyId;
+    // "First model" = nothing usable on disk and nothing else in flight -
+    // only the first download of a fresh install sets every AI's model.
+    const othersInFlight = Object.keys(store.downloads).length > 0;
+    store.downloads = { ...store.downloads, [familyId]: { progress: null, stage: 'model' } };
     store.error = null;
-    store.downloadProgress = null;
-    store.downloadStage = 'model';
     store.successMessage = null;
 
     const modelsBeforeDownload = await modelManager.listModels();
-    const isFirstModel = modelsBeforeDownload.length === 0;
+    const isFirstModel = modelsBeforeDownload.length === 0 && !othersInFlight;
     const displayName = `${family.name} ${variant.parameterCount}`;
 
     // Persist active download so it survives page navigation
@@ -528,11 +564,12 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
       isFirstModel,
       startedAt: Date.now(),
     };
-    localStorage.setItem(ACTIVE_DOWNLOAD_KEY, JSON.stringify(activeDownload));
+    rememberActiveDownload(activeDownload);
 
     try {
       await modelManager.downloadModel(variant.downloadUrl, variant.filename, (progress) => {
-        store.downloadProgress = progress;
+        const current = store.downloads[familyId];
+        store.downloads = { ...store.downloads, [familyId]: { stage: current?.stage ?? 'model', progress } };
       });
 
       // A vision model is only half-installed without its projector (the "eyes").
@@ -547,41 +584,37 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
         if (proj && !(await modelManager.isModelDownloaded(proj.filename))) {
           // Make the second file visible as its own stage - a fresh 0% bar
           // under the same name reads as a stalled or repeated download.
-          store.downloadStage = 'vision';
-          store.downloadProgress = null;
-          localStorage.setItem(
-            ACTIVE_DOWNLOAD_KEY,
-            JSON.stringify({
-              ...activeDownload,
-              stage: 'vision',
-              filename: proj.filename,
-              modelFilename: variant.filename,
-            } satisfies ActiveDownload),
-          );
+          store.downloads = { ...store.downloads, [familyId]: { progress: null, stage: 'vision' } };
+          rememberActiveDownload({
+            ...activeDownload,
+            stage: 'vision',
+            filename: proj.filename,
+            modelFilename: variant.filename,
+          } satisfies ActiveDownload);
           await modelManager.downloadModel(proj.downloadUrl, proj.filename, (progress) => {
-            store.downloadProgress = progress;
+            store.downloads = { ...store.downloads, [familyId]: { stage: 'vision', progress } };
           });
         }
       }
 
-      await finalizeDownload(variant.filename, displayName, isFirstModel);
+      await finalizeDownload(familyId, variant.filename, displayName, isFirstModel);
     } catch (error) {
       console.error('Download failed:', error);
       store.error = getUserFriendlyErrorMessage(error);
-      localStorage.removeItem(ACTIVE_DOWNLOAD_KEY);
-      store.downloading = null;
-      store.downloadProgress = null;
+      forgetActiveDownload(familyId);
+      const { [familyId]: _failed, ...stillRunning } = store.downloads;
+      store.downloads = stillRunning;
     }
   });
 
   const handleCustomModelDownload$ = $(async (downloadUrl: string, filename: string) => {
-    store.downloading = 'custom';
+    const othersInFlight = Object.keys(store.downloads).length > 0;
+    store.downloads = { ...store.downloads, custom: { progress: null, stage: 'model' } };
     store.error = null;
-    store.downloadProgress = null;
     store.successMessage = null;
 
     const modelsBeforeDownload = await modelManager.listModels();
-    const isFirstModel = modelsBeforeDownload.length === 0;
+    const isFirstModel = modelsBeforeDownload.length === 0 && !othersInFlight;
     const displayName = formatModelDisplayName(filename);
 
     const activeDownload: ActiveDownload = {
@@ -591,21 +624,21 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
       isFirstModel,
       startedAt: Date.now(),
     };
-    localStorage.setItem(ACTIVE_DOWNLOAD_KEY, JSON.stringify(activeDownload));
+    rememberActiveDownload(activeDownload);
 
     try {
       await modelManager.downloadModel(downloadUrl, filename, (progress) => {
-        store.downloadProgress = progress;
+        store.downloads = { ...store.downloads, custom: { stage: 'model', progress } };
       });
 
       store.customModelModalOpen = false;
-      await finalizeDownload(filename, displayName, isFirstModel);
+      await finalizeDownload('custom', filename, displayName, isFirstModel);
     } catch (error) {
       console.error('Custom model download failed:', error);
       store.error = getUserFriendlyErrorMessage(error);
-      localStorage.removeItem(ACTIVE_DOWNLOAD_KEY);
-      store.downloading = null;
-      store.downloadProgress = null;
+      forgetActiveDownload('custom');
+      const { custom: _failed, ...stillRunning } = store.downloads;
+      store.downloads = stillRunning;
     }
   });
 
@@ -886,7 +919,8 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     if (!selectedVariant) return null;
 
     const isDownloaded = downloadedFilenames.has(selectedVariant.filename);
-    const isDownloading = store.downloading === family.id;
+    const download = store.downloads[family.id];
+    const isDownloading = !!download;
     const isSuitable = isVariantSuitable(selectedVariant, totalRAM, totalVRAM, freeRAM);
     const runMode = getRunMode(selectedVariant, totalRAM, totalVRAM, freeRAM);
     const isExpanded = store.expandedDetails[family.id];
@@ -1125,26 +1159,26 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
               <div class="flex items-center gap-2 mb-2 justify-center">
                 <div class="w-4 h-4 border-2 border-[var(--text-primary)] border-t-transparent rounded-full animate-spin" />
                 <span class="text-sm text-[var(--text-primary)]">
-                  {store.downloadStage === 'vision'
+                  {download.stage === 'vision'
                     ? 'Downloading vision support...'
                     : 'Downloading...'}
                 </span>
               </div>
-              {store.downloadProgress && (
+              {download.progress && (
                 <div>
                   <div class="w-full bg-[var(--border-subtle)] rounded-full h-2 overflow-hidden mb-1">
                     <div
                       class="bg-blue-600 h-full transition-all duration-300"
-                      style={{ width: `${store.downloadProgress.percent}%` }}
+                      style={{ width: `${download.progress.percent}%` }}
                     />
                   </div>
                   <p class="text-xs text-[var(--text-muted)] text-center">
-                    {store.downloadProgress.percent}% •{' '}
-                    {modelManager.formatModelSize(store.downloadProgress.downloaded)}
+                    {download.progress.percent}% •{' '}
+                    {modelManager.formatModelSize(download.progress.downloaded)}
                   </p>
                 </div>
               )}
-              {store.downloadStage === 'vision' && (
+              {download.stage === 'vision' && (
                 <p class="text-xs text-[var(--text-muted)] text-center mt-1">
                   Model downloaded - now fetching the second, smaller file that
                   lets it read images.
@@ -1155,7 +1189,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
             <div class="flex justify-end">
               <LiquidMetalButton
                 onClick$={() => handleDownload$(family.id)}
-                disabled={(!isSuitable && !store.betaFitOverride) || store.downloading !== null}
+                disabled={(!isSuitable && !store.betaFitOverride) || isDownloading}
                 class="flex items-center gap-2 px-4 py-2 text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <LuHardDriveDownload class="w-4 h-4" />
@@ -1247,8 +1281,9 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
           <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4" onClick$={panelAction$}>
             {activityPicks.map((a) => {
               const { f, v } = a.pick!;
-              const downloaded = store.downloadedModels.some((m) => m.name === v.filename);
-              const inFlight = store.downloading === f.id;
+              const downloaded = downloadedFilenames.has(v.filename);
+              const pickDownload = store.downloads[f.id];
+              const inFlight = !!pickDownload;
               const isHealthChoice = store.medicalChoice === v.filename;
               return (
                 <div
@@ -1284,7 +1319,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                   )}
                   {inFlight && (
                     <p class="text-xs text-[var(--text-muted)] py-1.5 text-center">
-                      Downloading{store.downloadProgress ? ` - ${Math.round(store.downloadProgress.percent ?? 0)}%` : '..'}
+                      Downloading{pickDownload?.progress ? ` - ${Math.round(pickDownload.progress.percent ?? 0)}%` : '..'}
                     </p>
                   )}
                   {!store.loadingModels && downloaded && a.key !== 'medical' && (
@@ -1452,6 +1487,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                       <LuPauseCircle class="w-[18px] h-[18px]" />
                     )}
                   </LiquidMetalButton>
+                  )}
                   <LiquidMetalButton
                     variant="danger"
                     onClick$={() => handleDeleteClick$(model.name)}
@@ -1713,8 +1749,8 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
         isOpen={store.customModelModalOpen}
         onClose$={$(() => { store.customModelModalOpen = false; })}
         onDownload$={handleCustomModelDownload$}
-        isDownloading={store.downloading === 'custom'}
-        downloadProgress={store.downloading === 'custom' ? store.downloadProgress : null}
+        isDownloading={!!store.downloads['custom']}
+        downloadProgress={store.downloads['custom']?.progress ?? null}
       />
 
       {/* Publisher-terms agreement (required pass-through, e.g. HAI-DEF).
