@@ -33,6 +33,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - Several models can download at once, each card with its own progress
   and button. Starting a second download used to make the first card look
   idle.
+- A vision model is two files; the card now says which one is in flight
+  ("Downloading model · 1 of 2", then "Downloading vision support · 2 of
+  2"), shows downloaded of total, and the Download button states both
+  sizes up front ("3.2 GB + 0.9 GB vision") - the bar no longer looks
+  like it started over.
 
 ### Code in replies
 

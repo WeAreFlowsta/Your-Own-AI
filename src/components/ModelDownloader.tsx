@@ -123,6 +123,32 @@ function forgetActiveDownload(familyId: string) {
   writeActiveDownloads(map);
 }
 
+/** The vision projector that pairs with a model file (same filename-prefix
+ *  rule the loader uses), or undefined for models that do not see images. */
+function projectorFor(family: ModelFamily, variant: ModelVariant) {
+  if (!getModality(family).in.includes('vision')) return undefined;
+  const vlc = variant.filename.toLowerCase();
+  return VISION_PROJECTORS.find((p) => {
+    const key = p.filename.toLowerCase().split('-mmproj')[0];
+    return !!key && vlc.startsWith(key);
+  });
+}
+
+/** What a card says while it downloads. A vision model is two files; say
+ *  which one is in flight and count them, so the bar filling twice reads as
+ *  "1 of 2, then 2 of 2" instead of a download that started over. */
+function downloadLabel(
+  download: { progress: DownloadProgress | null; stage: 'model' | 'vision' } | undefined,
+  twoFiles: boolean,
+): string {
+  if (!download) return 'Downloading';
+  const pct = download.progress ? ` · ${Math.round(download.progress.percent ?? 0)}%` : '';
+  if (!twoFiles) return `Downloading${pct}`;
+  return download.stage === 'vision'
+    ? `Downloading vision support · 2 of 2${pct}`
+    : `Downloading model · 1 of 2${pct}`;
+}
+
 // One finalize per file: the downloading path's own completion and the
 // resume path's listener can both fire for a single download (navigate
 // away and back mid-download) - the duplicate must be a no-op.
@@ -575,12 +601,8 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
       // A vision model is only half-installed without its projector (the "eyes").
       // Pull the matching one too — paired by the same filename-prefix rule the
       // conductor uses — so "download a vision model" actually enables vision.
-      if (getModality(family).in.includes('vision')) {
-        const vlc = variant.filename.toLowerCase();
-        const proj = VISION_PROJECTORS.find((p) => {
-          const key = p.filename.toLowerCase().split('-mmproj')[0];
-          return !!key && vlc.startsWith(key);
-        });
+      {
+        const proj = projectorFor(family, variant);
         if (proj && !(await modelManager.isModelDownloaded(proj.filename))) {
           // Make the second file visible as its own stage - a fresh 0% bar
           // under the same name reads as a stalled or repeated download.
@@ -921,6 +943,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     const isDownloaded = downloadedFilenames.has(selectedVariant.filename);
     const download = store.downloads[family.id];
     const isDownloading = !!download;
+    const projector = projectorFor(family, selectedVariant);
     const isSuitable = isVariantSuitable(selectedVariant, totalRAM, totalVRAM, freeRAM);
     const runMode = getRunMode(selectedVariant, totalRAM, totalVRAM, freeRAM);
     const isExpanded = store.expandedDetails[family.id];
@@ -1159,9 +1182,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
               <div class="flex items-center gap-2 mb-2 justify-center">
                 <div class="w-4 h-4 border-2 border-[var(--text-primary)] border-t-transparent rounded-full animate-spin" />
                 <span class="text-sm text-[var(--text-primary)]">
-                  {download.stage === 'vision'
-                    ? 'Downloading vision support...'
-                    : 'Downloading...'}
+                  {downloadLabel(download, !!projector)}
                 </span>
               </div>
               {download.progress && (
@@ -1173,8 +1194,10 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                     />
                   </div>
                   <p class="text-xs text-[var(--text-muted)] text-center">
-                    {download.progress.percent}% •{' '}
                     {modelManager.formatModelSize(download.progress.downloaded)}
+                    {download.progress.total > 0
+                      ? ` of ${modelManager.formatModelSize(download.progress.total)}`
+                      : ''}
                   </p>
                 </div>
               )}
@@ -1193,9 +1216,9 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                 class="flex items-center gap-2 px-4 py-2 text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <LuHardDriveDownload class="w-4 h-4" />
-                {family.variants.length === 1
-                  ? `Download (${selectedVariant.size}GB)`
-                  : 'Download'}
+                {projector
+                  ? `Download (${selectedVariant.size} GB + ${projector.size} GB vision)`
+                  : `Download (${selectedVariant.size} GB)`}
               </LiquidMetalButton>
             </div>
           )}
@@ -1319,7 +1342,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                   )}
                   {inFlight && (
                     <p class="text-xs text-[var(--text-muted)] py-1.5 text-center">
-                      Downloading{pickDownload?.progress ? ` - ${Math.round(pickDownload.progress.percent ?? 0)}%` : '..'}
+                      {downloadLabel(pickDownload, !!projectorFor(f, v))}
                     </p>
                   )}
                   {!store.loadingModels && downloaded && a.key !== 'medical' && (
