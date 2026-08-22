@@ -1870,7 +1870,7 @@ pub async fn list_local_models(
             // and `size_label` as a fallback when the filename has no numeric
             // param tag (e.g. "E2B"/"E4B" names the filename parser can't read).
             let (mut param_size, mut quant) = parse_model_info(&filename);
-            if let Ok(meta) = crate::gguf::read_meta(&path) {
+            if let Some(meta) = &meta {
                 let gq = meta.quant_label();
                 if gq != "Unknown" {
                     quant = gq.to_string();
