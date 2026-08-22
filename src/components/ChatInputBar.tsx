@@ -4,6 +4,9 @@ import { AiSelector } from './AiSelector';
 import { ContentEditor } from './ContentEditor';
 import { ModelChip } from './ModelChip';
 import { LiquidMetalBorder } from './LiquidMetalBorder';
+import { Callout } from './Callout';
+import { ONLINE_UNLOCK_TIP_ID, clearOnlineUnlockPending, onlineUnlockPending } from '../utils/entitlement';
+import { isHelpDismissed } from '../utils/helpPrefs';
 
 interface ChatInputBarProps {
   input: Signal<string>;
@@ -56,9 +59,23 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
   // Background memory extraction after a turn: otherwise felt only as a
   // pause. A quiet hint in the Ask row while it runs.
   const remembering = useSignal(false);
+  // The moment a plan activates: entitlement.ts arms a pending unlock when
+  // the account goes from not-entitled to entitled; the tip sits right above
+  // the Ask row because the model chip there is the answer. Cleared when
+  // dismissed (Got it) or when the pending window lapses.
+  const onlineUnlocked = useSignal(false);
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(({ cleanup }) => {
     showModelChip.value = localStorage.getItem('showChatModelChip') !== 'false';
+    const checkUnlock = () => {
+      if (onlineUnlockPending() && isHelpDismissed(ONLINE_UNLOCK_TIP_ID)) {
+        clearOnlineUnlockPending();
+      }
+      onlineUnlocked.value = onlineUnlockPending();
+    };
+    checkUnlock();
+    window.addEventListener('entitlementChanged', checkUnlock);
+    window.addEventListener('helpTipsChanged', checkUnlock);
     const onSettings = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       if (detail && 'showChatModelChip' in detail) {
@@ -73,6 +90,8 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
     cleanup(() => {
       window.removeEventListener('settingsChanged', onSettings);
       window.removeEventListener('memoryExtractionChanged', onMemory);
+      window.removeEventListener('entitlementChanged', checkUnlock);
+      window.removeEventListener('helpTipsChanged', checkUnlock);
     });
   });
 
@@ -90,6 +109,24 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
 
   return (
     <div class="max-w-4xl mx-auto w-full">
+      {onlineUnlocked.value && (
+        <Callout intent="success" title="Your AIs can now go online" id={ONLINE_UNLOCK_TIP_ID} class="mb-3">
+          {showModelChip.value ? (
+            <>
+              Your plan is active. Tap the model chip at the end of the Ask row to
+              give this AI an online model, or let automatic routing use both online
+              and offline. The model line on every card in Your AIs switches too, and
+              Settings &gt; Routing decides when a question goes online.
+            </>
+          ) : (
+            <>
+              Your plan is active. Click the model line on any card in Your AIs to
+              give that AI an online model, or let automatic routing use both online
+              and offline. Settings &gt; Routing decides when a question goes online.
+            </>
+          )}
+        </Callout>
+      )}
       <div class={isBottomBar ? 'mb-2' : 'mb-3'}>
         <div class="flex items-center relative z-10">
           <span class="mr-2 text-[var(--text-primary)] text-xs sm:text-base">Ask</span>

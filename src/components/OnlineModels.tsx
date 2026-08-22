@@ -26,6 +26,7 @@ import {
 import LiquidMetalButton from './LiquidMetalButton';
 import { Callout } from './Callout';
 import { getPausedModels, setModelPaused } from '../utils/modelPrefs';
+import { noteEntitlement } from '../utils/entitlement';
 
 interface VaultStatus {
   installed: boolean;
@@ -143,6 +144,7 @@ export const OnlineModels = component$(() => {
       ]);
       store.vault = v;
       store.session = s;
+      noteEntitlement(s);
     } catch (e) {
       console.warn('[OnlineModels] status check failed:', e);
     }
@@ -168,6 +170,11 @@ export const OnlineModels = component$(() => {
       if (!store.session?.signed_in && !store.busy) refresh();
     }, 5000);
     cleanup(() => clearInterval(interval));
+    // A plan activated elsewhere (layout focus re-check, Settings) - swap
+    // the pitch for the model list without a manual refresh.
+    const onEntitlement = () => { if (!store.busy) void refresh(); };
+    window.addEventListener('entitlementChanged', onEntitlement);
+    cleanup(() => window.removeEventListener('entitlementChanged', onEntitlement));
   });
 
   const handleSignIn = $(async () => {
