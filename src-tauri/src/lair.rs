@@ -9,10 +9,9 @@
 
 use lair_keystore_api::prelude::*;
 use percent_encoding::percent_decode_str;
+use crate::process_ext::{SidecarChild, SidecarCommand};
 use std::io::Write;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
-use crate::process_ext::CommandExt;
 use std::sync::Arc;
 
 /// Start a lair-keystore process.
@@ -23,7 +22,7 @@ use std::sync::Arc;
 pub fn start_lair_process(
     lair_dir: &Path,
     passphrase: &str,
-) -> Result<(Child, String), String> {
+) -> Result<(SidecarChild, String), String> {
     std::fs::create_dir_all(lair_dir)
         .map_err(|e| format!("Failed to create lair directory: {}", e))?;
 
@@ -35,15 +34,11 @@ pub fn start_lair_process(
 
     if is_first_run {
         log::info!("First run: initializing lair-keystore...");
-        let mut child = Command::new(&lair_bin)
+        let mut child = SidecarCommand::new(&lair_bin)
             .arg("init")
             .arg("--piped")
             .current_dir(lair_dir)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .tie_to_parent()
-            .spawn_hidden()
+            .spawn()
             .map_err(|e| format!("Failed to spawn lair-keystore init: {}", e))?;
 
         if let Some(mut stdin) = child.stdin.take() {
@@ -73,15 +68,20 @@ pub fn start_lair_process(
 
     // Start the lair server.
     log::info!("Starting lair-keystore server...");
-    let mut child = Command::new(&lair_bin)
+    // Lair's own output goes to log files beside its store (it was a pipe
+    // nobody read before - a chatty lair could have stalled on a full pipe).
+    let mut cmd = SidecarCommand::new(&lair_bin)
         .arg("server")
         .arg("--piped")
-        .current_dir(lair_dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .tie_to_parent()
-        .spawn_hidden()
+        .current_dir(lair_dir);
+    if let Ok(f) = std::fs::File::create(lair_dir.join("lair-stdout.log")) {
+        cmd = cmd.stdout(f);
+    }
+    if let Ok(f) = std::fs::File::create(lair_dir.join("lair-stderr.log")) {
+        cmd = cmd.stderr(f);
+    }
+    let mut child = cmd
+        .spawn()
         .map_err(|e| format!("Failed to spawn lair-keystore server: {}", e))?;
 
     if let Some(mut stdin) = child.stdin.take() {

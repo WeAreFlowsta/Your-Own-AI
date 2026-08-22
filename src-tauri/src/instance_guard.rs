@@ -103,17 +103,41 @@ const SIDECAR_NAMES: &[&str] = &["llama-server", "yourowai-holochain", "yourowai
 
 /// Kill leftover processes from a dead session. Only runs once the caller
 /// holds (or is taking) the instance lock, which is what makes every match
-/// an orphan by definition:
+/// an orphan by definition. Repeats while it finds something: kills take a
+/// moment to land, and a launch that died mid-start may still have been
+/// spawning its sidecars during the first pass (stacked half-launches left
+/// several behind that a single pass missed).
+fn sweep_orphans(app: &AppHandle, include_same_exe: bool) {
+    for pass in 1..=3 {
+        let killed = sweep_orphans_once(app, include_same_exe);
+        if killed == 0 {
+            break;
+        }
+        log::info!("[instance] sweep pass {pass}: cleared {killed} orphan process(es)");
+        std::thread::sleep(Duration::from_millis(700));
+    }
+}
+
+/// One sweep pass. A process is an orphan when:
 /// - `same_exe`: another copy of our own executable (only when taking over
 ///   from a zombie - a healthy second launch exits itself via the probe).
 /// - release builds: a bundled sidecar (by name, next to the exe) or
 ///   anything under the downloaded engines dir (that dir is only ours).
 ///   Skipped in dev, where sidecars run from paths a dev controls.
-fn sweep_orphans(app: &AppHandle, include_same_exe: bool) {
+/// - release builds: a sidecar-named process whose PARENT is a copy of our
+///   executable that is not this process (a dead or dying earlier launch),
+///   or - for the two binaries that carry our own name - whose parent is
+///   gone. This is the case the path rules miss: the executable path of a
+///   process mid-teardown or from another session can be unreadable.
+fn sweep_orphans_once(app: &AppHandle, include_same_exe: bool) -> u32 {
     use sysinfo::{ProcessRefreshKind, RefreshKind, System, UpdateKind};
 
     let me = std::process::id();
     let my_exe = std::env::current_exe().ok();
+    let my_exe_name = my_exe
+        .as_ref()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().to_lowercase());
     let exe_dir = my_exe
         .as_ref()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()));
@@ -123,39 +147,84 @@ fn sweep_orphans(app: &AppHandle, include_same_exe: bool) {
         RefreshKind::nothing()
             .with_processes(ProcessRefreshKind::nothing().with_exe(UpdateKind::Always)),
     );
+    let procs = sys.processes();
+    // A process's name without the Windows extension, lower-case.
+    let stem_of = |name: &std::ffi::OsStr| -> String {
+        let n = name.to_string_lossy().to_lowercase();
+        n.strip_suffix(".exe").map(str::to_string).unwrap_or(n)
+    };
+    let is_our_app_name = |pid: &sysinfo::Pid| -> bool {
+        procs
+            .get(pid)
+            .map(|p| Some(p.name().to_string_lossy().to_lowercase()) == my_exe_name)
+            .unwrap_or(false)
+    };
+
     let mut killed = 0u32;
-    for (pid, proc_) in sys.processes() {
+    let mut unreadable = 0u32;
+    for (pid, proc_) in procs {
         if pid.as_u32() == me {
             continue;
         }
-        let Some(exe) = proc_.exe() else { continue };
-        let same_exe = my_exe.as_deref() == Some(exe);
-        let sidecar_name = exe
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .map(|n| SIDECAR_NAMES.contains(&n))
+        let name_stem = stem_of(proc_.name());
+        let sidecar_by_name = SIDECAR_NAMES.contains(&name_stem.as_str());
+        // Parent state: our own exe (and not us) = a stacked launch's child;
+        // missing = the launch that spawned it is gone.
+        let parent = proc_.parent();
+        let parent_is_other_launch = parent
+            .map(|pp| pp.as_u32() != me && is_our_app_name(&pp))
             .unwrap_or(false);
-        let in_install = !cfg!(debug_assertions)
-            && sidecar_name
-            && exe_dir.as_deref().map(|d| exe.starts_with(d)).unwrap_or(false);
-        let in_engines = !cfg!(debug_assertions)
-            && engines_dir
-                .as_deref()
-                .map(|d| exe.starts_with(d))
-                .unwrap_or(false);
-        if (same_exe && include_same_exe) || in_install || in_engines {
+        let parent_gone = parent.map(|pp| !procs.contains_key(&pp)).unwrap_or(true);
+        let ours_by_name = name_stem.starts_with("yourowai-");
+
+        let (same_exe, in_install, in_engines) = match proc_.exe() {
+            Some(exe) => {
+                let same_exe = my_exe.as_deref() == Some(exe);
+                let sidecar_name = exe
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(|n| SIDECAR_NAMES.contains(&n))
+                    .unwrap_or(false);
+                let in_install = !cfg!(debug_assertions)
+                    && sidecar_name
+                    && exe_dir.as_deref().map(|d| exe.starts_with(d)).unwrap_or(false);
+                let in_engines = !cfg!(debug_assertions)
+                    && engines_dir
+                        .as_deref()
+                        .map(|d| exe.starts_with(d))
+                        .unwrap_or(false);
+                (same_exe, in_install, in_engines)
+            }
+            None => {
+                if sidecar_by_name {
+                    unreadable += 1;
+                }
+                (false, false, false)
+            }
+        };
+        let stacked_sidecar = !cfg!(debug_assertions)
+            && sidecar_by_name
+            && (parent_is_other_launch || (ours_by_name && parent_gone));
+        if (same_exe && include_same_exe) || in_install || in_engines || stacked_sidecar {
             log::warn!(
-                "[instance] killing orphan process {} (pid {})",
-                exe.display(),
-                pid
+                "[instance] killing orphan process {} (pid {}{})",
+                proc_
+                    .exe()
+                    .map(|e| e.display().to_string())
+                    .unwrap_or_else(|| name_stem.clone()),
+                pid,
+                if stacked_sidecar { ", from an earlier launch" } else { "" }
             );
             proc_.kill();
             killed += 1;
         }
     }
-    if killed > 0 {
-        log::info!("[instance] cleared {killed} orphan process(es) from a previous session");
+    if unreadable > 0 {
+        log::info!(
+            "[instance] {unreadable} sidecar-named process(es) had no readable path; judged by parent"
+        );
     }
+    killed
 }
 
 fn show_already_running(app: &AppHandle) {

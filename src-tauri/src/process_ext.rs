@@ -1,54 +1,52 @@
-//! Cross-platform helpers for spawning child processes that are tied to the
-//! lifetime of the parent vault process and (on Windows) don't pop up a
-//! console window.
+//! Cross-platform helpers for spawning the sidecar processes (lair-keystore,
+//! the holochain conductor) so that they are tied to the lifetime of the app
+//! process and never show a console window.
 //!
-//! Without `tie_to_parent`, lair-keystore and the holochain conductor outlive
-//! the vault when the vault is killed (SIGKILL, OOM, dev-mode reload, dpkg
-//! upgrade, …) and hold the conductor admin-WS port, blocking the next
-//! launch.
-//!
-//! Without `spawn_hidden`, on Windows every Vault launch flashes two terminal
-//! windows (lair-keystore.exe + holochain.exe) - visually unprofessional and
-//! confusing for end users.
+//! Without the lifetime tie, lair-keystore and the conductor outlive the
+//! app when it is killed (SIGKILL, OOM, dev-mode reload, package upgrade,
+//! crash) and hold the conductor admin-WS port, blocking the next launch.
 //!
 //! Linux: `prctl(PR_SET_PDEATHSIG, SIGTERM)`.
-//! Windows: post-spawn `EnumWindows` + `ShowWindow(SW_HIDE)` for the new
-//! process's top-level console windows.
+//! Windows: a kill-on-close Job Object (the app owns the only handle), and
+//! the console window is CREATED hidden - see below.
 //! macOS: no-op for now. Clean exits work via `RunEvent::Exit`; abnormal
-//! terminations on macOS / Windows can still leak children. Job Objects
-//! (Windows) and kqueue (macOS) remain TODO.
+//! terminations can still leak children. kqueue remains TODO.
 //!
-//! ## Why post-spawn hide instead of `CREATE_NO_WINDOW`
+//! ## Windows: why a raw `CreateProcessW` with `SW_HIDE`
 //!
-//! v0.5.0 set `CREATE_NO_WINDOW` (0x08000000) on Windows to suppress the
-//! console windows. That flag does more than hide the window - it prevents
-//! Windows from allocating a console handle at all. `holochain.exe` then
-//! crashed with `0xc0000005` access violation in `MSVCP140.dll` during
-//! signing-DNA WASM compilation, because LLVM/cranelift's stdio path
-//! dereferences the (null) console handle. v0.5.1 reverted to default flags
-//! to restore reliable installs but at the cost of visible terminals.
+//! The sidecars are console programs; the app is a GUI process, so each
+//! spawn allocates a fresh console. Three ways to keep it off the screen:
 //!
-//! v0.5.2's approach: spawn normally so the console is allocated and
-//! handles work, then enumerate the new process's top-level windows and
-//! `ShowWindow(SW_HIDE)` each one. There's a brief flash (~50ms) while we
-//! find and hide the window, but no crashes. The polled hide thread retries
-//! for up to 2 seconds, so even if the window appears late we still catch
-//! it. To eliminate the flash entirely, a future change could spawn with
-//! `CREATE_SUSPENDED` via raw `CreateProcessW`, hide the window, then
-//! `ResumeThread` - much more invasive and not necessary for the MVP.
+//! - `CREATE_NO_WINDOW` (0.5.0): the child gets no usable console handles at
+//!   all. `holochain.exe` then died with an access violation in MSVCP140
+//!   during WASM compilation - its stdio path dereferences the null handle.
+//! - Post-spawn `ShowWindow(SW_HIDE)` polling (0.5.1): works, but the
+//!   console exists visibly for a moment, and on machines where Windows
+//!   Terminal is the default terminal the new console is handed off to WT -
+//!   which, if the app dies mid-spawn, leaves the user a WT error dialog
+//!   ("error 0x800700e8 when launching ...lair-keystore.exe") that reads
+//!   like a lair failure and is not one. Seen on two installs.
+//! - `STARTF_USESHOWWINDOW` + `SW_HIDE` in the `STARTUPINFO` (this module):
+//!   the console is allocated normally - every handle valid - and its window
+//!   is created hidden; the console host skips the terminal handoff for a
+//!   window that starts hidden. No flash, no dialog, no null handles.
+//!   `std::process::Command` cannot set `wShowWindow` on stable Rust, so the
+//!   Windows spawn is a small `CreateProcessW` wrapper with its own pipes.
+//!
+//! The post-spawn hide threads are kept as a second line: they cost nothing
+//! and log what they find, which is how the field cases were read.
 
+use std::ffi::OsString;
+use std::fs::File;
 use std::io;
-use std::process::{Child, Command};
+use std::path::PathBuf;
+use std::process::Command;
 
 pub trait CommandExt {
-    /// Configure the child to be managed as a vault sidecar:
+    /// Configure the child to be managed as a sidecar:
     /// - Linux: kernel sends `SIGTERM` when the parent dies.
-    /// - Windows / macOS: no-op for now.
+    /// - Windows / macOS: no-op (Windows uses the job object at spawn).
     fn tie_to_parent(&mut self) -> &mut Self;
-
-    /// Spawn the child, then on Windows asynchronously hide its console
-    /// window. On other platforms, identical to `spawn()`.
-    fn spawn_hidden(&mut self) -> io::Result<Child>;
 }
 
 impl CommandExt for Command {
@@ -74,32 +72,124 @@ impl CommandExt for Command {
     fn tie_to_parent(&mut self) -> &mut Self {
         self
     }
+}
 
-    #[cfg(target_os = "windows")]
-    fn spawn_hidden(&mut self) -> io::Result<Child> {
-        let child = self.spawn()?;
-        let pid = child.id();
-        // Tie the sidecar to a kill-on-close Job Object so it dies when THIS
-        // app process exits - clean quit, crash, or force-kill. Windows has no
-        // PR_SET_PDEATHSIG equivalent, so without this the conductor/lair
-        // children orphan on app close, leaving their console windows open and
-        // their admin ports + lair sockets locked. For the Vault this matters
-        // more than for client apps: the conductor watchdog restarts on
-        // failure, so orphans multiply during instability and can crash-loop
-        // the conductor.
-        win_job::assign_to_kill_on_close_job(&child);
-        log::info!("[hide] spawned child pid {pid}, dispatching async hide thread");
-        windows_hide::hide_console_for_pid_async(pid);
-        // Hide our sidecars' console-host windows (Windows Terminal / conhost)
-        // by title, and log the result so we can confirm they're hidden.
-        windows_hide::start_window_manager_once();
-        Ok(child)
+/// A sidecar spawn: program + args + working dir, stdin always piped (the
+/// passphrase goes down it), stdout/stderr to the given files or discarded.
+/// `spawn` yields a [`SidecarChild`] with the same small surface on every
+/// platform: `stdin`, `id`, `try_wait`, `wait`, `kill`.
+pub struct SidecarCommand {
+    program: PathBuf,
+    args: Vec<OsString>,
+    cwd: Option<PathBuf>,
+    stdout: Option<File>,
+    stderr: Option<File>,
+}
+
+impl SidecarCommand {
+    pub fn new(program: impl Into<PathBuf>) -> Self {
+        Self {
+            program: program.into(),
+            args: Vec::new(),
+            cwd: None,
+            stdout: None,
+            stderr: None,
+        }
+    }
+
+    pub fn arg(mut self, a: impl Into<OsString>) -> Self {
+        self.args.push(a.into());
+        self
+    }
+
+    pub fn current_dir(mut self, d: impl Into<PathBuf>) -> Self {
+        self.cwd = Some(d.into());
+        self
+    }
+
+    /// Where the child's stdout goes (a log file). Default: discarded.
+    pub fn stdout(mut self, f: File) -> Self {
+        self.stdout = Some(f);
+        self
+    }
+
+    /// Where the child's stderr goes (a log file). Default: discarded.
+    pub fn stderr(mut self, f: File) -> Self {
+        self.stderr = Some(f);
+        self
     }
 
     #[cfg(not(target_os = "windows"))]
-    fn spawn_hidden(&mut self) -> io::Result<Child> {
-        self.spawn()
+    pub fn spawn(self) -> io::Result<SidecarChild> {
+        use std::process::Stdio;
+        let mut cmd = Command::new(&self.program);
+        cmd.args(&self.args)
+            .stdin(Stdio::piped())
+            .stdout(self.stdout.map(Stdio::from).unwrap_or_else(Stdio::null))
+            .stderr(self.stderr.map(Stdio::from).unwrap_or_else(Stdio::null));
+        if let Some(d) = &self.cwd {
+            cmd.current_dir(d);
+        }
+        cmd.tie_to_parent().spawn()
     }
+
+    #[cfg(target_os = "windows")]
+    pub fn spawn(self) -> io::Result<SidecarChild> {
+        let child = win_spawn::spawn(self)?;
+        let pid = child.id();
+        log::info!("[hide] spawned child pid {pid} with a hidden console; dispatching hide thread");
+        windows_hide::hide_console_for_pid_async(pid);
+        windows_hide::start_window_manager_once();
+        Ok(child)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub type SidecarChild = std::process::Child;
+
+#[cfg(target_os = "windows")]
+pub use win_spawn::SidecarChild;
+
+/// Quote one argument for a Windows command line so that the child's
+/// `CommandLineToArgvW` / CRT parsing yields exactly the original string
+/// (the rules: quote when there is whitespace or a quote; backslashes are
+/// literal except immediately before a quote, where they double).
+/// Platform-independent so the rule is unit-tested everywhere.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn quote_windows_arg(arg: &str) -> String {
+    let needs_quotes = arg.is_empty()
+        || arg
+            .chars()
+            .any(|c| matches!(c, ' ' | '\t' | '\n' | '\u{0b}' | '"'));
+    if !needs_quotes {
+        return arg.to_string();
+    }
+    let mut out = String::with_capacity(arg.len() + 2);
+    out.push('"');
+    let chars: Vec<char> = arg.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let mut backslashes = 0;
+        while i < chars.len() && chars[i] == '\\' {
+            backslashes += 1;
+            i += 1;
+        }
+        if i == chars.len() {
+            // Trailing backslashes: double them so the closing quote stays a quote.
+            out.extend(std::iter::repeat('\\').take(backslashes * 2));
+            break;
+        }
+        if chars[i] == '"' {
+            out.extend(std::iter::repeat('\\').take(backslashes * 2 + 1));
+            out.push('"');
+        } else {
+            out.extend(std::iter::repeat('\\').take(backslashes));
+            out.push(chars[i]);
+        }
+        i += 1;
+    }
+    out.push('"');
+    out
 }
 
 /// Terminate a process by PID, platform-correct. `kill` does not exist on
@@ -123,17 +213,257 @@ pub fn stop_pid(pid: u32) {
 }
 
 #[cfg(target_os = "windows")]
+mod win_spawn {
+    //! `CreateProcessW` with the console window created hidden
+    //! (`STARTF_USESHOWWINDOW` + `SW_HIDE`), stdin piped to us, stdout and
+    //! stderr to inheritable file handles (or NUL). The child is assigned to
+    //! the kill-on-close job right after creation.
+    use super::SidecarCommand;
+    use std::fs::File;
+    use std::io;
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle};
+    use std::os::windows::process::ExitStatusExt;
+    use std::process::ExitStatus;
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, DuplicateHandle, SetHandleInformation, DUPLICATE_SAME_ACCESS, HANDLE,
+        HANDLE_FLAG_INHERIT, WAIT_OBJECT_0,
+    };
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::System::Pipes::CreatePipe;
+    use windows_sys::Win32::System::Threading::{
+        CreateProcessW, GetCurrentProcess, GetExitCodeProcess, TerminateProcess,
+        WaitForSingleObject, INFINITE, PROCESS_INFORMATION, STARTF_USESHOWWINDOW,
+        STARTF_USESTDHANDLES, STARTUPINFOW,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
+
+    /// A spawned sidecar on Windows. Mirrors the bits of `std::process::Child`
+    /// the conductor code uses.
+    pub struct SidecarChild {
+        pid: u32,
+        /// Process handle (owned; closed on drop). Stored as usize so the
+        /// struct is Send without a wrapper.
+        process: usize,
+        /// Our end of the child's stdin pipe.
+        pub stdin: Option<File>,
+        status: Option<ExitStatus>,
+    }
+
+    impl SidecarChild {
+        pub fn id(&self) -> u32 {
+            self.pid
+        }
+
+        fn handle(&self) -> HANDLE {
+            self.process as HANDLE
+        }
+
+        fn exit_status(&self) -> io::Result<ExitStatus> {
+            let mut code: u32 = 0;
+            // SAFETY: valid process handle, out-pointer to a u32.
+            if unsafe { GetExitCodeProcess(self.handle(), &mut code) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(ExitStatus::from_raw(code))
+        }
+
+        /// Has the child exited? Non-blocking.
+        pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+            if let Some(s) = self.status {
+                return Ok(Some(s));
+            }
+            // SAFETY: valid process handle; zero timeout = poll.
+            let r = unsafe { WaitForSingleObject(self.handle(), 0) };
+            if r == WAIT_OBJECT_0 {
+                let s = self.exit_status()?;
+                self.status = Some(s);
+                Ok(Some(s))
+            } else {
+                Ok(None)
+            }
+        }
+
+        /// Block until the child exits.
+        pub fn wait(&mut self) -> io::Result<ExitStatus> {
+            if let Some(s) = self.status {
+                return Ok(s);
+            }
+            // Closing our stdin end first so a child reading stdin to EOF
+            // can finish (std::process::Child does the same).
+            drop(self.stdin.take());
+            // SAFETY: valid process handle.
+            unsafe { WaitForSingleObject(self.handle(), INFINITE) };
+            let s = self.exit_status()?;
+            self.status = Some(s);
+            Ok(s)
+        }
+
+        /// Terminate the child (no-op if it already exited).
+        pub fn kill(&mut self) -> io::Result<()> {
+            if self.try_wait()?.is_some() {
+                return Ok(());
+            }
+            // SAFETY: valid process handle.
+            if unsafe { TerminateProcess(self.handle(), 1) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        }
+    }
+
+    impl Drop for SidecarChild {
+        fn drop(&mut self) {
+            // SAFETY: we own this handle; close exactly once.
+            unsafe {
+                CloseHandle(self.handle());
+            }
+        }
+    }
+
+    fn wide(s: &std::ffi::OsStr) -> Vec<u16> {
+        s.encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    /// An inheritable duplicate of `h` (the child gets the copy; the
+    /// original stays ours and non-inheritable).
+    fn inheritable_dup(h: HANDLE) -> io::Result<HANDLE> {
+        let mut out: HANDLE = std::ptr::null_mut();
+        // SAFETY: handles are valid for this process; out-pointer valid.
+        let ok = unsafe {
+            DuplicateHandle(
+                GetCurrentProcess(),
+                h,
+                GetCurrentProcess(),
+                &mut out,
+                0,
+                1, // bInheritHandle
+                DUPLICATE_SAME_ACCESS,
+            )
+        };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(out)
+    }
+
+    /// The child's stdout/stderr: the given file, or NUL.
+    fn out_handle(f: Option<File>) -> io::Result<(HANDLE, File)> {
+        let file = match f {
+            Some(f) => f,
+            None => File::create("NUL")?,
+        };
+        let dup = inheritable_dup(file.as_raw_handle() as HANDLE)?;
+        Ok((dup, file))
+    }
+
+    pub fn spawn(cmd: SidecarCommand) -> io::Result<SidecarChild> {
+        // stdin pipe: the child reads the inheritable end, we keep the
+        // writer and make sure it is NOT inherited (else the child never
+        // sees EOF on it).
+        let mut sa: SECURITY_ATTRIBUTES = unsafe { std::mem::zeroed() };
+        sa.nLength = std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32;
+        sa.bInheritHandle = 1;
+        let mut stdin_read: HANDLE = std::ptr::null_mut();
+        let mut stdin_write: HANDLE = std::ptr::null_mut();
+        // SAFETY: out-pointers valid; sa fully initialized.
+        if unsafe { CreatePipe(&mut stdin_read, &mut stdin_write, &sa, 0) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: valid handle.
+        unsafe { SetHandleInformation(stdin_write, HANDLE_FLAG_INHERIT, 0) };
+        // Own the writer as a File from here on (closed on every error path).
+        let stdin_file = unsafe { File::from_raw_handle(stdin_write as RawHandle) };
+
+        let (stdout_h, _stdout_keep) = match out_handle(cmd.stdout) {
+            Ok(v) => v,
+            Err(e) => {
+                unsafe { CloseHandle(stdin_read) };
+                return Err(e);
+            }
+        };
+        let (stderr_h, _stderr_keep) = match out_handle(cmd.stderr) {
+            Ok(v) => v,
+            Err(e) => {
+                unsafe {
+                    CloseHandle(stdin_read);
+                    CloseHandle(stdout_h);
+                }
+                return Err(e);
+            }
+        };
+
+        // Command line: quoted program + quoted args.
+        let mut line = super::quote_windows_arg(&cmd.program.to_string_lossy());
+        for a in &cmd.args {
+            line.push(' ');
+            line.push_str(&super::quote_windows_arg(&a.to_string_lossy()));
+        }
+        let mut line_w = wide(std::ffi::OsStr::new(&line));
+        let program_w = wide(cmd.program.as_os_str());
+        let cwd_w = cmd.cwd.as_ref().map(|d| wide(d.as_os_str()));
+
+        let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
+        si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+        si.dwFlags = STARTF_USESHOWWINDOW | STARTF_USESTDHANDLES;
+        si.wShowWindow = SW_HIDE as u16;
+        si.hStdInput = stdin_read;
+        si.hStdOutput = stdout_h;
+        si.hStdError = stderr_h;
+        let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+
+        // SAFETY: all pointers reference live, NUL-terminated buffers /
+        // initialized structs for the duration of the call; handles valid.
+        let ok = unsafe {
+            CreateProcessW(
+                program_w.as_ptr(),
+                line_w.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1, // bInheritHandles: the three std handles above
+                0, // no creation flags: a normal console, created hidden via si
+                std::ptr::null(),
+                cwd_w.as_ref().map(|w| w.as_ptr()).unwrap_or(std::ptr::null()),
+                &si,
+                &mut pi,
+            )
+        };
+        let spawn_err = if ok == 0 { Some(io::Error::last_os_error()) } else { None };
+
+        // The child holds its own copies now; ours go regardless of outcome.
+        // SAFETY: each handle closed exactly once.
+        unsafe {
+            CloseHandle(stdin_read);
+            CloseHandle(stdout_h);
+            CloseHandle(stderr_h);
+        }
+        if let Some(e) = spawn_err {
+            return Err(e);
+        }
+        // SAFETY: pi is populated on success; the thread handle is not needed.
+        unsafe { CloseHandle(pi.hThread) };
+
+        super::win_job::assign_to_kill_on_close_job(pi.hProcess, pi.dwProcessId);
+
+        Ok(SidecarChild {
+            pid: pi.dwProcessId,
+            process: pi.hProcess as usize,
+            stdin: Some(stdin_file),
+            status: None,
+        })
+    }
+}
+
+#[cfg(target_os = "windows")]
 mod win_job {
     //! Kill-on-close Job Object: the Windows stand-in for Linux's
     //! `PR_SET_PDEATHSIG`. Every sidecar (`yourowai-holochain`,
-    //! `yourowai-lair-keystore`, `llama-server`) is assigned to one process-wide job that has
+    //! `yourowai-lair-keystore`) is assigned to one process-wide job that has
     //! `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. The app process owns the only
     //! handle to that job, so when it exits - gracefully, by crash, or by
     //! Task Manager - Windows closes the handle and terminates every process
     //! still in the job. No more orphaned conductors holding ports/sockets and
     //! leaving console windows open.
-    use std::os::windows::io::AsRawHandle;
-    use std::process::Child;
     use std::sync::OnceLock;
     use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::System::JobObjects::{
@@ -142,9 +472,9 @@ mod win_job {
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
 
-    // Stored as isize so the HANDLE is Send + Sync inside the static. Created
+    // Stored as usize so the HANDLE is Send + Sync inside the static. Created
     // once, lazily; reused for every sidecar.
-    static JOB: OnceLock<isize> = OnceLock::new();
+    static JOB: OnceLock<usize> = OnceLock::new();
 
     fn job_handle() -> HANDLE {
         let h = *JOB.get_or_init(|| unsafe {
@@ -164,21 +494,21 @@ mod win_job {
             {
                 log::error!("[job] SetInformationJobObject(KILL_ON_JOB_CLOSE) failed");
             }
-            job as isize
+            job as usize
         });
         h as HANDLE
     }
 
-    pub(super) fn assign_to_kill_on_close_job(child: &Child) {
+    pub(super) fn assign_to_kill_on_close_job(process: HANDLE, pid: u32) {
         let job = job_handle();
         if job.is_null() {
             return;
         }
         unsafe {
-            if AssignProcessToJobObject(job, child.as_raw_handle() as HANDLE) == 0 {
+            if AssignProcessToJobObject(job, process) == 0 {
                 log::warn!(
                     "[job] failed to assign pid {} to kill-on-close job (orphan possible)",
-                    child.id(),
+                    pid,
                 );
             }
         }
@@ -615,5 +945,27 @@ mod windows_hide {
                 logged_via_parent_class,
             );
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::quote_windows_arg;
+
+    /// The rules a Windows child's argv parser applies, so a config path
+    /// under "C:\Users\Chris\Your Own AI\..." arrives intact.
+    #[test]
+    fn windows_quoting_rules() {
+        assert_eq!(quote_windows_arg("--piped"), "--piped");
+        assert_eq!(quote_windows_arg(""), "\"\"");
+        assert_eq!(
+            quote_windows_arg(r"C:\Users\Chris\Your Own AI\conductor-config.yaml"),
+            "\"C:\\Users\\Chris\\Your Own AI\\conductor-config.yaml\""
+        );
+        // A trailing backslash inside quotes doubles.
+        assert_eq!(quote_windows_arg(r"C:\Program Files\"), "\"C:\\Program Files\\\\\"");
+        // An embedded quote is escaped, along with the backslashes before it.
+        assert_eq!(quote_windows_arg(r#"a\"b"#), "\"a\\\\\\\"b\"");
+        assert_eq!(quote_windows_arg(r#"say "hi""#), "\"say \\\"hi\\\"\"");
     }
 }

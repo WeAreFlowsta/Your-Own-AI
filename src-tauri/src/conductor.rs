@@ -5,10 +5,9 @@
 //! (no DHT networking, no migration clients).
 
 use crate::lair;
-use crate::process_ext::CommandExt;
+use crate::process_ext::{SidecarChild, SidecarCommand};
 use lair_keystore_api::prelude::LairClient;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Stdio};
 use tauri::Emitter;
 
 /// Admin WebSocket port for the local Holochain conductor.
@@ -17,8 +16,8 @@ pub const ADMIN_WS_PORT: u16 = 4477;
 
 /// Handle to a running conductor + lair-keystore pair.
 pub struct ConductorHandle {
-    pub lair_child: Child,
-    pub conductor_child: Child,
+    pub lair_child: SidecarChild,
+    pub conductor_child: SidecarChild,
     pub admin_port: u16,
     pub app_port: u16,
 }
@@ -128,7 +127,7 @@ fn start_conductor_process(
     config_path: &Path,
     conductor_dir: &Path,
     passphrase: &str,
-) -> Result<Child, String> {
+) -> Result<SidecarChild, String> {
     log::info!("Starting holochain conductor...");
 
     let stdout_path = conductor_dir.join("holochain-stdout.log");
@@ -142,15 +141,13 @@ fn start_conductor_process(
     let holochain_bin = crate::resolve_sidecar_bin("yourowai-holochain");
     log::info!("Using holochain binary: {:?}", holochain_bin);
 
-    let mut child = std::process::Command::new(&holochain_bin)
+    let mut child = SidecarCommand::new(&holochain_bin)
         .arg("-c")
         .arg(config_path)
         .arg("--piped")
-        .stdin(Stdio::piped())
         .stdout(stdout_file)
         .stderr(stderr_file)
-        .tie_to_parent()
-        .spawn_hidden()
+        .spawn()
         .map_err(|e| format!("Failed to spawn holochain conductor: {}", e))?;
 
     if let Some(mut stdin) = child.stdin.take() {
@@ -196,7 +193,7 @@ fn read_conductor_logs(conductor_dir: &Path) -> String {
 async fn wait_for_admin_ws(
     port: u16,
     timeout_secs: u64,
-    conductor_child: &mut Child,
+    conductor_child: &mut SidecarChild,
     conductor_dir: &Path,
 ) -> Result<(), String> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
