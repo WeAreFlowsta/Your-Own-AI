@@ -876,25 +876,6 @@ pub async fn cell_lineage_report(
     }))
 }
 
-/// Phase B of cell-lineage recovery: disable the empty zombie cells the
-/// census identifies (reversible; data-bearing and link cells stay).
-/// Writes cell-cleanup-report.json beside the census report.
-#[tauri::command]
-pub async fn cell_cleanup(
-    app: tauri::AppHandle,
-    hc_state: State<'_, Arc<HolochainState>>,
-) -> Result<serde_json::Value, String> {
-    // DISARMED 2026-08-19 night: the census this relied on counted
-    // conversations inside the records-warmup window (cells answer empty
-    // before their records load), and disabling lineage links severs
-    // history lookup. It disabled cells holding real conversations and
-    // had to be undone live. Do not re-arm until the census verifies
-    // per-cell WARMTH and lineage walking is re-based on list_apps.
-    // (CELL_LINEAGE_RECOVERY.md has the rework spec.)
-    let _ = (app, hc_state);
-    Err("Records tidying is disabled in this build.".into())
-}
-
 /// Is the conductor up? The transcript surface reads empty during startup,
 /// which is indistinguishable from "no conversations" - callers that would
 /// show an empty state poll this first and keep their spinner up instead.
