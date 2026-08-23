@@ -20,7 +20,11 @@ const NON_CHAT_MODEL_FILES = new Set<string>([
   ...(OCR_MODELS.files?.map((f) => f.filename) ?? [OCR_MODELS.filename]),
 ]);
 const isNonChatModel = (name: string): boolean =>
-  NON_CHAT_MODEL_FILES.has(name) || /mmproj/i.test(name) || /\.rten$/i.test(name);
+  NON_CHAT_MODEL_FILES.has(name) ||
+  /mmproj/i.test(name) ||
+  /\.rten$/i.test(name) ||
+  // Speed-up files (speculative-decoding drafts) ride beside their model.
+  /^(mtp|dspark|dflash|eagle3|draft)-/i.test(name);
 
 export interface DownloadProgress {
   filename: string;
@@ -85,6 +89,19 @@ export class ModelManager {
       return await invoke('download_status', { filename });
     } catch {
       return { downloading: false, has_partial: false, downloaded_bytes: 0, total_bytes: 0 };
+    }
+  }
+
+  /**
+   * Tell the engine which speed-up (speculative-decoding draft) file goes
+   * with a model and of what kind; written beside the model as a small
+   * sidecar the loader reads. Best-effort.
+   */
+  async registerModelDraft(model: string, draft: string, draftType: string): Promise<void> {
+    try {
+      await invoke('register_model_draft', { model, draft, draftType });
+    } catch (e) {
+      console.warn('[ModelManager] registerModelDraft failed:', e);
     }
   }
 

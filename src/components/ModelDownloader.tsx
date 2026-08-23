@@ -77,7 +77,7 @@ interface ActiveDownload {
   /** The file currently downloading (the model, then its vision projector). */
   filename: string;
   /** 'vision' while the paired projector downloads after the model itself. */
-  stage?: 'model' | 'vision';
+  stage?: 'model' | 'vision' | 'draft';
   /** The chat model to load at finalize - `filename` during the vision stage
    *  is the projector, which must never be loaded as a model; during a
    *  sharded download it is the current part, and `modelFilename` the first. */
@@ -170,12 +170,13 @@ function variantByFirstPart(familyId: string, firstFilename: string): { family: 
  *  which one is in flight and count them, so the bar filling twice reads as
  *  "1 of 2, then 2 of 2" instead of a download that started over. */
 function downloadLabel(
-  download: { progress: DownloadProgress | null; stage: 'model' | 'vision'; part?: { index: number; count: number } } | undefined,
+  download: { progress: DownloadProgress | null; stage: 'model' | 'vision' | 'draft'; part?: { index: number; count: number } } | undefined,
   twoFiles: boolean,
 ): string {
   if (!download) return 'Downloading';
   const pct = download.progress ? ` · ${Math.round(download.progress.percent ?? 0)}%` : '';
   if (download.part) return `Downloading part ${download.part.index} of ${download.part.count}${pct}`;
+  if (download.stage === 'draft') return `Downloading its speed-up file${pct}`;
   if (!twoFiles) return `Downloading${pct}`;
   return download.stage === 'vision'
     ? `Downloading vision support · 2 of 2${pct}`
@@ -272,7 +273,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
      *  downloads run side by side. `stage` says which file is in flight:
      *  the model, or the vision projector that auto-follows a vision model
      *  (so the second file doesn't read as a stalled or repeated download). */
-    downloads: {} as Record<string, { progress: DownloadProgress | null; stage: 'model' | 'vision'; part?: { index: number; count: number } }>,
+    downloads: {} as Record<string, { progress: DownloadProgress | null; stage: 'model' | 'vision' | 'draft'; part?: { index: number; count: number } }>,
     error: null as string | null,
     modelsDirectory: '',
     successMessage: null as string | null,
@@ -543,7 +544,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     // Re-show each card's downloading state
     const reattached: typeof store.downloads = {};
     for (const a of actives) {
-      reattached[a.familyId] = { progress: null, stage: a.stage === 'vision' ? 'vision' : 'model' };
+      reattached[a.familyId] = { progress: null, stage: a.stage === 'vision' ? 'vision' : a.stage === 'draft' ? 'draft' : 'model' };
     }
     store.downloads = { ...store.downloads, ...reattached };
     const byFile = new Map(actives.map((a) => [a.filename, a]));
@@ -778,6 +779,29 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
             store.downloads = { ...store.downloads, [familyId]: { stage: 'vision', progress } };
           });
         }
+      }
+
+      // The maker's speed-up file, if any: kept beside the model and
+      // registered so the engine uses it for speculative decoding. Optional -
+      // a failure here is logged, the model is still finalized.
+      if (variant.draft && !(await modelManager.isModelDownloaded(variant.draft.filename))) {
+        store.downloads = { ...store.downloads, [familyId]: { progress: null, stage: 'draft' } };
+        rememberActiveDownload({
+          ...activeDownload,
+          stage: 'draft',
+          filename: variant.draft.filename,
+          modelFilename: variant.filename,
+        } satisfies ActiveDownload);
+        try {
+          await modelManager.downloadModel(variant.draft.downloadUrl, variant.draft.filename, (progress) => {
+            store.downloads = { ...store.downloads, [familyId]: { stage: 'draft', progress } };
+          });
+        } catch (e) {
+          console.warn('[ModelDownloader] speed-up file download failed (model still usable):', e);
+        }
+      }
+      if (variant.draft) {
+        await modelManager.registerModelDraft(variant.filename, variant.draft.filename, variant.draft.type);
       }
 
       await finalizeDownload(familyId, variant.filename, displayName, isFirstModel);
@@ -1386,8 +1410,10 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                 {projector
                   ? `Download (${selectedVariant.size} GB + ${projector.size} GB vision)`
                   : (selectedVariant.shards ?? 1) > 1
-                    ? `Download (${selectedVariant.size} GB in ${selectedVariant.shards} parts)`
-                    : `Download (${selectedVariant.size} GB)`}
+                    ? `Download (${selectedVariant.size} GB in ${selectedVariant.shards} parts${selectedVariant.draft ? ` + ${selectedVariant.draft.size} GB speed-up` : ''})`
+                    : selectedVariant.draft
+                      ? `Download (${selectedVariant.size} GB + ${selectedVariant.draft.size} GB speed-up)`
+                      : `Download (${selectedVariant.size} GB)`}
               </LiquidMetalButton>
             </div>
           )}

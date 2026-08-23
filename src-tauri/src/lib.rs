@@ -546,6 +546,7 @@ pub fn run() {
             vault_restore::memory_reembed_done,
             llm::get_system_info,
             llm::list_local_models,
+            llm::register_model_draft,
             engine::engine_status,
             engine::download_cuda_engine,
             engine::remove_cuda_engine,

@@ -48,6 +48,12 @@ export interface ModelVariant {
    *  name the FIRST part; the rest follow llama.cpp's naming and sit beside
    *  it. The first part is what the engine loads. */
   shards?: number;
+  /** A speed-up file the maker ships for this model (a multi-token
+   *  prediction head or a small draft): downloaded after the model, kept
+   *  beside it, and used by the engine for speculative decoding - the
+   *  model verifies several drafted tokens per pass, which matters most when
+   *  its experts live in main memory. Optional; the model runs without it. */
+  draft?: ModelDraft;
   /** Additional per-format artifacts (mlx, safetensors) — additive; a
    *  variant without an entry for the active engine's format simply isn't
    *  offered on that engine. */
@@ -124,6 +130,15 @@ export type Trait = 'new' | 'thinking' | 'uncensored' | 'moe' | 'distilled';
  * managed in Settings → Components), never shown in the chat picker.
  */
 export type ModelRole = 'chat' | 'embedding' | 'voice-tts' | 'voice-stt' | 'vision-projector' | 'ocr' | 'utility';
+
+/** The engine's speculative-decoding kinds we ship files for. */
+export type DraftType = 'draft-mtp' | 'draft-dspark' | 'draft-simple';
+export interface ModelDraft {
+  type: DraftType;
+  filename: string;
+  downloadUrl: string;
+  size: number;            // GB
+}
 
 export interface ModelFamily {
   id: string;              // e.g., "qwen-3.6"
@@ -744,7 +759,15 @@ export const modelFamilies: ModelFamily[] = [
         minRAM: 32,
         downloadUrl: 'https://huggingface.co/ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/main/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf',
         filename: 'NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf',
-        quantization: 'Q4_0'
+        quantization: 'Q4_0',
+        // NVIDIA's multi-token-prediction head for this model (llama.cpp's
+        // own GGUF): several drafted tokens verified per pass.
+        draft: {
+          type: 'draft-mtp',
+          filename: 'mtp-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf',
+          downloadUrl: 'https://huggingface.co/ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/main/mtp-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf',
+          size: 1.2,
+        },
       }
     ]
   },
@@ -799,7 +822,14 @@ export const modelFamilies: ModelFamily[] = [
         shards: 3,
         downloadUrl: 'https://huggingface.co/unsloth/DeepSeek-V4-Flash-0731-GGUF/resolve/main/UD-Q2_K_XL/DeepSeek-V4-Flash-0731-UD-Q2_K_XL-00001-of-00003.gguf',
         filename: 'DeepSeek-V4-Flash-0731-UD-Q2_K_XL-00001-of-00003.gguf',
-        quantization: 'UD-Q2_K_XL'
+        quantization: 'UD-Q2_K_XL',
+        // Unsloth's DSpark draft for V4 Flash ("up to 2x faster decoding").
+        draft: {
+          type: 'draft-dspark',
+          filename: 'dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf',
+          downloadUrl: 'https://huggingface.co/unsloth/DeepSeek-V4-Flash-0731-GGUF/resolve/main/dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf',
+          size: 10.9,
+        },
       },
       {
         parameterCount: '284B-A13B (MoE)',
@@ -808,7 +838,14 @@ export const modelFamilies: ModelFamily[] = [
         shards: 4,
         downloadUrl: 'https://huggingface.co/unsloth/DeepSeek-V4-Flash-0731-GGUF/resolve/main/UD-IQ4_XS/DeepSeek-V4-Flash-0731-UD-IQ4_XS-00001-of-00004.gguf',
         filename: 'DeepSeek-V4-Flash-0731-UD-IQ4_XS-00001-of-00004.gguf',
-        quantization: 'UD-IQ4_XS'
+        quantization: 'UD-IQ4_XS',
+        // Unsloth's DSpark draft for V4 Flash ("up to 2x faster decoding").
+        draft: {
+          type: 'draft-dspark',
+          filename: 'dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf',
+          downloadUrl: 'https://huggingface.co/unsloth/DeepSeek-V4-Flash-0731-GGUF/resolve/main/dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf',
+          size: 10.9,
+        },
       }
     ]
   },

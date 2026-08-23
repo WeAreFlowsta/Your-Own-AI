@@ -54,6 +54,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - Every model file's layout is now checked against its size when it is
   read, so a download cut off inside the weights - not just in the header
   - shows as damaged instead of failing to load.
+- Where the maker ships a speed-up file for a model (Nemotron 3.5
+  Lightning's multi-token head, DeepSeek V4 Flash's DSpark draft), the
+  app downloads it after the model, keeps it beside it, and the engine
+  uses it to answer faster - several drafted tokens checked per pass,
+  which matters most when a model's experts live in main memory.
 
 - Four additions to the offline catalog, all mixture-of-experts and all
   running on the new split-memory path: **LFM2.5 8B-A1B** (Liquid AI -

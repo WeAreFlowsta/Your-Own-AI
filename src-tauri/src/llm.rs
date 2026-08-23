@@ -1043,6 +1043,21 @@ pub async fn start_llama_server(
     // most of a minute - because without this, a model that "fits" only
     // through the driver silently paging VRAM over PCIe crawls below what
     // the CPU alone would do. Never on a CPU-forced spawn (nothing to split).
+    // The maker's speed-up file, when registered and present: the engine
+    // drafts several tokens from it and the model verifies them in one pass.
+    // Worth most when the experts live in main memory (decode is then bound
+    // by reading expert weights per token). Measured per machine by the
+    // tok/s stamp like everything else; the model runs without it.
+    if let Some(ref filename) = loading_name {
+        if let Some(d) = model_draft_for(&models_dir, filename) {
+            log::info!("[LLM] speculative decoding: {} ({})", d.draft, d.draft_type);
+            args.push("--spec-type".to_string());
+            args.push(d.draft_type.clone());
+            args.push("--spec-draft-model".to_string());
+            args.push(d.draft.clone());
+        }
+    }
+
     if let Some((meta, size_bytes)) = &header {
         if meta.is_moe() && !args_force_cpu(&args) {
             if let Some(free_mib) = available_vram_mib(&app_handle).await {
@@ -1920,6 +1935,10 @@ pub async fn list_local_models(
             if filename.to_lowercase().contains("mmproj") {
                 continue;
             }
+            // Speed-up drafts ride beside their model; never a chat model.
+            if is_draft_file(&models_dir, &filename) {
+                continue;
+            }
             // One bounded header read decides everything below: a readable
             // header upgrades the labels, a damaged file is listed AS damaged
             // (so the user can see and delete it), an unsupported-but-intact
@@ -2368,6 +2387,11 @@ pub async fn delete_model(
             let _ = std::fs::remove_file(&part);
         }
     }
+    // Its speed-up file and the sidecar go with it.
+    if let Some(d) = model_draft_for(&models_dir, &filename) {
+        let _ = std::fs::remove_file(models_dir.join(&d.draft));
+    }
+    let _ = std::fs::remove_file(draft_sidecar_path(&models_dir, &filename));
     
     println!("[LLM] Deleted model: {}", filename);
     Ok(())
@@ -2380,6 +2404,79 @@ pub async fn delete_model(
 pub async fn get_models_directory(app_handle: AppHandle) -> Result<String, String> {
     let models_dir = get_models_dir(&app_handle)?;
     Ok(models_dir.to_string_lossy().to_string())
+}
+
+/// A model's registered speed-up file (speculative-decoding draft) and its
+/// engine type, from the `<model>.draft.json` sidecar the downloader writes
+/// beside the model. Only returned when the draft file is present and sound.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct ModelDraft {
+    pub draft: String,
+    pub draft_type: String,
+}
+
+fn draft_sidecar_path(models_dir: &std::path::Path, model: &str) -> std::path::PathBuf {
+    models_dir.join(format!("{model}.draft.json"))
+}
+
+pub(crate) fn model_draft_for(models_dir: &std::path::Path, model: &str) -> Option<ModelDraft> {
+    let raw = std::fs::read_to_string(draft_sidecar_path(models_dir, model)).ok()?;
+    let d: ModelDraft = serde_json::from_str(&raw).ok()?;
+    // Only the engine's draft kinds we ship files for; a junk sidecar is ignored.
+    if !matches!(d.draft_type.as_str(), "draft-mtp" | "draft-dspark" | "draft-simple") {
+        return None;
+    }
+    let path = models_dir.join(&d.draft);
+    if !path.exists() || crate::gguf::damage(&path).is_some() {
+        return None;
+    }
+    Some(d)
+}
+
+/// True for files that are speed-up drafts, not chat models (the maker's
+/// naming, and anything a sidecar points at).
+fn is_draft_file(models_dir: &std::path::Path, filename: &str) -> bool {
+    let lower = filename.to_lowercase();
+    if ["mtp-", "dspark-", "dflash-", "eagle3-", "draft-"].iter().any(|p| lower.starts_with(p)) {
+        return true;
+    }
+    // Referenced by some model's sidecar.
+    std::fs::read_dir(models_dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".draft.json"))
+        .any(|e| {
+            std::fs::read_to_string(e.path())
+                .ok()
+                .and_then(|s| serde_json::from_str::<ModelDraft>(&s).ok())
+                .map(|d| d.draft == filename)
+                .unwrap_or(false)
+        })
+}
+
+/// Record which speed-up file goes with a model (written by the downloader
+/// after it fetches the maker's draft). The loader reads it at every start.
+#[tauri::command]
+pub async fn register_model_draft(
+    app_handle: AppHandle,
+    model: String,
+    draft: String,
+    draft_type: String,
+) -> Result<(), String> {
+    if !matches!(draft_type.as_str(), "draft-mtp" | "draft-dspark" | "draft-simple") {
+        return Err(format!("unknown draft type {draft_type}"));
+    }
+    let models_dir = get_models_dir(&app_handle)?;
+    let d = ModelDraft { draft, draft_type };
+    std::fs::write(
+        draft_sidecar_path(&models_dir, &model),
+        serde_json::to_string_pretty(&d).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("Failed to record the speed-up file: {e}"))?;
+    log::info!("[LLM] speed-up file registered for {model}: {} ({})", d.draft, d.draft_type);
+    Ok(())
 }
 
 /**
@@ -3462,6 +3559,20 @@ mod live_matrix {
             eprintln!("[matrix] no discrete GPU seen - CPU run (no offload decision to test)");
         }
         eprintln!("[matrix] decision: {decision}");
+        // Optional speculative-decoding arm (YOAI_MATRIX_SPEC_TYPE=ngram-cache|
+        // ngram-mod|ngram-simple|ngram-map-k4v|draft-mtp...; draft file via
+        // YOAI_MATRIX_DRAFT=<file in the models dir>).
+        if let Ok(t) = std::env::var("YOAI_MATRIX_SPEC_TYPE") {
+            if !t.is_empty() && t != "none" {
+                args.push("--spec-type".into());
+                args.push(t.clone());
+                if let Ok(d) = std::env::var("YOAI_MATRIX_DRAFT") {
+                    args.push("--spec-draft-model".into());
+                    args.push(d);
+                }
+                eprintln!("[matrix] speculative: {t}");
+            }
+        }
 
         let child = Command::new(&bin)
             .args(&args)
@@ -3500,10 +3611,12 @@ mod live_matrix {
         }
         eprintln!("[matrix] loaded in {:.1} s", t0.elapsed().as_secs_f64());
 
+        let prompt = std::env::var("YOAI_MATRIX_PROMPT").unwrap_or_else(|_| "In about 120 words, explain why the sky is blue.".into());
+        let max_tokens: u64 = std::env::var("YOAI_MATRIX_MAX_TOKENS").ok().and_then(|v| v.parse().ok()).unwrap_or(800);
         let mut body = serde_json::json!({
             "model": model,
-            "messages": [{"role": "user", "content": "In about 120 words, explain why the sky is blue."}],
-            "max_tokens": 800,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
             "temperature": 0,
             "stream": false,
             "stop": chat_stop_strings(&model),
@@ -3537,8 +3650,10 @@ mod live_matrix {
         let tps = resp["timings"]["predicted_per_second"].as_f64().unwrap_or(0.0);
         let n_gen = resp["timings"]["predicted_n"].as_u64().unwrap_or(0);
         let pp = resp["timings"]["prompt_per_second"].as_f64().unwrap_or(0.0);
+        let draft_n = resp["timings"]["draft_n"].as_u64().unwrap_or(0);
+        let draft_acc = resp["timings"]["draft_n_accepted"].as_u64().unwrap_or(0);
         eprintln!(
-            "[matrix] reply {} chars (reasoning {} chars), {n_gen} tokens, gen {tps:.1} tok/s, prompt {pp:.1} tok/s",
+            "[matrix] reply {} chars (reasoning {} chars), {n_gen} tokens, gen {tps:.1} tok/s, prompt {pp:.1} tok/s, draft {draft_acc}/{draft_n} accepted",
             content.len(), reasoning.len()
         );
         eprintln!(
