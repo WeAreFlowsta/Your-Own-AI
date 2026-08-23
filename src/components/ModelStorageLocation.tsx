@@ -94,7 +94,7 @@ export default component$<Props>((props) => {
   return (
     <div class="flex flex-col gap-1">
       {props.showPath && store.dir && (
-        <code class="text-xs bg-[var(--bg-dropdown)] px-2 py-1 rounded border border-[var(--border-subtle)] break-all">
+        <code class="text-xs text-[var(--text-primary)] bg-[var(--bg-dropdown)] px-2 py-1.5 rounded-lg border border-[var(--border-subtle)] break-all">
           {store.dir}
         </code>
       )}
