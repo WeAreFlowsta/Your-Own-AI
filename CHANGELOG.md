@@ -45,6 +45,16 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 
 ### New models - mixture-of-experts for every size of machine
 
+- Two workstation-class additions for very large machines: **DeepSeek V4
+  Flash** (284B mixture-of-experts, 13B active, 1M context; 128 GB+ of
+  main memory) and **GLM-5.2** (753B mixture-of-experts; 384 GB+). Both
+  ship as multi-part files: the app downloads the parts in order (each
+  part resumes on its own), shows "part 2 of 3", treats the set as one
+  model, and keeps them off machines that cannot run them.
+- Every model file's layout is now checked against its size when it is
+  read, so a download cut off inside the weights - not just in the header
+  - shows as damaged instead of failing to load.
+
 - Four additions to the offline catalog, all mixture-of-experts and all
   running on the new split-memory path: **LFM2.5 8B-A1B** (Liquid AI -
   a 4.8 GB file for 12-16 GB machines, the first MoE that fits them),

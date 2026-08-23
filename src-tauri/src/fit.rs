@@ -447,6 +447,9 @@ mod tests {
             n_experts_used: 0,
             expert_bytes_per_layer: Vec::new(),
             non_expert_bytes: 0,
+            split_no: 0,
+            split_count: 1,
+            total_bytes: 0,
         }
     }
 

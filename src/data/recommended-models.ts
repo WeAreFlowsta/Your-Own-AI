@@ -43,6 +43,11 @@ export interface ModelVariant {
   downloadUrl: string;
   filename: string;
   quantization: string;    // e.g., "Q4_K_M"
+  /** Sharded GGUF (files over Hugging Face's 50 GB limit ship as
+   *  `-0000i-of-0000N` parts): the part count. `filename`/`downloadUrl`
+   *  name the FIRST part; the rest follow llama.cpp's naming and sit beside
+   *  it. The first part is what the engine loads. */
+  shards?: number;
   /** Additional per-format artifacts (mlx, safetensors) — additive; a
    *  variant without an entry for the active engine's format simply isn't
    *  offered on that engine. */
@@ -770,6 +775,80 @@ export const modelFamilies: ModelFamily[] = [
     ]
   },
   {
+    // DeepSeek's V4 Flash (2026-07-31 release): 284B total / 13B active, 256
+    // experts, 1M context, MIT. Workstation class - the split-memory path
+    // with a big card and 128 GB+ of main memory; the fit gate hides it
+    // from everything smaller. Ships as sharded GGUFs (Unsloth dynamic
+    // quants); the first part is the model, the rest follow by name.
+    id: 'deepseek-v4-flash',
+    maker: 'DeepSeek',
+    quantizedBy: 'Unsloth',
+    contextWindow: 1048576,
+    released: '2026-07-31',
+    name: 'DeepSeek V4 Flash',
+    description: 'DeepSeek\'s V4 Flash - a 284B mixture-of-experts with 13B active per token and a 1M-token context. Frontier-class reasoning and agentic work on a workstation with a big graphics card and 128 GB or more of main memory.',
+    category: 'quality',
+    recommended: false,
+    capabilities: ['reasoning', 'agentic', 'coding', 'math', 'long-context', 'analysis'],
+    traits: ['new', 'moe'],
+    variants: [
+      {
+        parameterCount: '284B-A13B (MoE)',
+        size: 96.9,
+        minRAM: 128,
+        shards: 3,
+        downloadUrl: 'https://huggingface.co/unsloth/DeepSeek-V4-Flash-0731-GGUF/resolve/main/UD-Q2_K_XL/DeepSeek-V4-Flash-0731-UD-Q2_K_XL-00001-of-00003.gguf',
+        filename: 'DeepSeek-V4-Flash-0731-UD-Q2_K_XL-00001-of-00003.gguf',
+        quantization: 'UD-Q2_K_XL'
+      },
+      {
+        parameterCount: '284B-A13B (MoE)',
+        size: 137.9,
+        minRAM: 192,
+        shards: 4,
+        downloadUrl: 'https://huggingface.co/unsloth/DeepSeek-V4-Flash-0731-GGUF/resolve/main/UD-IQ4_XS/DeepSeek-V4-Flash-0731-UD-IQ4_XS-00001-of-00004.gguf',
+        filename: 'DeepSeek-V4-Flash-0731-UD-IQ4_XS-00001-of-00004.gguf',
+        quantization: 'UD-IQ4_XS'
+      }
+    ]
+  },
+  {
+    // Zhipu's GLM-5.2 (2026-06): 753B mixture-of-experts, 256 experts, 1M
+    // context, MIT. The biggest thing a very large workstation can run with
+    // experts in main memory (384-512 GB); sharded GGUFs (Unsloth).
+    id: 'glm-5-2',
+    maker: 'Zhipu AI',
+    quantizedBy: 'Unsloth',
+    contextWindow: 1048576,
+    released: '2026-06-16',
+    name: 'GLM-5.2',
+    description: 'Zhipu\'s GLM-5.2 - a 753B mixture-of-experts with a 1M-token context. For very large workstations: a big graphics card and 384 GB or more of main memory, experts in main memory.',
+    category: 'quality',
+    recommended: false,
+    capabilities: ['reasoning', 'agentic', 'coding', 'math', 'long-context', 'analysis'],
+    traits: ['new', 'moe'],
+    variants: [
+      {
+        parameterCount: '753B (MoE)',
+        size: 253.9,
+        minRAM: 384,
+        shards: 7,
+        downloadUrl: 'https://huggingface.co/unsloth/GLM-5.2-GGUF/resolve/main/UD-Q2_K_XL/GLM-5.2-UD-Q2_K_XL-00001-of-00007.gguf',
+        filename: 'GLM-5.2-UD-Q2_K_XL-00001-of-00007.gguf',
+        quantization: 'UD-Q2_K_XL'
+      },
+      {
+        parameterCount: '753B (MoE)',
+        size: 436.5,
+        minRAM: 512,
+        shards: 10,
+        downloadUrl: 'https://huggingface.co/unsloth/GLM-5.2-GGUF/resolve/main/UD-Q4_K_S/GLM-5.2-UD-Q4_K_S-00001-of-00010.gguf',
+        filename: 'GLM-5.2-UD-Q4_K_S-00001-of-00010.gguf',
+        quantization: 'UD-Q4_K_S'
+      }
+    ]
+  },
+  {
     id: 'deepseek-r1',
     maker: 'DeepSeek',
     quantizedBy: 'Unsloth',
@@ -1213,6 +1292,15 @@ function reservedRamGb(totalRAM: number): number {
  * the load-time decision (the conductor uses the exact GGUF-header estimate once a
  * model is downloaded), so the label matches what actually happens.
  */
+/** Part i (1-based) of a sharded model, from the first part's name/URL:
+ *  `...-00001-of-00003.gguf` -> `...-0000i-of-00003.gguf`. */
+export function shardFilename(first: string, i: number): string {
+  return first.replace(/-00001-of-(\d{5})\.gguf$/, (_m, n) => `-${String(i).padStart(5, '0')}-of-${n}.gguf`);
+}
+export function shardUrl(firstUrl: string, i: number): string {
+  return shardFilename(firstUrl, i);
+}
+
 export type RunMode = 'gpu' | 'cpu' | 'moe-split' | 'too-big';
 
 /** A mixture-of-experts artifact: its experts (most of the file) can live in

@@ -36,6 +36,11 @@ pub struct LocalModel {
     /// picker - only shown, so it can be deleted and fetched again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub damaged: Option<String>,
+    /// A sharded model: how many files make it up (`name` is the first
+    /// shard, the one the engine loads; `size_bytes` is the whole set).
+    /// Absent for single-file models.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shard_count: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1902,7 +1907,6 @@ pub async fn list_local_models(
                 .map_err(|e| format!("Failed to get file metadata: {}", e))?;
             
             let size_bytes = metadata.len();
-            let size_gb = size_bytes as f64 / (1024_f64.powi(3));
             
             let filename = path
                 .file_name()
@@ -1920,7 +1924,7 @@ pub async fn list_local_models(
             // header upgrades the labels, a damaged file is listed AS damaged
             // (so the user can see and delete it), an unsupported-but-intact
             // file just keeps its filename labels.
-            let (meta, damaged) = match crate::gguf::read_meta_classified(&path) {
+            let (meta, mut damaged) = match crate::gguf::read_meta_classified(&path) {
                 Ok(m) => (Some(m), None),
                 Err(crate::gguf::MetaError::Damaged(reason)) => {
                     log::warn!("[LLM] damaged model file {filename}: {reason}");
@@ -1931,6 +1935,37 @@ pub async fn list_local_models(
             if meta.as_ref().is_some_and(|m| m.is_embedding()) {
                 continue;
             }
+            // Shards of a sharded model: the first shard IS the model (its
+            // size is the whole set; a missing or damaged sibling makes the
+            // set unusable and says so); the other shards are parts - never
+            // listed on their own.
+            if meta.as_ref().is_some_and(|m| m.is_secondary_shard()) {
+                continue;
+            }
+            let mut shard_count: Option<u32> = None;
+            let mut size_bytes = size_bytes;
+            if let Some(m) = meta.as_ref().filter(|m| m.split_count > 1) {
+                shard_count = Some(m.split_count);
+                size_bytes = m.total_bytes;
+                let sibs = crate::gguf::shard_paths(&path, m.split_count);
+                let missing: Vec<u32> = sibs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| !p.exists())
+                    .map(|(i, _)| i as u32 + 1)
+                    .collect();
+                if !missing.is_empty() {
+                    damaged = Some(format!(
+                        "incomplete: missing part{} {} of {}",
+                        if missing.len() == 1 { "" } else { "s" },
+                        missing.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", "),
+                        m.split_count
+                    ));
+                } else if let Some(bad) = sibs.iter().skip(1).find_map(|p| crate::gguf::damage(p)) {
+                    damaged = Some(format!("a part of this model is damaged ({bad})"));
+                }
+            }
+            let size_gb = size_bytes as f64 / (1024_f64.powi(3));
 
             // Quant/param labels: start from the filename, then upgrade with the
             // GGUF header where it's better — the exact quant from `file_type`,
@@ -1958,6 +1993,7 @@ pub async fn list_local_models(
                 quantization: quant,
                 modified_at: metadata.modified().ok().map(|t| format!("{:?}", t)),
                 damaged,
+                shard_count,
             });
         }
     }
@@ -2316,8 +2352,22 @@ pub async fn delete_model(
         return Err("Model file not found".to_string());
     }
     
-    std::fs::remove_file(&file_path)
-        .map_err(|e| format!("Failed to delete model: {}", e))?;
+    // A sharded model is deleted as a set (every sibling shard, present or
+    // partial); a single file is just that file.
+    let mut targets = vec![file_path.clone()];
+    if let Some((_, _, n)) = crate::gguf::shard_name_parts(&file_path) {
+        targets = crate::gguf::shard_paths(&file_path, n);
+    }
+    for t in targets {
+        if t.exists() {
+            std::fs::remove_file(&t)
+                .map_err(|e| format!("Failed to delete model: {}", e))?;
+        }
+        let part = t.with_extension("gguf.part");
+        if part.exists() {
+            let _ = std::fs::remove_file(&part);
+        }
+    }
     
     println!("[LLM] Deleted model: {}", filename);
     Ok(())
@@ -2343,8 +2393,19 @@ pub async fn is_model_downloaded(
     let models_dir = get_models_dir(&app_handle)?;
     let file_path = models_dir.join(&filename);
     // A damaged file (incomplete or corrupted) is not a downloaded model -
-    // the download surfaces offer to fetch it again.
-    Ok(file_path.exists() && crate::gguf::damage(&file_path).is_none())
+    // the download surfaces offer to fetch it again. A sharded model is
+    // downloaded only when every shard is present and sound.
+    if !file_path.exists() || crate::gguf::damage(&file_path).is_some() {
+        return Ok(false);
+    }
+    if let Ok(m) = crate::gguf::read_meta(&file_path) {
+        if m.split_count > 1 {
+            return Ok(crate::gguf::shard_paths(&file_path, m.split_count)
+                .iter()
+                .all(|p| p.exists() && crate::gguf::damage(p).is_none()));
+        }
+    }
+    Ok(true)
 }
 
 /**

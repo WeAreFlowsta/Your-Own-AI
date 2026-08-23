@@ -80,6 +80,8 @@ export interface LocalModel {
   /** Set when the file does not read as a model (incomplete or corrupted
    *  download): the reason. Listed so it can be deleted, never offered. */
   damaged?: string;
+  /** A sharded model: how many files make it up (`name` is the first). */
+  shard_count?: number;
 }
 
 export type AppMode = 'local' | 'cloud';

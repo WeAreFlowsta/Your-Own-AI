@@ -44,6 +44,14 @@ pub struct GgufMeta {
     /// Bytes of everything that is not an expert tensor (attention, norms,
     /// embeddings, shared experts): what stays on the GPU under offload.
     pub non_expert_bytes: u64,
+    /// Sharded GGUF (`split.count` > 1): this file's index and the shard
+    /// count. `(0, 1)` for an ordinary single-file model. Shard 0 carries
+    /// the metadata and IS the model (it is what `--model` takes); the
+    /// others carry tensors and only the split keys - never list them.
+    pub split_no: u32,
+    pub split_count: u32,
+    /// Total bytes of every shard (== file size for a single file).
+    pub total_bytes: u64,
 }
 
 impl GgufMeta {
@@ -93,6 +101,12 @@ impl GgufMeta {
         // Compute buffers + graphics-context + empirical safety margin (~0.6 GiB).
         const OVERHEAD_MIB: u64 = 640;
         weights + kv + OVERHEAD_MIB
+    }
+
+    /// A shard of a sharded model that is not the first - a part, not a
+    /// model: never listed, graded, loaded or offered.
+    pub fn is_secondary_shard(&self) -> bool {
+        self.split_count > 1 && self.split_no > 0
     }
 
     /// Mixture-of-experts model: most of its weights are expert tensors that
@@ -366,6 +380,12 @@ pub fn read_meta_classified(path: &std::path::Path) -> Result<GgufMeta, MetaErro
         read_meta_uncached(path, stat.len())
     }))
     .unwrap_or_else(|_| Err(MetaError::Damaged("header parse panicked".into())))?;
+    // A sharded model's answer depends on its sibling shards too (present,
+    // sizes, tensor tables), which this key cannot see - and it is cheap to
+    // re-read (a few small headers), so it is not cached.
+    if parsed.split_count > 1 {
+        return Ok(parsed);
+    }
     META_CACHE
         .lock()
         .unwrap()
@@ -421,6 +441,9 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
         n_experts_used: 0,
         expert_bytes_per_layer: Vec::new(),
         non_expert_bytes: 0,
+        split_no: 0,
+        split_count: 1,
+        total_bytes: file_len,
     };
     let mut alignment: u64 = 32;
 
@@ -441,7 +464,9 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
             || key.ends_with(".expert_count")
             || key.ends_with(".expert_used_count")
             || key == "general.file_type"
-            || key == "general.alignment";
+            || key == "general.alignment"
+            || key == "split.no"
+            || key == "split.count";
 
         if key == "tokenizer.chat_template" && vtype == 8 {
             let tpl = r.read_gstr().map_err(io)?;
@@ -491,6 +516,10 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
                 m.file_type = v as u32;
             } else if key == "general.alignment" {
                 alignment = v.max(1);
+            } else if key == "split.no" {
+                m.split_no = v as u32;
+            } else if key == "split.count" {
+                m.split_count = (v as u32).max(1);
             }
         } else {
             r.skip_value(vtype).map_err(io)?;
@@ -505,17 +534,147 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
     // Tensor table: name, n_dims, dims, type, offset per tensor. Sizes come
     // from the offset deltas (tensors are laid out back to back in the data
     // section), so no ggml type table is needed; the last tensor's size is
-    // the remainder of the file. Only a MoE model's expert split is kept.
-    // A table that will not read leaves the vectors empty - the caller then
-    // pins ALL experts rather than none, never the other way round.
-    if m.is_moe() {
-        if let Err(e) = read_tensor_split(&mut r, tensor_count, alignment, &mut m) {
+    // the remainder of the file. Read for EVERY file: an offset past the
+    // end of the file is a truncated download (a file cut in the tensor
+    // data region has a perfectly good header), reported as damage. For a
+    // MoE model the expert split is kept; a table that merely does not
+    // read as expected leaves it empty - the loader then pins ALL experts
+    // rather than none, never the other way round.
+    let table = read_tensor_table(&mut r, tensor_count, alignment);
+    match table {
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+            return Err(MetaError::Damaged(e.to_string()));
+        }
+        Err(e) => {
             log::warn!("[gguf] tensor table unreadable for {}: {e}", path.display());
-            m.expert_bytes_per_layer.clear();
-            m.non_expert_bytes = 0;
+        }
+        Ok(t) => {
+            if m.is_moe() {
+                let n_layers = m.n_layers as usize;
+                apply_expert_split(&mut m, &t, n_layers);
+            }
+        }
+    }
+
+    // A sharded model: shard 0 holds the metadata but no tensors; the
+    // expert split and the total size come from its sibling shards, which
+    // sit beside it under the canonical `-0000i-of-0000N` names.
+    if m.split_count > 1 && m.split_no == 0 {
+        let mut total = file_len;
+        let mut per_layer = vec![0u64; m.n_layers as usize];
+        let mut non_expert = 0u64;
+        let mut complete = true;
+        for sib in shard_paths(path, m.split_count).into_iter().skip(1) {
+            match read_shard_table(&sib) {
+                Ok((len, t)) => {
+                    total += len;
+                    accumulate_expert_split(&t, &mut per_layer, &mut non_expert);
+                }
+                Err(e) => {
+                    log::warn!("[gguf] shard {} of {}: {e}", sib.display(), path.display());
+                    complete = false;
+                }
+            }
+        }
+        m.total_bytes = total;
+        if m.is_moe() {
+            if complete && per_layer.iter().any(|&b| b > 0) {
+                m.expert_bytes_per_layer = per_layer;
+                m.non_expert_bytes = non_expert;
+            } else {
+                m.expert_bytes_per_layer.clear();
+                m.non_expert_bytes = 0;
+            }
         }
     }
     Ok(m)
+}
+
+/// The canonical shard filenames of a sharded model, given any one shard:
+/// `<prefix>-0000i-of-0000N.gguf` for i in 1..=N (llama.cpp's
+/// `llama_split_path` format). None if `path` is not named as a shard.
+pub fn shard_paths(path: &std::path::Path, count: u32) -> Vec<std::path::PathBuf> {
+    let Some((prefix, _, n)) = shard_name_parts(path) else {
+        return vec![path.to_path_buf()];
+    };
+    let n = if n == 0 { count } else { n };
+    let dir = path.parent().map(|d| d.to_path_buf()).unwrap_or_default();
+    (1..=n)
+        .map(|i| dir.join(format!("{prefix}-{i:05}-of-{n:05}.gguf")))
+        .collect()
+}
+
+/// Parse `<prefix>-0000i-of-0000N.gguf` -> (prefix, i, N).
+pub fn shard_name_parts(path: &std::path::Path) -> Option<(String, u32, u32)> {
+    let name = path.file_name()?.to_str()?;
+    let stem = name.strip_suffix(".gguf")?;
+    // ...-00001-of-00003
+    let (head, tail) = stem.rsplit_once("-of-")?;
+    let (prefix, idx) = head.rsplit_once('-')?;
+    if idx.len() != 5 || tail.len() != 5 {
+        return None;
+    }
+    let i: u32 = idx.parse().ok()?;
+    let n: u32 = tail.parse().ok()?;
+    (i >= 1 && n >= 1 && i <= n).then(|| (prefix.to_string(), i, n))
+}
+
+/// One tensor-table entry we keep: byte size and the expert block it
+/// belongs to (None = not an expert tensor).
+struct TensorBytes {
+    bytes: u64,
+    expert_block: Option<usize>,
+}
+
+/// Read a shard's tensor table (bounded) and return its file length + table.
+fn read_shard_table(path: &std::path::Path) -> std::io::Result<(u64, Vec<TensorBytes>)> {
+    let len = std::fs::metadata(path)?.len();
+    let f = File::open(path)?;
+    let mut r = Bounded { r: BufReader::new(f), pos: 0, len };
+    let mut magic = [0u8; 4];
+    r.read_exact(&mut magic)?;
+    if &magic != b"GGUF" {
+        return Err(damaged("shard is not a GGUF file"));
+    }
+    let _version = r.read_u32()?;
+    let tensor_count = r.read_u64()?;
+    let kv_count = r.read_u64()?;
+    if tensor_count > MAX_TENSOR_COUNT || kv_count > MAX_KV_COUNT {
+        return Err(damaged("shard header counts are not plausible"));
+    }
+    let mut alignment: u64 = 32;
+    for _ in 0..kv_count {
+        let key = r.read_gstr()?;
+        let vtype = r.read_u32()?;
+        if key == "general.alignment" && scalar_width(vtype).is_some() {
+            if let Some(v) = r.read_int_value(vtype)? {
+                alignment = v.max(1);
+            }
+        } else {
+            r.skip_value(vtype)?;
+        }
+    }
+    let t = read_tensor_table(&mut r, tensor_count, alignment)?;
+    Ok((len, t))
+}
+
+fn accumulate_expert_split(t: &[TensorBytes], per_layer: &mut [u64], non_expert: &mut u64) {
+    for e in t {
+        match e.expert_block {
+            Some(b) if b < per_layer.len() => per_layer[b] += e.bytes,
+            _ => *non_expert += e.bytes,
+        }
+    }
+}
+
+fn apply_expert_split(m: &mut GgufMeta, t: &[TensorBytes], n_layers: usize) {
+    let mut per_layer = vec![0u64; n_layers];
+    let mut non_expert = 0u64;
+    accumulate_expert_split(t, &mut per_layer, &mut non_expert);
+    if per_layer.iter().any(|&b| b > 0) {
+        m.expert_bytes_per_layer = per_layer;
+        m.non_expert_bytes = non_expert;
+    }
 }
 
 /// Expert tensors: the per-block feed-forward expert weights llama.cpp's
@@ -536,12 +695,15 @@ fn expert_block_of(name: &str) -> Option<usize> {
     is_exps.then_some(block)
 }
 
-fn read_tensor_split<R: Read + Seek>(
+/// Read the tensor table at the cursor: (name, n_dims, dims, type, offset)
+/// per tensor. Sizes are offset deltas; the last tensor takes the rest of
+/// the file. An offset past the end of the file is `InvalidData` (a
+/// truncated download); anything else that does not read is `Other`.
+fn read_tensor_table<R: Read + Seek>(
     r: &mut Bounded<R>,
     tensor_count: u64,
     alignment: u64,
-    m: &mut GgufMeta,
-) -> std::io::Result<()> {
+) -> std::io::Result<Vec<TensorBytes>> {
     // (offset, expert block or None)
     let mut tensors: Vec<(u64, Option<usize>)> = Vec::with_capacity(tensor_count as usize);
     for _ in 0..tensor_count {
@@ -561,27 +723,15 @@ fn read_tensor_split<R: Read + Seek>(
     let data_start = r.pos.div_ceil(alignment) * alignment;
     let data_len = r.len.saturating_sub(data_start);
     tensors.sort_by_key(|t| t.0);
-    let n_layers = m.n_layers as usize;
-    let mut per_layer = vec![0u64; n_layers];
-    let mut non_expert = 0u64;
+    let mut out = Vec::with_capacity(tensors.len());
     for (i, (offset, block)) in tensors.iter().enumerate() {
         let end = tensors.get(i + 1).map(|t| t.0).unwrap_or(data_len);
         if end < *offset || *offset > data_len {
-            return Err(damaged("tensor offsets run past the file"));
+            return Err(damaged("tensor data runs past the end of the file (incomplete download)"));
         }
-        let bytes = end - offset;
-        match block {
-            Some(b) if *b < n_layers => per_layer[*b] += bytes,
-            _ => non_expert += bytes,
-        }
+        out.push(TensorBytes { bytes: end - offset, expert_block: *block });
     }
-    if per_layer.iter().all(|&b| b == 0) {
-        // A MoE header with no expert tensors found: treat as unknown.
-        return Err(damaged("no expert tensors in the tensor table"));
-    }
-    m.expert_bytes_per_layer = per_layer;
-    m.non_expert_bytes = non_expert;
-    Ok(())
+    Ok(out)
 }
 
 /// `general.file_type` enum → quant label (the common llama.cpp values).
@@ -762,7 +912,9 @@ mod tests {
     /// NOT flagged as damaged.
     #[test]
     fn synthetic_moe_header_parses() {
-        let mut b = gguf_header(10, 6);
+        // Header-only synthetic file: declares no tensors (a declared tensor
+        // with no table is a truncated file, and reads as damaged - by design).
+        let mut b = gguf_header(0, 6);
         let kv_u32 = |b: &mut Vec<u8>, k: &str, v: u32| {
             b.extend_from_slice(&gstr(k));
             b.extend_from_slice(&4u32.to_le_bytes());
@@ -837,9 +989,103 @@ mod tests {
         assert_eq!(m.n_kv_heads, 5, "array-valued head_count_kv reads as its mean");
         assert_eq!(m.expert_bytes_per_layer, vec![300, 350]);
         assert_eq!(m.non_expert_bytes, 150);
+        assert_eq!((m.split_no, m.split_count), (0, 1));
+        assert_eq!(m.total_bytes, std::fs::metadata(&p).unwrap().len());
+
+        // The same file cut inside the tensor data: header fine, a tensor
+        // offset now points past the end -> damaged, not "header OK".
+        let cut = &b[..b.len() - 600];
+        let p2 = tmp_file("moe-tensors-cut.gguf", cut);
+        assert!(matches!(read_meta_classified(&p2), Err(MetaError::Damaged(_))));
         assert!(expert_block_of("blk.12.ffn_gate_up_exps.weight") == Some(12));
         assert!(expert_block_of("blk.3.ffn_up_shexp.weight").is_none(), "shared experts stay on the GPU");
         assert!(expert_block_of("blk.3.attn_k.weight").is_none());
+    }
+
+    /// A sharded MoE model the way unsloth ships the big ones: shard 1 =
+    /// metadata only (0 tensors, split 0/3), shards 2-3 = tensors with ONLY
+    /// the split keys. Shard 1 is the model (sums sizes and expert bytes
+    /// across its siblings); shards 2-3 are parts, never models.
+    #[test]
+    fn sharded_model_reads_as_one_model() {
+        let dir = std::env::temp_dir().join("yoai-gguf-tests").join("shards");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let kv_u32 = |b: &mut Vec<u8>, k: &str, v: u32| {
+            b.extend_from_slice(&gstr(k));
+            b.extend_from_slice(&4u32.to_le_bytes());
+            b.extend_from_slice(&v.to_le_bytes());
+        };
+        let kv_u16 = |b: &mut Vec<u8>, k: &str, v: u16| {
+            b.extend_from_slice(&gstr(k));
+            b.extend_from_slice(&2u32.to_le_bytes());
+            b.extend_from_slice(&v.to_le_bytes());
+        };
+        let tensor = |b: &mut Vec<u8>, name: &str, off: u64| {
+            b.extend_from_slice(&gstr(name));
+            b.extend_from_slice(&1u32.to_le_bytes());
+            b.extend_from_slice(&16u64.to_le_bytes());
+            b.extend_from_slice(&0u32.to_le_bytes());
+            b.extend_from_slice(&off.to_le_bytes());
+        };
+        let pad = |b: &mut Vec<u8>| { while b.len() % 32 != 0 { b.push(0); } };
+        // shard 1: metadata, no tensors
+        let mut s1 = gguf_header(0, 6);
+        s1.extend_from_slice(&gstr("general.architecture"));
+        s1.extend_from_slice(&8u32.to_le_bytes());
+        s1.extend_from_slice(&gstr("deepseek4"));
+        kv_u32(&mut s1, "deepseek4.block_count", 2);
+        kv_u32(&mut s1, "deepseek4.attention.head_count", 8);
+        kv_u32(&mut s1, "deepseek4.expert_count", 256);
+        kv_u16(&mut s1, "split.no", 0);
+        kv_u16(&mut s1, "split.count", 3);
+        pad(&mut s1);
+        // shard 2: 2 tensors (expert of block 0 + attention), 400 bytes data
+        let mut s2 = gguf_header(2, 3);
+        kv_u16(&mut s2, "split.no", 1);
+        kv_u16(&mut s2, "split.count", 3);
+        kv_u32(&mut s2, "split.tensors.count", 4);
+        tensor(&mut s2, "blk.0.ffn_up_exps.weight", 0);   // 300
+        tensor(&mut s2, "blk.0.attn_q.weight", 300);      // remainder 100
+        pad(&mut s2);
+        s2.extend(std::iter::repeat(1u8).take(400));
+        // shard 3: expert of block 1 + shared expert, 500 bytes data
+        let mut s3 = gguf_header(2, 3);
+        kv_u16(&mut s3, "split.no", 2);
+        kv_u16(&mut s3, "split.count", 3);
+        kv_u32(&mut s3, "split.tensors.count", 4);
+        tensor(&mut s3, "blk.1.ffn_down_exps.weight", 0); // 350
+        tensor(&mut s3, "blk.1.ffn_up_shexp.weight", 350); // remainder 150
+        pad(&mut s3);
+        s3.extend(std::iter::repeat(2u8).take(500));
+        let p1 = dir.join("big-UD-Q2_K_XL-00001-of-00003.gguf");
+        let p2 = dir.join("big-UD-Q2_K_XL-00002-of-00003.gguf");
+        let p3 = dir.join("big-UD-Q2_K_XL-00003-of-00003.gguf");
+        std::fs::write(&p1, &s1).unwrap();
+        std::fs::write(&p2, &s2).unwrap();
+        std::fs::write(&p3, &s3).unwrap();
+
+        assert_eq!(shard_name_parts(&p2), Some(("big-UD-Q2_K_XL".to_string(), 2, 3)));
+        assert_eq!(shard_paths(&p1, 3), vec![p1.clone(), p2.clone(), p3.clone()]);
+
+        let m = read_meta_classified(&p1).expect("shard 1 parses");
+        assert_eq!((m.split_no, m.split_count), (0, 3));
+        assert!(!m.is_secondary_shard());
+        assert_eq!(m.total_bytes, (s1.len() + s2.len() + s3.len()) as u64);
+        assert!(m.is_moe());
+        assert_eq!(m.expert_bytes_per_layer, vec![300, 350], "experts summed across data shards");
+        assert_eq!(m.non_expert_bytes, 250, "attention + shared expert");
+
+        let m2 = read_meta_classified(&p2).expect("a data shard still parses");
+        assert!(m2.is_secondary_shard());
+        assert!(damage(&p2).is_none(), "a data shard is a part, not a damaged model");
+
+        // A missing sibling: shard 1 still reads, but the split is unknown
+        // (the loader pins all experts) and the set is incomplete.
+        std::fs::remove_file(&p3).unwrap();
+        let m = read_meta_classified(&p1).expect("shard 1 still parses");
+        assert!(m.expert_bytes_per_layer.is_empty());
+        assert!(shard_paths(&p1, 3).iter().any(|p| !p.exists()));
     }
 
     /// Muse Glimmer's REAL chat template (extracted from the Unsloth GGUF

@@ -26,6 +26,8 @@ import {
   getGPUStatus,
   getModality,
   getRunMode,
+  shardFilename,
+  shardUrl,
   isMoeVariant,
   formatContext,
   type Capability,
@@ -77,8 +79,12 @@ interface ActiveDownload {
   /** 'vision' while the paired projector downloads after the model itself. */
   stage?: 'model' | 'vision';
   /** The chat model to load at finalize - `filename` during the vision stage
-   *  is the projector, which must never be loaded as a model. */
+   *  is the projector, which must never be loaded as a model; during a
+   *  sharded download it is the current part, and `modelFilename` the first. */
   modelFilename?: string;
+  /** Sharded model: which part is in flight, of how many. */
+  partIndex?: number;
+  partCount?: number;
   isFirstModel: boolean;
   startedAt: number;
 }
@@ -143,19 +149,33 @@ function downloadUrlFor(filename: string): string | undefined {
   for (const f of modelFamilies) {
     const v = f.variants.find((x) => x.filename === filename);
     if (v) return v.downloadUrl;
+    // A part of a sharded variant: derive its URL from the first part's.
+    const m = filename.match(/^(.*)-(\d{5})-of-(\d{5})\.gguf$/);
+    if (m) {
+      const first = f.variants.find((x) => x.filename === `${m[1]}-00001-of-${m[3]}.gguf`);
+      if (first) return shardUrl(first.downloadUrl, Number(m[2]));
+    }
   }
   return VISION_PROJECTORS.find((p) => p.filename === filename)?.downloadUrl;
+}
+
+/** The family + variant a sharded download belongs to (by its first part). */
+function variantByFirstPart(familyId: string, firstFilename: string): { family: ModelFamily; variant: ModelVariant } | null {
+  const family = modelFamilies.find((f) => f.id === familyId);
+  const variant = family?.variants.find((v) => v.filename === firstFilename);
+  return family && variant ? { family, variant } : null;
 }
 
 /** What a card says while it downloads. A vision model is two files; say
  *  which one is in flight and count them, so the bar filling twice reads as
  *  "1 of 2, then 2 of 2" instead of a download that started over. */
 function downloadLabel(
-  download: { progress: DownloadProgress | null; stage: 'model' | 'vision' } | undefined,
+  download: { progress: DownloadProgress | null; stage: 'model' | 'vision'; part?: { index: number; count: number } } | undefined,
   twoFiles: boolean,
 ): string {
   if (!download) return 'Downloading';
   const pct = download.progress ? ` · ${Math.round(download.progress.percent ?? 0)}%` : '';
+  if (download.part) return `Downloading part ${download.part.index} of ${download.part.count}${pct}`;
   if (!twoFiles) return `Downloading${pct}`;
   return download.stage === 'vision'
     ? `Downloading vision support · 2 of 2${pct}`
@@ -252,7 +272,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
      *  downloads run side by side. `stage` says which file is in flight:
      *  the model, or the vision projector that auto-follows a vision model
      *  (so the second file doesn't read as a stalled or repeated download). */
-    downloads: {} as Record<string, { progress: DownloadProgress | null; stage: 'model' | 'vision' }>,
+    downloads: {} as Record<string, { progress: DownloadProgress | null; stage: 'model' | 'vision'; part?: { index: number; count: number } }>,
     error: null as string | null,
     modelsDirectory: '',
     successMessage: null as string | null,
@@ -553,6 +573,26 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
           return;
         }
         if (st.downloading) return;
+        // A sharded download: continue the part loop from where it stopped.
+        if (a.partCount && a.partCount > 1 && a.modelFilename) {
+          const hit = variantByFirstPart(a.familyId, a.modelFilename);
+          if (!hit) {
+            forgetActiveDownload(a.familyId);
+            const { [a.familyId]: _gone, ...rest } = store.downloads;
+            store.downloads = rest;
+            return;
+          }
+          downloadParts$(a.familyId, hit.family, hit.variant, a.familyName, a.isFirstModel, a.partIndex ?? 1)
+            .then(() => finalizeDownload(a.familyId, a.modelFilename!, a.familyName, a.isFirstModel))
+            .catch((error) => {
+              console.error('Resume failed:', error);
+              store.error = getUserFriendlyErrorMessage(error);
+              forgetActiveDownload(a.familyId);
+              const { [a.familyId]: _failed, ...rest } = store.downloads;
+              store.downloads = rest;
+            });
+          return;
+        }
         const url = downloadUrlFor(a.filename);
         if (!url) {
           // A pasted custom URL we no longer have: let the card go; the
@@ -628,6 +668,50 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     }
   });
 
+  /** Download the parts of a sharded variant in order, from `startPart`
+   *  (1-based). Parts already on disk are skipped; each part resumes its own
+   *  .part. The card shows "part i of N". Throws on a real failure. */
+  const downloadParts$ = $(async (
+    familyId: string,
+    family: ModelFamily,
+    variant: ModelVariant,
+    displayName: string,
+    isFirstModel: boolean,
+    startPart: number,
+  ) => {
+    const count = variant.shards ?? 1;
+    for (let i = Math.max(1, startPart); i <= count; i++) {
+      const filename = shardFilename(variant.filename, i);
+      const url = shardUrl(variant.downloadUrl, i);
+      const current = store.downloads[familyId];
+      store.downloads = {
+        ...store.downloads,
+        [familyId]: { progress: null, stage: current?.stage ?? 'model', part: { index: i, count } },
+      };
+      rememberActiveDownload({
+        familyId,
+        familyName: displayName,
+        filename,
+        modelFilename: variant.filename,
+        partIndex: i,
+        partCount: count,
+        isFirstModel,
+        startedAt: Date.now(),
+      });
+      try {
+        await modelManager.downloadModel(url, filename, (progress) => {
+          const now = store.downloads[familyId];
+          store.downloads = { ...store.downloads, [familyId]: { stage: now?.stage ?? 'model', part: { index: i, count }, progress } };
+        });
+      } catch (error) {
+        // A part that finished earlier reports "already downloaded": move on.
+        const msg = error instanceof Error ? error.message : String(error);
+        if (!msg.includes('already downloaded')) throw error;
+      }
+    }
+    void family;
+  });
+
   const handleDownload$ = $(async (familyId: string) => {
     const variant = store.selectedVariants[familyId];
     const family = modelFamilies.find((f) => f.id === familyId);
@@ -666,10 +750,14 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     rememberActiveDownload(activeDownload);
 
     try {
+      if ((variant.shards ?? 1) > 1) {
+        await downloadParts$(familyId, family, variant, displayName, isFirstModel, 1);
+      } else {
       await modelManager.downloadModel(variant.downloadUrl, variant.filename, (progress) => {
         const current = store.downloads[familyId];
         store.downloads = { ...store.downloads, [familyId]: { stage: current?.stage ?? 'model', progress } };
       });
+      }
 
       // A vision model is only half-installed without its projector (the "eyes").
       // Pull the matching one too — paired by the same filename-prefix rule the
@@ -1297,7 +1385,9 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                 <LuHardDriveDownload class="w-4 h-4" />
                 {projector
                   ? `Download (${selectedVariant.size} GB + ${projector.size} GB vision)`
-                  : `Download (${selectedVariant.size} GB)`}
+                  : (selectedVariant.shards ?? 1) > 1
+                    ? `Download (${selectedVariant.size} GB in ${selectedVariant.shards} parts)`
+                    : `Download (${selectedVariant.size} GB)`}
               </LiquidMetalButton>
             </div>
           )}
@@ -1570,8 +1660,8 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                       title="Trained context = what the model was built to handle. 'Runs at' = the context Your Own AI starts it with on this machine."
                     >
                       {model.damaged
-                        ? `${model.size} · incomplete or corrupted - delete it and download again`
-                        : `${quantization} · ${model.size}`}
+                        ? `${model.size} · ${model.damaged.startsWith('incomplete') ? model.damaged : 'incomplete or corrupted'} - delete it and download again`
+                        : `${quantization} · ${model.size}${model.shard_count ? ` · ${model.shard_count} parts` : ''}`}
                       {!model.damaged && fitInfo && fitInfo.context_runtime > 0
                         ? ` · runs at ${formatContext(fitInfo.context_runtime)}${fitInfo.agent_template_ok ? ' · works in projects' : ''}`
                         : ''}

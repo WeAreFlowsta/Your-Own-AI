@@ -65,14 +65,28 @@ pub(crate) fn get(app: &tauri::AppHandle, model: &str) -> Option<String> {
         return None;
     }
     let dir = crate::llm::get_models_dir(app).ok()?;
-    let meta = std::fs::metadata(dir.join(model)).ok()?;
+    let path = dir.join(model);
     let m = read_manifest(app);
-    let e = m.get(model)?;
-    if e.size == meta.len() && e.mtime == mtime_secs(&meta) {
-        Some(e.sha256.clone())
-    } else {
-        None
+    let current = |name: &str| -> Option<String> {
+        let meta = std::fs::metadata(dir.join(name)).ok()?;
+        let e = m.get(name)?;
+        (e.size == meta.len() && e.mtime == mtime_secs(&meta)).then(|| e.sha256.clone())
+    };
+    // A sharded model answers as a set: the digest of its shards' hashes in
+    // order - one value that changes if any part changes, absent until every
+    // part has been hashed.
+    if let Some((_, 1, n)) = crate::gguf::shard_name_parts(&path) {
+        if n > 1 {
+            let mut all = Sha256::new();
+            for p in crate::gguf::shard_paths(&path, n) {
+                let name = p.file_name()?.to_string_lossy().to_string();
+                all.update(current(&name)?.as_bytes());
+                all.update(b"\n");
+            }
+            return Some(hex::encode(all.finalize()));
+        }
     }
+    current(model)
 }
 
 /// Hash one file and store it. Blocking - call from a blocking task.
