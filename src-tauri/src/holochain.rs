@@ -481,7 +481,9 @@ impl HolochainManager {
             // records load from disk, and disabled cells cannot be asked.
             // The source chain on disk is the truth: probe it whenever the
             // zome count did not already prove data.
-            let chain_stats = if conversations.unwrap_or(0) == 0 {
+            // Disabled cells are classified by status alone - their dump
+            // would fail anyway, and 142 of them warn-spam the log.
+            let chain_stats = if enabled && conversations.unwrap_or(0) == 0 {
                 match Self::first_cell_id(app) {
                     Some(cell_id) => match admin_ws.dump_state(cell_id).await {
                         Ok(dump) => chain_stats_from_dump(&dump),
