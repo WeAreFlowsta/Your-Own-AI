@@ -2701,13 +2701,20 @@ pub async fn stream_chat_completion(
             body["chat_template_kwargs"] = serde_json::Value::Object(tpl_kwargs);
         }
     }
-    // gpt-oss always reasons (its template has no thinking switch) and at its
-    // default depth a short chat turn can spend the whole reply in the
-    // analysis channel and end with no visible answer. Plain chat turns ask
-    // for low effort - the server passes reasoning_effort into the template;
-    // report turns keep the model's default depth.
-    if !should_think && model_name.to_lowercase().contains("gpt-oss") {
-        body["reasoning_effort"] = serde_json::Value::String("low".to_string());
+    // Chat turns answer directly; Report turns think. `--reasoning off` only
+    // reaches templates with a thinking switch - always-reasoning models
+    // (LFM2.5, gpt-oss, ...) ignore it and can spend the whole reply
+    // thinking with nothing visible (seen on the dev-box matrix: 800 tokens
+    // of reasoning, 0 answer). The server's per-request reasoning budget
+    // closes that for any model whose thinking tags it knows: budget 0 =
+    // the model goes straight to the answer. Report mode leaves it open.
+    if !should_think {
+        body["reasoning_budget_tokens"] = serde_json::json!(0);
+        // gpt-oss additionally takes an effort level through its template;
+        // low keeps its analysis channel short where the budget cannot act.
+        if model_name.to_lowercase().contains("gpt-oss") {
+            body["reasoning_effort"] = serde_json::Value::String("low".to_string());
+        }
     }
     // Optional GBNF grammar to constrain output (local llama.cpp only — used by
     // memory extraction to force schema-valid JSON). Online providers don't take
@@ -3359,13 +3366,24 @@ mod live_matrix {
         }
         eprintln!("[matrix] loaded in {:.1} s", t0.elapsed().as_secs_f64());
 
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": model,
             "messages": [{"role": "user", "content": "In about 120 words, explain why the sky is blue."}],
-            "max_tokens": 200,
+            "max_tokens": 800,
             "temperature": 0,
             "stream": false,
         });
+        // Chat-turn shape by default (the app sends reasoning_budget_tokens 0 on
+        // chat turns so always-reasoning models answer directly); override with
+        // YOAI_MATRIX_REASONING_BUDGET=N (-1 = unlimited, Report-mode shape).
+        let budget: i64 = std::env::var("YOAI_MATRIX_REASONING_BUDGET")
+            .ok()
+            .and_then(|b| b.parse().ok())
+            .unwrap_or(0);
+        if budget >= 0 {
+            body["reasoning_budget_tokens"] = serde_json::json!(budget);
+        }
+        eprintln!("[matrix] reasoning budget: {}", if budget < 0 { "unlimited".to_string() } else { budget.to_string() });
         let resp: serde_json::Value = client
             .post(format!("http://127.0.0.1:{PORT}/v1/chat/completions"))
             .json(&body)
@@ -3385,7 +3403,10 @@ mod live_matrix {
             "[matrix] reply {} chars (reasoning {} chars), {n_gen} tokens, gen {tps:.1} tok/s, prompt {pp:.1} tok/s",
             content.len(), reasoning.len()
         );
-        eprintln!("[matrix] first line: {}", content.lines().next().unwrap_or("").chars().take(120).collect::<String>());
+        eprintln!(
+            "[matrix] first line: {}",
+            content.lines().find(|l| !l.trim().is_empty()).unwrap_or("").chars().take(120).collect::<String>()
+        );
         assert!(!content.trim().is_empty(), "reply had no visible content");
         assert!(tps > 0.0, "server reported no generation timing");
         assert!(n_gen >= 20, "reply too short to measure ({n_gen} tokens)");

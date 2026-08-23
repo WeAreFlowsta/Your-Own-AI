@@ -667,7 +667,7 @@ export const modelFamilies: ModelFamily[] = [
     category: 'fast',
     recommended: true,
     capabilities: ['chat', 'agentic', 'multilingual', 'reasoning', 'writing'],
-    traits: ['new', 'moe'],
+    traits: ['new', 'moe', 'thinking'],
     license: {
       id: 'lfm-open-1.0',
       name: 'LFM Open License v1.0',
