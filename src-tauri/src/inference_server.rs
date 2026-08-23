@@ -559,7 +559,7 @@ async fn chat_completions(
                     use tauri::Emitter as _;
                     let _ = app.emit(
                         "agent-route",
-                        json!({ "ai": ai.name, "model": r.model, "online": r.model.starts_with("online:") }),
+                        json!({ "ai": ai.name, "model": r.model, "online": r.model.starts_with("online:"), "reason": r.reason }),
                     );
                 }
                 ai.model = r.model;

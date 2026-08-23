@@ -69,6 +69,8 @@ export interface AgentSessionState {
    *  named for what it is: waiting on a provider, not local thinking. Empty
    *  for offline picks. */
   waitingOn: string;
+  /** Why routing picked the serving model (from the agent-route event). */
+  routeReason: string;
   /** Every file path the agent touched this session (viewer feed). */
   touchedFiles: string[];
   /** Set when a turn died on an overloaded upstream model: the explicit
@@ -361,6 +363,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     liveStatus: "",
     retryStatus: "",
     waitingOn: "",
+    routeReason: "",
     touchedFiles: [],
     overloadOffer: null,
     permissionMode: "ask",
@@ -1211,7 +1214,9 @@ export function useAgentSession(props: UseAgentSessionProps) {
                 ? `online:${modelKey}`
                 : modelKey
               : m.servedBy,
-            routingReason: `Agent session in ${folder ?? "your project"}`,
+            routingReason: state.routeReason
+              ? `Agent session in ${folder ?? "your project"} - ${state.routeReason}`
+              : `Agent session in ${folder ?? "your project"}`,
             agentStats: {
               durationMs: usage.apiDurationMs,
               modelCalls: usage.modelCalls,
@@ -1376,6 +1381,9 @@ export function useAgentSession(props: UseAgentSessionProps) {
     const unRoute = await listen<any>("agent-route", (e) => {
       const model = typeof e.payload?.model === "string" ? e.payload.model : "";
       state.waitingOn = e.payload?.online ? model.replace(/^online:/, "") : "";
+      // Why routing picked it - shown on the turn's Model button (e.g.
+      // "online by default (Ornith on your device is as capable)").
+      state.routeReason = typeof e.payload?.reason === "string" ? e.payload.reason : "";
     });
 
     // App-side hints about the agent's work that the agent itself may not

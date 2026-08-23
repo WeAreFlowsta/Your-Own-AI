@@ -294,6 +294,29 @@ fn faster(a: Option<f64>, b: Option<f64>) -> std::cmp::Ordering {
     }
 }
 
+/// Capability used to rank agent candidates: the tool-driving tier
+/// dominates, the task score (coding for agent turns, reasoning for
+/// planning) breaks ties.
+fn agent_rank_cap(agent_caps: u8, task_cap: u8) -> u8 {
+    agent_caps.saturating_mul(10).saturating_add(task_cap.min(9))
+}
+
+/// Slowest measured speed at which a local model still counts as ready for
+/// agent work. Agent loops burn tokens for many steps; below this a
+/// session is a crawl however well the model fits.
+pub const AGENT_MIN_TPS: f64 = 8.0;
+
+/// Is this local model ready to carry agent work here: a fast fit (fully on
+/// the card, or GPU + RAM) AND, once it has been measured on this machine,
+/// at least `AGENT_MIN_TPS`. Unmeasured = the fit decides.
+pub fn agent_ready(f: &crate::fit::ModelFit) -> bool {
+    f.fit.is_fast() && agent_speed_ok(f.measured_tps)
+}
+
+fn agent_speed_ok(measured_tps: Option<f64>) -> bool {
+    measured_tps.map_or(true, |t| t >= AGENT_MIN_TPS)
+}
+
 /// The lean-dependent ordering (greater = better; see `pick_offline` docs).
 fn offline_ordering(lean: &str, a: OfflineRank, b: OfflineRank) -> std::cmp::Ordering {
     use std::cmp::Ordering::Equal;
@@ -389,10 +412,19 @@ async fn pick_offline_for(app: &AppHandle, task: &str, lean: &str, agent_only: b
         }
     }
 
-    // fit tier: green(2) > yellow(1) > red(0).
     // fit tier: green / split (fast) = 2 > yellow = 1 > red = 0.
     let tier = |f: &crate::fit::ModelFit| f.fit.tier();
-    let cap = |name: &str| crate::model_caps::caps_for(name).by_task(task);
+    // Agent sessions rank on tool-driving capability first (the task score
+    // breaks ties) and always in the balanced order - a weak driver wastes
+    // a whole session, so the speed lean only decides between equals.
+    let cap = |name: &str| {
+        if agent_only {
+            agent_rank_cap(crate::model_caps::agent_caps(name), crate::model_caps::caps_for(name).by_task(task))
+        } else {
+            crate::model_caps::caps_for(name).by_task(task)
+        }
+    };
+    let lean = if agent_only { "balanced" } else { lean };
 
     // Prefer models that actually run (green/yellow); fall back to red only if
     // every model is red (better to try than to refuse). Models that already
@@ -710,7 +742,12 @@ pub async fn agent_serving_context(
     // Mirror route_inner's agent branch: privacy with a capable local model
     // serves locally; otherwise the Agent/Planning slot chain decides.
     let offline_task = if plan { "reasoning" } else { "code" };
-    let offline_ok = pick_offline(app, offline_task, "balanced", true).await.is_ok();
+    // Same bar as route_inner: the picked local model must be READY for
+    // agent work (fast fit, measured speed), not merely installed.
+    let offline_ok = match pick_offline(app, offline_task, "balanced", true).await {
+        Ok(name) => crate::fit::assess(app).await.iter().any(|f| f.name == name && agent_ready(f)),
+        Err(_) => false,
+    };
     if (eagerness == "privacy" || store_pref(app, "routingProjectThrifty").as_deref() == Some("1"))
         && offline_ok
     {
@@ -750,7 +787,7 @@ pub async fn device_subagents_enabled(app: &AppHandle) -> bool {
     crate::fit::assess(app)
         .await
         .iter()
-        .any(|f| crate::model_caps::agent_caps(&f.name) >= 6 && f.fit.is_fast())
+        .any(|f| crate::model_caps::agent_caps(&f.name) >= 6 && agent_ready(f))
 }
 
 /// A slot preference from the Rust-readable settings store (mirrored there
@@ -1074,7 +1111,7 @@ async fn route_inner(
             Some(name) => crate::fit::assess(app)
                 .await
                 .iter()
-                .any(|f| f.name == *name && f.fit.is_fast()),
+                .any(|f| f.name == *name && agent_ready(f)),
             None => false,
         };
         let t_green = tg.elapsed().as_millis();
@@ -1085,7 +1122,7 @@ async fn route_inner(
                     reason: "agent work on your device".to_string(),
                 })
                 .ok_or_else(|| {
-                    "No installed model can drive agent work - download an agentic model (Qwen 3.5, GLM, a coder) or use an online-capable AI".to_string()
+                    "No installed model can drive agent work - download an agentic model (Ornith, Qwen 3.6, GLM, Nemotron 3.5, a coder) or use an online-capable AI".to_string()
                 });
         }
         if eagerness == "privacy" {
@@ -1098,7 +1135,7 @@ async fn route_inner(
                 });
             }
             return Err(
-                "No local model runs comfortably enough for private agent work on this hardware - download a smaller agentic model, or allow online for projects".to_string(),
+                "No local model runs comfortably enough for private agent work on this hardware (a fast fit at 8+ tokens/s) - download a smaller agentic model, or allow online for projects".to_string(),
             );
         }
         // The cost-saver setting: whole project sessions stay on the device
@@ -1128,14 +1165,22 @@ async fn route_inner(
                 // The ledger and on-chain provenance must say WHY this model:
                 // an accepted overload offer is the user's call, not routing's.
                 let reason = if !plan && agent_online_override().as_deref() == Some(id.as_str()) {
-                    "agent work on your session pick (accepted after an overloaded model)"
+                    "agent work on your session pick (accepted after an overloaded model)".to_string()
+                } else if let Some(local) = offline
+                    .as_deref()
+                    .filter(|_| offline_green)
+                    .filter(|m| crate::model_caps::agent_caps(m) >= crate::model_caps::online_agent_caps(&id))
+                {
+                    // Online by default, but an equally capable model runs well
+                    // here: say so, so the user can choose local (free, private)
+                    // in Settings > Routing. A nudge by information, never a
+                    // silent switch.
+                    let local = local.trim_end_matches(".gguf");
+                    format!("agent work online by default ({local} on your device is as capable - Settings > Routing)")
                 } else {
-                    "agent work on a stronger online model"
+                    "agent work on a stronger online model".to_string()
                 };
-                return Ok(RouteResult {
-                    model: id,
-                    reason: reason.to_string(),
-                });
+                return Ok(RouteResult { model: id, reason });
             }
         }
         return offline
@@ -1365,6 +1410,21 @@ pub async fn route_model(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn agent_rank_prefers_tool_tier_then_task() {
+        // Ornith (9) beats a coder (8) even when the coder's task score is higher.
+        assert!(super::agent_rank_cap(9, 7) > super::agent_rank_cap(8, 9));
+        // Same tool tier: the task score decides.
+        assert!(super::agent_rank_cap(8, 8) > super::agent_rank_cap(8, 6));
+    }
+
+    #[test]
+    fn agent_speed_floor() {
+        assert!(super::agent_speed_ok(None), "unmeasured: the fit decides");
+        assert!(super::agent_speed_ok(Some(30.0)));
+        assert!(!super::agent_speed_ok(Some(5.0)), "a measured crawl is not agent-ready");
+    }
+
 
     fn om(id: &str, name: &str, desc: &str, search_fee: Option<f64>) -> crate::flowsta::OnlineModel {
         crate::flowsta::OnlineModel {

@@ -91,6 +91,7 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   like it started over.
 
 ### Routing
+- Project work: local picks for agent sessions rank tool capability first (the speed lean only decides between equals); a local model counts as ready for agent work only when it fits fast and, once measured here, keeps 8+ tokens a second - the same bar for side-work on this device and for "keep whole project sessions on this device". When a session goes online by default while an equally capable local model is ready, the Model button says so.
 
 - The Auto modes now judge models by how they actually run here, not by
   where their weights sit: a mixture-of-experts model running GPU + RAM
