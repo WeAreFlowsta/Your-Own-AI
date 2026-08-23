@@ -3,7 +3,7 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
-## [0.5.2] - 2026-08-23
+## [0.6.0] - 2026-08-23
 
 ### A damaged model file can't take the app down
 
