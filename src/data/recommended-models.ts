@@ -652,6 +652,124 @@ export const modelFamilies: ModelFamily[] = [
     ]
   },
   {
+    // Liquid AI's small mixture-of-experts: 8.3B total, 1.5B active. The
+    // first MoE that fits a 12-16 GB machine (a 4.8 GiB file) - the class
+    // that had no MoE option before. Reasoning-tuned, strong instruction
+    // following for its size (its own table: IFEval 91.8 vs Gemma-4 E4B 87.7),
+    // 10 languages, 128K context. Official GGUF.
+    id: 'lfm2-5',
+    maker: 'Liquid AI',
+    quantizedBy: 'Liquid AI',
+    contextWindow: 128000,
+    released: '2026-05-28',
+    name: 'LFM2.5',
+    description: 'Liquid AI\'s small mixture-of-experts - 8B total, 1.5B active per token, so it runs fast on ordinary machines. Strong instruction following and tool use for its size; 10 languages.',
+    category: 'fast',
+    recommended: true,
+    capabilities: ['chat', 'agentic', 'multilingual', 'reasoning', 'writing'],
+    traits: ['new', 'moe'],
+    license: {
+      id: 'lfm-open-1.0',
+      name: 'LFM Open License v1.0',
+      url: 'https://huggingface.co/LiquidAI/LFM2.5-8B-A1B/blob/main/LICENSE',
+      notice: 'LFM2.5-8B-A1B is licensed under the LFM Open License v1.0.',
+      points: [
+        'Free to use, including commercially, for individuals and organizations under US$10 million in annual revenue.',
+        'Organizations at or above that threshold need a separate license from Liquid AI for commercial use.',
+        'Keep the license and attribution notices with any copies or derivatives you distribute.',
+      ],
+    },
+    variants: [
+      {
+        parameterCount: '8B-A1B (MoE)',
+        size: 5.2,
+        minRAM: 12,
+        downloadUrl: 'https://huggingface.co/LiquidAI/LFM2.5-8B-A1B-GGUF/resolve/main/LFM2.5-8B-A1B-Q4_K_M.gguf',
+        filename: 'LFM2.5-8B-A1B-Q4_K_M.gguf',
+        quantization: 'Q4_K_M'
+      }
+    ]
+  },
+  {
+    // IBM's small hybrid mixture-of-experts (Mamba-2 + MoE, 7B total, ~1B
+    // active): a 3.9 GiB file with a 1M-token trained context, Apache-2.0.
+    // The permissive long-context pick for small machines. Official GGUF.
+    id: 'granite-4-tiny',
+    maker: 'IBM',
+    quantizedBy: 'IBM',
+    contextWindow: 1048576,
+    released: '2025-09-16',
+    name: 'Granite 4.0 Tiny',
+    description: 'IBM\'s small hybrid mixture-of-experts - 7B total, about 1B active per token, with a 1M-token context. Apache-2.0. A fast, permissive everyday model for long documents.',
+    category: 'fast',
+    recommended: true,
+    capabilities: ['chat', 'long-context', 'agentic', 'writing'],
+    traits: ['moe'],
+    variants: [
+      {
+        parameterCount: '7B-A1B (MoE)',
+        size: 4.2,
+        minRAM: 8,
+        downloadUrl: 'https://huggingface.co/ibm-granite/granite-4.0-h-tiny-GGUF/resolve/main/granite-4.0-h-tiny-Q4_K_M.gguf',
+        filename: 'granite-4.0-h-tiny-Q4_K_M.gguf',
+        quantization: 'Q4_K_M'
+      }
+    ]
+  },
+  {
+    // NVIDIA's August 2026 hybrid (Mamba-2 + MoE) reasoning model: 30B total,
+    // 3B active, 128 experts, 256K context (1M supported). The newest MoE in
+    // its class; llama.cpp's own GGUF (Q4_0). A 32 GB-RAM machine runs it
+    // with the experts in main memory. OpenMDW-1.1 (open weights + data).
+    id: 'nemotron-3-5',
+    maker: 'NVIDIA',
+    quantizedBy: 'the llama.cpp team (ggml-org)',
+    contextWindow: 262144,
+    released: '2026-08-11',
+    name: 'Nemotron 3.5 Lightning',
+    description: 'NVIDIA\'s newest open reasoning model - a 30B mixture-of-experts with 3B active per token and a 256K context. Strong reasoning, coding, and tool use; runs on a 32 GB machine with the experts in main memory.',
+    category: 'quality',
+    recommended: true,
+    capabilities: ['reasoning', 'agentic', 'coding', 'long-context', 'analysis', 'chat'],
+    traits: ['new', 'moe', 'thinking'],
+    variants: [
+      {
+        parameterCount: '30B-A3B (MoE)',
+        size: 18.9,
+        minRAM: 32,
+        downloadUrl: 'https://huggingface.co/ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/main/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf',
+        filename: 'NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf',
+        quantization: 'Q4_0'
+      }
+    ]
+  },
+  {
+    // Ant Group's Ling-mini 2.0: 16B total, 1.4B active, MIT, 128K. The
+    // mid-size MoE for 24 GB machines (a 9.2 GiB file) between the small
+    // MoEs and the 20-35B class. Official GGUF.
+    id: 'ling-mini-2',
+    maker: 'Ant Group (inclusionAI)',
+    quantizedBy: 'inclusionAI',
+    contextWindow: 131072,
+    released: '2025-09-08',
+    name: 'Ling-mini 2.0',
+    description: 'Ant Group\'s mid-size mixture-of-experts - 16B total, 1.4B active per token. MIT-licensed, 128K context; a quick all-rounder for 24 GB machines.',
+    category: 'balanced',
+    recommended: false,
+    capabilities: ['chat', 'reasoning', 'coding', 'writing'],
+    traits: ['moe'],
+    variants: [
+      {
+        parameterCount: '16B-A1.4B (MoE)',
+        size: 9.9,
+        minRAM: 24,
+        downloadUrl: 'https://huggingface.co/inclusionAI/Ling-mini-2.0-GGUF/resolve/main/Ling-mini-2.0-Q4_K_M.gguf',
+        filename: 'Ling-mini-2.0-Q4_K_M.gguf',
+        quantization: 'Q4_K_M'
+      }
+    ]
+  },
+  {
     id: 'deepseek-r1',
     maker: 'DeepSeek',
     quantizedBy: 'Unsloth',

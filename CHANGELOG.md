@@ -39,6 +39,17 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   question no longer ends inside its reasoning with nothing visible; and
   it is no longer used for memory extraction, which it cannot format.
 
+### New models - mixture-of-experts for every size of machine
+
+- Four additions to the offline catalog, all mixture-of-experts and all
+  running on the new split-memory path: **LFM2.5 8B-A1B** (Liquid AI -
+  a 4.8 GB file for 12-16 GB machines, the first MoE that fits them),
+  **Granite 4.0 Tiny** (IBM - 3.9 GB, a 1M-token context, Apache-2.0),
+  **Nemotron 3.5 Lightning 30B-A3B** (NVIDIA's August 2026 reasoning
+  model, for 32 GB machines) and **Ling-mini 2.0** (Ant Group - 16B-A1.4B,
+  MIT, for 24 GB machines). LFM2.5 asks you to accept Liquid AI's license
+  once before its first download.
+
 ### Downloads
 
 - Several models can download at once, each card with its own progress

@@ -61,6 +61,22 @@ pub fn known_caps(model_name: &str) -> Option<Caps> {
     if n.contains("gpt-oss") || n.contains("gpt_oss") || n.contains("gptoss") {
         return Some(Caps { overall: 8, coding: 7, reasoning: 8, math: 7, vision: 0, medical: 6 });
     }
+    // NVIDIA Nemotron 3.5 Lightning (2026-08): 30B-A3B hybrid reasoning model -
+    // reasoning/agentic/coding in the gpt-oss class. Re-rank after field use.
+    if n.contains("nemotron-3.5") || n.contains("nemotron-3-5") {
+        return Some(Caps { overall: 8, coding: 8, reasoning: 8, math: 7, vision: 0, medical: 3 });
+    }
+    // Small MoEs for ordinary machines (2026 catalog adds): capable chat /
+    // instruction-following / tool use for their size, not frontier coders.
+    if n.contains("lfm2") {
+        return Some(Caps { overall: 6, coding: 5, reasoning: 6, math: 5, vision: 0, medical: 3 });
+    }
+    if n.contains("granite-4") {
+        return Some(Caps { overall: 6, coding: 6, reasoning: 6, math: 5, vision: 0, medical: 3 });
+    }
+    if n.contains("ling-mini") {
+        return Some(Caps { overall: 6, coding: 6, reasoning: 6, math: 6, vision: 0, medical: 3 });
+    }
     // GLM (Zhipu) — strong all-rounder, agentic coding + reasoning + tool use.
     if n.contains("glm") {
         return Some(Caps { overall: 8, coding: 8, reasoning: 8, math: 7, vision: 0, medical: 3 });
@@ -151,6 +167,16 @@ pub fn agent_caps(model_name: &str) -> u8 {
     }
     if n.contains("glm") {
         return 8;
+    }
+    // Conservative until a live folder test promotes them (registry rule).
+    if n.contains("nemotron-3.5") || n.contains("nemotron-3-5") {
+        return 7;
+    }
+    if n.contains("lfm2") {
+        return 6;
+    }
+    if n.contains("granite-4") || n.contains("ling-mini") {
+        return 5;
     }
     if n.contains("coder") || n.contains("-code") || n.contains("codestral") || n.contains("devstral") {
         return 8;
