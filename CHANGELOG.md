@@ -77,11 +77,14 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   once before its first download.
 
 ### Model storage
-- Choose where models are stored: the models page now shows how much your
-  models take and how much room the drive has, with a Change button that
-  moves everything to a folder you pick - a second drive, an external SSD.
-  Downloads follow, moves roll back safely if interrupted, and if the drive
-  is missing later the app falls back to its default folder until it returns.
+- Choose where models are stored - and not just chat models: vision files,
+  speed-up drafts, engine packs, OCR models, and the Build agent all live in
+  the same folder and move together. The control is on the offline models
+  page and in Settings > Components. It shows how much is stored and how
+  much room the drive has, with a Change button that moves everything to a
+  folder you pick - a second drive, an external SSD. Downloads follow, moves
+  roll back safely if interrupted, and if the drive is missing later the app
+  falls back to its default folder until it returns.
 - Downloads check disk space up front and say plainly what is missing
   ("needs 22.4 GB free on the models drive, 9.1 GB available") instead of
   failing mid-file with "no space left".
@@ -140,10 +143,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - History stays reachable even when older storage generations are switched
   off - reading your records no longer depends on every generation being
   awake at once.
-- New in Help & diagnostics: "Run cell census" counts the storage cells
-  behind your AIs and how much history each holds, measured straight from
-  disk, and writes a report file you can review. Reads only, changes
-  nothing.
+- In beta builds, Help & diagnostics gains "Run cell census": counts the
+  storage cells behind your AIs and how much history each holds, measured
+  straight from disk, and writes a report file you can review. Reads only,
+  changes nothing.
 
 - Replies from online models now record the provider's own fingerprint
   for the backend that answered (when the provider sends one), alongside

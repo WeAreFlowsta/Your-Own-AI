@@ -6,6 +6,7 @@
  * (a first-use prompt) elsewhere; this is the manage/remove home.
  */
 import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
+import ModelStorageLocation from "./ModelStorageLocation";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { LuBrain, LuEye, LuFileText, LuSparkles, LuCheck, LuDownload, LuTrash2, LuFolderOpen } from "@qwikest/icons/lucide";
@@ -487,6 +488,16 @@ export default component$(() => {
           icon="scan"
           activeLabel="Installed — scanned PDFs are read on your device."
         />
+      </div>
+
+      <div class="mt-6 pt-5 border-t border-[var(--border-subtle)]">
+        <h3 class="font-semibold text-[var(--text-primary)] mb-1">Storage location</h3>
+        <p class="text-sm text-[var(--text-secondary)] mb-3">
+          Models and the other large components above download to one folder.
+          Move it to any drive - an external SSD, a roomier partition - and
+          future downloads follow.
+        </p>
+        <ModelStorageLocation showPath />
       </div>
     </section>
   );

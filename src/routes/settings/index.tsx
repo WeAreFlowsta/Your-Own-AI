@@ -1526,6 +1526,8 @@ export default component$(() => {
                 {diagError.value && (
                   <p class="mt-3 text-xs text-red-400">{diagError.value}</p>
                 )}
+                {(appVersion.value.includes("beta") || import.meta.env.DEV) && (
+                <>
                 <p class="mt-5 text-sm text-[var(--text-secondary)] mb-3">
                   <span class="font-semibold text-[var(--text-primary)]">
                     Records cell census
@@ -1549,6 +1551,8 @@ export default component$(() => {
                 )}
                 {censusError.value && (
                   <p class="mt-3 text-xs text-red-400">{censusError.value}</p>
+                )}
+                </>
                 )}
               </section>
 
