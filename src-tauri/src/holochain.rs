@@ -611,6 +611,67 @@ impl HolochainManager {
         }))
     }
 
+    /// Tidy v2: turn off exactly the cells a FRESH census just verified
+    /// as empty (zero app entries, not live, not already disabled).
+    /// `disable_app` only - reversible, nothing deleted, and the adopt
+    /// path re-enables a disabled cell if its id is ever asked for again.
+    /// The lineage index keeps disabled generations as links, so history
+    /// reads stay whole - the 08-19 severing cannot recur.
+    pub async fn tidy_cells(&self, live: &[(String, String)]) -> Result<serde_json::Value, String> {
+        let report = self.cell_lineage_report(live).await?;
+        let planned: Vec<String> = report["would_disable"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+            .unwrap_or_default();
+        let key_by_app: HashMap<String, String> = report["cells"]
+            .as_array()
+            .map(|cells| {
+                cells
+                    .iter()
+                    .filter_map(|c| {
+                        Some((
+                            c["app_id"].as_str()?.to_string(),
+                            c["agent_key"].as_str()?.to_string(),
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let admin_ws = holochain_client::AdminWebsocket::connect(
+            format!("localhost:{}", self.handle.admin_port),
+            Some("your-own-ai".to_string()),
+        )
+        .await
+        .map_err(|e| format!("Failed to connect to admin WebSocket: {}", e))?;
+        let mut disabled = 0u64;
+        let mut errors: Vec<String> = Vec::new();
+        for app_id in &planned {
+            match admin_ws.disable_app(app_id.clone()).await {
+                Ok(_) => {
+                    disabled += 1;
+                    // A just-disabled cell must not be dialed again this
+                    // session; the lineage index still links through it.
+                    if let Some(key) = key_by_app.get(app_id) {
+                        self.agents.lock().await.remove(key);
+                    }
+                }
+                Err(e) => errors.push(format!("{app_id}: {e:?}")),
+            }
+        }
+        log::info!(
+            "[cells] tidy v2: {} of {} verified-empty cells disabled, {} errors",
+            disabled,
+            planned.len(),
+            errors.len()
+        );
+        Ok(serde_json::json!({
+            "planned": planned.len(),
+            "disabled": disabled,
+            "errors": errors,
+            "census_before": report["summary"],
+        }))
+    }
+
     /// Check if an agent is provisioned (by pub key hex).
     pub async fn is_provisioned(&self, agent_key: &str) -> bool {
         let agents = self.agents.lock().await;

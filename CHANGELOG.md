@@ -148,6 +148,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   measured straight from the on-disk records (bookkeeping writes don't
   count), and writes a report file you can review. Reads only, changes
   nothing.
+- When a census finds verified-empty cells, a follow-up action can quiet
+  them: only cells proven never written to are turned off, nothing is
+  deleted, history stays fully readable, and a quieted cell turns back on
+  by itself if it's ever needed. (Beta builds.)
 
 - Replies from online models now record the provider's own fingerprint
   for the backend that answered (when the provider sends one), alongside

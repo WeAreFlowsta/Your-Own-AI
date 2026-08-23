@@ -843,6 +843,45 @@ pub async fn project_memory_append_note(
     Ok(())
 }
 
+/// Tidy v2 (cell-lineage recovery Phase B, reworked): disable exactly the
+/// cells a fresh census verifies as empty. Manual, reversible, beta-gated
+/// in the UI; writes cell-tidy-log.json beside the census report.
+#[tauri::command]
+pub async fn cell_tidy(
+    app: tauri::AppHandle,
+    hc_state: State<'_, Arc<HolochainState>>,
+) -> Result<serde_json::Value, String> {
+    use tauri::Manager;
+    let manager = hc_state.get()?;
+    let live = live_ais(&app);
+    let result = manager.tidy_cells(&live).await?;
+    if let Ok(dir) = app.path().app_data_dir() {
+        let _ = std::fs::write(
+            dir.join("cell-tidy-log.json"),
+            serde_json::to_string_pretty(&result).unwrap_or_default(),
+        );
+    }
+    Ok(result)
+}
+
+/// Live AIs = the store's custom AIs that carry an agent key.
+fn live_ais(app: &tauri::AppHandle) -> Vec<(String, String)> {
+    use tauri_plugin_store::StoreExt;
+    let mut live: Vec<(String, String)> = Vec::new();
+    if let Ok(store) = app.store("ai-data.json") {
+        if let Some(serde_json::Value::Array(arr)) = store.get("custom-ais") {
+            for ai in arr {
+                let key = ai.get("agentPubKey").and_then(|v| v.as_str()).unwrap_or("");
+                let name = ai.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+                if !key.is_empty() {
+                    live.push((key.to_string(), name.to_string()));
+                }
+            }
+        }
+    }
+    live
+}
+
 /// Phase A of cell-lineage recovery: build the read-only cell census
 /// (CELL_LINEAGE_RECOVERY.md) and save it next to the app data so it can
 /// be reviewed. Changes no cell state.
@@ -852,26 +891,8 @@ pub async fn cell_lineage_report(
     hc_state: State<'_, Arc<HolochainState>>,
 ) -> Result<serde_json::Value, String> {
     use tauri::Manager;
-    use tauri_plugin_store::StoreExt;
     let manager = hc_state.get()?;
-
-    // Live AIs = the store's custom AIs that carry an agent key.
-    let mut live: Vec<(String, String)> = Vec::new();
-    if let Ok(store) = app.store("ai-data.json") {
-        if let Some(serde_json::Value::Array(arr)) = store.get("custom-ais") {
-            for ai in arr {
-                let key = ai
-                    .get("agentPubKey")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let name = ai.get("name").and_then(|v| v.as_str()).unwrap_or("?");
-                if !key.is_empty() {
-                    live.push((key.to_string(), name.to_string()));
-                }
-            }
-        }
-    }
-
+    let live = live_ais(&app);
     let report = manager.cell_lineage_report(&live).await?;
 
     let dir = app

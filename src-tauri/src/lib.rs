@@ -616,6 +616,7 @@ pub fn run() {
             // Holochain transcript commands
             commands_holochain::provision_ai_agent,
             commands_holochain::cell_lineage_report,
+            commands_holochain::cell_tidy,
             commands_holochain::get_conversations_cached,
             commands_holochain::provision_all_agents,
             commands_holochain::start_conversation,

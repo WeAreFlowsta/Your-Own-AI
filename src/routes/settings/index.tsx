@@ -652,6 +652,10 @@ export default component$(() => {
   const censusBusy = useSignal(false);
   const censusResult = useSignal("");
   const censusError = useSignal("");
+  const censusWouldDisable = useSignal(0);
+  const tidyModalOpen = useSignal(false);
+  const tidyBusy = useSignal(false);
+  const tidyResult = useSignal("");
   /** Read-only census of the records cells behind your AIs - counts every
    *  cell's on-disk history and writes cell-lineage-report.json for
    *  review. Changes nothing. */
@@ -666,10 +670,31 @@ export default component$(() => {
       );
       const sm = r.summary as Record<string, number>;
       censusResult.value = `${sm.total_cells} cells for ${sm.live_ais} AIs - ${sm.live} live, ${sm.stranded_data} holding older history, ${(sm.empty_link_verified ?? 0) + (sm.empty_orphan_verified ?? 0)} verified empty, ${sm.unverified} unverified, ${sm.disabled} already quiet. Full report: ${r.path}`;
+      censusWouldDisable.value = sm.would_disable ?? 0;
     } catch (e) {
       censusError.value = String(e);
     } finally {
       censusBusy.value = false;
+    }
+  });
+
+  /** Tidy v2: turn off exactly the cells a FRESH census verifies as empty.
+   *  disable only - reversible, nothing deleted; a cell is re-enabled
+   *  automatically if its id is ever needed again. */
+  const runTidy = $(async () => {
+    tidyModalOpen.value = false;
+    tidyBusy.value = true;
+    tidyResult.value = "";
+    censusError.value = "";
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const r = await invoke<{ planned: number; disabled: number; errors: string[] }>("cell_tidy");
+      tidyResult.value = `${r.disabled} of ${r.planned} empty cells turned off${r.errors.length ? ` - ${r.errors.length} errors (see cell-tidy-log.json)` : ", no errors"}.`;
+      await runCellCensus();
+    } catch (e) {
+      censusError.value = String(e);
+    } finally {
+      tidyBusy.value = false;
     }
   });
   const doReset = $(async () => {
@@ -1549,6 +1574,27 @@ export default component$(() => {
                     {censusResult.value}
                   </p>
                 )}
+                {censusWouldDisable.value > 0 && !censusBusy.value && (
+                  <div class="mt-3">
+                    <LiquidMetalButton
+                      variant="secondary"
+                      onClick$={() => (tidyModalOpen.value = true)}
+                      class="px-4 py-2 text-sm"
+                    >
+                      {tidyBusy.value
+                        ? "Tidying…"
+                        : `Quiet ${censusWouldDisable.value} verified-empty cells`}
+                    </LiquidMetalButton>
+                    <p class="mt-2 text-xs text-[var(--text-muted)]">
+                      Turns off only cells the census verified as never
+                      written to. Reversible; nothing is deleted, and your
+                      history stays fully readable.
+                    </p>
+                  </div>
+                )}
+                {tidyResult.value && (
+                  <p class="mt-3 text-xs text-[var(--text-muted)]">{tidyResult.value}</p>
+                )}
                 {censusError.value && (
                   <p class="mt-3 text-xs text-red-400">{censusError.value}</p>
                 )}
@@ -1582,6 +1628,17 @@ export default component$(() => {
           </div>
         </div>
       </div>
+
+      <ConfirmModal
+        isOpen={tidyModalOpen.value}
+        title="Quiet the verified-empty cells?"
+        message={`This turns off ${censusWouldDisable.value} storage cells the census verified as never written to. Nothing is deleted, history stays readable, and any cell is turned back on automatically if it's ever needed. You can re-run the census afterwards to confirm.`}
+        confirmLabel="Quiet them"
+        cancelLabel="Cancel"
+        busy={tidyBusy.value}
+        onConfirm$={runTidy}
+        onCancel$={() => (tidyModalOpen.value = false)}
+      />
 
       <ConfirmModal
         isOpen={resetModalOpen.value}
