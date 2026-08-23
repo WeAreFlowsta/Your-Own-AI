@@ -687,7 +687,7 @@ export const modelFamilies: ModelFamily[] = [
         // downloader. Among the strongest open models on health/knowledge
         // benchmarks; the fit system hides it from machines that can't run it.
         parameterCount: '120B (5.1B active)',
-        size: 61,
+        size: 65.4,
         minRAM: 80,
         downloadUrl: 'https://huggingface.co/unsloth/gpt-oss-120b-GGUF/resolve/main/gpt-oss-120b-F16.gguf',
         filename: 'gpt-oss-120b-F16.gguf',
