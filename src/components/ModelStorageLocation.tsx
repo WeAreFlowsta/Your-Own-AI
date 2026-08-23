@@ -33,8 +33,15 @@ export default component$<Props>((props) => {
       store.dir = info.dir;
       store.freeBytes = info.free_bytes;
       store.modelsBytes = info.models_bytes;
-    } catch {
-      /* disk numbers are a nicety - the page works without them */
+    } catch (e) {
+      // The path must still show even when the disk numbers don't.
+      store.error = `Couldn't read the drive numbers: ${String(e)}`;
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        store.dir = await invoke<string>('get_models_directory');
+      } catch {
+        /* nothing else to fall back to */
+      }
     }
   });
 

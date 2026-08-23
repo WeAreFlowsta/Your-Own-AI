@@ -252,6 +252,7 @@ pub struct ModelsDiskInfo {
 pub async fn models_disk_info(app_handle: AppHandle) -> Result<ModelsDiskInfo, String> {
     use tauri_plugin_store::StoreExt;
     let dir = get_models_dir(&app_handle)?;
+    log::info!("[models] disk info requested - dir {}", dir.display());
     let (free, total) = disk_space_for(&dir).unwrap_or((0, 0));
     let is_custom = app_handle
         .store("settings.json")
