@@ -24,9 +24,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   with 32 GB of RAM: Qwen3.6 35B-A3B went from 6 to 26 tokens per second,
   gpt-oss 20B from 14 to 23, and the 35B loads in seconds instead of most
   of a minute. The gate is main memory: a 32 GB machine qualifies for the
-  35B, a 16 GB machine is told so honestly. Model cards say "Runs here -
-  split with main memory", and "Best for this computer" can recommend
-  these models.
+  35B, a 16 GB machine is told so honestly. The split is sized from the
+  model file itself - as many of the model's expert layers as fit stay on
+  the card, the rest go to main memory - so a bigger card keeps more.
+  Model cards say "Runs here - split with main memory", and "Best for
+  this computer" can recommend these models.
 
 ### Downloads
 

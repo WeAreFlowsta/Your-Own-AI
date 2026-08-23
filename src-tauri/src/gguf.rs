@@ -36,6 +36,14 @@ pub struct GgufMeta {
     pub n_experts: u64,
     /// `<arch>.expert_used_count` - experts active per token (0 = dense).
     pub n_experts_used: u64,
+    /// Bytes of expert tensors per layer (index = block), from the tensor
+    /// table (sizes = offset deltas, no type table needed). Empty for dense
+    /// models, and for files whose tensor table could not be read - the
+    /// caller then falls back to "all experts on the CPU".
+    pub expert_bytes_per_layer: Vec<u64>,
+    /// Bytes of everything that is not an expert tensor (attention, norms,
+    /// embeddings, shared experts): what stays on the GPU under offload.
+    pub non_expert_bytes: u64,
 }
 
 impl GgufMeta {
@@ -199,6 +207,39 @@ impl<R: Read + Seek> Bounded<R> {
     fn skip_gstr(&mut self) -> std::io::Result<()> {
         let len = self.read_u64()?;
         self.skip(len)
+    }
+
+    /// An array of integer scalars, averaged (rounded up). Some models store
+    /// per-layer values where others store one number - gemma4 keeps
+    /// `attention.head_count_kv` per layer ([2,8,...]) - and the fit math
+    /// wants one representative figure. Non-integer or oversized arrays
+    /// are skipped and read as None.
+    fn read_int_array_mean(&mut self) -> std::io::Result<Option<u64>> {
+        let elem_t = self.read_u32()?;
+        let count = self.read_u64()?;
+        let Some(w) = scalar_width(elem_t) else {
+            // string / nested array under an integer key: not ours
+            return Err(damaged("unexpected array element type under an integer key"));
+        };
+        if count == 0 || count > 4096 {
+            self.skip(w.checked_mul(count).ok_or_else(|| damaged("array size overflows"))?)?;
+            return Ok(None);
+        }
+        let mut sum = 0u64;
+        let mut n = 0u64;
+        for _ in 0..count {
+            match self.read_int_value(elem_t)? {
+                Some(v) => {
+                    sum += v;
+                    n += 1;
+                }
+                None => {
+                    // f32/f64/bool elements: consume and ignore
+                    self.skip(w)?;
+                }
+            }
+        }
+        Ok(if n > 0 { Some((sum + n - 1) / n) } else { None })
     }
 
     /// Read an integer-valued scalar as u64 (for the count keys we care about).
@@ -378,7 +419,10 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
         file_type: 0,
         n_experts: 0,
         n_experts_used: 0,
+        expert_bytes_per_layer: Vec::new(),
+        non_expert_bytes: 0,
     };
+    let mut alignment: u64 = 32;
 
     for _ in 0..kv_count {
         let key = r
@@ -396,7 +440,8 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
             || key.ends_with(".context_length")
             || key.ends_with(".expert_count")
             || key.ends_with(".expert_used_count")
-            || key == "general.file_type";
+            || key == "general.file_type"
+            || key == "general.alignment";
 
         if key == "tokenizer.chat_template" && vtype == 8 {
             let tpl = r.read_gstr().map_err(io)?;
@@ -407,6 +452,16 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
             m.architecture = r.read_gstr().map_err(io)?;
         } else if key == "general.size_label" && vtype == 8 {
             m.size_label = r.read_gstr().map_err(io)?;
+        } else if want_int && vtype == 9 {
+            // Per-layer arrays under a count key (gemma4's head_count_kv):
+            // one representative figure for the fit math.
+            if let Some(v) = r.read_int_array_mean().map_err(io)? {
+                if key.ends_with(".attention.head_count_kv") {
+                    m.n_kv_heads = v;
+                } else if key.ends_with(".attention.head_count") {
+                    m.n_heads = v;
+                }
+            }
         } else if want_int && scalar_width(vtype).is_some() {
             let v = match r.read_int_value(vtype).map_err(io)? {
                 Some(v) => v,
@@ -434,6 +489,8 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
                 m.n_experts = v;
             } else if key == "general.file_type" {
                 m.file_type = v as u32;
+            } else if key == "general.alignment" {
+                alignment = v.max(1);
             }
         } else {
             r.skip_value(vtype).map_err(io)?;
@@ -444,7 +501,87 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
     if m.n_kv_heads == 0 {
         m.n_kv_heads = m.n_heads;
     }
+
+    // Tensor table: name, n_dims, dims, type, offset per tensor. Sizes come
+    // from the offset deltas (tensors are laid out back to back in the data
+    // section), so no ggml type table is needed; the last tensor's size is
+    // the remainder of the file. Only a MoE model's expert split is kept.
+    // A table that will not read leaves the vectors empty - the caller then
+    // pins ALL experts rather than none, never the other way round.
+    if m.is_moe() {
+        if let Err(e) = read_tensor_split(&mut r, tensor_count, alignment, &mut m) {
+            log::warn!("[gguf] tensor table unreadable for {}: {e}", path.display());
+            m.expert_bytes_per_layer.clear();
+            m.non_expert_bytes = 0;
+        }
+    }
     Ok(m)
+}
+
+/// Expert tensors: the per-block feed-forward expert weights llama.cpp's
+/// `--cpu-moe` / `--n-cpu-moe` pin to the CPU (upstream pattern
+/// `blk.N.ffn_(up|down|gate|gate_up)_(ch|)exps`). Returns the block index.
+fn expert_block_of(name: &str) -> Option<usize> {
+    let rest = name.strip_prefix("blk.")?;
+    let dot = rest.find('.')?;
+    let block: usize = rest[..dot].parse().ok()?;
+    let tail = &rest[dot..];
+    let is_exps = [".ffn_up_", ".ffn_down_", ".ffn_gate_", ".ffn_gate_up_"]
+        .iter()
+        .any(|p| {
+            tail.strip_prefix(p)
+                .map(|t| t.starts_with("exps") || t.starts_with("chexps"))
+                .unwrap_or(false)
+        });
+    is_exps.then_some(block)
+}
+
+fn read_tensor_split<R: Read + Seek>(
+    r: &mut Bounded<R>,
+    tensor_count: u64,
+    alignment: u64,
+    m: &mut GgufMeta,
+) -> std::io::Result<()> {
+    // (offset, expert block or None)
+    let mut tensors: Vec<(u64, Option<usize>)> = Vec::with_capacity(tensor_count as usize);
+    for _ in 0..tensor_count {
+        let name = r.read_gstr()?;
+        let n_dims = r.read_u32()?;
+        if n_dims > 8 {
+            return Err(damaged(format!("tensor with {n_dims} dims is not plausible")));
+        }
+        for _ in 0..n_dims {
+            r.read_u64()?;
+        }
+        let _ty = r.read_u32()?;
+        let offset = r.read_u64()?;
+        tensors.push((offset, expert_block_of(&name)));
+    }
+    // Data section starts at the header end rounded up to the alignment.
+    let data_start = r.pos.div_ceil(alignment) * alignment;
+    let data_len = r.len.saturating_sub(data_start);
+    tensors.sort_by_key(|t| t.0);
+    let n_layers = m.n_layers as usize;
+    let mut per_layer = vec![0u64; n_layers];
+    let mut non_expert = 0u64;
+    for (i, (offset, block)) in tensors.iter().enumerate() {
+        let end = tensors.get(i + 1).map(|t| t.0).unwrap_or(data_len);
+        if end < *offset || *offset > data_len {
+            return Err(damaged("tensor offsets run past the file"));
+        }
+        let bytes = end - offset;
+        match block {
+            Some(b) if *b < n_layers => per_layer[*b] += bytes,
+            _ => non_expert += bytes,
+        }
+    }
+    if per_layer.iter().all(|&b| b == 0) {
+        // A MoE header with no expert tensors found: treat as unknown.
+        return Err(damaged("no expert tensors in the tensor table"));
+    }
+    m.expert_bytes_per_layer = per_layer;
+    m.non_expert_bytes = non_expert;
+    Ok(())
 }
 
 /// `general.file_type` enum → quant label (the common llama.cpp values).
@@ -648,6 +785,61 @@ mod tests {
         assert_eq!(m.n_experts_used, 8);
         assert!(m.is_moe());
         assert!(damage(&p).is_none());
+        // No tensor table -> the expert split is unknown, not fatal.
+        assert!(m.expert_bytes_per_layer.is_empty());
+    }
+
+    /// A MoE file WITH a tensor table: per-layer expert bytes come from the
+    /// offset deltas, everything else is non-expert, the last tensor is the
+    /// file remainder. Also: an array-valued head_count_kv (gemma4's shape)
+    /// reads as its mean instead of being skipped.
+    #[test]
+    fn tensor_table_gives_expert_bytes_per_layer() {
+        let mut b = gguf_header(5, 5);
+        let kv_u32 = |b: &mut Vec<u8>, k: &str, v: u32| {
+            b.extend_from_slice(&gstr(k));
+            b.extend_from_slice(&4u32.to_le_bytes());
+            b.extend_from_slice(&v.to_le_bytes());
+        };
+        b.extend_from_slice(&gstr("general.architecture"));
+        b.extend_from_slice(&8u32.to_le_bytes());
+        b.extend_from_slice(&gstr("gemma4"));
+        kv_u32(&mut b, "gemma4.block_count", 2);
+        kv_u32(&mut b, "gemma4.attention.head_count", 16);
+        // head_count_kv as a per-layer array [2, 8] -> mean 5
+        b.extend_from_slice(&gstr("gemma4.attention.head_count_kv"));
+        b.extend_from_slice(&9u32.to_le_bytes()); // array
+        b.extend_from_slice(&4u32.to_le_bytes()); // of u32
+        b.extend_from_slice(&2u64.to_le_bytes());
+        b.extend_from_slice(&2u32.to_le_bytes());
+        b.extend_from_slice(&8u32.to_le_bytes());
+        kv_u32(&mut b, "gemma4.expert_count", 128);
+        // tensor table: name, n_dims, dims, type, offset
+        let tensor = |b: &mut Vec<u8>, name: &str, off: u64| {
+            b.extend_from_slice(&gstr(name));
+            b.extend_from_slice(&1u32.to_le_bytes());
+            b.extend_from_slice(&16u64.to_le_bytes());
+            b.extend_from_slice(&0u32.to_le_bytes());
+            b.extend_from_slice(&off.to_le_bytes());
+        };
+        tensor(&mut b, "token_embd.weight", 0);            // 100 bytes
+        tensor(&mut b, "blk.0.ffn_up_exps.weight", 100);   // 300
+        tensor(&mut b, "blk.0.attn_q.weight", 400);        // 50
+        tensor(&mut b, "blk.1.ffn_gate_exps.weight", 450); // 200
+        tensor(&mut b, "blk.1.ffn_down_chexps.weight", 650); // remainder = 150
+        // pad header to alignment 32, then 800 bytes of "data"
+        while b.len() % 32 != 0 {
+            b.push(0);
+        }
+        b.extend(std::iter::repeat(7u8).take(800));
+        let p = tmp_file("moe-tensors.gguf", &b);
+        let m = read_meta_classified(&p).expect("parses");
+        assert_eq!(m.n_kv_heads, 5, "array-valued head_count_kv reads as its mean");
+        assert_eq!(m.expert_bytes_per_layer, vec![300, 350]);
+        assert_eq!(m.non_expert_bytes, 150);
+        assert!(expert_block_of("blk.12.ffn_gate_up_exps.weight") == Some(12));
+        assert!(expert_block_of("blk.3.ffn_up_shexp.weight").is_none(), "shared experts stay on the GPU");
+        assert!(expert_block_of("blk.3.attn_k.weight").is_none());
     }
 
     /// Muse Glimmer's REAL chat template (extracted from the Unsloth GGUF

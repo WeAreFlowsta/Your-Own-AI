@@ -42,6 +42,10 @@ pub struct ModelFit {
     /// with its experts in main memory (`--cpu-moe`): fits, and fast for its
     /// size - graded yellow with this flag so the UI can say why.
     pub moe_offload: bool,
+    /// Under offload: how many layers' experts the loader would pin to the
+    /// CPU (`--n-cpu-moe N`); None = all of them (`--cpu-moe`), which is
+    /// also the floor when the file's tensor table could not be read.
+    pub moe_cpu_layers: Option<u32>,
 }
 
 /// The context sizes the server can start at.
@@ -143,6 +147,40 @@ pub fn moe_offload_wanted(need_gb: f64, free_vram_gb: f64) -> bool {
 /// not, and the grade says so instead of promising a crawl.
 pub fn moe_offload_fits(weights_gb: f64, need_gb: f64, free_vram_gb: f64, free_ram_gb: f64) -> bool {
     weights_gb <= free_ram_gb && need_gb <= free_ram_gb + 0.9 * free_vram_gb
+}
+
+/// The VRAM (GiB) an MoE model needs with the experts of its first `n`
+/// layers on the CPU: everything that is not an expert tensor, plus the
+/// experts of the remaining layers, plus the KV cache and the compute
+/// overhead. With n = n_layers only attention/embeddings/KV remain on the
+/// card - the `--cpu-moe` footprint.
+pub fn moe_need_gb(meta: &GgufMeta, n_cpu_layers: usize, kv_gb: f64) -> f64 {
+    let gpu_experts: u64 = meta
+        .expert_bytes_per_layer
+        .iter()
+        .skip(n_cpu_layers)
+        .sum();
+    (meta.non_expert_bytes + gpu_experts) as f64 / GIB + kv_gb + 0.8
+}
+
+/// Headroom left on the card under expert offload. The bench rule: the
+/// best N sat about 1 GiB short of full; every arm that filled the card
+/// collapsed below the all-experts-on-CPU floor (driver paging).
+pub const MOE_VRAM_HEADROOM_GB: f64 = 1.0;
+
+/// How many layers' experts to pin to the CPU: the SMALLEST n whose
+/// footprint leaves the headroom on (pooled) free VRAM. `None` when the
+/// file's expert split is unknown - the caller then pins all experts
+/// (`--cpu-moe`, the safe floor). Returns `Some(n_layers)` when even the
+/// all-on-CPU footprint does not fit - the caller still pins everything
+/// (the alternative is an OOM or a crawl) and the fit grade says red.
+pub fn moe_cpu_layers(meta: &GgufMeta, kv_gb: f64, free_vram_gb: f64) -> Option<usize> {
+    let n_layers = meta.expert_bytes_per_layer.len();
+    if n_layers == 0 {
+        return None;
+    }
+    let budget = free_vram_gb - MOE_VRAM_HEADROOM_GB;
+    (0..=n_layers).find(|&n| moe_need_gb(meta, n, kv_gb) <= budget).or(Some(n_layers))
 }
 
 /// Grade fit. GPU: GREEN fits in (90% of) free VRAM, YELLOW fits VRAM+RAM
@@ -270,6 +308,7 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
         };
         let mut fit = grade(need_gb, free_vram_gb, free_ram_gb);
         let mut moe_offload = false;
+        let mut moe_cpu_layers_pick: Option<u32> = None;
         if meta.is_moe() {
             if let Some(vram) = free_vram_gb {
                 if moe_offload_wanted(need_gb, vram)
@@ -277,6 +316,9 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
                 {
                     fit = Fit::Yellow;
                     moe_offload = true;
+                    moe_cpu_layers_pick = moe_cpu_layers(&meta, kv_gb, vram)
+                        .filter(|&n| n < meta.expert_bytes_per_layer.len())
+                        .map(|n| n as u32);
                 }
             }
         }
@@ -293,6 +335,7 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
             context_max: meta.context_length,
             context_runtime: ctx,
             moe_offload,
+            moe_cpu_layers: moe_cpu_layers_pick,
         });
     }
     out
@@ -380,7 +423,45 @@ mod tests {
             file_type: 0,
             n_experts: 0,
             n_experts_used: 0,
+            expert_bytes_per_layer: Vec::new(),
+            non_expert_bytes: 0,
         }
+    }
+
+    /// A synthetic MoE meta shaped like a real file's tensor split.
+    fn moe_meta(n_layers: usize, expert_layer_gib: f64, non_expert_gib: f64) -> GgufMeta {
+        let mut m = meta(n_layers as u64, 2, 256, 262144);
+        m.n_experts = 256;
+        m.n_experts_used = 8;
+        m.expert_bytes_per_layer = vec![(expert_layer_gib * GIB) as u64; n_layers];
+        m.non_expert_bytes = (non_expert_gib * GIB) as u64;
+        m
+    }
+
+    /// The N-picker against the 2026-08-23 audit numbers (real tensor tables
+    /// of the three bench models, 7.8 GiB free on the 4060 Ti): it must land
+    /// on or just above the measured best N (34 vs 32, 14 vs 12, 27 vs 24) -
+    /// never below, which is the oversubscription side.
+    #[test]
+    fn moe_cpu_layers_matches_the_audit() {
+        // Qwen3.6-35B-A3B: 40 layers x ~0.48 GiB experts, 2.38 GiB other, KV@8k 0.62
+        let qwen = moe_meta(40, 18.22 / 40.0, 2.38);
+        assert_eq!(moe_cpu_layers(&qwen, 0.62, 7.8), Some(34));
+        assert_eq!(moe_cpu_layers(&qwen, 0.62, 15.5), Some(17));
+        assert_eq!(moe_cpu_layers(&qwen, 0.62, 23.5), Some(0));
+        // gpt-oss-20b: 24 x 0.395, 1.33 other, KV 0.38
+        let oss = moe_meta(24, 9.48 / 24.0, 1.33);
+        assert_eq!(moe_cpu_layers(&oss, 0.38, 7.8), Some(14));
+        assert_eq!(moe_cpu_layers(&oss, 0.38, 15.5), Some(0));
+        // Gemma-4 26B-A4B: 30 x 0.399, 1.47 other, KV 3.28 (mean kv-heads)
+        let gemma = moe_meta(30, 11.96 / 30.0, 1.47);
+        assert_eq!(moe_cpu_layers(&gemma, 3.28, 7.8), Some(27));
+        // Unknown split -> None (caller pins everything).
+        let dense_like = meta(40, 2, 256, 262144);
+        assert_eq!(moe_cpu_layers(&dense_like, 0.62, 7.8), None);
+        // Even all-on-CPU too big for the card -> Some(n_layers), still pin all.
+        let tiny_card = moe_cpu_layers(&gemma, 3.28, 4.0);
+        assert_eq!(tiny_card, Some(30));
     }
 
     #[test]

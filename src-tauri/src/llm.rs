@@ -997,11 +997,31 @@ pub async fn start_llama_server(
                 let free_gb = free_mib as f64 / 1024.0;
                 let (_, _, need_gb) = crate::fit::model_need(meta, *size_bytes, ctx_size);
                 if crate::fit::moe_offload_wanted(need_gb, free_gb) {
-                    log::info!(
-                        "[LLM] MoE offload: experts on CPU (--cpu-moe) - needs {:.1} GB, {:.1} GB of graphics memory free",
-                        need_gb, free_gb
-                    );
-                    args.push("--cpu-moe".to_string());
+                    // How many layers' experts go to the CPU: the smallest
+                    // count that leaves the headroom (from the file's own
+                    // tensor table); everything when the split is unknown
+                    // or nothing less fits. N is always within the layer
+                    // count - an out-of-range N is a hard abort upstream.
+                    let (_, kv_gb, _) = crate::fit::model_need(meta, *size_bytes, ctx_size);
+                    let n_layers = meta.expert_bytes_per_layer.len();
+                    match crate::fit::moe_cpu_layers(meta, kv_gb, free_gb) {
+                        Some(n) if n < n_layers => {
+                            log::info!(
+                                "[LLM] MoE offload: experts of {n} of {n_layers} layers on CPU (--n-cpu-moe {n}) - {:.1} GB on the card, {:.1} GB free",
+                                crate::fit::moe_need_gb(meta, n, kv_gb), free_gb
+                            );
+                            args.push("--n-cpu-moe".to_string());
+                            args.push(n.to_string());
+                        }
+                        pick => {
+                            log::info!(
+                                "[LLM] MoE offload: all experts on CPU (--cpu-moe) - needs {:.1} GB, {:.1} GB of graphics memory free{}",
+                                need_gb, free_gb,
+                                if pick.is_none() { " (expert split unknown)" } else { "" }
+                            );
+                            args.push("--cpu-moe".to_string());
+                        }
+                    }
                 }
             }
         }
