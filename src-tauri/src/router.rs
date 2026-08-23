@@ -277,17 +277,32 @@ fn looks_time_sensitive(query: &str) -> bool {
 #[derive(Clone, Copy, Debug)]
 struct OfflineRank {
     cap: u8,      // task capability score
-    tier: u8,     // fit: green 2 / yellow 1 / red 0
+    tier: u8,     // fit: green/split 2 / yellow 1 / red 0
     params_b: f64,
+    /// This machine's measured tokens/sec for the model, when it has been
+    /// used here. The "speed" lean ranks by it when both sides have one;
+    /// size stays the proxy until then.
+    tps: Option<f64>,
+}
+
+/// Compare two measured speeds (greater = faster); Equal when either is
+/// unknown, so the size proxy decides.
+fn faster(a: Option<f64>, b: Option<f64>) -> std::cmp::Ordering {
+    match (a, b) {
+        (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal),
+        _ => std::cmp::Ordering::Equal,
+    }
 }
 
 /// The lean-dependent ordering (greater = better; see `pick_offline` docs).
 fn offline_ordering(lean: &str, a: OfflineRank, b: OfflineRank) -> std::cmp::Ordering {
     use std::cmp::Ordering::Equal;
     match lean {
-        "speed" => a
-            .tier
-            .cmp(&b.tier)
+        // Speed: measured tokens/sec on THIS machine decides when known for
+        // both (a split 35B at 30 tok/s beats a dense 9B at 22); otherwise
+        // the fit tier, then capability, then SMALLER (the old proxy).
+        "speed" => faster(a.tps, b.tps)
+            .then(a.tier.cmp(&b.tier))
             .then(a.cap.cmp(&b.cap))
             // Smaller wins size ties — fewer parameters = faster tokens.
             .then(b.params_b.partial_cmp(&a.params_b).unwrap_or(Equal)),
@@ -304,6 +319,9 @@ fn offline_ordering(lean: &str, a: OfflineRank, b: OfflineRank) -> std::cmp::Ord
             .tier
             .cmp(&b.tier)
             .then(a.cap.cmp(&b.cap))
+            // Equal capability in the same tier: the measured-faster one,
+            // else the bigger (quality).
+            .then(faster(a.tps, b.tps))
             .then(a.params_b.partial_cmp(&b.params_b).unwrap_or(Equal)),
     }
 }
@@ -407,10 +425,8 @@ async fn pick_offline(app: &AppHandle, task: &str, lean: &str, agent_only: bool)
         }
     }
 
-    let rank = |f: &crate::fit::ModelFit| OfflineRank {
-        cap: cap(&f.name),
-        tier: tier(f),
-        params_b: f.params_b,
+    let rank = |f: &crate::fit::ModelFit| OfflineRank { cap: cap(&f.name), tier: tier(f), params_b: f.params_b,
+        tps: f.measured_tps,
     };
     let best = *pool
         .iter()
@@ -1405,8 +1421,8 @@ mod tests {
     #[test]
     fn balanced_ordering_puts_fit_before_capability() {
         use std::cmp::Ordering;
-        let green_modest = OfflineRank { cap: 5, tier: 2, params_b: 2.0 };
-        let yellow_smart = OfflineRank { cap: 8, tier: 1, params_b: 4.0 };
+        let green_modest = OfflineRank { cap: 5, tier: 2, params_b: 2.0, tps: None };
+        let yellow_smart = OfflineRank { cap: 8, tier: 1, params_b: 4.0, tps: None };
         assert_eq!(
             offline_ordering("balanced", green_modest, yellow_smart),
             Ordering::Greater,
@@ -1419,7 +1435,7 @@ mod tests {
             "quality lean still chases capability"
         );
         // Within a tier, capability decides on balanced.
-        let green_smart = OfflineRank { cap: 8, tier: 2, params_b: 4.0 };
+        let green_smart = OfflineRank { cap: 8, tier: 2, params_b: 4.0, tps: None };
         assert_eq!(
             offline_ordering("balanced", green_smart, green_modest),
             Ordering::Greater
@@ -1538,7 +1554,7 @@ mod tests {
     use std::cmp::Ordering;
 
     fn c(cap: u8, tier: u8, params_b: f64) -> OfflineRank {
-        OfflineRank { cap, tier, params_b }
+        OfflineRank { cap, tier, params_b, tps: None }
     }
 
     /// The best of two candidates under a lean (mirrors max_by semantics).
@@ -1556,6 +1572,21 @@ mod tests {
         // quality remains the explicit capability-chaser.
         assert_eq!(best("balanced", green_small, yellow_big).params_b, 8.0);
         assert_eq!(best("quality", green_small, yellow_big).params_b, 24.0);
+    }
+
+    /// Measured speed on this machine outranks the size proxy: a split 35B
+    /// MoE at 30 tok/s beats a dense 9B at 22 under the speed lean; without
+    /// measurements the old order (tier, cap, smaller) holds.
+    #[test]
+    fn speed_lean_ranks_by_measured_tps_when_known() {
+        let moe = OfflineRank { cap: 8, tier: 2, params_b: 35.0, tps: Some(30.0) };
+        let dense = OfflineRank { cap: 7, tier: 2, params_b: 9.0, tps: Some(22.0) };
+        assert_eq!(offline_ordering("speed", moe, dense), std::cmp::Ordering::Greater);
+        // No measurement on either side and equal capability: the size
+        // proxy decides (smaller = faster), as before.
+        let unknown_big = OfflineRank { cap: 7, tier: 2, params_b: 35.0, tps: None };
+        let unknown_small = OfflineRank { cap: 7, tier: 2, params_b: 9.0, tps: None };
+        assert_eq!(offline_ordering("speed", unknown_big, unknown_small), std::cmp::Ordering::Less, "no measurement: smaller wins");
     }
 
     #[test]

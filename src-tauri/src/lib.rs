@@ -2,7 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod conversation_cache;   // last-known-good conversation lists (encrypted)
-mod model_hash;           // sha256 per model artifact (provenance for records)
+mod model_hash;
+mod model_stats;         // per-machine measured tok/s + load time, shared by router + UI           // sha256 per model artifact (provenance for records)
 mod conversation_import;  // bring-your-history: parse + archive exported chats
 mod diagnostics;          // one-click diagnostic report (Settings > Help & diagnostics)
 mod llm;                  // llama-server module
@@ -547,6 +548,7 @@ pub fn run() {
             llm::get_system_info,
             llm::list_local_models,
             llm::register_model_draft,
+            model_stats::model_stats,
             engine::engine_status,
             engine::download_cuda_engine,
             engine::remove_cuda_engine,

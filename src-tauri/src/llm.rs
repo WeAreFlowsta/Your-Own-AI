@@ -1208,6 +1208,7 @@ pub async fn start_llama_server(
         }
     };
     log::info!("[LLM] spawning chat server ({:?} engine)", backend);
+    let t_spawn = std::time::Instant::now();
     let (mut rx, child) = match cmd.args(&args).spawn() {
         Ok(pair) => pair,
         Err(e) => {
@@ -1306,6 +1307,11 @@ pub async fn start_llama_server(
                 );
             }
             if chat_server_health_ok().await {
+                if let Some(ref m) = loading_name {
+                    let secs = t_spawn.elapsed().as_secs_f64();
+                    log::info!("[LLM] model ready in {secs:.1} s");
+                    crate::model_stats::record_load(&app_handle, m, secs);
+                }
                 // Measure what the split really cost the card and keep it:
                 // the next pick for this model on this machine starts from
                 // the truth, not the estimate.
@@ -3295,6 +3301,11 @@ pub async fn stream_chat_completion(
                                 if usage.tokens_per_second.is_none() {
                                     usage.tokens_per_second = server_tps;
                                 }
+                                if model_name != "remote" {
+                                    if let Some(tps) = usage.tokens_per_second {
+                                        crate::model_stats::record_speed(&app, &model_name, usage.completion_tokens, tps);
+                                    }
+                                }
                             }
                             if let Some(ref usage) = usage_data {
                                 println!("[LLM] Emitting usage: prompt={}, completion={}, total={}",
@@ -3462,6 +3473,11 @@ pub async fn stream_chat_completion(
     if let Some(ref mut usage) = usage_data {
         if usage.tokens_per_second.is_none() {
             usage.tokens_per_second = server_tps;
+        }
+        if model_name != "remote" {
+            if let Some(tps) = usage.tokens_per_second {
+                crate::model_stats::record_speed(&app, &model_name, usage.completion_tokens, tps);
+            }
         }
     }
     if let Some(ref usage) = usage_data {

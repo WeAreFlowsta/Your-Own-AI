@@ -17,7 +17,6 @@ import {
   recordGroundingAnnotation,
 } from "../utils/holochainTranscripts";
 import { extractAndStoreFacts, looksLikeUserFact } from "../utils/memoryExtraction";
-import { recordModelSpeed } from "../utils/modelSpeed";
 import { isUtilityModelReady } from "../utils/utilityModel";
 import { groundDocument, type GroundedSource } from "../utils/grounding";
 import { loadMemoryBlock } from "../utils/memory";
@@ -1140,14 +1139,9 @@ export function useChat(props: UseChatProps) {
             // the Models page shows as "~N tok/s measured" (never a bench number).
           }
         }
-        if (tokensPerSecond && tokenUsage) {
-          // This machine's measured speed for an offline model file - what
-          // the Models page shows as "~N tok/s measured" (never a bench number).
-          const localFile = !isOnlineModel && !isExternalModel ? preferredModel || currentModel : null;
-          if (localFile) {
-            recordModelSpeed(localFile, tokenUsage.completion_tokens, tokensPerSecond);
-          }
-        }
+        // The machine's measured speed per model is recorded engine-side
+        // (model-stats.json) from the same server timing; the Models page
+        // and the router read that one source.
 
         // Finalize
         const { thinking: finalThinking, contentWithoutThinking: finalContent } =

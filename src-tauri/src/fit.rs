@@ -71,6 +71,11 @@ pub struct ModelFit {
     /// CPU (`--n-cpu-moe N`); None = all of them (`--cpu-moe`), which is
     /// also the floor when the file's tensor table could not be read.
     pub moe_cpu_layers: Option<u32>,
+    /// This machine's measured generation speed for the model (engine
+    /// timings, moving average), when it has been used here.
+    pub measured_tps: Option<f64>,
+    /// How long the last load took here (seconds), when known.
+    pub load_secs: Option<f64>,
 }
 
 /// The context sizes the server can start at.
@@ -337,6 +342,7 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
         .unwrap_or(0.0);
     let (free_vram_gb, free_ram_gb) = reclaim_adjust(free_vram_gb, free_ram_gb, reclaim_gb);
 
+    let stats = crate::model_stats::read_all(app);
     let mut out = Vec::new();
     for m in models {
         let path = dir.join(&m.name);
@@ -383,6 +389,8 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
                 }
             }
         }
+        let measured_tps = stats.get(&m.name).and_then(|s| s.tps);
+        let load_secs = stats.get(&m.name).and_then(|s| s.load_secs);
         out.push(ModelFit {
             name: m.name,
             agent_template_ok: meta.agent_template_ok(),
@@ -397,6 +405,8 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
             context_runtime: ctx,
             moe_offload,
             moe_cpu_layers: moe_cpu_layers_pick,
+            measured_tps,
+            load_secs,
         });
     }
     out
