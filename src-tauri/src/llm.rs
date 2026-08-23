@@ -529,11 +529,19 @@ async fn select_gpu_device_args(app_handle: &AppHandle) -> Vec<String> {
 /// (unlike total heap size, which over-counts on small cards). `None` in CPU
 /// mode → caller falls back to system RAM. Cached ~20s so the router can call it
 /// per request without re-spawning the probe.
+static VRAM_CACHE: std::sync::OnceLock<tokio::sync::Mutex<Option<(std::time::Instant, Option<u64>)>>> =
+    std::sync::OnceLock::new();
+
+/// Forget the cached free-VRAM figure (after a load changed it).
+async fn invalidate_vram_cache() {
+    if let Some(c) = VRAM_CACHE.get() {
+        *c.lock().await = None;
+    }
+}
+
 pub async fn available_vram_mib(app_handle: &AppHandle) -> Option<u64> {
     use std::time::{Duration, Instant};
-    static CACHE: std::sync::OnceLock<tokio::sync::Mutex<Option<(Instant, Option<u64>)>>> =
-        std::sync::OnceLock::new();
-    let cache = CACHE.get_or_init(|| tokio::sync::Mutex::new(None));
+    let cache = VRAM_CACHE.get_or_init(|| tokio::sync::Mutex::new(None));
     if let Some((t, v)) = cache.lock().await.as_ref() {
         if t.elapsed() < Duration::from_secs(20) {
             return *v;
@@ -842,6 +850,57 @@ async fn chat_server_health_ok() -> bool {
     )
 }
 
+/// One measured MoE-offload load: what the estimate said would sit on the
+/// card for the chosen split, and what the card actually lost. Kept per
+/// model in app data; the next pick hands the difference back to the
+/// budget (fit::moe_budget_correction_gb). Per machine by construction.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct MoeCalibration {
+    pub n_cpu_layers: usize,
+    pub predicted_gb: f64,
+    pub actual_gb: f64,
+    pub at: i64,
+}
+
+fn moe_calibration_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join("moe-calibration.json"))
+}
+
+fn moe_calibration_read(app: &AppHandle, model: &str) -> Option<MoeCalibration> {
+    let p = moe_calibration_path(app)?;
+    let s = std::fs::read_to_string(p).ok()?;
+    let m: std::collections::HashMap<String, MoeCalibration> = serde_json::from_str(&s).ok()?;
+    m.get(model).cloned()
+}
+
+fn moe_calibration_write(app: &AppHandle, model: &str, c: MoeCalibration) {
+    let Some(p) = moe_calibration_path(app) else { return };
+    let mut m: std::collections::HashMap<String, MoeCalibration> = std::fs::read_to_string(&p)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    m.insert(model.to_string(), c);
+    if let Ok(s) = serde_json::to_string_pretty(&m) {
+        let _ = std::fs::write(p, s);
+    }
+}
+
+/// Models whose split ran out of graphics memory this session: the next
+/// load pins every expert layer to the CPU instead of guessing again.
+/// Session-scoped like the too-big set - the user may free VRAM.
+fn moe_force_all_cpu_set() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static S: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    S.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+fn chrono_now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// Models that OOM'd the GPU this session. Once a model proves it won't fit, we
 /// reject re-loading it instantly instead of burning ~30s for the same result.
 /// Session-scoped on purpose: clears on restart, so freeing VRAM gives it another go.
@@ -1058,6 +1117,9 @@ pub async fn start_llama_server(
         }
     }
 
+    // The split in play for this load (n on CPU, predicted GB on the card,
+    // free GB before) - measured against the card after the load below.
+    let mut moe_plan: Option<(usize, f64, f64)> = None;
     if let Some((meta, size_bytes)) = &header {
         if meta.is_moe() && !args_force_cpu(&args) {
             if let Some(free_mib) = available_vram_mib(&app_handle).await {
@@ -1066,27 +1128,50 @@ pub async fn start_llama_server(
                 if crate::fit::moe_offload_wanted(need_gb, free_gb) {
                     // How many layers' experts go to the CPU: the smallest
                     // count that leaves the headroom (from the file's own
-                    // tensor table); everything when the split is unknown
-                    // or nothing less fits. N is always within the layer
-                    // count - an out-of-range N is a hard abort upstream.
+                    // tensor table), corrected by what the last measured
+                    // load on THIS machine taught us; everything when the
+                    // split is unknown, nothing less fits, or the split ran
+                    // out of graphics memory earlier this session. N is
+                    // always within the layer count - an out-of-range N is a
+                    // hard abort upstream.
                     let (_, kv_gb, _) = crate::fit::model_need(meta, *size_bytes, ctx_size);
                     let n_layers = meta.expert_bytes_per_layer.len();
-                    match crate::fit::moe_cpu_layers(meta, kv_gb, free_gb) {
+                    let model_key = loading_name.clone().unwrap_or_default();
+                    let forced_all = moe_force_all_cpu_set()
+                        .lock()
+                        .map(|s| s.contains(&model_key))
+                        .unwrap_or(false);
+                    let correction = moe_calibration_read(&app_handle, &model_key)
+                        .map(|c| crate::fit::moe_budget_correction_gb(c.predicted_gb, c.actual_gb))
+                        .unwrap_or(0.0);
+                    let pick = if forced_all {
+                        Some(n_layers)
+                    } else {
+                        crate::fit::moe_cpu_layers_with(meta, kv_gb, free_gb, correction)
+                    };
+                    match pick {
                         Some(n) if n < n_layers => {
+                            let predicted = crate::fit::moe_need_gb(meta, n, kv_gb);
                             log::info!(
-                                "[LLM] MoE offload: experts of {n} of {n_layers} layers on CPU (--n-cpu-moe {n}) - {:.1} GB on the card, {:.1} GB free",
-                                crate::fit::moe_need_gb(meta, n, kv_gb), free_gb
+                                "[LLM] MoE offload: experts of {n} of {n_layers} layers on CPU (--n-cpu-moe {n}) - {:.1} GB on the card, {:.1} GB free{}",
+                                predicted, free_gb,
+                                if correction != 0.0 { format!(" (learned correction {correction:+.1} GB)") } else { String::new() }
                             );
                             args.push("--n-cpu-moe".to_string());
                             args.push(n.to_string());
+                            moe_plan = Some((n, predicted, free_gb));
                         }
                         pick => {
                             log::info!(
                                 "[LLM] MoE offload: all experts on CPU (--cpu-moe) - needs {:.1} GB, {:.1} GB of graphics memory free{}",
                                 need_gb, free_gb,
-                                if pick.is_none() { " (expert split unknown)" } else { "" }
+                                if forced_all { " (the split ran out of graphics memory earlier this session)" }
+                                else if pick.is_none() { " (expert split unknown)" } else { "" }
                             );
                             args.push("--cpu-moe".to_string());
+                            if n_layers > 0 {
+                                moe_plan = Some((n_layers, crate::fit::moe_need_gb(meta, n_layers, kv_gb), free_gb));
+                            }
                         }
                     }
                 }
@@ -1221,6 +1306,29 @@ pub async fn start_llama_server(
                 );
             }
             if chat_server_health_ok().await {
+                // Measure what the split really cost the card and keep it:
+                // the next pick for this model on this machine starts from
+                // the truth, not the estimate.
+                if let (Some((n, predicted, free_before)), Some(model)) = (moe_plan, loading_name.clone()) {
+                    let app = app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        invalidate_vram_cache().await;
+                        if let Some(after_mib) = available_vram_mib(&app).await {
+                            let actual = (free_before - after_mib as f64 / 1024.0).max(0.0);
+                            log::info!(
+                                "[LLM] MoE offload measured: {n} expert layers on CPU, predicted {predicted:.2} GB on the card, measured {actual:.2} GB (free {free_before:.2} -> {:.2})",
+                                after_mib as f64 / 1024.0
+                            );
+                            moe_calibration_write(&app, &model, MoeCalibration {
+                                n_cpu_layers: n,
+                                predicted_gb: predicted,
+                                actual_gb: actual,
+                                at: chrono_now_secs(),
+                            });
+                        }
+                    });
+                }
                 return Ok(());
             }
             if CHAT_LOAD_FAILED.load(Ordering::SeqCst) {
@@ -1240,6 +1348,20 @@ pub async fn start_llama_server(
                 // death is a crash; caching either as "too big" made every
                 // retry refuse instantly for the wrong reason.
                 if CHAT_LOAD_OOM.load(Ordering::SeqCst) {
+                    // A split that still ran out of graphics memory is not a
+                    // too-large model: pin every expert layer to the CPU for
+                    // the rest of the session and let the loader try that
+                    // once, immediately.
+                    if let (Some((n, _, _)), Some(name)) = (moe_plan, loading_name.clone()) {
+                        let n_layers = header.as_ref().map(|(m, _)| m.expert_bytes_per_layer.len()).unwrap_or(0);
+                        if n < n_layers {
+                            log::warn!("[LLM] MoE split ({n} of {n_layers} on CPU) ran out of graphics memory - next attempt pins all experts to the CPU");
+                            if let Ok(mut s) = moe_force_all_cpu_set().lock() {
+                                s.insert(name);
+                            }
+                            return Err("MODEL_OOM_SPLIT".to_string());
+                        }
+                    }
                     // Remember so we don't burn ~30s loading it again this
                     // session. Clears on restart (the user may free VRAM).
                     if let Some(ref name) = loading_name {
@@ -2668,6 +2790,21 @@ pub async fn load_model(
                 );
             }
         }
+    }
+
+    // The expert split ran out of graphics memory: the model is not too
+    // large, the split was too generous. The session now pins every expert
+    // layer to the CPU for this model - try that once before giving up.
+    if matches!(&started, Err(e) if e == "MODEL_OOM_SPLIT") {
+        log::warn!("[LLM] retrying '{}' with all expert layers on the CPU", filename);
+        *state.is_server_running.lock().await = false;
+        started = start_llama_server(
+            app_handle.clone(),
+            state.clone(),
+            Some(filename.clone()),
+            with_vision,
+        )
+        .await;
     }
 
     if let Some(p) = &sentinel {

@@ -186,12 +186,30 @@ pub const MOE_VRAM_HEADROOM_GB: f64 = 1.0;
 /// all-on-CPU footprint does not fit - the caller still pins everything
 /// (the alternative is an OOM or a crawl) and the fit grade says red.
 pub fn moe_cpu_layers(meta: &GgufMeta, kv_gb: f64, free_vram_gb: f64) -> Option<usize> {
+    moe_cpu_layers_with(meta, kv_gb, free_vram_gb, 0.0)
+}
+
+/// Same, with a per-machine correction (GB) learned from real loads: what
+/// the estimate over-counted last time is handed back to the budget
+/// (positive = put more on the card), what it under-counted is taken off.
+pub fn moe_cpu_layers_with(meta: &GgufMeta, kv_gb: f64, free_vram_gb: f64, correction_gb: f64) -> Option<usize> {
     let n_layers = meta.expert_bytes_per_layer.len();
     if n_layers == 0 {
         return None;
     }
-    let budget = free_vram_gb - MOE_VRAM_HEADROOM_GB;
+    let budget = free_vram_gb - MOE_VRAM_HEADROOM_GB + correction_gb;
     (0..=n_layers).find(|&n| moe_need_gb(meta, n, kv_gb) <= budget).or(Some(n_layers))
+}
+
+/// The budget correction from one measured load: predicted minus actual
+/// footprint on the card, bounded so a single odd reading cannot swing the
+/// split wildly (-1.0 .. +1.5 GB), and never trusted past half the headroom
+/// in the risky direction.
+pub fn moe_budget_correction_gb(predicted_gb: f64, actual_gb: f64) -> f64 {
+    if !(predicted_gb.is_finite() && actual_gb.is_finite()) || actual_gb <= 0.0 {
+        return 0.0;
+    }
+    (predicted_gb - actual_gb).clamp(-1.0, 1.5)
 }
 
 /// Grade fit. GPU: GREEN fits in (90% of) free VRAM, YELLOW fits VRAM+RAM
@@ -481,6 +499,14 @@ mod tests {
         // Gemma-4 26B-A4B: 30 x 0.399, 1.47 other, KV 3.28 (mean kv-heads)
         let gemma = moe_meta(30, 11.96 / 30.0, 1.47);
         assert_eq!(moe_cpu_layers(&gemma, 3.28, 7.8), Some(27));
+        // A learned correction moves the pick: +1.5 GB (the estimate
+        // over-counted) puts ~3 more layers on the card; -1 GB takes 2 off.
+        assert_eq!(moe_cpu_layers_with(&qwen, 0.62, 7.8, 1.5), Some(31));
+        assert_eq!(moe_cpu_layers_with(&qwen, 0.62, 7.8, -1.0), Some(36));
+        assert!((moe_budget_correction_gb(6.6, 5.9) - 0.7).abs() < 1e-9);
+        assert_eq!(moe_budget_correction_gb(6.6, 9.0), -1.0);
+        assert_eq!(moe_budget_correction_gb(6.6, 3.0), 1.5);
+        assert_eq!(moe_budget_correction_gb(6.6, 0.0), 0.0);
         // Unknown split -> None (caller pins everything).
         let dense_like = meta(40, 2, 256, 262144);
         assert_eq!(moe_cpu_layers(&dense_like, 0.62, 7.8), None);
