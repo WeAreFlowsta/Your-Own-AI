@@ -440,3 +440,42 @@ mod specialist_tests {
         assert!(!is_specialist("totally-unknown-model.gguf"));
     }
 }
+
+
+/// One model's routing view for the Settings overview: the capability
+/// registry's scores plus the agent tier. Read-only; the numbers the router
+/// actually ranks on.
+#[derive(serde::Serialize, Clone, Debug)]
+pub struct CapsRow {
+    pub name: String,
+    pub overall: u8,
+    pub coding: u8,
+    pub reasoning: u8,
+    pub math: u8,
+    pub vision: u8,
+    pub medical: u8,
+    pub agent: u8,
+    /// True when the family is in the registry (else middling defaults).
+    pub known: bool,
+}
+
+#[tauri::command]
+pub fn model_caps_for(names: Vec<String>) -> Vec<CapsRow> {
+    names
+        .into_iter()
+        .map(|name| {
+            let c = caps_for(&name);
+            CapsRow {
+                known: known_caps(&name).is_some(),
+                overall: c.overall,
+                coding: c.coding,
+                reasoning: c.reasoning,
+                math: c.math,
+                vision: c.vision,
+                medical: c.medical,
+                agent: agent_caps(&name),
+                name,
+            }
+        })
+        .collect()
+}

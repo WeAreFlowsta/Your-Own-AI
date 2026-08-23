@@ -90,6 +90,22 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   sizes up front ("3.2 GB + 0.9 GB vision") - the bar no longer looks
   like it started over.
 
+### Routing
+
+- The Auto modes now judge models by how they actually run here, not by
+  where their weights sit: a mixture-of-experts model running GPU + RAM
+  counts as running well (it no longer loses to a small model just for
+  using main memory), and a dense model that does not fit the graphics
+  card is honestly "too large" instead of "runs slower".
+- "Prefer fastest" ranks by each model's measured speed on this computer
+  once you have used it; a model that is slow to load here must be
+  clearly better before it replaces the one already loaded; and a
+  question bigger than a model's reading room goes to a model that can
+  hold it.
+- Settings > Routing shows your models as routing sees them - how each
+  runs, measured speed, load time, reading room, capability scores and
+  project readiness - next to the recent decisions. Nothing new to set.
+
 ### Conversations
 
 - The conversations list is ordered by last activity: continue a chat or

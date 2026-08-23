@@ -303,6 +303,21 @@ export default component$(() => {
   const projectThrifty = useSignal(false);
   const routingExplainerOpen = useSignal(false);
   const routingDecisions = useSignal<{ at_ms: number; model: string; reason: string }[]>([]);
+  /** Installed models as routing sees them (fit grade, split, measured
+   *  speed, load time, runtime context, agent-ready) + registry caps. */
+  const routingOverview = useSignal<
+    {
+      name: string;
+      fit: "green" | "split" | "yellow" | "red";
+      moe_cpu_layers?: number | null;
+      n_layers?: number;
+      measured_tps?: number | null;
+      load_secs?: number | null;
+      context_runtime: number;
+      agent_template_ok: boolean;
+      caps?: { overall: number; coding: number; reasoning: number; math: number; agent: number; known: boolean };
+    }[]
+  >([]);
   const onlineFresh = useSignal("");
   const onlineHardCode = useSignal("");
   const onlineHardGeneral = useSignal("");
@@ -392,6 +407,17 @@ export default component$(() => {
         ),
       )
       .then((d) => (routingDecisions.value = d))
+      .catch(() => {});
+    // The routing overview: fit + measurements from assess, caps from the registry.
+    import("@tauri-apps/api/core")
+      .then(async ({ invoke }) => {
+        const fits = await invoke<typeof routingOverview.value>("assess_model_fit");
+        const caps = await invoke<
+          { name: string; overall: number; coding: number; reasoning: number; math: number; agent: number; known: boolean }[]
+        >("model_caps_for", { names: fits.map((f) => f.name) }).catch(() => []);
+        const byName = new Map(caps.map((c) => [c.name, c]));
+        routingOverview.value = fits.map((f) => ({ ...f, caps: byName.get(f.name) }));
+      })
       .catch(() => {});
     onlineHardCode.value = localStorage.getItem("routingOnlineHardCode") || "";
     onlineHardGeneral.value = localStorage.getItem("routingOnlineHardGeneral") || "";
@@ -820,9 +846,14 @@ export default component$(() => {
                 <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela mb-2">
                   Routing
                 </h2>
-                <p class="text-sm text-[var(--text-secondary)] mb-4">
+                <p class="text-sm text-[var(--text-secondary)] mb-1">
                   How the Auto modes pick a model for each question. AIs set to a
                   specific model are never affected.
+                </p>
+                <p class="text-sm text-[var(--text-primary)] mb-4">
+                  Auto picks the best model that runs well on this machine. You
+                  don't need to change anything here - the rest of this section is
+                  for when you want to.
                 </p>
 
                 {/* Transparency, not controls: the knobless smarts described
@@ -854,7 +885,8 @@ export default component$(() => {
                       <p>Project sessions default to the recommended tool-driver online - both project pickers below let you change that.</p>
                       <p>Simple project side-work (searching and reading fan-outs) runs on your device when a capable model runs comfortably on your hardware - free and private. You can turn this off below.</p>
                       <p>The small jobs inside project work - summaries, tidying the conversation memory - always run on your device.</p>
-                      <p>Picks are fit-aware: a model that runs well on your hardware beats a stronger one that struggles. A loaded model that struggles hands off to one that runs at full speed - except while a project is open, so the session's model stays warm.</p>
+                      <p>A model's measured speed on this computer (from your own use) counts: "Prefer fastest" ranks by it, and a model that is slow to load here must be clearly better before it replaces the one already loaded. A question bigger than a model's reading room goes to a model that can hold it.</p>
+                      <p>Picks are fit-aware: a model that runs well on your hardware beats a stronger one that struggles - and a mixture-of-experts model running GPU + RAM counts as running well. A loaded model that struggles hands off to one that runs at full speed - except while a project is open, so the session's model stays warm.</p>
                       <p>Models you pause on the Offline or Online Models pages are never auto-picked - pausing is your veto.</p>
                       <p>A question with an image or document attached stays on your device unless you've turned on "Send attachments to online models" above - then online models may take it when they'd do better.</p>
                       <p>Every model starts with as much room to read and remember as your graphics card and memory can carry.</p>
@@ -862,6 +894,64 @@ export default component$(() => {
                         Every answer's Model button shows what happened and why, and each
                         decision is stored in the conversation's tamper-proof record.
                       </p>
+                      {routingOverview.value.length > 0 && (
+                        <div class="pt-2 border-t border-[var(--border-subtle)]">
+                          <div class="text-xs font-semibold text-[var(--text-primary)] mb-1.5">
+                            Your models, as routing sees them
+                          </div>
+                          <div class="overflow-x-auto">
+                            <table class="w-full text-xs text-[var(--text-muted)]">
+                              <thead>
+                                <tr class="text-left text-[var(--text-secondary)]">
+                                  <th class="pr-3 py-1 font-medium">Model</th>
+                                  <th class="pr-3 py-1 font-medium">Runs</th>
+                                  <th class="pr-3 py-1 font-medium">Speed</th>
+                                  <th class="pr-3 py-1 font-medium">Loads in</th>
+                                  <th class="pr-3 py-1 font-medium">Reads</th>
+                                  <th class="pr-3 py-1 font-medium">Code · Reason · Math</th>
+                                  <th class="py-1 font-medium">Projects</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {routingOverview.value.map((r) => (
+                                  <tr key={r.name} class="border-t border-[var(--border-subtle)]">
+                                    <td class="pr-3 py-1 text-[var(--text-secondary)] truncate max-w-[220px]" title={r.name}>
+                                      {r.name.replace(/\.gguf$/i, "")}
+                                    </td>
+                                    <td class="pr-3 py-1 whitespace-nowrap">
+                                      {r.fit === "green"
+                                        ? "Full speed"
+                                        : r.fit === "split"
+                                          ? `GPU + RAM${r.moe_cpu_layers != null && r.n_layers ? ` (${r.moe_cpu_layers} of ${r.n_layers} in RAM)` : ""}`
+                                          : r.fit === "yellow"
+                                            ? "Slower"
+                                            : "Too large"}
+                                    </td>
+                                    <td class="pr-3 py-1 whitespace-nowrap">
+                                      {r.measured_tps ? `~${Math.round(r.measured_tps)} tok/s` : "-"}
+                                    </td>
+                                    <td class="pr-3 py-1 whitespace-nowrap">
+                                      {r.load_secs ? `${r.load_secs < 10 ? r.load_secs.toFixed(1) : Math.round(r.load_secs)} s` : "-"}
+                                    </td>
+                                    <td class="pr-3 py-1 whitespace-nowrap">
+                                      {r.context_runtime >= 1024 ? `${Math.round(r.context_runtime / 1024)}K` : "-"}
+                                    </td>
+                                    <td class="pr-3 py-1 whitespace-nowrap" title={r.caps?.known ? "From the capability registry (0-10)" : "Unknown family - middling defaults"}>
+                                      {r.caps ? `${r.caps.coding} · ${r.caps.reasoning} · ${r.caps.math}${r.caps.known ? "" : " (est.)"}` : "-"}
+                                    </td>
+                                    <td class="py-1 whitespace-nowrap">
+                                      {r.agent_template_ok && (r.caps?.agent ?? 0) >= 6 ? "Yes" : "-"}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          <p class="text-[11px] text-[var(--text-muted)] mt-1.5">
+                            Speed and load time are measured on this computer from your own use; they fill in as you use each model.
+                          </p>
+                        </div>
+                      )}
                       {routingDecisions.value.length > 0 && (
                         <div class="pt-2 border-t border-[var(--border-subtle)]">
                           <div class="text-xs font-semibold text-[var(--text-primary)] mb-1.5">
@@ -895,7 +985,7 @@ export default component$(() => {
                 </p>
                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2">
                   {[
-                    { id: "speed", label: "Prefer fastest", hint: "A model that fits fully on your GPU wins" },
+                    { id: "speed", label: "Prefer fastest", hint: "Measured speed on this computer wins; until measured, a model that fits fully on your GPU" },
                     { id: "balanced", label: "Balanced", hint: "Best capability that still runs well" },
                     { id: "quality", label: "Prefer strongest", hint: "The most capable model, even if slower" },
                   ].map((opt) => (

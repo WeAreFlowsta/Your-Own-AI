@@ -549,6 +549,7 @@ pub fn run() {
             llm::list_local_models,
             llm::register_model_draft,
             model_stats::model_stats,
+            model_caps::model_caps_for,
             engine::engine_status,
             engine::download_cuda_engine,
             engine::remove_cuda_engine,
