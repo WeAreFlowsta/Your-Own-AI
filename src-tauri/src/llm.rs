@@ -3207,3 +3207,187 @@ mod gemma_thought_tests {
         );
     }
 }
+
+/// Headless matrix - the engine-path checks that do not need the GUI, run on
+/// the dev box BEFORE a beta is cut (`cargo test --lib -- --ignored live_matrix
+/// --nocapture`). Drives the SHIPPED bundled binary (`src-tauri/bin/`) the
+/// way the app does: same flags, same fit math, same MoE decision, a real
+/// chat completion, the server's own timings. Needs a MoE model in the
+/// models dir that does not fit the card (LFM2.5-8B-A1B on the dev box).
+#[cfg(test)]
+mod live_matrix {
+    use super::*;
+    use std::process::{Child, Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    const PORT: u16 = 18099;
+    const CTX: u64 = 8192;
+
+    struct KillOnDrop(Child);
+    impl Drop for KillOnDrop {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    fn shipped_binary() -> std::path::PathBuf {
+        let triple = if cfg!(target_os = "windows") {
+            "x86_64-pc-windows-msvc.exe"
+        } else if cfg!(target_os = "macos") {
+            if cfg!(target_arch = "aarch64") { "aarch64-apple-darwin" } else { "x86_64-apple-darwin" }
+        } else {
+            "x86_64-unknown-linux-gnu"
+        };
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("bin")
+            .join(format!("llama-server-{triple}"))
+    }
+
+    fn models_dir() -> std::path::PathBuf {
+        if let Ok(d) = std::env::var("YOAI_MODELS_DIR") {
+            return d.into();
+        }
+        let home = std::env::var("HOME").unwrap_or_default();
+        std::path::Path::new(&home).join(".local/share/com.solar.yourowai/models")
+    }
+
+    /// Pooled free VRAM of the discrete devices the shipped binary sees.
+    fn free_vram_gb(bin: &std::path::Path) -> Option<f64> {
+        let out = Command::new(bin).arg("--list-devices").output().ok()?;
+        let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+        text.push_str(&String::from_utf8_lossy(&out.stderr));
+        let discrete: Vec<GpuDevice> =
+            parse_gpu_devices(&text).into_iter().filter(|d| !d.integrated).collect();
+        if discrete.is_empty() {
+            return None;
+        }
+        Some(discrete.iter().map(|d| d.free_mib).sum::<u64>() as f64 / 1024.0)
+    }
+
+    /// A mixture-of-experts model bigger than the card loads with its
+    /// experts split to the CPU by the app's own rule, serves a real chat
+    /// completion, and reports its own generation speed.
+    #[tokio::test]
+    #[ignore]
+    async fn moe_offload_end_to_end() {
+        let bin = shipped_binary();
+        assert!(bin.exists(), "shipped engine binary missing at {}", bin.display());
+        let dir = models_dir();
+        let model = std::env::var("YOAI_MATRIX_MODEL").unwrap_or_else(|_| "LFM2.5-8B-A1B-Q4_K_M.gguf".into());
+        let path = dir.join(&model);
+        if !path.exists() {
+            eprintln!("[matrix] SKIP: {} not present", path.display());
+            return;
+        }
+        let meta = crate::gguf::read_meta(&path).expect("model header reads");
+        assert!(meta.is_moe(), "{model} is not a MoE model");
+        let size = std::fs::metadata(&path).unwrap().len();
+        let (weights_gb, kv_gb, need_gb) = crate::fit::model_need(&meta, size, CTX);
+        let free = free_vram_gb(&bin);
+        eprintln!(
+            "[matrix] {model}: {} layers, {} experts ({} used), weights {weights_gb:.2} GB, KV@{CTX} {kv_gb:.2} GB, need {need_gb:.2} GB, free VRAM {:?}",
+            meta.n_layers, meta.n_experts, meta.n_experts_used, free
+        );
+
+        let mut args: Vec<String> = vec![
+            "--port".into(), PORT.to_string(), "--host".into(), "127.0.0.1".into(),
+            "--no-webui".into(), "--reasoning".into(), "off".into(),
+            "--ctx-size".into(), CTX.to_string(), "--fit".into(), "off".into(),
+            "--model".into(), model.clone(),
+        ];
+        // The app's decision, verbatim (llm.rs start path): MoE + does not fit
+        // -> --n-cpu-moe N from the file's tensor table, --cpu-moe as the floor.
+        let mut decision = "fits the card - no offload".to_string();
+        if let Some(free) = free {
+            if crate::fit::moe_offload_wanted(need_gb, free) {
+                let n_layers = meta.expert_bytes_per_layer.len();
+                match crate::fit::moe_cpu_layers(&meta, kv_gb, free) {
+                    Some(n) if n < n_layers => {
+                        decision = format!(
+                            "--n-cpu-moe {n} of {n_layers} ({:.2} GB on the card)",
+                            crate::fit::moe_need_gb(&meta, n, kv_gb)
+                        );
+                        args.push("--n-cpu-moe".into());
+                        args.push(n.to_string());
+                    }
+                    _ => {
+                        decision = "--cpu-moe (all experts on CPU)".into();
+                        args.push("--cpu-moe".into());
+                    }
+                }
+            }
+        } else {
+            eprintln!("[matrix] no discrete GPU seen - CPU run (no offload decision to test)");
+        }
+        eprintln!("[matrix] decision: {decision}");
+
+        let child = Command::new(&bin)
+            .args(&args)
+            .current_dir(&dir)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn llama-server");
+        let mut guard = KillOnDrop(child);
+        // Drain stderr in a thread so a chatty load never blocks on a full pipe.
+        let stderr = guard.0.stderr.take().unwrap();
+        let log_lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let sink = log_lines.clone();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
+                sink.lock().unwrap().push(line);
+            }
+        });
+
+        let client = reqwest::Client::new();
+        let t0 = Instant::now();
+        let deadline = t0 + Duration::from_secs(240);
+        loop {
+            if let Ok(Some(status)) = guard.0.try_wait() {
+                let tail = log_lines.lock().unwrap().iter().rev().take(15).cloned().collect::<Vec<_>>();
+                panic!("llama-server exited during load ({status}); tail:\n{}", tail.join("\n"));
+            }
+            if let Ok(r) = client.get(format!("http://127.0.0.1:{PORT}/health")).send().await {
+                if r.status().is_success() {
+                    break;
+                }
+            }
+            assert!(Instant::now() < deadline, "server not healthy after 240 s");
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        eprintln!("[matrix] loaded in {:.1} s", t0.elapsed().as_secs_f64());
+
+        let body = serde_json::json!({
+            "model": model,
+            "messages": [{"role": "user", "content": "In about 120 words, explain why the sky is blue."}],
+            "max_tokens": 200,
+            "temperature": 0,
+            "stream": false,
+        });
+        let resp: serde_json::Value = client
+            .post(format!("http://127.0.0.1:{PORT}/v1/chat/completions"))
+            .json(&body)
+            .timeout(Duration::from_secs(300))
+            .send()
+            .await
+            .expect("chat request")
+            .json()
+            .await
+            .expect("chat json");
+        let content = resp["choices"][0]["message"]["content"].as_str().unwrap_or("");
+        let reasoning = resp["choices"][0]["message"]["reasoning_content"].as_str().unwrap_or("");
+        let tps = resp["timings"]["predicted_per_second"].as_f64().unwrap_or(0.0);
+        let n_gen = resp["timings"]["predicted_n"].as_u64().unwrap_or(0);
+        let pp = resp["timings"]["prompt_per_second"].as_f64().unwrap_or(0.0);
+        eprintln!(
+            "[matrix] reply {} chars (reasoning {} chars), {n_gen} tokens, gen {tps:.1} tok/s, prompt {pp:.1} tok/s",
+            content.len(), reasoning.len()
+        );
+        eprintln!("[matrix] first line: {}", content.lines().next().unwrap_or("").chars().take(120).collect::<String>());
+        assert!(!content.trim().is_empty(), "reply had no visible content");
+        assert!(tps > 0.0, "server reported no generation timing");
+        assert!(n_gen >= 20, "reply too short to measure ({n_gen} tokens)");
+    }
+}
