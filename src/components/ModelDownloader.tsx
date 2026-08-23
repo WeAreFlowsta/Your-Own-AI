@@ -578,6 +578,15 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
           return;
         }
         if (st.downloading) return;
+        // A speed-up file fetch for an already-downloaded model: run it again
+        // (the .part resumes); the model itself needs nothing.
+        if (a.stage === 'draft' && a.modelFilename) {
+          forgetActiveDownload(a.familyId);
+          const { [a.familyId]: _gone, ...rest } = store.downloads;
+          store.downloads = rest;
+          void handleGetDraft$(a.familyId, a.modelFilename);
+          return;
+        }
         // A sharded download: continue the part loop from where it stopped.
         if (a.partCount && a.partCount > 1 && a.modelFilename) {
           const hit = variantByFirstPart(a.familyId, a.modelFilename);
@@ -715,6 +724,41 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
       }
     }
     void family;
+  });
+
+  /** Fetch the maker's speed-up file for a model that is already downloaded
+   *  (downloaded before the catalog carried it), then register it. */
+  const handleGetDraft$ = $(async (familyId: string, modelFilename: string) => {
+    const hit = variantByFirstPart(familyId, modelFilename);
+    const draft = hit?.variant.draft;
+    if (!hit || !draft) return;
+    store.downloads = { ...store.downloads, [familyId]: { progress: null, stage: 'draft' } };
+    store.error = null;
+    rememberActiveDownload({
+      familyId,
+      familyName: `${hit.family.name} ${hit.variant.parameterCount}`,
+      filename: draft.filename,
+      modelFilename,
+      stage: 'draft',
+      isFirstModel: false,
+      startedAt: Date.now(),
+    });
+    try {
+      if (!(await modelManager.isModelDownloaded(draft.filename))) {
+        await modelManager.downloadModel(draft.downloadUrl, draft.filename, (progress) => {
+          store.downloads = { ...store.downloads, [familyId]: { stage: 'draft', progress } };
+        });
+      }
+      await modelManager.registerModelDraft(modelFilename, draft.filename, draft.type);
+      await loadModels();
+    } catch (error) {
+      console.error('Speed-up file download failed:', error);
+      store.error = getUserFriendlyErrorMessage(error);
+    } finally {
+      forgetActiveDownload(familyId);
+      const { [familyId]: _done, ...rest } = store.downloads;
+      store.downloads = rest;
+    }
   });
 
   const handleDownload$ = $(async (familyId: string) => {
@@ -1704,7 +1748,24 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                       {!model.damaged && store.modelSpeeds[model.name]
                         ? ` · ~${Math.round(store.modelSpeeds[model.name])} tok/s measured`
                         : ''}
+                      {!model.damaged && model.draft ? ' · speed-up file on' : ''}
                     </p>
+                    {!model.damaged && !model.draft && catalogMatch?.variant.draft && (
+                      store.downloads[catalogMatch.family.id]?.stage === 'draft' ? (
+                        <p class="text-xs text-[var(--text-muted)]">
+                          {downloadLabel(store.downloads[catalogMatch.family.id], false)}
+                        </p>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick$={() => handleGetDraft$(catalogMatch.family.id, model.name)}
+                          title="The maker ships a small file that lets this model answer faster: several drafted tokens checked per pass. Downloaded once, kept beside the model."
+                          class="mt-0.5 text-xs text-[var(--text-secondary)] underline underline-offset-2 bg-transparent border-none p-0 cursor-pointer hover:text-[var(--text-primary)]"
+                        >
+                          Get its speed-up file ({catalogMatch.variant.draft.size} GB)
+                        </button>
+                      )
+                    )}
                   </div>
                   {!model.damaged && (
                   <LiquidMetalButton

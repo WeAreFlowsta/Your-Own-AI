@@ -41,6 +41,10 @@ pub struct LocalModel {
     /// Absent for single-file models.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shard_count: Option<u32>,
+    /// The registered speed-up (speculative-decoding) file beside this
+    /// model, when present and sound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -2135,6 +2139,7 @@ pub async fn list_local_models(
                 modified_at: metadata.modified().ok().map(|t| format!("{:?}", t)),
                 damaged,
                 shard_count,
+                draft: model_draft_for(&models_dir, &filename).map(|d| d.draft),
             });
         }
     }

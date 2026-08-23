@@ -58,7 +58,14 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   Lightning's multi-token head, DeepSeek V4 Flash's DSpark draft), the
   app downloads it after the model, keeps it beside it, and the engine
   uses it to answer faster - several drafted tokens checked per pass,
-  which matters most when a model's experts live in main memory.
+  which matters most when a model's experts live in main memory. A model
+  downloaded earlier offers "Get its speed-up file" on the Models page.
+- The split between graphics card and main memory learns from your
+  machine: after a model loads, the app measures what the card actually
+  held and uses that for the next load, so it settles on the most the
+  card can carry. If a split ever runs out of graphics memory, the app
+  retries at once with the experts in main memory instead of reporting
+  the model too large.
 
 - Four additions to the offline catalog, all mixture-of-experts and all
   running on the new split-memory path: **LFM2.5 8B-A1B** (Liquid AI -

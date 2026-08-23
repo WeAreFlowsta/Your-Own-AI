@@ -82,6 +82,8 @@ export interface LocalModel {
   damaged?: string;
   /** A sharded model: how many files make it up (`name` is the first). */
   shard_count?: number;
+  /** The registered speed-up (speculative-decoding) file beside this model. */
+  draft?: string;
 }
 
 export type AppMode = 'local' | 'cloud';
