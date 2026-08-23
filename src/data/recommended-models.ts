@@ -563,6 +563,17 @@ export const modelFamilies: ModelFamily[] = [
         quantization: 'Q4_0 (QAT)'
       },
       {
+        // Expert-lean 2-bit build (Unsloth dynamic): attention at higher
+        // precision, experts squeezed - the part that lives in main memory
+        // under the GPU + RAM split. Brings the 26B to 24 GB machines.
+        parameterCount: '26B-A4B (MoE)',
+        size: 10.5,
+        minRAM: 24,
+        downloadUrl: 'https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/main/gemma-4-26B-A4B-it-UD-Q2_K_XL.gguf',
+        filename: 'gemma-4-26B-A4B-it-UD-Q2_K_XL.gguf',
+        quantization: 'UD-Q2_K_XL'
+      },
+      {
         parameterCount: '26B-A4B (MoE)',
         size: 14.5,
         minRAM: 32,
