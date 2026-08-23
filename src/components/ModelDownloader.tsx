@@ -55,6 +55,7 @@ import {
   LuCopy,
 } from '@qwikest/icons/lucide';
 import { getPausedModels, setModelPaused } from '../utils/modelPrefs';
+import { getModelSpeeds } from '../utils/modelSpeed';
 import { LiquidMetalBorder } from './LiquidMetalBorder';
 import LiquidMetalButton from './LiquidMetalButton';
 import { Callout } from './Callout';
@@ -261,6 +262,8 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     sortOpen: false,
     showTooBig: false,
     pausedModels: [] as string[],
+    /** This machine's measured generation speed per model file (tok/s). */
+    modelSpeeds: {} as Record<string, number>,
     // True until the first listModels() resolves, so the section can show a spinner
     // instead of popping in late. Only the initial load flips this (set in finally).
     loadingModels: true,
@@ -313,6 +316,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
       // every other surface reads the usable list.
       const models = await modelManager.listAllModels();
       store.downloadedModels = models;
+      store.modelSpeeds = getModelSpeeds();
     } catch (error) {
       console.error('Failed to load models:', error);
     } finally {
@@ -354,6 +358,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     loadModels();
     getModelsDir();
     store.pausedModels = [...getPausedModels()];
+    store.modelSpeeds = getModelSpeeds();
     import('@tauri-apps/api/app').then(({ getVersion }) =>
       getVersion().then((v) => {
         store.appVersion = v;
@@ -1494,6 +1499,9 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                         : `${quantization} · ${model.size}`}
                       {!model.damaged && fitInfo && fitInfo.context_runtime > 0
                         ? ` · runs at ${formatContext(fitInfo.context_runtime)}${fitInfo.agent_template_ok ? ' · works in projects' : ''}`
+                        : ''}
+                      {!model.damaged && store.modelSpeeds[model.name]
+                        ? ` · ~${Math.round(store.modelSpeeds[model.name])} tok/s measured`
                         : ''}
                     </p>
                   </div>

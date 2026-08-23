@@ -29,6 +29,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   the card, the rest go to main memory - so a bigger card keeps more.
   Model cards say "Runs here - split with main memory", and "Best for
   this computer" can recommend these models.
+- Downloaded models show this computer's measured generation speed
+  ("~27 tok/s measured") once you have used them - your number, not a
+  benchmark's.
 
 ### Downloads
 
