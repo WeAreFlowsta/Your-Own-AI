@@ -856,16 +856,30 @@ export default component$(() => {
                   for when you want to.
                 </p>
 
-                {/* Transparency, not controls: the knobless smarts described
-                    plainly. Permanent reference (no "Got it" dismissal - this
-                    is not a one-time tip), collapsible to stay quiet. */}
+                {/* The rules live in the public guide, not in a settings
+                    dropdown: one link. The data - how routing sees your models
+                    and its recent decisions - stays here, collapsed. */}
+                <p class="text-sm text-[var(--text-secondary)] mb-4">
+                  How routing decides - the rules, the modes, health, attachments -
+                  is written up in the guide:{" "}
+                  <button
+                    type="button"
+                    onClick$={async () => {
+                      const { openUrl } = await import("@tauri-apps/plugin-opener");
+                      await openUrl("https://docs.yourownai.net/routing/");
+                    }}
+                    class="underline underline-offset-2 text-[var(--text-primary)] bg-transparent border-none p-0 cursor-pointer"
+                  >
+                    docs.yourownai.net/routing
+                  </button>
+                </p>
                 <div class="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-main)] mb-5">
                   <button
                     onClick$={() => (routingExplainerOpen.value = !routingExplainerOpen.value)}
                     class="flex w-full items-center justify-between px-4 py-3 text-left"
                   >
                     <span class="text-sm font-semibold text-[var(--text-primary)]">
-                      What routing does automatically
+                      Your models as routing sees them, and its recent decisions
                     </span>
                     <LuChevronDown
                       class={`w-4 h-4 text-[var(--text-muted)] transition-transform ${routingExplainerOpen.value ? "rotate-180" : ""}`}
@@ -873,27 +887,6 @@ export default component$(() => {
                   </button>
                   {routingExplainerOpen.value && (
                     <div class="px-4 pb-4 text-sm text-[var(--text-secondary)] space-y-2">
-                      <p>
-                        Health questions go to the model you chose under
-                        Health questions below - on your device by default,
-                        and never online without asking you first.
-                      </p>
-                      <p>Questions that need current information go to a live-web model, at the eagerness you set below.</p>
-                      <p>Genuinely hard questions can be passed to a stronger online model (Auto - Online and Offline only).</p>
-                      <p>Plain conversation asks a model for quick, light thinking; reports, code, and genuinely hard questions get the deep kind - online and on your device alike.</p>
-                      <p>Project work only ever uses models that can drive tools, and never switches models mid-session.</p>
-                      <p>Project sessions default to the recommended tool-driver online - both project pickers below let you change that.</p>
-                      <p>Simple project side-work (searching and reading fan-outs) runs on your device when a capable model runs comfortably on your hardware - free and private. You can turn this off below.</p>
-                      <p>The small jobs inside project work - summaries, tidying the conversation memory - always run on your device.</p>
-                      <p>A model's measured speed on this computer (from your own use) counts: "Prefer fastest" ranks by it, and a model that is slow to load here must be clearly better before it replaces the one already loaded. A question bigger than a model's reading room goes to a model that can hold it.</p>
-                      <p>Picks are fit-aware: a model that runs well on your hardware beats a stronger one that struggles - and a mixture-of-experts model running GPU + RAM counts as running well. A loaded model that struggles hands off to one that runs at full speed - except while a project is open, so the session's model stays warm.</p>
-                      <p>Models you pause on the Offline or Online Models pages are never auto-picked - pausing is your veto.</p>
-                      <p>A question with an image or document attached stays on your device unless you've turned on "Send attachments to online models" above - then online models may take it when they'd do better.</p>
-                      <p>Every model starts with as much room to read and remember as your graphics card and memory can carry.</p>
-                      <p class="text-[var(--text-muted)]">
-                        Every answer's Model button shows what happened and why, and each
-                        decision is stored in the conversation's tamper-proof record.
-                      </p>
                       {routingOverview.value.length > 0 && (
                         <div class="pt-2 border-t border-[var(--border-subtle)]">
                           <div class="text-xs font-semibold text-[var(--text-primary)] mb-1.5">
