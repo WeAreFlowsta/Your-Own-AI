@@ -144,9 +144,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   off - reading your records no longer depends on every generation being
   awake at once.
 - In beta builds, Help & diagnostics gains "Run cell census": counts the
-  storage cells behind your AIs and how much history each holds, measured
-  straight from disk, and writes a report file you can review. Reads only,
-  changes nothing.
+  storage cells behind your AIs and how much real history each holds,
+  measured straight from the on-disk records (bookkeeping writes don't
+  count), and writes a report file you can review. Reads only, changes
+  nothing.
 
 - Replies from online models now record the provider's own fingerprint
   for the backend that answered (when the provider sends one), alongside
