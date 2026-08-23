@@ -648,6 +648,30 @@ export default component$(() => {
       // Reveal is a convenience; the saved-path text remains the fallback.
     }
   });
+
+  const censusBusy = useSignal(false);
+  const censusResult = useSignal("");
+  const censusError = useSignal("");
+  /** Read-only census of the records cells behind your AIs - counts every
+   *  cell's on-disk history and writes cell-lineage-report.json for
+   *  review. Changes nothing. */
+  const runCellCensus = $(async () => {
+    censusError.value = "";
+    censusResult.value = "";
+    censusBusy.value = true;
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const r = await invoke<{ summary: Record<string, number>; path: string }>(
+        "cell_lineage_report"
+      );
+      const sm = r.summary as Record<string, number>;
+      censusResult.value = `${sm.total_cells} cells for ${sm.live_ais} AIs - ${sm.live} live, ${sm.stranded_data} holding older history, ${(sm.empty_link_verified ?? 0) + (sm.empty_orphan_verified ?? 0)} verified empty, ${sm.unverified} unverified, ${sm.disabled} already quiet. Full report: ${r.path}`;
+    } catch (e) {
+      censusError.value = String(e);
+    } finally {
+      censusBusy.value = false;
+    }
+  });
   const doReset = $(async () => {
     resetting.value = true;
     try {
@@ -1501,6 +1525,30 @@ export default component$(() => {
                 )}
                 {diagError.value && (
                   <p class="mt-3 text-xs text-red-400">{diagError.value}</p>
+                )}
+                <p class="mt-5 text-sm text-[var(--text-secondary)] mb-3">
+                  <span class="font-semibold text-[var(--text-primary)]">
+                    Records cell census
+                  </span>{" "}
+                  - counts the storage cells behind your AIs and how much
+                  history each one holds, straight from disk. Reads only,
+                  changes nothing; writes a report file you can review or
+                  send to support.
+                </p>
+                <LiquidMetalButton
+                  variant="secondary"
+                  onClick$={runCellCensus}
+                  class="px-4 py-2 text-sm"
+                >
+                  {censusBusy.value ? "Counting…" : "Run cell census"}
+                </LiquidMetalButton>
+                {censusResult.value && (
+                  <p class="mt-3 text-xs text-[var(--text-muted)] break-all">
+                    {censusResult.value}
+                  </p>
+                )}
+                {censusError.value && (
+                  <p class="mt-3 text-xs text-red-400">{censusError.value}</p>
                 )}
               </section>
 

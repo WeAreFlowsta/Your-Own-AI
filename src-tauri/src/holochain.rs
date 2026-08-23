@@ -23,12 +23,59 @@ pub struct AiAgent {
 }
 
 /// Manages multiple AI agents within a single Holochain conductor.
+/// A source chain of at most this many records is "never written to":
+/// genesis is 3 (Dna, AgentValidationPkg, agent-key Create) and init
+/// callbacks plus capability grants add a few on first contact. Anything
+/// beyond carries real writes and is NEVER tidyable.
+const EMPTY_CHAIN_MAX: u64 = 7;
+
+/// Pull the source-chain record count out of an admin `dump_state` answer
+/// without assuming its exact framing (historically a JSON array of
+/// [dump, summary-string]).
+fn chain_records_from_dump(dump: &str) -> Option<u64> {
+    let v: serde_json::Value = serde_json::from_str(dump).ok()?;
+    let scd = v
+        .get(0)
+        .and_then(|d| d.get("source_chain_dump"))
+        .or_else(|| v.get("source_chain_dump"))?;
+    scd.get("records")
+        .and_then(|r| r.as_array())
+        .map(|a| a.len() as u64)
+}
+
+#[cfg(test)]
+mod census_tests {
+    #[test]
+    fn dump_parsing_handles_both_framings() {
+        let arr = r#"[{"peer_dump":{},"source_chain_dump":{"records":[{},{},{}],"published_ops_count":9}},"summary"]"#;
+        assert_eq!(super::chain_records_from_dump(arr), Some(3));
+        let obj = r#"{"source_chain_dump":{"records":[{}]}}"#;
+        assert_eq!(super::chain_records_from_dump(obj), Some(1));
+        assert_eq!(super::chain_records_from_dump("not json"), None);
+        assert_eq!(super::chain_records_from_dump(r#"{"other":1}"#), None);
+    }
+
+    #[test]
+    fn genesis_length_is_empty_and_more_is_data() {
+        assert!(3 <= super::EMPTY_CHAIN_MAX);
+        assert!(7 <= super::EMPTY_CHAIN_MAX);
+        assert!(8 > super::EMPTY_CHAIN_MAX);
+    }
+}
+
 pub struct HolochainManager {
     pub lair_client: LairClient,
     pub handle: ConductorHandle,
     pub resource_dir: PathBuf,
     /// Map from agent pub key hex to its Holochain agent.
     pub agents: Mutex<HashMap<String, AiAgent>>,
+    /// Lineage index: agent key hex -> the app-id suffix that generation
+    /// was installed under (= the previous generation's key, or the root
+    /// local id). Built from the conductor's `list_apps`, so the chain
+    /// survives DISABLED members - the connected map only knows enabled
+    /// cells, and severing a lineage at the first disabled link was the
+    /// 08-19 tidy trap.
+    lineage_index: Mutex<HashMap<String, String>>,
     /// Serializes provisioning end-to-end. The frontend can invoke
     /// provisioning concurrently (eager startup + per-page paths); without
     /// this, two racers pass the already-provisioned check and collide on
@@ -52,6 +99,7 @@ impl HolochainManager {
             handle: startup.handle,
             resource_dir,
             agents: Mutex::new(HashMap::new()),
+            lineage_index: Mutex::new(HashMap::new()),
             provision_lock: Mutex::new(()),
             chain_locks: Mutex::new(HashMap::new()),
             recovery,
@@ -72,6 +120,38 @@ impl HolochainManager {
     /// `ai_id` is only used as a stable seed tag in lair. The returned
     /// agent pub key hex is the canonical identifier for all subsequent
     /// Holochain operations.
+    /// The first provisioned cell of an app - the one its source chain
+    /// lives in (transcript apps have exactly one).
+    fn first_cell_id(app: &holochain_client::AppInfo) -> Option<holochain_types::prelude::CellId> {
+        app.cell_info.values().flatten().find_map(|ci| match ci {
+            holochain_client::CellInfo::Provisioned(p) => Some(p.cell_id.clone()),
+            _ => None,
+        })
+    }
+
+    fn app_id_suffix(installed_app_id: &str) -> String {
+        installed_app_id
+            .strip_prefix(dna::APP_ID_PREFIX)
+            .or_else(|| installed_app_id.strip_prefix("transcript_"))
+            .unwrap_or("")
+            .to_string()
+    }
+
+    /// Rebuild the lineage index from a `list_apps` answer. Disabled apps
+    /// are indexed too - that is the point.
+    async fn rebuild_lineage_index(&self, apps: &[holochain_client::AppInfo]) {
+        let mut idx = self.lineage_index.lock().await;
+        for app in apps.iter().filter(|a| {
+            a.installed_app_id.starts_with(dna::APP_ID_PREFIX)
+                || a.installed_app_id.starts_with("transcript_")
+        }) {
+            idx.insert(
+                hex::encode(app.agent_pub_key.get_raw_39()),
+                Self::app_id_suffix(&app.installed_app_id),
+            );
+        }
+    }
+
     pub async fn provision_agent(&self, ai_id: &str) -> Result<String, String> {
         // Hold for the entire provision — makes concurrent calls for the
         // same AI idempotent instead of racing the source chain.
@@ -169,6 +249,10 @@ impl HolochainManager {
                         ai_id, e
                     )
                 })?;
+                self.lineage_index.lock().await.insert(
+                    key_hex.clone(),
+                    Self::app_id_suffix(&app.installed_app_id),
+                );
                 let mut agents = self.agents.lock().await;
                 agents.insert(
                     key_hex.clone(),
@@ -253,6 +337,10 @@ impl HolochainManager {
 
         // 4. Store the agent keyed by pub key hex.
         let key_hex = hex::encode(agent_pub_key.get_raw_39());
+        self.lineage_index
+            .lock()
+            .await
+            .insert(key_hex.clone(), Self::app_id_suffix(&app_id));
         {
             let mut agents = self.agents.lock().await;
             agents.insert(
@@ -289,6 +377,7 @@ impl HolochainManager {
             .list_apps(None)
             .await
             .map_err(|e| format!("Failed to list apps: {}", e))?;
+        self.rebuild_lineage_index(&apps).await;
 
         struct Row {
             app_id: String,
@@ -297,6 +386,10 @@ impl HolochainManager {
             status: String,
             connected: bool,
             conversations: Option<u64>,
+            /// Source-chain record count from an admin dump - the on-disk
+            /// truth, immune to the records-warmup window that made the
+            /// 08-19 census call storied cells "empty".
+            chain_records: Option<u64>,
         }
         let mut rows: Vec<Row> = Vec::new();
 
@@ -365,6 +458,26 @@ impl HolochainManager {
                 None
             };
 
+            // WARM verification: a conversation count of zero (or an
+            // unreachable cell) proves nothing - cells answer empty while
+            // records load from disk, and disabled cells cannot be asked.
+            // The source chain on disk is the truth: probe it whenever the
+            // zome count did not already prove data.
+            let chain_records = if conversations.unwrap_or(0) == 0 {
+                match Self::first_cell_id(app) {
+                    Some(cell_id) => match admin_ws.dump_state(cell_id).await {
+                        Ok(dump) => chain_records_from_dump(&dump),
+                        Err(e) => {
+                            log::warn!("[cells] dump_state failed for {}: {e:?}", app.installed_app_id);
+                            None
+                        }
+                    },
+                    None => None,
+                }
+            } else {
+                None
+            };
+
             rows.push(Row {
                 app_id: app.installed_app_id.clone(),
                 key_hex,
@@ -372,6 +485,7 @@ impl HolochainManager {
                 status: format!("{:?}", app.status),
                 connected,
                 conversations,
+                chain_records,
             });
         }
 
@@ -409,31 +523,41 @@ impl HolochainManager {
         let mut n_link = 0u64;
         let mut n_data = 0u64;
         let mut n_orphan_empty = 0u64;
-        let mut n_unreachable = 0u64;
+        let mut n_unverified = 0u64;
         let mut n_disabled = 0u64;
+        let mut would_disable: Vec<String> = Vec::new();
         let cells: Vec<serde_json::Value> = rows
             .iter()
             .map(|r| {
                 let is_live = live_keys.contains(r.key_hex.as_str());
-                let has_data = r.conversations.unwrap_or(0) > 0;
+                // Data is proven by EITHER a warm conversation count or a
+                // storied source chain; emptiness ONLY by a verified
+                // genesis-length chain. "Couldn't verify" is its own class
+                // and is never tidyable - the 08-19 rule.
+                let has_data = r.conversations.unwrap_or(0) > 0
+                    || r.chain_records.map(|n| n > EMPTY_CHAIN_MAX).unwrap_or(false);
+                let verified_empty =
+                    r.chain_records.map(|n| n <= EMPTY_CHAIN_MAX).unwrap_or(false);
                 let class = if is_live {
                     n_live += 1;
                     "live"
                 } else if r.status.starts_with("Disabled") {
                     n_disabled += 1;
                     "disabled"
-                } else if !r.connected {
-                    n_unreachable += 1;
-                    "unreachable"
                 } else if has_data {
                     n_data += 1;
                     "stranded_data"
-                } else if on_live_chain.contains(&r.key_hex) {
+                } else if verified_empty && on_live_chain.contains(&r.key_hex) {
                     n_link += 1;
-                    "empty_link_on_live_chain"
-                } else {
+                    would_disable.push(r.app_id.clone());
+                    "empty_link_verified"
+                } else if verified_empty {
                     n_orphan_empty += 1;
-                    "empty_orphan"
+                    would_disable.push(r.app_id.clone());
+                    "empty_orphan_verified"
+                } else {
+                    n_unverified += 1;
+                    "unverified"
                 };
                 serde_json::json!({
                     "app_id": r.app_id,
@@ -442,22 +566,27 @@ impl HolochainManager {
                     "status": r.status,
                     "connected": r.connected,
                     "conversations": r.conversations,
+                    "chain_records": r.chain_records,
                     "class": class,
                 })
             })
             .collect();
 
         Ok(serde_json::json!({
+            "census_version": 2,
+            "empty_chain_max": EMPTY_CHAIN_MAX,
             "summary": {
                 "total_cells": rows.len(),
                 "live": n_live,
                 "stranded_data": n_data,
-                "empty_link_on_live_chain": n_link,
-                "empty_orphan": n_orphan_empty,
-                "unreachable": n_unreachable,
+                "empty_link_verified": n_link,
+                "empty_orphan_verified": n_orphan_empty,
+                "unverified": n_unverified,
                 "disabled": n_disabled,
                 "live_ais": live.len(),
+                "would_disable": would_disable.len(),
             },
+            "would_disable": would_disable,
             "chains": chains,
             "cells": cells,
         }))
@@ -595,17 +724,34 @@ impl HolochainManager {
     /// generation's agent. Readers merge across the whole lineage so no
     /// conversation is orphaned.
     pub async fn agent_lineage(&self, agent_key_hex: &str) -> Vec<String> {
+        // Walk the list_apps-based index: every generation is a link
+        // REGARDLESS of enable state, so a disabled middle cell no longer
+        // hides everything older. Readers skip members they cannot reach
+        // (call_zome fails, they warn + continue) - skip, never sever.
+        {
+            let idx = self.lineage_index.lock().await;
+            if idx.contains_key(agent_key_hex) {
+                let mut lineage: Vec<String> = Vec::new();
+                let mut cur = agent_key_hex.to_string();
+                while idx.contains_key(&cur) {
+                    lineage.push(cur.clone());
+                    let suffix = idx.get(&cur).cloned().unwrap_or_default();
+                    if suffix.is_empty() || suffix == cur || lineage.contains(&suffix) {
+                        break;
+                    }
+                    cur = suffix;
+                }
+                return lineage;
+            }
+        }
+        // Not indexed yet (call before the first reconnect finished):
+        // the connected-map walk still answers.
         let agents = self.agents.lock().await;
         let mut lineage: Vec<String> = Vec::new();
         let mut cur = agent_key_hex.to_string();
         while let Some(agent) = agents.get(&cur) {
             lineage.push(cur.clone());
-            let suffix = agent
-                .installed_app_id
-                .strip_prefix(dna::APP_ID_PREFIX)
-                .or_else(|| agent.installed_app_id.strip_prefix("transcript_"))
-                .unwrap_or("")
-                .to_string();
+            let suffix = Self::app_id_suffix(&agent.installed_app_id);
             // Root apps end in the original local AI id (not in the map);
             // guard against self-reference and cycles.
             if suffix.is_empty() || suffix == cur || lineage.contains(&suffix) {
@@ -632,6 +778,8 @@ impl HolochainManager {
             .list_apps(None)
             .await
             .map_err(|e| format!("Failed to list apps: {}", e))?;
+
+        self.rebuild_lineage_index(&apps).await;
 
         let mut reconnected = 0;
         let mut skipped_disabled = 0u32;
