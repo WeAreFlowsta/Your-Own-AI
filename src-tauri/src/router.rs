@@ -343,6 +343,17 @@ fn offline_ordering(lean: &str, a: OfflineRank, b: OfflineRank) -> std::cmp::Ord
 /// specialist for a real task is worth the reload, but near-equal models
 /// don't thrash).
 async fn pick_offline(app: &AppHandle, task: &str, lean: &str, agent_only: bool) -> Result<String, String> {
+    pick_offline_for(app, task, lean, agent_only, None).await
+}
+
+/// Room a reply needs beyond the prompt when the turn's size is known.
+const REPLY_ROOM_TOKENS: u32 = 1024;
+
+/// `pick_offline` with the turn's size: candidates whose runtime context
+/// cannot hold prompt + reply room are set aside ("needs a longer context");
+/// if none can, the largest-context candidates stay so the user gets the
+/// best that exists rather than a refusal.
+async fn pick_offline_for(app: &AppHandle, task: &str, lean: &str, agent_only: bool, turn_tokens: Option<u32>) -> Result<String, String> {
     let mut all = crate::fit::assess(app).await;
     // Agent sessions: tool-driving is a hard filter, not a preference.
     if agent_only {
@@ -354,6 +365,28 @@ async fn pick_offline(app: &AppHandle, task: &str, lean: &str, agent_only: bool)
     }
     if all.is_empty() {
         return Err("No offline models downloaded".to_string());
+    }
+    if let Some(need) = turn_tokens {
+        let need = need.saturating_add(REPLY_ROOM_TOKENS) as u64;
+        let fits_ctx: Vec<crate::fit::ModelFit> = all
+            .iter()
+            .filter(|f| f.context_runtime == 0 || f.context_runtime >= need)
+            .cloned()
+            .collect();
+        if !fits_ctx.is_empty() {
+            if fits_ctx.len() < all.len() {
+                log::info!(
+                    "[router] turn needs ~{need} tokens of context - {} of {} models set aside (too short a runtime context)",
+                    all.len() - fits_ctx.len(),
+                    all.len()
+                );
+            }
+            all = fits_ctx;
+        } else {
+            let max_ctx = all.iter().map(|f| f.context_runtime).max().unwrap_or(0);
+            all.retain(|f| f.context_runtime == max_ctx);
+            log::warn!("[router] no installed model holds ~{need} tokens; keeping the largest-context ones ({max_ctx})");
+        }
     }
 
     // fit tier: green(2) > yellow(1) > red(0).
@@ -451,7 +484,7 @@ async fn pick_offline(app: &AppHandle, task: &str, lean: &str, agent_only: bool)
                 .state::<crate::agent_bridge::AgentBridgeState>()
                 .has_open_folder()
                 .await;
-            if keep_loaded(cap(&cf.name), cap(&best.name), tier(cf), tier(best), folder_open) {
+            if keep_loaded(cap(&cf.name), cap(&best.name), tier(cf), tier(best), folder_open, best.load_secs) {
                 return Ok(cur.clone());
             }
         }
@@ -470,15 +503,29 @@ async fn pick_offline(app: &AppHandle, task: &str, lean: &str, agent_only: bool)
 /// UNLESS a project folder is open: agent sessions are deliberately
 /// session-stable, and evicting the project's model for a stray chat
 /// question costs a minutes-long reload on the way back.
+/// Extra switch margin for a candidate that is slow to load here: a reload
+/// that costs most of a minute must buy a clearly better model. Measured
+/// load time (model-stats) above ~10 s adds one point; above ~40 s, two.
+pub(crate) fn reload_margin(load_secs: Option<f64>) -> u8 {
+    match load_secs {
+        Some(s) if s >= 40.0 => 2,
+        Some(s) if s >= 10.0 => 1,
+        _ => 0,
+    }
+}
+
 pub(crate) fn keep_loaded(
     cap_cur: u8,
     cap_best: u8,
     tier_cur: u8,
     tier_best: u8,
     folder_open: bool,
+    load_secs_best: Option<f64>,
 ) -> bool {
-    if cap_cur + SWITCH_MARGIN < cap_best {
-        return false; // a real specialist wins regardless of fit or folders
+    // A real specialist wins regardless of fit or folders - but a candidate
+    // that is slow to load here must win by more (reload_margin).
+    if cap_cur + SWITCH_MARGIN + reload_margin(load_secs_best) < cap_best {
+        return false;
     }
     tier_cur >= tier_best || folder_open
 }
@@ -925,7 +972,27 @@ pub async fn route(
     agent: bool,
     plan: bool,
 ) -> Result<RouteResult, String> {
-    let result = route_inner(app, mode, query, eagerness, task, difficulty, lean, picks, query_vec, agent, plan).await;
+    route_with(app, mode, query, eagerness, task, difficulty, lean, picks, query_vec, agent, plan, None).await
+}
+
+/// `route` with the turn's size (prompt + history + attachments, tokens),
+/// so the offline pick can set aside models whose runtime context is too
+/// short for it.
+pub async fn route_with(
+    app: &AppHandle,
+    mode: &str,
+    query: &str,
+    eagerness: &str,
+    task: &str,
+    difficulty: &str,
+    lean: &str,
+    picks: &OnlinePicks,
+    query_vec: Option<&[f32]>,
+    agent: bool,
+    plan: bool,
+    turn_tokens: Option<u32>,
+) -> Result<RouteResult, String> {
+    let result = route_inner(app, mode, query, eagerness, task, difficulty, lean, picks, query_vec, agent, plan, turn_tokens).await;
     if let Ok(r) = &result {
         remember_decision(&r.model, &r.reason);
     }
@@ -944,6 +1011,7 @@ async fn route_inner(
     query_vec: Option<&[f32]>,
     agent: bool,
     plan: bool,
+    turn_tokens: Option<u32>,
 ) -> Result<RouteResult, String> {
     // Slot preferences: explicit params (the in-app chat path reads
     // localStorage) fall back to the Rust-readable settings store, so API
@@ -994,7 +1062,7 @@ async fn route_inner(
         };
         let offline_task = if plan { "reasoning" } else { "code" };
         let t0 = std::time::Instant::now();
-        let offline = pick_offline(app, offline_task, lean, true).await.ok();
+        let offline = pick_offline_for(app, offline_task, lean, true, turn_tokens).await.ok();
         let t_offline = t0.elapsed().as_millis();
         // Agent sessions hammer their model for many steps - "might load"
         // is not good enough. Green = fully comfortable on this hardware;
@@ -1144,7 +1212,7 @@ async fn route_inner(
     if mode == "my-hardware" {
         let (ext_models, ext_tps) = crate::engine::external_models_cached(app);
         if !ext_models.is_empty() {
-            let local = pick_offline(app, task, lean, false).await.ok();
+            let local = pick_offline_for(app, task, lean, false, turn_tokens).await.ok();
             let local_cap = local
                 .as_deref()
                 .map(|m| crate::model_caps::caps_for(m).by_task(task));
@@ -1184,7 +1252,7 @@ async fn route_inner(
         // No server connected (or nothing usable) — behave like offline-only.
     }
 
-    let model = pick_offline(app, task, lean, false).await?;
+    let model = pick_offline_for(app, task, lean, false, turn_tokens).await?;
     let reason = if medical {
         // The visible promise: this is the receipt line users see. Name the
         // specialist when one took the question.
@@ -1269,6 +1337,7 @@ pub async fn route_model(
     query_vec: Option<Vec<f32>>,
     agent: Option<bool>,
     plan: Option<bool>,
+    turn_tokens: Option<u32>,
 ) -> Result<RouteResult, String> {
     let picks = OnlinePicks {
         fresh: online_fresh,
@@ -1277,7 +1346,7 @@ pub async fn route_model(
         agent: online_agent,
         plan: online_planning,
     };
-    route(
+    route_with(
         &app,
         &mode,
         &query,
@@ -1289,6 +1358,7 @@ pub async fn route_model(
         query_vec.as_deref(),
         agent.unwrap_or(false),
         plan.unwrap_or(false),
+        turn_tokens,
     )
     .await
 }
@@ -1329,15 +1399,15 @@ mod tests {
     #[test]
     fn keep_loaded_is_fit_aware_with_a_project_guard() {
         // Green loaded, green best, near-equal caps: classic stickiness holds.
-        assert!(keep_loaded(8, 8, 2, 2, false));
+        assert!(keep_loaded(8, 8, 2, 2, false, None));
         // Yellow loaded vs green best, no folder open: switch - the
         // sky-is-blue case (a slow partial-offload must not hold the slot).
-        assert!(!keep_loaded(8, 8, 1, 2, false));
+        assert!(!keep_loaded(8, 8, 1, 2, false, None));
         // Same, but a project folder is open: the project's model stays warm.
-        assert!(keep_loaded(8, 8, 1, 2, true));
+        assert!(keep_loaded(8, 8, 1, 2, true, None));
         // A real specialist (beats the margin: gap of 3+) evicts regardless
         // of fit or folders...
-        assert!(!keep_loaded(6, 9, 2, 2, true));
+        assert!(!keep_loaded(6, 9, 2, 2, true, None));
         // ...but a 2-point gap is inside the margin - stickiness holds,
         // matching the shipped inclusive-margin semantics.
         assert!(keep_loaded(6, 8, 2, 2, false));
@@ -1345,6 +1415,18 @@ mod tests {
         assert!(keep_loaded(8, 8, 1, 1, false));
         // Loaded model BETTER fit than best candidate: stay.
         assert!(keep_loaded(7, 8, 2, 1, false));
+    }
+
+    /// A slow-loading candidate must win by more: 6 -> 9 (margin 3) switches
+    /// when the candidate loads fast, not when it takes a minute.
+    #[test]
+    fn slow_loads_need_a_bigger_margin() {
+        assert!(!keep_loaded(6, 9, 2, 2, true, Some(3.0)), "fast load: +3 is worth a reload");
+        assert!(keep_loaded(6, 9, 2, 2, true, Some(45.0)), "a 45 s reload needs more than +3");
+        assert!(!keep_loaded(5, 9, 2, 2, true, Some(45.0)), "+4 still wins against a 45 s reload");
+        assert_eq!(reload_margin(None), 0);
+        assert_eq!(reload_margin(Some(12.0)), 1);
+        assert_eq!(reload_margin(Some(60.0)), 2);
     }
 
     #[test]

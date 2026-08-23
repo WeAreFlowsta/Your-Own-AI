@@ -643,6 +643,15 @@ export function useChat(props: UseChatProps) {
             onlineHardCode,
             onlineHardGeneral,
             queryVec: queryVec ?? undefined,
+            // The turn's size, so the pick can set aside models whose runtime
+            // context is too short for it: history + this message + any
+            // attached text (chars/4) + ~1000 tokens per image + persona room.
+            turnTokens: Math.ceil(
+              (state.messages.reduce((n, m) => n + (m.content?.length ?? 0), 0) +
+                userInput.length +
+                (fileContext?.length ?? 0) +
+                4000) / 4,
+            ) + images.length * 1000,
           });
           console.log(`[Router] ${mode} → ${r.model} (${r.reason})`);
           preferredModel = r.model;
@@ -1584,6 +1593,11 @@ export function useChat(props: UseChatProps) {
           onlineFresh: localStorage.getItem("routingOnlineFresh") || undefined,
           onlineHardCode: localStorage.getItem("routingOnlineHardCode") || undefined,
           onlineHardGeneral: localStorage.getItem("routingOnlineHardGeneral") || undefined,
+          turnTokens: Math.ceil(
+            (state.messages.slice(0, messageIndex).reduce((n, m) => n + (m.content?.length ?? 0), 0) +
+              userMessage.content.length +
+              4000) / 4,
+          ) + (userMessage.images?.length ?? 0) * 1000,
         });
         const wentOnline = r.model.startsWith("online:");
         if (target === "online" ? wentOnline : !wentOnline) override = r.model;
