@@ -136,6 +136,17 @@ function projectorFor(family: ModelFamily, variant: ModelVariant) {
   });
 }
 
+/** The catalog URL for a file we are downloading (a model variant or a
+ *  vision projector) - what a reattach needs to pick a download back up
+ *  after the app was closed mid-way. Unknown for pasted custom URLs. */
+function downloadUrlFor(filename: string): string | undefined {
+  for (const f of modelFamilies) {
+    const v = f.variants.find((x) => x.filename === filename);
+    if (v) return v.downloadUrl;
+  }
+  return VISION_PROJECTORS.find((p) => p.filename === filename)?.downloadUrl;
+}
+
 /** What a card says while it downloads. A vision model is two files; say
  *  which one is in flight and count them, so the bar filling twice reads as
  *  "1 of 2, then 2 of 2" instead of a download that started over. */
@@ -478,7 +489,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
 
   // On mount: check for completed or in-progress downloads
   // eslint-disable-next-line qwik/no-use-visible-task
-  useVisibleTask$(({ cleanup }) => {
+  useVisibleTask$(async ({ cleanup }) => {
     // 1. Show recent completion banner (user navigated away and came back after download finished)
     const completedDownload = localStorage.getItem('completedModelDownload');
     if (completedDownload) {
@@ -495,12 +506,17 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     }
 
     // 2. Reattach to downloads still in progress (user navigated away
-    //    mid-download). Stale records (older than 2 hours) are dropped.
+    //    mid-download, or the app was closed mid-way). A record stays alive
+    //    as long as its resumable .part is on disk - a 17 GB download
+    //    interrupted yesterday should continue by itself, not need a click.
+    //    Only a record with no .part left (and no live download) is dropped.
     const activeMap = readActiveDownloads();
     const actives: ActiveDownload[] = [];
     for (const a of Object.values(activeMap)) {
-      if (Date.now() - a.startedAt > 2 * 60 * 60 * 1000) forgetActiveDownload(a.familyId);
-      else actives.push(a);
+      const st = await modelManager.downloadStatus(a.filename);
+      const fresh = Date.now() - a.startedAt <= 2 * 60 * 60 * 1000;
+      if (st.downloading || st.has_partial || fresh) actives.push(a);
+      else forgetActiveDownload(a.familyId);
     }
     if (actives.length === 0) return;
 
@@ -511,6 +527,57 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     }
     store.downloads = { ...store.downloads, ...reattached };
     const byFile = new Map(actives.map((a) => [a.filename, a]));
+
+    // Seed each card with the real figure right away, and pick up any
+    // download the backend is NOT running (the app was closed mid-way; the
+    // record is fresh and a .part is on disk) - resume from the catalog URL
+    // instead of showing "Downloading.." forever with nothing moving.
+    for (const a of actives) {
+      modelManager.downloadStatus(a.filename).then((st) => {
+        const current = store.downloads[a.familyId];
+        if (!current) return;
+        const total = st.total_bytes;
+        if (st.downloading && st.downloaded_bytes > 0) {
+          store.downloads = {
+            ...store.downloads,
+            [a.familyId]: {
+              ...current,
+              progress: {
+                filename: a.filename,
+                downloaded: st.downloaded_bytes,
+                total,
+                percent: total > 0 ? Math.floor((st.downloaded_bytes / total) * 100) : 0,
+              },
+            },
+          };
+          return;
+        }
+        if (st.downloading) return;
+        const url = downloadUrlFor(a.filename);
+        if (!url) {
+          // A pasted custom URL we no longer have: let the card go; the
+          // .part stays on disk and the custom dialog resumes it.
+          forgetActiveDownload(a.familyId);
+          const { [a.familyId]: _gone, ...rest } = store.downloads;
+          store.downloads = rest;
+          return;
+        }
+        modelManager
+          .downloadModel(url, a.filename, (progress) => {
+            const now = store.downloads[a.familyId];
+            if (!now) return;
+            store.downloads = { ...store.downloads, [a.familyId]: { ...now, progress } };
+          })
+          .then(() => finalizeDownload(a.familyId, a.modelFilename ?? a.filename, a.familyName, a.isFirstModel))
+          .catch((error) => {
+            console.error('Resume failed:', error);
+            store.error = getUserFriendlyErrorMessage(error);
+            forgetActiveDownload(a.familyId);
+            const { [a.familyId]: _failed, ...rest } = store.downloads;
+            store.downloads = rest;
+          });
+      });
+    }
 
     // Progress events are per file: route each to its card
     const unlistenProgress = listen<{ filename: string; downloaded: number; total: number; percent: number }>(
@@ -1417,10 +1484,11 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
           </button>
           {!store.loadingModels && store.inventoryOpen &&
             Object.values(store.modelFits).some((f) => f.moe_offload) && (
-            <Callout intent="info" id="moe-split" class="mb-4">
-              One of your models is bigger than your graphics memory. Your Own AI
-              splits the work - the model's less-used parts stay in main memory -
-              so replies stay quick.
+            <Callout intent="info" id="moe-split" title="What GPU + RAM means" class="mb-4">
+              Some models are bigger than your graphics card's memory. Your Own AI
+              keeps the parts a model uses most on the card and the rest in your
+              computer's main memory, so these models still run well. They carry
+              the "GPU + RAM" badge below.
             </Callout>
           )}
           {store.loadingModels ? (

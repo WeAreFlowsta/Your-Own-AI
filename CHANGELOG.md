@@ -59,6 +59,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - Several models can download at once, each card with its own progress
   and button. Starting a second download used to make the first card look
   idle.
+- Coming back to the Models page shows a download's real progress right
+  away, and a download the app was closed in the middle of picks itself
+  back up from where it stopped.
 - A vision model is two files; the card now says which one is in flight
   ("Downloading model · 1 of 2", then "Downloading vision support · 2 of
   2"), shows downloaded of total, and the Download button states both

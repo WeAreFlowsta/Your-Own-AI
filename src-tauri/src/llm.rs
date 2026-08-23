@@ -2052,13 +2052,31 @@ impl Drop for DownloadGuard {
         if let Ok(mut s) = downloading_set().lock() {
             s.remove(&self.0);
         }
+        if let Ok(mut p) = progress_map().lock() {
+            p.remove(&self.0);
+        }
     }
+}
+
+/// Bytes so far / total for every in-flight download, so a surface that
+/// reattaches (navigated away and back) shows the real figure at once
+/// instead of waiting for the next whole-percent event - on a 17 GB file a
+/// percent is ~170 MB, long enough to read as "stuck at Downloading..".
+fn progress_map() -> &'static std::sync::Mutex<std::collections::HashMap<String, (u64, u64)>> {
+    static P: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, (u64, u64)>>> =
+        std::sync::OnceLock::new();
+    P.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
 #[derive(serde::Serialize)]
 pub struct DownloadStatus {
     pub downloading: bool,  // a download_model call is running for this file
     pub has_partial: bool,  // a resumable `.part` exists (e.g. after an app restart)
+    /// Bytes on disk so far: the live figure while downloading, else the
+    /// size of the resumable `.part` (0 if none).
+    pub downloaded_bytes: u64,
+    /// Total size when known (the live download's Content-Length), else 0.
+    pub total_bytes: u64,
 }
 
 /// Lets the UI reattach to / resume a download started elsewhere — the parity fix
@@ -2073,8 +2091,14 @@ pub async fn download_status(
         .map(|s| s.contains(&filename))
         .unwrap_or(false);
     let models_dir = get_models_dir(&app_handle)?;
-    let has_partial = models_dir.join(format!("{}.part", filename)).exists();
-    Ok(DownloadStatus { downloading, has_partial })
+    let part = models_dir.join(format!("{}.part", filename));
+    let has_partial = part.exists();
+    let live = progress_map().lock().ok().and_then(|p| p.get(&filename).copied());
+    let (downloaded_bytes, total_bytes) = match live {
+        Some(v) => v,
+        None => (std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0), 0),
+    };
+    Ok(DownloadStatus { downloading, has_partial, downloaded_bytes, total_bytes })
 }
 
 /**
@@ -2146,6 +2170,7 @@ pub async fn download_model(
     const MAX_RETRIES: u32 = 10;
     let mut total_size: u64 = 0;
     let mut last_progress_percent = 0u32;
+    let mut last_progress_emit = std::time::Instant::now();
     let mut attempt: u32 = 0;
 
     loop {
@@ -2198,14 +2223,20 @@ pub async fn download_model(
                             break 'attempt Some(format!("write failed: {}", e));
                         }
                         downloaded += chunk.len() as u64;
+                        if let Ok(mut p) = progress_map().lock() {
+                            p.insert(filename.clone(), (downloaded, total_size));
+                        }
                         let pct = if total_size > 0 {
                             ((downloaded as f64 / total_size as f64) * 100.0) as u32
                         } else { 0 };
-                        if pct != last_progress_percent {
+                        // Emit on every whole percent, and at least every 2 s
+                        // so a slow large download still visibly moves.
+                        if pct != last_progress_percent || last_progress_emit.elapsed().as_secs() >= 2 {
                             let _ = app_handle.emit("model-download-progress", serde_json::json!({
                                 "filename": filename, "downloaded": downloaded, "total": total_size, "percent": pct
                             }));
                             last_progress_percent = pct;
+                            last_progress_emit = std::time::Instant::now();
                         }
                     }
                     Ok(Some(Err(e))) => break 'attempt Some(format!("stream error: {}", e)),

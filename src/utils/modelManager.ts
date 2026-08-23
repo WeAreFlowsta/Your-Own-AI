@@ -78,11 +78,13 @@ export class ModelManager {
    * whether a resumable partial exists. Lets a card pick a download back up after
    * the user navigated away.
    */
-  async downloadStatus(filename: string): Promise<{ downloading: boolean; has_partial: boolean }> {
+  async downloadStatus(
+    filename: string,
+  ): Promise<{ downloading: boolean; has_partial: boolean; downloaded_bytes: number; total_bytes: number }> {
     try {
       return await invoke('download_status', { filename });
     } catch {
-      return { downloading: false, has_partial: false };
+      return { downloading: false, has_partial: false, downloaded_bytes: 0, total_bytes: 0 };
     }
   }
 
