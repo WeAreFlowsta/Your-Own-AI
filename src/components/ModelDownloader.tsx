@@ -252,6 +252,8 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
         agent_template_ok: boolean;
         need_gb: number;
         moe_offload?: boolean;
+        moe_cpu_layers?: number | null;
+        n_layers?: number;
       }
     >,
     appVersion: '',
@@ -369,6 +371,8 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
           agent_template_ok: boolean;
           need_gb: number;
           moe_offload?: boolean;
+          moe_cpu_layers?: number | null;
+          n_layers?: number;
         }[]
       >('assess_model_fit');
       store.modelFits = Object.fromEntries(fits.map((f) => [f.name, f]));
@@ -1636,7 +1640,13 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                 ? {
                     label: 'GPU + RAM',
                     cls: 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400',
-                    tip: "Bigger than your graphics card's memory. The model's less-used parts stay in main memory while the rest runs on the card - fast for its size.",
+                    tip:
+                      "Bigger than your graphics card's memory. The model's less-used parts stay in main memory while the rest runs on the card - fast for its size." +
+                      (fitInfo.moe_cpu_layers != null && fitInfo.n_layers
+                        ? ` Right now: the experts of ${fitInfo.moe_cpu_layers} of ${fitInfo.n_layers} layers in main memory, the rest on the card.`
+                        : fitInfo.moe_cpu_layers == null && fitInfo.n_layers
+                          ? ' Right now: all expert layers in main memory, attention on the card.'
+                          : ''),
                   }
                 : fitInfo
                 ? {
