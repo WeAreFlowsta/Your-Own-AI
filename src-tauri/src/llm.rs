@@ -684,11 +684,7 @@ pub async fn find_vision_model(
     // is preferred over YELLOW (partial offload) to leave that headroom.
     let fits = crate::fit::assess(&app_handle).await;
     let tier = |name: &str| -> u8 {
-        match fits.iter().find(|f| f.name == name).map(|f| f.fit) {
-            Some(crate::fit::Fit::Green) => 2,
-            Some(crate::fit::Fit::Yellow) => 1,
-            _ => 0, // Red or ungraded
-        }
+        fits.iter().find(|f| f.name == name).map(|f| f.fit.tier()).unwrap_or(0)
     };
     let runnable: Vec<String> = candidates.iter().filter(|n| tier(n) > 0).cloned().collect();
     let candidates: Vec<String> = if runnable.is_empty() { candidates } else { runnable };

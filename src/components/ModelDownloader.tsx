@@ -246,7 +246,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     modelFits: {} as Record<
       string,
       {
-        fit: 'green' | 'yellow' | 'red';
+        fit: 'green' | 'split' | 'yellow' | 'red';
         context_max: number;
         context_runtime: number;
         agent_template_ok: boolean;
@@ -365,7 +365,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
       const fits = await invoke<
         {
           name: string;
-          fit: 'green' | 'yellow' | 'red';
+          fit: 'green' | 'split' | 'yellow' | 'red';
           context_max: number;
           context_runtime: number;
           agent_template_ok: boolean;
@@ -1680,7 +1680,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                     cls: 'bg-red-500/10 border-red-500/25 text-red-400',
                     tip: `This file is incomplete or corrupted and can't be used (${model.damaged}). Delete it and download the model again.`,
                   }
-                : fitInfo?.moe_offload
+                : fitInfo?.fit === 'split' || fitInfo?.moe_offload
                 ? {
                     label: 'GPU + RAM',
                     cls: 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400',
@@ -1708,6 +1708,11 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                       label: 'Too large',
                       cls: 'bg-red-500/10 border-red-500/25 text-red-400',
                       tip: 'Needs more memory than this machine has free.',
+                    },
+                    split: {
+                      label: 'GPU + RAM',
+                      cls: 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400',
+                      tip: "Bigger than your graphics card's memory; its experts run from main memory - fast for its size.",
                     },
                   }[fitInfo.fit]
                 : null;

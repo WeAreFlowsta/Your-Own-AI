@@ -90,7 +90,7 @@ const AiFormModal = component$<AiFormModalProps>(
       // starts true so a slow check never hides options from a paying user.)
       onlineEntitled: true,
       // model filename → fit grade (how well it runs on this device)
-      fits: {} as Record<string, 'green' | 'yellow' | 'red'>,
+      fits: {} as Record<string, 'green' | 'split' | 'yellow' | 'red'>,
       // true while the offline list is being fetched with nothing cached to show yet
       modelsLoading: false,
       useArchetypeThumbnail: false,
@@ -987,7 +987,7 @@ const AiFormModal = component$<AiFormModalProps>(
                               const fit = store.fits[localModel.name];
                               if (!fit) return null;
                               const color =
-                                fit === 'green'
+                                fit === 'green' || fit === 'split'
                                   ? 'bg-green-500'
                                   : fit === 'yellow'
                                     ? 'bg-yellow-500'
@@ -995,12 +995,14 @@ const AiFormModal = component$<AiFormModalProps>(
                               const title =
                                 fit === 'green'
                                   ? 'Fits fully on your GPU — fast'
-                                  : fit === 'yellow'
-                                    ? 'Partly runs on the CPU — slower'
-                                    : "Too big for this device — may be very slow";
+                                  : fit === 'split'
+                                    ? 'GPU + RAM — its experts run from main memory, fast for its size'
+                                    : fit === 'yellow'
+                                      ? 'Runs slower on this machine'
+                                      : 'Needs more memory than this machine has';
                               return (
                                 <span
-                                  class={`inline-block w-2 h-2 rounded-full mr-2 align-middle ${color}`}
+                                  class={`inline-block w-2 h-2 rounded-full ${color} mr-2 align-middle`}
                                   title={title}
                                 />
                               );

@@ -14,7 +14,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { LocalModel } from "../types";
 
-export type FitGrade = "green" | "yellow" | "red";
+/** green = fits fully on the GPU; split = GPU + RAM (MoE experts in main
+ *  memory, fast for its size); yellow = runs slower (CPU-only, tight RAM);
+ *  red = will not run here. */
+export type FitGrade = "green" | "split" | "yellow" | "red";
 export type FitMap = Record<string, FitGrade>;
 export interface OnlineModel {
   id: string;

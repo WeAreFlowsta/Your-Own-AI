@@ -268,7 +268,7 @@ pub async fn offline_agent_readiness(app: tauri::AppHandle) -> OfflineAgentReadi
         capable: !capable_models.is_empty(),
         comfortable: capable_models
             .iter()
-            .any(|f| matches!(f.fit, crate::fit::Fit::Green)),
+            .any(|f| f.fit.is_fast()),
     }
 }
 

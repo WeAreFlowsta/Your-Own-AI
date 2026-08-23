@@ -339,11 +339,8 @@ async fn pick_offline(app: &AppHandle, task: &str, lean: &str, agent_only: bool)
     }
 
     // fit tier: green(2) > yellow(1) > red(0).
-    let tier = |f: &crate::fit::ModelFit| match f.fit {
-        crate::fit::Fit::Green => 2,
-        crate::fit::Fit::Yellow => 1,
-        crate::fit::Fit::Red => 0,
-    };
+    // fit tier: green / split (fast) = 2 > yellow = 1 > red = 0.
+    let tier = |f: &crate::fit::ModelFit| f.fit.tier();
     let cap = |name: &str| crate::model_caps::caps_for(name).by_task(task);
 
     // Prefer models that actually run (green/yellow); fall back to red only if
@@ -690,7 +687,7 @@ pub async fn device_subagents_enabled(app: &AppHandle) -> bool {
     crate::fit::assess(app)
         .await
         .iter()
-        .any(|f| crate::model_caps::agent_caps(&f.name) >= 6 && f.fit == crate::fit::Fit::Green)
+        .any(|f| crate::model_caps::agent_caps(&f.name) >= 6 && f.fit.is_fast())
 }
 
 /// A slot preference from the Rust-readable settings store (mirrored there
@@ -993,7 +990,7 @@ async fn route_inner(
             Some(name) => crate::fit::assess(app)
                 .await
                 .iter()
-                .any(|f| f.name == *name && matches!(f.fit, crate::fit::Fit::Green)),
+                .any(|f| f.name == *name && f.fit.is_fast()),
             None => false,
         };
         let t_green = tg.elapsed().as_millis();

@@ -16,9 +16,34 @@ const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 #[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum Fit {
+    /// Fits fully on the graphics card: full speed.
     Green,
+    /// A mixture-of-experts model bigger than the card, running with its
+    /// experts in main memory ("GPU + RAM"): fast for its size - a first-class
+    /// grade, not a slower one. Routing treats it like green.
+    Split,
+    /// Runs, slower: on a CPU-only machine a model that is tight in RAM. (On a
+    /// GPU machine a dense model that does not fit the card is NOT yellow - it
+    /// loads fully on the card or not at all - it is red.)
     Yellow,
+    /// Will not run here.
     Red,
+}
+
+impl Fit {
+    /// Routing tier: higher runs better. Green and Split share the top - both
+    /// answer at full usable speed on this machine.
+    pub fn tier(self) -> u8 {
+        match self {
+            Fit::Green | Fit::Split => 2,
+            Fit::Yellow => 1,
+            Fit::Red => 0,
+        }
+    }
+    /// "Runs comfortably" - what agent work and the vision pairing ask for.
+    pub fn is_fast(self) -> bool {
+        matches!(self, Fit::Green | Fit::Split)
+    }
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -212,16 +237,18 @@ pub fn moe_budget_correction_gb(predicted_gb: f64, actual_gb: f64) -> f64 {
     (predicted_gb - actual_gb).clamp(-1.0, 1.5)
 }
 
-/// Grade fit. GPU: GREEN fits in (90% of) free VRAM, YELLOW fits VRAM+RAM
-/// (partial offload), else RED. CPU-only (`free_vram_gb` = None): GREEN if it
-/// comfortably fits RAM, YELLOW if tight, else RED.
+/// Grade fit. GPU: GREEN fits in (90% of) free VRAM, else RED - a dense
+/// model loads fully on the card or not at all (the app does not partially
+/// offload dense models: the field outcome is "too large", or on Windows a
+/// driver-paged crawl slower than the CPU). The GPU + RAM split for MoE
+/// models is graded separately by `assess` (Fit::Split). CPU-only
+/// (`free_vram_gb` = None): GREEN if it comfortably fits RAM, YELLOW if
+/// tight, else RED.
 pub fn grade(need_gb: f64, free_vram_gb: Option<f64>, free_ram_gb: f64) -> Fit {
     match free_vram_gb {
         Some(vram) => {
             if need_gb <= 0.9 * vram {
                 Fit::Green
-            } else if need_gb <= vram + free_ram_gb {
-                Fit::Yellow
             } else {
                 Fit::Red
             }
@@ -348,7 +375,7 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
                         moe_ram_budget_gb(free_ram_gb, total_ram_gb),
                     )
                 {
-                    fit = Fit::Yellow;
+                    fit = Fit::Split;
                     moe_offload = true;
                     moe_cpu_layers_pick = moe_cpu_layers(&meta, kv_gb, vram)
                         .filter(|&n| n < meta.expert_bytes_per_layer.len())
@@ -405,13 +432,14 @@ mod tests {
     fn reclaim_keeps_tiers_discriminating_while_a_model_is_loaded() {
         let (free_raw, ram) = (Some(1.0), 18.0);
         // Without reclaim: both the 7 GB incumbent-class model and the
-        // 13 GB big model grade yellow - the tier can't tell them apart.
-        assert_eq!(grade(7.0, free_raw, ram), Fit::Yellow);
-        assert_eq!(grade(13.0, free_raw, ram), Fit::Yellow);
+        // 13 GB big model grade red on a GPU machine - the tier can't tell
+        // them apart.
+        assert_eq!(grade(7.0, free_raw, ram), Fit::Red);
+        assert_eq!(grade(13.0, free_raw, ram), Fit::Red);
         // With the incumbent's 7 GB reclaimed (card is really 8 GB):
         let (free, ram) = reclaim_adjust(free_raw, ram, 7.0);
         assert_eq!(grade(7.0, free, ram), Fit::Green);
-        assert_eq!(grade(13.0, free, ram), Fit::Yellow);
+        assert_eq!(grade(13.0, free, ram), Fit::Red);
     }
 
     /// The 2026-08-22 bench box: 8 GB card, 32 GB RAM (~26 free), the
@@ -435,11 +463,16 @@ mod tests {
 
     #[test]
     fn grades_make_sense() {
-        // 6 GB fits in 8 GB free (≤ 0.9×8); 7.5 GB needs offload (yellow).
+        // 6 GB fits in 8 GB free (≤ 0.9×8); a dense 7.5 GB does not - and a
+        // dense model loads fully on the card or not at all: red, not yellow.
         assert_eq!(grade(6.0, Some(8.0), 16.0), Fit::Green);
-        assert_eq!(grade(7.5, Some(8.0), 16.0), Fit::Yellow);
+        assert_eq!(grade(7.5, Some(8.0), 16.0), Fit::Red);
         assert_eq!(grade(6.0, Some(12.0), 16.0), Fit::Green);
         assert_eq!(grade(40.0, Some(8.0), 16.0), Fit::Red);
+        // Tiers: split is a top-tier grade, yellow below, red bottom.
+        assert_eq!(Fit::Split.tier(), Fit::Green.tier());
+        assert!(Fit::Yellow.tier() < Fit::Split.tier());
+        assert!(Fit::Split.is_fast() && !Fit::Yellow.is_fast());
         // CPU-only
         assert_eq!(grade(4.0, None, 16.0), Fit::Green);
         assert_eq!(grade(13.0, None, 16.0), Fit::Yellow);
