@@ -26,6 +26,7 @@ import {
   getGPUStatus,
   getModality,
   getRunMode,
+  isMoeVariant,
   formatContext,
   type Capability,
   traitInfo,
@@ -974,7 +975,13 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
             <h3 class="text-lg font-semibold text-[var(--text-primary)] leading-tight">{family.name}</h3>
             <div class="flex flex-wrap gap-1 mt-2.5">
               {!isSuitable && (
-                <span class="px-2 py-0.5 bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/40 text-[10px] rounded-full font-semibold whitespace-nowrap">
+                <span
+                  title={totalVRAM && totalVRAM > 0
+                    ? (isMoeVariant(selectedVariant)
+                      ? "This mixture-of-experts model's file does not fit this machine's main memory."
+                      : "A dense model has to fit in graphics memory to run well; unlike a mixture-of-experts model it has no part that can stay in main memory.")
+                    : 'Needs more main memory than this machine has.'}
+                  class="px-2 py-0.5 bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/40 text-[10px] rounded-full font-semibold whitespace-nowrap">
                   {totalVRAM && totalVRAM > 0
                     ? "Too big for your GPU"
                     : systemInfo?.gpu_integrated
@@ -992,7 +999,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                   title="Bigger than your graphics card's memory. The model's less-used parts stay in main memory while the rest runs on the card - fast for its size."
                   class="px-2 py-0.5 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/40 text-[10px] rounded-full font-semibold whitespace-nowrap"
                 >
-                  Runs here - split with main memory
+                  GPU + RAM
                 </span>
               )}
               {isSuitable && runMode === 'cpu' && systemInfo?.gpu_integrated && (
@@ -1443,7 +1450,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                   }
                 : fitInfo?.moe_offload
                 ? {
-                    label: 'Runs here - split',
+                    label: 'GPU + RAM',
                     cls: 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400',
                     tip: "Bigger than your graphics card's memory. The model's less-used parts stay in main memory while the rest runs on the card - fast for its size.",
                   }

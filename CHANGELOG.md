@@ -35,10 +35,13 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - A reply's tokens-per-second now comes from the local engine's own
   timing, so a short one-line answer no longer reads as tens of
   thousands of tokens per second.
-- Models that always think before answering (gpt-oss, LFM2.5) now answer
-  directly in chat and think in Report mode, so a short question never
-  ends inside the model's reasoning with nothing visible. gpt-oss is no
-  longer used for memory extraction, which it cannot format.
+- Models that always think before answering (LFM2.5) now answer directly
+  in chat and think in Report mode, so a short question never ends inside
+  the model's reasoning with nothing visible. gpt-oss replies no longer
+  stop at the end of its reasoning: one of the app's generic stop markers
+  was the same token gpt-oss uses to close its reasoning channel, which
+  cut every reply off before the answer. gpt-oss is no longer used for
+  memory extraction, which it cannot format.
 
 ### New models - mixture-of-experts for every size of machine
 

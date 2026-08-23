@@ -368,6 +368,53 @@ fn parse_gpu_devices(text: &str) -> Vec<GpuDevice> {
 ///   add `--tensor-split` weighted by free VRAM to pool them.
 /// - Otherwise — integrated-only, a single Metal GPU on macOS, or no GPU — we
 ///   return no args and let llama.cpp's default behaviour stand.
+/// gpt-oss speaks OpenAI's channel ("harmony") format: its reasoning is the
+/// `analysis` channel, closed by `<|end|>`, and the visible answer follows in
+/// the `final` channel. That shape needs two departures from the generic
+/// chat-turn controls:
+/// - `<|end|>` must NOT be a stop string (it is Phi's end-of-text, which is
+///   why the generic list carries it): for gpt-oss it ends the analysis
+///   channel, so stopping there cuts the reply off before the answer - the
+///   field "all internal reasoning" / nothing-on-screen symptom.
+/// - no reasoning budget: the budget force-closes the analysis channel with
+///   that same `<|end|>`; effort "low" (which gpt-oss's template honours) is
+///   the lever that keeps its reasoning short instead.
+fn is_harmony_model(model_name: &str) -> bool {
+    let n = model_name.to_lowercase();
+    n.contains("gpt-oss") || n.contains("gpt_oss") || n.contains("gptoss")
+}
+
+/// The reasoning controls a CHAT turn sends for a local model (Report turns
+/// send none - thinking stays open): `(reasoning_budget_tokens,
+/// reasoning_effort)`. Generic: budget 0, so always-reasoning templates the
+/// server knows go straight to the answer. gpt-oss: no budget, effort low.
+pub(crate) fn chat_turn_reasoning_controls(model_name: &str) -> (Option<i64>, Option<&'static str>) {
+    if is_harmony_model(model_name) {
+        (None, Some("low"))
+    } else {
+        (Some(0), None)
+    }
+}
+
+/// Explicit stop sequences for local chat - ensures generation stops even
+/// when llama-server applies -inf logit bias to EOS tokens (which prevents
+/// models like Phi-4 from ever stopping on their own). gpt-oss gets none:
+/// `<|end|>` is its analysis-channel close, and the server already handles
+/// its real end-of-turn tokens (`<|return|>` / `<|call|>`).
+fn chat_stop_strings(model_name: &str) -> serde_json::Value {
+    if is_harmony_model(model_name) {
+        return serde_json::json!([]);
+    }
+    serde_json::json!([
+        "<|end|>",           // Phi-4, Phi-3
+        "<|endoftext|>",     // Phi-4, Phi-3
+        "<|im_end|>",        // Qwen, DeepSeek
+        "<end_of_turn>",     // Gemma
+        "</s>",              // Mistral, Llama
+        "<|eot_id|>",        // Llama 3
+    ])
+}
+
 /// True when the device args put every layer on the CPU (`-ngl 0` /
 /// `--device none`) - there is no graphics memory to split against.
 fn args_force_cpu(args: &[String]) -> bool {
@@ -2665,14 +2712,7 @@ pub async fn stream_chat_completion(
         // Explicit stop sequences — ensures generation stops even when
         // llama-server applies -inf logit bias to EOS tokens (which
         // prevents models like Phi-4 from ever stopping on their own).
-        "stop": [
-            "<|end|>",           // Phi-4, Phi-3
-            "<|endoftext|>",     // Phi-4, Phi-3
-            "<|im_end|>",        // Qwen, DeepSeek
-            "<end_of_turn>",     // Gemma
-            "</s>",              // Mistral, Llama
-            "<|eot_id|>",        // Llama 3
-        ],
+        "stop": chat_stop_strings(&model_name),
     });
     {
         let mut tpl_kwargs = serde_json::Map::new();
@@ -2703,17 +2743,19 @@ pub async fn stream_chat_completion(
     }
     // Chat turns answer directly; Report turns think. `--reasoning off` only
     // reaches templates with a thinking switch - always-reasoning models
-    // (LFM2.5, gpt-oss, ...) ignore it and can spend the whole reply
-    // thinking with nothing visible (seen on the dev-box matrix: 800 tokens
-    // of reasoning, 0 answer). The server's per-request reasoning budget
-    // closes that for any model whose thinking tags it knows: budget 0 =
-    // the model goes straight to the answer. Report mode leaves it open.
+    // (LFM2.5, ...) ignore it and can spend the whole reply thinking with
+    // nothing visible (seen on the dev-box matrix: 800 tokens of reasoning,
+    // 0 answer). The server's per-request reasoning budget closes that for
+    // any model whose thinking tags it knows: budget 0 = straight to the
+    // answer. gpt-oss takes effort "low" instead (see is_harmony_model).
+    // Report mode leaves thinking open.
     if !should_think {
-        body["reasoning_budget_tokens"] = serde_json::json!(0);
-        // gpt-oss additionally takes an effort level through its template;
-        // low keeps its analysis channel short where the budget cannot act.
-        if model_name.to_lowercase().contains("gpt-oss") {
-            body["reasoning_effort"] = serde_json::Value::String("low".to_string());
+        let (budget, effort) = chat_turn_reasoning_controls(&model_name);
+        if let Some(b) = budget {
+            body["reasoning_budget_tokens"] = serde_json::json!(b);
+        }
+        if let Some(e) = effort {
+            body["reasoning_effort"] = serde_json::Value::String(e.to_string());
         }
     }
     // Optional GBNF grammar to constrain output (local llama.cpp only — used by
@@ -3372,18 +3414,22 @@ mod live_matrix {
             "max_tokens": 800,
             "temperature": 0,
             "stream": false,
+            "stop": chat_stop_strings(&model),
         });
-        // Chat-turn shape by default (the app sends reasoning_budget_tokens 0 on
-        // chat turns so always-reasoning models answer directly); override with
-        // YOAI_MATRIX_REASONING_BUDGET=N (-1 = unlimited, Report-mode shape).
-        let budget: i64 = std::env::var("YOAI_MATRIX_REASONING_BUDGET")
-            .ok()
-            .and_then(|b| b.parse().ok())
-            .unwrap_or(0);
-        if budget >= 0 {
-            body["reasoning_budget_tokens"] = serde_json::json!(budget);
+        // Chat-turn shape by default - exactly what the app sends (budget 0, or
+        // gpt-oss's effort low); YOAI_MATRIX_REASONING_BUDGET=-1 = Report shape
+        // (thinking open), =N overrides the budget.
+        let (mut budget, effort) = chat_turn_reasoning_controls(&model);
+        if let Some(b) = std::env::var("YOAI_MATRIX_REASONING_BUDGET").ok().and_then(|b| b.parse::<i64>().ok()) {
+            budget = if b < 0 { None } else { Some(b) };
         }
-        eprintln!("[matrix] reasoning budget: {}", if budget < 0 { "unlimited".to_string() } else { budget.to_string() });
+        if let Some(b) = budget {
+            body["reasoning_budget_tokens"] = serde_json::json!(b);
+        }
+        if let Some(e) = effort {
+            body["reasoning_effort"] = serde_json::json!(e);
+        }
+        eprintln!("[matrix] reasoning controls: budget {:?}, effort {:?}", budget, effort);
         let resp: serde_json::Value = client
             .post(format!("http://127.0.0.1:{PORT}/v1/chat/completions"))
             .json(&body)
