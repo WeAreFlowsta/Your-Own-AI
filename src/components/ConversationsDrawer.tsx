@@ -48,6 +48,8 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
     const renameDraft = useSignal("");
     /** Filter by AI - null = all. Cleared when the filtered AI has no rows. */
     const filterAiId = useSignal<string | null>(null);
+    const stripAtStart = useSignal(true);
+    const stripAtEnd = useSignal(false);
     if (!open) return null;
     // The AIs that have conversations, in list order - the filter row.
     const ais: { id: string; label: string; imageUrl?: string | null }[] = [];
@@ -57,7 +59,11 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
       }
     }
     const activeFilter = ais.some((a) => a.id === filterAiId.value) ? filterAiId.value : null;
+    const activeAi = ais.find((a) => a.id === activeFilter) ?? null;
     const shown = activeFilter ? items.filter((i) => i.aiId === activeFilter) : items;
+    // ~8 avatars fit the drawer width; beyond that the strip scrolls and the
+    // right edge fades until the user reaches the end.
+    const mayOverflow = ais.length > 7;
     return (
       <div class="fixed inset-0 z-50">
         <div class="absolute inset-0 bg-black/40" onClick$={onClose$} />
@@ -75,42 +81,70 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
             </button>
           </div>
           {ais.length > 1 && (
-            <div class="flex items-center gap-2 px-4 py-2 border-b border-[var(--border-subtle)] overflow-x-auto">
-              <button
-                onClick$={() => (filterAiId.value = null)}
-                title="All AIs"
-                class={`shrink-0 px-2 py-0.5 rounded-full text-xs border transition-colors cursor-pointer ${
-                  activeFilter === null
-                    ? "border-[var(--text-secondary)] text-[var(--text-primary)] bg-[var(--bg-dropdown-hover)]"
-                    : "border-[var(--border-subtle)] text-[var(--text-muted)] bg-transparent hover:text-[var(--text-primary)]"
-                }`}
+            <div class="relative border-b border-[var(--border-subtle)]">
+              <div
+                class="flex items-center gap-2 px-4 py-2 overflow-x-auto scroll-smooth"
+                style={{ scrollbarWidth: "none" }}
+                onScroll$={(_, el) => {
+                  stripAtStart.value = el.scrollLeft <= 2;
+                  stripAtEnd.value = el.scrollLeft + el.clientWidth >= el.scrollWidth - 2;
+                }}
               >
-                All
-              </button>
-              {ais.map((ai) => (
                 <button
-                  key={ai.id}
-                  onClick$={() => (filterAiId.value = activeFilter === ai.id ? null : ai.id)}
-                  title={activeFilter === ai.id ? `${ai.label} - show all` : `Only ${ai.label}`}
-                  class={`shrink-0 rounded-full p-0.5 border-2 bg-transparent cursor-pointer transition-colors ${
-                    activeFilter === ai.id
-                      ? "border-[var(--text-secondary)]"
-                      : "border-transparent opacity-70 hover:opacity-100"
+                  onClick$={() => (filterAiId.value = null)}
+                  title="All AIs"
+                  class={`shrink-0 px-2 py-0.5 rounded-full text-xs border transition-colors cursor-pointer ${
+                    activeFilter === null
+                      ? "border-[var(--text-secondary)] text-[var(--text-primary)] bg-[var(--bg-dropdown-hover)]"
+                      : "border-[var(--border-subtle)] text-[var(--text-muted)] bg-transparent hover:text-[var(--text-primary)]"
                   }`}
                 >
-                  {ai.imageUrl ? (
-                    <img
-                      src={ai.imageUrl}
-                      alt={ai.label}
-                      width={28}
-                      height={28}
-                      class="w-7 h-7 rounded-full object-cover block"
-                    />
-                  ) : (
-                    <span class="w-7 h-7 rounded-full bg-[var(--bg-card)] border border-[var(--border-subtle)] block" />
-                  )}
+                  All
                 </button>
-              ))}
+                {activeAi && (
+                  <button
+                    onClick$={() => (filterAiId.value = null)}
+                    title={`Showing only ${activeAi.label} - click to show all`}
+                    class="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border border-[var(--text-secondary)] text-[var(--text-primary)] bg-[var(--bg-dropdown-hover)] cursor-pointer max-w-[120px]"
+                  >
+                    <span class="truncate">{activeAi.label}</span>
+                    <LuX class="h-3 w-3 shrink-0" />
+                  </button>
+                )}
+                {ais.map((ai) => (
+                  <button
+                    key={ai.id}
+                    onClick$={() => (filterAiId.value = activeFilter === ai.id ? null : ai.id)}
+                    title={activeFilter === ai.id ? `${ai.label} - show all` : `Only ${ai.label}`}
+                    class={`shrink-0 rounded-full p-0.5 border-2 bg-transparent cursor-pointer transition-colors ${
+                      activeFilter === ai.id
+                        ? "border-[var(--text-secondary)]"
+                        : "border-transparent opacity-70 hover:opacity-100"
+                    }`}
+                  >
+                    {ai.imageUrl ? (
+                      <img
+                        src={ai.imageUrl}
+                        alt={ai.label}
+                        width={28}
+                        height={28}
+                        class="w-7 h-7 rounded-full object-cover block"
+                      />
+                    ) : (
+                      <span class="w-7 h-7 rounded-full bg-[var(--bg-card)] border border-[var(--border-subtle)] flex items-center justify-center text-xs font-semibold text-[var(--text-secondary)]">
+                        {(ai.label || "?").charAt(0).toUpperCase()}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+              {/* Edge fades say "there's more" - the strip scrolls sideways. */}
+              {!stripAtStart.value && (
+                <div class="pointer-events-none absolute inset-y-0 left-0 w-8 bg-gradient-to-r from-[var(--bg-header-footer)] to-transparent" />
+              )}
+              {mayOverflow && !stripAtEnd.value && (
+                <div class="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-[var(--bg-header-footer)] to-transparent" />
+              )}
             </div>
           )}
           <div class="flex-1 overflow-y-auto py-1">
