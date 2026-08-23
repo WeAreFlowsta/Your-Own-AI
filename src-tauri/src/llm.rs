@@ -2516,6 +2516,14 @@ struct StreamUsageData {
     /// online sibling of the offline model-file hash.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     provider_fingerprint: Option<String>,
+    /// Generation speed as the local server measured it (llama-server's
+    /// `timings.predicted_per_second` on the final chunk). The app's own
+    /// wall-clock figure is wrong for short replies - content is streamed
+    /// in whole lines, so a one-line answer arrives as a single chunk and
+    /// "first chunk to last chunk" is near zero (a 21-token reply once read
+    /// as 21,000 tok/s). Absent for online providers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tokens_per_second: Option<f64>,
 }
 
 /// A web source returned by search-grounded online models (Perplexity/Sonar).
@@ -2693,6 +2701,14 @@ pub async fn stream_chat_completion(
             body["chat_template_kwargs"] = serde_json::Value::Object(tpl_kwargs);
         }
     }
+    // gpt-oss always reasons (its template has no thinking switch) and at its
+    // default depth a short chat turn can spend the whole reply in the
+    // analysis channel and end with no visible answer. Plain chat turns ask
+    // for low effort - the server passes reasoning_effort into the template;
+    // report turns keep the model's default depth.
+    if !should_think && model_name.to_lowercase().contains("gpt-oss") {
+        body["reasoning_effort"] = serde_json::Value::String("low".to_string());
+    }
     // Optional GBNF grammar to constrain output (local llama.cpp only — used by
     // memory extraction to force schema-valid JSON). Online providers don't take
     // it; their minimal body below omits it.
@@ -2859,6 +2875,7 @@ pub async fn stream_chat_completion(
     let mut content_buffer = String::new();
     let mut usage_data: Option<StreamUsageData> = None;
     let mut provider_fingerprint: Option<String> = None;
+    let mut server_tps: Option<f64> = None;
     let mut sources: Vec<SourceItem> = Vec::new();
     let mut in_reasoning = false;
 
@@ -2898,6 +2915,11 @@ pub async fn stream_chat_completion(
                             }
 
                             // Emit usage data if captured
+                            if let Some(ref mut usage) = usage_data {
+                                if usage.tokens_per_second.is_none() {
+                                    usage.tokens_per_second = server_tps;
+                                }
+                            }
                             if let Some(ref usage) = usage_data {
                                 println!("[LLM] Emitting usage: prompt={}, completion={}, total={}",
                                     usage.prompt_tokens, usage.completion_tokens, usage.total_tokens);
@@ -2926,6 +2948,16 @@ pub async fn stream_chat_completion(
                                     if !fp.is_empty() {
                                         provider_fingerprint = Some(fp.to_string());
                                     }
+                                }
+                            }
+                            // llama-server's own generation timing (final chunk).
+                            if let Some(tps) = parsed
+                                .get("timings")
+                                .and_then(|t| t.get("predicted_per_second"))
+                                .and_then(|v| v.as_f64())
+                            {
+                                if tps.is_finite() && tps > 0.0 {
+                                    server_tps = Some(tps);
                                 }
                             }
                             // If the server streams reasoning_content (native thinking from
@@ -3007,6 +3039,7 @@ pub async fn stream_chat_completion(
                                         completion_tokens: completion as u32,
                                         total_tokens: total as u32,
                                         provider_fingerprint: provider_fingerprint.clone(),
+                                        tokens_per_second: server_tps,
                                     });
                                 }
                             }
@@ -3050,6 +3083,11 @@ pub async fn stream_chat_completion(
     }
 
     // Emit usage data if captured (fallback for streams that end without [DONE])
+    if let Some(ref mut usage) = usage_data {
+        if usage.tokens_per_second.is_none() {
+            usage.tokens_per_second = server_tps;
+        }
+    }
     if let Some(ref usage) = usage_data {
         let _ = app.emit(&format!("chat-stream-usage-{}", request_id), usage.clone());
     }

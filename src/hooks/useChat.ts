@@ -18,6 +18,7 @@ import {
 } from "../utils/holochainTranscripts";
 import { extractAndStoreFacts, looksLikeUserFact } from "../utils/memoryExtraction";
 import { recordModelSpeed } from "../utils/modelSpeed";
+import { isUtilityModelReady } from "../utils/utilityModel";
 import { groundDocument, type GroundedSource } from "../utils/grounding";
 import { loadMemoryBlock } from "../utils/memory";
 import { indexTurn } from "../utils/transcriptMemory";
@@ -1015,6 +1016,7 @@ export function useChat(props: UseChatProps) {
           completion_tokens: number;
           total_tokens: number;
           provider_fingerprint?: string | null;
+          tokens_per_second?: number | null;
         } | null = null;
         let sources: { url: string; title: string }[] | null = null;
 
@@ -1123,16 +1125,27 @@ export function useChat(props: UseChatProps) {
         // Calculate tokens per second
         const streamEndTime = Date.now();
         let tokensPerSecond: number | undefined;
-        if (tokenUsage && firstChunkTime) {
+        if (tokenUsage && tokenUsage.tokens_per_second && tokenUsage.tokens_per_second > 0) {
+          // The local server's own measurement - exact, and right for short
+          // replies where the app's first-to-last-chunk clock is not.
+          tokensPerSecond = Math.round(tokenUsage.tokens_per_second * 10) / 10;
+        } else if (tokenUsage && firstChunkTime) {
+          // Wall clock from the first streamed chunk: content arrives in whole
+          // lines, so a reply that lands as one chunk has no measurable span -
+          // only trust spans long enough to mean something.
           const durationSec = (streamEndTime - firstChunkTime) / 1000;
-          if (durationSec > 0) {
+          if (durationSec >= 0.5 && tokenUsage.completion_tokens >= 16) {
             tokensPerSecond = Math.round((tokenUsage.completion_tokens / durationSec) * 10) / 10;
             // This machine's measured speed for an offline model file - what
             // the Models page shows as "~N tok/s measured" (never a bench number).
-            const localFile = !isOnlineModel && !isExternalModel ? preferredModel || currentModel : null;
-            if (localFile) {
-              recordModelSpeed(localFile, tokenUsage.completion_tokens, tokensPerSecond);
-            }
+          }
+        }
+        if (tokensPerSecond && tokenUsage) {
+          // This machine's measured speed for an offline model file - what
+          // the Models page shows as "~N tok/s measured" (never a bench number).
+          const localFile = !isOnlineModel && !isExternalModel ? preferredModel || currentModel : null;
+          if (localFile) {
+            recordModelSpeed(localFile, tokenUsage.completion_tokens, tokensPerSecond);
           }
         }
 
@@ -1203,8 +1216,19 @@ export function useChat(props: UseChatProps) {
               : null;
         // Remote turns (proxy or the user's own external server) may extract
         // via the same remote model — the content already went there.
-        const extractionFallback =
+        let extractionFallback =
           warmOffline ?? (isOnlineModel || isExternalModel ? preferredModel : null);
+        // gpt-oss speaks its own channel format and fights the extraction
+        // grammar (junk output, then a cancelled task): never use it as the
+        // extraction fallback. With the on-device utility model installed
+        // the fallback is not consulted, so extraction still runs.
+        if (
+          extractionFallback &&
+          /gpt-oss/i.test(extractionFallback) &&
+          !(await isUtilityModelReady())
+        ) {
+          extractionFallback = null;
+        }
         // Pre-gate: only spend a model call when the message could state a
         // personal fact (skips pure questions/requests/lookups).
         if (extractionFallback && looksLikeUserFact(userInput)) {

@@ -32,6 +32,12 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - Downloaded models show this computer's measured generation speed
   ("~27 tok/s measured") once you have used them - your number, not a
   benchmark's.
+- A reply's tokens-per-second now comes from the local engine's own
+  timing, so a short one-line answer no longer reads as tens of
+  thousands of tokens per second.
+- gpt-oss answers plain chat turns at low reasoning effort, so a short
+  question no longer ends inside its reasoning with nothing visible; and
+  it is no longer used for memory extraction, which it cannot format.
 
 ### Downloads
 

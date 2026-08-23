@@ -142,11 +142,22 @@ pub fn moe_offload_wanted(need_gb: f64, free_vram_gb: f64) -> bool {
 }
 
 /// Can this MoE model run with its experts in main memory? The experts are
-/// (nearly) the whole file, so the file must fit free RAM; attention + KV
-/// ride on the card. A 32 GB box carries a 21 GB 35B-A3B; a 16 GB box does
-/// not, and the grade says so instead of promising a crawl.
-pub fn moe_offload_fits(weights_gb: f64, need_gb: f64, free_vram_gb: f64, free_ram_gb: f64) -> bool {
-    weights_gb <= free_ram_gb && need_gb <= free_ram_gb + 0.9 * free_vram_gb
+/// (nearly) the whole file, so the file must fit the RAM budget; attention +
+/// KV ride on the card. A 32 GB box carries a 21 GB 35B-A3B; a 16 GB box
+/// does not, and the grade says so instead of promising a crawl.
+pub fn moe_offload_fits(weights_gb: f64, need_gb: f64, free_vram_gb: f64, ram_budget_gb: f64) -> bool {
+    weights_gb <= ram_budget_gb && need_gb <= ram_budget_gb + 0.9 * free_vram_gb
+}
+
+/// The RAM an offloaded MoE model can count on: what is free now, or total
+/// minus the OS reserve, whichever is larger. The file is memory-mapped and
+/// the OS makes room for it on load, so a machine that happens to have
+/// 18 GB in use this minute is still a 32 GB machine for this purpose
+/// (seen live: the 4060 Ti box graded the 35B red while running it at 32
+/// tok/s). The reserve mirrors the catalog's: 40% of RAM, 3..7 GB.
+pub fn moe_ram_budget_gb(free_ram_gb: f64, total_ram_gb: f64) -> f64 {
+    let reserve = (total_ram_gb * 0.4).clamp(3.0, 7.0);
+    free_ram_gb.max(total_ram_gb - reserve)
 }
 
 /// The VRAM (GiB) an MoE model needs with the experts of its first `n`
@@ -312,7 +323,12 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
         if meta.is_moe() {
             if let Some(vram) = free_vram_gb {
                 if moe_offload_wanted(need_gb, vram)
-                    && moe_offload_fits(weights_gb, need_gb, vram, free_ram_gb)
+                    && moe_offload_fits(
+                        weights_gb,
+                        need_gb,
+                        vram,
+                        moe_ram_budget_gb(free_ram_gb, total_ram_gb),
+                    )
                 {
                     fit = Fit::Yellow;
                     moe_offload = true;
@@ -391,6 +407,12 @@ mod tests {
         assert!(!moe_offload_fits(21.0, 22.8, 7.8, 12.0));
         // gpt-oss-20b (12 GB) on the same box.
         assert!(moe_offload_fits(12.0, 13.8, 7.8, 26.0));
+        // The RAM budget is total-minus-reserve when free is lower: the
+        // 31.8 GB box with 18 GB in use (13.8 free) still budgets 24.8 GB,
+        // so the 21 GB file fits; a 16 GB box (reserve 6.4) budgets 9.6.
+        assert!((moe_ram_budget_gb(13.8, 31.8) - 24.8).abs() < 0.01);
+        assert!(moe_offload_fits(21.0, 22.8, 6.9, moe_ram_budget_gb(13.8, 31.8)));
+        assert!(!moe_offload_fits(21.0, 22.8, 7.8, moe_ram_budget_gb(9.0, 15.8)));
     }
 
     #[test]

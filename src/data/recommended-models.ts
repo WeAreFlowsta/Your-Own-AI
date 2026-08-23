@@ -1149,9 +1149,12 @@ export function getRunMode(
   if (totalVRAM && totalVRAM > 0) {
     if (estimateVramGb(variant.size) <= totalVRAM) return 'gpu';
     // A mixture-of-experts model bigger than the card runs with its experts
-    // in main memory (the loader passes --cpu-moe): the gate is RAM, not
+    // in main memory (the loader pins them to the CPU): the gate is RAM, not
     // VRAM. A 32 GB box carries the 21 GB 35B-A3B; a 16 GB box does not.
-    if (isMoeVariant(variant) && variant.size * 1.1 <= cpuBudgetGb(totalRAM, freeRamGb)) {
+    // TOTAL memory minus the OS reserve, not what is free this minute: the
+    // file is memory-mapped and the OS makes room for it when it loads -
+    // a box that happens to have 18 GB in use right now still qualifies.
+    if (isMoeVariant(variant) && variant.size * 1.1 <= totalRAM - reservedRamGb(totalRAM)) {
       return 'moe-split';
     }
     return 'too-big';

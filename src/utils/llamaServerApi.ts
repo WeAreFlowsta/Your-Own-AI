@@ -20,6 +20,9 @@ export interface StreamUsageData {
   /** Online turns: the provider's own fingerprint for the backend that
    *  answered (`system_fingerprint`), when it sent one. */
   provider_fingerprint?: string | null;
+  /** Generation speed measured by the local server itself (final chunk
+   *  timings); preferred over the app's wall-clock estimate. */
+  tokens_per_second?: number | null;
 }
 
 export interface StreamSource {
