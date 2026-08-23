@@ -495,6 +495,19 @@ export const modelFamilies: ModelFamily[] = [
         quantization: 'Q4_K_M'
       },
       {
+        // The expert-lean build of the same model: Unsloth's dynamic 2-bit
+        // keeps attention at higher precision and squeezes the experts - the
+        // part that lives in main memory under the GPU + RAM split, where
+        // bytes per token is what sets the speed. Brings the 35B to 24 GB
+        // machines.
+        parameterCount: '35B-A3B (MoE)',
+        size: 12.3,
+        minRAM: 24,
+        downloadUrl: 'https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-Q2_K_XL.gguf',
+        filename: 'Qwen3.6-35B-A3B-UD-Q2_K_XL.gguf',
+        quantization: 'UD-Q2_K_XL'
+      },
+      {
         parameterCount: '35B-A3B (MoE)',
         size: 22.1,
         minRAM: 32,
