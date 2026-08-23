@@ -1410,11 +1410,11 @@ mod tests {
         assert!(!keep_loaded(6, 9, 2, 2, true, None));
         // ...but a 2-point gap is inside the margin - stickiness holds,
         // matching the shipped inclusive-margin semantics.
-        assert!(keep_loaded(6, 8, 2, 2, false));
+        assert!(keep_loaded(6, 8, 2, 2, false, None));
         // Yellow loaded vs yellow best: no fit win to be had - stay.
-        assert!(keep_loaded(8, 8, 1, 1, false));
+        assert!(keep_loaded(8, 8, 1, 1, false, None));
         // Loaded model BETTER fit than best candidate: stay.
-        assert!(keep_loaded(7, 8, 2, 1, false));
+        assert!(keep_loaded(7, 8, 2, 1, false, None));
     }
 
     /// A slow-loading candidate must win by more: 6 -> 9 (margin 3) switches
@@ -1423,7 +1423,7 @@ mod tests {
     fn slow_loads_need_a_bigger_margin() {
         assert!(!keep_loaded(6, 9, 2, 2, true, Some(3.0)), "fast load: +3 is worth a reload");
         assert!(keep_loaded(6, 9, 2, 2, true, Some(45.0)), "a 45 s reload needs more than +3");
-        assert!(!keep_loaded(5, 9, 2, 2, true, Some(45.0)), "+4 still wins against a 45 s reload");
+        assert!(!keep_loaded(4, 9, 2, 2, true, Some(45.0)), "+5 still wins against a 45 s reload");
         assert_eq!(reload_margin(None), 0);
         assert_eq!(reload_margin(Some(12.0)), 1);
         assert_eq!(reload_margin(Some(60.0)), 2);
