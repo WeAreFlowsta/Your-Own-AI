@@ -167,40 +167,61 @@ function renderMarkdownWithCitations(text: string): string {
   return html;
 }
 
-// The first code block of a reply is lifted out of the prose into the code
-// panel. It is replaced IN PLACE by this token, which the rendered HTML turns
-// into a small inline chip ("python · 42 lines · Show code") - so the message
-// still reads as complete exactly where the code was written. A bare removal
-// read as a failed reply: people told the AI it had produced no code when it
-// was one click away.
+// Short code reads best in place; long code reads best in the panel. So a
+// block up to this many lines stays fully inline (no lift, no chip), and the
+// first block beyond it is lifted into the code panel - replaced IN PLACE by
+// the token below, which renders as a preview of its first lines fading into
+// a "Show all N lines" chip. The code is visibly THERE either way: a reply
+// can never look like it lost its code (people told the AI it had produced
+// no code when it was one click away).
+const INLINE_CODE_MAX_LINES = 14;
+const CODE_PREVIEW_LINES = 8;
 const CODE_ANCHOR_TOKEN = 'YOAICODEANCHOR7f3a';
 
 // Helper function to parse code blocks from markdown
 const parseCodeFromMarkdown = (
   markdown: string
 ): { mainText: string; codeString: string; language: string; lineCount: number } | null => {
-  const codeBlockRegex = /```(\w+)?\n([\s\S]+?)\n```/;
-  const match = markdown.match(codeBlockRegex);
-
-  if (match) {
-    const mainText = markdown.replace(codeBlockRegex, `\n\n${CODE_ANCHOR_TOKEN}\n\n`).trim();
-    const language = match[1] || 'plaintext';
+  const codeBlockRegex = /```(\w+)?\n([\s\S]+?)\n```/g;
+  let match: RegExpExecArray | null;
+  while ((match = codeBlockRegex.exec(markdown)) !== null) {
     const codeString = match[2].trim();
     const lineCount = codeString.split('\n').length;
-    return { mainText, codeString, language, lineCount };
+    if (lineCount <= INLINE_CODE_MAX_LINES) continue; // short code stays in the prose
+    const mainText = (
+      markdown.slice(0, match.index) +
+      `\n\n${CODE_ANCHOR_TOKEN}\n\n` +
+      markdown.slice(match.index + match[0].length)
+    ).trim();
+    return { mainText, codeString, language: match[1] || 'plaintext', lineCount };
   }
-
   return null;
 };
 
-// Helper function to strip incomplete code blocks during streaming. The first
-// complete block keeps its anchor (it is already in the panel); later ones and
-// the still-open tail are held back until the reply is done.
+// Streaming mirror of parseCodeFromMarkdown: short complete blocks stay
+// inline as they finish, the first long complete block becomes the anchor
+// (it is already in the panel), later long blocks and the still-open tail
+// are held back until the reply is done.
 const stripIncompleteCodeBlocks = (text: string): string => {
-  let stripped = text.replace(/```(\w+)?\n[\s\S]+?\n```/, `\n\n${CODE_ANCHOR_TOKEN}\n\n`);
-  stripped = stripped.replace(/```(\w+)?\n[\s\S]+?\n```/g, '');
-  stripped = stripped.replace(/```[\s\S]*$/g, '');
-  return stripped.trim();
+  const re = /```(\w+)?\n([\s\S]+?)\n```/g;
+  let out = '';
+  let last = 0;
+  let anchored = false;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    out += text.slice(last, m.index);
+    const lineCount = m[2].trim().split('\n').length;
+    if (lineCount <= INLINE_CODE_MAX_LINES) {
+      out += m[0];
+    } else if (!anchored) {
+      anchored = true;
+      out += `\n\n${CODE_ANCHOR_TOKEN}\n\n`;
+    }
+    last = m.index + m[0].length;
+  }
+  // Only the tail (after the last complete block) can hold an open fence.
+  out += text.slice(last).replace(/```[\s\S]*$/, '');
+  return out.trim();
 };
 
 const escapeHtml = (s: string): string =>
@@ -208,8 +229,10 @@ const escapeHtml = (s: string): string =>
 
 /** The inline chip that stands where the extracted code block was. Clicks are
  *  handled by delegation on the message body (the chip lives in rendered HTML). */
-const codeAnchorHtml = (language: string, lineCount: number, open: boolean): string => {
-  const label = `${escapeHtml(language)} · ${lineCount} line${lineCount === 1 ? '' : 's'} · ${open ? 'Hide code' : 'Show code'}`;
+const codeAnchorHtml = (language: string, lineCount: number, open: boolean, preview = false): string => {
+  const label = preview
+    ? `${open ? 'Hide code' : `Show all ${lineCount} lines`} · ${escapeHtml(language)}`
+    : `${escapeHtml(language)} · ${lineCount} line${lineCount === 1 ? '' : 's'} · ${open ? 'Hide code' : 'Show code'}`;
   return (
     '<button type="button" data-code-anchor="1" class="code-anchor inline-flex items-center gap-1.5 my-1 px-2.5 py-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-dropdown)] text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)] transition-colors cursor-pointer">' +
     '<svg fill="currentColor" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M6 9a.5.5 0 0 1 .5-.5h3a.5.5 0 0 1 0 1h-3A.5.5 0 0 1 6 9zM3.854 4.146a.5.5 0 1 0-.708.708L4.793 6.5 3.146 8.146a.5.5 0 1 0 .708.708l2-2a.5.5 0 0 0 0-.708l-2-2z"/><path d="M2 1a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V3a2 2 0 0 0-2-2H2zm12 1a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h12z"/></svg>' +
@@ -217,11 +240,31 @@ const codeAnchorHtml = (language: string, lineCount: number, open: boolean): str
   );
 };
 
-/** Swap the anchor token for the chip in rendered HTML. The token renders as
- *  its own paragraph when the block stood alone; either way the chip takes
- *  its place. */
-const placeCodeAnchor = (html: string, chip: string): string =>
-  html.replace(new RegExp(`<p>\\s*${CODE_ANCHOR_TOKEN}\\s*</p>`, 'g'), `<p>${chip}</p>`).replace(new RegExp(CODE_ANCHOR_TOKEN, 'g'), chip);
+/** The inline stand-in for a lifted long block: its first lines rendered
+ *  exactly like any code block, fading out, with the chip as its footer. */
+const codePreviewHtml = (
+  codeData: { codeString: string; language: string; lineCount: number },
+  open: boolean
+): string => {
+  const head = codeData.codeString.split('\n').slice(0, CODE_PREVIEW_LINES).join('\n');
+  const fence =
+    '```' + (codeData.language === 'plaintext' ? '' : codeData.language) + '\n' + head + '\n```';
+  const fade =
+    'mask-image:linear-gradient(to bottom,black 45%,transparent 100%);' +
+    '-webkit-mask-image:linear-gradient(to bottom,black 45%,transparent 100%)';
+  return (
+    '<div class="code-preview" data-code-anchor-preview="1">' +
+    `<div style="max-height:11rem;overflow:hidden;${fade}" aria-hidden="true">${renderMarkdown(fence)}</div>` +
+    codeAnchorHtml(codeData.language, codeData.lineCount, open, true) +
+    '</div>'
+  );
+};
+
+/** Swap the anchor token for the preview (or chip) in rendered HTML. The
+ *  token renders as its own paragraph when the block stood alone; the
+ *  stand-in takes the paragraph's place (block content cannot live in a p). */
+const placeCodeAnchor = (html: string, standin: string): string =>
+  html.replace(new RegExp(`<p>\\s*${CODE_ANCHOR_TOKEN}\\s*</p>`, 'g'), standin).replace(new RegExp(CODE_ANCHOR_TOKEN, 'g'), standin);
 
 // Helper function to check if we're currently inside an incomplete code block
 const isInsideIncompleteCodeBlock = (text: string): boolean => {
@@ -1180,7 +1223,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
               .join('\n')
           );
           return codeData
-            ? placeCodeAnchor(html, codeAnchorHtml(codeData.language, codeData.lineCount, codeAnchorOpen))
+            ? placeCodeAnchor(html, codePreviewHtml(codeData, codeAnchorOpen))
             : html.split(CODE_ANCHOR_TOKEN).join('');
         })()
       : '';

@@ -116,13 +116,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 
 ### Code in replies
 
-- When a reply's code is lifted into the code panel, a small chip now
-  stands exactly where the code was written ("python · 42 lines · Show
-  code"), so the reply reads as complete. The button at the bottom of the
-  message is gone.
-
-### Windows
-
+- Short code blocks (up to 14 lines) now stay right in the reply where they
+  were written. Longer code is lifted into the code panel, and its first
+  lines show in place, fading into a "Show all N lines" chip - so a reply
+  can never read as if its code went missing
 - The app's helper programs start with their console windows created
   hidden: no flash, and no Windows Terminal error dialog on machines where
   Windows Terminal is the default terminal. Helper programs left behind by
