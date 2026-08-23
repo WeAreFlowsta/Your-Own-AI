@@ -137,6 +137,13 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   the next start.
 
 ### Your records
+- History stays reachable even when older storage generations are switched
+  off - reading your records no longer depends on every generation being
+  awake at once.
+- New in Help & diagnostics: "Run cell census" counts the storage cells
+  behind your AIs and how much history each holds, measured straight from
+  disk, and writes a report file you can review. Reads only, changes
+  nothing.
 
 - Replies from online models now record the provider's own fingerprint
   for the backend that answered (when the provider sends one), alongside
