@@ -329,6 +329,9 @@ export interface HolochainConversation {
   ai_personality_name: string;
   model_used: string;
   started_at: number;
+  /** When a turn was last recorded (micros); absent for conversations not
+   *  continued since this existed - order by it, falling back to started_at. */
+  last_active_at?: number | null;
   title: string | null;
   /** External app that drove this conversation over the API (null = in-app). */
   source?: string | null;

@@ -58,11 +58,14 @@ pub(crate) fn read_cache(
     app: &tauri::AppHandle,
     agent_key: &str,
 ) -> Result<Vec<ConversationInfo>, String> {
-    let path = path_for(app, agent_key)?;
+    read_at(app, &path_for(app, agent_key)?)
+}
+
+fn read_at(app: &tauri::AppHandle, path: &PathBuf) -> Result<Vec<ConversationInfo>, String> {
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let raw = std::fs::read_to_string(&path)
+    let raw = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read conversation cache: {}", e))?;
     let file: EncryptedListFile =
         serde_json::from_str(&raw).map_err(|e| format!("Failed to parse cache: {}", e))?;
@@ -78,6 +81,10 @@ pub(crate) fn write_cache(
     agent_key: &str,
     list: &[ConversationInfo],
 ) -> Result<(), String> {
+    write_at(app, &path_for(app, agent_key)?, list)
+}
+
+fn write_at(app: &tauri::AppHandle, path: &PathBuf, list: &[ConversationInfo]) -> Result<(), String> {
     // Never clobber a good list with an empty one.
     if list.is_empty() {
         return Ok(());
@@ -90,7 +97,6 @@ pub(crate) fn write_cache(
         nonce: hex::encode(nonce),
         cipher: hex::encode(cipher),
     };
-    let path = path_for(app, agent_key)?;
     std::fs::write(
         &path,
         serde_json::to_string(&file).map_err(|e| e.to_string())?,
@@ -133,5 +139,32 @@ pub(crate) fn append_to_cache(app: &tauri::AppHandle, agent_key: &str, info: Con
     list.insert(0, info);
     if let Err(e) = write_cache(app, agent_key, &list) {
         log::warn!("[conv-cache] append failed: {}", e);
+    }
+}
+
+/// A turn was just recorded in `hash`: stamp its last activity and move it
+/// to the top, in whichever AI's cached list holds it. The caller may only
+/// know the lineage agent that holds the conversation, not the AI's current
+/// key the list is filed under, so every cached list is checked - there are
+/// a handful of small files. Silent when the conversation is not cached yet
+/// (the next live read lists it by its start time).
+pub(crate) fn touch(app: &tauri::AppHandle, hash: &str, at_micros: i64) {
+    let Ok(dir) = app.path().app_data_dir() else { return };
+    let Ok(entries) = std::fs::read_dir(&dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !(name.starts_with("conv-list-") && name.ends_with(".enc")) {
+            continue;
+        }
+        let Ok(mut list) = read_at(app, &path) else { continue };
+        let Some(pos) = list.iter().position(|c| c.hash == hash) else { continue };
+        let mut conv = list.remove(pos);
+        conv.last_active_at = Some(at_micros);
+        list.insert(0, conv);
+        if let Err(e) = write_at(app, &path, &list) {
+            log::warn!("[conv-cache] touch failed: {}", e);
+        }
+        return;
     }
 }

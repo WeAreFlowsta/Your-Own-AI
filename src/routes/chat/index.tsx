@@ -32,6 +32,7 @@ import {
   getConversationTitleOverride,
   type ConversationListItem,
   type LastConversationPointer,
+  lastActiveAt,
 } from "../../utils/conversationResume";
 import { emptyMayBeWarmup, noteRecordsSeen, WARMUP_POLL_MS } from "../../utils/recordsWarmup";
 import { waitForHolochainReady } from "../../utils/holochainTranscripts";
@@ -471,7 +472,7 @@ export default component$(() => {
           const liveAis = new Set(items.map((i) => i.aiId));
           const kept = conversationItems.value.filter((i) => !liveAis.has(i.aiId));
           const merged = [...items, ...kept];
-          merged.sort((a, b) => b.conversation.started_at - a.conversation.started_at);
+          merged.sort((a, b) => lastActiveAt(b.conversation) - lastActiveAt(a.conversation));
           conversationItems.value = merged;
         } else if (items.length > 0 || conversationItems.value.length === 0) {
           conversationItems.value = items;

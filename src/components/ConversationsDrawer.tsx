@@ -1,6 +1,6 @@
 import { component$, useSignal, type QRL } from "@builder.io/qwik";
 import { LuFolderOpen, LuPencil, LuX } from "@qwikest/icons/lucide";
-import type { ConversationListItem } from "../utils/conversationResume";
+import { lastActiveAt, type ConversationListItem } from "../utils/conversationResume";
 
 interface ConversationsDrawerProps {
   open: boolean;
@@ -13,15 +13,27 @@ interface ConversationsDrawerProps {
   onRename$: QRL<(hash: string, title: string) => void>;
 }
 
-function timeAgo(startedAtUs: number): string {
-  // started_at arrives in microseconds.
-  const ms = startedAtUs > 1e14 ? startedAtUs / 1000 : startedAtUs;
-  const mins = Math.max(1, Math.round((Date.now() - ms) / 60000));
+/** Timestamps arrive in microseconds. */
+function toMs(us: number): number {
+  return us > 1e14 ? us / 1000 : us;
+}
+
+function timeAgo(us: number): string {
+  const mins = Math.max(1, Math.round((Date.now() - toMs(us)) / 60000));
   if (mins < 60) return `${mins}m`;
   const hours = Math.round(mins / 60);
   if (hours < 24) return `${hours}h`;
   const days = Math.round(hours / 24);
   return `${days}d`;
+}
+
+function whenText(us: number): string {
+  return new Date(toMs(us)).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 /**
@@ -34,7 +46,18 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
   ({ open, items, loading, warming, onClose$, onResume$, onRename$ }) => {
     const renamingHash = useSignal<string | null>(null);
     const renameDraft = useSignal("");
+    /** Filter by AI - null = all. Cleared when the filtered AI has no rows. */
+    const filterAiId = useSignal<string | null>(null);
     if (!open) return null;
+    // The AIs that have conversations, in list order - the filter row.
+    const ais: { id: string; label: string; imageUrl?: string | null }[] = [];
+    for (const it of items) {
+      if (!ais.some((a) => a.id === it.aiId)) {
+        ais.push({ id: it.aiId, label: it.aiLabel, imageUrl: it.aiImageUrl });
+      }
+    }
+    const activeFilter = ais.some((a) => a.id === filterAiId.value) ? filterAiId.value : null;
+    const shown = activeFilter ? items.filter((i) => i.aiId === activeFilter) : items;
     return (
       <div class="fixed inset-0 z-50">
         <div class="absolute inset-0 bg-black/40" onClick$={onClose$} />
@@ -51,6 +74,45 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
               <LuX class="h-4 w-4" />
             </button>
           </div>
+          {ais.length > 1 && (
+            <div class="flex items-center gap-2 px-4 py-2 border-b border-[var(--border-subtle)] overflow-x-auto">
+              <button
+                onClick$={() => (filterAiId.value = null)}
+                title="All AIs"
+                class={`shrink-0 px-2 py-0.5 rounded-full text-xs border transition-colors cursor-pointer ${
+                  activeFilter === null
+                    ? "border-[var(--text-secondary)] text-[var(--text-primary)] bg-[var(--bg-dropdown-hover)]"
+                    : "border-[var(--border-subtle)] text-[var(--text-muted)] bg-transparent hover:text-[var(--text-primary)]"
+                }`}
+              >
+                All
+              </button>
+              {ais.map((ai) => (
+                <button
+                  key={ai.id}
+                  onClick$={() => (filterAiId.value = activeFilter === ai.id ? null : ai.id)}
+                  title={activeFilter === ai.id ? `${ai.label} - show all` : `Only ${ai.label}`}
+                  class={`shrink-0 rounded-full p-0.5 border-2 bg-transparent cursor-pointer transition-colors ${
+                    activeFilter === ai.id
+                      ? "border-[var(--text-secondary)]"
+                      : "border-transparent opacity-70 hover:opacity-100"
+                  }`}
+                >
+                  {ai.imageUrl ? (
+                    <img
+                      src={ai.imageUrl}
+                      alt={ai.label}
+                      width={28}
+                      height={28}
+                      class="w-7 h-7 rounded-full object-cover block"
+                    />
+                  ) : (
+                    <span class="w-7 h-7 rounded-full bg-[var(--bg-card)] border border-[var(--border-subtle)] block" />
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
           <div class="flex-1 overflow-y-auto py-1">
             {loading && !warming && (
               <p class="px-4 py-3 text-sm text-[var(--text-muted)]">
@@ -72,10 +134,11 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
                 pick back up.
               </p>
             )}
-            {items.map((item) => (
+            {shown.map((item) => (
               <div
                 key={item.conversation.hash}
                 class="group flex w-full items-center gap-3 px-4 py-2.5 hover:bg-[var(--bg-dropdown-hover)]"
+                title={`Started ${whenText(item.conversation.started_at)} · last active ${whenText(lastActiveAt(item.conversation))}`}
               >
                 {item.aiImageUrl ? (
                   <img
@@ -141,7 +204,7 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
                   <LuFolderOpen class="h-3.5 w-3.5 shrink-0 text-[var(--text-muted)]" />
                 )}
                 <span class="shrink-0 text-xs text-[var(--text-muted)]">
-                  {timeAgo(item.conversation.started_at)}
+                  {timeAgo(lastActiveAt(item.conversation))}
                 </span>
               </div>
             ))}

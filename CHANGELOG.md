@@ -39,6 +39,13 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   sizes up front ("3.2 GB + 0.9 GB vision") - the bar no longer looks
   like it started over.
 
+### Conversations
+
+- The conversations list is ordered by last activity: continue a chat or
+  a project from days ago and it comes back to the top, with the time of
+  its last turn on the row (hover shows when it started). With more than
+  one AI, a row of their avatars at the top filters the list to one AI.
+
 ### Code in replies
 
 - When a reply's code is lifted into the code panel, a small chip now

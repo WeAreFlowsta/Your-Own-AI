@@ -25,6 +25,12 @@ export interface ConversationListItem {
   folderPath?: string;
 }
 
+/** What the list orders by: the last recorded turn, else when it started
+ *  (conversations not continued since last-activity tracking began). */
+export function lastActiveAt(c: HolochainConversation): number {
+  return c.last_active_at ?? c.started_at;
+}
+
 /** Titles come from raw first messages - agent-formatted ones carry tags
  *  like <user_query>. Strip markup, collapse whitespace. */
 export function sanitizeTitle(raw?: string | null): string {
@@ -35,7 +41,7 @@ export function sanitizeTitle(raw?: string | null): string {
   return clean.length > 80 ? clean.slice(0, 80) + "..." : clean || "Conversation";
 }
 
-/** All conversations across every provisioned AI, newest first. */
+/** All conversations across every provisioned AI, most recently active first. */
 export async function listAllConversations(
   ais: SelectedAiModel[],
 ): Promise<ConversationListItem[]> {
@@ -77,7 +83,7 @@ export async function listAllConversations(
         }
       }),
   );
-  out.sort((a, b) => b.conversation.started_at - a.conversation.started_at);
+  out.sort((a, b) => lastActiveAt(b.conversation) - lastActiveAt(a.conversation));
   return out;
 }
 
@@ -107,7 +113,7 @@ export async function listAllConversationsCached(
         }
       }),
   );
-  out.sort((a, b) => b.conversation.started_at - a.conversation.started_at);
+  out.sort((a, b) => lastActiveAt(b.conversation) - lastActiveAt(a.conversation));
   return out;
 }
 

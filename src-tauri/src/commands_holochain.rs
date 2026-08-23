@@ -42,6 +42,13 @@ pub struct ConversationInfo {
     pub ai_personality_name: String,
     pub model_used: String,
     pub started_at: i64,
+    /// When a turn was last recorded (micros) - what the conversation list
+    /// orders by, so continuing an old conversation brings it back to the
+    /// top. Kept in the local list cache (the records entry only knows
+    /// when it started); None for conversations untouched since this
+    /// existed, which fall back to started_at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_active_at: Option<i64>,
     pub title: Option<String>,
     /// External app that drove this conversation over the API (None = in-app).
     pub source: Option<String>,
@@ -368,6 +375,7 @@ pub async fn start_conversation(
             ai_personality_name: ai_name.clone(),
             model_used: model.clone(),
             started_at,
+            last_active_at: Some(started_at),
             title: title.clone(),
             source: source.clone(),
             agent_key: agent_key.clone(),
@@ -545,6 +553,8 @@ pub async fn record_transcript_entry(
         .map_err(|e| format!("Failed to decode entry hash: {}", e))?;
 
     crate::vault_escrow::schedule_full_backup(&app);
+    // The conversation was just continued: it moves to the top of the list.
+    crate::conversation_cache::touch(&app, &conversation_hash, now_micros());
     Ok(hex::encode(hash.get_raw_39()))
 }
 
@@ -954,6 +964,7 @@ pub async fn get_conversations(
                         ai_personality_name: conv["ai_personality_name"].as_str().unwrap_or("").to_string(),
                         model_used: conv["model_used"].as_str().unwrap_or("").to_string(),
                         started_at: conv["started_at"].as_i64().unwrap_or(0),
+                        last_active_at: None,
                         title: conv["title"].as_str().map(|s| s.to_string()),
                         source: conv["source"].as_str().map(|s| s.to_string()),
                         agent_key: key.clone(),
@@ -963,8 +974,20 @@ pub async fn get_conversations(
         }
     }
 
-    // Newest first across all generations.
-    conversations.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+    // Last activity lives only in the local cache (the records entry knows
+    // when a conversation started, not when it was last continued) - carry
+    // it over so a live refresh never resets the order.
+    let known: std::collections::HashMap<String, i64> =
+        crate::conversation_cache::read_cache(&app, &agent_key)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|c| c.last_active_at.map(|t| (c.hash, t)))
+            .collect();
+    for c in conversations.iter_mut() {
+        c.last_active_at = known.get(&c.hash).copied();
+    }
+    // Most recently active first, across all generations.
+    conversations.sort_by_key(|c| std::cmp::Reverse(c.last_active_at.unwrap_or(c.started_at)));
 
     // Last-known-good cache: served instantly by get_conversations_cached
     // while live reads are slow or the conductor is still starting.
