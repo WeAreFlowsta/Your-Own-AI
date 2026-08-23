@@ -23,43 +23,58 @@ pub struct AiAgent {
 }
 
 /// Manages multiple AI agents within a single Holochain conductor.
-/// A source chain of at most this many records is "never written to":
-/// genesis is 3 (Dna, AgentValidationPkg, agent-key Create) and init
-/// callbacks plus capability grants add a few on first contact. Anything
-/// beyond carries real writes and is NEVER tidyable.
-const EMPTY_CHAIN_MAX: u64 = 7;
-
-/// Pull the source-chain record count out of an admin `dump_state` answer
-/// without assuming its exact framing (historically a JSON array of
-/// [dump, summary-string]).
-fn chain_records_from_dump(dump: &str) -> Option<u64> {
+/// (total records, app-entry records) of a source chain, from an admin
+/// `dump_state` answer, without assuming its exact framing (historically a
+/// JSON array of [dump, summary-string]).
+///
+/// Chain LENGTH proves nothing about emptiness: every launch that connects
+/// a cell writes a capability grant, so a never-used cell reaches 40-120
+/// records in weeks (field-measured 08-24 - the 142 zombies carried 41-124
+/// records, all Dna/AgentValidationPkg/InitZomesComplete/CapGrant). Real
+/// data means APP ENTRIES: records whose action's entry_type is the
+/// `{"App": ...}` object. Zero app entries = never written to.
+fn chain_stats_from_dump(dump: &str) -> Option<(u64, u64)> {
     let v: serde_json::Value = serde_json::from_str(dump).ok()?;
     let scd = v
         .get(0)
         .and_then(|d| d.get("source_chain_dump"))
         .or_else(|| v.get("source_chain_dump"))?;
-    scd.get("records")
-        .and_then(|r| r.as_array())
-        .map(|a| a.len() as u64)
+    let records = scd.get("records")?.as_array()?;
+    let app_entries = records
+        .iter()
+        .filter(|r| {
+            r.get("action")
+                .and_then(|a| a.get("entry_type"))
+                .map(|et| et.is_object() && et.get("App").is_some())
+                .unwrap_or(false)
+        })
+        .count() as u64;
+    Some((records.len() as u64, app_entries))
 }
 
 #[cfg(test)]
 mod census_tests {
     #[test]
-    fn dump_parsing_handles_both_framings() {
-        let arr = r#"[{"peer_dump":{},"source_chain_dump":{"records":[{},{},{}],"published_ops_count":9}},"summary"]"#;
-        assert_eq!(super::chain_records_from_dump(arr), Some(3));
-        let obj = r#"{"source_chain_dump":{"records":[{}]}}"#;
-        assert_eq!(super::chain_records_from_dump(obj), Some(1));
-        assert_eq!(super::chain_records_from_dump("not json"), None);
-        assert_eq!(super::chain_records_from_dump(r#"{"other":1}"#), None);
-    }
-
-    #[test]
-    fn genesis_length_is_empty_and_more_is_data() {
-        assert!(3 <= super::EMPTY_CHAIN_MAX);
-        assert!(7 <= super::EMPTY_CHAIN_MAX);
-        assert!(8 > super::EMPTY_CHAIN_MAX);
+    fn dump_parsing_counts_records_and_app_entries() {
+        // The field shape of a zombie: genesis + init + grants, no app entries.
+        let zombie = r#"[{"source_chain_dump":{"records":[
+            {"action":{"type":"Dna"}},
+            {"action":{"type":"AgentValidationPkg"}},
+            {"action":{"type":"Create","entry_type":"AgentPubKey"}},
+            {"action":{"type":"InitZomesComplete"}},
+            {"action":{"type":"Create","entry_type":"CapGrant"}},
+            {"action":{"type":"Create","entry_type":"CapGrant"}}
+        ]}},"summary"]"#;
+        assert_eq!(super::chain_stats_from_dump(zombie), Some((6, 0)));
+        // A storied cell: app entries present (object-shaped entry_type).
+        let storied = r#"{"source_chain_dump":{"records":[
+            {"action":{"type":"Create","entry_type":"CapGrant"}},
+            {"action":{"type":"Create","entry_type":{"App":{"entry_index":0,"zome_index":0,"visibility":"Private"}}}},
+            {"action":{"type":"Update","entry_type":{"App":{"entry_index":0,"zome_index":0,"visibility":"Private"}}}}
+        ]}}"#;
+        assert_eq!(super::chain_stats_from_dump(storied), Some((3, 2)));
+        assert_eq!(super::chain_stats_from_dump("not json"), None);
+        assert_eq!(super::chain_stats_from_dump(r#"{"other":1}"#), None);
     }
 }
 
@@ -390,6 +405,9 @@ impl HolochainManager {
             /// truth, immune to the records-warmup window that made the
             /// 08-19 census call storied cells "empty".
             chain_records: Option<u64>,
+            /// How many of those records are APP ENTRIES (real writes).
+            /// Grants and genesis don't count - see chain_stats_from_dump.
+            app_entries: Option<u64>,
         }
         let mut rows: Vec<Row> = Vec::new();
 
@@ -463,10 +481,10 @@ impl HolochainManager {
             // records load from disk, and disabled cells cannot be asked.
             // The source chain on disk is the truth: probe it whenever the
             // zome count did not already prove data.
-            let chain_records = if conversations.unwrap_or(0) == 0 {
+            let chain_stats = if conversations.unwrap_or(0) == 0 {
                 match Self::first_cell_id(app) {
                     Some(cell_id) => match admin_ws.dump_state(cell_id).await {
-                        Ok(dump) => chain_records_from_dump(&dump),
+                        Ok(dump) => chain_stats_from_dump(&dump),
                         Err(e) => {
                             log::warn!("[cells] dump_state failed for {}: {e:?}", app.installed_app_id);
                             None
@@ -485,7 +503,8 @@ impl HolochainManager {
                 status: format!("{:?}", app.status),
                 connected,
                 conversations,
-                chain_records,
+                chain_records: chain_stats.map(|(r, _)| r),
+                app_entries: chain_stats.map(|(_, a)| a),
             });
         }
 
@@ -535,9 +554,8 @@ impl HolochainManager {
                 // genesis-length chain. "Couldn't verify" is its own class
                 // and is never tidyable - the 08-19 rule.
                 let has_data = r.conversations.unwrap_or(0) > 0
-                    || r.chain_records.map(|n| n > EMPTY_CHAIN_MAX).unwrap_or(false);
-                let verified_empty =
-                    r.chain_records.map(|n| n <= EMPTY_CHAIN_MAX).unwrap_or(false);
+                    || r.app_entries.map(|n| n > 0).unwrap_or(false);
+                let verified_empty = r.app_entries == Some(0);
                 let class = if is_live {
                     n_live += 1;
                     "live"
@@ -567,14 +585,15 @@ impl HolochainManager {
                     "connected": r.connected,
                     "conversations": r.conversations,
                     "chain_records": r.chain_records,
+                    "app_entries": r.app_entries,
                     "class": class,
                 })
             })
             .collect();
 
         Ok(serde_json::json!({
-            "census_version": 2,
-            "empty_chain_max": EMPTY_CHAIN_MAX,
+            "census_version": 3,
+            "empty_rule": "zero app-entry records on the on-disk source chain",
             "summary": {
                 "total_cells": rows.len(),
                 "live": n_live,
