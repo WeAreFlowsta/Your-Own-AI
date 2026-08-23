@@ -76,6 +76,16 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   MIT, for 24 GB machines). LFM2.5 asks you to accept Liquid AI's license
   once before its first download.
 
+### Model storage
+- Choose where models are stored: the models page now shows how much your
+  models take and how much room the drive has, with a Change button that
+  moves everything to a folder you pick - a second drive, an external SSD.
+  Downloads follow, moves roll back safely if interrupted, and if the drive
+  is missing later the app falls back to its default folder until it returns.
+- Downloads check disk space up front and say plainly what is missing
+  ("needs 22.4 GB free on the models drive, 9.1 GB available") instead of
+  failing mid-file with "no space left".
+
 ### Downloads
 
 - Several models can download at once, each card with its own progress

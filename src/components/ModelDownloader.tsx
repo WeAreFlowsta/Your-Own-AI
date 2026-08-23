@@ -279,6 +279,10 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     downloads: {} as Record<string, { progress: DownloadProgress | null; stage: 'model' | 'vision' | 'draft'; part?: { index: number; count: number } }>,
     error: null as string | null,
     modelsDirectory: '',
+    diskFreeBytes: 0,
+    diskModelsBytes: 0,
+    /** In-flight "move the models folder" progress; null when not moving. */
+    moving: null as null | { done: number; total: number; current: string; bytesDone: number; bytesTotal: number },
     successMessage: null as string | null,
     // A medical specialist just finished downloading and the user's health
     // model is something else: ask ONCE whether to switch (visible choice,
@@ -387,6 +391,49 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
       store.modelsDirectory = dir;
     } catch (error) {
       console.error('Failed to get models directory:', error);
+    }
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const info = await invoke<{ dir: string; free_bytes: number; models_bytes: number }>('models_disk_info');
+      store.modelsDirectory = info.dir;
+      store.diskFreeBytes = info.free_bytes;
+      store.diskModelsBytes = info.models_bytes;
+    } catch { /* disk numbers are a nicety - the page works without them */ }
+  });
+
+  /** Pick a new drive/folder for models and move everything there. The
+   *  backend refuses mid-download, stops a loaded model, moves with
+   *  rollback, and emits "models-move" progress along the way. */
+  const changeStorage$ = $(async () => {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const picked = await open({ directory: true, multiple: false, title: 'Where should models be stored?' });
+      if (typeof picked !== 'string' || !picked) return;
+      const { invoke } = await import('@tauri-apps/api/core');
+      const { listen } = await import('@tauri-apps/api/event');
+      store.moving = { done: 0, total: 0, current: '', bytesDone: 0, bytesTotal: 0 };
+      const un = await listen<{ done: number; total: number; current: string; bytes_done: number; bytes_total: number }>(
+        'models-move',
+        (e) => {
+          store.moving = {
+            done: e.payload.done,
+            total: e.payload.total,
+            current: e.payload.current,
+            bytesDone: e.payload.bytes_done,
+            bytesTotal: e.payload.bytes_total,
+          };
+        }
+      );
+      try {
+        await invoke('set_models_directory', { path: picked });
+      } finally {
+        un();
+        store.moving = null;
+        await getModelsDir();
+      }
+    } catch (error) {
+      store.error = String(error);
+      store.moving = null;
     }
   });
 
@@ -651,6 +698,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
       (event) => {
         const a = byFile.get(event.payload.filename);
         if (a) finalizeDownload(a.familyId, a.modelFilename ?? a.filename, a.familyName, a.isFirstModel);
+        getModelsDir(); // the drive numbers just changed
       }
     );
 
@@ -2017,6 +2065,29 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
             <code class="text-xs bg-[var(--bg-dropdown)] px-2 py-1 rounded border border-[var(--border-subtle)] break-all">
               {store.modelsDirectory}
             </code>
+            <div class="flex items-center justify-between gap-2 pt-1">
+              <span class="text-xs text-[var(--text-muted)]">
+                {(store.diskModelsBytes / 1e9).toFixed(1)} GB of models · {(store.diskFreeBytes / 1e9).toFixed(1)} GB free on this drive
+              </span>
+              {store.moving ? (
+                <span class="text-xs text-[var(--text-secondary)]">
+                  Moving models - {Math.min(store.moving.done + 1, Math.max(store.moving.total, 1))} of {store.moving.total}
+                  {store.moving.bytesTotal > 0
+                    ? ` (${(store.moving.bytesDone / 1e9).toFixed(1)} of ${(store.moving.bytesTotal / 1e9).toFixed(1)} GB)`
+                    : ''}
+                  ...
+                </span>
+              ) : (
+                <LiquidMetalButton
+                  variant="secondary"
+                  class="px-3 py-1.5 text-xs shrink-0"
+                  onClick$={changeStorage$}
+                  title="Pick a folder on any drive - your models move there and future downloads follow. They live in a 'Your Own AI models' folder inside it."
+                >
+                  Change...
+                </LiquidMetalButton>
+              )}
+            </div>
           </div>
           <p class="pt-1 text-xs text-[var(--text-muted)]">
             Something not working?{" "}

@@ -135,6 +135,27 @@ impl LLMState {
  * Initialize models directory
  */
 pub(crate) fn get_models_dir(app_handle: &AppHandle) -> Result<PathBuf, String> {
+    // The user's chosen storage location wins (models page > "Change where
+    // models are stored"); the app-data default otherwise. If the chosen
+    // folder can't be reached right now (an unplugged external drive), fall
+    // back to the default rather than failing every scan - the choice is
+    // kept and works again when the drive returns.
+    {
+        use tauri_plugin_store::StoreExt;
+        if let Ok(store) = app_handle.store("settings.json") {
+            if let Some(dir) = store
+                .get("modelsDir")
+                .and_then(|v| v.as_str().map(str::to_string))
+                .filter(|d| !d.is_empty())
+            {
+                let p = PathBuf::from(&dir);
+                if std::fs::create_dir_all(&p).is_ok() {
+                    return Ok(p);
+                }
+                log::warn!("[models] chosen models folder {dir} is unavailable - using the default");
+            }
+        }
+    }
     let app_data_dir = app_handle
         .path()
         .app_data_dir()
@@ -147,6 +168,219 @@ pub(crate) fn get_models_dir(app_handle: &AppHandle) -> Result<PathBuf, String> 
         .map_err(|e| format!("Failed to create models directory: {}", e))?;
     
     Ok(models_dir)
+}
+
+/// (free, total) bytes of the disk holding `path`: the deepest mount point
+/// that is a prefix of it. None when the disk list gives no match.
+fn disk_space_for(path: &std::path::Path) -> Option<(u64, u64)> {
+    let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let disks = sysinfo::Disks::new_with_refreshed_list();
+    disks
+        .list()
+        .iter()
+        .filter(|d| canon.starts_with(d.mount_point()))
+        .max_by_key(|d| d.mount_point().as_os_str().len())
+        .map(|d| (d.available_space(), d.total_space()))
+}
+
+fn dir_size(path: &std::path::Path) -> u64 {
+    let Ok(rd) = std::fs::read_dir(path) else { return 0 };
+    rd.flatten()
+        .map(|e| {
+            let p = e.path();
+            match e.metadata() {
+                Ok(m) if m.is_dir() => dir_size(&p),
+                Ok(m) => m.len(),
+                Err(_) => 0,
+            }
+        })
+        .sum()
+}
+
+/// Move a file or directory across the filesystem: rename when the drive is
+/// the same, copy + delete when it is not.
+#[cfg(test)]
+mod storage_tests {
+    #[test]
+    fn move_entry_moves_files_and_nested_dirs() {
+        let base = std::env::temp_dir().join(format!("yoai-move-test-{}", std::process::id()));
+        let old = base.join("old");
+        let new = base.join("new");
+        std::fs::create_dir_all(old.join("sub")).unwrap();
+        std::fs::create_dir_all(&new).unwrap();
+        std::fs::write(old.join("a.gguf"), b"model").unwrap();
+        std::fs::write(old.join("sub/b.part"), b"part").unwrap();
+        super::move_entry(&old.join("a.gguf"), &new.join("a.gguf")).unwrap();
+        super::move_entry(&old.join("sub"), &new.join("sub")).unwrap();
+        assert_eq!(std::fs::read(new.join("a.gguf")).unwrap(), b"model");
+        assert_eq!(std::fs::read(new.join("sub/b.part")).unwrap(), b"part");
+        assert!(!old.join("a.gguf").exists() && !old.join("sub").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+fn move_entry(from: &std::path::Path, to: &std::path::Path) -> Result<(), String> {
+    if std::fs::rename(from, to).is_ok() {
+        return Ok(());
+    }
+    let md = std::fs::metadata(from).map_err(|e| e.to_string())?;
+    if md.is_dir() {
+        std::fs::create_dir_all(to).map_err(|e| e.to_string())?;
+        for e in std::fs::read_dir(from).map_err(|e| e.to_string())?.flatten() {
+            move_entry(&e.path(), &to.join(e.file_name()))?;
+        }
+        let _ = std::fs::remove_dir(from);
+    } else {
+        std::fs::copy(from, to).map_err(|e| e.to_string())?;
+        std::fs::remove_file(from).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[derive(serde::Serialize, Clone)]
+pub struct ModelsDiskInfo {
+    pub dir: String,
+    pub free_bytes: u64,
+    pub disk_total_bytes: u64,
+    pub models_bytes: u64,
+    pub is_custom: bool,
+}
+
+/// The models folder, how much it holds, and how much room its drive has -
+/// the numbers behind "Where models are stored" on the models page.
+#[tauri::command]
+pub async fn models_disk_info(app_handle: AppHandle) -> Result<ModelsDiskInfo, String> {
+    use tauri_plugin_store::StoreExt;
+    let dir = get_models_dir(&app_handle)?;
+    let (free, total) = disk_space_for(&dir).unwrap_or((0, 0));
+    let is_custom = app_handle
+        .store("settings.json")
+        .ok()
+        .and_then(|st| st.get("modelsDir"))
+        .and_then(|v| v.as_str().map(|d| !d.is_empty()))
+        .unwrap_or(false);
+    Ok(ModelsDiskInfo {
+        dir: dir.display().to_string(),
+        free_bytes: free,
+        disk_total_bytes: total,
+        models_bytes: dir_size(&dir),
+        is_custom,
+    })
+}
+
+/// Move the models folder to a drive the user picked. Everything in the old
+/// folder moves (models, parts, drafts, projectors); on any failure the moved
+/// files roll back so the collection is never split across drives. Emits
+/// "models-move" progress events - a 60 GB collection crossing drives takes
+/// real time.
+#[tauri::command]
+pub async fn set_models_directory(
+    app_handle: AppHandle,
+    state: State<'_, LLMState>,
+    path: String,
+) -> Result<String, String> {
+    use tauri_plugin_store::StoreExt;
+    const SUBFOLDER: &str = "Your Own AI models";
+    let picked = PathBuf::from(path.trim());
+    if !picked.is_absolute() {
+        return Err("Pick a full folder path".to_string());
+    }
+    // Keep the drive tidy and the choice reversible: models live in their own
+    // subfolder of whatever the user picked, unless they picked one already.
+    let new_dir = if picked.file_name().and_then(|f| f.to_str()) == Some(SUBFOLDER)
+        || picked.file_name().and_then(|f| f.to_str()) == Some("models")
+    {
+        picked
+    } else {
+        picked.join(SUBFOLDER)
+    };
+    let old_dir = get_models_dir(&app_handle)?;
+    if new_dir == old_dir {
+        return Ok(new_dir.display().to_string());
+    }
+    if new_dir.starts_with(&old_dir) || old_dir.starts_with(&new_dir) {
+        return Err("That folder is inside the current models folder - pick a separate one".to_string());
+    }
+    if downloading_set().lock().map(|d| !d.is_empty()).unwrap_or(false) {
+        return Err("A model is still downloading - wait for it to finish first".to_string());
+    }
+    std::fs::create_dir_all(&new_dir).map_err(|e| format!("Can't create that folder: {e}"))?;
+    let probe = new_dir.join(".yoai-write-probe");
+    std::fs::write(&probe, b"ok").map_err(|e| format!("Can't write in that folder: {e}"))?;
+    let _ = std::fs::remove_file(&probe);
+    let bytes_total = dir_size(&old_dir);
+    if let Some((free, _)) = disk_space_for(&new_dir) {
+        let needed = bytes_total.saturating_add(1u64 << 30);
+        if free < needed && free > 0 {
+            return Err(format!(
+                "Not enough space there - your models take {:.1} GB and that drive has {:.1} GB free",
+                bytes_total as f64 / 1e9,
+                free as f64 / 1e9
+            ));
+        }
+    }
+    // A loaded model holds its file open - stop the server before moving.
+    {
+        let mut server_process = state.server_process.lock().await;
+        if let Some(child) = server_process.take() {
+            let _ = child.kill();
+            *state.is_server_running.lock().await = false;
+            *state.current_model.lock().await = None;
+        }
+    }
+    let entries: Vec<PathBuf> = std::fs::read_dir(&old_dir)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .map(|e| e.path())
+        .collect();
+    let total_files = entries.len();
+    let mut bytes_done: u64 = 0;
+    let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
+    for (i, from) in entries.iter().enumerate() {
+        let name = from.file_name().unwrap_or_default().to_owned();
+        let _ = app_handle.emit(
+            "models-move",
+            serde_json::json!({
+                "done": i,
+                "total": total_files,
+                "current": name.to_string_lossy(),
+                "bytes_done": bytes_done,
+                "bytes_total": bytes_total,
+            }),
+        );
+        let size = if from.is_dir() { dir_size(from) } else { std::fs::metadata(from).map(|m| m.len()).unwrap_or(0) };
+        let to = new_dir.join(&name);
+        match move_entry(from, &to) {
+            Ok(()) => {
+                moved.push((from.clone(), to));
+                bytes_done = bytes_done.saturating_add(size);
+            }
+            Err(e) => {
+                for (f, t) in moved.iter().rev() {
+                    let _ = move_entry(t, f);
+                }
+                return Err(format!(
+                    "Couldn't move {}: {e}. Your models are back where they were.",
+                    name.to_string_lossy()
+                ));
+            }
+        }
+    }
+    let store = app_handle.store("settings.json").map_err(|e| e.to_string())?;
+    store.set("modelsDir", serde_json::json!(new_dir.to_string_lossy()));
+    let _ = store.save();
+    let _ = app_handle.emit(
+        "models-move",
+        serde_json::json!({
+            "done": total_files,
+            "total": total_files,
+            "current": "",
+            "bytes_done": bytes_total,
+            "bytes_total": bytes_total,
+        }),
+    );
+    log::info!("[models] storage moved to {}", new_dir.display());
+    Ok(new_dir.display().to_string())
 }
 
 /**
@@ -2384,6 +2618,21 @@ pub async fn download_model(
                 let body_len = response.content_length().unwrap_or(0);
                 total_size = if is_partial { resume_from + body_len } else { body_len };
                 log::info!("[LLM] Downloading {} ({:.1}GB)", filename, total_size as f64 / 1024_f64.powi(3));
+            }
+            // Disk gate: refuse in plain words before writing rather than
+            // dying at "no space left" mid-file. 1 GB of headroom stays free.
+            if total_size > 0 {
+                let needed = total_size.saturating_sub(resume_from).saturating_add(1u64 << 30);
+                if let Some((free, _)) = disk_space_for(&models_dir) {
+                    if free < needed {
+                        return Err(format!(
+                            "Download Failed: {} needs {:.1} GB free on the models drive and only {:.1} GB is available. Free some space, or move your models to a roomier drive from the models page.",
+                            filename,
+                            needed as f64 / 1e9,
+                            free as f64 / 1e9
+                        ));
+                    }
+                }
             }
             // Append when resuming (206); fresh file otherwise (200 = full restart).
             let mut file = match if resume_from > 0 && is_partial {

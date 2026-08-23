@@ -7,7 +7,7 @@
 //! the UI can badge each model.
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 use crate::gguf::GgufMeta;
 
@@ -289,7 +289,8 @@ pub(crate) fn reclaim_adjust(
 }
 
 fn models_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
-    Some(app.path().app_data_dir().ok()?.join("models"))
+    // The single chokepoint - honors the user's chosen storage location.
+    crate::llm::get_models_dir(app).ok()
 }
 
 /// Assess every downloaded model. Reuses free-VRAM (cached) + system RAM.
