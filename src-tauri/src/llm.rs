@@ -2781,12 +2781,16 @@ pub async fn download_model(
     }
     // The bytes must read as a model file: a stream that ended early
     // without a length, or a server that answered with something other
-    // than the file, must never be published under a .gguf name.
-    if let Some(reason) = crate::gguf::damage(&part_path) {
-        log::error!("[LLM] downloaded bytes for {} do not read as a model: {reason}", filename);
-        let _ = std::fs::remove_file(&part_path);
-        let _ = std::fs::remove_file(&etag_path);
-        return Err("Download corrupted (the file does not read as a model). Please try again.".to_string());
+    // than the file, must never be published under a .gguf name. GGUF
+    // names only - this transport also carries engine zips/tarballs and
+    // (MLX) safetensors, which are no less complete for not being GGUF.
+    if filename.ends_with(".gguf") {
+        if let Some(reason) = crate::gguf::damage(&part_path) {
+            log::error!("[LLM] downloaded bytes for {} do not read as a model: {reason}", filename);
+            let _ = std::fs::remove_file(&part_path);
+            let _ = std::fs::remove_file(&etag_path);
+            return Err("Download corrupted (the file does not read as a model). Please try again.".to_string());
+        }
     }
 
     // Atomically publish: only now does the model appear in list_local_models.
