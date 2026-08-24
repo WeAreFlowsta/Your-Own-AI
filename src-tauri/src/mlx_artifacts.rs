@@ -241,7 +241,41 @@ pub async fn download_mlx_artifact(
         );
         // The path inside models_dir doubles as the progress/in-flight key.
         let rel = format!("{}/{}", dir_name, f.name);
-        crate::llm::download_model(app.clone(), url, rel).await?;
+        // Live aggregate progress DURING the file (a 2.7 GB weights file
+        // otherwise leaves the bar at its pre-file value the whole way -
+        // field 08-24: "stuck at 0%").
+        let ticker = {
+            let app = app.clone();
+            let rel = rel.clone();
+            let dir_name = dir_name.clone();
+            let base = bytes_done;
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    let Some((done, _)) = crate::llm::download_progress_of(&rel) else {
+                        continue;
+                    };
+                    let agg = base.saturating_add(done);
+                    let percent = if bytes_total > 0 {
+                        ((agg as f64 / bytes_total as f64) * 100.0) as u32
+                    } else {
+                        0
+                    };
+                    let _ = app.emit(
+                        "model-download-progress",
+                        serde_json::json!({
+                            "filename": dir_name,
+                            "downloaded": agg,
+                            "total": bytes_total,
+                            "percent": percent,
+                        }),
+                    );
+                }
+            })
+        };
+        let dl = crate::llm::download_model(app.clone(), url, rel).await;
+        ticker.abort();
+        dl?;
         let got = std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
         if f.size > 0 && got != f.size {
             // Delete before erroring - a wrong-size file left in place

@@ -2637,6 +2637,12 @@ impl Drop for DownloadGuard {
 /// reattaches (navigated away and back) shows the real figure at once
 /// instead of waiting for the next whole-percent event - on a 17 GB file a
 /// percent is ~170 MB, long enough to read as "stuck at Downloading..".
+/// Live (downloaded, total) of one in-flight download, for surfaces that
+/// aggregate several files into one bar (MLX artifacts).
+pub(crate) fn download_progress_of(filename: &str) -> Option<(u64, u64)> {
+    progress_map().lock().ok()?.get(filename).copied()
+}
+
 fn progress_map() -> &'static std::sync::Mutex<std::collections::HashMap<String, (u64, u64)>> {
     static P: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, (u64, u64)>>> =
         std::sync::OnceLock::new();
