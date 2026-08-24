@@ -10,10 +10,13 @@ have, and choose between them by what actually runs well on it.
 
 ### Highlights
 
-- **Your AIs know you - and you can see how.** Each AI has one memory,
-  what every AI knows about you lives in one place, and your AIs carry a
-  short portrait of you written on your device - never online - that
-  rewrites itself as your memory changes. See *Memory*.
+- **Your AIs know you as a whole, not as a list.** From what they have
+  learned, they keep a short summary of who you are - "How your AIs see
+  you" - written on your device and rewritten as things change. You can
+  read it any time, and if it is wrong you fix the fact it came from and
+  it rewrites itself. Every fact is yours to edit or forget, traceable to
+  the conversation it came from, and none of it leaves your machine. See
+  *Memory*.
 - **Bigger models on the machine you already have.** Mixture-of-experts
   models split between your graphics card and main memory - measured 4.5x
   faster on an 8 GB card - and the catalog now has a mixture-of-experts
@@ -185,13 +188,14 @@ have, and choose between them by what actually runs well on it.
   given it, and moments it's learned with you), and what every AI knows
   about you lives in ONE place - Your Memory. Project sessions' notes are
   now called project notes, so "memory" always means those two.
-- Your AIs now carry a short portrait of you - a few sentences written on
-  your device from your remembered facts and notes, shown at the top of
-  Your Memory ("How your AIs see you") and given to every AI alongside the
-  facts. It rewrites itself in the background as your memory changes -
-  including updating things that have since happened - and duplicate
-  learned facts tidy themselves up along the way. Nothing leaves your
-  device, and pausing memory pauses this too.
+- Your AIs now keep a short summary of who you are - a few sentences
+  written on your device from your remembered facts and notes, shown at
+  the top of Your Memory ("How your AIs see you") and given to every AI
+  alongside the facts. It rewrites itself in the background as your memory
+  changes - including updating things that have since happened - so if it
+  is ever wrong, fix or forget the fact it came from and it follows.
+  Duplicate learned facts tidy themselves up along the way. Nothing
+  leaves your device, and pausing memory pauses this too.
 
 ### The app fails politely
 - The first-run recommendation now sizes to your whole machine, not just
