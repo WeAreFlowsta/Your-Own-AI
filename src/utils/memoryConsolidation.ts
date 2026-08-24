@@ -22,9 +22,42 @@
  * WRITES PROSE here - it is never allowed to add, merge, or delete facts.
  * Structural changes stay mechanical; a weak model can't corrupt the store.
  */
+import { invoke } from "@tauri-apps/api/core";
 import { getFacts, saveFacts, type Fact } from "./memory";
 import { isMemoryPaused } from "./memory";
 import { runUtilityTask } from "./utilityModel";
+import { modelFamilies, UTILITY_MODEL } from "../data/recommended-models";
+
+/** Prose quality matters here (unlike extraction, which needs precision):
+ *  when a clearly stronger LOCAL model is already loaded and warm, write
+ *  the portrait with it instead of Ministral. Never loads anything, never
+ *  goes online - the profile is the most sensitive input we hold. */
+async function pickSynthesisModel(
+  fallbackModel?: string,
+): Promise<{ model?: string; preferLoaded: boolean }> {
+  try {
+    const loaded = await invoke<string | null>("get_current_model");
+    if (
+      loaded &&
+      loaded.endsWith(".gguf") &&
+      loaded !== UTILITY_MODEL.filename
+    ) {
+      for (const fam of modelFamilies) {
+        for (const v of fam.variants) {
+          if (v.filename === loaded) {
+            const b = parseFloat(v.parameterCount);
+            if (Number.isFinite(b) && b >= 7) {
+              return { model: loaded, preferLoaded: true };
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    /* unknown loaded state - the utility path is always safe */
+  }
+  return { model: fallbackModel, preferLoaded: false };
+}
 
 export const SYNTHESIS_KIND = "synthesis";
 const LAST_RUN_KEY = "yoai-memory-consolidated-at";
@@ -137,8 +170,9 @@ export async function maybeConsolidateMemory(fallbackModel?: string): Promise<vo
       (noteLines ? `Notes:\n${noteLines}\n` : "") +
       "Write the summary paragraph now.";
 
+    const chosen = await pickSynthesisModel(fallbackModel);
     const text = (
-      await runUtilityTask(system, user, undefined, 220, fallbackModel, 45000)
+      await runUtilityTask(system, user, undefined, 220, chosen.model, 45000, chosen.preferLoaded)
     ).trim();
     // A bad or empty synthesis must never replace a good one.
     if (text.length < 40 || text.length > 1200 || text.startsWith("-")) {

@@ -55,13 +55,17 @@ export async function runUtilityTask(
   maxTokens: number,
   fallbackModel: string | undefined,
   timeoutMs?: number,
+  /** Skip the utility server and run on the (already warm) chat server -
+   *  for quality-sensitive prose tasks where a stronger LOADED local model
+   *  beats Ministral. Callers must only set this with a loaded model. */
+  preferFallback?: boolean,
 ): Promise<string> {
   const work = (async () => {
     // Use the dedicated utility server only when the utility model is installed
     // AND it isn't already the loaded chat model. If the user is chatting WITH
     // it (fallbackModel is the utility filename), reuse that warm — often GPU —
     // instance via the fallback path instead of loading a second CPU copy.
-    if (fallbackModel !== UTILITY_MODEL.filename && (await isUtilityModelReady())) {
+    if (!preferFallback && fallbackModel !== UTILITY_MODEL.filename && (await isUtilityModelReady())) {
       return utilityChat(system, user, grammar, maxTokens);
     }
     const msgs: ChatMessage[] = [{ role: "user", content: user } as ChatMessage];
