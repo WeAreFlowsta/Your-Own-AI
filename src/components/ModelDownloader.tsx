@@ -1329,6 +1329,14 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                   </span>
                 );
               })}
+              {store.mlxEngineInstalled && family.variants.some((v) => v.artifacts?.mlx) && (
+                <span
+                  title="An MLX version of this model is available for Apple Silicon - once you get it, chats run on MLX"
+                  class="px-1.5 py-0.5 bg-violet-500/15 text-violet-700 dark:text-violet-400 border border-violet-500/40 text-[10px] rounded-full font-semibold whitespace-nowrap"
+                >
+                  MLX
+                </span>
+              )}
             </div>
           </div>
 
