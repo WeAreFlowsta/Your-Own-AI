@@ -16,7 +16,7 @@ import {
 import { LuHardDriveDownload, LuAlertTriangle, LuZap } from '@qwikest/icons/lucide';
 import LiquidMetalButton from './LiquidMetalButton';
 import type { SystemInfo } from './ModelDownloader';
-import { modelFamilies, getBestFamilyForRAM, getBestVariantForSystem, estimateVramGb, type ModelVariant } from '../data/recommended-models';
+import { modelFamilies, getBestFamilyForRAM, getBestVariantForSystem, getRunMode, type ModelVariant } from '../data/recommended-models';
 import { modelManager, type DownloadProgress } from '../utils/modelManager';
 import { invoke } from '@tauri-apps/api/core';
 
@@ -58,15 +58,17 @@ function getRecommendedModel(
   const gpuName = systemInfo?.gpu_name || 'GPU';
 
   if (hasGPU && totalVRAM) {
-    // Find the largest model that fits entirely in VRAM (skip specialist models for first-run)
+    // Grade with getRunMode end to end - the same call the models page
+    // makes, with the card's memory AND system RAM in the picture. This
+    // branch used to check VRAM alone; a big card on a RAM-poor machine
+    // was sold a model the system could not stage (silent first-run
+    // crash, found in the field).
     const candidates: { family: typeof modelFamilies[0]; variant: ModelVariant }[] = [];
 
     for (const family of modelFamilies) {
       if (family.category === 'specialist') continue;
       for (const variant of family.variants) {
-        // Same fit math as the models page (weights + KV cache + overhead),
-        // not the raw file size - a "fits entirely on GPU" promise must hold.
-        if (estimateVramGb(variant.size) <= totalVRAM) {
+        if (getRunMode(variant, totalRAM, totalVRAM, freeRAM) === 'gpu') {
           candidates.push({ family, variant });
         }
       }

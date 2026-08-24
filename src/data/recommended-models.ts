@@ -1608,7 +1608,13 @@ export function getRunMode(
   // the CPU is the only path, so RAM is what matters. Integrated GPUs share
   // system RAM - callers pass totalVRAM = null for them so they size as CPU.
   if (totalVRAM && totalVRAM > 0) {
-    if (estimateVramGb(variant.size) <= totalVRAM) return 'gpu';
+    // The card alone is not enough: loading stages weights through system
+    // memory and the OS still has to live in what remains, so the
+    // catalog's minRAM floor applies even to a full-GPU run (field case:
+    // a 10 GB card on a RAM-poor machine crashed the app at first load).
+    if (estimateVramGb(variant.size) <= totalVRAM && variant.minRAM <= totalRAM) {
+      return 'gpu';
+    }
     // A mixture-of-experts model bigger than the card runs with its experts
     // in main memory (the loader pins them to the CPU): the gate is RAM, not
     // VRAM. A 32 GB box carries the 21 GB 35B-A3B; a 16 GB box does not.

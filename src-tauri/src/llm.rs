@@ -3166,7 +3166,9 @@ pub async fn load_model(
     // looping until the user hunts down the model files on disk. Explicit
     // loads (user picked it again) proceed and get a fresh attempt.
     let sentinel = load_sentinel_path(&app_handle);
-    if reason == "page-ensure" {
+    // Every AUTOMATIC reason is gated - the welcome flow's post-crash
+    // relaunch used to slip past a page-ensure-only check and loop.
+    if reason == "page-ensure" || reason == "welcome" || reason == "vision-auto-switch" {
         if let Some(p) = &sentinel {
             if let Ok(prev) = std::fs::read_to_string(p) {
                 if prev.trim() == filename {
@@ -3177,6 +3179,28 @@ pub async fn load_model(
                     return Err("MODEL_LOAD_CRASHED_LAST_RUN".to_string());
                 }
             }
+        }
+    }
+
+    // Free-memory gate: an allocation failure mid-load is a hard abort
+    // (0xc0000409 on Windows) with no error path - refuse up front when
+    // the system clearly cannot stage this file. Conservative on purpose:
+    // blocks only under 2 GiB free plus a tenth of the model, so healthy
+    // machines never see it.
+    {
+        let model_bytes = std::fs::metadata(&model_path).map(|m| m.len()).unwrap_or(0);
+        let mut sys = sysinfo::System::new();
+        sys.refresh_memory();
+        let avail = sys.available_memory();
+        let needed = 2u64 * 1024 * 1024 * 1024 + model_bytes / 10;
+        if avail > 0 && avail < needed {
+            let msg = format!(
+                "Not enough free memory to load this model safely right now ({:.1} GB free, about {:.1} GB needed). Close some other apps and try again, or pick a smaller model.",
+                avail as f64 / 1024f64.powi(3),
+                needed as f64 / 1024f64.powi(3)
+            );
+            log::warn!("[LLM] {}", msg);
+            return Err(msg);
         }
     }
 
