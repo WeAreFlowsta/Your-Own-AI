@@ -221,7 +221,7 @@ export const ModelChip = component$<ModelChipProps>((props) => {
                         {store.fits[m.name] && (
                           <span
                             class={`inline-block w-2 h-2 rounded-full mr-2 align-middle ${
-                              store.fits[m.name] === 'green'
+                              store.fits[m.name] === 'green' || store.fits[m.name] === 'split'
                                 ? 'bg-green-500'
                                 : store.fits[m.name] === 'yellow'
                                   ? 'bg-yellow-500'

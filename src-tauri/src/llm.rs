@@ -1561,12 +1561,23 @@ pub async fn start_llama_server(
                                 "[LLM] MoE offload measured: {n} expert layers on CPU, predicted {predicted:.2} GB on the card, measured {actual:.2} GB (free {free_before:.2} -> {:.2})",
                                 after_mib as f64 / 1024.0
                             );
-                            moe_calibration_write(&app, &model, MoeCalibration {
-                                n_cpu_layers: n,
-                                predicted_gb: predicted,
-                                actual_gb: actual,
-                                at: chrono_now_secs(),
-                            });
+                            // Windows WDDM virtualizes graphics memory, so
+                            // the free-VRAM query can come back unchanged
+                            // after a 6 GB load. A reading far below the
+                            // prediction is the driver talking, not the
+                            // model - keep the estimate, learn nothing.
+                            if actual < predicted * 0.2 {
+                                log::info!(
+                                    "[LLM] MoE measurement implausible ({actual:.2} GB for a {predicted:.2} GB plan) - driver-virtualized memory; keeping the estimate"
+                                );
+                            } else {
+                                moe_calibration_write(&app, &model, MoeCalibration {
+                                    n_cpu_layers: n,
+                                    predicted_gb: predicted,
+                                    actual_gb: actual,
+                                    at: chrono_now_secs(),
+                                });
+                            }
                         }
                     });
                 }
