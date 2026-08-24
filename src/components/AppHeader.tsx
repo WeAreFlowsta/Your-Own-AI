@@ -474,7 +474,7 @@ export default component$<AppHeaderProps>(
                           class={`flex flex-col items-center justify-center gap-1.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-3.5 text-xs text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)] active:scale-[0.98] cursor-pointer ${onCloseFolder$ ? '' : 'col-span-2'}`}
                         >
                           <LuBrain class="h-5 w-5 opacity-70" />
-                          Project memory
+                          Project notes
                         </button>
                         {onCloseFolder$ && (
                           <button

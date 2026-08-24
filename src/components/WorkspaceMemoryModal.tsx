@@ -128,7 +128,7 @@ export const WorkspaceMemoryModal = component$<{
               <span class="mt-0.5 inline-block h-4 w-4 flex-shrink-0 rounded-full border-2 border-[var(--border-subtle)] border-t-[var(--text-secondary)] animate-spin" />
               <span>
                 {slowLoad.value
-                  ? "Your records are warming up - just after launch, project memory takes a moment to be ready."
+                  ? "Your records are warming up - just after launch, project notes take a moment to be ready."
                   : "Loading from your records.."}
               </span>
             </div>

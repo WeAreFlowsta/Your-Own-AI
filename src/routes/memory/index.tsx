@@ -430,13 +430,13 @@ export default component$(() => {
               {workspacesLoading.value && (
                 <p class="text-sm text-[var(--text-muted)]">
                   {workspacesWarming.value
-                    ? "Your records are warming up - just after launch, project memories take a moment to be ready."
+                    ? "Your records are warming up - just after launch, project notes take a moment to be ready."
                     : "Loading from your records.."}
                 </p>
               )}
               {!workspacesLoading.value && workspaceMemories.value.length === 0 && (
                 <p class="text-sm text-[var(--text-muted)]">
-                  Nothing yet - project memory grows as your AIs work on
+                  Nothing yet - project notes grow as your AIs work on
                   projects.
                 </p>
               )}
