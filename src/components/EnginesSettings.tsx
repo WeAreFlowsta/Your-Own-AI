@@ -41,6 +41,18 @@ interface EngineStatus {
 const zipNameFor = (tag: string) =>
   `llama-server-cuda-${tag.replace(/^llama-/, "")}.zip`;
 
+interface MlxEngineStatus {
+  supported: boolean;
+  installed: boolean;
+  stale_version_installed: boolean;
+  tag: string;
+  download_url: string;
+  download_mb: number;
+}
+
+/** The tarball filename the MLX engine download emits progress under. */
+const mlxTarballFor = (tag: string) => `SwiftLM-${tag}-macos-arm64.tar.gz`;
+
 export default component$(() => {
   const status = useSignal<EngineStatus | null>(null);
   const isNvidia = useSignal(false);
@@ -107,6 +119,57 @@ export default component$(() => {
       await refresh();
     } catch (e) {
       error.value = e instanceof Error ? e.message : String(e);
+    }
+  });
+
+  // MLX engine (preview) - Apple Silicon only; the card renders nowhere else.
+  const mlxStatus = useSignal<MlxEngineStatus | null>(null);
+  const mlxDownloading = useSignal(false);
+  const mlxPercent = useSignal(0);
+  const mlxError = useSignal("");
+  const refreshMlx = $(async () => {
+    try {
+      mlxStatus.value = await invoke<MlxEngineStatus>("mlx_engine_status");
+    } catch {
+      /* command missing = old backend; card stays hidden */
+    }
+  });
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async ({ cleanup }) => {
+    await refreshMlx();
+    if (!mlxStatus.value?.supported) return;
+    const tarball = mlxTarballFor(mlxStatus.value.tag);
+    const unp = await listen<{ filename: string; percent: number }>(
+      "model-download-progress",
+      (e) => {
+        if (e.payload.filename === tarball) {
+          mlxDownloading.value = true;
+          mlxPercent.value = e.payload.percent;
+        }
+      },
+    );
+    cleanup(() => unp());
+  });
+  const doMlxDownload = $(async () => {
+    mlxError.value = "";
+    mlxDownloading.value = true;
+    mlxPercent.value = 0;
+    try {
+      await invoke("download_mlx_engine", {});
+      await refreshMlx();
+    } catch (e) {
+      mlxError.value = e instanceof Error ? e.message : String(e);
+    } finally {
+      mlxDownloading.value = false;
+    }
+  });
+  const doMlxRemove = $(async () => {
+    mlxError.value = "";
+    try {
+      await invoke("remove_mlx_engine");
+      await refreshMlx();
+    } catch (e) {
+      mlxError.value = e instanceof Error ? e.message : String(e);
     }
   });
 
@@ -297,6 +360,82 @@ export default component$(() => {
                 >
                   <LuDownload class="w-3.5 h-3.5" />
                   {s.stale_version_installed ? "Update" : "Download"}
+                </LiquidMetalButton>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* MLX engine (preview) - Apple Silicon Macs only. */}
+        {mlxStatus.value?.supported && (
+          <div class="flex items-start gap-4 p-4 rounded-xl bg-[var(--bg-main)] border border-[var(--border-subtle)]">
+            <div class="w-10 h-10 rounded-lg bg-[var(--bg-dropdown)] flex items-center justify-center flex-shrink-0">
+              <LuZap class="w-5 h-5 text-[var(--text-secondary)]" />
+            </div>
+            <div class="min-w-0 flex-1">
+              <h3 class="text-base font-semibold text-[var(--text-primary)] flex items-center gap-2">
+                Apple Silicon engine (MLX)
+                <span class="text-[10px] font-normal uppercase tracking-wide px-1.5 py-0.5 rounded bg-[var(--bg-dropdown)] text-[var(--text-muted)]">
+                  preview
+                </span>
+                <span class="text-xs font-normal text-[var(--text-muted)]">
+                  ~{mlxStatus.value.download_mb} MB
+                </span>
+              </h3>
+              <p class="text-sm text-[var(--text-secondary)] mt-0.5">
+                Runs models built for Apple's MLX framework - often quicker
+                to the first word on M-series chips. Models offer an MLX
+                version where one exists; everything else keeps the standard
+                engine. In this preview it serves chats - projects, vision
+                and memory stay on the standard engine.
+              </p>
+              {mlxStatus.value.stale_version_installed && !mlxStatus.value.installed && (
+                <p class="mt-1.5 text-xs text-amber-500/90">
+                  Update available - the app was updated and needs a matching
+                  engine. Download to update.
+                </p>
+              )}
+              {mlxDownloading.value && (
+                <div class="mt-2">
+                  <div class="h-1.5 w-full rounded-full bg-[var(--border-subtle)] overflow-hidden">
+                    <div
+                      class={`h-full bg-[var(--bg-button-primary)] transition-all ${mlxPercent.value >= 100 ? "animate-pulse" : ""}`}
+                      style={{ width: `${mlxPercent.value}%` }}
+                    />
+                  </div>
+                  <p class="text-[11px] text-[var(--text-muted)] mt-1">
+                    {mlxPercent.value >= 100 ? "Installing…" : `Downloading… ${mlxPercent.value}%`}
+                  </p>
+                </div>
+              )}
+              {mlxError.value && <p class="text-xs text-red-400 mt-1">{mlxError.value}</p>}
+              {mlxStatus.value.installed && !mlxDownloading.value && (
+                <p class="mt-2 text-[11px] text-emerald-400/80 flex items-center gap-1">
+                  <LuCheck class="w-3 h-3" /> Installed - models with an MLX
+                  version use it for chats.
+                </p>
+              )}
+            </div>
+            <div class="flex-shrink-0">
+              {mlxStatus.value.installed && !mlxDownloading.value ? (
+                <LiquidMetalButton
+                  variant="danger"
+                  onClick$={doMlxRemove}
+                  class="flex items-center gap-1.5 px-3 py-1.5 text-xs"
+                >
+                  <LuTrash2 class="w-3.5 h-3.5" /> Remove
+                </LiquidMetalButton>
+              ) : mlxDownloading.value ? (
+                <span class="flex items-center gap-1.5 px-3 py-1.5 text-xs text-[var(--text-muted)]">
+                  {mlxPercent.value >= 100 ? "Installing…" : `${mlxPercent.value}%`}
+                </span>
+              ) : (
+                <LiquidMetalButton
+                  onClick$={doMlxDownload}
+                  class="flex items-center gap-1.5 px-3 py-1.5 text-xs"
+                >
+                  <LuDownload class="w-3.5 h-3.5" />
+                  {mlxStatus.value.stale_version_installed ? "Update" : "Download"}
                 </LiquidMetalButton>
               )}
             </div>
