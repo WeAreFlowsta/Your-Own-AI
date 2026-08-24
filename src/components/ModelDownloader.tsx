@@ -1831,6 +1831,12 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                         ? ` · ~${Math.round(fitInfo.measured_tps)} tok/s measured`
                         : ''}
                       {!model.damaged && model.draft ? ' · speed-up file on' : ''}
+                      {!model.damaged &&
+                      store.mlxEngineInstalled &&
+                      catalogMatch?.variant.artifacts?.mlx?.hfRepo &&
+                      store.mlxArtifacts[catalogMatch.variant.artifacts.mlx.hfRepo!]?.complete
+                        ? ' · chats run on MLX'
+                        : ''}
                     </p>
                     {!model.damaged && !model.draft && catalogMatch?.variant.draft && (
                       store.downloads[catalogMatch.family.id]?.stage === 'draft' ? (
@@ -1852,11 +1858,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                       (() => {
                         const a = catalogMatch.variant.artifacts!.mlx!;
                         const st = store.mlxArtifacts[a.hfRepo!];
-                        return st?.complete ? (
-                          <p class="mt-0.5 text-xs text-[var(--text-muted)]">
-                            MLX version installed - serves this model's chats.
-                          </p>
-                        ) : st?.percent != null ? (
+                        return st?.complete ? null : st?.percent != null ? (
                           <p class="mt-0.5 text-xs text-[var(--text-muted)]">
                             Downloading the MLX version… {st.percent}%
                           </p>
@@ -1864,10 +1866,10 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                           <button
                             type="button"
                             onClick$={() => handleGetMlx$(a.hfRepo!, a.revision!, model.name)}
-                            title="A version of this model built for Apple's MLX framework - often quicker to the first word. Chats use it; projects and images keep the standard engine. Your current file stays."
+                            title="A version of this model built for Apple's MLX framework. Chats use it once installed; whether it is faster depends on your Mac. Projects and images keep the standard engine, and your current file stays."
                             class="mt-0.5 text-xs text-[var(--text-secondary)] underline underline-offset-2 bg-transparent border-none p-0 cursor-pointer hover:text-[var(--text-primary)]"
                           >
-                            Get the faster MLX version ({a.sizeGb} GB)
+                            Get the MLX version ({a.sizeGb} GB)
                           </button>
                         );
                       })()
