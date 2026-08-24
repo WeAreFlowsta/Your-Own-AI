@@ -168,6 +168,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   Offline replies already carry the hash of the exact model file.
 
 ### Other
+- Loading a model now shows its proper catalog name ("Qwen 3.6 35B-A3B
+  (MoE)", not a cleaned-up file name), and when a load takes more than a
+  few seconds, short lines explain what the wait is - the model moving
+  into memory, once - and that it stays loaded for the questions after.
+  Fast loads show none of it.
 
 - "Your AIs can now go online" shows once, the moment a plan activates.
 - Removed the disabled records-tidying command.
