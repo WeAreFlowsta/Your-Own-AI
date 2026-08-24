@@ -90,6 +90,15 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   failing mid-file with "no space left".
 
 ### Downloads
+- A resumed download now proves it is continuing the same file it started
+  (If-Range): if the model was re-uploaded upstream in between, the download
+  starts over instead of stitching two versions into one broken file.
+- A model file the engine rejects ("layout doesn't match") is reported in
+  those words with the fix (delete and re-download), sits out the session,
+  and no longer counts against the graphics card - two rejections of one
+  bad file could previously switch the whole app off CUDA.
+- If CUDA was ever switched off by the safety ladder, the notice offering
+  "Try GPU again" now stays available instead of appearing only once.
 
 - Several models can download at once, each card with its own progress
   and button. Starting a second download used to make the first card look

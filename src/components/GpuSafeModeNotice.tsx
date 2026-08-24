@@ -28,7 +28,10 @@ export default component$(() => {
         cuda_disabled?: boolean;
       }>("gpu_safe_mode_status");
       active.value = s.active;
-      cudaStepped.value = !s.active && !!s.cuda_disabled && s.just_engaged;
+      // Show whenever CUDA sits laddered out - not only the launch it
+      // engaged - so there is always a way back (field 08-24: a bad model
+      // file laddered CUDA out; the fix landed but the notice was gone).
+      cudaStepped.value = !s.active && !!s.cuda_disabled;
     } catch {
       /* command unavailable (e.g. not on desktop) — stay hidden */
     }

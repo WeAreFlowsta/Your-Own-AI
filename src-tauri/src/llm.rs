@@ -1033,6 +1033,26 @@ static CHAT_LOAD_DEVICE_UNSUPPORTED: std::sync::atomic::AtomicU8 =
 static CHAT_LOAD_OPEN_FAILED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// Whether the dying server's stderr showed the engine REJECTING the model
+/// file itself (layout mismatch: a conversion newer than the engine, a bad
+/// conversion, or a download that stitched two repo revisions together).
+/// Deterministic and file-specific - it must never feed the GPU crash
+/// ladder (field 08-24: two rejections of one bad Nemotron file laddered
+/// CUDA out on a healthy machine).
+static CHAT_LOAD_MODEL_REJECTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Engine "this file's layout is wrong" markers. Excludes the device
+/// verdicts ("Unsupported device"), which classify separately.
+fn looks_like_model_rejected(line: &str) -> bool {
+    let l = line.to_ascii_lowercase();
+    l.contains("check_tensor_dims")
+        || l.contains("unknown model architecture")
+        || l.contains("wrong number of tensors")
+        || l.contains("missing tensor")
+        || (l.contains("error loading model:") && !l.contains("unsupported device"))
+}
+
 /// File-open failure markers in llama.cpp output.
 fn looks_like_open_failure(line: &str) -> bool {
     let l = line.to_ascii_lowercase();
@@ -1431,6 +1451,7 @@ pub async fn start_llama_server(
     CHAT_LOAD_OOM.store(false, std::sync::atomic::Ordering::SeqCst);
     CHAT_LOAD_OPEN_FAILED.store(false, std::sync::atomic::Ordering::SeqCst);
     CHAT_LOAD_DEVICE_UNSUPPORTED.store(0, std::sync::atomic::Ordering::SeqCst);
+    CHAT_LOAD_MODEL_REJECTED.store(false, std::sync::atomic::Ordering::SeqCst);
     CHAT_ANY_OUTPUT.store(false, std::sync::atomic::Ordering::SeqCst);
     // Resolve-and-spawn failures MUST be logged app-side: they return an
     // error to the frontend and otherwise leave no trace in the app log -
@@ -1490,6 +1511,9 @@ pub async fn start_llama_server(
                     log::info!("[llama-server] {}", text.trim_end());
                     if looks_like_oom(&text) {
                         CHAT_LOAD_OOM.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    if looks_like_model_rejected(&text) {
+                        CHAT_LOAD_MODEL_REJECTED.store(true, std::sync::atomic::Ordering::SeqCst);
                     }
                     if looks_like_open_failure(&text) {
                         CHAT_LOAD_OPEN_FAILED.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1625,6 +1649,20 @@ pub async fn start_llama_server(
                 }
                 if CHAT_LOAD_OPEN_FAILED.load(Ordering::SeqCst) {
                     return Err("MODEL_FILE_UNREADABLE".to_string());
+                }
+                if CHAT_LOAD_MODEL_REJECTED.load(Ordering::SeqCst) {
+                    // The engine rejected the FILE, with its own words -
+                    // deterministic and file-specific, so the GPU ladder
+                    // must not count it, and the model sits out the rest
+                    // of the session so retries don't loop the rejection.
+                    if let Some(ref name) = loading_name {
+                        if let Ok(mut set) = too_big_set().lock() {
+                            set.insert(name.clone());
+                        }
+                    }
+                    return Err(
+                        "This model file doesn't match what the engine expects - delete the model and download it again. If it happens again, the model needs a newer engine than this release ships.".to_string(),
+                    );
                 }
                 // Unexplained crash. If this spawn actually used the GPU,
                 // feed the safety ladder - child crashes previously never
@@ -2554,6 +2592,7 @@ pub async fn download_model(
     // therefore never appears as a usable model (list_local_models only lists
     // `.gguf`), which is what made an interrupted download look "corrupted".
     let part_path = models_dir.join(format!("{}.part", filename));
+    let etag_path = part_path.with_extension("part.etag");
 
     // Check if file already exists (fully downloaded). A damaged file under
     // the final name (a half-copied manual download, a corrupted file) is
@@ -2605,10 +2644,20 @@ pub async fn download_model(
 
     loop {
         let resume_from = std::fs::metadata(&part_path).map(|m| m.len()).unwrap_or(0);
+        // Revision guard: a resume must continue the SAME file the first
+        // bytes came from. If-Range with the stored ETag makes the server
+        // answer 200 (fresh start) when the repo re-uploaded in between -
+        // without it, a byte-offset resume can stitch two revisions into
+        // one coherent-looking, unloadable model (field 08-24: Nemotron
+        // re-uploaded mid-download).
+        let stored_etag = std::fs::read_to_string(&etag_path).ok().filter(|e| !e.is_empty());
 
         let mut req = client.get(&url);
         if resume_from > 0 {
             req = req.header(reqwest::header::RANGE, format!("bytes={}-", resume_from));
+            if let Some(ref etag) = stored_etag {
+                req = req.header(reqwest::header::IF_RANGE, etag.trim());
+            }
         }
 
         // One attempt; `break 'attempt Some(err)` on any failure so we retry.
@@ -2626,6 +2675,17 @@ pub async fn download_model(
                 break 'attempt Some(format!("server returned {}", status));
             }
             let is_partial = status == reqwest::StatusCode::PARTIAL_CONTENT;
+            if !is_partial {
+                // A full answer starts the file over - remember whose bytes
+                // these are so a later resume can prove it's the same file.
+                match response.headers().get(reqwest::header::ETAG).and_then(|v| v.to_str().ok()) {
+                    Some(etag) => { let _ = std::fs::write(&etag_path, etag); }
+                    None => { let _ = std::fs::remove_file(&etag_path); }
+                }
+                if resume_from > 0 {
+                    log::info!("[LLM] {} changed upstream since the partial download - starting over", filename);
+                }
+            }
             if total_size == 0 {
                 let body_len = response.content_length().unwrap_or(0);
                 total_size = if is_partial { resume_from + body_len } else { body_len };
@@ -2716,6 +2776,7 @@ pub async fn download_model(
     let downloaded = std::fs::metadata(&part_path).map(|m| m.len()).unwrap_or(0);
     if total_size > 0 && downloaded > total_size {
         let _ = std::fs::remove_file(&part_path);
+        let _ = std::fs::remove_file(&etag_path);
         return Err("Download corrupted (size mismatch). Please try again.".to_string());
     }
     // The bytes must read as a model file: a stream that ended early
@@ -2724,10 +2785,12 @@ pub async fn download_model(
     if let Some(reason) = crate::gguf::damage(&part_path) {
         log::error!("[LLM] downloaded bytes for {} do not read as a model: {reason}", filename);
         let _ = std::fs::remove_file(&part_path);
+        let _ = std::fs::remove_file(&etag_path);
         return Err("Download corrupted (the file does not read as a model). Please try again.".to_string());
     }
 
     // Atomically publish: only now does the model appear in list_local_models.
+    let _ = std::fs::remove_file(&etag_path);
     std::fs::rename(&part_path, &file_path)
         .map_err(|e| format!("Failed to finalize download: {}", e))?;
 
@@ -3791,6 +3854,19 @@ mod load_failure_classification_tests {
     fn oom_lines_are_not_open_failures() {
         let l = "ggml_vulkan: ErrorOutOfDeviceMemory while trying to allocate";
         assert!(looks_like_oom(l));
+    }
+
+    #[test]
+    fn model_rejection_is_classified_not_crashed() {
+        // The exact field line (Nemotron 3.5, 08-24): engine rejects the file.
+        let l = "0.00.377.544 E llama_model_load: error loading model: check_tensor_dims: tensor 'blk.5.ssm_in.weight' not found";
+        assert!(looks_like_model_rejected(l));
+        assert!(!looks_like_oom(l));
+        assert!(looks_like_device_unsupported(l).is_none());
+        // A device verdict is NOT a file rejection.
+        assert!(!looks_like_model_rejected("error loading model: Unsupported device"));
+        // Healthy load lines don't match.
+        assert!(!looks_like_model_rejected("srv load_model: loading model 'a.gguf'"));
         assert!(!looks_like_open_failure(l));
     }
 }
