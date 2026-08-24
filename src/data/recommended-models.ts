@@ -1,3 +1,14 @@
+// ADDING A MODEL - the ground rules (learned the hard way):
+// 1. Verify the file's header and that the bundled llama.cpp tag supports
+//    its declared architecture BEFORE adding - a 32 MB range request is
+//    enough; never trust the repo name alone.
+// 2. PIN every URL to a repo revision (resolve/<commit>/...), never
+//    resolve/main - an upstream re-upload mid-download otherwise stitches
+//    two revisions into one unloadable file. Upgrading to a fixed upload
+//    is a deliberate pin bump, re-verified.
+// 3. size = the repo's exact bytes (drives the disk-space gate); minRAM
+//    from real footprint; every shard, vision and draft file gets the
+//    same treatment.
 /**
  * Recommended AI Models Catalog
  *
