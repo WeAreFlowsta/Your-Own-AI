@@ -12,9 +12,30 @@ import { modelFamilies } from "../data/recommended-models";
  * - "llama-3.2-3b-instruct-q4_k_m.gguf" → "Llama 3.2 3B Instruct"
  * - "mistral-7b-instruct-v0.2-Q4_0.gguf" → "Mistral 7B Instruct v0.2"
  */
+// filename -> the catalog's own display name ("Qwen 3.6 35B-A3B (MoE)") -
+// always nicer than anything derived from the file name.
+let catalogNames: Map<string, string> | null = null;
+function catalogName(filename: string): string | undefined {
+  if (!catalogNames) {
+    catalogNames = new Map();
+    for (const fam of modelFamilies) {
+      for (const v of fam.variants ?? []) {
+        if (v.filename) catalogNames.set(v.filename, fam.name);
+      }
+    }
+  }
+  return catalogNames.get(filename);
+}
+
 export function formatModelDisplayName(filename: string): string {
+  const fromCatalog = catalogName(filename);
+  if (fromCatalog) return fromCatalog;
   // Remove file extension
   let name = filename.replace(/\.gguf$/i, '');
+  // Shard suffix and dynamic-quant markers carry no meaning for a reader.
+  name = name.replace(/-\d{5}-of-\d{5}$/, '');
+  name = name.replace(/-?UD-(IQ|Q)[\w]+$/i, '');
+  name = name.replace(/-?IQ\d[\w]*$/i, '');
   
   // Remove common quantization patterns at the end
   name = name.replace(/-?(q4|q5|q6|q8|Q4_0|Q4_K_M|Q5_0|Q5_K_M|Q6_K|Q8_0|f16|f32)$/i, '');

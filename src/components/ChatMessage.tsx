@@ -434,6 +434,28 @@ const ActionBar = component$<ActionBarProps>((props) => {
   // it renders with the thinking animation, not the loading one.
   const isShowingModelLoading = !!props.statusText && !props.message.searchingWeb;
 
+  // A model load can take tens of seconds. After a moment, a slow rotation
+  // of short lines explains what the wait IS (the model moving into
+  // memory) and why it won't repeat (it stays loaded) - then holds on the
+  // last line. Fast loads never show any of it, so pros see nothing extra.
+  const loadingHintIdx = useSignal(-1);
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track, cleanup }) => {
+    const active = track(() => isShowingModelLoading && !!props.message.isLoading);
+    loadingHintIdx.value = -1;
+    if (!active) return;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    timers.push(setTimeout(() => (loadingHintIdx.value = 0), 3000));
+    timers.push(setTimeout(() => (loadingHintIdx.value = 1), 8000));
+    timers.push(setTimeout(() => (loadingHintIdx.value = 2), 13000));
+    cleanup(() => timers.forEach(clearTimeout));
+  });
+  const LOADING_HINTS = [
+    'moving the model into memory, a one-time step',
+    'bigger models take longer to wake up',
+    'once loaded it stays ready - your next questions answer right away',
+  ];
+
   const statusType = isShowingModelLoading
     ? 'loading' as const
     : props.isWritingCode
@@ -473,6 +495,14 @@ const ActionBar = component$<ActionBarProps>((props) => {
                   style={{ opacity: props.statusOpacity ?? 1, transition: 'opacity 300ms ease-in-out' }}
                 >
                   {props.dynamicStatus}
+                </em>
+              )}
+              {isShowingModelLoading && loadingHintIdx.value >= 0 && (
+                <em
+                  key={loadingHintIdx.value}
+                  class="italic block md:inline md:ml-3 opacity-70 animate-fade-in"
+                >
+                  {LOADING_HINTS[Math.min(loadingHintIdx.value, LOADING_HINTS.length - 1)]}
                 </em>
               )}
             </span>
