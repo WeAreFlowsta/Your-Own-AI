@@ -226,7 +226,7 @@ export const EMBEDDING_MODEL: CapabilityModel = {
     'A small local model two features share: memory recall (each AI recalling relevant past conversations and notes) and smart routing (spotting when a question needs an online model). Runs on your device.',
   filename: 'bge-small-en-v1.5-f16.gguf',
   downloadUrl:
-    'https://huggingface.co/CompendiumLabs/bge-small-en-v1.5-gguf/resolve/main/bge-small-en-v1.5-f16.gguf',
+    'https://huggingface.co/CompendiumLabs/bge-small-en-v1.5-gguf/resolve/d32f8c040ea3b516330eeb75b72bcc2d3a780ab7/bge-small-en-v1.5-f16.gguf',
   size: 0.067, // ~67 MB
 };
 
@@ -247,7 +247,7 @@ export const UTILITY_MODEL: CapabilityModel = {
     'A small local model that learns your memory facts and spots when a question wants a report or code — kept fully on your device, even while chatting with online AIs.',
   filename: 'Ministral-3-3B-Instruct-2512-Q4_K_M.gguf',
   downloadUrl:
-    'https://huggingface.co/unsloth/Ministral-3-3B-Instruct-2512-GGUF/resolve/main/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf',
+    'https://huggingface.co/unsloth/Ministral-3-3B-Instruct-2512-GGUF/resolve/7f116d3df13bc7d3820b2ff1d5c273133b5accaa/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf',
   size: 2.2,
 };
 
@@ -272,7 +272,7 @@ export const VISION_PROJECTORS: CapabilityModel[] = [
     // key "qwen3.8-27b" prefixes the model filename for pairing.
     filename: 'Qwen3.8-27B-mmproj-F16.gguf',
     downloadUrl:
-      'https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/mmproj-F16.gguf',
+      'https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/1cff334a4a228324d4ee1f76d55d372588f0d556/mmproj-F16.gguf',
     size: 0.93,
   },
   {
@@ -285,7 +285,7 @@ export const VISION_PROJECTORS: CapabilityModel[] = [
     // key "ornith-1.5-35b" prefixes the model filename for pairing.
     filename: 'Ornith-1.5-35B-mmproj-BF16.gguf',
     downloadUrl:
-      'https://huggingface.co/ornith-ai/Ornith-1.5-35B-A3B-GGUF/resolve/main/mmproj-Ornith-1.5-35B-BF16.gguf',
+      'https://huggingface.co/ornith-ai/Ornith-1.5-35B-A3B-GGUF/resolve/ca1a0fa530357832ed63c1f98932a04731c2e8c1/mmproj-Ornith-1.5-35B-BF16.gguf',
     size: 0.9,
   },
   {
@@ -298,7 +298,7 @@ export const VISION_PROJECTORS: CapabilityModel[] = [
     // key "qwen3.8-27b-uncensored" prefixes the model filename for pairing.
     filename: 'Qwen3.8-27B-Uncensored-mmproj-F16.gguf',
     downloadUrl:
-      'https://huggingface.co/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF/resolve/main/Qwen3.8-27B-Uncensored-vision-f16.gguf',
+      'https://huggingface.co/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF/resolve/ade635f5c9c48e63ac5d42b4580761094b1630c4/Qwen3.8-27B-Uncensored-vision-f16.gguf',
     size: 0.93,
   },
   {
@@ -312,7 +312,7 @@ export const VISION_PROJECTORS: CapabilityModel[] = [
     // upstream name would never pair.
     filename: 'Muse-Glimmer-30B-mmproj-Q8_0.gguf',
     downloadUrl:
-      'https://huggingface.co/unsloth/Muse-Glimmer-30B-GGUF/resolve/main/mmproj-Muse-Glimmer-30B-Q8_0.gguf',
+      'https://huggingface.co/unsloth/Muse-Glimmer-30B-GGUF/resolve/c3ac2ebf47426591b4c6d408103c8c15a1e2afd6/mmproj-Muse-Glimmer-30B-Q8_0.gguf',
     size: 2.1,
   },
   {
@@ -323,7 +323,7 @@ export const VISION_PROJECTORS: CapabilityModel[] = [
       'Lets the Gemma 4 E2B model see images you attach — diagrams, screenshots, photos. The lighter option; needs the Gemma 4 E2B model downloaded.',
     filename: 'gemma-4-E2B-mmproj-F16.gguf',
     downloadUrl:
-      'https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/mmproj-F16.gguf',
+      'https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/90f9618340396838ee7ff5b0ba2da27da62953d3/mmproj-F16.gguf',
     size: 0.99, // ~986 MB
   },
   {
@@ -334,7 +334,7 @@ export const VISION_PROJECTORS: CapabilityModel[] = [
       'Lets the Gemma 4 E4B model see images you attach — diagrams, screenshots, photos. Needs the Gemma 4 E4B model downloaded.',
     filename: 'gemma-4-E4B-mmproj-F16.gguf',
     downloadUrl:
-      'https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/main/gemma-4-E4B-it-mmproj.gguf',
+      'https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/4b4a2c1d584be7264f87aac328a1bc739ce81b6c/gemma-4-E4B-it-mmproj.gguf',
     size: 0.99, // ~990 MB
   },
   {
@@ -345,7 +345,7 @@ export const VISION_PROJECTORS: CapabilityModel[] = [
       'Lets MedGemma 4B see medical images you attach - X-rays, skin photos, scans. Needs the MedGemma 4B model downloaded.',
     filename: 'medgemma-1.5-4b-it-mmproj-F16.gguf',
     downloadUrl:
-      'https://huggingface.co/unsloth/medgemma-1.5-4b-it-GGUF/resolve/main/mmproj-F16.gguf',
+      'https://huggingface.co/unsloth/medgemma-1.5-4b-it-GGUF/resolve/ea2657a9a89b338af20be8e285d78de5347603b9/mmproj-F16.gguf',
     size: 0.79,
   },
   {
@@ -356,7 +356,7 @@ export const VISION_PROJECTORS: CapabilityModel[] = [
       'Lets MedGemma 27B see medical images you attach - X-rays, skin photos, scans. Needs the MedGemma 27B model downloaded.',
     filename: 'medgemma-27b-it-mmproj-F16.gguf',
     downloadUrl:
-      'https://huggingface.co/unsloth/medgemma-27b-it-GGUF/resolve/main/mmproj-F16.gguf',
+      'https://huggingface.co/unsloth/medgemma-27b-it-GGUF/resolve/48216cb6aa3bd2042f00c674c7a2d3ff0f4b88e6/mmproj-F16.gguf',
     size: 0.8,
   },
   {
@@ -368,7 +368,7 @@ export const VISION_PROJECTORS: CapabilityModel[] = [
     // Filename must prefix the model file so the conductor pairs them (find_projector_for).
     filename: 'Qwythos-9B-v2-mmproj-BF16.gguf',
     downloadUrl:
-      'https://huggingface.co/empero-ai/Qwythos-9B-v2-GGUF/resolve/main/mmproj-Qwythos-9B-v2-BF16.gguf',
+      'https://huggingface.co/empero-ai/Qwythos-9B-v2-GGUF/resolve/ad91e8216a35ffc6365129d8d89857ba5d051689/mmproj-Qwythos-9B-v2-BF16.gguf',
     size: 0.9, // ~920 MB
   },
 ];
@@ -426,7 +426,7 @@ export const modelFamilies: ModelFamily[] = [
         size: 12.4,
         minRAM: 16,
         downloadUrl:
-          'https://huggingface.co/unsloth/Muse-Glimmer-30B-GGUF/resolve/main/Muse-Glimmer-30B-UD-Q2_K_XL.gguf',
+          'https://huggingface.co/unsloth/Muse-Glimmer-30B-GGUF/resolve/2d6f03e44141daeb68c0f2c181f23338acc3af7e/Muse-Glimmer-30B-UD-Q2_K_XL.gguf',
         filename: 'Muse-Glimmer-30B-UD-Q2_K_XL.gguf',
         quantization: 'Q2_K_XL'
       },
@@ -435,7 +435,7 @@ export const modelFamilies: ModelFamily[] = [
         size: 15.9,
         minRAM: 32,
         downloadUrl:
-          'https://huggingface.co/unsloth/Muse-Glimmer-30B-GGUF/resolve/main/Muse-Glimmer-30B-UD-Q4_K_XL.gguf',
+          'https://huggingface.co/unsloth/Muse-Glimmer-30B-GGUF/resolve/2d6f03e44141daeb68c0f2c181f23338acc3af7e/Muse-Glimmer-30B-UD-Q4_K_XL.gguf',
         filename: 'Muse-Glimmer-30B-UD-Q4_K_XL.gguf',
         quantization: 'Q4_K_XL'
       }
@@ -467,7 +467,7 @@ export const modelFamilies: ModelFamily[] = [
         // Unsloth's Dynamic 3.0 requant renamed the file (the old
         // Q4_K_M URL 404s). Local filename stays the same - existing
         // installs, capability tiers, and routing key off it.
-        downloadUrl: 'https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/313447f257f7ebde0b968e4778feef774546ed81/Qwen3.8-27B-UD-Q4_K_M.gguf',
         filename: 'Qwen3.8-27B-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       }
@@ -490,7 +490,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '27B',
         size: 16.8,
         minRAM: 32,
-        downloadUrl: 'https://huggingface.co/unsloth/Qwen3.6-27B-GGUF/resolve/main/Qwen3.6-27B-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/unsloth/Qwen3.6-27B-GGUF/resolve/1d6ab03427938c7514519b1a87814fae54fb57c9/Qwen3.6-27B-Q4_K_M.gguf',
         filename: 'Qwen3.6-27B-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       },
@@ -503,7 +503,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '35B-A3B (MoE)',
         size: 12.3,
         minRAM: 24,
-        downloadUrl: 'https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-Q2_K_XL.gguf',
+        downloadUrl: 'https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/a20f211db19c28fa9c7296ebd413370fd3cfc4bf/Qwen3.6-35B-A3B-UD-Q2_K_XL.gguf',
         filename: 'Qwen3.6-35B-A3B-UD-Q2_K_XL.gguf',
         quantization: 'UD-Q2_K_XL'
       },
@@ -511,7 +511,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '35B-A3B (MoE)',
         size: 22.1,
         minRAM: 32,
-        downloadUrl: 'https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/edc6f12e7bb90602ca1d34faecbec9844137b7fe/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf',
         filename: 'Qwen3.6-35B-A3B-UD-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       }
@@ -541,7 +541,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: 'E2B',
         size: 3.1,
         minRAM: 8,
-        downloadUrl: 'https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2/gemma-4-E2B-it-Q4_K_M.gguf',
         filename: 'gemma-4-E2B-it-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       },
@@ -549,7 +549,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: 'E4B',
         size: 5.2,
         minRAM: 16,
-        downloadUrl: 'https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/main/gemma-4-E4B_q4_0-it.gguf',
+        downloadUrl: 'https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/e998672c8018dd704e347d3b6843c112547244d1/gemma-4-E4B_q4_0-it.gguf',
         filename: 'gemma-4-E4B_q4_0-it.gguf',
         quantization: 'Q4_0 (QAT)'
       },
@@ -558,7 +558,7 @@ export const modelFamilies: ModelFamily[] = [
         size: 7.0,
         minRAM: 16,
         contextWindow: 262144,
-        downloadUrl: 'https://huggingface.co/google/gemma-4-12B-it-qat-q4_0-gguf/resolve/main/gemma-4-12b-it-qat-q4_0.gguf',
+        downloadUrl: 'https://huggingface.co/google/gemma-4-12B-it-qat-q4_0-gguf/resolve/ef7b15515d7ed7f34305a08edb5717e7989d6dc9/gemma-4-12b-it-qat-q4_0.gguf',
         filename: 'gemma-4-12b-it-qat-q4_0.gguf',
         quantization: 'Q4_0 (QAT)'
       },
@@ -569,7 +569,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '26B-A4B (MoE)',
         size: 10.5,
         minRAM: 24,
-        downloadUrl: 'https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/main/gemma-4-26B-A4B-it-UD-Q2_K_XL.gguf',
+        downloadUrl: 'https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/c099eb48e663fd284577b04978a94ffccb261841/gemma-4-26B-A4B-it-UD-Q2_K_XL.gguf',
         filename: 'gemma-4-26B-A4B-it-UD-Q2_K_XL.gguf',
         quantization: 'UD-Q2_K_XL'
       },
@@ -578,7 +578,7 @@ export const modelFamilies: ModelFamily[] = [
         size: 14.5,
         minRAM: 32,
         contextWindow: 262144,
-        downloadUrl: 'https://huggingface.co/google/gemma-4-26B-A4B-it-qat-q4_0-gguf/resolve/main/gemma-4-26B_q4_0-it.gguf',
+        downloadUrl: 'https://huggingface.co/google/gemma-4-26B-A4B-it-qat-q4_0-gguf/resolve/8afd43710afbb87c711f33f7e7c11b1434a9fa1a/gemma-4-26B_q4_0-it.gguf',
         filename: 'gemma-4-26B_q4_0-it.gguf',
         quantization: 'Q4_0 (QAT)'
       },
@@ -587,7 +587,7 @@ export const modelFamilies: ModelFamily[] = [
         size: 17.7,
         minRAM: 32,
         contextWindow: 262144,
-        downloadUrl: 'https://huggingface.co/google/gemma-4-31B-it-qat-q4_0-gguf/resolve/main/gemma-4-31B_q4_0-it.gguf',
+        downloadUrl: 'https://huggingface.co/google/gemma-4-31B-it-qat-q4_0-gguf/resolve/0e39713ad6f0520613127717c0648c13f71ceb39/gemma-4-31B_q4_0-it.gguf',
         filename: 'gemma-4-31B_q4_0-it.gguf',
         quantization: 'Q4_0 (QAT)'
       }
@@ -610,7 +610,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '3B',
         size: 2.2,
         minRAM: 8,
-        downloadUrl: 'https://huggingface.co/unsloth/Ministral-3-3B-Instruct-2512-GGUF/resolve/main/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/unsloth/Ministral-3-3B-Instruct-2512-GGUF/resolve/7f116d3df13bc7d3820b2ff1d5c273133b5accaa/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf',
         filename: 'Ministral-3-3B-Instruct-2512-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       },
@@ -618,7 +618,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '8B',
         size: 5.2,
         minRAM: 16,
-        downloadUrl: 'https://huggingface.co/unsloth/Ministral-3-8B-Instruct-2512-GGUF/resolve/main/Ministral-3-8B-Instruct-2512-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/unsloth/Ministral-3-8B-Instruct-2512-GGUF/resolve/1b83c277dcaa1f736c25cf1e3cc4b48110697df2/Ministral-3-8B-Instruct-2512-Q4_K_M.gguf',
         filename: 'Ministral-3-8B-Instruct-2512-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       },
@@ -626,7 +626,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '14B',
         size: 8.2,
         minRAM: 16,
-        downloadUrl: 'https://huggingface.co/unsloth/Ministral-3-14B-Instruct-2512-GGUF/resolve/main/Ministral-3-14B-Instruct-2512-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/unsloth/Ministral-3-14B-Instruct-2512-GGUF/resolve/d222a984ffc9ede1c2883899cc3d7b37ec95f0ba/Ministral-3-14B-Instruct-2512-Q4_K_M.gguf',
         filename: 'Ministral-3-14B-Instruct-2512-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       }
@@ -651,7 +651,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '3.8B',
         size: 2.5,
         minRAM: 8,
-        downloadUrl: 'https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF/resolve/main/Phi-4-mini-instruct-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF/resolve/78eb92a46fc37e6b524df991ed9aca9bc6aa7b80/Phi-4-mini-instruct-Q4_K_M.gguf',
         filename: 'Phi-4-mini-instruct-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       }
@@ -676,7 +676,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '20B (3.6B active)',
         size: 11.6,
         minRAM: 16,
-        downloadUrl: 'https://huggingface.co/unsloth/gpt-oss-20b-GGUF/resolve/main/gpt-oss-20b-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/unsloth/gpt-oss-20b-GGUF/resolve/ce6ba6163271f5d73dbe2a20b85e66d79126e942/gpt-oss-20b-Q4_K_M.gguf',
         filename: 'gpt-oss-20b-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       },
@@ -689,7 +689,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '120B (5.1B active)',
         size: 65.4,
         minRAM: 80,
-        downloadUrl: 'https://huggingface.co/unsloth/gpt-oss-120b-GGUF/resolve/main/gpt-oss-120b-F16.gguf',
+        downloadUrl: 'https://huggingface.co/unsloth/gpt-oss-120b-GGUF/resolve/91daeef64d6b1e1078ad1d007f9efa98526d7bf1/gpt-oss-120b-F16.gguf',
         filename: 'gpt-oss-120b-F16.gguf',
         quantization: 'MXFP4',
       }
@@ -728,7 +728,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '8B-A1B (MoE)',
         size: 5.2,
         minRAM: 12,
-        downloadUrl: 'https://huggingface.co/LiquidAI/LFM2.5-8B-A1B-GGUF/resolve/main/LFM2.5-8B-A1B-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/LiquidAI/LFM2.5-8B-A1B-GGUF/resolve/dfd5fdcad7a1c0d31473fb4ca443b8befbacddf0/LFM2.5-8B-A1B-Q4_K_M.gguf',
         filename: 'LFM2.5-8B-A1B-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       }
@@ -754,7 +754,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '7B-A1B (MoE)',
         size: 4.2,
         minRAM: 8,
-        downloadUrl: 'https://huggingface.co/ibm-granite/granite-4.0-h-tiny-GGUF/resolve/main/granite-4.0-h-tiny-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/ibm-granite/granite-4.0-h-tiny-GGUF/resolve/a5f3711e9e4b9ad17da7e2ac3e1b51c50acedcfa/granite-4.0-h-tiny-Q4_K_M.gguf',
         filename: 'granite-4.0-h-tiny-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       }
@@ -781,7 +781,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '30B-A3B (MoE)',
         size: 18.9,
         minRAM: 32,
-        downloadUrl: 'https://huggingface.co/ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/main/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf',
+        downloadUrl: 'https://huggingface.co/ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/0cdf8a8a0bae49ae9634dd68778216d75de63305/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf',
         filename: 'NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf',
         quantization: 'Q4_0',
         // NVIDIA's multi-token-prediction head for this model (llama.cpp's
@@ -789,7 +789,7 @@ export const modelFamilies: ModelFamily[] = [
         draft: {
           type: 'draft-mtp',
           filename: 'mtp-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf',
-          downloadUrl: 'https://huggingface.co/ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/main/mtp-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf',
+          downloadUrl: 'https://huggingface.co/ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/0cdf8a8a0bae49ae9634dd68778216d75de63305/mtp-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf',
           size: 1.2,
         },
       }
@@ -815,7 +815,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '16B-A1.4B (MoE)',
         size: 9.9,
         minRAM: 24,
-        downloadUrl: 'https://huggingface.co/inclusionAI/Ling-mini-2.0-GGUF/resolve/main/Ling-mini-2.0-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/inclusionAI/Ling-mini-2.0-GGUF/resolve/943c45f3228c490cddfb19fe33f14ddf6760332e/Ling-mini-2.0-Q4_K_M.gguf',
         filename: 'Ling-mini-2.0-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       }
@@ -844,14 +844,14 @@ export const modelFamilies: ModelFamily[] = [
         size: 96.9,
         minRAM: 128,
         shards: 3,
-        downloadUrl: 'https://huggingface.co/unsloth/DeepSeek-V4-Flash-0731-GGUF/resolve/main/UD-Q2_K_XL/DeepSeek-V4-Flash-0731-UD-Q2_K_XL-00001-of-00003.gguf',
+        downloadUrl: 'https://huggingface.co/unsloth/DeepSeek-V4-Flash-0731-GGUF/resolve/109848da2469efe1f1aab9e11acea08a065ccd4f/UD-Q2_K_XL/DeepSeek-V4-Flash-0731-UD-Q2_K_XL-00001-of-00003.gguf',
         filename: 'DeepSeek-V4-Flash-0731-UD-Q2_K_XL-00001-of-00003.gguf',
         quantization: 'UD-Q2_K_XL',
         // Unsloth's DSpark draft for V4 Flash ("up to 2x faster decoding").
         draft: {
           type: 'draft-dspark',
           filename: 'dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf',
-          downloadUrl: 'https://huggingface.co/unsloth/DeepSeek-V4-Flash-0731-GGUF/resolve/main/dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf',
+          downloadUrl: 'https://huggingface.co/unsloth/DeepSeek-V4-Flash-0731-GGUF/resolve/c888b379ad5e1af411080a931f67f48cbd52c6b8/dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf',
           size: 10.9,
         },
       },
@@ -860,14 +860,14 @@ export const modelFamilies: ModelFamily[] = [
         size: 137.9,
         minRAM: 192,
         shards: 4,
-        downloadUrl: 'https://huggingface.co/unsloth/DeepSeek-V4-Flash-0731-GGUF/resolve/main/UD-IQ4_XS/DeepSeek-V4-Flash-0731-UD-IQ4_XS-00001-of-00004.gguf',
+        downloadUrl: 'https://huggingface.co/unsloth/DeepSeek-V4-Flash-0731-GGUF/resolve/109848da2469efe1f1aab9e11acea08a065ccd4f/UD-IQ4_XS/DeepSeek-V4-Flash-0731-UD-IQ4_XS-00001-of-00004.gguf',
         filename: 'DeepSeek-V4-Flash-0731-UD-IQ4_XS-00001-of-00004.gguf',
         quantization: 'UD-IQ4_XS',
         // Unsloth's DSpark draft for V4 Flash ("up to 2x faster decoding").
         draft: {
           type: 'draft-dspark',
           filename: 'dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf',
-          downloadUrl: 'https://huggingface.co/unsloth/DeepSeek-V4-Flash-0731-GGUF/resolve/main/dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf',
+          downloadUrl: 'https://huggingface.co/unsloth/DeepSeek-V4-Flash-0731-GGUF/resolve/c888b379ad5e1af411080a931f67f48cbd52c6b8/dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf',
           size: 10.9,
         },
       }
@@ -894,7 +894,7 @@ export const modelFamilies: ModelFamily[] = [
         size: 253.9,
         minRAM: 384,
         shards: 7,
-        downloadUrl: 'https://huggingface.co/unsloth/GLM-5.2-GGUF/resolve/main/UD-Q2_K_XL/GLM-5.2-UD-Q2_K_XL-00001-of-00007.gguf',
+        downloadUrl: 'https://huggingface.co/unsloth/GLM-5.2-GGUF/resolve/c3a15488fe3838f80263ddc848bed0350dae3141/UD-Q2_K_XL/GLM-5.2-UD-Q2_K_XL-00001-of-00007.gguf',
         filename: 'GLM-5.2-UD-Q2_K_XL-00001-of-00007.gguf',
         quantization: 'UD-Q2_K_XL'
       },
@@ -903,7 +903,7 @@ export const modelFamilies: ModelFamily[] = [
         size: 436.5,
         minRAM: 512,
         shards: 10,
-        downloadUrl: 'https://huggingface.co/unsloth/GLM-5.2-GGUF/resolve/main/UD-Q4_K_S/GLM-5.2-UD-Q4_K_S-00001-of-00010.gguf',
+        downloadUrl: 'https://huggingface.co/unsloth/GLM-5.2-GGUF/resolve/0a395becf95f27137be6277aa4dd61c3fa5a3425/UD-Q4_K_S/GLM-5.2-UD-Q4_K_S-00001-of-00010.gguf',
         filename: 'GLM-5.2-UD-Q4_K_S-00001-of-00010.gguf',
         quantization: 'UD-Q4_K_S'
       }
@@ -927,7 +927,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '8B',
         size: 5.0,
         minRAM: 16,
-        downloadUrl: 'https://huggingface.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF/resolve/main/DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF/resolve/b58254ad0ca4e44ed43d75ce693118ea3d677d4c/DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf',
         filename: 'DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       }
@@ -951,7 +951,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '24B',
         size: 14.3,
         minRAM: 16,
-        downloadUrl: 'https://huggingface.co/unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF/resolve/main/Devstral-Small-2-24B-Instruct-2512-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF/resolve/c4433c89b76dd28b9a9963d10e7171209d2cc44f/Devstral-Small-2-24B-Instruct-2512-Q4_K_M.gguf',
         filename: 'Devstral-Small-2-24B-Instruct-2512-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       }
@@ -974,7 +974,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '9B',
         size: 5.6,
         minRAM: 16,
-        downloadUrl: 'https://huggingface.co/ornith-ai/Ornith-1.5-9B-GGUF/resolve/main/Ornith-1.5-9B-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/ornith-ai/Ornith-1.5-9B-GGUF/resolve/0d64ca9c7679dac7d7e4ef89ec30318a3741e337/Ornith-1.5-9B-Q4_K_M.gguf',
         filename: 'Ornith-1.5-9B-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       },
@@ -982,7 +982,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '35B',
         size: 21.7,
         minRAM: 32,
-        downloadUrl: 'https://huggingface.co/ornith-ai/Ornith-1.5-35B-A3B-GGUF/resolve/main/Ornith-1.5-35B-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/ornith-ai/Ornith-1.5-35B-A3B-GGUF/resolve/ca1a0fa530357832ed63c1f98932a04731c2e8c1/Ornith-1.5-35B-Q4_K_M.gguf',
         filename: 'Ornith-1.5-35B-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       }
@@ -1005,7 +1005,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '30B-A3B (MoE)',
         size: 18.3,
         minRAM: 32,
-        downloadUrl: 'https://huggingface.co/unsloth/GLM-4.7-Flash-GGUF/resolve/main/GLM-4.7-Flash-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/unsloth/GLM-4.7-Flash-GGUF/resolve/bc383b21e43b880a69b6a0a3d41f26710c3608f3/GLM-4.7-Flash-Q4_K_M.gguf',
         filename: 'GLM-4.7-Flash-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       }
@@ -1028,7 +1028,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '30B-A3B (MoE)',
         size: 18.6,
         minRAM: 32,
-        downloadUrl: 'https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/main/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/b17cb02dd882d5b6ab62fc777ad2995f19668350/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf',
         filename: 'Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       }
@@ -1054,7 +1054,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '4B',
         size: 2.7,
         minRAM: 8,
-        downloadUrl: 'https://huggingface.co/Jackrong/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF/resolve/main/Qwen3.5-4B.Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/Jackrong/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF/resolve/5f0772a1e97636bb3d75825559b4a46b49cd93b0/Qwen3.5-4B.Q4_K_M.gguf',
         filename: 'Qwen3.5-4B-Opus-Distilled-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       },
@@ -1062,7 +1062,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '9B',
         size: 5.6,
         minRAM: 16,
-        downloadUrl: 'https://huggingface.co/Jackrong/Qwen3.5-9B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF/resolve/main/Qwen3.5-9B.Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/Jackrong/Qwen3.5-9B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF/resolve/00d9f425b85fa0f3c7ee7b3a766a16bde686a522/Qwen3.5-9B.Q4_K_M.gguf',
         filename: 'Qwen3.5-9B-Opus-Distilled-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       },
@@ -1070,7 +1070,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '27B',
         size: 16.5,
         minRAM: 32,
-        downloadUrl: 'https://huggingface.co/Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF/resolve/main/Qwen3.5-27B.Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-v2-GGUF/resolve/2fc6465288bfa3695eda8fc367e5ccb7e5609f0a/Qwen3.5-27B.Q4_K_M.gguf',
         filename: 'Qwen3.5-27B-Opus-Distilled-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       }
@@ -1096,7 +1096,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '2B',
         size: 1.2,
         minRAM: 4,
-        downloadUrl: 'https://huggingface.co/HauhauCS/Qwen3.5-2B-Uncensored-HauhauCS-Aggressive/resolve/main/Qwen3.5-2B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/HauhauCS/Qwen3.5-2B-Uncensored-HauhauCS-Aggressive/resolve/cafbddcb9940f38618e2b2ba84149584949379f9/Qwen3.5-2B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf',
         filename: 'Qwen3.5-2B-Uncensored-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       },
@@ -1104,7 +1104,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '4B',
         size: 2.6,
         minRAM: 8,
-        downloadUrl: 'https://huggingface.co/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive/resolve/main/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive/resolve/55e05aba5a4e1e2d6c4919753a68941c4ad4cb11/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf',
         filename: 'Qwen3.5-4B-Uncensored-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       },
@@ -1112,7 +1112,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '9B',
         size: 5.3,
         minRAM: 16,
-        downloadUrl: 'https://huggingface.co/HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive/resolve/main/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive/resolve/a5ebf434dfbf9646d1bb97a469c1d8f69e4feb2e/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf',
         filename: 'Qwen3.5-9B-Uncensored-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       },
@@ -1120,7 +1120,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '27B',
         size: 16.0,
         minRAM: 32,
-        downloadUrl: 'https://huggingface.co/HauhauCS/Qwen3.5-27B-Uncensored-HauhauCS-Aggressive/resolve/main/Qwen3.5-27B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/HauhauCS/Qwen3.5-27B-Uncensored-HauhauCS-Aggressive/resolve/6601ca30d45fa62dfa2b74f1460d4feebd83a3b0/Qwen3.5-27B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf',
         filename: 'Qwen3.5-27B-Uncensored-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       }
@@ -1158,7 +1158,7 @@ export const modelFamilies: ModelFamily[] = [
         size: 2.4,
         minRAM: 8,
         downloadUrl:
-          'https://huggingface.co/unsloth/medgemma-1.5-4b-it-GGUF/resolve/main/medgemma-1.5-4b-it-Q4_K_M.gguf',
+          'https://huggingface.co/unsloth/medgemma-1.5-4b-it-GGUF/resolve/f2b0c97fc20d9de0d4dd0d299a098943b8b9a96f/medgemma-1.5-4b-it-Q4_K_M.gguf',
         filename: 'medgemma-1.5-4b-it-Q4_K_M.gguf',
         quantization: 'Q4_K_M',
       },
@@ -1167,7 +1167,7 @@ export const modelFamilies: ModelFamily[] = [
         size: 15.5,
         minRAM: 32,
         downloadUrl:
-          'https://huggingface.co/unsloth/medgemma-27b-it-GGUF/resolve/main/medgemma-27b-it-Q4_K_M.gguf',
+          'https://huggingface.co/unsloth/medgemma-27b-it-GGUF/resolve/d61d7bf8e8a3f2e9434424b9e0fb4d721c2e4fd3/medgemma-27b-it-Q4_K_M.gguf',
         filename: 'medgemma-27b-it-Q4_K_M.gguf',
         quantization: 'Q4_K_M',
       },
@@ -1191,7 +1191,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '2B',
         size: 1.3,
         minRAM: 4,
-        downloadUrl: 'https://huggingface.co/empero-ai/Qwen3.8-2B-GGUF/resolve/main/Qwen3.8-2B-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/empero-ai/Qwen3.8-2B-GGUF/resolve/f4f73582d0b149595450c719b9a7521a03894f9c/Qwen3.8-2B-Q4_K_M.gguf',
         filename: 'Qwen3.8-2B-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       },
@@ -1199,7 +1199,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '4B',
         size: 2.8,
         minRAM: 8,
-        downloadUrl: 'https://huggingface.co/empero-ai/Qwen3.8-4B-GGUF/resolve/main/Qwen3.8-4B-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/empero-ai/Qwen3.8-4B-GGUF/resolve/391fc7d103e3942a408def3e4f51c2f85d464417/Qwen3.8-4B-Q4_K_M.gguf',
         filename: 'Qwen3.8-4B-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       },
@@ -1207,7 +1207,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '9B',
         size: 5.8,
         minRAM: 16,
-        downloadUrl: 'https://huggingface.co/empero-ai/Qwen3.8-9B-GGUF/resolve/main/Qwen3.8-9B-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/empero-ai/Qwen3.8-9B-GGUF/resolve/760121cd70bb4c36b2b5ec58eb765e0df5987efe/Qwen3.8-9B-Q4_K_M.gguf',
         filename: 'Qwen3.8-9B-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       }
@@ -1232,7 +1232,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '27B',
         size: 16.5,
         minRAM: 32,
-        downloadUrl: 'https://huggingface.co/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF/resolve/main/Qwen3.8-27B-Uncensored-noMTP-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/JonathanColetti/Qwen3.8-27B-Uncensored-GGUF/resolve/1ba71457350e9d4b792c9fbcad86e3a26971f7fb/Qwen3.8-27B-Uncensored-noMTP-Q4_K_M.gguf',
         filename: 'Qwen3.8-27B-Uncensored-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       }
@@ -1257,7 +1257,7 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '9B',
         size: 5.4,
         minRAM: 16,
-        downloadUrl: 'https://huggingface.co/empero-ai/Qwythos-9B-v2-GGUF/resolve/main/Qwythos-9B-v2-Q4_K_M.gguf',
+        downloadUrl: 'https://huggingface.co/empero-ai/Qwythos-9B-v2-GGUF/resolve/ad91e8216a35ffc6365129d8d89857ba5d051689/Qwythos-9B-v2-Q4_K_M.gguf',
         filename: 'Qwythos-9B-v2-Q4_K_M.gguf',
         quantization: 'Q4_K_M'
       }
