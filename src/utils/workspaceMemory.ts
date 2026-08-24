@@ -41,61 +41,98 @@ async function provisionedAgents(): Promise<{ agentKey: string; name: string }[]
     .map((a) => ({ agentKey: a.agentPubKey!, name: a.name }));
 }
 
-/** The current memory for one folder - newest revision across all chains. */
-export async function getWorkspaceMemory(folderPath: string): Promise<WorkspaceMemory> {
-  const best: WorkspaceMemory = {
-    folderPath,
-    content: "",
-    updatedAt: 0,
-    revisions: 0,
-  };
-  for (const agent of await provisionedAgents()) {
-    const conversations = await getConversations(agent.agentKey);
-    for (const c of conversations) {
-      if (c.source !== WORKSPACE_MEMORY_SOURCE || c.title !== folderPath) continue;
-      const entries = await getTranscript(c.agent_key || agent.agentKey, c.hash);
-      best.revisions += entries.length;
-      for (const e of entries) {
-        if (e.timestamp > best.updatedAt) {
-          best.updatedAt = e.timestamp;
-          best.content = e.content;
-          best.agentKey = c.agent_key || agent.agentKey;
-          best.conversationHash = c.hash;
-        }
-      }
-    }
-  }
-  return best;
+/** One chain's project-notes conversations, transcripts included. Chains
+ *  are independent, so the scans below run these CONCURRENTLY - the serial
+ *  walk made the Projects tab minutes-slow on installs with many AIs and
+ *  long agent lineages. Read errors surface as an empty slice (the utils
+ *  already swallow them), never as a rejected scan. */
+type ScannedNotes = {
+  agentKey: string;
+  conv: Awaited<ReturnType<typeof getConversations>>[number];
+  entries: Awaited<ReturnType<typeof getTranscript>>;
+};
+async function scanAgentProjectNotes(
+  agentKey: string,
+  folderPath?: string,
+): Promise<ScannedNotes[]> {
+  const conversations = await getConversations(agentKey);
+  const matches = conversations.filter(
+    (c) =>
+      c.source === WORKSPACE_MEMORY_SOURCE &&
+      (folderPath ? c.title === folderPath : !!c.title),
+  );
+  return Promise.all(
+    matches.map(async (conv) => ({
+      agentKey,
+      conv,
+      entries: await getTranscript(conv.agent_key || agentKey, conv.hash),
+    })),
+  );
 }
 
-/** All folders that have memory anywhere (Memory page's Workspaces list). */
-export async function listWorkspaceMemories(): Promise<WorkspaceMemory[]> {
-  const byFolder = new Map<string, WorkspaceMemory>();
-  for (const agent of await provisionedAgents()) {
-    const conversations = await getConversations(agent.agentKey);
-    for (const c of conversations) {
-      if (c.source !== WORKSPACE_MEMORY_SOURCE || !c.title) continue;
-      const entries = await getTranscript(c.agent_key || agent.agentKey, c.hash);
-      const cur =
-        byFolder.get(c.title) ?? {
-          folderPath: c.title,
-          content: "",
-          updatedAt: 0,
-          revisions: 0,
-        };
-      cur.revisions += entries.length;
-      for (const e of entries) {
-        if (e.timestamp > cur.updatedAt) {
-          cur.updatedAt = e.timestamp;
-          cur.content = e.content;
-          cur.agentKey = c.agent_key || agent.agentKey;
-          cur.conversationHash = c.hash;
-        }
+/** Newest-revision-wins merge of scanned conversations into folders. */
+function foldScans(scans: ScannedNotes[], byFolder: Map<string, WorkspaceMemory>) {
+  for (const { agentKey, conv: c, entries } of scans) {
+    const title = c.title!;
+    const cur =
+      byFolder.get(title) ?? {
+        folderPath: title,
+        content: "",
+        updatedAt: 0,
+        revisions: 0,
+      };
+    cur.revisions += entries.length;
+    for (const e of entries) {
+      if (e.timestamp > cur.updatedAt) {
+        cur.updatedAt = e.timestamp;
+        cur.content = e.content;
+        cur.agentKey = c.agent_key || agentKey;
+        cur.conversationHash = c.hash;
       }
-      byFolder.set(c.title, cur);
     }
+    byFolder.set(title, cur);
   }
-  return [...byFolder.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+/** Session cache of the last NON-EMPTY list - the full scan is the app's
+ *  heaviest read, so the Memory page shows the last known list instantly
+ *  and lets the fresh scan replace it. Empty results are never cached: an
+ *  empty answer during records warmup must not masquerade as "no
+ *  projects" on the next visit. */
+let lastScan: WorkspaceMemory[] | null = null;
+export function cachedWorkspaceMemories(): WorkspaceMemory[] | null {
+  return lastScan;
+}
+
+/** The current memory for one folder - newest revision across all chains. */
+export async function getWorkspaceMemory(folderPath: string): Promise<WorkspaceMemory> {
+  const agents = await provisionedAgents();
+  const scans = await Promise.all(
+    agents.map((a) => scanAgentProjectNotes(a.agentKey, folderPath)),
+  );
+  const byFolder = new Map<string, WorkspaceMemory>();
+  foldScans(scans.flat(), byFolder);
+  return (
+    byFolder.get(folderPath) ?? {
+      folderPath,
+      content: "",
+      updatedAt: 0,
+      revisions: 0,
+    }
+  );
+}
+
+/** All folders that have memory anywhere (Memory page's Projects list). */
+export async function listWorkspaceMemories(): Promise<WorkspaceMemory[]> {
+  const agents = await provisionedAgents();
+  const scans = await Promise.all(
+    agents.map((a) => scanAgentProjectNotes(a.agentKey)),
+  );
+  const byFolder = new Map<string, WorkspaceMemory>();
+  foldScans(scans.flat(), byFolder);
+  const out = [...byFolder.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+  if (out.length > 0) lastScan = out;
+  return out;
 }
 
 /** Write a new revision. `writer` = the AI whose chain takes it (the one in

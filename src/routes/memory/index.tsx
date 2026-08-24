@@ -15,6 +15,7 @@ import {
 } from "@builder.io/qwik";
 import { LuFolderOpen } from "@qwikest/icons/lucide";
 import {
+  cachedWorkspaceMemories,
   listWorkspaceMemories,
   type WorkspaceMemory,
 } from "../../utils/workspaceMemory";
@@ -291,7 +292,13 @@ export default component$(() => {
     if (tab !== "workspaces" || reopened) return;
     let alive = true;
     cleanup(() => (alive = false));
-    workspacesLoading.value = true;
+    // Last known list first, instantly - the fresh scan replaces it when
+    // it lands. Loading UI only when there is nothing to show meanwhile.
+    const cached = cachedWorkspaceMemories();
+    if (cached && workspaceMemories.value.length === 0) {
+      workspaceMemories.value = cached;
+    }
+    workspacesLoading.value = workspaceMemories.value.length === 0;
     try {
       // Project memories read through the conductor - an early empty is
       // "not yet", not "none" (readThroughWarmup holds the line).
@@ -428,11 +435,14 @@ export default component$(() => {
                 by all your AIs, yours to edit.
               </p>
               {workspacesLoading.value && (
-                <p class="text-sm text-[var(--text-muted)]">
-                  {workspacesWarming.value
-                    ? "Your records are warming up - just after launch, project notes take a moment to be ready."
-                    : "Loading from your records.."}
-                </p>
+                <div class="flex items-start gap-3 py-2 text-sm text-[var(--text-muted)]">
+                  <span class="mt-0.5 inline-block h-4 w-4 flex-shrink-0 rounded-full border-2 border-[var(--border-subtle)] border-t-[var(--text-secondary)] animate-spin" />
+                  <span>
+                    {workspacesWarming.value
+                      ? "Your records are warming up - just after launch, project notes take a moment to be ready."
+                      : "Reading every AI's records - a long history takes a moment.."}
+                  </span>
+                </div>
               )}
               {!workspacesLoading.value && workspaceMemories.value.length === 0 && (
                 <div class="p-5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)]">

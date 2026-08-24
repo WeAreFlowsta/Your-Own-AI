@@ -767,17 +767,22 @@ impl HolochainManager {
 
         let mut last_err = String::new();
         for attempt in 0..3 {
-            match client
-                .call_zome(
-                    ZomeCallTarget::RoleName(RoleName::from(dna::ROLE_NAME)),
-                    ZomeName::from(zome_name),
-                    FunctionName::from(fn_name),
-                    payload.clone(),
-                )
-                .await
-            {
-                Ok(result) => return Ok(result),
-                Err(e) => {
+            // Bounded wait: a hung conductor websocket must surface as an
+            // error, not freeze every reader queued behind this chain's
+            // lock (and the UI above them) forever.
+            let call = client.call_zome(
+                ZomeCallTarget::RoleName(RoleName::from(dna::ROLE_NAME)),
+                ZomeName::from(zome_name),
+                FunctionName::from(fn_name),
+                payload.clone(),
+            );
+            match tokio::time::timeout(std::time::Duration::from_secs(60), call).await {
+                Err(_) => {
+                    last_err = "no answer from the conductor within 60s".to_string();
+                    break;
+                }
+                Ok(Ok(result)) => return Ok(result),
+                Ok(Err(e)) => {
                     last_err = format!("{}", e);
                     if attempt < 2 && last_err.contains("head has moved") {
                         log::warn!(

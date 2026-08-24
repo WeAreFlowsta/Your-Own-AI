@@ -8,6 +8,7 @@ import {
   MEMORY_MAX_LINES,
 } from "../utils/workspaceMemory";
 import { getLocalCustomAis } from "../utils/localAiStorage";
+import { emptyMayBeWarmup } from "../utils/recordsWarmup";
 
 /**
  * The workspace's memory - what this folder's work has taught the AIs -
@@ -29,6 +30,7 @@ export const WorkspaceMemoryModal = component$<{
   const dirty = useSignal(false);
   const saving = useSignal(false);
   const slowLoad = useSignal(false);
+  const warmupLikely = useSignal(false);
 
   // useVisibleTask$, NOT useTask$: an async useTask$ blocks the first
   // render until it resolves, so the modal painted NOTHING while the
@@ -42,8 +44,13 @@ export const WorkspaceMemoryModal = component$<{
     dirty.value = false;
     editingIdx.value = null;
     adding.value = false;
-    // Patience message once the read outlives a normal one.
-    const slowTimer = setTimeout(() => (slowLoad.value = true), 4000);
+    // Patience message once the read outlives a normal one. Whether it
+    // blames warmup is decided by the warmup window, not the delay - a
+    // slow scan hours after launch must not claim records are warming.
+    const slowTimer = setTimeout(() => {
+      slowLoad.value = true;
+      warmupLikely.value = emptyMayBeWarmup();
+    }, 4000);
     cleanup(() => clearTimeout(slowTimer));
     try {
       const m = await getWorkspaceMemory(folder);
@@ -128,7 +135,9 @@ export const WorkspaceMemoryModal = component$<{
               <span class="mt-0.5 inline-block h-4 w-4 flex-shrink-0 rounded-full border-2 border-[var(--border-subtle)] border-t-[var(--text-secondary)] animate-spin" />
               <span>
                 {slowLoad.value
-                  ? "Your records are warming up - just after launch, project notes take a moment to be ready."
+                  ? warmupLikely.value
+                    ? "Your records are warming up - just after launch, project notes take a moment to be ready."
+                    : "Still reading - your records hold a lot of history.."
                   : "Loading from your records.."}
               </span>
             </div>
