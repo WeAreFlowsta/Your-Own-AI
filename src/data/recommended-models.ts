@@ -1074,7 +1074,7 @@ export const modelFamilies: ModelFamily[] = [
     contextWindow: 262144,
     released: '2026-08-20',
     name: 'Ornith 1.5',
-    description: 'DeepReinforce\'s agentic coding model, self-improved with RL - 1.5 extends the loop to generating its own training tasks. State-of-the-art among open coders at its size, purpose-built for terminal coding agents and tool use. The 9B runs on modest machines; the 35B adds vision.',
+    description: 'DeepReinforce\'s agentic coding model, self-improved with RL - 1.5 extends the loop to generating its own training tasks. State-of-the-art among open coders at its size, purpose-built for terminal coding agents and tool use. The 9B runs on modest machines; the 35B is a mixture-of-experts (3B active per token) that runs fast for its size and adds vision.',
     category: 'quality',
     recommended: false,
     capabilities: ['coding', 'agentic', 'reasoning'],
@@ -1101,7 +1101,7 @@ export const modelFamilies: ModelFamily[] = [
         quantization: 'Q4_K_M'
       },
       {
-        parameterCount: '35B',
+        parameterCount: '35B-A3B (MoE)',
         size: 21.7,
         minRAM: 32,
         downloadUrl: 'https://huggingface.co/ornith-ai/Ornith-1.5-35B-A3B-GGUF/resolve/ca1a0fa530357832ed63c1f98932a04731c2e8c1/Ornith-1.5-35B-Q4_K_M.gguf',
