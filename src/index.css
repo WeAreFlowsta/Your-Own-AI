@@ -938,3 +938,12 @@ main {
 .animate-pulse {
   animation-timing-function: steps(4, end);
 }
+
+/* Gentle appearance for rotating status hints (model loading). */
+@keyframes yoai-fade-in {
+  from { opacity: 0; }
+  to { opacity: 0.7; }
+}
+.animate-fade-in {
+  animation: yoai-fade-in 400ms ease-in;
+}
