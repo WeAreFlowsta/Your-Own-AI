@@ -3860,13 +3860,13 @@ mod load_failure_classification_tests {
     fn model_rejection_is_classified_not_crashed() {
         // The exact field line (Nemotron 3.5, 08-24): engine rejects the file.
         let l = "0.00.377.544 E llama_model_load: error loading model: check_tensor_dims: tensor 'blk.5.ssm_in.weight' not found";
-        assert!(looks_like_model_rejected(l));
+        assert!(super::looks_like_model_rejected(l));
         assert!(!looks_like_oom(l));
-        assert!(looks_like_device_unsupported(l).is_none());
+        assert!(super::looks_like_device_unsupported(l).is_none());
         // A device verdict is NOT a file rejection.
-        assert!(!looks_like_model_rejected("error loading model: Unsupported device"));
+        assert!(!super::looks_like_model_rejected("error loading model: Unsupported device"));
         // Healthy load lines don't match.
-        assert!(!looks_like_model_rejected("srv load_model: loading model 'a.gguf'"));
+        assert!(!super::looks_like_model_rejected("srv load_model: loading model 'a.gguf'"));
         assert!(!looks_like_open_failure(l));
     }
 }
