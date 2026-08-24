@@ -1315,7 +1315,9 @@ pub async fn start_llama_server(
     // recompute across agent turns), and any serving failure this session
     // sends the model back to llama.cpp instead of looping.
     let force_gguf = FORCE_GGUF_NEXT_LOAD.swap(false, std::sync::atomic::Ordering::SeqCst);
-    if !force_gguf {
+    // with_vision: image turns need the projector, which only llama.cpp
+    // pairs - vision stays on Metal in the MLX preview (plan §0).
+    if !force_gguf && !with_vision {
         if let Some(ref f) = model_filename {
             if let Some(mlx_dir) = crate::mlx_artifacts::serving_dir_for(&app_handle, f) {
                 return start_mlx_server(&app_handle, &state, &mut is_running, f, &mlx_dir).await;

@@ -37,6 +37,9 @@ export interface ModelArtifact {
   sizeGb: number;
   /** Source repo for repo-shaped formats (mlx / safetensors). */
   hfRepo?: string;
+  /** Pinned repo revision (commit sha) - repo-shaped downloads fetch the
+   *  file list and every file AT this revision, never a moving branch. */
+  revision?: string;
   quantization?: string;
 }
 
@@ -448,6 +451,18 @@ export const modelFamilies: ModelFamily[] = [
         downloadUrl:
           'https://huggingface.co/unsloth/Muse-Glimmer-30B-GGUF/resolve/2d6f03e44141daeb68c0f2c181f23338acc3af7e/Muse-Glimmer-30B-UD-Q4_K_XL.gguf',
         filename: 'Muse-Glimmer-30B-UD-Q4_K_XL.gguf',
+        // MLX artifact (preview): revision-pinned; verified via the
+        // model-addition pre-flight 2026-08-24.
+        artifacts: {
+          mlx: {
+            filename: 'mlx-Muse-Glimmer-30B-4bit',
+            downloadUrl: 'https://huggingface.co/mlx-community/Muse-Glimmer-30B-4bit',
+            hfRepo: 'mlx-community/Muse-Glimmer-30B-4bit',
+            revision: '3e7677d7a40d348a3daba263a2b1c0aa41910710',
+            sizeGb: 19.4,
+            quantization: '4-bit',
+          },
+        },
         quantization: 'Q4_K_XL'
       }
     ]
@@ -480,6 +495,18 @@ export const modelFamilies: ModelFamily[] = [
         // installs, capability tiers, and routing key off it.
         downloadUrl: 'https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/313447f257f7ebde0b968e4778feef774546ed81/Qwen3.8-27B-UD-Q4_K_M.gguf',
         filename: 'Qwen3.8-27B-Q4_K_M.gguf',
+        // MLX artifact (preview): revision-pinned; verified via the
+        // model-addition pre-flight 2026-08-24.
+        artifacts: {
+          mlx: {
+            filename: 'mlx-Qwen3.8-27B-4bit',
+            downloadUrl: 'https://huggingface.co/mlx-community/Qwen3.8-27B-4bit',
+            hfRepo: 'mlx-community/Qwen3.8-27B-4bit',
+            revision: '3e6447f082e89cc7f0bc6e5441afd38dfce760ff',
+            sizeGb: 16.1,
+            quantization: '4-bit',
+          },
+        },
         quantization: 'Q4_K_M'
       }
     ]
@@ -524,6 +551,18 @@ export const modelFamilies: ModelFamily[] = [
         minRAM: 32,
         downloadUrl: 'https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/edc6f12e7bb90602ca1d34faecbec9844137b7fe/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf',
         filename: 'Qwen3.6-35B-A3B-UD-Q4_K_M.gguf',
+        // MLX artifact (preview): revision-pinned; verified via the
+        // model-addition pre-flight 2026-08-24.
+        artifacts: {
+          mlx: {
+            filename: 'mlx-Qwen3.6-35B-A3B-4bit-DWQ',
+            downloadUrl: 'https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit-DWQ',
+            hfRepo: 'mlx-community/Qwen3.6-35B-A3B-4bit-DWQ',
+            revision: '73c707af4243243b18193444467872d20cff9399',
+            sizeGb: 20.7,
+            quantization: '4-bit',
+          },
+        },
         quantization: 'Q4_K_M'
       }
     ]
@@ -562,6 +601,18 @@ export const modelFamilies: ModelFamily[] = [
         minRAM: 16,
         downloadUrl: 'https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/e998672c8018dd704e347d3b6843c112547244d1/gemma-4-E4B_q4_0-it.gguf',
         filename: 'gemma-4-E4B_q4_0-it.gguf',
+        // MLX artifact (preview): revision-pinned; verified via the
+        // model-addition pre-flight 2026-08-24.
+        artifacts: {
+          mlx: {
+            filename: 'mlx-gemma-4-e4b-it-OptiQ-4bit',
+            downloadUrl: 'https://huggingface.co/mlx-community/gemma-4-e4b-it-OptiQ-4bit',
+            hfRepo: 'mlx-community/gemma-4-e4b-it-OptiQ-4bit',
+            revision: '6be2eaf50f08b88b5dadca0f4a02c0a0880e7bd3',
+            sizeGb: 6.6,
+            quantization: '4-bit',
+          },
+        },
         quantization: 'Q4_0 (QAT)'
       },
       {
@@ -591,6 +642,18 @@ export const modelFamilies: ModelFamily[] = [
         contextWindow: 262144,
         downloadUrl: 'https://huggingface.co/google/gemma-4-26B-A4B-it-qat-q4_0-gguf/resolve/8afd43710afbb87c711f33f7e7c11b1434a9fa1a/gemma-4-26B_q4_0-it.gguf',
         filename: 'gemma-4-26B_q4_0-it.gguf',
+        // MLX artifact (preview): revision-pinned; verified via the
+        // model-addition pre-flight 2026-08-24.
+        artifacts: {
+          mlx: {
+            filename: 'mlx-gemma-4-26b-a4b-it-4bit',
+            downloadUrl: 'https://huggingface.co/mlx-community/gemma-4-26b-a4b-it-4bit',
+            hfRepo: 'mlx-community/gemma-4-26b-a4b-it-4bit',
+            revision: '0d77464eeb233a2da68ebf9d7dc4edaac7db956d',
+            sizeGb: 15.4,
+            quantization: '4-bit',
+          },
+        },
         quantization: 'Q4_0 (QAT)'
       },
       {
@@ -623,6 +686,18 @@ export const modelFamilies: ModelFamily[] = [
         minRAM: 8,
         downloadUrl: 'https://huggingface.co/unsloth/Ministral-3-3B-Instruct-2512-GGUF/resolve/7f116d3df13bc7d3820b2ff1d5c273133b5accaa/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf',
         filename: 'Ministral-3-3B-Instruct-2512-Q4_K_M.gguf',
+        // MLX artifact (preview): revision-pinned; verified via the
+        // model-addition pre-flight 2026-08-24.
+        artifacts: {
+          mlx: {
+            filename: 'mlx-Ministral-3-3B-Instruct-2512-4bit',
+            downloadUrl: 'https://huggingface.co/mlx-community/Ministral-3-3B-Instruct-2512-4bit',
+            hfRepo: 'mlx-community/Ministral-3-3B-Instruct-2512-4bit',
+            revision: 'a962dcb09eee4169c890e544c9eb938f1113fdee',
+            sizeGb: 2.8,
+            quantization: '4-bit',
+          },
+        },
         quantization: 'Q4_K_M'
       },
       {
@@ -987,6 +1062,18 @@ export const modelFamilies: ModelFamily[] = [
         minRAM: 16,
         downloadUrl: 'https://huggingface.co/ornith-ai/Ornith-1.5-9B-GGUF/resolve/0d64ca9c7679dac7d7e4ef89ec30318a3741e337/Ornith-1.5-9B-Q4_K_M.gguf',
         filename: 'Ornith-1.5-9B-Q4_K_M.gguf',
+        // MLX artifact (preview): revision-pinned; verified via the
+        // model-addition pre-flight 2026-08-24.
+        artifacts: {
+          mlx: {
+            filename: 'mlx-Ornith-1.5-9B-MLX-4bit',
+            downloadUrl: 'https://huggingface.co/ornith-ai/Ornith-1.5-9B-MLX-4bit',
+            hfRepo: 'ornith-ai/Ornith-1.5-9B-MLX-4bit',
+            revision: 'a48173b246ac705be75c05bedf1a0666db522d53',
+            sizeGb: 5.1,
+            quantization: '4-bit',
+          },
+        },
         quantization: 'Q4_K_M'
       },
       {
@@ -995,6 +1082,18 @@ export const modelFamilies: ModelFamily[] = [
         minRAM: 32,
         downloadUrl: 'https://huggingface.co/ornith-ai/Ornith-1.5-35B-A3B-GGUF/resolve/ca1a0fa530357832ed63c1f98932a04731c2e8c1/Ornith-1.5-35B-Q4_K_M.gguf',
         filename: 'Ornith-1.5-35B-Q4_K_M.gguf',
+        // MLX artifact (preview): revision-pinned; verified via the
+        // model-addition pre-flight 2026-08-24.
+        artifacts: {
+          mlx: {
+            filename: 'mlx-Ornith-1.5-35B-A3B-MLX-4bit',
+            downloadUrl: 'https://huggingface.co/ornith-ai/Ornith-1.5-35B-A3B-MLX-4bit',
+            hfRepo: 'ornith-ai/Ornith-1.5-35B-A3B-MLX-4bit',
+            revision: '19504d912fa8fc7622bf6b1de3db5d5d890b1f02',
+            sizeGb: 19.5,
+            quantization: '4-bit',
+          },
+        },
         quantization: 'Q4_K_M'
       }
     ]
@@ -1018,6 +1117,18 @@ export const modelFamilies: ModelFamily[] = [
         minRAM: 32,
         downloadUrl: 'https://huggingface.co/unsloth/GLM-4.7-Flash-GGUF/resolve/bc383b21e43b880a69b6a0a3d41f26710c3608f3/GLM-4.7-Flash-Q4_K_M.gguf',
         filename: 'GLM-4.7-Flash-Q4_K_M.gguf',
+        // MLX artifact (preview): revision-pinned; verified via the
+        // model-addition pre-flight 2026-08-24.
+        artifacts: {
+          mlx: {
+            filename: 'mlx-GLM-4.7-Flash-4bit',
+            downloadUrl: 'https://huggingface.co/mlx-community/GLM-4.7-Flash-4bit',
+            hfRepo: 'mlx-community/GLM-4.7-Flash-4bit',
+            revision: '1454cffb1a21737e162f508e5bc70be9def89276',
+            sizeGb: 16.9,
+            quantization: '4-bit',
+          },
+        },
         quantization: 'Q4_K_M'
       }
     ]
@@ -1041,6 +1152,18 @@ export const modelFamilies: ModelFamily[] = [
         minRAM: 32,
         downloadUrl: 'https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/resolve/b17cb02dd882d5b6ab62fc777ad2995f19668350/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf',
         filename: 'Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf',
+        // MLX artifact (preview): revision-pinned; verified via the
+        // model-addition pre-flight 2026-08-24.
+        artifacts: {
+          mlx: {
+            filename: 'mlx-Qwen3-Coder-30B-A3B-Instruct-4bit-DWQ',
+            downloadUrl: 'https://huggingface.co/mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit-DWQ',
+            hfRepo: 'mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit-DWQ',
+            revision: 'cfcade7221ccd128681961446e5f7906c08cae55',
+            sizeGb: 17.2,
+            quantization: '4-bit',
+          },
+        },
         quantization: 'Q4_K_M'
       }
     ]
@@ -1171,6 +1294,18 @@ export const modelFamilies: ModelFamily[] = [
         downloadUrl:
           'https://huggingface.co/unsloth/medgemma-1.5-4b-it-GGUF/resolve/f2b0c97fc20d9de0d4dd0d299a098943b8b9a96f/medgemma-1.5-4b-it-Q4_K_M.gguf',
         filename: 'medgemma-1.5-4b-it-Q4_K_M.gguf',
+        // MLX artifact (preview): revision-pinned; verified via the
+        // model-addition pre-flight 2026-08-24.
+        artifacts: {
+          mlx: {
+            filename: 'mlx-medgemma-1.5-4b-it-4bit',
+            downloadUrl: 'https://huggingface.co/mlx-community/medgemma-1.5-4b-it-4bit',
+            hfRepo: 'mlx-community/medgemma-1.5-4b-it-4bit',
+            revision: '762746b7a72b0b68dd8fa3f9aea5dc3980674d23',
+            sizeGb: 3.4,
+            quantization: '4-bit',
+          },
+        },
         quantization: 'Q4_K_M',
       },
       {
@@ -1180,6 +1315,18 @@ export const modelFamilies: ModelFamily[] = [
         downloadUrl:
           'https://huggingface.co/unsloth/medgemma-27b-it-GGUF/resolve/d61d7bf8e8a3f2e9434424b9e0fb4d721c2e4fd3/medgemma-27b-it-Q4_K_M.gguf',
         filename: 'medgemma-27b-it-Q4_K_M.gguf',
+        // MLX artifact (preview): revision-pinned; verified via the
+        // model-addition pre-flight 2026-08-24.
+        artifacts: {
+          mlx: {
+            filename: 'mlx-medgemma-27b-it-4bit',
+            downloadUrl: 'https://huggingface.co/mlx-community/medgemma-27b-it-4bit',
+            hfRepo: 'mlx-community/medgemma-27b-it-4bit',
+            revision: 'f57d2d648d28950b1bc7abd6e1b7b06aff0e183a',
+            sizeGb: 16.9,
+            quantization: '4-bit',
+          },
+        },
         quantization: 'Q4_K_M',
       },
     ],
@@ -1270,6 +1417,18 @@ export const modelFamilies: ModelFamily[] = [
         minRAM: 16,
         downloadUrl: 'https://huggingface.co/empero-ai/Qwythos-9B-v2-GGUF/resolve/ad91e8216a35ffc6365129d8d89857ba5d051689/Qwythos-9B-v2-Q4_K_M.gguf',
         filename: 'Qwythos-9B-v2-Q4_K_M.gguf',
+        // MLX artifact (preview): revision-pinned; verified via the
+        // model-addition pre-flight 2026-08-24.
+        artifacts: {
+          mlx: {
+            filename: 'mlx-Qwythos-9B-v2-OptiQ-4bit',
+            downloadUrl: 'https://huggingface.co/mlx-community/Qwythos-9B-v2-OptiQ-4bit',
+            hfRepo: 'mlx-community/Qwythos-9B-v2-OptiQ-4bit',
+            revision: '9c0cbe23617e22620232b2b4cfe2d4bcada2921d',
+            sizeGb: 7.1,
+            quantization: '4-bit',
+          },
+        },
         quantization: 'Q4_K_M'
       }
     ]
