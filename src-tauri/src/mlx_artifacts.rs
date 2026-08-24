@@ -156,11 +156,64 @@ fn sha256_of(path: &std::path::Path) -> Result<String, String> {
 /// restarting. Emits "model-download-progress" under the ARTIFACT DIR
 /// name with aggregate percent, alongside the per-file events every file
 /// emits under its own path.
+fn map_path(app: &AppHandle) -> Option<PathBuf> {
+    use tauri::Manager;
+    app.path().app_data_dir().ok().map(|d| d.join("mlx-map.json"))
+}
+
+fn read_map(app: &AppHandle) -> std::collections::HashMap<String, String> {
+    map_path(app)
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+/// Remember which GGUF model an artifact upgrades - the loader's lookup key.
+fn record_mapping(app: &AppHandle, gguf_filename: &str, repo: &str) {
+    let mut map = read_map(app);
+    map.insert(gguf_filename.to_string(), repo.to_string());
+    if let Some(p) = map_path(app) {
+        let _ = std::fs::write(p, serde_json::to_vec_pretty(&map).unwrap_or_default());
+    }
+}
+
+/// Models whose MLX serving failed this session - retries land on
+/// llama.cpp instead of looping the same failure. Cleared on restart.
+fn mlx_failed_set() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static S: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    S.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+pub fn note_mlx_serving_failed(gguf_filename: &str) {
+    if let Ok(mut s) = mlx_failed_set().lock() {
+        s.insert(gguf_filename.to_string());
+    }
+}
+
+/// The MLX artifact dir that should SERVE this GGUF-named model's chat
+/// turns right now: platform supported, engine installed, an artifact
+/// mapped + complete, and no failure this session. None = llama.cpp.
+pub fn serving_dir_for(app: &AppHandle, gguf_filename: &str) -> Option<PathBuf> {
+    if !crate::mlx_engine::supported() {
+        return None;
+    }
+    crate::mlx_engine::swiftlm_binary(app)?;
+    if mlx_failed_set().lock().ok()?.contains(gguf_filename) {
+        return None;
+    }
+    let repo = read_map(app).get(gguf_filename)?.to_string();
+    let dir = artifact_dir(app, &repo).ok()?;
+    artifact_complete(&dir).then_some(dir)
+}
+
 #[tauri::command]
 pub async fn download_mlx_artifact(
     app: AppHandle,
     repo: String,
     revision: String,
+    // for_model: the GGUF filename this artifact upgrades (the row's identity).
+    for_model: Option<String>,
 ) -> Result<(), String> {
     let dir = artifact_dir(&app, &repo)?;
     let dir_name = artifact_dir_name(&repo);
@@ -241,6 +294,9 @@ pub async fn download_mlx_artifact(
     )
     .map_err(|e| format!("cannot write manifest: {e}"))?;
 
+    if let Some(ref gguf) = for_model {
+        record_mapping(&app, gguf, &repo);
+    }
     let _ = app.emit(
         "model-download-complete",
         serde_json::json!({ "filename": dir_name }),

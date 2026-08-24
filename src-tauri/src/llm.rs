@@ -1174,6 +1174,96 @@ pub fn is_model_too_big(filename: String) -> bool {
         .unwrap_or(false)
 }
 
+/// Set by agent/project code paths before a load: the next chat-server
+/// start must be llama.cpp even when an MLX artifact exists (v1 rule:
+/// MLX serves chat turns only). Loads are single-slot serialized, so a
+/// one-shot flag is race-safe in practice.
+pub static FORCE_GGUF_NEXT_LOAD: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Spawn SwiftLM serving `mlx_dir` on the chat port. Same single slot,
+/// same health probe, same client - a different engine underneath.
+async fn start_mlx_server(
+    app_handle: &AppHandle,
+    state: &State<'_, LLMState>,
+    is_running: &mut tokio::sync::MutexGuard<'_, bool>,
+    model_name: &str,
+    mlx_dir: &std::path::Path,
+) -> Result<(), String> {
+    let bin = crate::mlx_engine::swiftlm_binary(app_handle)
+        .ok_or("MLX engine binary missing")?;
+    let models_dir = get_models_dir(app_handle)?;
+    // Conservative fixed context for the preview - the context-fit gate
+    // stays honest without trusting an unprobed server default. Reading
+    // the real window from the serving model is a spike follow-up.
+    CURRENT_CTX_SIZE.store(8192, std::sync::atomic::Ordering::Relaxed);
+    log::info!(
+        "[LLM] spawning chat server (MLX engine) for {} from {}",
+        model_name,
+        mlx_dir.display()
+    );
+    let t_spawn = std::time::Instant::now();
+    let (mut rx, child) = app_handle
+        .shell()
+        .command(&bin)
+        .current_dir(models_dir)
+        .args([
+            "--model",
+            &mlx_dir.display().to_string(),
+            "--port",
+            CHAT_PORT,
+        ])
+        .spawn()
+        .map_err(|e| format!("Failed to start the MLX engine: {e}"))?;
+    *state.server_process.lock().await = Some(child);
+    **is_running = true;
+    *state.spawned_backend.lock().await = Some("mlx".to_string());
+    let name_for_log = model_name.to_string();
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            match event {
+                tauri_plugin_shell::process::CommandEvent::Stdout(line)
+                | tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
+                    log::info!("[swiftlm] {}", String::from_utf8_lossy(&line).trim_end());
+                }
+                tauri_plugin_shell::process::CommandEvent::Terminated(t) => {
+                    log::warn!("[swiftlm] process terminated: {:?}", t.code);
+                    break;
+                }
+                _ => {}
+            }
+        }
+    });
+    // Health-wait: SwiftLM downloads nothing (the artifact is local), so
+    // readiness is load time only. 120 x 1s covers big models on slow SSDs.
+    for _ in 0..120 {
+        if chat_server_health_ok().await {
+            log::info!(
+                "[LLM] model ready in {:.1} s (MLX engine)",
+                t_spawn.elapsed().as_secs_f64()
+            );
+            return Ok(());
+        }
+        // A dead child means it will never come healthy.
+        if !**is_running {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    // Failed to serve: remember, tear down, and tell the caller to retry -
+    // the retry lands on llama.cpp (the memo makes serving_dir_for say no).
+    crate::mlx_artifacts::note_mlx_serving_failed(&name_for_log);
+    if let Some(child) = state.server_process.lock().await.take() {
+        let _ = child.kill();
+    }
+    **is_running = false;
+    *state.spawned_backend.lock().await = None;
+    Err(format!(
+        "The MLX engine couldn't serve {} - it will use the standard engine instead. Try the request again.",
+        name_for_log
+    ))
+}
+
 #[tauri::command]
 pub async fn start_llama_server(
     app_handle: AppHandle,
@@ -1217,6 +1307,21 @@ pub async fn start_llama_server(
     }
 
     let models_dir = get_models_dir(&app_handle)?;
+
+    // ── MLX (preview) ────────────────────────────────────────────────
+    // A CHAT-context load of a model with a complete MLX artifact serves
+    // via SwiftLM instead of llama.cpp. Agent/project loads set
+    // FORCE_GGUF_NEXT_LOAD first (the KV-cache-rewind scar: MLX servers
+    // recompute across agent turns), and any serving failure this session
+    // sends the model back to llama.cpp instead of looping.
+    let force_gguf = FORCE_GGUF_NEXT_LOAD.swap(false, std::sync::atomic::Ordering::SeqCst);
+    if !force_gguf {
+        if let Some(ref f) = model_filename {
+            if let Some(mlx_dir) = crate::mlx_artifacts::serving_dir_for(&app_handle, f) {
+                return start_mlx_server(&app_handle, &state, &mut is_running, f, &mlx_dir).await;
+            }
+        }
+    }
 
     // Determine safe context size based on available system RAM
     let sys = sysinfo::System::new_with_specifics(
@@ -3629,7 +3734,17 @@ pub async fn stream_chat_completion(
                                 if usage.tokens_per_second.is_none() {
                                     usage.tokens_per_second = server_tps;
                                 }
-                                if model_name != "remote" {
+                                // MLX-served turns must not stamp the GGUF
+                                // name's measured speed - routing ranks the
+                                // llama.cpp artifact by it. (Per-artifact
+                                // stats are the follow-up.)
+                                let mlx_serving = app
+                                    .state::<LLMState>()
+                                    .spawned_backend
+                                    .try_lock()
+                                    .map(|b| b.as_deref() == Some("mlx"))
+                                    .unwrap_or(false);
+                                if model_name != "remote" && !mlx_serving {
                                     if let Some(tps) = usage.tokens_per_second {
                                         crate::model_stats::record_speed(&app, &model_name, usage.completion_tokens, tps);
                                     }
@@ -3802,7 +3917,13 @@ pub async fn stream_chat_completion(
         if usage.tokens_per_second.is_none() {
             usage.tokens_per_second = server_tps;
         }
-        if model_name != "remote" {
+        let mlx_serving = app
+            .state::<LLMState>()
+            .spawned_backend
+            .try_lock()
+            .map(|b| b.as_deref() == Some("mlx"))
+            .unwrap_or(false);
+        if model_name != "remote" && !mlx_serving {
             if let Some(tps) = usage.tokens_per_second {
                 crate::model_stats::record_speed(&app, &model_name, usage.completion_tokens, tps);
             }

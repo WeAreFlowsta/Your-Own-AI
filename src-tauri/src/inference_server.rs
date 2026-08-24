@@ -582,9 +582,37 @@ async fn chat_completions(
     if online_id.is_none() {
         let state = app.state::<crate::llm::LLMState>();
         let current = state.current_model.lock().await.clone();
-        if current.as_deref() != Some(ai.model.as_str()) {
+        // v1 MLX rule: agent/project turns are served by llama.cpp even
+        // when the model has an MLX artifact (the KV-rewind scar). A same-
+        // model agent turn arriving while SwiftLM serves must flip engines.
+        let mlx_serving = state
+            .spawned_backend
+            .try_lock()
+            .map(|b| b.as_deref() == Some("mlx"))
+            .unwrap_or(false);
+        // Recomputed here (the earlier binding lives in the auto-routing
+        // scope): every agent-shaped call carries the mode header or an
+        // :agent/:plan/:summary suffix.
+        let agent_turn = header_str(&headers, "x-your-own-ai-mode").as_deref() == Some("agent")
+            || model.trim().ends_with(":agent")
+            || model.trim().ends_with(":plan")
+            || model.trim().ends_with(":summary");
+        let engine_flip = agent_turn && mlx_serving;
+        if current.as_deref() != Some(ai.model.as_str()) || engine_flip {
+            if agent_turn {
+                crate::llm::FORCE_GGUF_NEXT_LOAD.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            if engine_flip && current.as_deref() == Some(ai.model.as_str()) {
+                // Same model, wrong engine: stop the MLX server so the
+                // load below actually restarts instead of "already loaded".
+                if let Some(child) = state.server_process.lock().await.take() {
+                    let _ = child.kill();
+                }
+                *state.is_server_running.lock().await = false;
+                *state.current_model.lock().await = None;
+            }
             log::info!(
-                "[inference] switching model for AI '{}': {:?} -> {}",
+                "[inference] switching model for AI '{}': {:?} -> {} (engine_flip: {engine_flip})",
                 ai.name,
                 current,
                 ai.model
