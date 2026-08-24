@@ -5,6 +5,37 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 
 ## [0.6.0] - 2026-08-23
 
+Your AIs know you better, run bigger models on the machine you already
+have, and choose between them by what actually runs well on it.
+
+### Highlights
+
+- **Your AIs know you - and you can see how.** Each AI has one memory,
+  what every AI knows about you lives in one place, and your AIs carry a
+  short portrait of you written on your device - never online - that
+  rewrites itself as your memory changes. See *Memory*.
+- **Bigger models on the machine you already have.** Mixture-of-experts
+  models split between your graphics card and main memory - measured 4.5x
+  faster on an 8 GB card - and the catalog now has a mixture-of-experts
+  for every size of machine, from a 4.8 GB file for 12 GB laptops to
+  753B for workstations. See *Big mixture-of-experts models* and *New
+  models*.
+- **Routing that measures, not assumes.** On your device, the app times
+  how fast each model actually runs on this computer as you use it, and
+  picks by those numbers - not a spec sheet. Online models follow your
+  preferences instead. See *Routing*.
+- **It fails politely.** The first-run recommendation sizes to your whole
+  machine, a load that cannot succeed is refused with a plain sentence,
+  and the app never crash-loops on a model that took it down. See *The
+  app fails politely*.
+- **Models live where you say.** Store models on any drive, with free
+  space checked before every download. See *Model storage*.
+- **Records that tell the truth.** A conversation is in your records the
+  moment you send; a stopped reply is kept and marked. See *Your
+  records*.
+- **Apple Silicon: MLX engine, as a preview.** Optional, per model, chats
+  only, no speed promise. See *Apple Silicon*.
+
 ### A damaged model file can't take the app down
 
 - A model file that is incomplete or corrupted (a browser download that
@@ -75,6 +106,20 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   model, for 32 GB machines) and **Ling-mini 2.0** (Ant Group - 16B-A1.4B,
   MIT, for 24 GB machines). LFM2.5 asks you to accept Liquid AI's license
   once before its first download.
+
+### Apple Silicon: MLX engine (preview)
+- Macs with Apple Silicon can add an optional MLX engine (Settings >
+  Engines, about 50 MB, checked against a pinned release before it runs)
+  and then fetch MLX versions of supported models - 15 in the catalog,
+  from Ministral 3B to Qwen 3.6 35B - with "Get the MLX version" on a
+  downloaded model's row, and an MLX chip on catalog cards once the engine
+  is installed. Chats run on MLX once a model's MLX version is installed;
+  project work, images, memory and everything else stay on the standard
+  engine, and your existing model file stays. Whether MLX is faster
+  depends on your Mac - the app makes no promise, and nothing changes
+  unless you install it. Remove on the engine card puts everything back.
+- MLX downloads resume file by file, show live progress, and pick back up
+  after navigating away or restarting the app.
 
 ### Model storage
 - Choose where models are stored - and not just chat models: vision files,
@@ -148,12 +193,40 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   learned facts tidy themselves up along the way. Nothing leaves your
   device, and pausing memory pauses this too.
 
+### The app fails politely
+- The first-run recommendation now sizes to your whole machine, not just
+  the graphics card: a model that fits the card but not the system's
+  memory is no longer offered. A big card in a machine with little memory
+  used to be handed a model it could not load - and the app went down
+  silently, every time.
+- A model load that cannot succeed is refused with a plain sentence
+  ("Not enough free memory to load this model safely right now - 1.4 GB
+  free, about 2.7 GB needed. Close some other apps and try again, or pick
+  a smaller model.") instead of the app vanishing.
+- If the app ever stops mid-load, it will not automatically retry the
+  same model on the next start - the crash loop is gone. Picking the
+  model yourself still gets a fresh attempt.
+- Mixture-of-experts models are labeled as such in the catalog (Ornith
+  1.5's 35B is now "35B-A3B (MoE)"), which is also what unlocks their
+  GPU + RAM split on cards they do not fit.
+
 ### Conversations
 
 - The conversations list is ordered by last activity: continue a chat or
   a project from days ago and it comes back to the top, with the time of
   its last turn on the row (hover shows when it started). With more than
   one AI, a row of their avatars at the top filters the list to one AI.
+
+### Projects
+- The Projects tab (project notes shared by all your AIs) loads in a
+  fraction of the time on installs with a long history: every AI's
+  records are read at once instead of one after another, the last list
+  shows instantly when you come back, and the "warming up" message only
+  appears while records are genuinely still warming after launch.
+- Project memory is now called project notes everywhere, and the Projects
+  tab explains what projects are when you have none yet.
+- A read of your records that stalls now gives up after a minute with a
+  clear error instead of hanging the page.
 
 ### Code in replies
 
@@ -168,18 +241,17 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   the next start.
 
 ### Your records
+- A conversation exists in your records from the moment you send your
+  first message: it appears in the conversations list while the reply is
+  still being written, and your words are kept even if the reply is
+  stopped, fails, or the app closes mid-answer. (Nothing used to be
+  written until the reply finished.)
+- Stopping a reply keeps what was written so far on screen, marked
+  "Stopped here", and records it as far as it got, flagged as stopped -
+  so your records show the conversation as it actually happened.
 - History stays reachable even when older storage generations are switched
   off - reading your records no longer depends on every generation being
   awake at once.
-- In beta builds, Help & diagnostics gains "Run cell census": counts the
-  storage cells behind your AIs and how much real history each holds,
-  measured straight from the on-disk records (bookkeeping writes don't
-  count), and writes a report file you can review. Reads only, changes
-  nothing.
-- When a census finds verified-empty cells, a follow-up action can quiet
-  them: only cells proven never written to are turned off, nothing is
-  deleted, history stays fully readable, and a quieted cell turns back on
-  by itself if it's ever needed. (Beta builds.)
 
 - Replies from online models now record the provider's own fingerprint
   for the backend that answered (when the provider sends one), alongside
@@ -195,6 +267,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 
 - "Your AIs can now go online" shows once, the moment a plan activates.
 - Removed the disabled records-tidying command.
+
+### Elsewhere
+- Every model, offline and online, now has its own page at
+  yourownai.net/models - with a check of what runs on your machine, the
+  same sizing the app uses.
 
 ## [0.5.1] - 2026-08-21
 
