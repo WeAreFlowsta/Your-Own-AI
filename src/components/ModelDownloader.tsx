@@ -280,6 +280,10 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     downloads: {} as Record<string, { progress: DownloadProgress | null; stage: 'model' | 'vision' | 'draft'; part?: { index: number; count: number } }>,
     error: null as string | null,
     modelsDirectory: '',
+    /** MLX engine installed (Apple Silicon Macs only; false elsewhere). */
+    mlxEngineInstalled: false,
+    /** Per-repo MLX artifact state + in-flight percent, keyed by hfRepo. */
+    mlxArtifacts: {} as Record<string, { complete: boolean; percent: number | null }>,
     successMessage: null as string | null,
     // A medical specialist just finished downloading and the user's health
     // model is something else: ask ONCE whether to switch (visible choice,
@@ -389,6 +393,12 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     } catch (error) {
       console.error('Failed to get models directory:', error);
     }
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const mlx = await invoke<{ supported: boolean; installed: boolean }>('mlx_engine_status');
+      store.mlxEngineInstalled = mlx.supported && mlx.installed;
+      await refreshMlxArtifacts$();
+    } catch { /* pre-MLX backend or not a Mac */ }
   });
 
   // eslint-disable-next-line qwik/no-use-visible-task
@@ -637,6 +647,25 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     const unlistenProgress = listen<{ filename: string; downloaded: number; total: number; percent: number }>(
       'model-download-progress',
       (event) => {
+        // MLX artifact aggregate events arrive under the artifact DIR name
+        // ("mlx-<repo>"); per-file events under "mlx-<repo>/<file>" are
+        // ignored here (the aggregate is the honest overall number).
+        if (event.payload.filename.startsWith('mlx-')) {
+          if (!event.payload.filename.includes('/')) {
+            for (const fam of modelFamilies) {
+              for (const v of fam.variants) {
+                const a = v.artifacts?.mlx;
+                if (a?.hfRepo && `mlx-${a.hfRepo.split('/').pop()}` === event.payload.filename) {
+                  store.mlxArtifacts = {
+                    ...store.mlxArtifacts,
+                    [a.hfRepo]: { complete: false, percent: event.payload.percent },
+                  };
+                }
+              }
+            }
+          }
+          return;
+        }
         const a = byFile.get(event.payload.filename);
         if (!a) return;
         const current = store.downloads[a.familyId];
@@ -728,6 +757,41 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
 
   /** Fetch the maker's speed-up file for a model that is already downloaded
    *  (downloaded before the catalog carried it), then register it. */
+  /** Fetch the MLX artifact's state for every catalog entry that has one
+   *  (Apple Silicon + engine installed only - the lookups are cheap). */
+  const refreshMlxArtifacts$ = $(async () => {
+    if (!store.mlxEngineInstalled) return;
+    const { invoke } = await import('@tauri-apps/api/core');
+    for (const fam of modelFamilies) {
+      for (const v of fam.variants) {
+        const a = v.artifacts?.mlx;
+        if (!a?.hfRepo) continue;
+        try {
+          const st = await invoke<{ complete: boolean }>('mlx_artifact_status', { repo: a.hfRepo });
+          const prev = store.mlxArtifacts[a.hfRepo];
+          store.mlxArtifacts = {
+            ...store.mlxArtifacts,
+            [a.hfRepo]: { complete: st.complete, percent: prev?.percent ?? null },
+          };
+        } catch { /* leave unknown */ }
+      }
+    }
+  });
+
+  /** Download the MLX version of a downloaded GGUF model (the opt-in
+   *  upgrade row action - never a silent second copy). */
+  const handleGetMlx$ = $(async (repo: string, revision: string, forModel: string) => {
+    const { invoke } = await import('@tauri-apps/api/core');
+    store.mlxArtifacts = { ...store.mlxArtifacts, [repo]: { complete: false, percent: 0 } };
+    try {
+      await invoke('download_mlx_artifact', { repo, revision, forModel });
+      store.mlxArtifacts = { ...store.mlxArtifacts, [repo]: { complete: true, percent: null } };
+    } catch (error) {
+      store.error = getUserFriendlyErrorMessage(error);
+      store.mlxArtifacts = { ...store.mlxArtifacts, [repo]: { complete: false, percent: null } };
+    }
+  });
+
   const handleGetDraft$ = $(async (familyId: string, modelFilename: string) => {
     const hit = variantByFirstPart(familyId, modelFilename);
     const draft = hit?.variant.draft;
@@ -1773,6 +1837,30 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                           Get its speed-up file ({catalogMatch.variant.draft.size} GB)
                         </button>
                       )
+                    )}
+                    {!model.damaged && store.mlxEngineInstalled && catalogMatch?.variant.artifacts?.mlx?.hfRepo && (
+                      (() => {
+                        const a = catalogMatch.variant.artifacts!.mlx!;
+                        const st = store.mlxArtifacts[a.hfRepo!];
+                        return st?.complete ? (
+                          <p class="mt-0.5 text-xs text-[var(--text-muted)]">
+                            MLX version installed - serves this model's chats.
+                          </p>
+                        ) : st?.percent != null ? (
+                          <p class="mt-0.5 text-xs text-[var(--text-muted)]">
+                            Downloading the MLX version… {st.percent}%
+                          </p>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick$={() => handleGetMlx$(a.hfRepo!, a.revision!, model.name)}
+                            title="A version of this model built for Apple's MLX framework - often quicker to the first word. Chats use it; projects and images keep the standard engine. Your current file stays."
+                            class="mt-0.5 text-xs text-[var(--text-secondary)] underline underline-offset-2 bg-transparent border-none p-0 cursor-pointer hover:text-[var(--text-primary)]"
+                          >
+                            Get the faster MLX version ({a.sizeGb} GB)
+                          </button>
+                        );
+                      })()
                     )}
                   </div>
                   {!model.damaged && (
