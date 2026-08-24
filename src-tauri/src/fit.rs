@@ -167,6 +167,30 @@ pub fn model_need(meta: &GgufMeta, size_bytes: u64, ctx: u64) -> (f64, f64, f64)
 /// does not fit (90% of) free VRAM - the same bound that makes a model
 /// green. Above it, the only alternative is the driver paging VRAM over
 /// PCIe (slower than the CPU alone, measured) or an outright OOM.
+/// How much of the feed-forward runs on EVERY token. Catalog MoEs sit in
+/// the 5-13% range - their experts are cold mass, and parking them in main
+/// memory is nearly free. A post-hoc "surgery" MoE can activate most of its
+/// width (Whittle-27B: 16-of-64 slivers + a 5120-wide always-on shared
+/// expert = 47% of the FFN every token) - then the split ships the bulk of
+/// the compute across the bus each step, and the honest grade is "runs
+/// slower", not "runs well". None when the header lacks the counts.
+pub fn moe_active_fraction(meta: &crate::gguf::GgufMeta) -> Option<f64> {
+    if meta.n_experts == 0 || meta.n_experts_used == 0 {
+        return None;
+    }
+    let ff_e = meta.ff_expert_len as f64;
+    let ff_s = meta.ff_shared_expert_len as f64;
+    if ff_e <= 0.0 {
+        return Some(meta.n_experts_used as f64 / meta.n_experts as f64);
+    }
+    let active = meta.n_experts_used as f64 * ff_e + ff_s;
+    let total = meta.n_experts as f64 * ff_e + ff_s;
+    Some(active / total)
+}
+
+/// Above this active fraction a split stops counting as "runs well".
+pub const MOE_HIGH_ACTIVE_FRACTION: f64 = 0.30;
+
 pub fn moe_offload_wanted(need_gb: f64, free_vram_gb: f64) -> bool {
     need_gb > 0.9 * free_vram_gb
 }
@@ -382,11 +406,18 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
                         moe_ram_budget_gb(free_ram_gb, total_ram_gb),
                     )
                 {
-                    fit = Fit::Split;
-                    moe_offload = true;
-                    moe_cpu_layers_pick = moe_cpu_layers(&meta, kv_gb, vram)
-                        .filter(|&n| n < meta.expert_bytes_per_layer.len())
-                        .map(|n| n as u32);
+                    if moe_active_fraction(&meta).map_or(true, |f| f <= MOE_HIGH_ACTIVE_FRACTION) {
+                        fit = Fit::Split;
+                        moe_offload = true;
+                        moe_cpu_layers_pick = moe_cpu_layers(&meta, kv_gb, vram)
+                            .filter(|&n| n < meta.expert_bytes_per_layer.len())
+                            .map(|n| n as u32);
+                    } else {
+                        // The loader will still split it if the user runs
+                        // it - but most of its width fires every token, so
+                        // the grade tells the truth: works, slower.
+                        fit = Fit::Yellow;
+                    }
                 }
             }
         }
@@ -507,6 +538,8 @@ mod tests {
             file_type: 0,
             n_experts: 0,
             n_experts_used: 0,
+            ff_expert_len: 0,
+            ff_shared_expert_len: 0,
             expert_bytes_per_layer: Vec::new(),
             non_expert_bytes: 0,
             split_no: 0,
@@ -516,6 +549,34 @@ mod tests {
     }
 
     /// A synthetic MoE meta shaped like a real file's tensor split.
+    #[test]
+    fn active_fraction_separates_cold_experts_from_surgery_moes() {
+        // Whittle-27B: 16-of-64 slivers of width 192 + a 5120-wide shared
+        // expert = 8192 of 17408 every token. A split would crawl.
+        let mut m = meta(64, 2, 256, 262144);
+        m.n_experts = 64;
+        m.n_experts_used = 16;
+        m.ff_expert_len = 192;
+        m.ff_shared_expert_len = 5120;
+        let f = moe_active_fraction(&m).unwrap();
+        assert!((f - 8192.0 / 17408.0).abs() < 1e-9);
+        assert!(f > MOE_HIGH_ACTIVE_FRACTION);
+        // Nemotron 3.5: 6-of-128 of width 1856 + shared 3712 = cold experts.
+        m.n_experts = 128;
+        m.n_experts_used = 6;
+        m.ff_expert_len = 1856;
+        m.ff_shared_expert_len = 3712;
+        assert!(moe_active_fraction(&m).unwrap() < MOE_HIGH_ACTIVE_FRACTION);
+        // No width metadata: fall back to the plain count ratio (8-of-128).
+        m.ff_expert_len = 0;
+        m.ff_shared_expert_len = 0;
+        m.n_experts_used = 8;
+        assert!((moe_active_fraction(&m).unwrap() - 0.0625).abs() < 1e-9);
+        // Dense: no verdict.
+        m.n_experts = 0;
+        assert!(moe_active_fraction(&m).is_none());
+    }
+
     fn moe_meta(n_layers: usize, expert_layer_gib: f64, non_expert_gib: f64) -> GgufMeta {
         let mut m = meta(n_layers as u64, 2, 256, 262144);
         m.n_experts = 256;

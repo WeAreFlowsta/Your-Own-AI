@@ -113,6 +113,12 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   like it started over.
 
 ### Routing
+- The GPU + RAM split now checks how much of a mixture-of-experts model
+  actually fires on every token. Catalog models activate a few percent -
+  their experts are cold mass and the split is fast. A converted
+  "surgery" model that activates most of its width gets the honest
+  "Runs slower" grade instead of a promise the hardware can't keep
+  (it still runs if you pick it).
 - Project work: local picks for agent sessions rank tool capability first (the speed lean only decides between equals); a local model counts as ready for agent work only when it fits fast and, once measured here, keeps 8+ tokens a second - the same bar for side-work on this device and for "keep whole project sessions on this device". When a session goes online by default while an equally capable local model is ready, the Model button says so.
 
 - The Auto modes now judge models by how they actually run here, not by

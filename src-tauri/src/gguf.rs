@@ -36,6 +36,16 @@ pub struct GgufMeta {
     pub n_experts: u64,
     /// `<arch>.expert_used_count` - experts active per token (0 = dense).
     pub n_experts_used: u64,
+    /// `<arch>.expert_feed_forward_length` - width of one routed expert
+    /// (0 when absent).
+    pub ff_expert_len: u64,
+    /// `<arch>.expert_shared_feed_forward_length` - width of the always-on
+    /// shared expert (0 when absent). Together with the two counts this
+    /// yields the ACTIVE FRACTION - how much of the feed-forward runs on
+    /// every token - which decides whether a GPU + RAM split is fast
+    /// (cold experts) or a crawl (post-hoc "surgery" MoEs that activate
+    /// most of their width).
+    pub ff_shared_expert_len: u64,
     /// Bytes of expert tensors per layer (index = block), from the tensor
     /// table (sizes = offset deltas, no type table needed). Empty for dense
     /// models, and for files whose tensor table could not be read - the
@@ -439,6 +449,8 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
         file_type: 0,
         n_experts: 0,
         n_experts_used: 0,
+        ff_expert_len: 0,
+        ff_shared_expert_len: 0,
         expert_bytes_per_layer: Vec::new(),
         non_expert_bytes: 0,
         split_no: 0,
@@ -463,6 +475,8 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
             || key.ends_with(".context_length")
             || key.ends_with(".expert_count")
             || key.ends_with(".expert_used_count")
+            || key.ends_with(".expert_feed_forward_length")
+            || key.ends_with(".expert_shared_feed_forward_length")
             || key == "general.file_type"
             || key == "general.alignment"
             || key == "split.no"
@@ -510,6 +524,10 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
                 m.context_length = v;
             } else if key.ends_with(".expert_used_count") {
                 m.n_experts_used = v;
+            } else if key.ends_with(".expert_shared_feed_forward_length") {
+                m.ff_shared_expert_len = v;
+            } else if key.ends_with(".expert_feed_forward_length") {
+                m.ff_expert_len = v;
             } else if key.ends_with(".expert_count") {
                 m.n_experts = v;
             } else if key == "general.file_type" {
