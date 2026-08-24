@@ -2637,6 +2637,16 @@ impl Drop for DownloadGuard {
 /// reattaches (navigated away and back) shows the real figure at once
 /// instead of waiting for the next whole-percent event - on a 17 GB file a
 /// percent is ~170 MB, long enough to read as "stuck at Downloading..".
+/// Is any download in flight whose key starts with `prefix`? Lets a
+/// directory-shaped artifact answer "still downloading" across UI
+/// remounts (the per-file keys are "<dir>/<file>").
+pub(crate) fn any_download_in_flight_under(prefix: &str) -> bool {
+    downloading_set()
+        .lock()
+        .map(|s| s.iter().any(|k| k.starts_with(prefix)))
+        .unwrap_or(false)
+}
+
 /// Live (downloaded, total) of one in-flight download, for surfaces that
 /// aggregate several files into one bar (MLX artifacts).
 pub(crate) fn download_progress_of(filename: &str) -> Option<(u64, u64)> {

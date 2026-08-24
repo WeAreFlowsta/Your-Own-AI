@@ -79,8 +79,19 @@ pub struct MlxArtifactStatus {
     pub dir: String,
     pub present: bool,
     pub complete: bool,
+    /// A download command for this artifact is running right now - the UI
+    /// reattaches to it instead of offering the button again.
+    pub downloading: bool,
     pub bytes_done: u64,
     pub bytes_total: u64,
+}
+
+/// Repos with a download command in flight (whole-artifact granularity -
+/// the per-file guard lives in the downloader).
+fn artifact_inflight_set() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static S: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    S.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
 }
 
 /// Fetch the pinned revision's file list from the Hugging Face API.
@@ -217,6 +228,22 @@ pub async fn download_mlx_artifact(
 ) -> Result<(), String> {
     let dir = artifact_dir(&app, &repo)?;
     let dir_name = artifact_dir_name(&repo);
+    // Whole-artifact single flight: a second click reattaches in the UI,
+    // it must not start a competing pass over the file list.
+    if let Ok(mut set) = artifact_inflight_set().lock() {
+        if !set.insert(repo.clone()) {
+            return Err("This MLX version is already downloading".to_string());
+        }
+    }
+    struct Inflight(String);
+    impl Drop for Inflight {
+        fn drop(&mut self) {
+            if let Ok(mut s) = artifact_inflight_set().lock() {
+                s.remove(&self.0);
+            }
+        }
+    }
+    let _inflight = Inflight(repo.clone());
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create artifact dir: {e}"))?;
 
     let files = fetch_file_list(&repo, &revision).await?;
@@ -344,6 +371,12 @@ pub async fn mlx_artifact_status(app: AppHandle, repo: String) -> Result<MlxArti
     let dir = artifact_dir(&app, &repo)?;
     let present = dir.exists();
     let complete = present && artifact_complete(&dir);
+    let dir_name = artifact_dir_name(&repo);
+    let downloading = artifact_inflight_set()
+        .lock()
+        .map(|s| s.contains(&repo))
+        .unwrap_or(false)
+        || crate::llm::any_download_in_flight_under(&format!("{}/", dir_name));
     let (mut done, mut total) = (0u64, 0u64);
     if let Some(m) = read_manifest(&dir) {
         for f in &m.files {
@@ -354,9 +387,10 @@ pub async fn mlx_artifact_status(app: AppHandle, repo: String) -> Result<MlxArti
         }
     }
     Ok(MlxArtifactStatus {
-        dir: artifact_dir_name(&repo),
+        dir: dir_name,
         present,
         complete,
+        downloading,
         bytes_done: done,
         bytes_total: total,
     })

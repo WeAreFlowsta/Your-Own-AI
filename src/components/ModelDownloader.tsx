@@ -767,11 +767,21 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
         const a = v.artifacts?.mlx;
         if (!a?.hfRepo) continue;
         try {
-          const st = await invoke<{ complete: boolean }>('mlx_artifact_status', { repo: a.hfRepo });
+          const st = await invoke<{ complete: boolean; downloading: boolean; bytes_done: number; bytes_total: number }>(
+            'mlx_artifact_status',
+            { repo: a.hfRepo }
+          );
           const prev = store.mlxArtifacts[a.hfRepo];
+          // Reattach: an in-flight artifact download survives navigating
+          // away - the row shows its live percent again, never the button.
+          const percent = st.downloading
+            ? st.bytes_total > 0
+              ? Math.floor((st.bytes_done / st.bytes_total) * 100)
+              : 0
+            : prev?.percent ?? null;
           store.mlxArtifacts = {
             ...store.mlxArtifacts,
-            [a.hfRepo]: { complete: st.complete, percent: prev?.percent ?? null },
+            [a.hfRepo]: { complete: st.complete, percent },
           };
         } catch { /* leave unknown */ }
       }
