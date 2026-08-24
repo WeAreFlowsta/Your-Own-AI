@@ -9,7 +9,8 @@ mod diagnostics;          // one-click diagnostic report (Settings > Help & diag
 mod llm;                  // llama-server module
 mod engine;               // optional inference engines (pinned tag; CUDA backend later)
 mod ocr;                  // OCR for scanned PDFs (pdfium render + ocrs)
-mod lair;                 // Holochain lair keystore management
+mod lair;
+mod mlx_engine;         // Apple Silicon MLX engine (preview) - SwiftLM                 // Holochain lair keystore management
 mod conductor;            // Holochain conductor lifecycle
 pub mod dna;              // DNA installation per AI personality (pub for bin/census)
 pub mod flowsta;          // Sign in with Flowsta via Vault + online-model proxy
@@ -568,6 +569,9 @@ pub fn run() {
             llm::delete_model,
             llm::get_models_directory,
             llm::models_disk_info,
+            mlx_engine::mlx_engine_status,
+            mlx_engine::download_mlx_engine,
+            mlx_engine::remove_mlx_engine,
             llm::set_models_directory,
             llm::is_model_downloaded,
             llm::load_model,
