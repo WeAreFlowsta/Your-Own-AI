@@ -593,6 +593,18 @@ export const modelFamilies: ModelFamily[] = [
         minRAM: 8,
         downloadUrl: 'https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2/gemma-4-E2B-it-Q4_K_M.gguf',
         filename: 'gemma-4-E2B-it-Q4_K_M.gguf',
+        // MLX artifact (preview): revision-pinned; pre-flighted 2026-08-24
+        // (appeared upstream after the 08-23 sweep).
+        artifacts: {
+          mlx: {
+            filename: 'mlx-gemma-4-e2b-it-4bit',
+            downloadUrl: 'https://huggingface.co/mlx-community/gemma-4-e2b-it-4bit',
+            hfRepo: 'mlx-community/gemma-4-e2b-it-4bit',
+            revision: '238767527555cb75a05732a84dff5d6ba0dd6809',
+            sizeGb: 3.6,
+            quantization: '4-bit',
+          },
+        },
         quantization: 'Q4_K_M'
       },
       {
@@ -739,6 +751,18 @@ export const modelFamilies: ModelFamily[] = [
         minRAM: 8,
         downloadUrl: 'https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF/resolve/78eb92a46fc37e6b524df991ed9aca9bc6aa7b80/Phi-4-mini-instruct-Q4_K_M.gguf',
         filename: 'Phi-4-mini-instruct-Q4_K_M.gguf',
+        // MLX artifact (preview): revision-pinned; pre-flighted 2026-08-24
+        // (appeared upstream after the 08-23 sweep).
+        artifacts: {
+          mlx: {
+            filename: 'mlx-Phi-4-mini-instruct-4bit',
+            downloadUrl: 'https://huggingface.co/mlx-community/Phi-4-mini-instruct-4bit',
+            hfRepo: 'mlx-community/Phi-4-mini-instruct-4bit',
+            revision: 'ac1c269cb4222a4e136a3d09edad301056c1f36a',
+            sizeGb: 2.2,
+            quantization: '4-bit',
+          },
+        },
         quantization: 'Q4_K_M'
       }
     ]
