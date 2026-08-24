@@ -253,11 +253,12 @@ export async function loadMemoryBlock(
   );
 
   // Always-injected = facts only. Notes are free-text and retrieved on
-  // relevance (below), never dumped into every prompt.
+  // relevance (below); the synthesis paragraph injects separately.
   const factItems = all
-    .filter((f) => f.entry_kind !== "note")
+    .filter((f) => f.entry_kind !== "note" && f.entry_kind !== "synthesis")
     .sort((a, b) => b.confidence - a.confidence || b.updated_at - a.updated_at)
     .slice(0, 25);
+  const synthesis = all.find((f) => f.entry_kind === "synthesis");
 
   const name = factItems.find((f) => isNamePredicate(f.predicate));
   const others = factItems.filter((f) => f !== name);
@@ -267,6 +268,11 @@ export async function loadMemoryBlock(
     : "Their name is unknown. Do not assume or allude to it.";
 
   let block = nameLine;
+  // The consolidated portrait first (the 2026 lesson: a coherent summary
+  // outperforms a bare fact list), the ground-truth facts after it.
+  if (synthesis) {
+    block += `\nAbout them, from what they've shared over time (use naturally; never recite): ${synthesis.value}`;
+  }
   if (others.length > 0) {
     // Include the relation so a bare value isn't ambiguous to the model
     // ("- Melbourne" vs "- lives in: Melbourne").

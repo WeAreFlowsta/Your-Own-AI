@@ -755,6 +755,11 @@ export default component$(() => {
       // cache so the first fact this session isn't a cold ~22s wait. CPU-only,
       // never touches the chat model (GPU); no-op if the model isn't installed.
       void prewarmExtractionModel();
+      // A late, quiet consolidation pass catches changes from the previous
+      // session (hash-gated no-op when nothing changed).
+      setTimeout(() => {
+        import("../../utils/memoryConsolidation").then((m) => void m.maybeConsolidateMemory());
+      }, 90_000);
     } catch (error) {
       console.error("[ChatPage] Failed during initialization:", error);
     } finally {

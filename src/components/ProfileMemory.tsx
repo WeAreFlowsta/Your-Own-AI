@@ -99,14 +99,19 @@ export default component$<ProfileMemoryProps>(
     const sourceFilter = useSignal<string | null>(null);
     const showForgetSourceConfirm = useSignal(false);
     const showAdd = useSignal(false);
+    /** The consolidated portrait the AIs are given (read-only; refreshes
+     *  itself in the background whenever the facts change). */
+    const synthesis = useSignal("");
     const addPredicate = useSignal("likes");
     const addValue = useSignal("");
     const relOpen = useSignal(false);
 
     const factsWarming = useSignal(false);
     const activeFacts$ = $(async () => {
-      facts.value = (await getFacts())
-        .filter((f) => f.valid_to == null)
+      const loaded = (await getFacts()).filter((f) => f.valid_to == null);
+      synthesis.value = loaded.find((f) => f.entry_kind === "synthesis")?.value ?? "";
+      facts.value = loaded
+        .filter((f) => f.entry_kind !== "synthesis")
         .sort((a, b) => b.confidence - a.confidence);
     });
 
@@ -191,6 +196,20 @@ export default component$<ProfileMemoryProps>(
     return (
       <>
         <div>
+        {synthesis.value && (
+          <div class="mb-5 p-4 rounded-xl bg-[var(--bg-main)] border border-[var(--border-subtle)]">
+            <p class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-1.5">
+              How your AIs see you
+            </p>
+            <p class="text-sm text-[var(--text-secondary)] leading-relaxed">
+              {synthesis.value}
+            </p>
+            <p class="mt-1.5 text-[11px] text-[var(--text-muted)]">
+              Written on your device from the facts and notes below - it
+              rewrites itself as they change.
+            </p>
+          </div>
+        )}
         {/* Header + controls */}
         <div class="flex flex-wrap items-center justify-between gap-3 mb-5">
           <p class="text-sm text-[var(--text-secondary)] flex items-center gap-1.5">

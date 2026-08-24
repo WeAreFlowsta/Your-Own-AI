@@ -18,7 +18,7 @@ import {
   listWorkspaceMemories,
   type WorkspaceMemory,
 } from "../../utils/workspaceMemory";
-import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
+import { Link, useNavigate, type DocumentHead } from "@builder.io/qwik-city";
 import { LuArrowLeft, LuMessageSquare, LuChevronDown, LuChevronUp, LuInfo, LuDownload, LuPencil, LuShieldCheck, LuBrain, LuUser, LuTrash2 } from "@qwikest/icons/lucide";
 import ConfirmModal from "../../components/ConfirmModal";
 import AppHeader from "../../components/AppHeader";
@@ -42,7 +42,6 @@ import LiquidMetalButton from "../../components/LiquidMetalButton";
 import { renderMarkdown } from "../../utils/renderMarkdown";
 import { exportConversation, describeSignError, type ExportOptions } from "../../utils/exportConversation";
 import { ExportConversationModal } from "../../components/ExportConversationModal";
-import ProfileMemory from "../../components/ProfileMemory";
 import AiEpisodicMemory from "../../components/AiEpisodicMemory";
 import AiKnowledge from "../../components/AiKnowledge";
 import { RememberEntryButton } from "../../components/RememberEntryButton";
@@ -466,40 +465,36 @@ export default component$(() => {
 
           {activeTab.value === "knows" && (
             <div class="space-y-8">
+              <Callout intent="premium" title={`${aiName.value || "This AI"}'s memory`} id="memory-tip-knowledge" class="mb-2">
+                One memory, two kinds of entries: things you've{" "}
+                <span class="font-semibold">given</span> it (backstory, world,
+                product details, policies - exportable as a shareable pack),
+                and moments it's <span class="font-semibold">learned</span>{" "}
+                with you as you chat - kept just for this AI.
+              </Callout>
               <div>
-                <Callout intent="premium" title="Knowledge you give it" id="memory-tip-knowledge" class="mb-4">
-                  Give {aiName.value || "this AI"} knowledge only it should have —
-                  a character's backstory and world, or your product details,
-                  policies, and procedures. It draws on them when they're
-                  relevant, and you can export the set as a shareable pack.
-                </Callout>
+                <h3 class="text-sm font-semibold text-[var(--text-primary)] mb-3">
+                  Given by you
+                </h3>
                 <AiKnowledge aiId={aiId.value} aiName={aiName.value} />
+                <div class="mt-4">
+                  <AiKnowledgeDocuments aiId={aiId.value} aiName={aiName.value} />
+                </div>
               </div>
               <div class="border-t border-[var(--border-subtle)] pt-6">
-                <Callout intent="info" title="Documents you've given it" id="memory-tip-documents" class="mb-4">
-                  Files you add to {aiName.value || "this AI"} from the Knowledge
-                  tab when editing it. It reads and remembers them, then uses the
-                  relevant parts whenever they fit — the original files can be
-                  moved or deleted after.
-                </Callout>
-                <AiKnowledgeDocuments aiId={aiId.value} aiName={aiName.value} />
-              </div>
-              <div class="border-t border-[var(--border-subtle)] pt-6">
-                <Callout intent="info" title="What it remembers" id="memory-tip-episodic" class="mb-4">
-                  As you chat, {aiName.value || "this AI"} quietly remembers key
-                  moments from your conversations and brings them back when they
-                  fit — kept just for this AI, separate from your others.
-                </Callout>
+                <h3 class="text-sm font-semibold text-[var(--text-primary)] mb-3">
+                  Learned with you
+                </h3>
                 <AiEpisodicMemory aiId={aiId.value} aiName={aiName.value} />
               </div>
-              <div class="border-t border-[var(--border-subtle)] pt-6">
-                <Callout intent="info" title="Shared across your AIs" id="memory-tip-shared" class="mb-4">
-                  Facts about you — your name, preferences, projects — that every
-                  AI uses, so you don't repeat yourself. Manage them on the Your
-                  Memory page.
-                </Callout>
-                <ProfileMemory readOnly manageHref="/your-memory/" />
-              </div>
+              <p class="border-t border-[var(--border-subtle)] pt-5 text-sm text-[var(--text-secondary)]">
+                What <span class="font-semibold">every</span> AI knows about you
+                - your name, preferences, projects - lives in one place:{" "}
+                <Link href="/your-memory/" class="text-[var(--text-link)] hover:underline">
+                  Your Memory
+                </Link>
+                .
+              </p>
             </div>
           )}
 

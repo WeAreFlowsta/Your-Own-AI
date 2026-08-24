@@ -135,6 +135,19 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   runs, measured speed, load time, reading room, capability scores and
   project readiness - next to the recent decisions. Nothing new to set.
 
+### Memory
+- Memory is now two things, not four: each AI has ONE memory (entries you've
+  given it, and moments it's learned with you), and what every AI knows
+  about you lives in ONE place - Your Memory. Project sessions' notes are
+  now called project notes, so "memory" always means those two.
+- Your AIs now carry a short portrait of you - a few sentences written on
+  your device from your remembered facts and notes, shown at the top of
+  Your Memory ("How your AIs see you") and given to every AI alongside the
+  facts. It rewrites itself in the background as your memory changes -
+  including updating things that have since happened - and duplicate
+  learned facts tidy themselves up along the way. Nothing leaves your
+  device, and pausing memory pauses this too.
+
 ### Conversations
 
 - The conversations list is ordered by last activity: continue a chat or

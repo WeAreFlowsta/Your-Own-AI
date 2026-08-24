@@ -313,6 +313,9 @@ export function extractAndStoreFacts(input: {
     inFlight.delete(p);
     removePendingTurn(pendingId);
     announceBusy();
+    // Consolidation rides every extraction: hash-gated, so a turn that
+    // taught nothing costs one store read.
+    import("./memoryConsolidation").then((m) => void m.maybeConsolidateMemory(input.model));
   });
   inFlight.add(p);
   announceBusy();

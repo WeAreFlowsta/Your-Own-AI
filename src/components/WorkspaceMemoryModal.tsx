@@ -100,7 +100,7 @@ export const WorkspaceMemoryModal = component$<{
         <div class="flex items-center justify-between px-5 py-3 border-b border-[var(--border-subtle)]">
           <div class="min-w-0">
             <h2 class="text-base font-semibold text-[var(--text-primary)] font-varela truncate">
-              Project memory - {folderLeaf}
+              Project notes - {folderLeaf}
             </h2>
             <p class="text-xs text-[var(--text-muted)] truncate">
               {loading.value
