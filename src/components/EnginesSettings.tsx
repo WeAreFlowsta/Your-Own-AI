@@ -383,11 +383,12 @@ export default component$(() => {
                 </span>
               </h3>
               <p class="text-sm text-[var(--text-secondary)] mt-0.5">
-                Runs models built for Apple's MLX framework - often quicker
-                to the first word on M-series chips. Models offer an MLX
-                version where one exists; everything else keeps the standard
-                engine. In this preview it serves chats - projects, vision
-                and memory stay on the standard engine.
+                Runs models built for Apple's MLX framework. Models offer
+                an MLX version where one exists; everything else keeps the
+                standard engine. In this preview it serves chats - projects,
+                vision and memory stay on the standard engine. Whether it is
+                faster depends on your Mac; nothing changes unless you
+                install it.
               </p>
               {mlxStatus.value.stale_version_installed && !mlxStatus.value.installed && (
                 <p class="mt-1.5 text-xs text-amber-500/90">
