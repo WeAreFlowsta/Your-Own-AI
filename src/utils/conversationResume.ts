@@ -176,6 +176,7 @@ export async function loadConversationMessages(
       // works on resumed conversations exactly as it did live.
       servedBy: e.model || undefined,
       routingReason: e.routing_reason || undefined,
+      stopped: e.stopped || undefined,
       routingTask: e.routing_task || undefined,
       // Agent turns come back whole: the rail's stub renders from the
       // stored working log, expandable to the full story (step outputs

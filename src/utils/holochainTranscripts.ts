@@ -76,6 +76,8 @@ export async function recordMessage(
     routing_reason?: string;
     routing_task?: string;
     provider_fingerprint?: string;
+    /** The user stopped the reply; content is as far as it got. */
+    stopped?: boolean;
   },
   /** Agent turn extras: the working log (sanitized) + workspace folder.
    *  Client-side schema, encrypted before the zome sees it - no DNA change. */

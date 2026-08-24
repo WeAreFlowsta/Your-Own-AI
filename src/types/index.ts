@@ -120,6 +120,8 @@ export interface Message {
   model: string; // AI id (e.g. 'veebo', 'local-123') or 'user' for user messages
   thinking?: string;
   isLoading?: boolean;
+  /** The user stopped this reply - shown and recorded as far as it got. */
+  stopped?: boolean;
   error?: string | null;
   aiLabel?: string;
   aiImageUrl?: string | null;
@@ -361,6 +363,8 @@ export interface HolochainTranscriptEntry {
   thinking: string | null;
   tokens: HolochainTokenUsage | null;
   // Provenance (recorded from Phase A+; null on older entries)
+  /** Reply stopped by the user - recorded as far as it got. */
+  stopped?: boolean | null;
   sources?: { url: string; title: string }[] | null;
   system_prompt?: string | null;
   mode?: string | null;

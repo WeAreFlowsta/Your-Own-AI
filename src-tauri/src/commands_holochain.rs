@@ -89,6 +89,8 @@ pub struct TranscriptEntryInfo {
     pub runtime: Option<RuntimeInfo>,
     pub routing_reason: Option<String>,
     pub routing_task: Option<String>,
+    /// The user stopped this reply; content is as far as it got.
+    pub stopped: Option<bool>,
     pub agent_log: Option<serde_json::Value>,
     pub folder_path: Option<String>,
 }
@@ -205,6 +207,9 @@ pub struct Provenance {
     /// "reasoning" | "general").
     #[serde(default)]
     pub routing_task: Option<String>,
+    /// The user stopped this reply; content is as far as it got.
+    #[serde(default)]
+    pub stopped: Option<bool>,
 }
 
 /// Plaintext message payload (lives INSIDE the ciphertext). Provenance fields
@@ -245,6 +250,9 @@ struct MessagePlain {
     pub routing_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing_task: Option<String>,
+    /// The user stopped this reply; content is as far as it got.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stopped: Option<bool>,
     /// The agent turn's working log (steps/narration/thoughts/permission
     /// receipts + stats), opaque JSON owned by the frontend. The plaintext
     /// schema is client-side and encrypted before the zome sees it, so this
@@ -517,6 +525,7 @@ pub async fn record_transcript_entry(
         runtime: prov.runtime,
         routing_reason: prov.routing_reason,
         routing_task: prov.routing_task,
+        stopped: prov.stopped,
         agent_log,
         folder_path,
     };
@@ -1154,6 +1163,7 @@ pub async fn get_conversation_transcript(
                     runtime: e.runtime,
                     routing_reason: e.routing_reason,
                     routing_task: e.routing_task,
+                    stopped: e.stopped,
                     agent_log: e.agent_log,
                     folder_path: e.folder_path,
                 });
@@ -1259,6 +1269,7 @@ mod size_guard_tests {
             runtime: None,
             routing_reason: None,
             routing_task: None,
+            stopped: None,
             agent_log: log,
             folder_path: None,
         }

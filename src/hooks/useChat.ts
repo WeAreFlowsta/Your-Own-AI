@@ -961,6 +961,26 @@ export function useChat(props: UseChatProps) {
       const controller = new AbortController();
       abortControllerRef.value = noSerialize(controller);
 
+      // Records: the conversation and the user's message are written the
+      // moment they are sent - in parallel with the request, never gating
+      // it - so the conversation exists in your records while the reply is
+      // still streaming (it used to appear only after the reply finished)
+      // and the user's words survive a stopped, failed, or crashed reply.
+      // The assistant turn is recorded when the reply finishes, or, when
+      // stopped, as far as it got (flagged stopped). Same order as agent
+      // sessions.
+      const recordCtx = {
+        holochainId: selectedAi.aiConfig?.agentPubKey as string | undefined,
+        modelName: (preferredModel || currentModel || "unknown") as string,
+        turnMode: "chat" as string,
+      };
+      let preRecord: Promise<{
+        userMsgHash: string | null;
+        userAttachment: Awaited<ReturnType<typeof buildAttachmentInfo>> | undefined;
+        imageInfos: Awaited<ReturnType<typeof buildImageAttachmentInfo>>[] | undefined;
+        appVersion: string;
+      } | null> | null = null;
+
       // A web-search model researches for a long stretch (often 30-60s)
       // before its first visible text - mark the turn so the status line can
       // say what's actually happening instead of a generic "thinking".
@@ -1046,6 +1066,70 @@ export function useChat(props: UseChatProps) {
           turnMode === "chat" && classifierJudged && !needsVision
             ? ("low" as const)
             : undefined;
+
+        // Write the user's side now (see recordCtx above). Not awaited: the
+        // request below goes out immediately; the assistant record awaits
+        // this promise later.
+        recordCtx.turnMode = turnMode;
+        preRecord = (async () => {
+          const recHolochainId = recordCtx.holochainId;
+          if (!recHolochainId) return null;
+          try {
+            if (!state.conversationHash) {
+              // Use the first user message as the conversation title
+              const title = userInput.length > 80
+                ? userInput.substring(0, 80) + "..."
+                : userInput;
+              const hash = await startConversation(
+                recHolochainId,
+                selectedAi.label,
+                recordCtx.modelName,
+                title,
+              );
+              console.log("[Holochain] Conversation started:", hash);
+              if (!hash) {
+                console.warn("[Holochain] Failed to start conversation");
+                return null;
+              }
+              state.conversationHash = hash;
+            }
+            const appVersion = await import("@tauri-apps/api/app")
+              .then((m) => m.getVersion())
+              .catch(() => "unknown");
+            // Record user message - with the attached context the model
+            // actually received (hash always; full content under the cap).
+            const userAttachment = fileContext
+              ? await buildAttachmentInfo(fileContext)
+              : undefined;
+            const imageInfos =
+              images.length > 0
+                ? await Promise.all(
+                    images.map((url, i) => buildImageAttachmentInfo(url, i)),
+                  )
+                : undefined;
+            const userMsgHash = await recordMessage(
+              recHolochainId,
+              state.conversationHash!,
+              "user",
+              userInput,
+              state.messageSequence,
+              "user",
+              undefined,
+              undefined,
+              {
+                mode: turnMode,
+                attachments: userAttachment,
+                images: imageInfos,
+              },
+            );
+            state.messageSequence++;
+            console.log("[Holochain] User message recorded");
+            return { userMsgHash, userAttachment, imageInfos, appVersion };
+          } catch (e) {
+            console.warn("[Holochain] Transcript recording failed (user turn):", e);
+            return null;
+          }
+        })();
 
         for await (const chunk of llamaServerApi.chatCompletion(
           chatHistory,
@@ -1270,62 +1354,15 @@ export function useChat(props: UseChatProps) {
             return;
           }
           try {
-            // Start a new conversation if needed
-            if (!state.conversationHash) {
-              // Use the first user message as the conversation title
-              const title = userInput.length > 80
-                ? userInput.substring(0, 80) + "..."
-                : userInput;
-              const hash = await startConversation(
-                holochainId,
-                selectedAi.label,
-                modelName,
-                title,
-              );
-              console.log("[Holochain] Conversation started:", hash);
-              if (hash) {
-                state.conversationHash = hash;
-              } else {
-                console.warn("[Holochain] Failed to start conversation");
-                settleUserMsgHash(null);
-                return;
-              }
+            // The user's side was written at send time - pick up its result.
+            const pre = await preRecord;
+            if (!pre) {
+              settleUserMsgHash(null);
+              return;
             }
-
-            const appVersion = await import("@tauri-apps/api/app")
-              .then((m) => m.getVersion())
-              .catch(() => "unknown");
-
-            // Record user message — with the attached context the model
-            // actually received (hash always; full content under the cap).
-            const userAttachment = fileContext
-              ? await buildAttachmentInfo(fileContext)
-              : undefined;
-            const imageInfos =
-              images.length > 0
-                ? await Promise.all(
-                    images.map((url, i) => buildImageAttachmentInfo(url, i)),
-                  )
-                : undefined;
-            const userMsgHash = await recordMessage(
-              holochainId,
-              state.conversationHash!,
-              "user",
-              userInput,
-              state.messageSequence,
-              "user",
-              undefined,
-              undefined,
-              {
-                mode: turnMode,
-                attachments: userAttachment,
-                images: imageInfos,
-              },
-            );
-            state.messageSequence++;
-            console.log("[Holochain] User message recorded");
+            const { userAttachment, imageInfos, appVersion } = pre;
             // Hand the signed hash to the in-flight extraction for provenance.
-            settleUserMsgHash(userMsgHash);
+            settleUserMsgHash(pre.userMsgHash);
 
             // Source-grounding: anchor the answer's factual claims to the attached
             // document (verbatim quote + char span) and link any attached image,
@@ -1459,7 +1496,59 @@ export function useChat(props: UseChatProps) {
         })();
       } catch (err) {
         if (err instanceof Error && err.name === "AbortError") {
-          state.messages = state.messages.filter((m) => m.id !== assistantId);
+          // Stopped by the user: keep what was said (marked stopped) and
+          // record it as far as it got, so the record matches what you saw.
+          // Stopped before the first word = nothing to keep.
+          const partialMsg = state.messages.find((m) => m.id === assistantId);
+          const { thinking: partialThinking, contentWithoutThinking: partialText } =
+            extractThinkingFromContent(partialMsg?.content ?? "");
+          if (partialText.trim() && !partialMsg?.error) {
+            state.messages = state.messages.map((m) =>
+              m.id === assistantId
+                ? {
+                    ...m,
+                    content: partialText,
+                    thinking: partialThinking || m.thinking,
+                    isLoading: false,
+                    statusText: undefined,
+                    stopped: true,
+                  }
+                : m,
+            );
+            const stoppedPre = preRecord;
+            void (async () => {
+              const pre = stoppedPre ? await stoppedPre : null;
+              if (!pre || !recordCtx.holochainId || !state.conversationHash) return;
+              try {
+                await recordMessage(
+                  recordCtx.holochainId,
+                  state.conversationHash,
+                  "assistant",
+                  partialText,
+                  state.messageSequence,
+                  recordCtx.modelName,
+                  partialThinking || undefined,
+                  undefined,
+                  {
+                    mode: recordCtx.turnMode,
+                    stopped: true,
+                    runtime: {
+                      online:
+                        recordCtx.modelName.startsWith("online:") ||
+                        recordCtx.modelName.startsWith("external:"),
+                      app_version: pre.appVersion,
+                    },
+                  },
+                );
+                state.messageSequence++;
+                console.log("[Holochain] Stopped reply recorded as far as it got");
+              } catch (e) {
+                console.warn("[Holochain] Stopped reply not recorded:", e);
+              }
+            })();
+          } else {
+            state.messages = state.messages.filter((m) => m.id !== assistantId);
+          }
         } else {
           const errorMsg =
             err instanceof Error ? err.message : "Failed to get response";

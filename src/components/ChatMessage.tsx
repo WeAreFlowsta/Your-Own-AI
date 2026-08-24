@@ -1399,6 +1399,11 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
                   }}
                 />
               )}
+              {props.message.stopped && (
+                <p class="mt-1 pl-0 md:pl-10 lg:pl-10 text-xs text-[var(--text-muted)]">
+                  Stopped here - kept in your records as far as it got.
+                </p>
+              )}
               {codeData && !props.isDesktop && isCodePanelOpen.value && (
                 <div class="mt-2 pl-2 md:pl-10 lg:pl-10">
                   <CodePanel
