@@ -1451,7 +1451,10 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
             <div class="flex justify-end">
               <LiquidMetalButton
                 onClick$={() => handleDownload$(family.id)}
-                disabled={(!isSuitable && !store.betaFitOverride) || isDownloading}
+                // Greyed until the inventory answers - before that, "not
+                // downloaded" is a guess (field 08-24: active Download
+                // buttons on cards whose models were still being listed).
+                disabled={store.loadingModels || (!isSuitable && !store.betaFitOverride) || isDownloading}
                 class="flex items-center gap-2 px-4 py-2 text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <LuHardDriveDownload class="w-4 h-4" />
