@@ -435,10 +435,19 @@ export default component$(() => {
                 </p>
               )}
               {!workspacesLoading.value && workspaceMemories.value.length === 0 && (
-                <p class="text-sm text-[var(--text-muted)]">
-                  Nothing yet - project notes grow as your AIs work on
-                  projects.
-                </p>
+                <div class="p-5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)]">
+                  <p class="text-sm font-semibold text-[var(--text-primary)] mb-1.5">
+                    No project notes yet - because no projects yet.
+                  </p>
+                  <p class="text-sm text-[var(--text-secondary)] leading-relaxed">
+                    A project lets an AI work directly in a folder of your
+                    files - reading, writing, and building alongside you. As it
+                    works, it keeps notes here that every AI shares: the
+                    conventions, the decisions, the context. Start one from any
+                    chat with <span class="font-semibold">"Open a project..."</span>{" "}
+                    in the actions menu, and this page fills itself in.
+                  </p>
+                </div>
               )}
               {workspaceMemories.value.map((w) => (
                 <button
