@@ -3,7 +3,7 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
-## [0.6.0] - 2026-08-23
+## [0.6.0] - 2026-08-25
 
 Your AIs know you better, run bigger models on the machine you already
 have, and choose between them by what actually runs well on it.
@@ -303,6 +303,12 @@ have, and choose between them by what actually runs well on it.
 
 - "Your AIs can now go online" shows once, the moment a plan activates.
 - Removed the disabled records-tidying command.
+- The Models page's picks for this computer rank by where a model would
+  run first - on the card, then split with main memory, then processor -
+  the same order the first-run recommendation uses, so both screens name
+  the same model for the same machine.
+- The offline models page carries the same header controls as every
+  other page, Conversations included.
 
 ### Elsewhere
 - Every model, offline and online, now has its own page at
