@@ -940,6 +940,23 @@ pub async fn find_vision_model(
         _ => false,
     };
 
+    // A specialist (MedGemma) is for medical turns. For anything else a
+    // generalist wins even when the specialist's image encoder scores
+    // higher on the vision axis - that score reflects X-rays and scans,
+    // not holiday photos - the same discipline text routing applies to
+    // its general picks. The specialist is used only when it is the sole
+    // vision model here.
+    let candidates: Vec<String> = if medical {
+        candidates
+    } else {
+        let general: Vec<String> = candidates
+            .iter()
+            .filter(|n| !crate::model_caps::is_specialist(n))
+            .cloned()
+            .collect();
+        if general.is_empty() { candidates } else { general }
+    };
+
     // Rank: medical turns by medical capability, others by vision capability
     // (overall as the tiebreak in both cases).
     let axis = |name: &str| -> (u8, u8, u8) {
