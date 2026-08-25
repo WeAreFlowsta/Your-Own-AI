@@ -60,6 +60,30 @@ pub fn read_manifest(dir: &std::path::Path) -> Option<MlxManifest> {
     serde_json::from_slice(&bytes).ok()
 }
 
+/// Why a present artifact directory does not count as complete.
+fn incomplete_reason(dir: &std::path::Path) -> String {
+    let path = manifest_path(dir);
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) => return format!("no manifest ({e})"),
+    };
+    let m: MlxManifest = match serde_json::from_slice(&bytes) {
+        Ok(m) => m,
+        Err(e) => return format!("manifest unreadable ({e})"),
+    };
+    if !m.complete {
+        return "manifest not marked complete (download did not finish)".to_string();
+    }
+    for f in &m.files {
+        match std::fs::metadata(dir.join(&f.name)) {
+            Ok(md) if md.len() == f.size => {}
+            Ok(md) => return format!("{} is {} bytes, manifest says {}", f.name, md.len(), f.size),
+            Err(e) => return format!("{} missing ({e})", f.name),
+        }
+    }
+    "unknown".to_string()
+}
+
 /// Is this artifact completely downloaded and size-sound right now?
 /// (Cheap: stat per file. Hash verification happens once, at download.)
 pub fn artifact_complete(dir: &std::path::Path) -> bool {
@@ -371,6 +395,11 @@ pub async fn mlx_artifact_status(app: AppHandle, repo: String) -> Result<MlxArti
     let dir = artifact_dir(&app, &repo)?;
     let present = dir.exists();
     let complete = present && artifact_complete(&dir);
+    if present && !complete {
+        // Say WHY in the log: a row offering "Get the MLX version" for a
+        // directory that looks downloaded needs a reason in the diagnostics.
+        log::info!("[MLX] {} present but not complete: {}", artifact_dir_name(&repo), incomplete_reason(&dir));
+    }
     let dir_name = artifact_dir_name(&repo);
     let downloading = artifact_inflight_set()
         .lock()

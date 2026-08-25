@@ -14,6 +14,7 @@ import {
 import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
 import { ModelDownloader } from "../../components/ModelDownloader";
 import AppHeader from "../../components/AppHeader";
+import { useHeaderWorkspace } from "../../hooks/useHeaderWorkspace";
 import { invoke } from "@tauri-apps/api/core";
 
 export interface SystemInfo {
@@ -28,6 +29,7 @@ export interface SystemInfo {
 
 export default component$(() => {
   const nav = useNavigate();
+  const headerWs = useHeaderWorkspace();
   const systemInfo = useSignal<SystemInfo | null>(null);
   const loading = useSignal(true);
 
@@ -137,6 +139,15 @@ export default component$(() => {
           handleNewQuestion$={handleNewQuestion}
           handleModelsClick$={handleModelsClick}
           currentModel={currentModel.value}
+          folderPath={headerWs.folderPath.value}
+          folderStatus={headerWs.folderStatus.value}
+          permissionMode={headerWs.permissionMode.value}
+          onCloseFolder$={headerWs.closeFolder$}
+          buildInstalled={headerWs.buildInstalled.value}
+          recentFolders={headerWs.recentFolders.value}
+          onOpenFolder$={headerWs.openFolder$}
+          onBrowseFolder$={headerWs.browseFolder$}
+          onOpenConversations$={headerWs.openConversations$}
           showModelWidget={showModelWidget.value && currentModel.value !== null}
         />
         <div class="flex-1 flex items-center justify-center">
@@ -163,6 +174,15 @@ export default component$(() => {
           handleNewQuestion$={handleNewQuestion}
           handleModelsClick$={handleModelsClick}
           currentModel={currentModel.value}
+          folderPath={headerWs.folderPath.value}
+          folderStatus={headerWs.folderStatus.value}
+          permissionMode={headerWs.permissionMode.value}
+          onCloseFolder$={headerWs.closeFolder$}
+          buildInstalled={headerWs.buildInstalled.value}
+          recentFolders={headerWs.recentFolders.value}
+          onOpenFolder$={headerWs.openFolder$}
+          onBrowseFolder$={headerWs.browseFolder$}
+          onOpenConversations$={headerWs.openConversations$}
           showModelWidget={showModelWidget.value && currentModel.value !== null}
         />
       </div>

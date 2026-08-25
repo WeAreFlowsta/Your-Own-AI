@@ -386,6 +386,37 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     }
   });
 
+  /** Fetch the MLX artifact's state for every catalog entry that has one
+   *  (Apple Silicon + engine installed only - the lookups are cheap). */
+  const refreshMlxArtifacts$ = $(async () => {
+    if (!store.mlxEngineInstalled) return;
+    const { invoke } = await import('@tauri-apps/api/core');
+    for (const fam of modelFamilies) {
+      for (const v of fam.variants) {
+        const a = v.artifacts?.mlx;
+        if (!a?.hfRepo) continue;
+        try {
+          const st = await invoke<{ complete: boolean; downloading: boolean; bytes_done: number; bytes_total: number }>(
+            'mlx_artifact_status',
+            { repo: a.hfRepo }
+          );
+          const prev = store.mlxArtifacts[a.hfRepo];
+          // Reattach: an in-flight artifact download survives navigating
+          // away - the row shows its live percent again, never the button.
+          const percent = st.downloading
+            ? st.bytes_total > 0
+              ? Math.floor((st.bytes_done / st.bytes_total) * 100)
+              : 0
+            : prev?.percent ?? null;
+          store.mlxArtifacts = {
+            ...store.mlxArtifacts,
+            [a.hfRepo]: { complete: st.complete, percent },
+          };
+        } catch { /* leave unknown */ }
+      }
+    }
+  });
+
   const getModelsDir = $(async () => {
     try {
       const dir = await modelManager.getModelsDirectory();
@@ -398,13 +429,25 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
       const mlx = await invoke<{ supported: boolean; installed: boolean }>('mlx_engine_status');
       store.mlxEngineInstalled = mlx.supported && mlx.installed;
       await refreshMlxArtifacts$();
-    } catch { /* pre-MLX backend or not a Mac */ }
+    } catch (e) {
+      // Not a Mac / pre-MLX backend is normal; anything else must be seen.
+      console.warn('[models] MLX status check did not run:', e);
+    }
   });
 
   // eslint-disable-next-line qwik/no-use-visible-task
-  useVisibleTask$(() => {
+  useVisibleTask$(({ cleanup }) => {
     loadModels();
     getModelsDir();
+    // The MLX rows re-read their state when the window regains focus or a
+    // model is deleted - not only at mount.
+    const recheckMlx = () => { void refreshMlxArtifacts$(); };
+    window.addEventListener('focus', recheckMlx);
+    window.addEventListener('modelDeleted', recheckMlx);
+    cleanup(() => {
+      window.removeEventListener('focus', recheckMlx);
+      window.removeEventListener('modelDeleted', recheckMlx);
+    });
     store.pausedModels = [...getPausedModels()];
     import('@tauri-apps/api/app').then(({ getVersion }) =>
       getVersion().then((v) => {
@@ -757,36 +800,6 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
 
   /** Fetch the maker's speed-up file for a model that is already downloaded
    *  (downloaded before the catalog carried it), then register it. */
-  /** Fetch the MLX artifact's state for every catalog entry that has one
-   *  (Apple Silicon + engine installed only - the lookups are cheap). */
-  const refreshMlxArtifacts$ = $(async () => {
-    if (!store.mlxEngineInstalled) return;
-    const { invoke } = await import('@tauri-apps/api/core');
-    for (const fam of modelFamilies) {
-      for (const v of fam.variants) {
-        const a = v.artifacts?.mlx;
-        if (!a?.hfRepo) continue;
-        try {
-          const st = await invoke<{ complete: boolean; downloading: boolean; bytes_done: number; bytes_total: number }>(
-            'mlx_artifact_status',
-            { repo: a.hfRepo }
-          );
-          const prev = store.mlxArtifacts[a.hfRepo];
-          // Reattach: an in-flight artifact download survives navigating
-          // away - the row shows its live percent again, never the button.
-          const percent = st.downloading
-            ? st.bytes_total > 0
-              ? Math.floor((st.bytes_done / st.bytes_total) * 100)
-              : 0
-            : prev?.percent ?? null;
-          store.mlxArtifacts = {
-            ...store.mlxArtifacts,
-            [a.hfRepo]: { complete: st.complete, percent },
-          };
-        } catch { /* leave unknown */ }
-      }
-    }
-  });
 
   /** Download the MLX version of a downloaded GGUF model (the opt-in
    *  upgrade row action - never a silent second copy). */
