@@ -207,8 +207,17 @@ have, and choose between them by what actually runs well on it.
   and sends again by itself.
 - When nothing this machine can afford would hold it, the app says so in
   plain words - how much room the turn needs, how much the model is
-  running with - and offers to let Auto pick a model here that can hold
-  it, or to shorten the attachment.
+  running with - and offers what the AI's mode allows: an
+  online-and-offline AI can send it to an online model that holds it (an
+  explicit choice for that turn, since an attachment would leave your
+  device); an offline-only AI is never sent online quietly - the offer is
+  to switch it to Auto - Online and Offline first; a pinned model gets
+  "let Auto choose here". Health questions stay on your device whatever
+  the size, and the online offer only appears when your plan includes
+  online models.
+- In Auto - Online and Offline, a turn too long for every model on your
+  device routes to an online model that can hold it by itself (long
+  conversations; attachments only with consent), and the reply says why.
 - Models can now run with up to 131,072 tokens of context where the
   hardware carries it (the ceiling used to be 32,768 for every model, no
   matter the card or the model's own limit) - always sized against your
