@@ -227,6 +227,7 @@ have, and choose between them by what actually runs well on it.
   attention, not every layer - they were being charged several times
   their real cost, which kept them at smaller contexts than the card
   could carry and under-graded their fit.
+- The attachment meter counts with the running model's own tokenizer and shows its real context, with the room the app can make for a longer turn - chips go amber when a reload will hold them and red only when nothing on this machine can.
 
 ### The app fails politely
 - The first-run recommendation now sizes to your whole machine, not just
