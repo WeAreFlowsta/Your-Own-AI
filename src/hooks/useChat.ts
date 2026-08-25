@@ -259,6 +259,9 @@ export interface UseChatState {
   /** A turn parked because the user must resolve something before it sends —
    *  pick/download a vision model, or consent to sending an attachment to the
    *  cloud. The inline card (chat route) resends it once resolved. */
+  /** A resend after the app grew the context (context_grown) must not
+   *  record the user turn a second time - the first attempt already did. */
+  skipNextUserRecord?: boolean;
   pendingTurn: {
     userInput: string;
     chatAction: ChatAction;
@@ -294,6 +297,7 @@ export function useChat(props: UseChatProps) {
     messages: [],
     isLoading: false,
     error: null,
+    skipNextUserRecord: false,
     pendingTurn: null,
     conversationHash: null,
     cacheKey: newCacheKey(),
@@ -1020,7 +1024,6 @@ export function useChat(props: UseChatProps) {
             /* not a structured refusal - let the request try */
           }
           if (info.code !== "context_exceeded") return "ok";
-          state.messages = state.messages.filter((m) => m.id !== assistantId);
           state.pendingTurn = {
             userInput,
             chatAction,
@@ -1028,14 +1031,16 @@ export function useChat(props: UseChatProps) {
             fileContext,
             visionModel: "",
           };
-          state.error = JSON.stringify({
+          // abortWith parks the turn: user bubble AND placeholder go (the
+          // resend re-adds the bubble), loading clears, the banner shows.
+          abortWith(JSON.stringify({
             ...info,
             aiId: selectedAi.id,
             aiLabel: selectedAi.label,
             aiModel: selectedAi.aiConfig?.model ?? null,
             hasAttachment: images.length > 0 || !!fileContext,
             medical: await turnIsMedical(),
-          });
+          }));
           return "refused";
         }
       };
@@ -1148,6 +1153,20 @@ export function useChat(props: UseChatProps) {
         preRecord = (async () => {
           const recHolochainId = recordCtx.holochainId;
           if (!recHolochainId) return null;
+          if (state.skipNextUserRecord) {
+            // A resend after the app grew the context: the user turn was
+            // recorded by the first attempt; only the reply is new.
+            state.skipNextUserRecord = false;
+            const appVersion = await import("@tauri-apps/api/app")
+              .then((m) => m.getVersion())
+              .catch(() => "unknown");
+            const userAttachment = fileContext ? await buildAttachmentInfo(fileContext) : undefined;
+            const imageInfos =
+              images.length > 0
+                ? await Promise.all(images.map((url, i) => buildImageAttachmentInfo(url, i)))
+                : undefined;
+            return { userMsgHash: null, userAttachment, imageInfos, appVersion };
+          }
           try {
             if (!state.conversationHash) {
               // Use the first user message as the conversation title
@@ -1461,13 +1480,13 @@ export function useChat(props: UseChatProps) {
                   m.id === assistantId ? { ...m, groundingPending: true } : m,
                 );
                 grounded.push(
-                  ...(await groundDocument({
+                  ...((await groundDocument({
                     documentText: fileContext!,
                     answerText: displayContent,
                     docSha256: userAttachment.sha256,
                     docName,
                     model: warmOffline,
-                  })),
+                  })) ?? []),
                 );
               } else {
                 // Auto-grounding off → stash the context so the on-demand "Verify
@@ -1637,7 +1656,6 @@ export function useChat(props: UseChatProps) {
           if (ctxHit) {
             const need = Number(ctxHit[1]);
             const have = Number(errorMsg.match(/"n_ctx":\s*(\d+)/)?.[1] ?? 0);
-            state.messages = state.messages.filter((m) => m.id !== assistantId);
             const outcome = await growContextFor(need);
             if (outcome === "grew") {
               state.pendingTurn = {
@@ -1647,9 +1665,11 @@ export function useChat(props: UseChatProps) {
                 fileContext,
                 visionModel: "",
               };
-              state.error = JSON.stringify({ code: "context_grown", need });
+              // The user turn is already in the records from this attempt.
+              state.skipNextUserRecord = true;
+              abortWith(JSON.stringify({ code: "context_grown", need }));
             } else if (outcome === "ok") {
-              state.error = JSON.stringify({
+              abortWith(JSON.stringify({
                 code: "context_exceeded",
                 need,
                 have,
@@ -1659,7 +1679,7 @@ export function useChat(props: UseChatProps) {
                 aiModel: selectedAi.aiConfig?.model ?? null,
                 hasAttachment: images.length > 0 || !!fileContext,
                 medical: await turnIsMedical(),
-              });
+              }));
               state.pendingTurn = {
                 userInput,
                 chatAction,
@@ -1822,21 +1842,47 @@ export function useChat(props: UseChatProps) {
   const groundMessage$ = $(async (messageId: string) => {
     const msg = state.messages.find((m) => m.id === messageId);
     if (!msg?.groundingSource || msg.groundingPending) return;
+    const note = (text: string | undefined) => {
+      state.messages = state.messages.map((m) =>
+        m.id === messageId ? { ...m, groundingNote: text, groundingPending: false } : m,
+      );
+    };
     const current = props.currentModel.value;
     const model =
       current && !current.startsWith("online:") && !current.startsWith("external:")
         ? current
         : null;
     if (!model) {
-      state.messages = state.messages.map((m) =>
-        m.id === messageId
-          ? { ...m, statusText: "Load an offline model to verify sources." }
-          : m,
-      );
+      note("Verifying runs on your device - load an offline model first.");
       return;
     }
+    // Verification sends the WHOLE document to the local model: make sure
+    // it has the reading room (grow if the machine affords it), and say so
+    // plainly when it does not - a silent empty result read as a dead button.
+    const estTokens = Math.ceil(
+      (msg.groundingSource.documentText.length + msg.content.length + 2000) / 3,
+    );
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("ensure_context", { minTokens: estTokens });
+    } catch (e) {
+      const raw = e instanceof Error ? e.message : String(e);
+      let code = "";
+      try {
+        code = JSON.parse(raw)?.code ?? "";
+      } catch {
+        /* not structured */
+      }
+      if (code === "context_exceeded") {
+        const label = model.replace(/\.gguf$/i, "");
+        note(
+          `This document is too long for ${label} to check on this device (about ${estTokens.toLocaleString()} tokens). A shorter document, or a model with more room, can be verified.`,
+        );
+        return;
+      }
+    }
     state.messages = state.messages.map((m) =>
-      m.id === messageId ? { ...m, groundingPending: true, statusText: undefined } : m,
+      m.id === messageId ? { ...m, groundingPending: true, groundingNote: undefined } : m,
     );
     const grounded = await groundDocument({
       documentText: msg.groundingSource.documentText,
@@ -1845,12 +1891,18 @@ export function useChat(props: UseChatProps) {
       docName: msg.groundingSource.docName,
       model,
     });
+    if (grounded === null) {
+      note("Couldn't verify on this device - the model did not answer the check. See the log for details.");
+      return;
+    }
     state.messages = state.messages.map((m) =>
       m.id === messageId
         ? {
             ...m,
             ...(grounded.length > 0 ? { grounded } : {}),
             groundingPending: false,
+            groundingNote:
+              grounded.length > 0 ? undefined : "No claim in this answer could be matched to a passage in the document.",
           }
         : m,
     );

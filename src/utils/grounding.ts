@@ -85,7 +85,7 @@ export async function groundDocument(params: {
   docSha256: string;
   docName?: string;
   model: string;
-}): Promise<GroundedSource[]> {
+}): Promise<GroundedSource[] | null> {
   const { documentText, answerText, docSha256, docName, model } = params;
   if (!documentText.trim() || !answerText.trim() || !model) return [];
   try {
@@ -116,7 +116,9 @@ export async function groundDocument(params: {
       span: locateSpan(documentText, p.quote),
     }));
   } catch (e) {
+    // null = the check itself failed (request error, model refused) - callers
+    // tell the user; [] means it ran and matched nothing.
     console.warn("[Grounding] failed:", e);
-    return [];
+    return null;
   }
 }

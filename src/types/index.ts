@@ -122,6 +122,8 @@ export interface Message {
   isLoading?: boolean;
   /** The user stopped this reply - shown and recorded as far as it got. */
   stopped?: boolean;
+  /** Why Verify sources could not run, or that it matched nothing. */
+  groundingNote?: string;
   error?: string | null;
   aiLabel?: string;
   aiImageUrl?: string | null;
