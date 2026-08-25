@@ -534,11 +534,24 @@ async fn chat_completions(
         // app writes attachment context with a fixed marker, so the turn is
         // recognizable without any new wire field. Direct chats apply the
         // same rule client-side; this is the agent path's half.
+        // Images count too: a content array with an image part is an
+        // attachment as much as a marked document (the Build agent's
+        // image-description calls ride this path).
         let carries_attachment = incoming.iter().any(|m| {
-            m.get("content")
+            let content = m.get("content");
+            let marked_doc = content
                 .and_then(Value::as_str)
                 .map(|c| c.contains("[Attached files for context]"))
-                .unwrap_or(false)
+                .unwrap_or(false);
+            let has_image = content
+                .and_then(Value::as_array)
+                .map(|parts| {
+                    parts.iter().any(|p| {
+                        matches!(p.get("type").and_then(Value::as_str), Some("image_url") | Some("input_image"))
+                    })
+                })
+                .unwrap_or(false);
+            marked_doc || has_image
         });
         let attachments_may_go_online = crate::router::store_pref_bool(&app, "allowAttachmentsOnline");
         let route_mode = if device_only {

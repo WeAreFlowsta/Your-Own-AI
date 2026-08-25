@@ -555,7 +555,9 @@ export function useChat(props: UseChatProps) {
               query: userInput,
               queryVec: qv ?? undefined,
             }).catch(() => false);
-            if (!medicalImage && preferredModel === "auto:online-offline") {
+            const { lastKnownEntitled } = await import("../utils/entitlement");
+            const canUseOnline = lastKnownEntitled() !== "no";
+            if (!medicalImage && preferredModel === "auto:online-offline" && canUseOnline) {
               const onlineModels = await invoke<{ id: string; vision?: boolean }[]>(
                 "list_online_models",
               );
