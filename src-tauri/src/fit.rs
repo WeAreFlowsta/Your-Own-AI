@@ -78,8 +78,40 @@ pub struct ModelFit {
     pub load_secs: Option<f64>,
 }
 
-/// The context sizes the server can start at.
-const CTX_LADDER: [u64; 4] = [32768, 16384, 8192, 4096];
+/// The context sizes the server can start at (largest first). The top
+/// rungs are only ever reached VRAM-gated and clamped to the model's
+/// trained context - a 1M-context model on a card that can hold 64K of
+/// KV runs at 64K, and a dense model whose KV would not fit stays lower.
+const CTX_LADDER: [u64; 6] = [131072, 65536, 32768, 16384, 8192, 4096];
+
+/// The smallest ladder rung that holds `need_tokens` and that this
+/// machine can afford for this model - fully on the card (the green
+/// bound) or within the card plus a bounded slice of main memory (the
+/// same budget the agent floor uses). CPU-only machines size against
+/// main memory alone. None = nothing affordable holds it.
+pub fn ctx_for_need(
+    meta: &GgufMeta,
+    size_bytes: u64,
+    total_ram_gb: f64,
+    free_vram_gb: Option<f64>,
+    need_tokens: u64,
+) -> Option<u64> {
+    let cap = if meta.context_length > 0 { meta.context_length.max(4096) } else { u64::MAX };
+    let need = |ctx: u64| model_need(meta, size_bytes, ctx).2;
+    for &c in CTX_LADDER.iter().rev() {
+        if c < need_tokens || c > cap {
+            continue;
+        }
+        let affordable = match free_vram_gb {
+            Some(vram) => need(c) <= 0.9 * vram || need(c) <= vram + 0.6 * total_ram_gb,
+            None => need(c) <= 0.75 * total_ram_gb,
+        };
+        if affordable {
+            return Some(c);
+        }
+    }
+    None
+}
 
 /// The RAM-tier baseline (the sizes that have shipped for months). The
 /// thresholds sit BELOW the installed sizes they stand for: the OS reports
@@ -152,8 +184,17 @@ pub fn model_need(meta: &GgufMeta, size_bytes: u64, ctx: u64) -> (f64, f64, f64)
         ctx
     } as f64;
     // KV = 2 (K and V) × layers × kv_heads × head_dim × ctx × 2 bytes (f16).
+    // Only layers that carry attention hold a KV cache: hybrid models keep
+    // attention on a fraction of their layers, and charging all of them
+    // over-counted their context cost several times over (a 1M-context 9B
+    // read as unable to afford 64K on an 8 GB card that runs it fine).
+    let kv_layers = if meta.n_attn_layers > 0 && meta.n_attn_layers <= meta.n_layers {
+        meta.n_attn_layers
+    } else {
+        meta.n_layers
+    };
     let kv_gb = 2.0
-        * meta.n_layers as f64
+        * kv_layers as f64
         * meta.n_kv_heads as f64
         * meta.head_dim() as f64
         * eff_ctx
@@ -540,6 +581,7 @@ mod tests {
             n_experts_used: 0,
             ff_expert_len: 0,
             ff_shared_expert_len: 0,
+            n_attn_layers: 0,
             expert_bytes_per_layer: Vec::new(),
             non_expert_bytes: 0,
             split_no: 0,

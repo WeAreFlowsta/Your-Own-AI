@@ -981,6 +981,41 @@ export function useChat(props: UseChatProps) {
         appVersion: string;
       } | null> | null = null;
 
+      // Reading room: ask the app to make sure the running local model's
+      // context holds a turn of `tokens`. "grew" = it reloaded with more
+      // room; "ok" = it already held it (or the check could not run);
+      // "refused" = nothing this machine can afford holds it - the turn is
+      // parked and a plain-words banner explains (state.error).
+      const growContextFor = async (tokens: number): Promise<"grew" | "ok" | "refused"> => {
+        try {
+          const { invoke } = await import("@tauri-apps/api/core");
+          const r = await invoke<{ ctx: number; grew: boolean }>("ensure_context", {
+            minTokens: tokens,
+          });
+          if (r.grew) console.log(`[LLM] reading room: context grown to ${r.ctx} for a ~${tokens}-token turn`);
+          return r.grew ? "grew" : "ok";
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          let info: Record<string, unknown> = {};
+          try {
+            info = JSON.parse(msg);
+          } catch {
+            /* not a structured refusal - let the request try */
+          }
+          if (info.code !== "context_exceeded") return "ok";
+          state.messages = state.messages.filter((m) => m.id !== assistantId);
+          state.pendingTurn = {
+            userInput,
+            chatAction,
+            images: images ?? [],
+            fileContext,
+            visionModel: "",
+          };
+          state.error = JSON.stringify({ ...info, aiId: selectedAi.id, aiLabel: selectedAi.label });
+          return "refused";
+        }
+      };
+
       // A web-search model researches for a long stretch (often 30-60s)
       // before its first visible text - mark the turn so the status line can
       // say what's actually happening instead of a generic "thinking".
@@ -1066,6 +1101,21 @@ export function useChat(props: UseChatProps) {
           turnMode === "chat" && classifierJudged && !needsVision
             ? ("low" as const)
             : undefined;
+
+        // Reading room, BEFORE sending: a conservative estimate (dense text
+        // like logs runs ~3 characters a token) against the running
+        // context. Only local models have a context the app owns. The
+        // server's exact count corrects any miss on a 400 below.
+        if (!isOnlineModel && !isExternalModel) {
+          const estTokens =
+            Math.ceil(
+              (state.messages.reduce((n, m) => n + (m.content?.length ?? 0), 0) +
+                userInput.length +
+                (fileContext?.length ?? 0) +
+                4000) / 3,
+            ) + images.length * 1000;
+          if ((await growContextFor(estTokens)) === "refused") return;
+        }
 
         // Write the user's side now (see recordCtx above). Not awaited: the
         // request below goes out immediately; the assistant record awaits
@@ -1553,6 +1603,46 @@ export function useChat(props: UseChatProps) {
           const errorMsg =
             err instanceof Error ? err.message : "Failed to get response";
           console.error("[useChat] Error:", errorMsg);
+
+          // The server counted the turn exactly and it did not fit: grow to
+          // that count and resend once (the chat route resends on
+          // context_grown), or explain in plain words.
+          const ctxHit = errorMsg.includes("exceed_context_size_error")
+            ? errorMsg.match(/"n_prompt_tokens":\s*(\d+)/)
+            : null;
+          if (ctxHit) {
+            const need = Number(ctxHit[1]);
+            const have = Number(errorMsg.match(/"n_ctx":\s*(\d+)/)?.[1] ?? 0);
+            state.messages = state.messages.filter((m) => m.id !== assistantId);
+            const outcome = await growContextFor(need);
+            if (outcome === "grew") {
+              state.pendingTurn = {
+                userInput,
+                chatAction,
+                images: images ?? [],
+                fileContext,
+                visionModel: "",
+              };
+              state.error = JSON.stringify({ code: "context_grown", need });
+            } else if (outcome === "ok") {
+              state.error = JSON.stringify({
+                code: "context_exceeded",
+                need,
+                have,
+                model: recordCtx.modelName,
+                aiId: selectedAi.id,
+                aiLabel: selectedAi.label,
+              });
+              state.pendingTurn = {
+                userInput,
+                chatAction,
+                images: images ?? [],
+                fileContext,
+                visionModel: "",
+              };
+            }
+            return;
+          }
 
           const isNoModelError =
             errorMsg.includes("Model file not found") ||

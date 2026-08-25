@@ -579,6 +579,7 @@ pub fn run() {
             llm::set_models_directory,
             llm::is_model_downloaded,
             llm::load_model,
+            llm::ensure_context,
             llm::ensure_vision,
             llm::is_model_too_big,
             llm::get_current_model,

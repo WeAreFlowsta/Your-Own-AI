@@ -1005,6 +1005,86 @@ pub struct VisionPick {
 /// config stops its own compaction from ever firing).
 pub static CURRENT_CTX_SIZE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
+/// A context the NEXT spawn must reach at least (set by `ensure_context`
+/// after it checked the machine can afford it; consumed by the spawn).
+/// Lets a turn that outgrows the running context reload with more room
+/// instead of failing with a 400.
+pub static MIN_CTX_NEXT_LOAD: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+#[derive(serde::Serialize)]
+pub struct EnsureContextResult {
+    pub ctx: u32,
+    pub grew: bool,
+    pub model: Option<String>,
+}
+
+/// Make sure the running local model's context can hold a turn of
+/// `min_tokens` (plus reply room). No-op when it already does or when no
+/// local model is running; otherwise, if this machine can afford the rung
+/// that holds it, reload the same model there and report `grew`. When
+/// nothing affordable holds it, the error is a JSON `context_exceeded`
+/// with the numbers, for a plain-words banner.
+#[tauri::command]
+pub async fn ensure_context(
+    app_handle: AppHandle,
+    state: State<'_, LLMState>,
+    min_tokens: u32,
+) -> Result<EnsureContextResult, String> {
+    const REPLY_ROOM: u64 = 1024;
+    let unchanged = |model: Option<String>| EnsureContextResult {
+        ctx: current_ctx_size(),
+        grew: false,
+        model,
+    };
+    let Some(filename) = state.current_model.lock().await.clone() else {
+        return Ok(unchanged(None));
+    };
+    if !filename.ends_with(".gguf") {
+        return Ok(unchanged(Some(filename)));
+    }
+    let need = (min_tokens as u64).saturating_add(REPLY_ROOM);
+    let have = current_ctx_size() as u64;
+    if have >= need {
+        return Ok(unchanged(Some(filename)));
+    }
+    let path = get_models_dir(&app_handle)?.join(&filename);
+    let meta = crate::gguf::read_meta(&path).map_err(|e| e.to_string())?;
+    let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
+    let sys = sysinfo::System::new_with_specifics(
+        sysinfo::RefreshKind::nothing().with_memory(sysinfo::MemoryRefreshKind::everything()),
+    );
+    let total_ram_gb = sys.total_memory() as f64 / (1024.0 * 1024.0 * 1024.0);
+    // Free VRAM right now excludes what the running model holds; the
+    // reload frees it, so hand that footprint back before judging.
+    let reclaim = crate::fit::model_need(&meta, size, have).2;
+    let free_vram_gb = available_vram_mib(&app_handle)
+        .await
+        .map(|mib| mib as f64 / 1024.0 + reclaim);
+    match crate::fit::ctx_for_need(&meta, size, total_ram_gb, free_vram_gb, need) {
+        Some(target) => {
+            log::info!(
+                "[LLM] reading room: turn needs ~{need} tokens, running at {have} - reloading '{}' at {target}",
+                filename
+            );
+            MIN_CTX_NEXT_LOAD.store(target as u32, std::sync::atomic::Ordering::SeqCst);
+            let with_vision = state.current_mmproj.lock().await.is_some();
+            if let Err(e) = load_model(app_handle, state, filename.clone(), with_vision, "context-grow".into()).await {
+                MIN_CTX_NEXT_LOAD.store(0, std::sync::atomic::Ordering::SeqCst);
+                return Err(e);
+            }
+            Ok(EnsureContextResult { ctx: current_ctx_size(), grew: true, model: Some(filename) })
+        }
+        None => Err(serde_json::json!({
+            "code": "context_exceeded",
+            "need": need,
+            "have": have,
+            "model": filename,
+            "model_max": meta.context_length,
+        })
+        .to_string()),
+    }
+}
+
 pub fn current_ctx_size() -> u32 {
     let v = CURRENT_CTX_SIZE.load(std::sync::atomic::Ordering::Relaxed);
     if v == 0 { 8192 } else { v }
@@ -1358,6 +1438,20 @@ pub async fn start_llama_server(
             crate::fit::choose_ctx(meta, *size_bytes, total_ram_gb, free_vram_gb)
         }
         None => crate::fit::ram_tier_ctx(total_ram_gb, small_model),
+    };
+    // A turn that needs more room than the sizing gave (ensure_context
+    // checked the machine can afford it): honor the requested minimum,
+    // clamped to the model's trained context.
+    let min_ctx = MIN_CTX_NEXT_LOAD.swap(0, std::sync::atomic::Ordering::SeqCst) as u64;
+    let ctx_size: u64 = if min_ctx > ctx_size {
+        let cap = header
+            .as_ref()
+            .map(|(m, _)| m.context_length)
+            .filter(|&c| c > 0)
+            .unwrap_or(u64::MAX);
+        min_ctx.min(cap.max(4096))
+    } else {
+        ctx_size
     };
     CURRENT_CTX_SIZE.store(ctx_size as u32, std::sync::atomic::Ordering::Relaxed);
     println!(
@@ -3124,6 +3218,8 @@ pub async fn load_model(
         let current = state.current_model.lock().await.clone();
         if current.as_deref() == Some(filename.as_str())
             && (!with_vision || state.current_mmproj.lock().await.is_some())
+            // A pending reading-room request means "reload with more" - not a duplicate.
+            && MIN_CTX_NEXT_LOAD.load(std::sync::atomic::Ordering::SeqCst) == 0
             && chat_server_health_ok().await
         {
             log::info!("[LLM] '{}' already loaded and healthy — nothing to do", filename);

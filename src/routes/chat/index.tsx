@@ -543,6 +543,26 @@ export default component$(() => {
   // Auto-resume a message that was waiting on a vision-model download, once the
   // app-level manager reports it finished for this AI (fires on completion or when
   // returning to this chat). consumeReady$ no-ops if it's for a different AI.
+  // A turn parked because the model's context could not hold it, after
+  // the app made room: resend it once. (useChat cannot call itself - a
+  // QRL that captures its own binding breaks the build.)
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async ({ track }) => {
+    const err = track(() => chatState.error);
+    if (!err) return;
+    let code = "";
+    try {
+      code = JSON.parse(err)?.code ?? "";
+    } catch {
+      return;
+    }
+    if (code !== "context_grown") return;
+    const t = chatState.pendingTurn;
+    chatState.pendingTurn = null;
+    chatState.error = null;
+    if (t) await sendMessage(t.userInput, t.chatAction, t.fileContext, t.images);
+  });
+
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async ({ track }) => {
     const status = track(() => visionDownload.state.active?.status);
@@ -1626,6 +1646,52 @@ export default component$(() => {
                         >
                           Manage plan
                         </LiquidMetalButton>
+                      </div>
+                    );
+                  }
+                  if (online?.code === "context_exceeded") {
+                    const c = online as {
+                      need?: number;
+                      have?: number;
+                      model?: string;
+                      aiId?: string;
+                      aiLabel?: string;
+                    };
+                    const modelLabel = (c.model ?? "this model").replace(/\.gguf$/i, "");
+                    return (
+                      <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-700 rounded-lg p-4">
+                        <p class="text-sm font-medium text-yellow-800 dark:text-yellow-200 mb-1">
+                          More than {modelLabel} can read at once here
+                        </p>
+                        <p class="text-sm text-yellow-700 dark:text-yellow-300 mb-4">
+                          This turn needs about {Number(c.need ?? 0).toLocaleString()} tokens of
+                          reading room; the model is running with {Number(c.have ?? 0).toLocaleString()},
+                          and this computer can't make more room for it. Shorten the
+                          attachment, or let Auto pick a model here that can hold it.
+                        </p>
+                        <div class="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+                          <LiquidMetalButton
+                            variant="secondary"
+                            onClick$={() => {
+                              chatState.pendingTurn = null;
+                              chatState.error = null;
+                            }}
+                            class="px-4 py-2 text-sm"
+                          >
+                            Dismiss
+                          </LiquidMetalButton>
+                          <LiquidMetalButton
+                            onClick$={async () => {
+                              const t = chatState.pendingTurn;
+                              chatState.pendingTurn = null;
+                              chatState.error = null;
+                              if (t) await sendMessage(t.userInput, t.chatAction, t.fileContext, t.images, "auto:offline");
+                            }}
+                            class="px-4 py-2 text-sm"
+                          >
+                            Let Auto choose a model
+                          </LiquidMetalButton>
+                        </div>
                       </div>
                     );
                   }

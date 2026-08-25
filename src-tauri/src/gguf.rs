@@ -46,6 +46,13 @@ pub struct GgufMeta {
     /// (cold experts) or a crawl (post-hoc "surgery" MoEs that activate
     /// most of their width).
     pub ff_shared_expert_len: u64,
+    /// Layers that actually carry an attention KV cache, counted from the
+    /// tensor table (`blk.N.attn_k*` / `attn_qkv`). Hybrid models (Qwen 3.5
+    /// family, Nemotron 3.5, Granite 4, LFM2.5) keep attention on a
+    /// fraction of their layers - the rest are recurrent and hold no KV -
+    /// so charging every layer over-counts their context cost several
+    /// times over. 0 = unknown (table unreadable): callers use n_layers.
+    pub n_attn_layers: u64,
     /// Bytes of expert tensors per layer (index = block), from the tensor
     /// table (sizes = offset deltas, no type table needed). Empty for dense
     /// models, and for files whose tensor table could not be read - the
@@ -451,6 +458,7 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
         n_experts_used: 0,
         ff_expert_len: 0,
         ff_shared_expert_len: 0,
+        n_attn_layers: 0,
         expert_bytes_per_layer: Vec::new(),
         non_expert_bytes: 0,
         split_no: 0,
@@ -571,6 +579,7 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
                 let n_layers = m.n_layers as usize;
                 apply_expert_split(&mut m, &t, n_layers);
             }
+            m.n_attn_layers = count_attention_layers(&t);
         }
     }
 
@@ -582,11 +591,13 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
         let mut per_layer = vec![0u64; m.n_layers as usize];
         let mut non_expert = 0u64;
         let mut complete = true;
+        let mut attn_blocks: std::collections::HashSet<usize> = std::collections::HashSet::new();
         for sib in shard_paths(path, m.split_count).into_iter().skip(1) {
             match read_shard_table(&sib) {
                 Ok((len, t)) => {
                     total += len;
                     accumulate_expert_split(&t, &mut per_layer, &mut non_expert);
+                    attn_blocks.extend(t.iter().filter_map(|e| e.attn_block));
                 }
                 Err(e) => {
                     log::warn!("[gguf] shard {} of {}: {e}", sib.display(), path.display());
@@ -595,6 +606,9 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
             }
         }
         m.total_bytes = total;
+        if complete && !attn_blocks.is_empty() {
+            m.n_attn_layers = attn_blocks.len() as u64;
+        }
         if m.is_moe() {
             if complete && per_layer.iter().any(|&b| b > 0) {
                 m.expert_bytes_per_layer = per_layer;
@@ -642,6 +656,28 @@ pub fn shard_name_parts(path: &std::path::Path) -> Option<(String, u32, u32)> {
 struct TensorBytes {
     bytes: u64,
     expert_block: Option<usize>,
+    /// The block this tensor belongs to when it is an attention K weight
+    /// (the layer carries a KV cache); None otherwise.
+    attn_block: Option<usize>,
+}
+
+/// Attention layers are the ones with a K projection (`blk.N.attn_k.*`,
+/// `attn_k_norm` only appears beside one) or a fused `attn_qkv`. Recurrent
+/// layers of hybrid models carry `ssm_*` tensors and no K - no KV cache.
+fn attn_block_of(name: &str) -> Option<usize> {
+    let rest = name.strip_prefix("blk.")?;
+    let dot = rest.find('.')?;
+    let block: usize = rest[..dot].parse().ok()?;
+    let tail = &rest[dot..];
+    let is_attn = tail.starts_with(".attn_k.") || tail.starts_with(".attn_k_") || tail.starts_with(".attn_qkv");
+    is_attn.then_some(block)
+}
+
+/// Distinct blocks with an attention K weight - the layers a KV cache
+/// actually costs for.
+fn count_attention_layers(t: &[TensorBytes]) -> u64 {
+    let blocks: std::collections::HashSet<usize> = t.iter().filter_map(|e| e.attn_block).collect();
+    blocks.len() as u64
 }
 
 /// Read a shard's tensor table (bounded) and return its file length + table.
@@ -722,8 +758,9 @@ fn read_tensor_table<R: Read + Seek>(
     tensor_count: u64,
     alignment: u64,
 ) -> std::io::Result<Vec<TensorBytes>> {
-    // (offset, expert block or None)
-    let mut tensors: Vec<(u64, Option<usize>)> = Vec::with_capacity(tensor_count as usize);
+    // (offset, expert block or None, attention block or None)
+    let mut tensors: Vec<(u64, Option<usize>, Option<usize>)> =
+        Vec::with_capacity(tensor_count as usize);
     for _ in 0..tensor_count {
         let name = r.read_gstr()?;
         let n_dims = r.read_u32()?;
@@ -735,19 +772,19 @@ fn read_tensor_table<R: Read + Seek>(
         }
         let _ty = r.read_u32()?;
         let offset = r.read_u64()?;
-        tensors.push((offset, expert_block_of(&name)));
+        tensors.push((offset, expert_block_of(&name), attn_block_of(&name)));
     }
     // Data section starts at the header end rounded up to the alignment.
     let data_start = r.pos.div_ceil(alignment) * alignment;
     let data_len = r.len.saturating_sub(data_start);
     tensors.sort_by_key(|t| t.0);
     let mut out = Vec::with_capacity(tensors.len());
-    for (i, (offset, block)) in tensors.iter().enumerate() {
+    for (i, (offset, block, attn)) in tensors.iter().enumerate() {
         let end = tensors.get(i + 1).map(|t| t.0).unwrap_or(data_len);
         if end < *offset || *offset > data_len {
             return Err(damaged("tensor data runs past the end of the file (incomplete download)"));
         }
-        out.push(TensorBytes { bytes: end - offset, expert_block: *block });
+        out.push(TensorBytes { bytes: end - offset, expert_block: *block, attn_block: *attn });
     }
     Ok(out)
 }
