@@ -162,6 +162,15 @@ const BENIGN_REFERENCES: &[&str] = &[
     "my car is making a strange noise",
     "recommend something to watch",
     "help me with my resume",
+    // Generic image and document questions: without these, "what's in this
+    // image?" had no benign neighbor and sat next to "explain this x-ray
+    // image to me" - a random photo routed to the medical model.
+    "what is in this image",
+    "describe this picture for me",
+    "what does this photo show",
+    "what is in this pdf",
+    "summarize this document for me",
+    "what is this file about",
 ];
 
 static MEDICAL_REFS: tokio::sync::OnceCell<Vec<Vec<f32>>> = tokio::sync::OnceCell::const_new();
@@ -215,6 +224,20 @@ fn looks_medical(query: &str) -> bool {
 /// semantic stage against MEDICAL_REFERENCES using the turn's shared
 /// embedding. `false` when embedding is unavailable and no keyword hits.
 pub(crate) async fn is_medical_turn(app: &AppHandle, query: &str, query_vec: Option<&[f32]>) -> bool {
+    is_medical_turn_with_margin(app, query, query_vec, MEDICAL_MARGIN).await
+}
+
+/// The vision picker's bar: a text-routing false positive only keeps a
+/// question home (the safe direction); a vision-pick false positive swaps
+/// a general vision model for the medical one on a holiday photo.
+pub(crate) const VISION_MEDICAL_MARGIN: f32 = 0.15;
+
+pub(crate) async fn is_medical_turn_with_margin(
+    app: &AppHandle,
+    query: &str,
+    query_vec: Option<&[f32]>,
+    min_margin: f32,
+) -> bool {
     if looks_medical(query) {
         return true;
     }
@@ -239,7 +262,7 @@ pub(crate) async fn is_medical_turn(app: &AppHandle, query: &str, query_vec: Opt
     let benign_score = benign.iter().map(|r| cosine(&qvec, r)).fold(0.0f32, f32::max);
     // Contrastive: medical only when the turn is BOTH related to the medical
     // refs AND meaningfully closer to them than to ordinary-question anchors.
-    if med_score >= MEDICAL_THRESHOLD && med_score - benign_score >= MEDICAL_MARGIN {
+    if med_score >= MEDICAL_THRESHOLD && med_score - benign_score >= min_margin {
         log::info!(
             "[router] medical semantic gate hit (med {med_score:.3}, benign {benign_score:.3}, margin {:.3})",
             med_score - benign_score

@@ -929,7 +929,13 @@ pub async fn find_vision_model(
     // turn embedding.
     let medical = match query.as_deref() {
         Some(q) if !q.trim().is_empty() => {
-            crate::router::is_medical_turn(&app_handle, q, query_vec.as_deref()).await
+            crate::router::is_medical_turn_with_margin(
+                &app_handle,
+                q,
+                query_vec.as_deref(),
+                crate::router::VISION_MEDICAL_MARGIN,
+            )
+            .await
         }
         _ => false,
     };
