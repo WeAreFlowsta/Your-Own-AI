@@ -197,6 +197,28 @@ have, and choose between them by what actually runs well on it.
   Duplicate learned facts tidy themselves up along the way. Nothing
   leaves your device, and pausing memory pauses this too.
 
+### Reading room follows the turn
+- A long attachment or a long conversation no longer fails with a raw
+  "exceeds the available context" error. Before sending, the app checks
+  whether the running model's context can hold the turn; if this
+  computer can afford more, it reloads the same model with more room
+  first - you see the usual loading hint - and then sends. If the
+  server still finds the turn too big, the app grows to the exact count
+  and sends again by itself.
+- When nothing this machine can afford would hold it, the app says so in
+  plain words - how much room the turn needs, how much the model is
+  running with - and offers to let Auto pick a model here that can hold
+  it, or to shorten the attachment.
+- Models can now run with up to 131,072 tokens of context where the
+  hardware carries it (the ceiling used to be 32,768 for every model, no
+  matter the card or the model's own limit) - always sized against your
+  graphics memory and clamped to what the model was trained for.
+- The context cost of hybrid models (the Qwen 3.5 family, Nemotron 3.5,
+  Granite 4, LFM2.5) is now counted from the layers that actually keep
+  attention, not every layer - they were being charged several times
+  their real cost, which kept them at smaller contexts than the card
+  could carry and under-graded their fit.
+
 ### The app fails politely
 - The first-run recommendation now sizes to your whole machine, not just
   the graphics card: a model that fits the card but not the system's
