@@ -648,6 +648,14 @@ const ActionBar = component$<ActionBarProps>((props) => {
               </LiquidMetalButton>
             )}
           </div>
+          {/* Verify-sources outcome sits right under the strip that holds the
+              button - feedback belongs where the click happened, not at the
+              foot of a long answer. */}
+          {props.message.groundingNote && (
+            <p class="px-4 pb-3 -mt-1 text-xs text-[var(--text-muted)]">
+              {props.message.groundingNote}
+            </p>
+          )}
         )}
       </div>
 
@@ -1402,11 +1410,6 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
               {props.message.stopped && (
                 <p class="mt-1 pl-0 md:pl-10 lg:pl-10 text-xs text-[var(--text-muted)]">
                   Stopped here - kept in your records as far as it got.
-                </p>
-              )}
-              {props.message.groundingNote && (
-                <p class="mt-1 pl-0 md:pl-10 lg:pl-10 text-xs text-[var(--text-muted)]">
-                  {props.message.groundingNote}
                 </p>
               )}
               {codeData && !props.isDesktop && isCodePanelOpen.value && (
