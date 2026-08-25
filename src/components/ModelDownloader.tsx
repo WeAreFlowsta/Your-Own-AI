@@ -1087,6 +1087,14 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     { key: 'size-desc', label: 'Largest' },
   ] as const;
 
+  // Where a pick would run outranks its category: fully on the card, then
+  // MoE split / fast-class, then an oversized CPU run - the welcome modal's
+  // order, so both screens name the same model for the same machine.
+  const modeClass = (v: ModelVariant) => {
+    const m = getRunMode(v, totalRAM, totalVRAM, freeRAM);
+    return m === 'gpu' ? 2 : m === 'moe-split' || v.size <= 5 ? 1 : 0;
+  };
+
   // Find the single best recommended family + variant for this system.
   // Prefers models that fit fully in VRAM (fastest), then largest suitable.
   const bestPick = (() => {
@@ -1098,10 +1106,14 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
         return { family: f, variant, gpu };
       });
 
-    // Sort: full GPU first, then by size descending within each group
+    // Sort by where it runs (getRunMode, not raw file size vs VRAM), then
+    // size: bigger wins on the card and in fast-class, smaller wins oversized.
     candidates.sort((a, b) => {
-      if (a.gpu.isFull !== b.gpu.isFull) return a.gpu.isFull ? -1 : 1;
-      return b.variant.size - a.variant.size;
+      const d = modeClass(b.variant) - modeClass(a.variant);
+      if (d !== 0) return d;
+      return modeClass(a.variant) === 0
+        ? a.variant.size - b.variant.size
+        : b.variant.size - a.variant.size;
     });
 
     return candidates[0] || null;
@@ -1128,6 +1140,9 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
         const bp = b.f.id === preferId ? 0 : 1;
         if (ap !== bp) return ap - bp;
       }
+      const am = modeClass(a.v);
+      const bm = modeClass(b.v);
+      if (am !== bm) return bm - am;
       const ac = order[a.f.category] ?? 9;
       const bc = order[b.f.category] ?? 9;
       if (ac !== bc) return ac - bc;

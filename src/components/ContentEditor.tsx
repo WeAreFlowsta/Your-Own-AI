@@ -16,6 +16,7 @@ interface ContentEditorProps {
   attachedFiles: Signal<AttachedFile[]>;
   attachedImages?: Signal<AttachedImage[]>;
   contextWindowSize: number;
+  contextCeiling: number;
   onAttachFiles$: QRL<(paths: string[]) => void>;
   /** Open a folder for this conversation (Build agent). */
   onOpenFolder$?: QRL<(path: string) => void>;
@@ -242,6 +243,7 @@ export const ContentEditor = component$<ContentEditorProps>((props) => {
         files={props.attachedFiles}
         images={props.attachedImages}
         contextWindowSize={props.contextWindowSize}
+        contextCeiling={props.contextCeiling}
       />
 
       <div class={`relative flex ${isMultiLine.value ? 'items-start' : 'items-center'} transition-[align-items] duration-200`}>

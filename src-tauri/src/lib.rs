@@ -447,7 +447,8 @@ async fn read_file_for_context(
         content
     };
 
-    let estimated_tokens = (final_content.len() as f64 / 4.0).ceil() as u64;
+    // Exact when a local model is up (its own tokenizer); a safe ratio otherwise.
+    let estimated_tokens = llm::count_tokens_text(&final_content).await;
 
     Ok(serde_json::json!({
         "filename": filename,
@@ -459,9 +460,14 @@ async fn read_file_for_context(
     }))
 }
 
-/// Get the current model's context window size in tokens
+/// The running local model's context in tokens; the RAM-tier baseline
+/// before any model has loaded.
 #[tauri::command]
 async fn get_context_window_size() -> Result<u64, String> {
+    let live = llm::CURRENT_CTX_SIZE.load(std::sync::atomic::Ordering::Relaxed);
+    if live > 0 {
+        return Ok(live as u64);
+    }
     let sys = sysinfo::System::new_with_specifics(
         sysinfo::RefreshKind::nothing().with_memory(sysinfo::MemoryRefreshKind::everything()),
     );
@@ -580,6 +586,8 @@ pub fn run() {
             llm::is_model_downloaded,
             llm::load_model,
             llm::ensure_context,
+            llm::context_room,
+            llm::count_tokens,
             llm::ensure_vision,
             llm::is_model_too_big,
             llm::get_current_model,

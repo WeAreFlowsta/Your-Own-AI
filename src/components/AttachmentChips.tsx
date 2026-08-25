@@ -16,7 +16,10 @@ import type { AttachedFile, AttachedImage } from '../types';
 interface AttachmentChipsProps {
   files: Signal<AttachedFile[]>;
   images?: Signal<AttachedImage[]>;
+  /** The running model's context. */
   contextWindowSize: number;
+  /** The largest context the app can make room for on this machine. */
+  contextCeiling: number;
 }
 
 function formatSize(bytes: number): string {
@@ -25,18 +28,13 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** Traffic light per file: share of the context window it eats alone. */
-function fileStatus(tokens: number, contextWindow: number): 'green' | 'amber' | 'red' {
-  const ratio = tokens / contextWindow;
-  if (ratio < 0.15) return 'green';
-  if (ratio < 0.4) return 'amber';
-  return 'red';
-}
-
-function totalStatusOf(totalTokens: number, contextWindow: number): 'green' | 'amber' | 'red' {
-  const ratio = totalTokens / contextWindow;
-  if (ratio < 0.5) return 'green';
-  if (ratio < 0.75) return 'amber';
+/** Traffic light against the reading room: green fits the running context
+ *  outright, amber fits once the app makes room (a reload), red is more
+ *  than this model can hold on this machine. */
+type Light = 'green' | 'amber' | 'red';
+function lightFor(tokens: number, current: number, ceiling: number): Light {
+  if (tokens <= current * 0.75) return 'green';
+  if (tokens <= Math.max(ceiling, current) * 0.9) return 'amber';
   return 'red';
 }
 
@@ -58,7 +56,7 @@ export const AttachmentChips = component$<AttachmentChipsProps>((props) => {
   if (files.length === 0 && images.length === 0) return null;
 
   const totalTokens = files.reduce((sum, f) => sum + f.estimatedTokens, 0);
-  const totalStatus = totalStatusOf(totalTokens, props.contextWindowSize);
+  const totalStatus = lightFor(totalTokens, props.contextWindowSize, props.contextCeiling);
   const itemCount = files.length + images.length;
 
   const removeFile = $((path: string) => {
@@ -99,7 +97,7 @@ export const AttachmentChips = component$<AttachmentChipsProps>((props) => {
         ))}
 
         {files.map((file) => {
-          const status = fileStatus(file.estimatedTokens, props.contextWindowSize);
+          const status = lightFor(file.estimatedTokens, props.contextWindowSize, props.contextCeiling);
           return (
             <span
               key={file.path}
@@ -140,6 +138,9 @@ export const AttachmentChips = component$<AttachmentChipsProps>((props) => {
       {files.length > 0 && totalStatus !== 'green' && (
         <div class={`text-right text-[10px] mt-0.5 ${totalTextColors[totalStatus]}`}>
           ~{totalTokens.toLocaleString()} / {props.contextWindowSize.toLocaleString()} tokens
+          {totalStatus === 'amber'
+            ? ` · room will be made (up to ${props.contextCeiling.toLocaleString()})`
+            : ` · beyond this model's room here (${props.contextCeiling.toLocaleString()}) - options when you send`}
         </div>
       )}
     </div>

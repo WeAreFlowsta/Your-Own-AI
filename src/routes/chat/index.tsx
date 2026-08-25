@@ -104,6 +104,8 @@ export default component$(() => {
   // reading notice so a big PDF drop never looks like nothing happened.
   const attachReading = useSignal<string | null>(null);
   const contextWindowSize = useSignal(8192);
+  // The reading room's ceiling for the running model on this machine.
+  const contextCeiling = useSignal(8192);
 
   // Refs (replace useRef)
   const messagesEndRef = useSignal<HTMLDivElement | undefined>();
@@ -636,13 +638,23 @@ export default component$(() => {
       window.removeEventListener("modelDeleted", checkCurrentModelExists);
     });
 
-    // Fetch context window size for file attachment token budget
-    try {
-      const ctxSize = await invoke<number>("get_context_window_size");
-      contextWindowSize.value = ctxSize;
-    } catch (e) {
-      console.error("[ChatPage] Failed to get context window size:", e);
-    }
+    // The attachment meter grades against the running model's context and
+    // the reading room's ceiling - re-read whenever a model (re)loads.
+    const refreshRoom = async () => {
+      try {
+        const room = await invoke<{ current: number; ceiling: number }>("context_room");
+        contextWindowSize.value = room.current;
+        contextCeiling.value = Math.max(room.ceiling, room.current);
+      } catch (e) {
+        console.error("[ChatPage] Failed to read the context room:", e);
+      }
+    };
+    await refreshRoom();
+    import("@tauri-apps/api/event").then(({ listen }) => {
+      listen("context-size-changed", () => {
+        void refreshRoom();
+      });
+    });
 
     // --- Check for models on mount, show welcome modal or auto-load ---
     if (hasCheckedForModels.value) {
@@ -1102,7 +1114,9 @@ export default component$(() => {
                     sizeBytes: new TextEncoder().encode(text).length,
                     content: text,
                     truncated: false,
-                    estimatedTokens: Math.ceil(text.length / 4),
+                    estimatedTokens: await invoke<number>("count_tokens", { text }).catch(() =>
+                      Math.ceil(text.length / 3),
+                    ),
                   },
                 ];
                 continue;
@@ -1302,6 +1316,7 @@ export default component$(() => {
               attachedFiles={attachedFiles}
               attachedImages={attachedImages}
               contextWindowSize={contextWindowSize.value}
+              contextCeiling={contextCeiling.value}
               onAttachFiles$={handleAttachFiles}
               onOpenFolder$={openFolder$}
               onOpenTerminal$={handleOpenTerminal}

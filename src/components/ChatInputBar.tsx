@@ -25,6 +25,7 @@ interface ChatInputBarProps {
   attachedFiles: Signal<AttachedFile[]>;
   attachedImages: Signal<AttachedImage[]>;
   contextWindowSize: number;
+  contextCeiling: number;
   onAttachFiles$: QRL<(paths: string[]) => void>;
   /** Open a folder for this conversation (Build agent). */
   onOpenFolder$?: QRL<(path: string) => void>;
@@ -48,6 +49,7 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
   attachedFiles,
   attachedImages,
   contextWindowSize,
+  contextCeiling,
   onAttachFiles$,
   onOpenFolder$,
   theme,
@@ -194,6 +196,7 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
             attachedFiles={attachedFiles}
             attachedImages={attachedImages}
             contextWindowSize={contextWindowSize}
+            contextCeiling={contextCeiling}
             onAttachFiles$={onAttachFiles$}
             onOpenFolder$={onOpenFolder$}
             selectedAiId={selectedAi.id}

@@ -37,6 +37,7 @@ interface ChatContainerProps {
   attachedFiles: Signal<AttachedFile[]>;
   attachedImages: Signal<AttachedImage[]>;
   contextWindowSize: number;
+  contextCeiling: number;
   onAttachFiles$: QRL<(paths: string[]) => void>;
   // Folder (Build agent) session
   onPermissionRespond$?: QRL<(requestId: number, decision: 'allow' | 'reject', always: boolean) => void>;
@@ -147,6 +148,7 @@ export default component$<ChatContainerProps>((props) => {
           attachedFiles={props.attachedFiles}
           attachedImages={props.attachedImages}
           contextWindowSize={props.contextWindowSize}
+          contextCeiling={props.contextCeiling}
           onAttachFiles$={props.onAttachFiles$}
           onOpenFolder$={props.onOpenFolder$}
           lastConversationTitle={props.lastConversationTitle}
@@ -223,6 +225,7 @@ export default component$<ChatContainerProps>((props) => {
           attachedFiles={props.attachedFiles}
           attachedImages={props.attachedImages}
           contextWindowSize={props.contextWindowSize}
+          contextCeiling={props.contextCeiling}
           onAttachFiles$={props.onAttachFiles$}
           onOpenFolder$={props.onOpenFolder$}
           theme={props.theme}

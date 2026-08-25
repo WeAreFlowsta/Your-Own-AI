@@ -292,6 +292,28 @@ export interface UseChatProps {
   modelTooBig: Signal<boolean>;
 }
 
+/** A turn's size in tokens - history, this message and any attached text -
+ *  by the running model's own tokenizer when one is up (a dense-text ratio
+ *  when not), plus persona room and ~1000 per image. Shared by the router's
+ *  context filter and the reading-room check. */
+async function turnTokensFor(
+  history: { content?: string }[],
+  userInput: string,
+  fileContext: string | null | undefined,
+  imageCount: number,
+): Promise<number> {
+  const text =
+    history.map((m) => m.content ?? "").join("\n") + "\n" + userInput + "\n" + (fileContext ?? "");
+  let counted: number;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    counted = await invoke<number>("count_tokens", { text });
+  } catch {
+    counted = Math.ceil(text.length / 3);
+  }
+  return counted + 1500 + imageCount * 1000;
+}
+
 export function useChat(props: UseChatProps) {
   const state = useStore<UseChatState>({
     messages: [],
@@ -654,14 +676,8 @@ export function useChat(props: UseChatProps) {
             onlineHardGeneral,
             queryVec: queryVec ?? undefined,
             // The turn's size, so the pick can set aside models whose runtime
-            // context is too short for it: history + this message + any
-            // attached text (chars/4) + ~1000 tokens per image + persona room.
-            turnTokens: Math.ceil(
-              (state.messages.reduce((n, m) => n + (m.content?.length ?? 0), 0) +
-                userInput.length +
-                (fileContext?.length ?? 0) +
-                4000) / 4,
-            ) + images.length * 1000,
+            // context is too short for it.
+            turnTokens: await turnTokensFor(state.messages, userInput, fileContext, images.length),
           });
           console.log(`[Router] ${mode} → ${r.model} (${r.reason})`);
           preferredModel = r.model;
@@ -1131,18 +1147,12 @@ export function useChat(props: UseChatProps) {
             ? ("low" as const)
             : undefined;
 
-        // Reading room, BEFORE sending: a conservative estimate (dense text
-        // like logs runs ~3 characters a token) against the running
-        // context. Only local models have a context the app owns. The
-        // server's exact count corrects any miss on a 400 below.
+        // Reading room, BEFORE sending: the turn counted by the running
+        // model's own tokenizer, against its context. Only local models have
+        // a context the app owns. The server's count corrects any miss on a
+        // 400 below (a model that loaded after this count, say).
         if (!isOnlineModel && !isExternalModel) {
-          const estTokens =
-            Math.ceil(
-              (state.messages.reduce((n, m) => n + (m.content?.length ?? 0), 0) +
-                userInput.length +
-                (fileContext?.length ?? 0) +
-                4000) / 3,
-            ) + images.length * 1000;
+          const estTokens = await turnTokensFor(state.messages, userInput, fileContext, images.length);
           if ((await growContextFor(estTokens)) === "refused") return;
         }
 
@@ -1859,9 +1869,7 @@ export function useChat(props: UseChatProps) {
     // Verification sends the WHOLE document to the local model: make sure
     // it has the reading room (grow if the machine affords it), and say so
     // plainly when it does not - a silent empty result read as a dead button.
-    const estTokens = Math.ceil(
-      (msg.groundingSource.documentText.length + msg.content.length + 2000) / 3,
-    );
+    const estTokens = await turnTokensFor([], msg.groundingSource.documentText, msg.content, 0);
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       await invoke("ensure_context", { minTokens: estTokens });

@@ -52,7 +52,9 @@ export const OcrOfferCard = component$<OcrOfferCardProps>((props) => {
         sizeBytes: new TextEncoder().encode(text).length,
         content: text,
         truncated: false,
-        estimatedTokens: Math.ceil(text.length / 4),
+        estimatedTokens: await invoke<number>('count_tokens', { text }).catch(() =>
+          Math.ceil(text.length / 3),
+        ),
       });
     } catch (e) {
       store.phase = 'error';

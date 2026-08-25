@@ -97,20 +97,49 @@ pub fn ctx_for_need(
     need_tokens: u64,
 ) -> Option<u64> {
     let cap = if meta.context_length > 0 { meta.context_length.max(4096) } else { u64::MAX };
-    let need = |ctx: u64| model_need(meta, size_bytes, ctx).2;
     for &c in CTX_LADDER.iter().rev() {
         if c < need_tokens || c > cap {
             continue;
         }
-        let affordable = match free_vram_gb {
-            Some(vram) => need(c) <= 0.9 * vram || need(c) <= vram + 0.6 * total_ram_gb,
-            None => need(c) <= 0.75 * total_ram_gb,
-        };
-        if affordable {
+        if rung_affordable(meta, size_bytes, total_ram_gb, free_vram_gb, c) {
             return Some(c);
         }
     }
     None
+}
+
+/// Whether this machine affords the model at context `ctx`: on a card, the
+/// need fits 90% of free VRAM or spills into main memory; without one, 75%
+/// of RAM.
+fn rung_affordable(
+    meta: &GgufMeta,
+    size_bytes: u64,
+    total_ram_gb: f64,
+    free_vram_gb: Option<f64>,
+    ctx: u64,
+) -> bool {
+    let need = model_need(meta, size_bytes, ctx).2;
+    match free_vram_gb {
+        Some(vram) => need <= 0.9 * vram || need <= vram + 0.6 * total_ram_gb,
+        None => need <= 0.75 * total_ram_gb,
+    }
+}
+
+/// The largest ladder rung this machine affords for the model - the reading
+/// room's ceiling, so a meter can say what the app CAN make room for rather
+/// than what happens to be loaded.
+pub fn max_ctx(
+    meta: &GgufMeta,
+    size_bytes: u64,
+    total_ram_gb: f64,
+    free_vram_gb: Option<f64>,
+) -> Option<u64> {
+    let cap = if meta.context_length > 0 { meta.context_length.max(4096) } else { u64::MAX };
+    CTX_LADDER
+        .iter()
+        .copied()
+        .filter(|&c| c <= cap)
+        .find(|&c| rung_affordable(meta, size_bytes, total_ram_gb, free_vram_gb, c))
 }
 
 /// The RAM-tier baseline (the sizes that have shipped for months). The

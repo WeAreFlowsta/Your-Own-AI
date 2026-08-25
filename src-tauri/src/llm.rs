@@ -1070,19 +1070,7 @@ pub async fn ensure_context(
     if have >= need {
         return Ok(unchanged(Some(filename)));
     }
-    let path = get_models_dir(&app_handle)?.join(&filename);
-    let meta = crate::gguf::read_meta(&path).map_err(|e| e.to_string())?;
-    let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
-    let sys = sysinfo::System::new_with_specifics(
-        sysinfo::RefreshKind::nothing().with_memory(sysinfo::MemoryRefreshKind::everything()),
-    );
-    let total_ram_gb = sys.total_memory() as f64 / (1024.0 * 1024.0 * 1024.0);
-    // Free VRAM right now excludes what the running model holds; the
-    // reload frees it, so hand that footprint back before judging.
-    let reclaim = crate::fit::model_need(&meta, size, have).2;
-    let free_vram_gb = available_vram_mib(&app_handle)
-        .await
-        .map(|mib| mib as f64 / 1024.0 + reclaim);
+    let (meta, size, total_ram_gb, free_vram_gb) = fit_inputs(&app_handle, &filename, have).await?;
     match crate::fit::ctx_for_need(&meta, size, total_ram_gb, free_vram_gb, need) {
         Some(target) => {
             log::info!(
@@ -1097,14 +1085,115 @@ pub async fn ensure_context(
             }
             Ok(EnsureContextResult { ctx: current_ctx_size(), grew: true, model: Some(filename) })
         }
-        None => Err(serde_json::json!({
-            "code": "context_exceeded",
-            "need": need,
-            "have": have,
-            "model": filename,
-            "model_max": meta.context_length,
-        })
-        .to_string()),
+        None => {
+            // Said in the log too: a diagnostics file from someone who saw
+            // the banner should explain it.
+            let ceiling = crate::fit::max_ctx(&meta, size, total_ram_gb, free_vram_gb).unwrap_or(have);
+            log::warn!(
+                "[LLM] reading room: nothing here holds ~{need} tokens for '{}' (running at {have}, ceiling {ceiling}) - offering elsewhere",
+                filename
+            );
+            Err(serde_json::json!({
+                "code": "context_exceeded",
+                "need": need,
+                "have": have,
+                "ceiling": ceiling,
+                "model": filename,
+                "model_max": meta.context_length,
+            })
+            .to_string())
+        }
+    }
+}
+
+/// (GGUF meta, file size, total RAM GB, free VRAM GB) for the reading-room
+/// fit of `filename`. Free VRAM right now excludes what the running model
+/// holds; a reload frees it, so that footprint (at context `have`) is
+/// handed back before judging.
+async fn fit_inputs(
+    app_handle: &AppHandle,
+    filename: &str,
+    have: u64,
+) -> Result<(crate::gguf::GgufMeta, u64, f64, Option<f64>), String> {
+    let path = get_models_dir(app_handle)?.join(filename);
+    let meta = crate::gguf::read_meta(&path).map_err(|e| e.to_string())?;
+    let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
+    let sys = sysinfo::System::new_with_specifics(
+        sysinfo::RefreshKind::nothing().with_memory(sysinfo::MemoryRefreshKind::everything()),
+    );
+    let total_ram_gb = sys.total_memory() as f64 / (1024.0 * 1024.0 * 1024.0);
+    let reclaim = crate::fit::model_need(&meta, size, have).2;
+    let free_vram_gb = available_vram_mib(app_handle)
+        .await
+        .map(|mib| mib as f64 / 1024.0 + reclaim);
+    Ok((meta, size, total_ram_gb, free_vram_gb))
+}
+
+#[derive(serde::Serialize)]
+pub struct ContextRoom {
+    pub current: u32,
+    pub ceiling: u64,
+    pub model: Option<String>,
+}
+
+/// The running local model's context and the largest one this machine
+/// affords for it (the reading room's ceiling) - what the attachment meter
+/// grades against. No local model: ceiling = current.
+#[tauri::command]
+pub async fn context_room(
+    app_handle: AppHandle,
+    state: State<'_, LLMState>,
+) -> Result<ContextRoom, String> {
+    let current = current_ctx_size();
+    let Some(filename) = state.current_model.lock().await.clone() else {
+        return Ok(ContextRoom { current, ceiling: current as u64, model: None });
+    };
+    if !filename.ends_with(".gguf") {
+        return Ok(ContextRoom { current, ceiling: current as u64, model: Some(filename) });
+    }
+    let ceiling = match fit_inputs(&app_handle, &filename, current as u64).await {
+        Ok((meta, size, ram, vram)) => crate::fit::max_ctx(&meta, size, ram, vram)
+            .unwrap_or(current as u64)
+            .max(current as u64),
+        Err(_) => current as u64,
+    };
+    Ok(ContextRoom { current, ceiling, model: Some(filename) })
+}
+
+/// Token count of `text` by the running local model's own tokenizer
+/// (llama-server /tokenize - milliseconds even for a book). Falls back to a
+/// dense-text ratio (3 characters a token) when no local server answers:
+/// prose runs ~4, logs and tables ~2, so the guess leans safe.
+#[tauri::command]
+pub async fn count_tokens(text: String) -> Result<u64, String> {
+    Ok(count_tokens_text(&text).await)
+}
+
+pub async fn count_tokens_text(text: &str) -> u64 {
+    if text.is_empty() {
+        return 0;
+    }
+    let fallback = (text.len() as f64 / 3.0).ceil() as u64;
+    if CURRENT_CTX_SIZE.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+        return fallback;
+    }
+    let client = reqwest::Client::new();
+    let res = client
+        .post(format!("http://localhost:{}/tokenize", CHAT_PORT))
+        .timeout(std::time::Duration::from_secs(8))
+        .json(&serde_json::json!({ "content": text, "add_special": false, "with_pieces": false }))
+        .send()
+        .await;
+    match res {
+        Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
+            Ok(v) => v
+                .get("tokens")
+                .and_then(|t| t.as_array())
+                .map(|a| a.len() as u64)
+                .unwrap_or(fallback),
+            Err(_) => fallback,
+        },
+        _ => fallback,
     }
 }
 
@@ -1794,6 +1883,8 @@ pub async fn start_llama_server(
                     let secs = t_spawn.elapsed().as_secs_f64();
                     log::info!("[LLM] model ready in {secs:.1} s");
                     crate::model_stats::record_load(&app_handle, m, secs);
+                    // The attachment meter re-reads its room on every load.
+                    let _ = app_handle.emit("context-size-changed", current_ctx_size());
                 }
                 // Measure what the split really cost the card and keep it:
                 // the next pick for this model on this machine starts from

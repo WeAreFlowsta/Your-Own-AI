@@ -411,7 +411,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
   const hasModelInfo = props.message.role === 'assistant' && !!props.message.servedBy;
   const hasSteps =
     !!props.railOpen && !!props.message.agentLog && props.message.agentLog.length > 0 && !props.message.isLoading;
-  const hasButtons = hasSteps || hasTokens || hasThoughts || hasSources || hasGrounded || canGround || !!props.message.groundingPending || hasModelInfo;
+  const hasButtons = hasSteps || hasTokens || hasThoughts || hasSources || hasGrounded || canGround || !!props.message.groundingPending || !!props.message.groundingNote || hasModelInfo;
   const showStatus = props.isLoading && !props.message.error;
 
   // Nothing to say and nothing to offer: render nothing. (The empty bar
@@ -622,7 +622,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
                 </span>
               </LiquidMetalButton>
             )}
-            {(hasSources || hasGrounded) && (
+            {(hasSources || hasGrounded || !!props.message.groundingNote) && (
               <LiquidMetalButton
                 onClick$={() => toggleSection$('sources')}
                 class="px-3 py-1 text-xs flex items-center"
@@ -640,7 +640,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
             )}
             {canGround && (
               <LiquidMetalButton
-                onClick$={() => props.onGround$!()}
+                onClick$={() => { openSection.value = 'sources'; props.onGround$!(); }}
                 class="px-3 py-1 text-xs flex items-center"
                 aria-label="Check this answer's claims against the attached document"
               >
@@ -649,14 +649,6 @@ const ActionBar = component$<ActionBarProps>((props) => {
               </LiquidMetalButton>
             )}
           </div>
-          {/* Verify-sources outcome sits right under the strip that holds the
-              button - feedback belongs where the click happened, not at the
-              foot of a long answer. */}
-          {props.message.groundingNote && (
-            <p class="px-4 pb-3 -mt-1 text-xs text-[var(--text-muted)]">
-              {props.message.groundingNote}
-            </p>
-          )}
           </>
         )}
       </div>
@@ -762,9 +754,26 @@ const ActionBar = component$<ActionBarProps>((props) => {
         </div>
       )}
 
-      {openSection.value === 'sources' && (hasSources || hasGrounded) && (
+      {openSection.value === 'sources' &&
+        (hasSources || hasGrounded || props.message.groundingPending || props.message.groundingNote) && (
         <div class="px-4 pb-4 -mt-2 text-[var(--text-primary)] text-base leading-relaxed tracking-normal font-light">
           <div class="pt-4 space-y-4">
+            {/* Verify-sources outcome lives here, where located quotes would
+                appear - not in the button strip. */}
+            {props.message.groundingPending && !hasGrounded && (
+              <div class="text-xs text-[var(--text-muted)] flex items-center gap-1.5">
+                <span class="inline-block w-1.5 h-1.5 rounded-full bg-[var(--text-muted)] animate-pulse" />
+                Verifying sources…
+              </div>
+            )}
+            {!props.message.groundingPending && !hasGrounded && props.message.groundingNote && (
+              <div>
+                {hasSources && (
+                  <div class="text-xs text-[var(--text-muted)] mb-1">From your documents</div>
+                )}
+                <p class="text-sm text-[var(--text-secondary)]">{props.message.groundingNote}</p>
+              </div>
+            )}
             {hasSources && (
               <div>
                 {hasGrounded && (
