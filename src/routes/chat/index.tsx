@@ -1670,12 +1670,6 @@ export default component$(() => {
                     const what = c.hasAttachment ? "the attachment" : "this conversation";
                     const need = Number(c.need ?? 0).toLocaleString();
                     const have = Number(c.have ?? 0).toLocaleString();
-                    const resendOnline = async () => {
-                      const t = chatState.pendingTurn;
-                      chatState.pendingTurn = null;
-                      chatState.error = null;
-                      if (t) await sendMessage(t.userInput, t.chatAction, t.fileContext, t.images, undefined, true);
-                    };
                     return (
                       <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-700 rounded-lg p-4">
                         <p class="text-sm font-medium text-yellow-800 dark:text-yellow-200 mb-1">
@@ -1724,7 +1718,15 @@ export default component$(() => {
                             </LiquidMetalButton>
                           )}
                           {!pinned && !medical && onlineOffline && entitled && (
-                            <LiquidMetalButton onClick$={resendOnline} class="px-4 py-2 text-sm">
+                            <LiquidMetalButton
+                              onClick$={async () => {
+                                const t = chatState.pendingTurn;
+                                chatState.pendingTurn = null;
+                                chatState.error = null;
+                                if (t) await sendMessage(t.userInput, t.chatAction, t.fileContext, t.images, undefined, true);
+                              }}
+                              class="px-4 py-2 text-sm"
+                            >
                               Send it online
                             </LiquidMetalButton>
                           )}
@@ -1745,7 +1747,10 @@ export default component$(() => {
                                 } catch (e) {
                                   console.warn("[Chat] switch-to-auto failed:", e);
                                 }
-                                await resendOnline();
+                                const t = chatState.pendingTurn;
+                                chatState.pendingTurn = null;
+                                chatState.error = null;
+                                if (t) await sendMessage(t.userInput, t.chatAction, t.fileContext, t.images, undefined, true);
                               }}
                               class="px-4 py-2 text-sm"
                             >
