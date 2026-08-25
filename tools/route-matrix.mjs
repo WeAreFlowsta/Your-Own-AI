@@ -68,6 +68,42 @@ for (const mode of MODES)
                 violations.push(`${label}: AGENT GOT SEARCH-ONLY MODEL -> ${r.model}`);
             }
 
+// Size sweep: a turn far bigger than any local model holds. Promises:
+//   5. offline / my-hardware modes still never resolve online, however big.
+//   6. online-offline + a neutral question goes ONLINE with a "too long"
+//      reason (the mode permits it; consent is the frontend's half) - unless
+//      the mirrored entitlement says the user cannot use online models.
+//   7. a health question stays home even when too long.
+const HUGE = "200000";
+for (const mode of MODES)
+  for (const role of ROLES)
+    for (const [qname, q] of Object.entries(QUERIES)) {
+      total++;
+      const params = new URLSearchParams({
+        mode, task: "general", difficulty: "easy", eagerness: "balanced", lean: "balanced", q,
+        agent: role.agent, plan: role.plan, turn_tokens: HUGE,
+      });
+      const label = `${mode}/huge-turn/${role.name}/${qname}`;
+      let r;
+      try {
+        r = await (await fetch(`${BASE}/internal/route-preview?${params}`)).json();
+      } catch (e) {
+        violations.push(`${label}: endpoint unreachable (${e.message})`);
+        continue;
+      }
+      if (r.error) { errors++; continue; }
+      const online = String(r.model).startsWith("online:");
+      if (online && (mode === "offline" || mode === "my-hardware"))
+        violations.push(`${label}: OFFLINE PROMISE BROKEN ON SIZE -> ${r.model} (${r.reason})`);
+      if (online && qname === "health" && role.name === "chat")
+        violations.push(`${label}: HEALTH WENT ONLINE FOR SIZE -> ${r.model} (${r.reason})`);
+      if (mode === "online-offline" && qname === "neutral" && role.name === "chat" && !online
+          && process.env.YOAI_MATRIX_ENTITLED !== "0")
+        violations.push(`${label}: TOO-LONG TURN STAYED LOCAL -> ${r.model} (${r.reason})`);
+      if (online && mode === "online-offline" && qname === "neutral" && role.name === "chat" && !/too long/.test(r.reason))
+        violations.push(`${label}: went online without the size reason -> ${r.reason}`);
+    }
+
 console.log(`swept ${total} combinations, ${errors} clean refusals`);
 if (violations.length) {
   console.log(`\n${violations.length} VIOLATIONS:`);

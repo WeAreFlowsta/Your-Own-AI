@@ -520,7 +520,9 @@ export function useChat(props: UseChatProps) {
       let routedTask: string | undefined;
       // Auto modes may transparently switch an image turn to a vision model; a
       // pinned model is left as-is (we ask before switching — see vision block).
-      const isAutoMode = !modelOverride && !!preferredModel?.startsWith("auto:");
+      // An "auto:" override is a request to ROUTE this turn (the banner's
+      // "let Auto choose"), not a file to load.
+      const isAutoMode = !!preferredModel?.startsWith("auto:");
 
       // Vision-aware routing: for an image turn in an Auto mode, vision capability
       // takes priority over the freshness route. Prefer a ready OFFLINE vision
@@ -573,7 +575,7 @@ export function useChat(props: UseChatProps) {
 
       // Routing receipt for this turn (shown in the hover strip + recorded in
       // the transcript). Stays undefined when the user picked the model.
-      if (!modelOverride && preferredModel?.startsWith("auto:")) {
+      if (preferredModel?.startsWith("auto:")) {
         // An attached image or document is a privacy fact the router must
         // weigh: in online-offline mode it routes OFFLINE unless the user has
         // given standing consent for attachments to go online (Settings >
@@ -582,8 +584,10 @@ export function useChat(props: UseChatProps) {
         // consent modal, since consent is already given. Without it, the
         // pick stays local instead of routing straight into a modal.
         const hasAttachment = images.length > 0 || !!fileContext;
+        // Standing consent (Settings) or a one-off grant for THIS turn (the
+        // user pressed "Send it online" on a banner).
         const attachmentsMayGoOnline =
-          localStorage.getItem("allowAttachmentsOnline") === "true";
+          consentGranted || localStorage.getItem("allowAttachmentsOnline") === "true";
         const requestedMode =
           preferredModel === "auto:online-offline"
             ? "online-offline"
@@ -981,6 +985,17 @@ export function useChat(props: UseChatProps) {
         appVersion: string;
       } | null> | null = null;
 
+      // Health turns stay on the device whatever the mode: the reading-room
+      // banner must never offer to send one online.
+      const turnIsMedical = async (): Promise<boolean> => {
+        try {
+          const { invoke } = await import("@tauri-apps/api/core");
+          return await invoke<boolean>("is_medical_query", { query: userInput, queryVec: undefined });
+        } catch {
+          return false;
+        }
+      };
+
       // Reading room: ask the app to make sure the running local model's
       // context holds a turn of `tokens`. "grew" = it reloaded with more
       // room; "ok" = it already held it (or the check could not run);
@@ -1011,7 +1026,14 @@ export function useChat(props: UseChatProps) {
             fileContext,
             visionModel: "",
           };
-          state.error = JSON.stringify({ ...info, aiId: selectedAi.id, aiLabel: selectedAi.label });
+          state.error = JSON.stringify({
+            ...info,
+            aiId: selectedAi.id,
+            aiLabel: selectedAi.label,
+            aiModel: selectedAi.aiConfig?.model ?? null,
+            hasAttachment: images.length > 0 || !!fileContext,
+            medical: await turnIsMedical(),
+          });
           return "refused";
         }
       };
@@ -1632,6 +1654,9 @@ export function useChat(props: UseChatProps) {
                 model: recordCtx.modelName,
                 aiId: selectedAi.id,
                 aiLabel: selectedAi.label,
+                aiModel: selectedAi.aiConfig?.model ?? null,
+                hasAttachment: images.length > 0 || !!fileContext,
+                medical: await turnIsMedical(),
               });
               state.pendingTurn = {
                 userInput,

@@ -391,7 +391,7 @@ async fn route_preview(
     }
     let g = |k: &str, d: &str| q.get(k).cloned().unwrap_or_else(|| d.to_string());
     let picks = crate::router::OnlinePicks::from_store(&app);
-    match crate::router::route(
+    match crate::router::route_with(
         &app,
         &g("mode", "online-offline"),
         &g("q", "hello"),
@@ -403,6 +403,7 @@ async fn route_preview(
         None,
         g("agent", "0") == "1",
         g("plan", "0") == "1",
+        q.get("turn_tokens").and_then(|t| t.parse::<u32>().ok()),
     )
     .await
     {

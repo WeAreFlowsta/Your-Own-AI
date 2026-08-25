@@ -68,6 +68,19 @@ export function noteEntitlement(s: EntitlementSession): void {
   const prev = localStorage.getItem(KNOWN_KEY);
   if (prev === known) return;
   localStorage.setItem(KNOWN_KEY, known);
+  // Mirror for the Rust side: the router must never escalate a turn online
+  // for someone who cannot use online models (best-effort, like the
+  // attachments-online mirror).
+  void (async () => {
+    try {
+      const { Store } = await import("@tauri-apps/plugin-store");
+      const store = await Store.load("settings.json");
+      await store.set("onlineEntitled", known);
+      await store.save();
+    } catch {
+      /* best-effort */
+    }
+  })();
   if (prev === "no" && known === "yes") {
     localStorage.setItem(UNLOCK_KEY, String(Date.now()));
   }

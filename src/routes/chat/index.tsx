@@ -1,3 +1,4 @@
+import { lastKnownEntitled } from "../../utils/entitlement";
 /**
  * Chat Page (Qwik City route) - Main conversation interface
  * Migrated from React ChatPage.tsx
@@ -1656,18 +1657,47 @@ export default component$(() => {
                       model?: string;
                       aiId?: string;
                       aiLabel?: string;
+                      aiModel?: string | null;
+                      hasAttachment?: boolean;
+                      medical?: boolean;
                     };
+                    const medical = !!c.medical;
                     const modelLabel = (c.model ?? "this model").replace(/\.gguf$/i, "");
+                    const aiMode = c.aiModel ?? "";
+                    const pinned = !aiMode.startsWith("auto:");
+                    const onlineOffline = aiMode === "auto:online-offline";
+                    const entitled = lastKnownEntitled() === "yes";
+                    const what = c.hasAttachment ? "the attachment" : "this conversation";
+                    const need = Number(c.need ?? 0).toLocaleString();
+                    const have = Number(c.have ?? 0).toLocaleString();
+                    const resendOnline = async () => {
+                      const t = chatState.pendingTurn;
+                      chatState.pendingTurn = null;
+                      chatState.error = null;
+                      if (t) await sendMessage(t.userInput, t.chatAction, t.fileContext, t.images, undefined, true);
+                    };
                     return (
                       <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-700 rounded-lg p-4">
                         <p class="text-sm font-medium text-yellow-800 dark:text-yellow-200 mb-1">
-                          More than {modelLabel} can read at once here
+                          {pinned
+                            ? `More than ${modelLabel} can read at once here`
+                            : "Too long for any model on this device"}
                         </p>
                         <p class="text-sm text-yellow-700 dark:text-yellow-300 mb-4">
-                          This turn needs about {Number(c.need ?? 0).toLocaleString()} tokens of
-                          reading room; the model is running with {Number(c.have ?? 0).toLocaleString()},
-                          and this computer can't make more room for it. Shorten the
-                          attachment, or let Auto pick a model here that can hold it.
+                          This turn needs about {need} tokens of reading room
+                          {pinned ? `; ${modelLabel} is running with ${have}` : ""}, and no model on this
+                          computer can make room for it.{" "}
+                          {pinned
+                            ? "Shorten it, or let Auto pick the roomiest model here."
+                            : medical
+                              ? "Health questions stay on your device, whatever the mode. Shorten it, or use a medical model with more room."
+                              : onlineOffline
+                              ? entitled
+                                ? `An online model can hold it - that means sending ${what} online.`
+                                : "An online model could hold it - online models are an optional paid service (Settings → Online Models). Or shorten it."
+                              : entitled
+                                ? `This AI never goes online. Switching it to Auto - Online and Offline would let an online model take it - and send ${what} online.`
+                                : "This AI never goes online, and online models are an optional paid service (Settings → Online Models). Shorten it, or try a smaller attachment."}
                         </p>
                         <div class="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
                           <LiquidMetalButton
@@ -1680,17 +1710,48 @@ export default component$(() => {
                           >
                             Dismiss
                           </LiquidMetalButton>
-                          <LiquidMetalButton
-                            onClick$={async () => {
-                              const t = chatState.pendingTurn;
-                              chatState.pendingTurn = null;
-                              chatState.error = null;
-                              if (t) await sendMessage(t.userInput, t.chatAction, t.fileContext, t.images, "auto:offline");
-                            }}
-                            class="px-4 py-2 text-sm"
-                          >
-                            Let Auto choose a model
-                          </LiquidMetalButton>
+                          {pinned && (
+                            <LiquidMetalButton
+                              onClick$={async () => {
+                                const t = chatState.pendingTurn;
+                                chatState.pendingTurn = null;
+                                chatState.error = null;
+                                if (t) await sendMessage(t.userInput, t.chatAction, t.fileContext, t.images, "auto:offline");
+                              }}
+                              class="px-4 py-2 text-sm"
+                            >
+                              Let Auto choose here
+                            </LiquidMetalButton>
+                          )}
+                          {!pinned && !medical && onlineOffline && entitled && (
+                            <LiquidMetalButton onClick$={resendOnline} class="px-4 py-2 text-sm">
+                              Send it online
+                            </LiquidMetalButton>
+                          )}
+                          {!pinned && !medical && !onlineOffline && entitled && (
+                            <LiquidMetalButton
+                              onClick$={async () => {
+                                try {
+                                  if (c.aiId) {
+                                    await updateCustomAi(c.aiId, { model: "auto:online-offline" });
+                                    selectedAi.value = {
+                                      ...selectedAi.value,
+                                      aiConfig: {
+                                        ...selectedAi.value.aiConfig,
+                                        model: "auto:online-offline",
+                                      },
+                                    };
+                                  }
+                                } catch (e) {
+                                  console.warn("[Chat] switch-to-auto failed:", e);
+                                }
+                                await resendOnline();
+                              }}
+                              class="px-4 py-2 text-sm"
+                            >
+                              Switch to Auto - Online and Offline and send
+                            </LiquidMetalButton>
+                          )}
                         </div>
                       </div>
                     );

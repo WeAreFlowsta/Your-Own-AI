@@ -838,6 +838,54 @@ fn store_pref(app: &AppHandle, key: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// Can any runnable model on this device hold `need` tokens - at the
+/// context it runs at, or at a rung it could grow to (the same test
+/// `ensure_context` applies before a send)?
+async fn local_can_hold(app: &AppHandle, need: u64) -> bool {
+    let runnable: Vec<crate::fit::ModelFit> = crate::fit::assess(app)
+        .await
+        .into_iter()
+        .filter(|f| !matches!(f.fit, crate::fit::Fit::Red))
+        .collect();
+    if runnable.is_empty() {
+        return false;
+    }
+    if runnable.iter().any(|f| f.context_runtime >= need) {
+        return true;
+    }
+    let Ok(dir) = crate::llm::get_models_dir(app) else {
+        return false;
+    };
+    let sys = sysinfo::System::new_with_specifics(
+        sysinfo::RefreshKind::nothing().with_memory(sysinfo::MemoryRefreshKind::everything()),
+    );
+    let total_ram_gb = sys.total_memory() as f64 / (1024.0 * 1024.0 * 1024.0);
+    let free_vram_gb = crate::llm::available_vram_mib(app).await.map(|m| m as f64 / 1024.0);
+    for f in runnable {
+        let path = dir.join(&f.name);
+        let Ok(meta) = crate::gguf::read_meta(&path) else { continue };
+        let Ok(size) = std::fs::metadata(&path).map(|m| m.len()) else { continue };
+        if crate::fit::ctx_for_need(&meta, size, total_ram_gb, free_vram_gb, need).is_some() {
+            return true;
+        }
+    }
+    false
+}
+
+/// An online model whose context holds `need` tokens: the user's slot pick
+/// when it does, else the best general pick among those that do.
+async fn pick_online_holding(need: u64, task: &str, pref: Option<&str>) -> Option<String> {
+    let models = crate::flowsta::list_online_models().await.ok()?;
+    let roomy: Vec<crate::flowsta::OnlineModel> = models
+        .into_iter()
+        .filter(|m| m.context_window >= need)
+        .collect();
+    if roomy.is_empty() {
+        return None;
+    }
+    select_online(&roomy, task, false, pref)
+}
+
 async fn pick_online(task: &str, fresh: bool, pref: Option<&str>) -> Option<String> {
     let models = crate::flowsta::list_online_models().await.ok()?;
     select_online(&models, task, fresh, pref)
@@ -1203,6 +1251,28 @@ async fn route_inner(
     let task: &str = if medical { "medical" } else { task };
 
     if mode == "online-offline" && !medical {
+        // Size first: a turn no model on this device can hold - even after
+        // growing its context - goes to an online model that can. The mode
+        // permits it; an attachment only reaches this mode with consent
+        // (the frontend routes offline otherwise), so nothing leaves
+        // unasked.
+        if let Some(need) = turn_tokens {
+            let need = (need as u64).saturating_add(REPLY_ROOM_TOKENS as u64);
+            // A user the app knows cannot use online models never gets
+            // routed there for size - the banner explains instead.
+            let known_not_entitled = store_pref(app, "onlineEntitled").as_deref() == Some("no");
+            if !known_not_entitled && !local_can_hold(app, need).await {
+                if let Some(model) =
+                    pick_online_holding(need, task, picks.hard_general.as_deref()).await
+                {
+                    log::info!("[router] ~{need} tokens is more than any model here holds - online");
+                    return Ok(RouteResult {
+                        model,
+                        reason: "online — too long for any model on this device".to_string(),
+                    });
+                }
+            }
+        }
         // Stage 0: cheap keyword cues. Stage 1 (only if Stage 0 is negative):
         // bge-small semantic similarity to "needs-current-info" phrases. Stage 2:
         // difficulty escalation — a HARD query goes to a stronger online model
