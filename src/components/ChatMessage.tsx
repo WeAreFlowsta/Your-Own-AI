@@ -514,6 +514,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
 
         {/* Action buttons (right-aligned, shown when data available) */}
         {hasButtons && !showStatus && (
+          <>
           <div class="flex items-center space-x-2">
             {hasSteps && (
               <LiquidMetalButton
@@ -656,6 +657,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
               {props.message.groundingNote}
             </p>
           )}
+          </>
         )}
       </div>
 
