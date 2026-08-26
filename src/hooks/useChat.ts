@@ -780,6 +780,13 @@ export function useChat(props: UseChatProps) {
             abortWith(
               `The AI engine crashed while loading ${selectedAi.label}'s model. This looks like a problem on our side, not your hardware - restarting the app may help, and the log file helps us fix it.`
             );
+          } else if (errorMessage.includes("MODEL_FILE_REJECTED")) {
+            // The engine could not read the file itself - not a size problem.
+            props.currentModel.value = preferredModel;
+            props.modelTooBig.value = true;
+            abortWith(
+              `${selectedAi.label}'s model file can't be read by this engine. On the Offline Models page, delete it and download it again - the catalog may point at a corrected copy. If it happens again, the model needs a newer engine than this release ships.`
+            );
           } else if (errorMessage.includes("MODEL_TOO_LARGE")) {
             // Show it red in the header (name visible, not loaded) and tell the user.
             props.currentModel.value = preferredModel;

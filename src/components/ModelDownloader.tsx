@@ -1787,11 +1787,23 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
               const quantization = catalogMatch?.variant.quantization || model.quantization;
               const isPaused = store.pausedModels.includes(model.name);
               const fitInfo = store.modelFits[model.name];
+              // The catalog pins a hash: a downloaded file that differs was
+              // replaced upstream after the pin (and may not load on any
+              // engine) - offer a re-download instead of a fit grade.
+              const catalogSha = catalogMatch?.variant.sha256;
+              const replaced = !!(catalogSha && model.sha256 && model.sha256 !== catalogSha);
+              const unusable = !!model.damaged || replaced;
               const fitBadge = model.damaged
                 ? {
                     label: 'Damaged file',
                     cls: 'bg-red-500/10 border-red-500/25 text-red-400',
                     tip: `This file is incomplete or corrupted and can't be used (${model.damaged}). Delete it and download the model again.`,
+                  }
+                : replaced
+                ? {
+                    label: 'Re-download needed',
+                    cls: 'bg-amber-500/10 border-amber-500/25 text-amber-400',
+                    tip: 'The maker replaced this file after it was downloaded, and the catalog now points at the copy that loads. Delete it and download the model again.',
                   }
                 : fitInfo?.fit === 'split' || fitInfo?.moe_offload
                 ? {
@@ -1859,22 +1871,24 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                     >
                       {model.damaged
                         ? `${model.size} · ${model.damaged.startsWith('incomplete') ? model.damaged : 'incomplete or corrupted'} - delete it and download again`
+                        : replaced
+                        ? `${model.size} · the maker replaced this file - delete it and download again`
                         : `${quantization} · ${model.size}${model.shard_count ? ` · ${model.shard_count} parts` : ''}`}
-                      {!model.damaged && fitInfo && fitInfo.context_runtime > 0
+                      {!unusable && fitInfo && fitInfo.context_runtime > 0
                         ? ` · runs at ${formatContext(fitInfo.context_runtime)}${fitInfo.agent_template_ok ? ' · works in projects' : ''}`
                         : ''}
-                      {!model.damaged && fitInfo?.measured_tps
+                      {!unusable && fitInfo?.measured_tps
                         ? ` · ~${Math.round(fitInfo.measured_tps)} tok/s measured`
                         : ''}
-                      {!model.damaged && model.draft ? ' · speed-up file on' : ''}
-                      {!model.damaged &&
+                      {!unusable && model.draft ? ' · speed-up file on' : ''}
+                      {!unusable &&
                       store.mlxEngineInstalled &&
                       catalogMatch?.variant.artifacts?.mlx?.hfRepo &&
                       store.mlxArtifacts[catalogMatch.variant.artifacts.mlx.hfRepo!]?.complete
                         ? ' · chats run on MLX'
                         : ''}
                     </p>
-                    {!model.damaged && !model.draft && catalogMatch?.variant.draft && (
+                    {!unusable && !model.draft && catalogMatch?.variant.draft && (
                       store.downloads[catalogMatch.family.id]?.stage === 'draft' ? (
                         <p class="text-xs text-[var(--text-muted)]">
                           {downloadLabel(store.downloads[catalogMatch.family.id], false)}
@@ -1890,7 +1904,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                         </button>
                       )
                     )}
-                    {!model.damaged && store.mlxEngineInstalled && catalogMatch?.variant.artifacts?.mlx?.hfRepo && (
+                    {!unusable && store.mlxEngineInstalled && catalogMatch?.variant.artifacts?.mlx?.hfRepo && (
                       (() => {
                         const a = catalogMatch.variant.artifacts!.mlx!;
                         const st = store.mlxArtifacts[a.hfRepo!];
@@ -1911,7 +1925,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                       })()
                     )}
                   </div>
-                  {!model.damaged && (
+                  {!unusable && (
                   <LiquidMetalButton
                     variant="secondary"
                     onClick$={() => handleTogglePause$(model.name)}

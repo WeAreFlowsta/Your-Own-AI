@@ -590,6 +590,7 @@ pub fn run() {
             llm::count_tokens,
             llm::ensure_vision,
             llm::is_model_too_big,
+            llm::is_model_rejected,
             llm::get_current_model,
             llm::is_llama_server_running,
             llm::is_llama_server_ready,

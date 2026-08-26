@@ -45,6 +45,10 @@ pub struct LocalModel {
     /// model, when present and sound.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub draft: Option<String>,
+    /// sha256 of the file when the app has hashed it (the answer-fingerprint
+    /// cache). The models page compares it with the catalog's pinned hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -899,7 +903,7 @@ pub async fn find_vision_model(
         if name.to_lowercase().contains("mmproj") {
             continue; // it's a projector, not a chat model
         }
-        if is_model_too_big(name.to_string()) {
+        if is_model_too_big(name.to_string()) || is_model_rejected(name.to_string()) {
             continue;
         }
         if find_projector_for(&models_dir, name).is_some() {
@@ -1361,6 +1365,26 @@ fn too_big_set() -> &'static std::sync::Mutex<std::collections::HashSet<String>>
 #[tauri::command]
 pub fn is_model_too_big(filename: String) -> bool {
     too_big_set()
+        .lock()
+        .map(|s| s.contains(&filename))
+        .unwrap_or(false)
+}
+
+/// Models the engine REJECTED this session: a file layout it cannot read (a
+/// conversion newer than the engine, or a bad conversion). Kept apart from
+/// `too_big_set` on purpose - the advice is "delete and download again /
+/// newer engine", never "pick a smaller model", and the fit grade for the
+/// file stays honest (it would fit; it just cannot be read).
+fn rejected_set() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static S: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    S.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// True if the engine rejected `filename` this session (see `rejected_set`).
+#[tauri::command]
+pub fn is_model_rejected(filename: String) -> bool {
+    rejected_set()
         .lock()
         .map(|s| s.contains(&filename))
         .unwrap_or(false)
@@ -1971,13 +1995,13 @@ pub async fn start_llama_server(
                     // must not count it, and the model sits out the rest
                     // of the session so retries don't loop the rejection.
                     if let Some(ref name) = loading_name {
-                        if let Ok(mut set) = too_big_set().lock() {
+                        if let Ok(mut set) = rejected_set().lock() {
                             set.insert(name.clone());
                         }
                     }
-                    return Err(
-                        "This model file doesn't match what the engine expects - delete the model and download it again. If it happens again, the model needs a newer engine than this release ships.".to_string(),
-                    );
+                    // Token, not prose: the chat and the models page each
+                    // say it in their own words (never as "too large").
+                    return Err("MODEL_FILE_REJECTED".to_string());
                 }
                 // Unexplained crash. If this spawn actually used the GPU,
                 // feed the safety ladder - child crashes previously never
@@ -2741,6 +2765,7 @@ pub async fn list_local_models(
                 damaged,
                 shard_count,
                 draft: model_draft_for(&models_dir, &filename).map(|d| d.draft),
+                sha256: crate::model_hash::get(&app_handle, &filename),
             });
         }
     }
@@ -3368,6 +3393,10 @@ pub async fn load_model(
     if is_model_too_big(filename.clone()) {
         log::info!("[LLM] '{}' is known too-large this session — skipping load", filename);
         return Err("MODEL_TOO_LARGE".to_string());
+    }
+    if is_model_rejected(filename.clone()) {
+        log::info!("[LLM] '{}' was rejected by the engine this session - skipping load", filename);
+        return Err("MODEL_FILE_REJECTED".to_string());
     }
 
     // Crash sentinel: if the process DIED mid-load of this same model (the
@@ -4231,6 +4260,16 @@ mod load_failure_classification_tests {
     fn oom_lines_are_not_open_failures() {
         let l = "ggml_vulkan: ErrorOutOfDeviceMemory while trying to allocate";
         assert!(looks_like_oom(l));
+    }
+
+    #[test]
+    fn rejected_models_are_tracked_apart_from_too_big() {
+        let name = "test-rejected-model.gguf".to_string();
+        assert!(!super::is_model_rejected(name.clone()));
+        super::rejected_set().lock().unwrap().insert(name.clone());
+        assert!(super::is_model_rejected(name.clone()));
+        assert!(!super::is_model_too_big(name.clone()));
+        super::rejected_set().lock().unwrap().remove(&name);
     }
 
     #[test]

@@ -454,7 +454,9 @@ async fn pick_offline_for(app: &AppHandle, task: &str, lean: &str, agent_only: b
     // OOM'd the GPU this session are excluded outright — the loader rejects
     // them instantly, so picking one would turn every auto request into an
     // error even though the pre-load fit estimate still grades them runnable.
-    let usable = |f: &&crate::fit::ModelFit| !crate::llm::is_model_too_big(f.name.clone());
+    let usable = |f: &&crate::fit::ModelFit| {
+        !crate::llm::is_model_too_big(f.name.clone()) && !crate::llm::is_model_rejected(f.name.clone())
+    };
     let runnable: Vec<&crate::fit::ModelFit> =
         all.iter().filter(|f| tier(f) > 0).filter(usable).collect();
     let pool: Vec<&crate::fit::ModelFit> = if runnable.is_empty() {

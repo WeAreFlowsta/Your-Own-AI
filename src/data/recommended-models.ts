@@ -56,6 +56,12 @@ export interface ModelVariant {
   contextWindow?: number;
   downloadUrl: string;
   filename: string;
+  /** sha256 of the pinned file (Hugging Face's LFS hash). When present the
+   *  inventory compares it with the downloaded file's hash: a mismatch means
+   *  the repo replaced the file after our pin (a re-upload can stop loading
+   *  on every engine - ggml-org's 08-23 Nemotron did) and the card offers a
+   *  re-download instead of a green badge. */
+  sha256?: string;
   quantization: string;    // e.g., "Q4_K_M"
   /** Sharded GGUF (files over Hugging Face's 50 GB limit ship as
    *  `-0000i-of-0000N` parts): the part count. `filename`/`downloadUrl`
@@ -152,6 +158,8 @@ export interface ModelDraft {
   filename: string;
   downloadUrl: string;
   size: number;            // GB
+  /** sha256 of the pinned file (Hugging Face's LFS hash) - see ModelVariant. */
+  sha256?: string;
 }
 
 export interface ModelFamily {
@@ -891,16 +899,22 @@ export const modelFamilies: ModelFamily[] = [
         parameterCount: '30B-A3B (MoE)',
         size: 18.9,
         minRAM: 32,
-        downloadUrl: 'https://huggingface.co/ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/0cdf8a8a0bae49ae9634dd68778216d75de63305/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf',
+        // Pinned to the 2026-08-14 upload on purpose: ggml-org re-uploaded
+        // this Q4_0 on 08-23 with block 5 marked as 0 KV heads, which every
+        // llama.cpp through v0.3.0 reads as a recurrent layer and rejects
+        // ("tensor 'blk.5.ssm_in.weight' not found"). The 08-14 file loads.
+        downloadUrl: 'https://huggingface.co/ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/6058d29faf9df73eb1c1ac7bbcc70023b9ec9d8e/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf',
         filename: 'NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf',
+        sha256: '61f87e75974e4b535dcdf9aad056541a9514f1dfa4538b463b081d19b7a00e3c',
         quantization: 'Q4_0',
         // NVIDIA's multi-token-prediction head for this model (llama.cpp's
         // own GGUF): several drafted tokens verified per pass.
         draft: {
           type: 'draft-mtp',
           filename: 'mtp-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf',
-          downloadUrl: 'https://huggingface.co/ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/0cdf8a8a0bae49ae9634dd68778216d75de63305/mtp-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf',
+          downloadUrl: 'https://huggingface.co/ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/6058d29faf9df73eb1c1ac7bbcc70023b9ec9d8e/mtp-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf',
           size: 1.2,
+          sha256: '19f964207d5236dc88662686f00604a5494974c23fb04dd16a5ad7b2eebbd5b4',
         },
       }
     ]

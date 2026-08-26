@@ -3,6 +3,17 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [Unreleased]
+
+### Models
+- Nemotron 3.5 Lightning loads again. The maker replaced its download after
+  our catalog pinned it, with a copy no current engine can read; the catalog
+  now points at the copy that loads, and the Offline Models page says
+  "Re-download needed" on a file the maker has replaced, instead of a green
+  badge, with delete and download one click away.
+- A model file the engine cannot read is now said in those words - in chat
+  and on its card - and never as "too large for your graphics card".
+
 ## [0.6.0] - 2026-08-25
 
 Your AIs know you better, run bigger models on the machine you already

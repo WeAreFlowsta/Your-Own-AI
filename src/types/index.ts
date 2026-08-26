@@ -84,6 +84,8 @@ export interface LocalModel {
   shard_count?: number;
   /** The registered speed-up (speculative-decoding) file beside this model. */
   draft?: string;
+  /** sha256 of the file once the app has hashed it; compared with the catalog's pin. */
+  sha256?: string;
 }
 
 export type AppMode = 'local' | 'cloud';
