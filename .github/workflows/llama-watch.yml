@@ -17,6 +17,10 @@ permissions:
 jobs:
   watch:
     runs-on: ubuntu-latest
+    env:
+      # gh needs the repo named explicitly here - detection from the checkout
+      # gave an empty issue list on the first runs.
+      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
