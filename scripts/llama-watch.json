@@ -1,0 +1,8 @@
+{
+  "prs": [
+    { "number": 27742, "why": "Qwen 3.8 Flash Next (qwen4exp) - 125B-A6B, needs 96 GB+" },
+    { "number": 27754, "why": "GLM-5.3 Flash (glm5next) with vision - 320B-A18B, 192 GB+" },
+    { "number": 27752, "why": "GLM-5.3 Flash (glm5next) text-only, the competing PR" }
+  ],
+  "swiftlm": { "repo": "SharpAI/SwiftLM" }
+}

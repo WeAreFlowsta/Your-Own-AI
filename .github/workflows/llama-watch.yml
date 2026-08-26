@@ -1,0 +1,58 @@
+name: Engine watch
+
+# Daily: new versioned llama.cpp releases, watched upstream PRs (models we
+# are waiting on), SwiftLM releases past our pin. One tracking issue
+# (label: engine-watch) holds the current report and the "seen" state in
+# its body; every piece of news lands as a comment on it.
+
+on:
+  schedule:
+    - cron: "5 7 * * *" # daily, 07:05 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Find or create the tracking issue
+        id: issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          num=$(gh issue list --label engine-watch --state open --json number --jq '.[0].number // empty')
+          if [ -z "$num" ]; then
+            gh label create engine-watch --description "Upstream engine releases and PRs we wait on" --color 0e8a16 2>/dev/null || true
+            num=$(gh issue create --title "Engine watch: llama.cpp releases, watched PRs, SwiftLM" --label engine-watch \
+              --body "Filled in by the Engine watch workflow." --json number --jq .number 2>/dev/null \
+              || gh issue list --label engine-watch --state open --json number --jq '.[0].number')
+          fi
+          echo "number=$num" >> "$GITHUB_OUTPUT"
+          body=$(gh issue view "$num" --json body --jq .body)
+          seen=$(printf '%s' "$body" | sed -n 's/^<!-- seen:\(.*\) -->$/\1/p' | tail -1)
+          echo "seen=${seen:-{}}" >> "$GITHUB_OUTPUT"
+      - name: Check upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LLAMA_WATCH_SEEN: ${{ steps.issue.outputs.seen }}
+        run: node scripts/watch-llama-cpp.mjs
+      - name: Update the issue and comment on news
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          num="${{ steps.issue.outputs.number }}"
+          { cat watch-report.md; echo; echo "<!-- seen:$(cat watch-seen.json) -->"; } > issue-body.md
+          gh issue edit "$num" --body-file issue-body.md
+          if [ -s watch-news.md ]; then
+            { echo "**News since the last check:**"; echo; cat watch-news.md; } > comment.md
+            gh issue comment "$num" --body-file comment.md
+          else
+            echo "no news"
+          fi

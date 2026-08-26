@@ -35,3 +35,8 @@ dev-env.sh
 .env.dev
 dev-urls.json
 tsconfig.tsbuildinfo
+
+# engine-watch script outputs (workflow artifacts, never committed)
+watch-report.md
+watch-news.md
+watch-seen.json
