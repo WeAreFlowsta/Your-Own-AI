@@ -30,14 +30,16 @@ jobs:
           num=$(gh issue list --label engine-watch --state open --json number --jq '.[0].number // empty')
           if [ -z "$num" ]; then
             gh label create engine-watch --description "Upstream engine releases and PRs we wait on" --color 0e8a16 2>/dev/null || true
-            num=$(gh issue create --title "Engine watch: llama.cpp releases, watched PRs, SwiftLM" --label engine-watch \
-              --body "Filled in by the Engine watch workflow." --json number --jq .number 2>/dev/null \
-              || gh issue list --label engine-watch --state open --json number --jq '.[0].number')
+            # gh issue create prints the URL, not JSON - create, then look it up.
+            gh issue create --title "Engine watch: llama.cpp releases, watched PRs, SwiftLM" --label engine-watch \
+              --body "Filled in by the Engine watch workflow." >/dev/null
+            num=$(gh issue list --label engine-watch --state open --json number --jq '.[0].number')
           fi
           echo "number=$num" >> "$GITHUB_OUTPUT"
           body=$(gh issue view "$num" --json body --jq .body)
           seen=$(printf '%s' "$body" | sed -n 's/^<!-- seen:\(.*\) -->$/\1/p' | tail -1)
-          echo "seen=${seen:-{}}" >> "$GITHUB_OUTPUT"
+          if [ -z "$seen" ]; then seen='{}'; fi
+          echo "seen=$seen" >> "$GITHUB_OUTPUT"
       - name: Check upstream
         env:
           GH_TOKEN: ${{ github.token }}
