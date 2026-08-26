@@ -14,6 +14,22 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - A model file the engine cannot read is now said in those words - in chat
   and on its card - and never as "too large for your graphics card".
 
+### Macs and engines
+- The free-memory check reads memory the way macOS means it (free plus
+  inactive and purgeable pages), sizes the file that will actually load,
+  re-samples once before refusing, and no longer tells you to pick a
+  smaller model. A settled Mac with plenty of headroom was refused a 2 GB
+  model for as long as it stayed settled.
+- A send that was refused no longer piles up unanswered turns for the next
+  one: consecutive user turns go to the engine as one message (your
+  records keep each as it happened). Strict chat templates rejected the
+  pile, and the error blamed the model.
+- An engine that stops answering is given ten minutes, then the reply is
+  marked failed and the next send starts a fresh server; an MLX server that
+  rejects a request is restarted before the next turn instead of wedging.
+- The GPU safety net no longer counts a reboot, or a run that never reached
+  the graphics card, as a crash. Four of those put a Mac on CPU.
+
 ## [0.6.0] - 2026-08-25
 
 Your AIs know you better, run bigger models on the machine you already

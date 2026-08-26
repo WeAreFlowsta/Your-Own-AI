@@ -1201,6 +1201,95 @@ pub async fn count_tokens_text(text: &str) -> u64 {
     }
 }
 
+/// Two user contents (plain strings or OpenAI content-part arrays) as one:
+/// strings join with a blank line; anything with parts becomes one array
+/// so images survive.
+fn merge_user_content(a: serde_json::Value, b: serde_json::Value) -> serde_json::Value {
+    match (a, b) {
+        (serde_json::Value::String(x), serde_json::Value::String(y)) => {
+            serde_json::Value::String(if x.trim().is_empty() { y } else if y.trim().is_empty() { x } else { format!("{}\n\n{}", x, y) })
+        }
+        (a, b) => {
+            let to_parts = |v: serde_json::Value| -> Vec<serde_json::Value> {
+                match v {
+                    serde_json::Value::Array(parts) => parts,
+                    serde_json::Value::String(s) => vec![serde_json::json!({ "type": "text", "text": s })],
+                    other => vec![serde_json::json!({ "type": "text", "text": other.to_string() })],
+                }
+            };
+            let mut parts = to_parts(a);
+            parts.extend(to_parts(b));
+            serde_json::Value::Array(parts)
+        }
+    }
+}
+
+/// Memory the OS would hand to a new allocation right now. On macOS the
+/// library's figure is strict free pages, which sit near zero on any settled
+/// Mac (inactive and purgeable pages are the real headroom) - a tester's
+/// 8 GB Air was refused a 2 GB model for ninety minutes at "64% free". Read
+/// `vm_stat` there: free + inactive + speculative + purgeable pages.
+pub fn available_memory_bytes() -> u64 {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(b) = macos_available_from_vm_stat() {
+            return b;
+        }
+    }
+    let mut sys = sysinfo::System::new();
+    sys.refresh_memory();
+    sys.available_memory()
+}
+
+#[cfg(target_os = "macos")]
+fn macos_available_from_vm_stat() -> Option<u64> {
+    let out = std::process::Command::new("vm_stat").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_vm_stat(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// `vm_stat` text -> available bytes (free + inactive + speculative +
+/// purgeable pages, times the page size it states). None if unparseable.
+#[allow(dead_code)]
+fn parse_vm_stat(text: &str) -> Option<u64> {
+    let mut page: u64 = 4096;
+    let mut pages: u64 = 0;
+    let mut seen = 0;
+    for line in text.lines() {
+        let l = line.trim();
+        if let Some(rest) = l.strip_prefix("Mach Virtual Memory Statistics: (page size of ") {
+            if let Some(n) = rest.split_whitespace().next().and_then(|n| n.parse::<u64>().ok()) {
+                page = n;
+            }
+            continue;
+        }
+        for key in ["Pages free:", "Pages inactive:", "Pages speculative:", "Pages purgeable:"] {
+            if let Some(v) = l.strip_prefix(key) {
+                if let Ok(n) = v.trim().trim_end_matches('.').parse::<u64>() {
+                    pages += n;
+                    seen += 1;
+                }
+            }
+        }
+    }
+    (seen > 0).then(|| pages * page)
+}
+
+/// Bytes of the regular files directly inside `dir` (an MLX artifact).
+fn dir_bytes(dir: &std::path::Path) -> u64 {
+    std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter_map(|e| e.metadata().ok())
+                .filter(|m| m.is_file())
+                .map(|m| m.len())
+                .sum()
+        })
+        .unwrap_or(0)
+}
+
 pub fn current_ctx_size() -> u32 {
     let v = CURRENT_CTX_SIZE.load(std::sync::atomic::Ordering::Relaxed);
     if v == 0 { 8192 } else { v }
@@ -1434,6 +1523,7 @@ async fn start_mlx_server(
     *state.server_process.lock().await = Some(child);
     **is_running = true;
     *state.spawned_backend.lock().await = Some("mlx".to_string());
+    crate::gpu_safety::note_gpu_started(app_handle);
     let name_for_log = model_name.to_string();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
@@ -3427,14 +3517,24 @@ pub async fn load_model(
     // blocks only under 2 GiB free plus a tenth of the model, so healthy
     // machines never see it.
     {
-        let model_bytes = std::fs::metadata(&model_path).map(|m| m.len()).unwrap_or(0);
-        let mut sys = sysinfo::System::new();
-        sys.refresh_memory();
-        let avail = sys.available_memory();
+        // Size the thing that will actually load: the MLX artifact when the
+        // MLX engine will serve this model, else the GGUF (field 08-26: the
+        // gate quoted the GGUF's size while the row's engine was MLX).
+        let model_bytes = crate::mlx_artifacts::serving_dir_for(&app_handle, &filename)
+            .map(|d| dir_bytes(&d))
+            .filter(|&b| b > 0)
+            .unwrap_or_else(|| std::fs::metadata(&model_path).map(|m| m.len()).unwrap_or(0));
         let needed = 2u64 * 1024 * 1024 * 1024 + model_bytes / 10;
+        let mut avail = available_memory_bytes();
+        if avail > 0 && avail < needed {
+            // The previous server may still be releasing its memory, or the
+            // OS may reclaim in a moment - one short re-sample before refusing.
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+            avail = available_memory_bytes();
+        }
         if avail > 0 && avail < needed {
             let msg = format!(
-                "Not enough free memory to load this model safely right now ({:.1} GB free, about {:.1} GB needed). Close some other apps and try again, or pick a smaller model.",
+                "Not enough free memory to load this model safely right now ({:.1} GB available, about {:.1} GB needed). Close some other apps and try again in a moment.",
                 avail as f64 / 1024f64.powi(3),
                 needed as f64 / 1024f64.powi(3)
             );
@@ -3707,6 +3807,20 @@ pub async fn stream_chat_completion(
         }));
     }
     for msg in messages {
+        // A refused send leaves its user turn in the conversation (records
+        // at send), so the next attempt would carry user, user, user - a
+        // shape strict templates (Mistral's) reject and lenient ones swallow
+        // silently. Fold consecutive user turns into one for the request;
+        // the records keep every turn as it happened.
+        if msg.role == "user" {
+            if let Some(prev) = all_messages.last_mut() {
+                if prev["role"] == "user" {
+                    let merged = merge_user_content(prev["content"].take(), msg.content.clone());
+                    prev["content"] = merged;
+                    continue;
+                }
+            }
+        }
         all_messages.push(serde_json::json!({
             "role": msg.role,
             "content": msg.content
@@ -3961,12 +4075,31 @@ pub async fn stream_chat_completion(
             );
             return Ok(());
         }
-        return Err(format!("llama-server error ({}): {}", status, error_text));
+        // An engine that rejects the request itself (SwiftLM's Mistral
+        // template on an illegal turn shape, field 08-26) can leave its one
+        // slot wedged - the next request is accepted and never answered.
+        // Stop it so the next turn spawns a fresh server (seconds).
+        let mlx = state.spawned_backend.lock().await.as_deref() == Some("mlx");
+        if mlx {
+            log::warn!("[LLM] MLX server rejected a request ({}) - stopping it so the next turn starts clean", status);
+            let _ = stop_llama_server(state.clone()).await;
+        }
+        if error_text.to_ascii_lowercase().contains("template") {
+            return Err(format!(
+                "The engine could not accept this conversation's shape ({}). It has been tidied - please send your message again.",
+                status
+            ));
+        }
+        return Err(format!("{} error ({}): {}", if mlx { "MLX engine" } else { "llama-server" }, status, error_text));
     }
     
     // Stream response with line-by-line buffering
     use futures::StreamExt;
     let mut stream = response.bytes_stream();
+    // Stall watchdog: a reply that produces no bytes for this long is a
+    // wedged engine, not a slow one - surface it instead of waiting forever
+    // (prefill of a very long turn on a slow machine is minutes, not this).
+    const STALL: std::time::Duration = std::time::Duration::from_secs(600);
     let mut sse_buffer = String::new();
     let mut content_buffer = String::new();
     let mut usage_data: Option<StreamUsageData> = None;
@@ -3975,7 +4108,20 @@ pub async fn stream_chat_completion(
     let mut sources: Vec<SourceItem> = Vec::new();
     let mut in_reasoning = false;
 
-    while let Some(chunk_result) = stream.next().await {
+    loop {
+        let next = match tokio::time::timeout(STALL, stream.next()).await {
+            Ok(n) => n,
+            Err(_) => {
+                log::warn!("[LLM] no bytes from the engine for {}s on request {} - giving up on the stream", STALL.as_secs(), request_id);
+                let _ = app.emit(
+                    &format!("chat-stream-error-{}", request_id),
+                    StreamErrorData { error: r#"{"code":"engine_stalled","message":"The engine stopped responding. Please send your message again."}"#.to_string() },
+                );
+                let _ = app.emit(&format!("chat-stream-{}", request_id), StreamChunkData { chunk: "[DONE]".to_string() });
+                return Ok(());
+            }
+        };
+        let Some(chunk_result) = next else { break };
         // Check for cancellation
         if state.cancel_stream.load(std::sync::atomic::Ordering::Relaxed) {
             println!("[LLM] Stream cancelled by user for request: {}", request_id);
@@ -4260,6 +4406,27 @@ mod load_failure_classification_tests {
     fn oom_lines_are_not_open_failures() {
         let l = "ggml_vulkan: ErrorOutOfDeviceMemory while trying to allocate";
         assert!(looks_like_oom(l));
+    }
+
+    #[test]
+    fn vm_stat_available_counts_free_inactive_speculative_purgeable() {
+        let text = "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                              111844.\nPages active:                            200000.\nPages inactive:                          150000.\nPages speculative:                        20000.\nPages throttled:                              0.\nPages wired down:                        100000.\nPages purgeable:                          30000.\n";
+        let b = super::parse_vm_stat(text).unwrap();
+        assert_eq!(b, (111_844 + 150_000 + 20_000 + 30_000) * 16384);
+        assert!(super::parse_vm_stat("nothing here").is_none());
+    }
+
+    #[test]
+    fn consecutive_user_turns_merge_text_and_parts() {
+        let a = serde_json::json!("first question");
+        let b = serde_json::json!("second question");
+        assert_eq!(super::merge_user_content(a, b), serde_json::json!("first question\n\nsecond question"));
+        let a = serde_json::json!("look at this");
+        let b = serde_json::json!([{ "type": "image_url", "image_url": { "url": "data:x" } }]);
+        let m = super::merge_user_content(a, b);
+        assert_eq!(m.as_array().unwrap().len(), 2);
+        assert_eq!(m[0]["type"], "text");
+        assert_eq!(m[1]["type"], "image_url");
     }
 
     #[test]

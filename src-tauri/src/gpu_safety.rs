@@ -55,6 +55,14 @@ struct State {
     /// reason ("vulkan-driver" | "cuda-arch") or "" when the device is fine.
     /// Cleared by gpu_retry (the user updated a driver and wants to try).
     device_unsupported: String,
+    /// When this run's sentinel was set (unix seconds). A machine that
+    /// rebooted since then did not crash on the GPU - it was rebooted.
+    pending_since: u64,
+    /// This run actually spawned a GPU server (`note_backend` /
+    /// `note_gpu_started`). A run that never got that far (memory gate,
+    /// no model, force-quit at the welcome screen) cannot have crashed
+    /// the GPU and must not count a strike.
+    gpu_started: bool,
 }
 
 #[derive(Serialize)]
@@ -138,6 +146,11 @@ fn decide(mut st: State) -> (State, bool) {
         st.pending = true;
         true
     };
+    if st.pending {
+        // The sentinel written for THIS run starts fresh and unproven.
+        st.pending_since = now_secs();
+        st.gpu_started = false;
+    }
     (st, allow)
 }
 
@@ -152,7 +165,8 @@ pub fn gpu_allowed(app: &AppHandle) -> bool {
         return decided;
     }
 
-    let (st, decision) = decide(load(app));
+    let st = discount_pending(load(app), sysinfo::System::boot_time());
+    let (st, decision) = decide(st);
     if st.crashes > 0 && !decision {
         log::warn!("[GPU] safe mode ENGAGED — forcing CPU after repeated unclean exits");
     } else if st.pending && st.crashes > 0 {
@@ -161,6 +175,45 @@ pub fn gpu_allowed(app: &AppHandle) -> bool {
     save(app, &st);
     let _ = SESSION_DECISION.set(decision);
     decision
+}
+
+/// A pending sentinel that cannot be a GPU crash is cleared before the
+/// ladder sees it: the machine rebooted since the run started (a reboot
+/// leaves every sentinel behind), or the run never spawned a GPU server.
+/// Both were strikes in the field (an M1 Air hit 4/4 after a reboot and a
+/// wedged-session quit, and ran the next conversation on CPU).
+fn discount_pending(mut st: State, boot_time: u64) -> State {
+    if !st.pending {
+        return st;
+    }
+    let rebooted = st.pending_since > 0 && boot_time > st.pending_since;
+    if rebooted || !st.gpu_started {
+        log::info!(
+            "[GPU] previous run left a sentinel but {} - not counted",
+            if rebooted { "the machine has rebooted since" } else { "it never reached the GPU" }
+        );
+        st.pending = false;
+    }
+    st
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// The spawn paths say a GPU server is really up for this run.
+pub fn note_gpu_started(app: &AppHandle) {
+    if !enabled() {
+        return;
+    }
+    let mut st = load(app);
+    if !st.gpu_started {
+        st.gpu_started = true;
+        save(app, &st);
+    }
 }
 
 /// Clear the sentinel on a clean app exit so this run isn't counted as a crash.
@@ -192,8 +245,9 @@ pub fn note_backend(app: &AppHandle, backend: &str) {
         return;
     }
     let mut st = load(app);
-    if st.backend != backend {
+    if st.backend != backend || !st.gpu_started {
         st.backend = backend.to_string();
+        st.gpu_started = true;
         save(app, &st);
     }
 }
@@ -273,6 +327,34 @@ pub fn gpu_retry(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reboot_since_sentinel_is_not_a_strike() {
+        let st = State { pending: true, crashes: 1, pending_since: 1_000, gpu_started: true, ..Default::default() };
+        let st = discount_pending(st, 2_000);
+        assert!(!st.pending, "a reboot after the sentinel clears it");
+        let (st, allow) = decide(st);
+        assert!(allow);
+        assert_eq!(st.crashes, 0, "no strike counted");
+    }
+
+    #[test]
+    fn run_that_never_reached_the_gpu_is_not_a_strike() {
+        let st = State { pending: true, crashes: 1, pending_since: 5_000, gpu_started: false, ..Default::default() };
+        let st = discount_pending(st, 1_000);
+        assert!(!st.pending);
+    }
+
+    #[test]
+    fn real_unclean_gpu_exit_still_counts() {
+        let st = State { pending: true, crashes: 0, pending_since: 5_000, gpu_started: true, ..Default::default() };
+        let st = discount_pending(st, 1_000);
+        assert!(st.pending, "no reboot, GPU ran: the strike stands");
+        let (st, _) = decide(st);
+        assert_eq!(st.crashes, 1);
+        assert!(!st.gpu_started, "the new run starts unproven");
+        assert!(st.pending_since > 0);
+    }
 
     #[test]
     fn clean_first_run_uses_gpu() {
