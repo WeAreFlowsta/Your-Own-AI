@@ -529,6 +529,28 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     if (finalizeInFlight.has(filename)) return;
     finalizeInFlight.add(filename);
     try {
+    // A download finished from an earlier session (reattach) or one that
+    // predates its speed-up file in the catalog: fetch and register the
+    // draft the fresh path would have (field 08-26: Nemotron's MTP head
+    // stayed an opt-in link after a resumed download).
+    const hit = variantByFirstPart(familyId, filename);
+    const draft = hit?.variant.draft;
+    if (draft) {
+      try {
+        if (!(await modelManager.isModelDownloaded(draft.filename))) {
+          store.downloads = { ...store.downloads, [familyId]: { progress: null, stage: 'draft' } };
+          await modelManager.downloadModel(draft.downloadUrl, draft.filename, (progress) => {
+            store.downloads = { ...store.downloads, [familyId]: { stage: 'draft', progress } };
+          });
+        }
+        await modelManager.registerModelDraft(filename, draft.filename, draft.type);
+      } catch (e) {
+        console.warn('[ModelDownloader] speed-up file after reattach failed (model still usable):', e);
+      } finally {
+        const { [familyId]: _done, ...rest } = store.downloads;
+        store.downloads = rest;
+      }
+    }
     await loadModels();
 
     if (isFirstModel) {

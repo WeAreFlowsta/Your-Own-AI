@@ -13,6 +13,8 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   badge, with delete and download one click away.
 - A model file the engine cannot read is now said in those words - in chat
   and on its card - and never as "too large for your graphics card".
+- A download finished from an earlier session now fetches the model's
+  speed-up file like a fresh download does, instead of leaving it as a link.
 
 ### Macs and engines
 - The free-memory check reads memory the way macOS means it (free plus
