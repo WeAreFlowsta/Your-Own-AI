@@ -36,11 +36,19 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           # The block between "## [<version>]" and the next "## [" heading.
-          awk -v ver="$VERSION" '
-            $0 ~ "^## \\["ver"\\]" { flag=1; next }
-            flag && /^## \[/ { exit }
-            flag { print }
-          ' CHANGELOG.md > /tmp/release-body.md
+          extract() {
+            awk -v ver="$1" '
+              $0 ~ "^## \\["ver"\\]" { flag=1; next }
+              flag && /^## \[/ { exit }
+              flag { print }
+            ' CHANGELOG.md
+          }
+          extract "$VERSION" > /tmp/release-body.md
+          # A beta carries the block of the version it is heading for
+          # (0.6.1-beta.1 -> "## [0.6.1]"), so testers read what changed.
+          if [ ! -s /tmp/release-body.md ] && [[ "$VERSION" == *-* ]]; then
+            extract "${VERSION%%-*}" > /tmp/release-body.md
+          fi
 
       - name: Create GitHub Release
         id: create-release
