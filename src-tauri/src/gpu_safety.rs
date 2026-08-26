@@ -21,7 +21,6 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::OnceLock;
 use tauri::{AppHandle, Manager};
 
 const STATE_FILE: &str = "gpu-safety.json";
@@ -78,7 +77,7 @@ pub struct SafeModeStatus {
 
 // Evaluate the crash sentinel at most once per process — the model can be
 // (re)loaded several times per session, and each reload asks for GPU args.
-static SESSION_DECISION: OnceLock<bool> = OnceLock::new();
+static SESSION_DECISION: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
 
 /// Production always; in debug only when FLOWSTA_GPU_SAFEMODE=1, so a dev's
 /// Ctrl-C (an "unclean" exit) doesn't false-trip safe mode during work.
@@ -161,7 +160,7 @@ pub fn gpu_allowed(app: &AppHandle) -> bool {
     if !enabled() {
         return true;
     }
-    if let Some(&decided) = SESSION_DECISION.get() {
+    if let Some(decided) = SESSION_DECISION.lock().ok().and_then(|d| *d) {
         return decided;
     }
 
@@ -173,7 +172,9 @@ pub fn gpu_allowed(app: &AppHandle) -> bool {
         log::warn!("[GPU] previous GPU run did not exit cleanly ({}/{})", st.crashes, CRASH_THRESHOLD);
     }
     save(app, &st);
-    let _ = SESSION_DECISION.set(decision);
+    if let Ok(mut d) = SESSION_DECISION.lock() {
+        *d = Some(decision);
+    }
     decision
 }
 
@@ -318,10 +319,19 @@ pub fn gpu_safe_mode_status(app: AppHandle) -> SafeModeStatus {
 
 /// Frontend "Try GPU again": clear safe mode so the next launch uses the GPU.
 #[tauri::command]
-pub fn gpu_retry(app: AppHandle) {
+pub async fn gpu_retry(app: AppHandle, state: tauri::State<'_, crate::llm::LLMState>) -> Result<(), String> {
     let st = State::default();
     save(&app, &st);
-    log::info!("[GPU] safe mode cleared by user — GPU will be retried next launch");
+    // Applies now: forget this session's verdict and reload the open model
+    // so the next reply uses the GPU (field 08-26: "next launch" meant it).
+    if let Ok(mut d) = SESSION_DECISION.lock() {
+        *d = None;
+    }
+    log::info!("[GPU] safe mode cleared by user - GPU retried now");
+    if let Err(e) = crate::llm::reload_for_engine_change(app.clone(), state, None, None).await {
+        log::warn!("[GPU] reload after retry failed: {}", e);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

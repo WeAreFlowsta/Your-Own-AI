@@ -17,12 +17,14 @@ use tauri::{AppHandle, Manager};
 
 /// The SwiftLM release this app is pinned to. Bump deliberately, with the
 /// sha256 below, after a spike pass on real hardware - never float.
-pub const SWIFTLM_TAG: &str = "b699";
+pub const SWIFTLM_TAG: &str = "b700";
 
-/// sha256 of the release tarball, measured 2026-08-24 at pin time. The
+/// sha256 of the release tarball, measured 2026-08-26 at pin time (b700:
+/// text-only Qwen 3.5/3.6 MoE checkpoints no longer misdetected as
+/// vision models - two of our pinned artifacts are exactly that). The
 /// download is refused if it does not match - an engine binary is the one
 /// artifact we never run unverified.
-const SWIFTLM_SHA256: &str = "73c845aca312093cb6bfd3e4854006929520e0a94daf61c0df0ad6c3416fe09e";
+const SWIFTLM_SHA256: &str = "f78e92e1bba0da70fc9317d72e0f529a7f91caba6f3b8cc79e236a9db73c5906";
 
 const SWIFTLM_REPO: &str = "SharpAI/SwiftLM";
 

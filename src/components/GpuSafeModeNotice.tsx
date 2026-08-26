@@ -56,7 +56,7 @@ export default component$(() => {
       <div class="min-w-0 flex-1">
         {retried.value ? (
           <p class="font-medium">
-            Re-enabled — restart the app to use it again.
+            Re-enabled - your next reply uses the graphics card.
           </p>
         ) : active.value ? (
           <>

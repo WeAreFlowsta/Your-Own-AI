@@ -39,6 +39,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   reading speed when the engine reports it. A model's card keeps separate
   measured speeds for MLX and the standard engine, and says which one
   chats are using.
+- "Try GPU again" tries it now: the open model reloads on the graphics
+  card at once instead of at the next launch.
+- MLX preview: SwiftLM b700 - text-only Qwen 3.5 and 3.6 mixture-of-experts
+  models are no longer mistaken for vision models.
 
 ## [0.6.0] - 2026-08-25
 
