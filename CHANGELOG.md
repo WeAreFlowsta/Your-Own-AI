@@ -29,6 +29,14 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   rejects a request is restarted before the next turn instead of wedging.
 - The GPU safety net no longer counts a reboot, or a run that never reached
   the graphics card, as a crash. Four of those put a Mac on CPU.
+- Engine changes apply now, not next launch: getting or removing a model's
+  MLX version, removing the MLX engine, or installing the CUDA engine
+  reloads the model you have open onto the engine that now applies.
+- Speed is one number with one meaning on every engine - completion tokens
+  over the time they streamed - and the tokens panel also shows the
+  reading speed when the engine reports it. A model's card keeps separate
+  measured speeds for MLX and the standard engine, and says which one
+  chats are using.
 
 ## [0.6.0] - 2026-08-25
 

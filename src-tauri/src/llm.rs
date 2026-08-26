@@ -1290,6 +1290,42 @@ fn dir_bytes(dir: &std::path::Path) -> u64 {
         .unwrap_or(0)
 }
 
+/// Set by an engine change so the next `load_model` of the already-loaded
+/// model really reloads it (on the engine that now applies) instead of
+/// short-circuiting. Field 08-26: switching a model to MLX, removing the
+/// engine, and installing CUDA all "took effect next launch" while the UI
+/// implied now.
+pub static FORCE_RELOAD_NEXT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Reload the running model so an engine change applies now. `only_model`
+/// limits it to that GGUF (an artifact arrived/left for one model);
+/// `only_if_backend` limits it to a currently spawned backend ("mlx" when
+/// the MLX engine was removed). No model loaded: nothing to do - the next
+/// load picks the new engine anyway.
+pub async fn reload_for_engine_change(
+    app: AppHandle,
+    state: State<'_, LLMState>,
+    only_model: Option<&str>,
+    only_if_backend: Option<&str>,
+) -> Result<(), String> {
+    let current = state.current_model.lock().await.clone();
+    let Some(cur) = current else { return Ok(()) };
+    if let Some(m) = only_model {
+        if m != cur {
+            return Ok(());
+        }
+    }
+    if let Some(b) = only_if_backend {
+        if state.spawned_backend.lock().await.as_deref() != Some(b) {
+            return Ok(());
+        }
+    }
+    let with_vision = state.current_mmproj.lock().await.is_some();
+    log::info!("[LLM] engine change - reloading '{}' now so it applies", cur);
+    FORCE_RELOAD_NEXT.store(true, std::sync::atomic::Ordering::SeqCst);
+    load_model(app, state, cur, with_vision, "engine-switch".into()).await
+}
+
 pub fn current_ctx_size() -> u32 {
     let v = CURRENT_CTX_SIZE.load(std::sync::atomic::Ordering::Relaxed);
     if v == 0 { 8192 } else { v }
@@ -3449,6 +3485,9 @@ pub async fn load_model(
             && (!with_vision || state.current_mmproj.lock().await.is_some())
             // A pending reading-room request means "reload with more" - not a duplicate.
             && MIN_CTX_NEXT_LOAD.load(std::sync::atomic::Ordering::SeqCst) == 0
+            // An engine change (MLX artifact arrived or removed, engine
+            // installed or removed) asks for the same model on the new engine.
+            && !FORCE_RELOAD_NEXT.swap(false, std::sync::atomic::Ordering::SeqCst)
             && chat_server_health_ok().await
         {
             log::info!("[LLM] '{}' already loaded and healthy — nothing to do", filename);
@@ -3710,6 +3749,13 @@ struct StreamUsageData {
     /// online sibling of the offline model-file hash.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     provider_fingerprint: Option<String>,
+    /// Prompt-reading speed (llama-server's `timings.prompt_per_second`),
+    /// when the engine reports it - the panel's "reading" figure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prompt_per_second: Option<f64>,
+    /// Which local engine served the turn ("llama" | "mlx"), for the stamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    engine: Option<String>,
     /// Generation speed as the local server measured it (llama-server's
     /// `timings.predicted_per_second` on the final chunk). The app's own
     /// wall-clock figure is wrong for short replies - content is streamed
@@ -4105,8 +4151,35 @@ pub async fn stream_chat_completion(
     let mut usage_data: Option<StreamUsageData> = None;
     let mut provider_fingerprint: Option<String> = None;
     let mut server_tps: Option<f64> = None;
+    let mut prompt_tps: Option<f64> = None;
     let mut sources: Vec<SourceItem> = Vec::new();
     let mut in_reasoning = false;
+    // One definition of "tokens per second" for every engine: completion
+    // tokens over the span from the first streamed bytes to the last.
+    // llama-server's `predicted_per_second` is that same span; SwiftLM's is
+    // completion over prefill + generation (field 08-26: three numbers for
+    // one reply), so the MLX path uses the app's own span instead.
+    let mlx_serving = state.spawned_backend.lock().await.as_deref() == Some("mlx");
+    let mut first_bytes_at: Option<std::time::Instant> = None;
+    let mut last_bytes_at: Option<std::time::Instant> = None;
+    let finish_usage = |usage: &mut StreamUsageData, server_tps: Option<f64>, prompt_tps: Option<f64>, first: Option<std::time::Instant>, last: Option<std::time::Instant>| {
+        let ours = match (first, last) {
+            (Some(f), Some(l)) => {
+                let secs = l.duration_since(f).as_secs_f64();
+                (secs >= 0.5 && usage.completion_tokens >= 16).then(|| usage.completion_tokens as f64 / secs)
+            }
+            _ => None,
+        };
+        if usage.tokens_per_second.is_none() {
+            usage.tokens_per_second = if mlx_serving { ours.or(server_tps) } else { server_tps.or(ours) };
+        }
+        if usage.prompt_per_second.is_none() {
+            usage.prompt_per_second = prompt_tps;
+        }
+        if usage.engine.is_none() && model_name != "remote" {
+            usage.engine = Some(if mlx_serving { "mlx".to_string() } else { "llama".to_string() });
+        }
+    };
 
     loop {
         let next = match tokio::time::timeout(STALL, stream.next()).await {
@@ -4133,6 +4206,11 @@ pub async fn stream_chat_completion(
 
         match chunk_result {
             Ok(chunk) => {
+                let now = std::time::Instant::now();
+                if first_bytes_at.is_none() {
+                    first_bytes_at = Some(now);
+                }
+                last_bytes_at = Some(now);
                 // Convert bytes to string
                 let chunk_str = String::from_utf8_lossy(&chunk);
                 sse_buffer.push_str(&chunk_str);
@@ -4158,22 +4236,14 @@ pub async fn stream_chat_completion(
 
                             // Emit usage data if captured
                             if let Some(ref mut usage) = usage_data {
-                                if usage.tokens_per_second.is_none() {
-                                    usage.tokens_per_second = server_tps;
-                                }
-                                // MLX-served turns must not stamp the GGUF
-                                // name's measured speed - routing ranks the
-                                // llama.cpp artifact by it. (Per-artifact
-                                // stats are the follow-up.)
-                                let mlx_serving = app
-                                    .state::<LLMState>()
-                                    .spawned_backend
-                                    .try_lock()
-                                    .map(|b| b.as_deref() == Some("mlx"))
-                                    .unwrap_or(false);
-                                if model_name != "remote" && !mlx_serving {
+                                finish_usage(usage, server_tps, prompt_tps, first_bytes_at, last_bytes_at);
+                                // Stamp the engine that served: the GGUF name
+                                // for llama.cpp (routing ranks by it), an
+                                // "mlx:" key for MLX, so the row can show both.
+                                if model_name != "remote" {
                                     if let Some(tps) = usage.tokens_per_second {
-                                        crate::model_stats::record_speed(&app, &model_name, usage.completion_tokens, tps);
+                                        let key = if mlx_serving { format!("mlx:{}", model_name) } else { model_name.clone() };
+                                        crate::model_stats::record_speed(&app, &key, usage.completion_tokens, tps);
                                     }
                                 }
                             }
@@ -4215,6 +4285,15 @@ pub async fn stream_chat_completion(
                             {
                                 if tps.is_finite() && tps > 0.0 {
                                     server_tps = Some(tps);
+                                }
+                            }
+                            if let Some(pp) = parsed
+                                .get("timings")
+                                .and_then(|t| t.get("prompt_per_second"))
+                                .and_then(|v| v.as_f64())
+                            {
+                                if pp.is_finite() && pp > 0.0 {
+                                    prompt_tps = Some(pp);
                                 }
                             }
                             // If the server streams reasoning_content (native thinking from
@@ -4296,6 +4375,8 @@ pub async fn stream_chat_completion(
                                         completion_tokens: completion as u32,
                                         total_tokens: total as u32,
                                         provider_fingerprint: provider_fingerprint.clone(),
+                                        prompt_per_second: None,
+                                        engine: None,
                                         tokens_per_second: server_tps,
                                     });
                                 }
@@ -4341,18 +4422,11 @@ pub async fn stream_chat_completion(
 
     // Emit usage data if captured (fallback for streams that end without [DONE])
     if let Some(ref mut usage) = usage_data {
-        if usage.tokens_per_second.is_none() {
-            usage.tokens_per_second = server_tps;
-        }
-        let mlx_serving = app
-            .state::<LLMState>()
-            .spawned_backend
-            .try_lock()
-            .map(|b| b.as_deref() == Some("mlx"))
-            .unwrap_or(false);
-        if model_name != "remote" && !mlx_serving {
+        finish_usage(usage, server_tps, prompt_tps, first_bytes_at, last_bytes_at);
+        if model_name != "remote" {
             if let Some(tps) = usage.tokens_per_second {
-                crate::model_stats::record_speed(&app, &model_name, usage.completion_tokens, tps);
+                let key = if mlx_serving { format!("mlx:{}", model_name) } else { model_name.clone() };
+                crate::model_stats::record_speed(&app, &key, usage.completion_tokens, tps);
             }
         }
     }

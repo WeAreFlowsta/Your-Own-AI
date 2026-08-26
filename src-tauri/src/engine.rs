@@ -220,7 +220,11 @@ pub async fn engine_status(
 /// the zip. `url` override exists for dev testing against a locally served
 /// zip (the release repo is private until launch).
 #[tauri::command]
-pub async fn download_cuda_engine(app: AppHandle, url: Option<String>) -> Result<(), String> {
+pub async fn download_cuda_engine(
+    app: AppHandle,
+    state: tauri::State<'_, crate::llm::LLMState>,
+    url: Option<String>,
+) -> Result<(), String> {
     let url = match url {
         Some(u) => u,
         None => cuda_download_url().ok_or("unsupported_platform")?,
@@ -236,6 +240,10 @@ pub async fn download_cuda_engine(app: AppHandle, url: Option<String>) -> Result
     // Older versions are superseded the moment the new one is in place.
     remove_stale_cuda_versions(&app);
     log::info!("[Engine] CUDA engine installed ({})", LLAMA_ENGINE_TAG);
+    // Applies now: the loaded model moves onto the new engine.
+    if let Err(e) = crate::llm::reload_for_engine_change(app.clone(), state, None, None).await {
+        log::warn!("[Engine] reload after CUDA install failed: {}", e);
+    }
     Ok(())
 }
 

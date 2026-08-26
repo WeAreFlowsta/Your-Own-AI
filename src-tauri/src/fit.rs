@@ -74,6 +74,9 @@ pub struct ModelFit {
     /// This machine's measured generation speed for the model (engine
     /// timings, moving average), when it has been used here.
     pub measured_tps: Option<f64>,
+    /// Measured on the MLX engine (Apple Silicon), when it has served this
+    /// model here - kept apart so the row can show the engine in use.
+    pub measured_tps_mlx: Option<f64>,
     /// How long the last load took here (seconds), when known.
     pub load_secs: Option<f64>,
 }
@@ -492,6 +495,7 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
             }
         }
         let measured_tps = stats.get(&m.name).and_then(|s| s.tps);
+        let measured_tps_mlx = stats.get(&format!("mlx:{}", m.name)).and_then(|s| s.tps);
         let load_secs = stats.get(&m.name).and_then(|s| s.load_secs);
         out.push(ModelFit {
             name: m.name,
@@ -508,6 +512,7 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
             moe_offload,
             moe_cpu_layers: moe_cpu_layers_pick,
             measured_tps,
+            measured_tps_mlx,
             load_secs,
         });
     }

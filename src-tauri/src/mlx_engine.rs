@@ -205,11 +205,18 @@ fn remove_stale_mlx_versions(app: &AppHandle) {
 /// Remove the installed MLX engine (and any stale versions). Models keep
 /// their artifacts; they simply run on llama.cpp Metal again.
 #[tauri::command]
-pub async fn remove_mlx_engine(app: AppHandle) -> Result<(), String> {
+pub async fn remove_mlx_engine(
+    app: AppHandle,
+    state: tauri::State<'_, crate::llm::LLMState>,
+) -> Result<(), String> {
     let dir = engine_dir(&app)?;
     let _ = std::fs::remove_dir_all(&dir);
     remove_stale_mlx_versions(&app);
     log::info!("[Engine] MLX engine removed");
+    // Applies now: a model MLX was serving reloads on llama.cpp.
+    if let Err(e) = crate::llm::reload_for_engine_change(app.clone(), state, None, Some("mlx")).await {
+        log::warn!("[Engine] reload after MLX removal failed: {}", e);
+    }
     Ok(())
 }
 

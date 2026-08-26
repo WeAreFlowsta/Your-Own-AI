@@ -255,6 +255,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
         moe_cpu_layers?: number | null;
         n_layers?: number;
         measured_tps?: number | null;
+        measured_tps_mlx?: number | null;
         load_secs?: number | null;
       }
     >,
@@ -377,6 +378,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
           moe_cpu_layers?: number | null;
           n_layers?: number;
           measured_tps?: number | null;
+        measured_tps_mlx?: number | null;
           load_secs?: number | null;
         }[]
       >('assess_model_fit');
@@ -1793,11 +1795,25 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
               const catalogSha = catalogMatch?.variant.sha256;
               const replaced = !!(catalogSha && model.sha256 && model.sha256 !== catalogSha);
               const unusable = !!model.damaged || replaced;
+              // Chats for this model run on the MLX engine (Apple Silicon):
+              // the engine is installed and its artifact is complete.
+              const mlxServes = !!(
+                !unusable &&
+                store.mlxEngineInstalled &&
+                catalogMatch?.variant.artifacts?.mlx?.hfRepo &&
+                store.mlxArtifacts[catalogMatch.variant.artifacts.mlx.hfRepo!]?.complete
+              );
               const fitBadge = model.damaged
                 ? {
                     label: 'Damaged file',
                     cls: 'bg-red-500/10 border-red-500/25 text-red-400',
                     tip: `This file is incomplete or corrupted and can't be used (${model.damaged}). Delete it and download the model again.`,
+                  }
+                : mlxServes
+                ? {
+                    label: 'MLX',
+                    cls: 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400',
+                    tip: 'Chats run on the MLX engine. The standard engine\'s fit applies again if MLX is removed.',
                   }
                 : replaced
                 ? {
@@ -1877,16 +1893,13 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                       {!unusable && fitInfo && fitInfo.context_runtime > 0
                         ? ` · runs at ${formatContext(fitInfo.context_runtime)}${fitInfo.agent_template_ok ? ' · works in projects' : ''}`
                         : ''}
-                      {!unusable && fitInfo?.measured_tps
+                      {!unusable && mlxServes && fitInfo?.measured_tps_mlx
+                        ? ` · ~${Math.round(fitInfo.measured_tps_mlx)} tok/s measured on MLX`
+                        : !unusable && !mlxServes && fitInfo?.measured_tps
                         ? ` · ~${Math.round(fitInfo.measured_tps)} tok/s measured`
                         : ''}
                       {!unusable && model.draft ? ' · speed-up file on' : ''}
-                      {!unusable &&
-                      store.mlxEngineInstalled &&
-                      catalogMatch?.variant.artifacts?.mlx?.hfRepo &&
-                      store.mlxArtifacts[catalogMatch.variant.artifacts.mlx.hfRepo!]?.complete
-                        ? ' · chats run on MLX'
-                        : ''}
+                      {mlxServes ? ' · chats run on MLX' : ''}
                     </p>
                     {!unusable && !model.draft && catalogMatch?.variant.draft && (
                       store.downloads[catalogMatch.family.id]?.stage === 'draft' ? (

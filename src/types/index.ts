@@ -137,7 +137,7 @@ export interface Message {
    *  "Searching the web" instead of a generic "thinking". */
   searchingWeb?: boolean;
   // OwnServer-only properties (unused in Desktop, but needed for TypeScript compatibility)
-  tokens?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; tokens_per_second?: number };
+  tokens?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; tokens_per_second?: number; prompt_per_second?: number; engine?: string };
   sources?: any[];
   /** Source-grounding: an answer's claims anchored to document quotes/spans (+
    *  image links), computed after the reply and shown in this message's Sources

@@ -245,6 +245,7 @@ pub fn serving_dir_for(app: &AppHandle, gguf_filename: &str) -> Option<PathBuf> 
 #[tauri::command]
 pub async fn download_mlx_artifact(
     app: AppHandle,
+    state: tauri::State<'_, crate::llm::LLMState>,
     repo: String,
     revision: String,
     // for_model: the GGUF filename this artifact upgrades (the row's identity).
@@ -387,6 +388,12 @@ pub async fn download_mlx_artifact(
         serde_json::json!({ "filename": dir_name }),
     );
     log::info!("[MLX] artifact complete: {} ({} files, {} bytes)", dir_name, manifest.files.len(), bytes_total);
+    // Applies now: if this model is the one loaded, reload it on MLX.
+    if let Some(ref gguf) = for_model {
+        if let Err(e) = crate::llm::reload_for_engine_change(app.clone(), state, Some(gguf), None).await {
+            log::warn!("[MLX] reload after artifact download failed: {}", e);
+        }
+    }
     Ok(())
 }
 
@@ -428,7 +435,11 @@ pub async fn mlx_artifact_status(app: AppHandle, repo: String) -> Result<MlxArti
 /// Delete an MLX artifact directory entirely (its GGUF sibling, if any,
 /// is untouched - deleting one artifact never deletes the model).
 #[tauri::command]
-pub async fn delete_mlx_artifact(app: AppHandle, repo: String) -> Result<(), String> {
+pub async fn delete_mlx_artifact(
+    app: AppHandle,
+    state: tauri::State<'_, crate::llm::LLMState>,
+    repo: String,
+) -> Result<(), String> {
     let dir = artifact_dir(&app, &repo)?;
     // Belt: never remove anything outside the models dir or without our prefix.
     let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -437,6 +448,13 @@ pub async fn delete_mlx_artifact(app: AppHandle, repo: String) -> Result<(), Str
     }
     std::fs::remove_dir_all(&dir).map_err(|e| format!("delete failed: {e}"))?;
     log::info!("[MLX] artifact deleted: {}", name);
+    // Applies now: the model this artifact served goes back to llama.cpp.
+    let gguf = read_map(&app).into_iter().find(|(_, r)| r == &repo).map(|(g, _)| g);
+    if let Some(gguf) = gguf {
+        if let Err(e) = crate::llm::reload_for_engine_change(app.clone(), state, Some(&gguf), Some("mlx")).await {
+            log::warn!("[MLX] reload after artifact delete failed: {}", e);
+        }
+    }
     Ok(())
 }
 

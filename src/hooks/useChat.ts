@@ -1132,6 +1132,8 @@ export function useChat(props: UseChatProps) {
           total_tokens: number;
           provider_fingerprint?: string | null;
           tokens_per_second?: number | null;
+          prompt_per_second?: number | null;
+          engine?: string | null;
         } | null = null;
         let sources: { url: string; title: string }[] | null = null;
 
@@ -1366,6 +1368,10 @@ export function useChat(props: UseChatProps) {
                       completion_tokens: tokenUsage.completion_tokens,
                       total_tokens: tokenUsage.total_tokens,
                       tokens_per_second: tokensPerSecond,
+                      prompt_per_second: tokenUsage.prompt_per_second
+                        ? Math.round(tokenUsage.prompt_per_second)
+                        : undefined,
+                      engine: tokenUsage.engine ?? undefined,
                     }
                   : undefined,
                 sources: sources || undefined,

@@ -708,7 +708,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
 
       {openSection.value === 'tokens' && hasTokens && (
         <div class="px-4 pb-4 -mt-2 text-[var(--text-primary)] whitespace-pre-wrap text-base leading-relaxed tracking-normal font-light">
-          <div class={`pt-4 grid ${props.message.tokens?.tokens_per_second ? 'grid-cols-4' : 'grid-cols-3'} gap-2 text-center`}>
+          <div class={`pt-4 grid ${props.message.tokens?.tokens_per_second ? (props.message.tokens?.prompt_per_second ? 'grid-cols-5' : 'grid-cols-4') : 'grid-cols-3'} gap-2 text-center`}>
             <div>
               <div class="font-semibold text-base">{props.message.tokens?.prompt_tokens}</div>
               <div class="text-xs text-[var(--text-muted)]">Prompt</div>
@@ -721,10 +721,18 @@ const ActionBar = component$<ActionBarProps>((props) => {
               <div class="font-semibold text-base">{props.message.tokens?.total_tokens}</div>
               <div class="text-xs text-[var(--text-muted)]">Total</div>
             </div>
-            {props.message.tokens?.tokens_per_second && (
+            {props.message.tokens?.prompt_per_second && (
               <div>
+                <div class="font-semibold text-base">{props.message.tokens.prompt_per_second}</div>
+                <div class="text-xs text-[var(--text-muted)]">Reading tok/s</div>
+              </div>
+            )}
+            {props.message.tokens?.tokens_per_second && (
+              <div title="Completion tokens over the time they streamed - the same measure for every engine">
                 <div class="font-semibold text-base">{props.message.tokens.tokens_per_second}</div>
-                <div class="text-xs text-[var(--text-muted)]">Tokens/sec</div>
+                <div class="text-xs text-[var(--text-muted)]">
+                  Writing tok/s{props.message.tokens.engine === 'mlx' ? ' · MLX' : ''}
+                </div>
               </div>
             )}
           </div>

@@ -328,7 +328,7 @@ export default component$(() => {
                   {s.running_backend === "cuda"
                     ? "Active - powering your chats."
                     : s.active_backend === "cuda"
-                      ? "Installed - takes over the next time a model loads."
+                      ? "Installed - in use from now on."
                       : "Installed."}
                 </p>
               )}
