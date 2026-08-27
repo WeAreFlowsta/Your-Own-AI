@@ -21,8 +21,8 @@ pub struct RouteResult {
     pub reason: String,
 }
 
-const QUERY_INSTRUCTION: &str = "Represent this sentence for searching relevant passages: ";
-const EMBED_MODEL: &str = "bge-small-en-v1.5-f16.gguf";
+pub(crate) const QUERY_INSTRUCTION: &str = "Represent this sentence for searching relevant passages: ";
+pub(crate) const EMBED_MODEL: &str = "bge-small-en-v1.5-f16.gguf";
 
 /// How much better (on the 0–9 task scale) a candidate must be than the loaded
 /// model to justify a reload. Generous so near-equal models don't thrash; small
@@ -67,7 +67,7 @@ const FRESH_REFERENCES: &[&str] = &[
     "who is favored to win this weekends game",
 ];
 
-fn cosine(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) fn cosine(a: &[f32], b: &[f32]) -> f32 {
     let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
     let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();

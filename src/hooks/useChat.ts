@@ -1112,10 +1112,14 @@ export function useChat(props: UseChatProps) {
           userMemory,
           needsVision
         );
-        // Skills: the AI's installed skills (all, or the ones set on it)
-        // go in whole - chat has no tool use, so there is nothing to read
-        // on demand. Their size shows on the skill cards for that reason.
-        const skillsBlock = await skillsPromptBlock(selectedAi.aiConfig.skills);
+        // Skills: the ones chosen for this AI. Chat has no tool use, so the
+        // Rust side picks the skill whose description matches the question
+        // and sends its full text; the rest ride as a one-line index.
+        const skillsBlock = await skillsPromptBlock(
+          selectedAi.aiConfig.skills,
+          userInput,
+          await queryVecPromise,
+        );
         if (skillsBlock.block) systemPrompt += "\n\n" + skillsBlock.block;
         const skillsUsed = skillsBlock.names;
 

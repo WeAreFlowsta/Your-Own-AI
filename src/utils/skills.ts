@@ -57,18 +57,11 @@ export function sourceLabel(s: SkillSource | null): string {
   return "from a folder";
 }
 
-/** Which AIs use a skill, for the card: null skills = every skill. */
-export function usedBy(
-  skill: string,
-  ais: { name: string; status: string; skills?: string[] | null }[],
-): { all: boolean; names: string[] } {
-  const active = ais.filter((a) => a.status === "active");
-  const explicit = active.filter((a) => Array.isArray(a.skills));
-  if (explicit.length === 0) return { all: true, names: [] };
-  const names = active
-    .filter((a) => !Array.isArray(a.skills) || a.skills.includes(skill))
+/** Which active AIs have chosen a skill. */
+export function usedBy(skill: string, ais: { name: string; status: string; skills?: string[] | null }[]): string[] {
+  return ais
+    .filter((a) => a.status === "active" && Array.isArray(a.skills) && a.skills.includes(skill))
     .map((a) => a.name);
-  return { all: names.length === active.length, names };
 }
 
 export interface SkillsBlock {
@@ -76,10 +69,16 @@ export interface SkillsBlock {
   names: string[];
 }
 
-/** The chat path's skills block for an AI (null = every installed skill). */
-export async function skillsPromptBlock(names: string[] | null | undefined): Promise<SkillsBlock> {
+/** The chat path's skills block for one turn: the AI's chosen skills, the
+ *  full text of the one(s) matching the question. Nothing chosen = "". */
+export async function skillsPromptBlock(
+  names: string[] | undefined,
+  query: string,
+  queryVec?: number[] | null,
+): Promise<SkillsBlock> {
+  if (!names || names.length === 0) return { block: "", names: [] };
   try {
-    return await invoke<SkillsBlock>("skills_prompt_block", { names: names ?? null });
+    return await invoke<SkillsBlock>("skills_prompt_block", { names, query, queryVec: queryVec ?? null });
   } catch (e) {
     console.warn("[skills] prompt block unavailable", e);
     return { block: "", names: [] };

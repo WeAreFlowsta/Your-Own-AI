@@ -549,57 +549,182 @@ pub async fn skills_skill_md(app: AppHandle, name: String) -> Result<String, Str
 pub struct SkillsBlock {
     /// The text appended to the AI's instructions; empty when nothing applies.
     pub block: String,
-    /// The skills in it, in order - shown on the turn as proof.
+    /// The skills whose full text rode along, in order - shown on the turn.
     pub names: Vec<String>,
 }
 
-/// The chat path's skills block: every installed skill (or only `names`),
-/// SKILL.md bodies under one heading.
-#[tauri::command]
-pub async fn skills_prompt_block(app: AppHandle, names: Option<Vec<String>>) -> Result<SkillsBlock, String> {
-    let root = skills_dir(&app)?;
-    let wanted: Option<Vec<String>> = names.map(|v| v.iter().map(|n| normalize_name(n)).collect());
-    let mut dirs: Vec<PathBuf> = std::fs::read_dir(&root)
-        .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.join("SKILL.md").is_file()).collect())
-        .unwrap_or_default();
-    dirs.sort();
-    let mut block = String::new();
-    let mut used: Vec<String> = Vec::new();
-    for d in dirs {
-        if is_agent_builtin(&d) {
+/// A skill's description above this cosine to the question gets its full
+/// text into the turn (bge-small, same query instruction as routing and
+/// memory retrieval; routing's own gates sit at 0.52-0.62).
+const SKILL_MATCH_THRESHOLD: f32 = 0.50;
+/// A second skill rides only when it is this close as well.
+const SKILL_SECOND_THRESHOLD: f32 = 0.58;
+/// Full skill text carried per turn, at most (tokens, approx).
+const SKILL_BODY_BUDGET_TOKENS: u64 = 4000;
+
+/// Description embeddings, keyed by (name, description) so an updated
+/// skill re-embeds. Lives for the process.
+static DESC_VECS: std::sync::LazyLock<tokio::sync::Mutex<std::collections::HashMap<String, Vec<f32>>>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(std::collections::HashMap::new()));
+
+struct ChosenSkill {
+    name: String,
+    description: String,
+    body: String,
+}
+
+async fn chosen_skills(app: &AppHandle, names: &[String]) -> Result<Vec<ChosenSkill>, String> {
+    let root = skills_dir(app)?;
+    let mut out = Vec::new();
+    for n in names {
+        let dir = root.join(normalize_name(n));
+        if is_agent_builtin(&dir) {
             continue;
         }
-        let dir_name = d.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
-        if let Some(w) = &wanted {
-            if !w.iter().any(|n| n == &dir_name) {
-                continue;
-            }
-        }
-        let Ok(text) = std::fs::read_to_string(d.join("SKILL.md")) else { continue };
-        let (fm_name, _) = parse_front_matter(&text);
-        let name = fm_name.unwrap_or(dir_name);
-        let body = body_without_front_matter(&text).trim();
+        let Ok(text) = std::fs::read_to_string(dir.join("SKILL.md")) else { continue };
+        let (fm_name, fm_desc) = parse_front_matter(&text);
+        let body = body_without_front_matter(&text).trim().to_string();
         if body.is_empty() {
             continue;
         }
-        used.push(name.clone());
-        block.push_str(&format!("\n\n### Skill: {name}\n{body}"));
+        let name = fm_name.unwrap_or_else(|| normalize_name(n));
+        let description = fm_desc.unwrap_or_else(|| body.lines().find(|l| !l.trim().is_empty()).unwrap_or("").to_string());
+        out.push(ChosenSkill { name, description, body });
     }
-    if block.is_empty() {
+    Ok(out)
+}
+
+/// Cosine of the question to each chosen skill's description; None when
+/// the embedding server is not available.
+async fn skill_scores(app: &AppHandle, skills: &[ChosenSkill], query: &str, query_vec: Option<Vec<f32>>) -> Option<Vec<f32>> {
+    use tauri::Manager;
+    let state = app.state::<crate::llm::LLMState>();
+    // Descriptions first (cached), then the question.
+    let mut missing: Vec<(String, String)> = Vec::new();
+    {
+        let cache = DESC_VECS.lock().await;
+        for sk in skills {
+            let key = format!("{}\u{0}{}", sk.name, sk.description);
+            if !cache.contains_key(&key) {
+                missing.push((key, sk.description.clone()));
+            }
+        }
+    }
+    if !missing.is_empty() {
+        let texts: Vec<String> = missing.iter().map(|(_, d)| d.clone()).collect();
+        let vecs = crate::llm::embed_texts(app.clone(), state.clone(), texts, crate::router::EMBED_MODEL.to_string()).await.ok()?;
+        let mut cache = DESC_VECS.lock().await;
+        for ((key, _), v) in missing.into_iter().zip(vecs.into_iter()) {
+            cache.insert(key, v);
+        }
+    }
+    let qvec: Vec<f32> = match query_vec {
+        Some(v) if !v.is_empty() => v,
+        _ => {
+            let qtext = format!("{}{}", crate::router::QUERY_INSTRUCTION, query);
+            crate::llm::embed_texts(app.clone(), state, vec![qtext], crate::router::EMBED_MODEL.to_string()).await.ok()?.pop()?
+        }
+    };
+    let cache = DESC_VECS.lock().await;
+    Some(
+        skills
+            .iter()
+            .map(|sk| {
+                let key = format!("{}\u{0}{}", sk.name, sk.description);
+                cache.get(&key).map(|v| crate::router::cosine(&qvec, v)).unwrap_or(0.0)
+            })
+            .collect(),
+    )
+}
+
+/// Word overlap between the question and a description - the fallback
+/// when no embedding server is up. Returns the count of shared words of
+/// four letters or more.
+fn word_overlap(query: &str, description: &str) -> usize {
+    let words = |t: &str| -> std::collections::HashSet<String> {
+        t.split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.len() >= 4)
+            .map(|w| w.to_ascii_lowercase())
+            .collect()
+    };
+    words(query).intersection(&words(description)).count()
+}
+
+/// The chat path's skills block for one turn. `names` = the skills chosen
+/// on the AI (nothing chosen = nothing carried). The turn always carries a
+/// one-line index of those skills; the full text of the one (or two) whose
+/// description best matches the question rides along - the chat surface
+/// has no tools, so this stands in for the agent's read-on-demand.
+#[tauri::command]
+pub async fn skills_prompt_block(
+    app: AppHandle,
+    names: Option<Vec<String>>,
+    query: Option<String>,
+    query_vec: Option<Vec<f32>>,
+) -> Result<SkillsBlock, String> {
+    let names = names.unwrap_or_default();
+    if names.is_empty() {
         return Ok(SkillsBlock::default());
     }
-    // Visible proof in the dev log that a chat turn carried its skills.
-    log::info!(
-        "[skills] chat block: {} (~{} tokens)",
-        used.join(", "),
-        crate::llm::count_tokens_text(&block).await
-    );
-    Ok(SkillsBlock {
-        block: format!(
-            "You have the following skills - instructions you follow when the task calls for them. Apply the relevant one; ignore the others.{block}"
-        ),
-        names: used,
-    })
+    let skills = chosen_skills(&app, &names).await?;
+    if skills.is_empty() {
+        return Ok(SkillsBlock::default());
+    }
+    let query = query.unwrap_or_default();
+    // Which get their full text: one chosen skill always does (the person
+    // picked it for this AI on purpose); several are ranked by the question.
+    let mut picked: Vec<usize> = Vec::new();
+    if skills.len() == 1 {
+        picked.push(0);
+    } else if !query.trim().is_empty() {
+        let mut ranked: Vec<(usize, f32)> = match skill_scores(&app, &skills, &query, query_vec).await {
+            Some(scores) => scores.into_iter().enumerate().collect(),
+            None => skills
+                .iter()
+                .enumerate()
+                .map(|(i, sk)| (i, if word_overlap(&query, &sk.description) >= 2 { 0.6 } else { 0.0 }))
+                .collect(),
+        };
+        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        if let Some((i, s)) = ranked.first() {
+            if *s >= SKILL_MATCH_THRESHOLD {
+                picked.push(*i);
+            }
+        }
+        if let Some((i, s)) = ranked.get(1) {
+            if *s >= SKILL_SECOND_THRESHOLD {
+                picked.push(*i);
+            }
+        }
+    }
+    // Budget: the full texts must stay within what a small model can carry.
+    let mut used: Vec<String> = Vec::new();
+    let mut bodies = String::new();
+    let mut spent: u64 = 0;
+    for i in picked {
+        let sk = &skills[i];
+        let cost = crate::llm::count_tokens_text(&sk.body).await;
+        if spent + cost > SKILL_BODY_BUDGET_TOKENS && !used.is_empty() {
+            continue;
+        }
+        spent += cost;
+        used.push(sk.name.clone());
+        bodies.push_str(&format!("\n\n### Skill: {}\n{}", sk.name, sk.body));
+    }
+    let index: String = skills
+        .iter()
+        .map(|sk| format!("- {}: {}", sk.name, sk.description.chars().take(160).collect::<String>()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    log::info!("[skills] chat block: {} of {} chosen ({} tokens): {}", used.len(), skills.len(), spent, used.join(", "));
+    let block = if bodies.is_empty() {
+        format!("This AI has these skills (their full instructions are brought in when a question calls for them):\n{index}")
+    } else {
+        format!(
+            "This AI has these skills:\n{index}\n\nThe instructions below apply to this question - follow them.{bodies}"
+        )
+    };
+    Ok(SkillsBlock { block, names: used })
 }
 
 /// For a skill installed from a GitHub link: the commit its branch or tag
@@ -677,6 +802,12 @@ mod tests {
         );
         assert_eq!(parse_github_url("https://github.com/o/r.git").map(|g| g.repo), Some("r".into()));
         assert!(parse_github_url("https://example.com/x.zip").is_none());
+    }
+
+    #[test]
+    fn word_overlap_counts_shared_long_words() {
+        assert_eq!(word_overlap("how do I design zome validation for a holochain app", "Holochain hApp development: zome architecture, validation, testing"), 3);
+        assert_eq!(word_overlap("what is the weather", "Holochain hApp development"), 0);
     }
 
     #[test]

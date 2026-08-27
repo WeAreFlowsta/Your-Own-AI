@@ -66,10 +66,13 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   files). Add-ons > Skills lists what is installed and adds more from a
   folder, a zip file, or a link - a GitHub repository is pinned to the
   commit it points at today. Skills work in projects (the AI picks one by
-  its description) and in chat (the skill's text rides with the AI's
-  instructions; each card shows what that costs). Every AI uses every
-  skill unless you narrow it on the AI (Your AIs > Skills). A skill is
-  text - adding one never runs anything; one that ships programs says so.
+  its description) and in chat, where the AI carries a short list of its
+  chosen skills and the full text of the one that fits the question, so a
+  few skills stay cheap (each card shows what a skill costs when used). A
+  skill does nothing until you give it to an AI - "Used by" on its card,
+  or Your AIs > edit > Skills; a freshly added skill opens that picker. A
+  skill is text - adding one never runs anything; one that ships programs
+  says so.
 - Proof on the turn: a chat reply's model details now list the skills
   that rode with it, and a project step that reads inside a skill says
   "Using skill: name" instead of "Reading SKILL.md".

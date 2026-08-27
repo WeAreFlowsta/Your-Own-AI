@@ -121,15 +121,13 @@ export default component$(() => {
     }
   });
 
-  /** Flip one AI's use of a skill. null skills = every installed skill. */
+  /** Flip one AI's use of a skill. */
   const toggleAiSkill = $(async (aiId: string, skill: string) => {
     const ai = aiData.userDefinedAis.find((a) => a.id === aiId);
     if (!ai) return;
-    const all = store.skills.map((s) => s.name);
-    const current = Array.isArray(ai.skills) ? ai.skills : all;
+    const current = Array.isArray(ai.skills) ? ai.skills : [];
     const next = current.includes(skill) ? current.filter((n) => n !== skill) : [...current, skill];
-    const isAll = all.every((n) => next.includes(n));
-    await editUserAi(aiId, { skills: isAll ? null : next });
+    await editUserAi(aiId, { skills: next });
   });
 
   // eslint-disable-next-line qwik/no-use-visible-task
@@ -163,6 +161,8 @@ export default component$(() => {
     store.addOpen = false;
     store.link = "";
     await load();
+    // A skill does nothing until an AI has it: open the new card's picker.
+    store.usedByOpen = name;
   });
 
   const addFolder = $(async () => {
@@ -298,10 +298,10 @@ export default component$(() => {
           </div>
 
           <Callout intent="info" title="How skills work" id="skills-intro">
-            Skills work in projects and in chat. In a project the AI picks a skill by its description and reads the
-            rest as it works. In chat the whole SKILL.md goes to the model with the AI's instructions, so the size on
-            each card is what a chat turn pays to carry it. Every AI uses every skill unless you choose for it (Your
-            AIs, edit, Skills - or "Used by" on a card here).
+            A skill does nothing until you give it to an AI - "Used by" on a card here, or Your AIs, edit, Skills. In
+            chat the AI carries a short list of its skills and the full text of the one that fits the question, so a
+            few chosen skills stay cheap; the size on each card is what that costs when it is used. In a project the
+            agent sees every installed skill's description and reads one only when the work calls for it.
           </Callout>
 
           {store.addOpen && (
@@ -408,7 +408,7 @@ export default component$(() => {
             ) : (
               <div class="grid gap-4 sm:grid-cols-2">
                 {store.skills.map((s) => {
-                  const use = usedBy(s.name, aiData.userDefinedAis);
+                  const users = usedBy(s.name, aiData.userDefinedAis);
                   const large = s.tokens >= LARGE_SKILL_TOKENS;
                   return (
                     <div
@@ -452,14 +452,14 @@ export default component$(() => {
                         title="Choose which AIs use this skill"
                       >
                         <LuUsers class="h-3.5 w-3.5 shrink-0" />
-                        Used by: {use.all ? "all your AIs" : use.names.length ? use.names.join(", ") : "no AI yet"}
+                        Used by: {users.length ? users.join(", ") : "no AI yet - choose one"}
                       </button>
                       {store.usedByOpen === s.name && (
                         <div class="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-main)] p-3 space-y-1.5">
                           {aiData.userDefinedAis
                             .filter((a) => a.status === "active")
                             .map((a) => {
-                              const on = !Array.isArray(a.skills) || a.skills.includes(s.name);
+                              const on = Array.isArray(a.skills) && a.skills.includes(s.name);
                               return (
                                 <label key={a.id} class="flex items-center gap-2 text-sm text-[var(--text-primary)]">
                                   <input type="checkbox" checked={on} onChange$={() => toggleAiSkill(a.id, s.name)} />
@@ -498,7 +498,7 @@ export default component$(() => {
                       {large && (
                         <p class="flex items-start gap-1.5 text-xs text-amber-500">
                           <LuAlertTriangle class="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                          Large for a small model: in chat this takes {tokensLabel(s.tokens)} of the AI's memory every turn.
+                          Large for a small model: when it is used in chat it takes {tokensLabel(s.tokens)} of the AI's memory.
                         </p>
                       )}
                       {s.runs_programs && (
