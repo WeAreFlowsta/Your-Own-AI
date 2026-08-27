@@ -71,12 +71,27 @@ export function usedBy(
   return { all: names.length === active.length, names };
 }
 
+export interface SkillsBlock {
+  block: string;
+  names: string[];
+}
+
 /** The chat path's skills block for an AI (null = every installed skill). */
-export async function skillsPromptBlock(names: string[] | null | undefined): Promise<string> {
+export async function skillsPromptBlock(names: string[] | null | undefined): Promise<SkillsBlock> {
   try {
-    return await invoke<string>("skills_prompt_block", { names: names ?? null });
+    return await invoke<SkillsBlock>("skills_prompt_block", { names: names ?? null });
   } catch (e) {
     console.warn("[skills] prompt block unavailable", e);
-    return "";
+    return { block: "", names: [] };
   }
+}
+
+/** The installed skills folder as it appears in a path, any OS. */
+const SKILLS_DIR_RE = /[\/]\.your-own-ai-build[\/]skills[\/]([^\/]+)[\/]/;
+
+/** If `path` is inside an installed skill, that skill's name. */
+export function skillNameFromPath(path: string | undefined): string | null {
+  if (!path) return null;
+  const m = path.match(SKILLS_DIR_RE);
+  return m ? m[1] : null;
 }

@@ -674,6 +674,8 @@ pub fn run() {
             skills::skills_remove,
             skills::skills_skill_md,
             skills::skills_prompt_block,
+            skills::skills_check_update,
+            skills::skills_update,
         ])
         .setup(|app| {
             // Backfill model-artifact hashes for files downloaded before

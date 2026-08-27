@@ -15,6 +15,7 @@
  * goes through the agent session instead of the direct model call.
  */
 
+import { skillNameFromPath } from "../utils/skills";
 import { $, useSignal, useStore, useVisibleTask$, type Signal } from "@builder.io/qwik";
 import { v4 as uuidv4 } from "uuid";
 import { startConversation, recordMessage } from "../utils/holochainTranscripts";
@@ -266,8 +267,12 @@ function humanizeAction(update: any): { label: string; kind?: string; detail?: s
           dir && dir !== "." ? `Looking through ${basename(dir)}/` : "Looking through the project",
         detail: dir,
       };
-    case "read":
+    case "read": {
+      // A file inside an installed skill: say which skill is in use.
+      const skill = skillNameFromPath(path);
+      if (skill) return { kind, label: `Using skill: ${skill} (${basename(path)})`, detail: path };
       return { kind, label: path ? `Reading ${basename(path)}` : "Reading files", detail: path };
+    }
     case "edit":
     case "write":
       return { kind, label: path ? `Editing ${basename(path)}` : "Editing files", detail: path };

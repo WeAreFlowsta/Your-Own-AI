@@ -1116,7 +1116,8 @@ export function useChat(props: UseChatProps) {
         // go in whole - chat has no tool use, so there is nothing to read
         // on demand. Their size shows on the skill cards for that reason.
         const skillsBlock = await skillsPromptBlock(selectedAi.aiConfig.skills);
-        if (skillsBlock) systemPrompt += "\n\n" + skillsBlock;
+        if (skillsBlock.block) systemPrompt += "\n\n" + skillsBlock.block;
+        const skillsUsed = skillsBlock.names;
 
         // Generous ceiling — the prompt shapes the actual length; this just prevents
         // truncation. Report mode gets extra headroom because the <think> pass + a
@@ -1462,7 +1463,7 @@ export function useChat(props: UseChatProps) {
         // renders it once the reply finishes).
         state.messages = state.messages.map((m) =>
           m.id === assistantId
-            ? { ...m, servedBy: modelName, routingReason: routedReason, routingTask: routedTask }
+            ? { ...m, servedBy: modelName, routingReason: routedReason, routingTask: routedTask, skills: skillsUsed }
             : m,
         );
 

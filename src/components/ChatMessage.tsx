@@ -666,6 +666,11 @@ const ActionBar = component$<ActionBarProps>((props) => {
                 ? `Auto routing: ${props.message.routingReason}`
                 : 'This model was picked directly, not by Auto routing.'}
             </p>
+            {!!props.message.skills?.length && (
+              <p class="text-xs mt-1.5">
+                Skills carried on this turn: {props.message.skills.join(', ')}
+              </p>
+            )}
             {props.message.agentTurn && (
               <p class="text-xs mt-1.5 text-[var(--text-muted)]">
                 A folder session stays on its model for the whole conversation.

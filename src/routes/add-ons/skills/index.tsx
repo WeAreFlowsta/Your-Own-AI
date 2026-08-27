@@ -21,10 +21,14 @@ import {
   LuLoader,
   LuAlertTriangle,
   LuChevronLeft,
+  LuRefreshCw,
+  LuFileText,
+  LuUsers,
 } from "@qwikest/icons/lucide";
 import AppHeader from "../../../components/AppHeader";
 import { useHeaderWorkspace } from "../../../hooks/useHeaderWorkspace";
-import { useAiData } from "../../../contexts/AiDataContext";
+import { useAiData, useAiDataActions } from "../../../contexts/AiDataContext";
+import { renderMarkdown } from "../../../utils/renderMarkdown";
 import LiquidMetalButton from "../../../components/LiquidMetalButton";
 import ConfirmModal from "../../../components/ConfirmModal";
 import { Callout } from "../../../components/Callout";
@@ -41,6 +45,7 @@ export default component$(() => {
   const nav = useNavigate();
   const headerWs = useHeaderWorkspace();
   const aiData = useAiData();
+  const { editUserAi } = useAiDataActions();
   const currentModel = useSignal<string | null>(null);
   const showModelWidget = useSignal(false);
 
@@ -55,12 +60,71 @@ export default component$(() => {
     justAdded: "" as string,
     confirmRemove: null as string | null,
     removing: false,
+    // SKILL.md text per skill, once fetched; which card shows it
+    preview: {} as Record<string, string>,
+    previewOpen: "" as string,
+    // name -> newer commit on the source branch (link installs only)
+    updates: {} as Record<string, string>,
+    updating: "" as string,
+    // which card has its "Used by" picker open
+    usedByOpen: "" as string,
   });
 
   const load = $(async () => {
     store.loading = true;
     store.skills = await listSkills();
     store.loading = false;
+    // Quiet update check for link installs - one at a time, never an error.
+    const updates: Record<string, string> = {};
+    for (const s of store.skills) {
+      if (s.source?.kind !== "link" || !s.source.sha) continue;
+      try {
+        const latest = await invoke<string | null>("skills_check_update", { name: s.name });
+        if (latest) updates[s.name] = latest;
+      } catch {
+        /* offline or rate-limited: no badge */
+      }
+    }
+    store.updates = updates;
+  });
+
+  const togglePreview = $(async (name: string) => {
+    if (store.previewOpen === name) {
+      store.previewOpen = "";
+      return;
+    }
+    if (!store.preview[name]) {
+      try {
+        store.preview = { ...store.preview, [name]: await invoke<string>("skills_skill_md", { name }) };
+      } catch {
+        store.preview = { ...store.preview, [name]: "Couldn't read SKILL.md." };
+      }
+    }
+    store.previewOpen = name;
+  });
+
+  const updateSkill = $(async (name: string) => {
+    store.error = "";
+    store.updating = name;
+    try {
+      await invoke<string>("skills_update", { name });
+      await load();
+    } catch (e) {
+      store.error = typeof e === "string" ? e : "Couldn't update that skill.";
+    } finally {
+      store.updating = "";
+    }
+  });
+
+  /** Flip one AI's use of a skill. null skills = every installed skill. */
+  const toggleAiSkill = $(async (aiId: string, skill: string) => {
+    const ai = aiData.userDefinedAis.find((a) => a.id === aiId);
+    if (!ai) return;
+    const all = store.skills.map((s) => s.name);
+    const current = Array.isArray(ai.skills) ? ai.skills : all;
+    const next = current.includes(skill) ? current.filter((n) => n !== skill) : [...current, skill];
+    const isAll = all.every((n) => next.includes(n));
+    await editUserAi(aiId, { skills: isAll ? null : next });
   });
 
   // eslint-disable-next-line qwik/no-use-visible-task
@@ -300,10 +364,64 @@ export default component$(() => {
                         {s.files} file{s.files === 1 ? "" : "s"} · {tokensLabel(s.tokens)} ·{" "}
                         {s.runs_programs ? "can run programs" : "knowledge only"}
                       </p>
-                      <p class="text-xs text-[var(--text-muted)]">{sourceLabel(s.source)}</p>
                       <p class="text-xs text-[var(--text-muted)]">
-                        Used by: {use.all ? "all your AIs" : use.names.length ? use.names.join(", ") : "no AI yet"}
+                        {sourceLabel(s.source)}
+                        {store.updates[s.name] && (
+                          <span class="ml-2 text-amber-500">Update available ({store.updates[s.name].slice(0, 7)})</span>
+                        )}
                       </p>
+                      <button
+                        type="button"
+                        onClick$={() => {
+                          store.usedByOpen = store.usedByOpen === s.name ? "" : s.name;
+                        }}
+                        class="inline-flex items-center gap-1.5 text-left text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                        title="Choose which AIs use this skill"
+                      >
+                        <LuUsers class="h-3.5 w-3.5 shrink-0" />
+                        Used by: {use.all ? "all your AIs" : use.names.length ? use.names.join(", ") : "no AI yet"}
+                      </button>
+                      {store.usedByOpen === s.name && (
+                        <div class="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-main)] p-3 space-y-1.5">
+                          {aiData.userDefinedAis
+                            .filter((a) => a.status === "active")
+                            .map((a) => {
+                              const on = !Array.isArray(a.skills) || a.skills.includes(s.name);
+                              return (
+                                <label key={a.id} class="flex items-center gap-2 text-sm text-[var(--text-primary)]">
+                                  <input type="checkbox" checked={on} onChange$={() => toggleAiSkill(a.id, s.name)} />
+                                  {a.name}
+                                </label>
+                              );
+                            })}
+                        </div>
+                      )}
+                      <div class="flex flex-wrap gap-2 pt-1">
+                        <LiquidMetalButton
+                          variant="secondary"
+                          class="flex items-center gap-1.5 px-3 py-1.5 text-xs"
+                          onClick$={() => togglePreview(s.name)}
+                        >
+                          <LuFileText class="h-3.5 w-3.5" />
+                          {store.previewOpen === s.name ? "Hide SKILL.md" : "Show SKILL.md"}
+                        </LiquidMetalButton>
+                        {store.updates[s.name] && (
+                          <LiquidMetalButton
+                            class="flex items-center gap-1.5 px-3 py-1.5 text-xs"
+                            disabled={store.updating === s.name}
+                            onClick$={() => updateSkill(s.name)}
+                          >
+                            <LuRefreshCw class={`h-3.5 w-3.5 ${store.updating === s.name ? "animate-spin" : ""}`} />
+                            Update
+                          </LiquidMetalButton>
+                        )}
+                      </div>
+                      {store.previewOpen === s.name && store.preview[s.name] && (
+                        <div
+                          class="markdown-content max-h-80 overflow-y-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-main)] p-3 text-sm text-[var(--text-primary)]"
+                          dangerouslySetInnerHTML={renderMarkdown(store.preview[s.name])}
+                        />
+                      )}
                       {large && (
                         <p class="flex items-start gap-1.5 text-xs text-amber-500">
                           <LuAlertTriangle class="mt-0.5 h-3.5 w-3.5 shrink-0" />

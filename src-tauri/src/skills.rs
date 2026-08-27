@@ -519,10 +519,18 @@ pub async fn skills_skill_md(app: AppHandle, name: String) -> Result<String, Str
     std::fs::read_to_string(dir.join("SKILL.md")).map_err(|e| e.to_string())
 }
 
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct SkillsBlock {
+    /// The text appended to the AI's instructions; empty when nothing applies.
+    pub block: String,
+    /// The skills in it, in order - shown on the turn as proof.
+    pub names: Vec<String>,
+}
+
 /// The chat path's skills block: every installed skill (or only `names`),
-/// SKILL.md bodies under one heading. Empty string when there is nothing.
+/// SKILL.md bodies under one heading.
 #[tauri::command]
-pub async fn skills_prompt_block(app: AppHandle, names: Option<Vec<String>>) -> Result<String, String> {
+pub async fn skills_prompt_block(app: AppHandle, names: Option<Vec<String>>) -> Result<SkillsBlock, String> {
     let root = skills_dir(&app)?;
     let wanted: Option<Vec<String>> = names.map(|v| v.iter().map(|n| normalize_name(n)).collect());
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(&root)
@@ -552,7 +560,7 @@ pub async fn skills_prompt_block(app: AppHandle, names: Option<Vec<String>>) -> 
         block.push_str(&format!("\n\n### Skill: {name}\n{body}"));
     }
     if block.is_empty() {
-        return Ok(String::new());
+        return Ok(SkillsBlock::default());
     }
     // Visible proof in the dev log that a chat turn carried its skills.
     log::info!(
@@ -560,9 +568,53 @@ pub async fn skills_prompt_block(app: AppHandle, names: Option<Vec<String>>) -> 
         used.join(", "),
         crate::llm::count_tokens_text(&block).await
     );
-    Ok(format!(
-        "You have the following skills - instructions you follow when the task calls for them. Apply the relevant one; ignore the others.{block}"
-    ))
+    Ok(SkillsBlock {
+        block: format!(
+            "You have the following skills - instructions you follow when the task calls for them. Apply the relevant one; ignore the others.{block}"
+        ),
+        names: used,
+    })
+}
+
+/// For a skill installed from a GitHub link: the commit its branch or tag
+/// points at now, when it differs from the installed one. None = current,
+/// not a link install, or GitHub unreachable (never an error on the page).
+#[tauri::command]
+pub async fn skills_check_update(app: AppHandle, name: String) -> Result<Option<String>, String> {
+    let dir = skills_dir(&app)?.join(normalize_name(&name));
+    let Some(src) = read_sidecar(&dir) else { return Ok(None) };
+    let (Some(url), Some(sha)) = (src.url.clone(), src.sha.clone()) else { return Ok(None) };
+    let Some(gh) = parse_github_url(&url) else { return Ok(None) };
+    let r#ref = src.r#ref.clone().unwrap_or_else(|| "main".into());
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).build().map_err(|e| e.to_string())?;
+    let commit: serde_json::Value = match client
+        .get(format!("https://api.github.com/repos/{}/{}/commits/{}", gh.owner, gh.repo, r#ref))
+        .send()
+        .await
+    {
+        Ok(r) => r.json().await.unwrap_or(serde_json::Value::Null),
+        Err(e) => {
+            log::warn!("[skills] update check for '{name}' failed: {e}");
+            return Ok(None);
+        }
+    };
+    let latest = commit.get("sha").and_then(|v| v.as_str()).map(str::to_string);
+    Ok(latest.filter(|l| l != &sha))
+}
+
+/// Reinstall a link-installed skill from its recorded source (branch or
+/// tag re-resolved to today's commit). Same name, replaced in place.
+#[tauri::command]
+pub async fn skills_update(app: AppHandle, name: String) -> Result<String, String> {
+    let dir = skills_dir(&app)?.join(normalize_name(&name));
+    let src = read_sidecar(&dir).ok_or("This skill was not installed from a link.")?;
+    let url = src.url.clone().ok_or("This skill was not installed from a link.")?;
+    let link = match (parse_github_url(&url), src.r#ref.as_deref(), src.path.as_deref()) {
+        (Some(gh), Some(r), Some(p)) => format!("https://github.com/{}/{}/tree/{r}/{p}", gh.owner, gh.repo),
+        (Some(gh), Some(r), None) => format!("https://github.com/{}/{}/tree/{r}", gh.owner, gh.repo),
+        _ => url,
+    };
+    skills_add_link(app, link).await
 }
 
 #[cfg(test)]

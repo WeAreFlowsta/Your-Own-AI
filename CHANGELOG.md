@@ -62,6 +62,12 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   instructions; each card shows what that costs). Every AI uses every
   skill unless you narrow it on the AI (Your AIs > Skills). A skill is
   text - adding one never runs anything; one that ships programs says so.
+- Proof on the turn: a chat reply's model details now list the skills
+  that rode with it, and a project step that reads inside a skill says
+  "Using skill: name" instead of "Reading SKILL.md".
+- Each skill card can show its SKILL.md, says when the source branch has
+  moved on ("Update available") with a one-tap update, and lets you choose
+  which AIs use the skill from the card itself.
 - Characters. Every built-in personality on one shelf, each with "Make an
   AI from this" - New AI opens with that character chosen. A character is
   a starting point you stamp an AI from; the AI is then yours in Your AIs.

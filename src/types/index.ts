@@ -186,6 +186,8 @@ export interface Message {
    *  order). `content` holds only the text the AI is currently saying -
    *  which, at turn end, IS the final answer. */
   agentLog?: AgentLogItem[];
+  /** Skills whose instructions rode with this chat turn (proof on the turn). */
+  skills?: string[];
   /** Turn-level stats from the agent's turn_completed usage - drives the
    *  collapsed stub ("6 steps - 5 files - 40s") and the Tokens panel. */
   agentStats?: { durationMs?: number; modelCalls?: number };
