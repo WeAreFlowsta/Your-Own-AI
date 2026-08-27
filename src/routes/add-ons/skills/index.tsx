@@ -74,7 +74,9 @@ export default component$(() => {
   });
 
   const load = $(async () => {
-    store.loading = true;
+    // First load shows the placeholder; a refresh after add/remove/update
+    // keeps the cards in place (blanking them read as a page change).
+    if (store.skills.length === 0) store.loading = true;
     store.skills = await listSkills();
     store.loading = false;
     // Quiet update check for link installs - one at a time, never an error.
@@ -296,9 +298,10 @@ export default component$(() => {
           </div>
 
           <Callout intent="info" title="How skills work" id="skills-intro">
-            In a project, the AI picks a skill by its description and reads the rest as it works. In chat, the whole
-            SKILL.md goes to the model with the AI's instructions, so the size shown on each card is what a chat turn
-            pays to carry it. Every AI uses every skill unless you narrow it on the AI (Your AIs, Skills).
+            Skills work in projects and in chat. In a project the AI picks a skill by its description and reads the
+            rest as it works. In chat the whole SKILL.md goes to the model with the AI's instructions, so the size on
+            each card is what a chat turn pays to carry it. Every AI uses every skill unless you choose for it (Your
+            AIs, edit, Skills - or "Used by" on a card here).
           </Callout>
 
           {store.addOpen && (
