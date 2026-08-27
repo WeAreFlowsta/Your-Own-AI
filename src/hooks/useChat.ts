@@ -8,6 +8,7 @@
  * flushSync is not needed — Qwik signals auto-update the DOM.
  */
 
+import { skillsPromptBlock } from "../utils/skills";
 import { useStore, useSignal, $, noSerialize, type Signal, type NoSerialize } from "@builder.io/qwik";
 import type { Message, ChatMessage, SelectedAiModel, ChatAction, TurnMode } from "../types";
 import { v4 as uuidv4 } from "uuid";
@@ -1104,13 +1105,18 @@ export function useChat(props: UseChatProps) {
         // Memory: the block was kicked off in parallel right after the
         // optimistic UI - by now routing/model-load usually paid for it.
         const userMemory = await memoryBlockPromise;
-        const systemPrompt = buildSystemPrompt(
+        let systemPrompt = buildSystemPrompt(
           selectedAi,
           disposition,
           turnMode,
           userMemory,
           needsVision
         );
+        // Skills: the AI's installed skills (all, or the ones set on it)
+        // go in whole - chat has no tool use, so there is nothing to read
+        // on demand. Their size shows on the skill cards for that reason.
+        const skillsBlock = await skillsPromptBlock(selectedAi.aiConfig.skills);
+        if (skillsBlock) systemPrompt += "\n\n" + skillsBlock;
 
         // Generous ceiling — the prompt shapes the actual length; this just prevents
         // truncation. Report mode gets extra headroom because the <think> pass + a

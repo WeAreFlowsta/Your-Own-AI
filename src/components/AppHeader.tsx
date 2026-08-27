@@ -26,6 +26,7 @@ import {
   LuCloud,
   LuX,
   LuRotateCw,
+  LuPuzzle,
 } from "@qwikest/icons/lucide";
 
 import { ThemeContext, ProjectMemoryContext, type AppTheme } from "../routes/layout";
@@ -883,6 +884,19 @@ export default component$<AppHeaderProps>(
                   >
                     <LuCloud class="mr-2 h-5 w-5" aria-hidden="true" />
                     Online Models
+                  </button>
+                </div>
+                <div class="py-1">
+                  <button
+                    onClick$={async () => {
+                      menuOpen.value = false;
+                      await nav("/add-ons");
+                    }}
+                    class="group flex w-full items-center pl-3 pr-2 py-2 text-sm text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)] hover:text-[var(--text-primary)] transition-colors"
+                    role="menuitem"
+                  >
+                    <LuPuzzle class="mr-2 h-5 w-5" aria-hidden="true" />
+                    Add-ons
                   </button>
                 </div>
                 <div class="py-1">

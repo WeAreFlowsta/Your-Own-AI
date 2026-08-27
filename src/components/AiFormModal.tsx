@@ -31,6 +31,7 @@ import {
   LuBookOpen,
   LuImagePlus,
   LuFileText,
+  LuPuzzle,
 } from '@qwikest/icons/lucide';
 import { invoke } from '@tauri-apps/api/core';
 import { richModelName } from '../utils/modelNameFormatter';
@@ -38,6 +39,7 @@ import { isModelPaused } from '../utils/modelPrefs';
 import { autoOptions, offeredOnlineModels } from '../utils/modelOptions';
 import { ImageCropModal } from './ImageCropModal';
 import { KnowledgeSection } from './KnowledgeSection';
+import { listSkills, tokensLabel, type SkillInfo } from '../utils/skills';
 import { ThumbnailGalleryModal } from './ThumbnailGalleryModal';
 import type { GalleryThumb } from '../data/thumbnail-gallery';
 import { buildAiPack, signAiPack, aiPackFilename } from '../utils/aiPack';
@@ -97,7 +99,10 @@ const AiFormModal = component$<AiFormModalProps>(
       localPreviewOverride: null as string | null,
       originalImageSrc: null as string | null,
       showCropModal: false,
-      activeSection: 'basics' as 'basics' | 'behaviour' | 'details' | 'knowledge' | 'appearance',
+      activeSection: 'basics' as 'basics' | 'behaviour' | 'details' | 'knowledge' | 'skills' | 'appearance',
+      // Skills this AI uses: 'all' (the default - every installed skill) or an explicit list.
+      skills: 'all' as 'all' | string[],
+      installedSkills: [] as SkillInfo[],
       knowledgeDocs: [] as import('../utils/transcriptMemory').KnowledgeDocument[],
       knowledgeBusy: false,
       knowledgeError: '' as string,
@@ -109,6 +114,14 @@ const AiFormModal = component$<AiFormModalProps>(
     });
 
     // We keep thumbnailFile in a signal since File objects are non-serializable
+    // Installed skills for the Skills section (the list itself lives in Add-ons).
+    // eslint-disable-next-line qwik/no-use-visible-task
+    useVisibleTask$(async ({ track }) => {
+      track(() => isOpen);
+      if (!isOpen) return;
+      store.installedSkills = await listSkills();
+    });
+
     const thumbnailFile = useSignal<File | null>(null);
     const previewSrc = useSignal<string | null>(null);
 
@@ -318,6 +331,7 @@ const AiFormModal = component$<AiFormModalProps>(
         previewSrc.value = null;
 
         const templates = getArchetypeTemplates();
+        store.skills = 'all';
 
         if (editingAi) {
           store.name = editingAi.name;
@@ -328,6 +342,7 @@ const AiFormModal = component$<AiFormModalProps>(
           store.model = editingAi.model || 'auto:offline';
           store.askBlurb = editingAi.askBlurb || '';
           store.useEmojis = editingAi.useEmojis ?? false;
+          store.skills = Array.isArray(editingAi.skills) ? [...editingAi.skills] : 'all';
 
           const defaultDescription = generateDefaultDescription(
             editingAi.name,
@@ -519,6 +534,7 @@ const AiFormModal = component$<AiFormModalProps>(
           model: store.model,
           askBlurb: store.askBlurb.trim(),
           useEmojis: store.useEmojis,
+          skills: store.skills === 'all' ? null : store.skills,
         };
 
         if (editingAi) {
@@ -633,6 +649,7 @@ const AiFormModal = component$<AiFormModalProps>(
                   { id: 'behaviour', label: 'Behaviour', icon: LuSlidersHorizontal },
                   { id: 'details', label: 'Details', icon: LuFileText },
                   { id: 'knowledge', label: 'Knowledge', icon: LuBookOpen },
+                  { id: 'skills', label: 'Skills', icon: LuPuzzle },
                   { id: 'appearance', label: 'Appearance', icon: LuImagePlus },
                 ].map((sec) => {
                   const Icon = sec.icon;
@@ -1202,6 +1219,69 @@ const AiFormModal = component$<AiFormModalProps>(
             </>)}
             {(!editingAi || store.activeSection === 'knowledge') && editingAi && (
               <KnowledgeSection aiId={editingAi.id} store={store} />
+            )}
+            {(!editingAi || store.activeSection === 'skills') && (
+              <div class="space-y-3">
+                <p class="block text-sm font-medium text-[var(--text-secondary)]">Skills</p>
+                <p class="text-sm text-[var(--text-muted)]">
+                  What this AI knows how to do. Every AI uses every installed skill unless you narrow it here.
+                </p>
+                {store.installedSkills.length === 0 ? (
+                  <p class="text-sm text-[var(--text-secondary)]">
+                    No skills installed yet.{' '}
+                    <a href="/add-ons/skills" class="text-[var(--text-link)] hover:underline">Get some in Add-ons</a>.
+                  </p>
+                ) : (
+                  <>
+                    <label class="flex items-center gap-2 text-sm text-[var(--text-primary)]">
+                      <input
+                        type="radio"
+                        name="skillsMode"
+                        checked={store.skills === 'all'}
+                        onChange$={() => { store.skills = 'all'; }}
+                      />
+                      All skills ({store.installedSkills.length})
+                    </label>
+                    <label class="flex items-center gap-2 text-sm text-[var(--text-primary)]">
+                      <input
+                        type="radio"
+                        name="skillsMode"
+                        checked={store.skills !== 'all'}
+                        onChange$={() => { if (store.skills === 'all') store.skills = store.installedSkills.map((s) => s.name); }}
+                      />
+                      Only these
+                    </label>
+                    {store.skills !== 'all' && (
+                      <div class="ml-6 space-y-1.5">
+                        {store.installedSkills.map((s) => {
+                          const on = store.skills !== 'all' && store.skills.includes(s.name);
+                          return (
+                            <label key={s.name} class="flex items-start gap-2 text-sm text-[var(--text-primary)]">
+                              <input
+                                type="checkbox"
+                                checked={on}
+                                onChange$={() => {
+                                  if (store.skills === 'all') return;
+                                  store.skills = on ? store.skills.filter((n) => n !== s.name) : [...store.skills, s.name];
+                                }}
+                                class="mt-0.5"
+                              />
+                              <span class="min-w-0">
+                                <span class="font-medium">{s.name}</span>
+                                <span class="text-[var(--text-muted)]"> · {tokensLabel(s.tokens)}</span>
+                                {s.description && (
+                                  <span class="block text-xs text-[var(--text-secondary)] line-clamp-2">{s.description}</span>
+                                )}
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                    <a href="/add-ons/skills" class="inline-block text-sm text-[var(--text-link)] hover:underline">Get more skills</a>
+                  </>
+                )}
+              </div>
             )}
             {(!editingAi || store.activeSection === 'appearance') && (<>
             {/* Thumbnail */}

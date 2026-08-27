@@ -35,7 +35,8 @@ mod vault_restore;         // replay conversations from the Vault backup onto th
 mod model_caps;            // capability registry (benchmark-informed scores)
 mod process_ext;           // Windows: hide sidecar consoles + kill-on-close job; Linux: PDEATHSIG
 mod instance_guard;        // single-instance port lock + orphan-process sweep
-mod clipboard;             // Rust-side copy (WebView2 denies navigator.clipboard)
+mod clipboard;
+mod skills;               // Add-ons > Skills: SKILL.md folders the AIs read             // Rust-side copy (WebView2 denies navigator.clipboard)
 
 use llm::LLMState;
 use holochain::HolochainManager;
@@ -666,6 +667,13 @@ pub fn run() {
             conversation_import::import_adopt_status,
             commands_holochain::delete_conversation,
             conversation_import::import_archive_delete,
+            skills::skills_list,
+            skills::skills_add_folder,
+            skills::skills_add_zip,
+            skills::skills_add_link,
+            skills::skills_remove,
+            skills::skills_skill_md,
+            skills::skills_prompt_block,
         ])
         .setup(|app| {
             // Backfill model-artifact hashes for files downloaded before

@@ -52,6 +52,20 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   the rail says why the picture was not looked at - a line that stays
   readable after the steps fold and is kept in your records.
 
+### Add-ons
+- Skills. A skill is a folder of instructions an AI reads when the work
+  calls for it (the Agent Skills open standard: SKILL.md plus supporting
+  files). Add-ons > Skills lists what is installed and adds more from a
+  folder, a zip file, or a link - a GitHub repository is pinned to the
+  commit it points at today. Skills work in projects (the AI picks one by
+  its description) and in chat (the skill's text rides with the AI's
+  instructions; each card shows what that costs). Every AI uses every
+  skill unless you narrow it on the AI (Your AIs > Skills). A skill is
+  text - adding one never runs anything; one that ships programs says so.
+- Add-ons has its own place in the menu: Projects, Skills, and the kinds
+  that follow.
+
+
 ## [0.6.0] - 2026-08-25
 
 Your AIs know you better, run bigger models on the machine you already
