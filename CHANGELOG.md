@@ -68,6 +68,16 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - Each skill card can show its SKILL.md, says when the source branch has
   moved on ("Update available") with a one-tap update, and lets you choose
   which AIs use the skill from the card itself.
+- A Recommended list inside "Add a skill": open-standard skills we have
+  read and pinned (Holochain development, debugging, incremental
+  implementation, decision records, front-end design, refining an idea,
+  internal communications, a second look before you act) - knowledge
+  only, permissive licenses, sized for a local model. One tap installs
+  exactly the reviewed version.
+- A project that brings its own skills (.claude, .agents or .grok skills
+  folders) shows "N skills" on its pill in the header.
+- yourownai:// links open the app at the matching page; a skills link
+  arrives with the source filled in, ready to add.
 - Characters. Every built-in personality on one shelf, each with "Make an
   AI from this" - New AI opens with that character chosen. A character is
   a starting point you stamp an AI from; the AI is then yours in Your AIs.

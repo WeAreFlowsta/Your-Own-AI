@@ -150,6 +150,23 @@ export default component$<AppHeaderProps>(
     // The workspace slot's recents menu.
     const folderMenuOpen = useSignal(false);
     const workspaceMenuOpen = useSignal(false);
+    // Skills the open project folder carries itself (.claude/.agents/.grok
+    // skills dirs) - shown on the pill so a repo's own know-how is visible.
+    const projectSkills = useSignal<string[]>([]);
+    // eslint-disable-next-line qwik/no-use-visible-task
+    useVisibleTask$(async ({ track }) => {
+      const p = track(() => folderPath);
+      if (!p) {
+        projectSkills.value = [];
+        return;
+      }
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        projectSkills.value = await invoke<string[]>('skills_in_folder', { path: p });
+      } catch {
+        projectSkills.value = [];
+      }
+    });
     // The project-memory modal lives at the layout root (route stacking
     // contexts would bury it here) - this signal opens it.
     const memoryFolder = useContext(ProjectMemoryContext);
@@ -342,6 +359,14 @@ export default component$<AppHeaderProps>(
                     }
                   >
                     {permissionMode === 'all' ? 'all' : 'auto'}
+                  </span>
+                )}
+                {projectSkills.value.length > 0 && (
+                  <span
+                    class="shrink-0 rounded-full border border-[var(--border-subtle)] px-1.5 text-[10px] text-[var(--text-secondary)]"
+                    title={`This project brings its own skills: ${projectSkills.value.join(', ')}`}
+                  >
+                    {projectSkills.value.length} skill{projectSkills.value.length === 1 ? '' : 's'}
                   </span>
                 )}
                 {folderStatus === 'stopped' && (

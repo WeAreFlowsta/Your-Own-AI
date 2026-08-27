@@ -40,6 +40,7 @@ import {
   LARGE_SKILL_TOKENS,
   type SkillInfo,
 } from "../../../utils/skills";
+import { RECOMMENDED_SKILLS, SKILL_GROUPS } from "../../../data/recommended-skills";
 
 export default component$(() => {
   const nav = useNavigate();
@@ -68,6 +69,8 @@ export default component$(() => {
     updating: "" as string,
     // which card has its "Used by" picker open
     usedByOpen: "" as string,
+    // Recommended entry being installed (by name)
+    installing: "" as string,
   });
 
   const load = $(async () => {
@@ -131,6 +134,18 @@ export default component$(() => {
   useVisibleTask$(async () => {
     currentModel.value = localStorage.getItem("currentModel");
     showModelWidget.value = localStorage.getItem("showModelWidget") === "true";
+    // Arriving through a yourownai:// link ("Add to Your Own AI"): the Add
+    // sheet opens with the link filled in. Handed over in sessionStorage.
+    try {
+      const link = sessionStorage.getItem("skillsAddLink");
+      if (link) {
+        sessionStorage.removeItem("skillsAddLink");
+        store.link = link;
+        store.addOpen = true;
+      }
+    } catch {
+      /* no session storage */
+    }
     await load();
   });
 
@@ -196,6 +211,20 @@ export default component$(() => {
       store.error = typeof e === "string" ? e : e instanceof Error ? e.message : "Couldn't add that skill.";
     } finally {
       store.busy = "";
+    }
+  });
+
+  const installRecommended = $(async (name: string, link: string) => {
+    store.error = "";
+    store.installing = name;
+    try {
+      const installed = await invoke<string>("skills_add_link", { url: link });
+      await finishAdd(installed);
+      store.addOpen = true;
+    } catch (e) {
+      store.error = typeof e === "string" ? e : e instanceof Error ? e.message : "Couldn't add that skill.";
+    } finally {
+      store.installing = "";
     }
   });
 
@@ -311,6 +340,47 @@ export default component$(() => {
               <p class="text-xs text-[var(--text-muted)]">
                 A GitHub link is pinned to the commit it points at today. A link into a subfolder (…/tree/main/skills/name) works too.
               </p>
+
+              <div class="pt-2 border-t border-[var(--border-subtle)]">
+                <p class="text-sm font-medium text-[var(--text-primary)]">Recommended</p>
+                <p class="text-xs text-[var(--text-muted)]">
+                  Open-standard skills we have read and pinned. Knowledge only, permissive licenses, sized for a local model.
+                </p>
+                {SKILL_GROUPS.map((g) => (
+                  <div key={g} class="mt-3">
+                    <p class="text-xs uppercase tracking-wide text-[var(--text-muted)]">{g}</p>
+                    <div class="mt-1.5 space-y-1.5">
+                      {RECOMMENDED_SKILLS.filter((r) => r.group === g).map((r) => {
+                        const installed = store.skills.some((s) => s.name === r.name);
+                        return (
+                          <div key={r.name} class="flex items-start justify-between gap-3 rounded-xl bg-[var(--bg-main)] px-3 py-2">
+                            <div class="min-w-0">
+                              <p class="text-sm font-medium text-[var(--text-primary)]">{r.title}</p>
+                              <p class="text-xs text-[var(--text-secondary)]">{r.blurb}</p>
+                              <p class="text-xs text-[var(--text-muted)]">
+                                {r.maker} · {r.license} · ~{Math.round(r.sizeChars / 4 / 100) * 100} tokens
+                              </p>
+                            </div>
+                            {installed ? (
+                              <span class="shrink-0 text-xs text-[var(--text-muted)] pt-1">Installed</span>
+                            ) : (
+                              <LiquidMetalButton
+                                variant="secondary"
+                                class="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-xs"
+                                disabled={!!store.busy || !!store.installing}
+                                onClick$={() => installRecommended(r.name, r.link)}
+                              >
+                                {store.installing === r.name && <LuLoader class="h-3.5 w-3.5 animate-spin" />}
+                                Add
+                              </LiquidMetalButton>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

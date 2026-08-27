@@ -501,12 +501,19 @@ pub fn run() {
         // winner's hidden message window isn't findable (simultaneous
         // double-launch, or a hung zombie) - instance_guard in setup() is
         // the authoritative lock.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            use tauri::Manager;
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            use tauri::{Emitter, Manager};
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.set_focus();
             }
+            // A yourownai:// link opened while the app runs arrives here as
+            // the second instance's argument (Linux / Windows).
+            if let Some(url) = args.iter().find(|a| a.starts_with("yourownai://")) {
+                log::info!("[deep-link] {url}");
+                let _ = app.emit("deep-link", url.clone());
+            }
         }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::default().build())
@@ -676,8 +683,27 @@ pub fn run() {
             skills::skills_prompt_block,
             skills::skills_check_update,
             skills::skills_update,
+            skills::skills_in_folder,
         ])
         .setup(|app| {
+            // yourownai:// links (Add to Your Own AI on the site). Registered
+            // at runtime so a dev build answers too; a first launch by link
+            // arrives through on_open_url, a later one via single-instance.
+            {
+                use tauri::Emitter;
+                use tauri_plugin_deep_link::DeepLinkExt;
+                #[cfg(any(target_os = "linux", windows))]
+                if let Err(e) = app.deep_link().register_all() {
+                    log::warn!("[deep-link] register: {e}");
+                }
+                let handle = app.handle().clone();
+                app.deep_link().on_open_url(move |event| {
+                    for url in event.urls() {
+                        log::info!("[deep-link] {url}");
+                        let _ = handle.emit("deep-link", url.to_string());
+                    }
+                });
+            }
             // Backfill model-artifact hashes for files downloaded before
             // hashing existed - delayed well past the launch grind, one
             // file at a time (model_hash module; provenance in records).

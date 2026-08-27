@@ -7,6 +7,7 @@ import {
   useVisibleTask$,
   type Signal,
 } from "@builder.io/qwik";
+import { useNavigate } from "@builder.io/qwik-city";
 import { ModeProvider } from "../contexts/ModeContext";
 import { AiDataProvider } from "../contexts/AiDataContext";
 import { VisionDownloadProvider } from "../contexts/VisionDownloadContext";
@@ -300,6 +301,41 @@ export default component$(() => {
     };
     raf = requestAnimationFrame(tick);
     cleanup(() => cancelAnimationFrame(raf));
+  });
+
+  // yourownai:// links ("Add to Your Own AI" on the site). The path maps
+  // onto the app's own routes; a skills link carries the source to add.
+  const nav = useNavigate();
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async ({ cleanup }) => {
+    try {
+      const { listen } = await import("@tauri-apps/api/event");
+      const un = await listen<string>("deep-link", async (e) => {
+        const raw = typeof e.payload === "string" ? e.payload : "";
+        if (!raw.startsWith("yourownai://")) return;
+        let path = "/";
+        let link = "";
+        try {
+          const u = new URL(raw.replace(/^yourownai:\/\//, "https://app.local/"));
+          path = u.pathname;
+          link = u.searchParams.get("link") ?? "";
+        } catch {
+          return;
+        }
+        if (!/^\/(add-ons|your-ais|your-memory|chat|settings|online-models|setup)(\/|$)/.test(path)) return;
+        if (path.startsWith("/add-ons/skills") && link) {
+          try {
+            sessionStorage.setItem("skillsAddLink", link);
+          } catch {
+            /* the page still opens; the user pastes the link */
+          }
+        }
+        await nav(path);
+      });
+      cleanup(() => un());
+    } catch {
+      /* not inside Tauri */
+    }
   });
 
   return (

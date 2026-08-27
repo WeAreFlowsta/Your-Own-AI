@@ -512,6 +512,32 @@ pub async fn skills_remove(app: AppHandle, name: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Skills a project folder carries itself (`.claude/skills`, `.agents/skills`,
+/// `.grok/skills` - the open-standard locations the agent scans). Names only;
+/// nothing is copied or run.
+#[tauri::command]
+pub async fn skills_in_folder(path: String) -> Result<Vec<String>, String> {
+    let base = PathBuf::from(&path);
+    let mut names: Vec<String> = Vec::new();
+    for cfg in [".claude", ".agents", ".grok"] {
+        let dir = base.join(cfg).join("skills");
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() && p.join("SKILL.md").is_file() {
+                if let Some(n) = p.file_name().and_then(|n| n.to_str()) {
+                    let n = normalize_name(n);
+                    if !n.is_empty() && !names.contains(&n) {
+                        names.push(n);
+                    }
+                }
+            }
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
 /// SKILL.md of one installed skill (for a preview).
 #[tauri::command]
 pub async fn skills_skill_md(app: AppHandle, name: String) -> Result<String, String> {
