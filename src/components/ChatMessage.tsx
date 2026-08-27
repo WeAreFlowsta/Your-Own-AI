@@ -133,6 +133,8 @@ interface ChatMessageProps {
   onPermissionOffscreen$?: QRL<(offscreen: boolean) => void>;
   /** Run a suggested command in the user's own terminal. */
   onOpenTerminal$?: QRL<(command: string) => void>;
+  /** Undo the file changes of this message's agent turn (last finished turn only). */
+  onUndoTurn$?: QRL<(messageId: string) => void>;
   /** Live retry text for the active agent turn's pearl. */
   agentRetryStatus?: string;
   /** Online model the agent's current call is waiting on (bare id), if any. */
@@ -1397,6 +1399,12 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
                     retryStatus={props.isLast ? props.agentRetryStatus : undefined}
                     waitingOn={props.isLast ? props.agentWaitingOn : undefined}
                     durationMs={props.message.agentStats?.durationMs}
+                    undone={!!props.message.undone}
+                    onUndoTurn$={
+                      props.isLast && props.onUndoTurn$ && !props.message.undone
+                        ? $(() => props.onUndoTurn$!(props.message.id))
+                        : undefined
+                    }
                     onPermissionRespond$={props.onPermissionRespond$}
                     onPermissionOffscreen$={props.onPermissionOffscreen$}
                   />

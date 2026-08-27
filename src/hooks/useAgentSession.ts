@@ -1157,7 +1157,12 @@ export function useAgentSession(props: UseAgentSessionProps) {
       // Any real progress means the retry resolved.
       if (state.retryStatus) state.retryStatus = "";
 
-      if (kind === "agent_message_chunk") {
+      if (kind === "user_message_chunk") {
+        // The agent echoes our prompt with the number it gave this turn -
+        // the key for undoing the turn's file changes later.
+        const pi = update?._meta?.promptIndex;
+        if (typeof pi === "number") mutateTurn((m) => (m.promptIndex === pi ? m : { ...m, promptIndex: pi }));
+      } else if (kind === "agent_message_chunk") {
         // ALL text streams as narration in the working box during the turn
         // (the opening words are part of the work story, Cursor-style). The
         // bubble body is written ONCE, at turn end - ChatMessage's reveal
@@ -1869,8 +1874,46 @@ export function useAgentSession(props: UseAgentSessionProps) {
     });
   });
 
+  /** Undo every file change of one finished agent turn (the agent's hunk
+   *  tracker rejects the turn's hunks: edits reverted, created files
+   *  removed, deleted files restored). Marks the turn and says so on its
+   *  rail, in the record. */
+  const undoTurn$ = $(async (messageId: string) => {
+    const m = props.chatState.messages.find((x) => x.id === messageId);
+    if (!m || m.undone) return;
+    if (typeof m.promptIndex !== "number") {
+      props.chatState.messages = props.chatState.messages.map((x) =>
+        x.id === messageId
+          ? { ...x, agentLog: [...(x.agentLog ?? []), { id: uuidv4(), type: "notice" as const, text: "Couldn't undo: this turn's changes are not tracked (the project session was started by an older agent)." }] }
+          : x,
+      );
+      return;
+    }
+    try {
+      const n = Number(await invokeTauri("agent_undo_turn", { promptIndex: m.promptIndex })) || 0;
+      props.chatState.messages = props.chatState.messages.map((x) =>
+        x.id === messageId
+          ? {
+              ...x,
+              undone: true,
+              agentLog: [
+                ...(x.agentLog ?? []),
+                { id: uuidv4(), type: "notice" as const, text: n > 0 ? `Undone: ${n} change${n === 1 ? "" : "s"} from this turn put back the way they were.` : "Undone: nothing was left to put back (the files already matched)." },
+              ],
+            }
+          : x,
+      );
+    } catch (e) {
+      const text = typeof e === "string" ? e : "Couldn't undo this turn.";
+      props.chatState.messages = props.chatState.messages.map((x) =>
+        x.id === messageId ? { ...x, agentLog: [...(x.agentLog ?? []), { id: uuidv4(), type: "notice" as const, text }] } : x,
+      );
+    }
+  });
+
   return {
     agentState: state,
+    undoTurn$,
     openFolder$,
     closeFolder$,
     sendPrompt$,

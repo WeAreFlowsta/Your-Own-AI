@@ -13,6 +13,7 @@ import {
   LuChevronDown,
   LuBrain,
   LuInfo,
+  LuRotateCcw,
 } from "@qwikest/icons/lucide";
 import { AgentPermissionCard } from "./AgentPermissionCard";
 import { AgentDiffBlock } from "./AgentDiffBlock";
@@ -37,6 +38,10 @@ interface AgentWorkingBoxProps {
   railOpen: Signal<boolean>;
   /** apiDurationMs from the turn's usage - shown on the stub. */
   durationMs?: number;
+  /** Undo this turn's file changes (the last finished turn only). */
+  onUndoTurn$?: QRL<() => void>;
+  /** This turn's changes were undone - the stub says so instead of offering it. */
+  undone?: boolean;
   /** Live retry text ("Retrying (7/15) - context size exceeded..") - wins
    *  over everything on the pearl: a retry loop must never look like a
    *  hang behind a stale action label. */
@@ -114,7 +119,7 @@ const LiveLogPanel = component$<{ text: string; live: boolean }>(({ text, live }
 });
 
 export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
-  ({ log, working, tipHere = true, railOpen, durationMs, retryStatus, waitingOn, onPermissionRespond$, onPermissionOffscreen$ }) => {
+  ({ log, working, tipHere = true, railOpen, durationMs, retryStatus, waitingOn, onPermissionRespond$, onPermissionOffscreen$, onUndoTurn$, undone = false }) => {
     const showThoughts = useSignal(true);
     const openOutputs = useSignal<Record<string, boolean>>({});
 
@@ -314,6 +319,25 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
             </span>
             </div>
           </button>
+        )}
+        {/* Undo: the whole turn's file changes back to how they were -
+            edits reverted, new files removed, deleted files restored. */}
+        {!working && stats.value.files > 0 && (undone || onUndoTurn$) && (
+          <div class="mb-2 flex items-center gap-2 text-xs text-[var(--text-muted)]">
+            {undone ? (
+              <span>This turn's file changes were undone.</span>
+            ) : (
+              <button
+                type="button"
+                onClick$={() => onUndoTurn$?.()}
+                class="btn-liquid-metal btn-secondary-metal flex items-center gap-1.5 px-3 py-1 text-xs"
+                title="Put every file this turn changed back the way it was"
+              >
+                <LuRotateCcw class="h-3.5 w-3.5" />
+                Undo this turn's changes
+              </button>
+            )}
+          </div>
         )}
         {!expanded &&
           notices.value.map((n) =>

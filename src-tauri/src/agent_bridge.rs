@@ -36,6 +36,9 @@ pub struct AgentBridgeState {
     /// page (not just the chat route) can render the workspace slot.
     folder: Mutex<Option<String>>,
     next_id: AtomicU64,
+    /// Responses we await by id (extension requests such as undo). Anything
+    /// not registered here keeps flowing to the frontend as `agent-turn`.
+    pending: Mutex<std::collections::HashMap<u64, tokio::sync::oneshot::Sender<Value>>>,
     /// When the current agent process was spawned - startup-phase timing
     /// for the "getting this project ready" window.
     started_at: std::sync::Mutex<Option<std::time::Instant>>,
@@ -59,6 +62,7 @@ impl AgentBridgeState {
             session_id: Mutex::new(None),
             folder: Mutex::new(None),
             next_id: AtomicU64::new(1),
+            pending: Mutex::new(std::collections::HashMap::new()),
             started_at: std::sync::Mutex::new(None),
             generation: AtomicU64::new(0),
         }
@@ -442,7 +446,13 @@ pub async fn start_build_agent(
                 },
                 "clientCapabilities": {
                     "fs": { "readTextFile": false, "writeTextFile": false },
-                    "terminal": false
+                    "terminal": false,
+                    // The agent's hunk tracker keeps every file it writes
+                    // against a baseline (git HEAD or the content before
+                    // its first write - no git needed), attributed to the
+                    // prompt that made the change. That is what "Undo
+                    // this turn" rejects.
+                    "_meta": { "x.ai/hunkTracker": { "mode": "agent_only" } }
                 },
                 "_meta": { "clientIdentifier": CLIENT_IDENTIFIER }
             }
@@ -635,7 +645,11 @@ async fn handle_agent_message(
             }
         }
         // Prompt-turn completions (and any other response to our requests).
-        (None, Some(_)) => {
+        (None, Some(rid)) => {
+            if let Some(tx) = state.pending.lock().await.remove(&rid) {
+                let _ = tx.send(msg);
+                return;
+            }
             let _ = app.emit("agent-turn", &msg);
         }
         // Other agent-side requests (fs/terminal are disabled, so none are
@@ -678,6 +692,57 @@ pub async fn send_agent_prompt(
     )
     .await?;
     Ok(id)
+}
+
+/// Send one of our own requests to the agent and wait for its response
+/// (extension methods carry the `_` prefix the protocol layer strips).
+async fn request_reply(
+    state: &AgentBridgeState,
+    method: &str,
+    params: Value,
+    timeout: std::time::Duration,
+) -> Result<Value, String> {
+    let id = state.next_id.fetch_add(1, Ordering::SeqCst);
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    state.pending.lock().await.insert(id, tx);
+    if let Err(e) = write_line(state, &json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })).await {
+        state.pending.lock().await.remove(&id);
+        return Err(e);
+    }
+    match tokio::time::timeout(timeout, rx).await {
+        Ok(Ok(msg)) => Ok(msg),
+        Ok(Err(_)) => Err("the agent went away before answering".into()),
+        Err(_) => {
+            state.pending.lock().await.remove(&id);
+            Err("the agent did not answer in time".into())
+        }
+    }
+}
+
+/// Undo every file change the agent made in one turn (`prompt_index` as
+/// the agent numbers prompts, from 0): edits reverted, created files
+/// removed, deleted files restored - the hunk tracker's per-turn reject.
+/// Returns how many hunks were reverted.
+#[tauri::command]
+pub async fn agent_undo_turn(state: State<'_, AgentBridgeState>, prompt_index: u64) -> Result<u64, String> {
+    let session_id = state.session_id.lock().await.clone().ok_or("agent session is not ready")?;
+    let reply = request_reply(
+        &state,
+        "_x.ai/hunk-tracker/turn-action",
+        json!({ "sessionId": session_id, "promptIndex": prompt_index, "action": "reject" }),
+        std::time::Duration::from_secs(30),
+    )
+    .await?;
+    if let Some(err) = reply.get("error") {
+        return Err(format!("undo failed: {}", err.get("message").and_then(Value::as_str).unwrap_or("unknown error")));
+    }
+    let result = reply.get("result").cloned().unwrap_or(Value::Null);
+    if result.get("success").and_then(Value::as_bool) == Some(false) {
+        return Err(format!("undo failed: {}", result.get("error").and_then(Value::as_str).unwrap_or("unknown error")));
+    }
+    let n = result.get("affectedCount").and_then(Value::as_u64).unwrap_or(0);
+    log::info!("[agent] undo turn {prompt_index}: {n} change(s) reverted");
+    Ok(n)
 }
 
 /// Cancel the in-flight prompt turn (ACP `session/cancel` notification).

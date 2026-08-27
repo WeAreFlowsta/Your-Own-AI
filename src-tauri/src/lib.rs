@@ -625,6 +625,7 @@ pub fn run() {
             build_install::uninstall_build_agent,
             agent_bridge::path_is_dir,
             agent_bridge::path_is_file,
+            agent_bridge::agent_undo_turn,
             terminal::open_in_terminal,
             model_caps::agent_capability,
             model_caps::offline_agent_readiness,

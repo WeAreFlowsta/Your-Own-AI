@@ -186,6 +186,11 @@ export interface Message {
    *  order). `content` holds only the text the AI is currently saying -
    *  which, at turn end, IS the final answer. */
   agentLog?: AgentLogItem[];
+  /** Agent turns: the prompt number the agent gave this turn (from 0) -
+   *  the key for undoing its file changes. */
+  promptIndex?: number;
+  /** Agent turns: this turn's file changes were undone. */
+  undone?: boolean;
   /** Skills whose instructions rode with this chat turn (proof on the turn). */
   skills?: string[];
   /** Turn-level stats from the agent's turn_completed usage - drives the
