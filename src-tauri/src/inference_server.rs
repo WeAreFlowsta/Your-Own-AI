@@ -742,6 +742,39 @@ async fn chat_completions(
     // Some chat templates (Mistral/Ministral) accept only ONE system message —
     // coalesce any system messages into a single leading one (order-preserving).
     body["messages"] = Value::Array(coalesce_system(messages));
+    // A model without a projector must not receive image parts: llama-server
+    // refuses the whole request ("image input is not supported") and the
+    // agent's turn dies with it. Replace each image with a note the model can
+    // act on (a PDF can be re-read as text) and tell the rail why.
+    if online_id.is_none() {
+        let state = app.state::<crate::llm::LLMState>();
+        let has_eyes = state.current_mmproj.lock().await.is_some();
+        if !has_eyes {
+            if let Some(msgs) = body.get_mut("messages").and_then(Value::as_array_mut) {
+                let replaced = strip_image_parts(msgs);
+                if replaced > 0 {
+                    log::info!(
+                        "[inference] {replaced} image part(s) replaced for '{}' - {} has no projector",
+                        ai.name,
+                        ai.model
+                    );
+                    if agent_mode {
+                        use tauri::Emitter as _;
+                        let _ = app.emit(
+                            "agent-hint",
+                            json!({
+                                "kind": "no-vision",
+                                "text": format!(
+                                    "Couldn't look at an image - {} can't see pictures. A vision-capable model with its projector downloaded (Offline Models) can; a PDF can still be read as text.",
+                                    pretty_model_name(&ai.model)
+                                )
+                            }),
+                        );
+                    }
+                }
+            }
+        }
+    }
     // Offline: llama-server keys off the loaded model. Online: the proxy needs
     // the bare provider id (no "online:" prefix).
     body["model"] = json!(online_id.clone().unwrap_or_else(|| ai.model.clone()));
@@ -896,6 +929,33 @@ fn header_str(h: &HeaderMap, name: &str) -> Option<String> {
 /// Merge all `system` messages into one leading system message (joined in
 /// order), keeping the rest as-is. Mistral-family templates reject more than
 /// one system message; this keeps us compatible without losing any instruction.
+/// Stands in for an image the serving model cannot see. Worded for the
+/// model: it says what to do next instead of what went wrong.
+const NO_VISION_NOTE: &str = "[Image not read: this AI's model can't see images. If this was a PDF, read it again with output format \"text\". A vision-capable model with its projector downloaded (Offline Models) would let the AI look at pictures.]";
+
+/// Replace every image part with `NO_VISION_NOTE`. Text parts and plain
+/// string contents are untouched. Returns how many images were replaced.
+fn strip_image_parts(messages: &mut [Value]) -> usize {
+    let mut replaced = 0;
+    for m in messages.iter_mut() {
+        let Some(parts) = m.get_mut("content").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for p in parts.iter_mut() {
+            if matches!(p.get("type").and_then(Value::as_str), Some("image_url") | Some("input_image")) {
+                *p = json!({ "type": "text", "text": NO_VISION_NOTE });
+                replaced += 1;
+            }
+        }
+    }
+    replaced
+}
+
+/// A model filename as the rail says it: no extension.
+fn pretty_model_name(model: &str) -> String {
+    model.trim_end_matches(".gguf").to_string()
+}
+
 fn coalesce_system(messages: Vec<Value>) -> Vec<Value> {
     let mut sys: Vec<String> = Vec::new();
     let mut rest: Vec<Value> = Vec::new();
@@ -1551,5 +1611,40 @@ mod think_tests {
         // reasoning streams live even before the close tag arrives
         assert_eq!(run(&["<think>partial thought"]).1, "partial thought");
         assert_eq!(run(&["plain text only"]).1, "");
+    }
+}
+
+#[cfg(test)]
+mod vision_guard_tests {
+    use super::{strip_image_parts, NO_VISION_NOTE};
+    use serde_json::json;
+
+    #[test]
+    fn replaces_both_image_part_shapes_and_counts() {
+        let mut msgs = vec![
+            json!({ "role": "system", "content": "be brief" }),
+            json!({ "role": "user", "content": [
+                { "type": "text", "text": "what is in this?" },
+                { "type": "image_url", "image_url": { "url": "data:image/png;base64,AAAA" } },
+                { "type": "input_image", "image_url": "data:image/png;base64,BBBB" }
+            ]}),
+        ];
+        assert_eq!(strip_image_parts(&mut msgs), 2);
+        let parts = msgs[1]["content"].as_array().unwrap();
+        assert_eq!(parts[0]["text"], "what is in this?");
+        assert_eq!(parts[1]["type"], "text");
+        assert_eq!(parts[1]["text"], NO_VISION_NOTE);
+        assert_eq!(parts[2]["text"], NO_VISION_NOTE);
+        assert!(parts.iter().all(|p| p.get("image_url").is_none()));
+        // Plain-string content is left alone.
+        assert_eq!(msgs[0]["content"], "be brief");
+    }
+
+    #[test]
+    fn nothing_to_replace_returns_zero_and_keeps_messages() {
+        let mut msgs = vec![json!({ "role": "user", "content": [{ "type": "text", "text": "hi" }] })];
+        let before = msgs.clone();
+        assert_eq!(strip_image_parts(&mut msgs), 0);
+        assert_eq!(msgs, before);
     }
 }
