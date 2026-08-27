@@ -45,10 +45,12 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   models are no longer mistaken for vision models.
 
 ### Projects
-- An agent that opens a picture or a PDF while its AI runs a model without
-  vision no longer loses the turn to an engine error. The image becomes a
-  note the AI can act on (a PDF can be read as text), and the project rail
-  says why the picture was not looked at.
+- An agent that opens a picture or a PDF no longer loses the turn to an
+  engine error when its model has no vision. In an automatic mode the call
+  goes to a downloaded model that can see, when one fits; otherwise the
+  image becomes a note the AI can act on (a PDF can be read as text), and
+  the rail says why the picture was not looked at - a line that stays
+  readable after the steps fold and is kept in your records.
 
 ## [0.6.0] - 2026-08-25
 

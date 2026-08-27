@@ -458,6 +458,19 @@ async fn chat_completions(
 
     // Auto modes: resolve "auto:*" to a concrete model for this question, so the
     // online/offline logic below runs on the resolved value.
+    // Kept for the no-vision note below: routing overwrites ai.model.
+    let requested_model = ai.model.clone();
+    // Image parts in the request (a picture or a PDF page the agent opened).
+    let has_image_parts = incoming.iter().any(|m| {
+        m.get("content")
+            .and_then(Value::as_array)
+            .map(|parts| {
+                parts.iter().any(|p| {
+                    matches!(p.get("type").and_then(Value::as_str), Some("image_url") | Some("input_image"))
+                })
+            })
+            .unwrap_or(false)
+    });
     let auto_mode = ai.model.strip_prefix("auto:").map(str::to_string);
     if let Some(m) = auto_mode {
         // "my-hardware" maps to offline HERE: this server has no
@@ -588,6 +601,35 @@ async fn chat_completions(
         }
     }
 
+    // An Auto-mode call that carries a picture and resolved to a local model
+    // takes the vision-ready pick when one is downloaded and fits - the same
+    // picker the chat uses for an image turn (fit-graded, medical-aware).
+    // The text router never sees images, so left alone it picks a model on
+    // text merit that may have no eyes.
+    if requested_model.starts_with("auto:") && has_image_parts && !ai.model.starts_with("online:") {
+        match crate::llm::find_vision_model(app.clone(), Some(query.clone()), None).await {
+            Ok(Some(pick)) if pick.model != ai.model => {
+                log::info!(
+                    "[inference] picture in an Auto call for '{}': {} -> {} ({})",
+                    ai.name,
+                    ai.model,
+                    pick.model,
+                    pick.reason
+                );
+                // agent_mode is declared later; the same markers, in scope here.
+                if model.trim().ends_with(":agent") || header_str(&headers, "x-your-own-ai-mode").as_deref() == Some("agent") {
+                    use tauri::Emitter as _;
+                    let _ = app.emit(
+                        "agent-route",
+                        json!({ "ai": ai.name, "model": pick.model, "online": false, "reason": "the picture needs a model that can see it" }),
+                    );
+                }
+                ai.model = pick.model;
+            }
+            Ok(_) => {}
+            Err(e) => log::warn!("[inference] vision pick failed for '{}': {e}", ai.name),
+        }
+    }
     // Online models ("online:<id>") route to the Flowsta proxy with the
     // Vault-grant token; offline models run on the local llama-server.
     let online_id: Option<String> = ai.model.strip_prefix("online:").map(str::to_string);
@@ -760,15 +802,25 @@ async fn chat_completions(
                     );
                     if agent_mode {
                         use tauri::Emitter as _;
+                        // Say the true reason for THIS setup: an automatic
+                        // online-and-offline AI kept the picture on the
+                        // device because attachments stay offline without
+                        // standing consent; a pinned model simply has no eyes.
+                        let consent = crate::router::store_pref_bool(&app, "allowAttachmentsOnline");
+                        let text = if requested_model == "auto:online-offline" && !consent {
+                            format!(
+                                "Couldn't look at an image - it stayed on your device because attachments only go online with your say-so (Settings > Routing), and {} can't see pictures. A vision-capable model with its projector downloaded (Offline Models) can; a PDF can still be read as text.",
+                                pretty_model_name(&ai.model)
+                            )
+                        } else {
+                            format!(
+                                "Couldn't look at an image - {} can't see pictures. A vision-capable model with its projector downloaded (Offline Models) can; a PDF can still be read as text.",
+                                pretty_model_name(&ai.model)
+                            )
+                        };
                         let _ = app.emit(
                             "agent-hint",
-                            json!({
-                                "kind": "no-vision",
-                                "text": format!(
-                                    "Couldn't look at an image - {} can't see pictures. A vision-capable model with its projector downloaded (Offline Models) can; a PDF can still be read as text.",
-                                    pretty_model_name(&ai.model)
-                                )
-                            }),
+                            json!({ "kind": "no-vision", "sticky": true, "text": text }),
                         );
                     }
                 }

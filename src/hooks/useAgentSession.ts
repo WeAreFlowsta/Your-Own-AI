@@ -1398,7 +1398,9 @@ export function useAgentSession(props: UseAgentSessionProps) {
         // Once per turn per hint kind - the agent may retry the tool.
         const kind = String(e.payload?.kind ?? "");
         if (kind && log.some((i) => i.id === `hint-${kind}`)) return m;
-        log.push({ id: kind ? `hint-${kind}` : uuidv4(), type: "narration", text });
+        // sticky = must outlive the fold: a notice, not narration.
+        const type = e.payload?.sticky ? ("notice" as const) : ("narration" as const);
+        log.push({ id: kind ? `hint-${kind}` : uuidv4(), type, text });
         return { ...m, agentLog: log };
       });
     });

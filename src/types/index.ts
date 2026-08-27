@@ -203,6 +203,10 @@ export type AgentLogItem = { id: string } & (
   /** Text the AI said mid-work, superseded by later activity - shown muted
    *  inside the box, without bubble chrome. */
   | { type: 'narration'; text: string }
+  /** An app-side note about the work that must stay readable after the
+   *  rail folds (e.g. a picture the model could not look at, and why).
+   *  Shown in the flow and under the collapsed stub; kept in the record. */
+  | { type: 'notice'; text: string }
   /** Model reasoning (agent_thought_chunk). Shown only when the user turns
    *  on the thinking view. */
   | { type: 'thought'; text: string }

@@ -12,6 +12,7 @@ import {
   LuChevronRight,
   LuChevronDown,
   LuBrain,
+  LuInfo,
 } from "@qwikest/icons/lucide";
 import { AgentPermissionCard } from "./AgentPermissionCard";
 import { AgentDiffBlock } from "./AgentDiffBlock";
@@ -74,7 +75,8 @@ type GroupItem =
 type FlowElement =
   | { kind: "text"; id: string; text: string }
   | { kind: "group"; id: string; items: GroupItem[] }
-  | { kind: "permission"; id: string; permission: AgentPermission };
+  | { kind: "permission"; id: string; permission: AgentPermission }
+  | { kind: "notice"; id: string; text: string };
 
 function formatDuration(ms?: number): string | null {
   if (!ms || ms <= 0) return null;
@@ -141,6 +143,8 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
       for (const item of items) {
         if (item.type === "narration") {
           out.push({ kind: "text", id: item.id, text: item.text });
+        } else if (item.type === "notice") {
+          out.push({ kind: "notice", id: item.id, text: item.text });
         } else if (item.type === "permission") {
           out.push({ kind: "permission", id: item.id, permission: item.permission });
         } else {
@@ -264,6 +268,8 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
     });
 
     const expanded = working || railOpen.value;
+    // Notes that must stay readable once the rail folds (no-vision etc.).
+    const notices = useComputed$(() => log.filter((i) => i.type === "notice"));
 
     return (
       <>
@@ -309,9 +315,32 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
             </div>
           </button>
         )}
+        {!expanded &&
+          notices.value.map((n) =>
+            n.type === "notice" ? (
+              <div
+                key={n.id}
+                class="flex items-start gap-2 mb-2 text-sm leading-snug text-[var(--text-secondary)]"
+              >
+                <LuInfo class="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span class="min-w-0 break-words">{n.text}</span>
+              </div>
+            ) : null,
+          )}
 
         {expanded &&
           flow.value.map((el) => {
+            if (el.kind === "notice") {
+              return (
+                <div
+                  key={el.id}
+                  class="flex items-start gap-2 py-1.5 text-sm leading-snug text-[var(--text-secondary)]"
+                >
+                  <LuInfo class="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span class="min-w-0 break-words">{el.text}</span>
+                </div>
+              );
+            }
             if (el.kind === "text") {
               // The AI speaking - full size, unboxed. Same register as the
               // final answer, so nothing ever resizes.
