@@ -90,12 +90,15 @@ export default component$(() => {
           <div class="mt-6 grid gap-4 sm:grid-cols-2">
             {kinds.map((k) => {
               const Icon = k.icon;
+              // Capture only the path: the card object carries an icon
+              // component, which the static build cannot serialize.
+              const href = k.href;
               return (
                 <button
                   key={k.id}
                   type="button"
                   onClick$={async () => {
-                    await nav(k.href);
+                    await nav(href);
                   }}
                   class="text-left rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-5 hover:border-[var(--text-muted)] transition-colors"
                 >
