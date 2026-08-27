@@ -122,7 +122,7 @@ export default component$(() => {
                 </div>
                 <p class="text-sm text-[var(--text-secondary)] line-clamp-3 flex-1">{characterBlurb(c)}</p>
                 <div class="flex justify-end">
-                  <LiquidMetalButton variant="secondary" onClick$={() => makeAi(c.id)}>
+                  <LiquidMetalButton variant="secondary" onClick$={() => makeAi(c.id)} class="flex items-center h-9 px-4 sm:px-5 text-sm">
                     Make an AI from this
                   </LiquidMetalButton>
                 </div>

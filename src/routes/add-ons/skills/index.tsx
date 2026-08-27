@@ -196,7 +196,7 @@ export default component$(() => {
                 store.addOpen = !store.addOpen;
                 store.error = "";
               }}
-              class="shrink-0"
+              class="shrink-0 flex items-center h-9 px-4 sm:px-5 text-[0.9375rem]"
             >
               Add a skill
             </LiquidMetalButton>
@@ -214,11 +214,11 @@ export default component$(() => {
                 A skill is text - adding one never runs anything. Pick the folder or zip that holds SKILL.md, or paste a link.
               </p>
               <div class="flex flex-wrap gap-2">
-                <LiquidMetalButton variant="secondary" onClick$={addFolder} disabled={!!store.busy} class="inline-flex items-center gap-2">
+                <LiquidMetalButton variant="secondary" onClick$={addFolder} disabled={!!store.busy} class="flex items-center gap-2 h-9 px-4 sm:px-5 text-[0.9375rem]">
                   {store.busy === "folder" ? <LuLoader class="h-4 w-4 animate-spin" /> : <LuFolderPlus class="h-4 w-4" />}
                   From a folder
                 </LiquidMetalButton>
-                <LiquidMetalButton variant="secondary" onClick$={addZip} disabled={!!store.busy} class="inline-flex items-center gap-2">
+                <LiquidMetalButton variant="secondary" onClick$={addZip} disabled={!!store.busy} class="flex items-center gap-2 h-9 px-4 sm:px-5 text-[0.9375rem]">
                   {store.busy === "zip" ? <LuLoader class="h-4 w-4 animate-spin" /> : <LuPackagePlus class="h-4 w-4" />}
                   From a zip file
                 </LiquidMetalButton>
@@ -239,7 +239,7 @@ export default component$(() => {
                     class="w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full pl-9 pr-4 py-2 text-sm placeholder-[var(--text-muted)] border border-[var(--border-subtle)] focus:outline-none focus:border-[var(--text-muted)]"
                   />
                 </div>
-                <LiquidMetalButton onClick$={addLink} disabled={!!store.busy || !store.link.trim()} class="inline-flex items-center gap-2">
+                <LiquidMetalButton onClick$={addLink} disabled={!!store.busy || !store.link.trim()} class="flex items-center gap-2 h-9 px-4 sm:px-5 text-[0.9375rem] shrink-0">
                   {store.busy === "link" && <LuLoader class="h-4 w-4 animate-spin" />}
                   Add from link
                 </LiquidMetalButton>
