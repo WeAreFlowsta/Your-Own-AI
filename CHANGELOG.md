@@ -53,6 +53,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   readable after the steps fold and is kept in your records.
 
 ### Projects
+- Undo this turn. A finished turn that changed files offers "Undo this
+  turn's changes" under its steps: every edit is put back, files the turn
+  created are removed, files it deleted are restored - in any folder, with
+  or without git. What was undone is written on the turn and kept in your
+  records. This is what makes "approve everything" safe to pick.
 - Reading a project's memory no longer holds up the agent's turn. The
   current memory is kept ready (and in an encrypted copy on disk for the
   next start); a new note updates it in place instead of throwing it away,
