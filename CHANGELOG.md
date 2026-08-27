@@ -62,8 +62,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   instructions; each card shows what that costs). Every AI uses every
   skill unless you narrow it on the AI (Your AIs > Skills). A skill is
   text - adding one never runs anything; one that ships programs says so.
-- Add-ons has its own place in the menu: Projects, Skills, and the kinds
-  that follow.
+- Characters. Every built-in personality on one shelf, each with "Make an
+  AI from this" - New AI opens with that character chosen. A character is
+  a starting point you stamp an AI from; the AI is then yours in Your AIs.
+- Add-ons has its own place in the menu: Projects, Skills, Characters, and
+  the kinds that follow.
 
 
 ## [0.6.0] - 2026-08-25

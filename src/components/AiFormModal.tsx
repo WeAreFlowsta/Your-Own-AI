@@ -53,6 +53,8 @@ interface AiFormModalProps {
   onClose$: QRL<() => void>;
   editingAi: UserDefinedAI | null;
   currentDisplayableThumbnailUrl?: string | null;
+  /** New AI only: the character to start from (Add-ons > Characters). */
+  initialArchetypeId?: string | null;
 }
 
 // Static local placeholder
@@ -69,7 +71,7 @@ const sanitizeImageUrl = (url: string | null | undefined): string => {
 };
 
 const AiFormModal = component$<AiFormModalProps>(
-  ({ isOpen, onClose$, editingAi, currentDisplayableThumbnailUrl }) => {
+  ({ isOpen, onClose$, editingAi, currentDisplayableThumbnailUrl, initialArchetypeId }) => {
     const aiData = useAiData();
     const { addUserAi, editUserAi, refreshThumbnail } = useAiDataActions();
 
@@ -357,7 +359,9 @@ const AiFormModal = component$<AiFormModalProps>(
           }
         } else {
           store.name = '';
-          const defaultArchetype = templates.length > 0 ? templates[0] : null;
+          const defaultArchetype =
+            (initialArchetypeId && templates.find((t) => t.id === initialArchetypeId)) ||
+            (templates.length > 0 ? templates[0] : null);
           store.baseArchetypeId = defaultArchetype?.id || '';
           store.systemPrompt = defaultArchetype?.systemPromptTemplate || '';
           store.description = '';
@@ -714,6 +718,7 @@ const AiFormModal = component$<AiFormModalProps>(
                 class="block text-sm font-medium text-[var(--text-secondary)] mb-1"
               >
                 Personality *
+                <a href="/add-ons/characters" class="ml-2 text-xs font-normal text-[var(--text-link)] hover:underline">See the characters</a>
               </label>
               <LiquidMetalBorder borderRadius="9999px">
                 <div class="relative">
