@@ -52,6 +52,14 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   the rail says why the picture was not looked at - a line that stays
   readable after the steps fold and is kept in your records.
 
+### Projects
+- Reading a project's memory no longer holds up the agent's turn. The
+  current memory is kept ready (and in an encrypted copy on disk for the
+  next start); a new note updates it in place instead of throwing it away,
+  and the records are re-checked in the background. A read that used to
+  walk every memory revision - close to a minute on a busy machine - now
+  answers at once.
+
 ### Add-ons
 - Skills. A skill is a folder of instructions an AI reads when the work
   calls for it (the Agent Skills open standard: SKILL.md plus supporting

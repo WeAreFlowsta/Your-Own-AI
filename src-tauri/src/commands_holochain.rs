@@ -393,7 +393,6 @@ pub async fn start_conversation(
         if let Some(folder) = title.as_deref() {
             project_memory_index_add(&app, folder, &agent_key, &hex_hash);
         }
-        project_memory_cache_clear();
     }
     Ok(hex_hash)
 }
@@ -497,11 +496,16 @@ pub async fn record_transcript_entry(
     let manager = hc_state.get()?;
 
     // A project-memory revision (from the app's Remember/curate paths or the
-    // MCP tool) makes every cached read stale - drop the cache before the
-    // write so a concurrent reader can never see the old content as fresh.
-    if model == "workspace-memory" {
-        project_memory_cache_clear();
-    }
+    // MCP tool): the folder's cache takes the new content the moment the
+    // write lands (below) - a read never walks the records for it again.
+    let is_memory_write = model == "workspace-memory";
+    let memory_folder: Option<String> = if is_memory_write {
+        folder_path.clone().or_else(|| project_memory_folder_for(&app, &conversation_hash))
+    } else {
+        None
+    };
+    // `content` is moved into the record below; keep the copy the cache needs.
+    let memory_content: Option<String> = memory_folder.as_ref().map(|_| content.clone());
 
     // Phase A: message content is encrypted with the user data key.
     let prov = provenance.unwrap_or_default();
@@ -560,6 +564,14 @@ pub async fn record_transcript_entry(
 
     let hash: ActionHash = ExternIO::decode(&result)
         .map_err(|e| format!("Failed to decode entry hash: {}", e))?;
+
+    if let (Some(folder), Some(text)) = (memory_folder.as_deref(), memory_content.as_deref()) {
+        project_memory_cache_set(&app, folder, Some(text)).await;
+    } else if is_memory_write {
+        // Folder unknown: nothing to write through; drop every copy so no
+        // stale one survives.
+        PROJECT_MEMORY_CACHE.lock().await.clear();
+    }
 
     crate::vault_escrow::schedule_full_backup(&app);
     // The conversation was just continued: it moves to the top of the list.
@@ -672,24 +684,126 @@ pub(crate) fn project_memory_index_add(app: &tauri::AppHandle, folder: &str, age
     }
 }
 
-/// Something wrote project memory (any folder) - drop cached content.
-pub(crate) fn project_memory_cache_clear() {
-    tauri::async_runtime::spawn(async {
-        PROJECT_MEMORY_CACHE.lock().await.clear();
-    });
+/// Folders whose disk copy was served this process - refreshed from the
+/// records once in the background, so a change made elsewhere shows up.
+static PROJECT_MEMORY_REFRESHED: std::sync::LazyLock<tokio::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(std::collections::HashSet::new()));
+
+fn project_memory_disk_path(app: &tauri::AppHandle, folder: &str) -> Option<std::path::PathBuf> {
+    use sha2::Digest as _;
+    use tauri::Manager;
+    let tag = hex::encode(&sha2::Sha256::digest(folder.as_bytes())[..12]);
+    app.path().app_data_dir().ok().map(|d| d.join(format!("project-memory-{tag}.enc")))
 }
 
-/// The current memory for a folder: newest revision across all agents.
-/// Returns (content, writer_hint) where writer_hint is the conversation
-/// owner of the newest revision (unused by callers today, kept for parity).
+fn project_memory_data_key(app: &tauri::AppHandle) -> Result<[u8; 32], String> {
+    use tauri::Manager;
+    let dir = app.path().app_data_dir().map_err(|e| format!("No app data dir: {e}"))?;
+    crate::transcript_crypto::load_recovery_material(&dir)?
+        .ok_or_else(|| "No recovery material yet".to_string())?
+        .data_key()
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct EncryptedTextFile {
+    version: u8,
+    nonce: String,
+    cipher: String,
+}
+
+/// Encrypted copy of a folder's memory, so a cold start answers at once.
+fn project_memory_disk_write(app: &tauri::AppHandle, folder: &str, content: &str) {
+    let Some(path) = project_memory_disk_path(app, folder) else { return };
+    let Ok(key) = project_memory_data_key(app) else { return };
+    let Ok((nonce, cipher)) = crate::transcript_crypto::encrypt(&key, content.as_bytes()) else { return };
+    let file = EncryptedTextFile { version: 1, nonce: hex::encode(nonce), cipher: hex::encode(cipher) };
+    if let Ok(text) = serde_json::to_string(&file) {
+        let _ = std::fs::write(&path, text);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
+    }
+}
+
+fn project_memory_disk_read(app: &tauri::AppHandle, folder: &str) -> Option<String> {
+    let path = project_memory_disk_path(app, folder)?;
+    let raw = std::fs::read_to_string(path).ok()?;
+    let file: EncryptedTextFile = serde_json::from_str(&raw).ok()?;
+    let key = project_memory_data_key(app).ok()?;
+    let nonce = hex::decode(&file.nonce).ok()?;
+    let cipher = hex::decode(&file.cipher).ok()?;
+    let plain = crate::transcript_crypto::decrypt(&key, &nonce, &cipher).ok()?;
+    String::from_utf8(plain).ok()
+}
+
+/// A write to a folder's memory: the cache and the disk copy take the new
+/// content at once (write-through). None drops the folder's copies.
+pub(crate) async fn project_memory_cache_set(app: &tauri::AppHandle, folder: &str, content: Option<&str>) {
+    match content {
+        Some(c) => {
+            PROJECT_MEMORY_CACHE.lock().await.insert(folder.to_string(), c.to_string());
+            project_memory_disk_write(app, folder, c);
+        }
+        None => {
+            PROJECT_MEMORY_CACHE.lock().await.remove(folder);
+            if let Some(p) = project_memory_disk_path(app, folder) {
+                let _ = std::fs::remove_file(p);
+            }
+        }
+    }
+}
+
+/// The folder a memory conversation belongs to, from the index (reverse
+/// lookup by conversation hash).
+fn project_memory_folder_for(app: &tauri::AppHandle, hash: &str) -> Option<String> {
+    project_memory_index_load(app)
+        .into_iter()
+        .find(|(_, list)| list.iter().any(|(_, h)| h == hash))
+        .map(|(folder, _)| folder)
+}
+
+/// The current memory for a folder: newest revision across all agents -
+/// the cache, else the encrypted disk copy (records checked once in the
+/// background), else the records themselves.
 pub async fn project_memory_read(
     app: &tauri::AppHandle,
     folder: &str,
 ) -> Result<String, String> {
-    use tauri::Manager;
     if let Some(hit) = PROJECT_MEMORY_CACHE.lock().await.get(folder) {
         return Ok(hit.clone());
     }
+    if let Some(disk) = project_memory_disk_read(app, folder) {
+        PROJECT_MEMORY_CACHE.lock().await.insert(folder.to_string(), disk.clone());
+        if PROJECT_MEMORY_REFRESHED.lock().await.insert(folder.to_string()) {
+            let (app2, folder2) = (app.clone(), folder.to_string());
+            tauri::async_runtime::spawn(async move {
+                match project_memory_read_records(&app2, &folder2).await {
+                    Ok(_) => log::info!("[project-memory] background refresh for {} done", folder2),
+                    Err(e) => log::warn!("[project-memory] background refresh for {} failed: {e}", folder2),
+                }
+            });
+        }
+        log::info!("[project-memory] read {} from the disk copy", folder);
+        return Ok(disk);
+    }
+    project_memory_read_records(app, folder).await
+}
+
+/// The records themselves (index first, full walk as fallback); the result
+/// is written through to the cache and the disk copy.
+async fn project_memory_read_records(app: &tauri::AppHandle, folder: &str) -> Result<String, String> {
+    let content = project_memory_read_records_inner(app, folder).await?;
+    project_memory_cache_set(app, folder, Some(&content)).await;
+    Ok(content)
+}
+
+async fn project_memory_read_records_inner(
+    app: &tauri::AppHandle,
+    folder: &str,
+) -> Result<String, String> {
+    use tauri::Manager;
     let started = std::time::Instant::now();
     let hc_state = app.state::<Arc<HolochainState>>();
     let manager = hc_state.get()?;
@@ -717,7 +831,6 @@ pub async fn project_memory_read(
                 "[project-memory] read {} via index ({} conv, {} ms)",
                 folder, indexed.len(), started.elapsed().as_millis()
             );
-            PROJECT_MEMORY_CACHE.lock().await.insert(folder.to_string(), best.clone());
             return Ok(best);
         }
         // An indexed conversation could not be read (rare: cell not up yet) -
@@ -763,7 +876,6 @@ pub async fn project_memory_read(
         idx.insert(folder.to_string(), found);
         project_memory_index_save(app, &idx);
     }
-    PROJECT_MEMORY_CACHE.lock().await.insert(folder.to_string(), best.clone());
     Ok(best)
 }
 
@@ -846,9 +958,9 @@ pub async fn project_memory_append_note(
         app.state(),
     )
     .await?;
-    // record_transcript_entry cleared the cache (any workspace-memory write
-    // does); put the content we just wrote back so the next read is instant.
-    PROJECT_MEMORY_CACHE.lock().await.insert(folder.to_string(), content_for_cache);
+    // record_transcript_entry wrote through (folder from the index); belt
+    // and braces with the folder we know for certain.
+    project_memory_cache_set(app, folder, Some(&content_for_cache)).await;
     Ok(())
 }
 
