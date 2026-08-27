@@ -20,6 +20,15 @@ const SIDECAR: &str = ".your-own-ai-skill.json";
 /// Refuse archives beyond this (a skill is text; 50 MB is already generous).
 const MAX_ARCHIVE_BYTES: u64 = 50 * 1024 * 1024;
 const USER_AGENT: &str = "your-own-ai-skills";
+/// The Build agent materializes its own helper skills into the same folder
+/// (no sidecar). They are the agent's, not the user's: kept out of the page
+/// and the chat block, still there for project sessions.
+const AGENT_BUILTIN_SKILLS: &[&str] = &["create-skill", "help"];
+
+fn is_agent_builtin(dir: &Path) -> bool {
+    let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    AGENT_BUILTIN_SKILLS.contains(&name) && !dir.join(SIDECAR).is_file()
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct SkillSource {
@@ -238,7 +247,7 @@ pub async fn skills_list(app: AppHandle) -> Result<Vec<SkillInfo>, String> {
     let mut dirs: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
     dirs.sort();
     for d in dirs {
-        if d.file_name().and_then(|n| n.to_str()).map(|n| n.starts_with('.')).unwrap_or(true) {
+        if d.file_name().and_then(|n| n.to_str()).map(|n| n.starts_with('.')).unwrap_or(true) || is_agent_builtin(&d) {
             continue;
         }
         if let Some(info) = info_for(&d).await {
@@ -522,6 +531,9 @@ pub async fn skills_prompt_block(app: AppHandle, names: Option<Vec<String>>) -> 
     dirs.sort();
     let mut block = String::new();
     for d in dirs {
+        if is_agent_builtin(&d) {
+            continue;
+        }
         let dir_name = d.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
         if let Some(w) = &wanted {
             if !w.iter().any(|n| n == &dir_name) {
