@@ -316,6 +316,11 @@ pub async fn start_build_agent(
 
     std::fs::create_dir_all(&cwd).map_err(|e| format!("cannot create workspace dir: {}", e))?;
 
+    // Checks after edits ride on the agent's Stop hook - keep its files
+    // current before the process reads them.
+    if let Err(e) = crate::checks::install_check_hooks(&app_handle) {
+        log::warn!("[checks] hook install failed: {e}");
+    }
     // The model must exist in the agent's config catalog before the process
     // starts, or session/set_model has nothing to resolve.
     if let Some(slug) = &model {

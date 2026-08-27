@@ -1658,10 +1658,35 @@ export function useAgentSession(props: UseAgentSessionProps) {
       );
     };
 
+    /** Checks after edits: the project's own check command ran on the
+     *  agent's Stop hook; its last outcome for this folder goes on the
+     *  turn as a notice (readable after the fold, kept in the record). */
+    const stampChecks = async (id: string | null, folder: string | null) => {
+      if (!id || !folder) return;
+      try {
+        const r = (await invokeTauri("project_checks_last", { folder })) as
+          | { status: string; command: string; summary: string; at: number }
+          | null;
+        if (!r || r.status === "none" || Date.now() / 1000 - r.at > 600) return;
+        const text =
+          r.status === "passed"
+            ? `Checks passed (${r.command}).`
+            : `Checks failed (${r.command}):\n${r.summary}`.trim();
+        props.chatState.messages = props.chatState.messages.map((m) =>
+          m.id === id && !(m.agentLog ?? []).some((i) => i.id === `checks-${r.at}`)
+            ? { ...m, agentLog: [...(m.agentLog ?? []), { id: `checks-${r.at}`, type: "notice" as const, text }] }
+            : m,
+        );
+      } catch {
+        /* no checks line - the hook may not have run */
+      }
+    };
+
     const finishTurn = (errorText?: string) => {
       // Once per turn: turn_completed (with the informative error) and the
       // RPC response (with a generic "Internal error") both land here.
       if (!props.chatState.isLoading) return;
+      void stampChecks(turnId.value, state.folderPath);
       mutateTurn((m) => {
         let log = (m.agentLog ?? []).map((i) =>
           i.type === "action" &&

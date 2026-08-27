@@ -53,6 +53,13 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   readable after the steps fold and is kept in your records.
 
 ### Projects
+- Checks after edits. When the agent thinks a turn is done, the project's
+  own check command runs first - a typecheck, check or lint script from
+  package.json, cargo check, go vet, or ruff - and failures go straight
+  back to the agent to fix before it finishes (two rounds at most). The
+  outcome is written on the turn: "Checks passed (npm run typecheck)" or
+  the errors that remain. Projects without a check command are left
+  alone.
 - Undo this turn. A finished turn that changed files offers "Undo this
   turn's changes" under its steps: every edit is put back, files the turn
   created are removed, files it deleted are restored - in any folder, with

@@ -36,7 +36,8 @@ mod model_caps;            // capability registry (benchmark-informed scores)
 mod process_ext;           // Windows: hide sidecar consoles + kill-on-close job; Linux: PDEATHSIG
 mod instance_guard;        // single-instance port lock + orphan-process sweep
 mod clipboard;
-mod skills;               // Add-ons > Skills: SKILL.md folders the AIs read             // Rust-side copy (WebView2 denies navigator.clipboard)
+mod skills;               // Add-ons > Skills: SKILL.md folders the AIs read
+mod checks;               // Projects: the project's own checks run before a turn ends (agent Stop hook)             // Rust-side copy (WebView2 denies navigator.clipboard)
 
 use llm::LLMState;
 use holochain::HolochainManager;
@@ -626,6 +627,7 @@ pub fn run() {
             agent_bridge::path_is_dir,
             agent_bridge::path_is_file,
             agent_bridge::agent_undo_turn,
+            checks::project_checks_last,
             terminal::open_in_terminal,
             model_caps::agent_capability,
             model_caps::offline_agent_readiness,
