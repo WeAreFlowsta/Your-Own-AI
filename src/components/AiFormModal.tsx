@@ -105,6 +105,7 @@ const AiFormModal = component$<AiFormModalProps>(
       // Skills this AI uses: 'all' (the default - every installed skill) or an explicit list.
       skills: 'all' as 'all' | string[],
       installedSkills: [] as SkillInfo[],
+      skillFilter: '',
       knowledgeDocs: [] as import('../utils/transcriptMemory').KnowledgeDocument[],
       knowledgeBusy: false,
       knowledgeError: '' as string,
@@ -1225,11 +1226,11 @@ const AiFormModal = component$<AiFormModalProps>(
             {(!editingAi || store.activeSection === 'knowledge') && editingAi && (
               <KnowledgeSection aiId={editingAi.id} store={store} />
             )}
-            {(!editingAi || store.activeSection === 'skills') && (
+            {editingAi && store.activeSection === 'skills' && (
               <div class="space-y-3">
                 <p class="block text-sm font-medium text-[var(--text-secondary)]">Skills</p>
                 <p class="text-sm text-[var(--text-muted)]">
-                  What this AI knows how to do. Every AI uses every installed skill unless you narrow it here.
+                  What this AI knows how to do. Every AI uses every installed skill unless you choose for it here.
                 </p>
                 {store.installedSkills.length === 0 ? (
                   <p class="text-sm text-[var(--text-secondary)]">
@@ -1240,47 +1241,58 @@ const AiFormModal = component$<AiFormModalProps>(
                   <>
                     <label class="flex items-center gap-2 text-sm text-[var(--text-primary)]">
                       <input
-                        type="radio"
-                        name="skillsMode"
+                        type="checkbox"
                         checked={store.skills === 'all'}
-                        onChange$={() => { store.skills = 'all'; }}
+                        onChange$={() => {
+                          store.skills = store.skills === 'all' ? store.installedSkills.map((s) => s.name) : 'all';
+                        }}
                       />
-                      All skills ({store.installedSkills.length})
-                    </label>
-                    <label class="flex items-center gap-2 text-sm text-[var(--text-primary)]">
-                      <input
-                        type="radio"
-                        name="skillsMode"
-                        checked={store.skills !== 'all'}
-                        onChange$={() => { if (store.skills === 'all') store.skills = store.installedSkills.map((s) => s.name); }}
-                      />
-                      Only these
+                      Use every installed skill ({store.installedSkills.length})
                     </label>
                     {store.skills !== 'all' && (
-                      <div class="ml-6 space-y-1.5">
-                        {store.installedSkills.map((s) => {
-                          const on = store.skills !== 'all' && store.skills.includes(s.name);
-                          return (
-                            <label key={s.name} class="flex items-start gap-2 text-sm text-[var(--text-primary)]">
-                              <input
-                                type="checkbox"
-                                checked={on}
-                                onChange$={() => {
-                                  if (store.skills === 'all') return;
-                                  store.skills = on ? store.skills.filter((n) => n !== s.name) : [...store.skills, s.name];
-                                }}
-                                class="mt-0.5"
-                              />
-                              <span class="min-w-0">
-                                <span class="font-medium">{s.name}</span>
-                                <span class="text-[var(--text-muted)]"> · {tokensLabel(s.tokens)}</span>
-                                {s.description && (
-                                  <span class="block text-xs text-[var(--text-secondary)] line-clamp-2">{s.description}</span>
-                                )}
-                              </span>
-                            </label>
-                          );
-                        })}
+                      <div class="space-y-2">
+                        {store.installedSkills.length > 8 && (
+                          <input
+                            type="search"
+                            value={store.skillFilter}
+                            onInput$={(_, el) => { store.skillFilter = el.value; }}
+                            placeholder="Find a skill"
+                            class="w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm placeholder-[var(--text-muted)] border border-[var(--border-subtle)] focus:outline-none"
+                          />
+                        )}
+                        <p class="text-xs text-[var(--text-muted)]">
+                          {store.skills.length} of {store.installedSkills.length} chosen
+                        </p>
+                        <div class="max-h-64 overflow-y-auto space-y-1.5 pr-1">
+                          {store.installedSkills
+                            .filter((s) => {
+                              const q = store.skillFilter.trim().toLowerCase();
+                              return !q || s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q);
+                            })
+                            .map((s) => {
+                              const on = store.skills !== 'all' && store.skills.includes(s.name);
+                              return (
+                                <label key={s.name} class="flex items-start gap-2 text-sm text-[var(--text-primary)]">
+                                  <input
+                                    type="checkbox"
+                                    checked={on}
+                                    onChange$={() => {
+                                      if (store.skills === 'all') return;
+                                      store.skills = on ? store.skills.filter((n) => n !== s.name) : [...store.skills, s.name];
+                                    }}
+                                    class="mt-0.5"
+                                  />
+                                  <span class="min-w-0">
+                                    <span class="font-medium">{s.name}</span>
+                                    <span class="text-[var(--text-muted)]"> · {tokensLabel(s.tokens)}</span>
+                                    {s.description && (
+                                      <span class="block text-xs text-[var(--text-secondary)] line-clamp-2">{s.description}</span>
+                                    )}
+                                  </span>
+                                </label>
+                              );
+                            })}
+                        </div>
                       </div>
                     )}
                     <a href="/add-ons/skills" class="inline-block text-sm text-[var(--text-link)] hover:underline">Get more skills</a>

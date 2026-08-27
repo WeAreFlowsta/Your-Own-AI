@@ -530,6 +530,7 @@ pub async fn skills_prompt_block(app: AppHandle, names: Option<Vec<String>>) -> 
         .unwrap_or_default();
     dirs.sort();
     let mut block = String::new();
+    let mut used: Vec<String> = Vec::new();
     for d in dirs {
         if is_agent_builtin(&d) {
             continue;
@@ -547,11 +548,18 @@ pub async fn skills_prompt_block(app: AppHandle, names: Option<Vec<String>>) -> 
         if body.is_empty() {
             continue;
         }
+        used.push(name.clone());
         block.push_str(&format!("\n\n### Skill: {name}\n{body}"));
     }
     if block.is_empty() {
         return Ok(String::new());
     }
+    // Visible proof in the dev log that a chat turn carried its skills.
+    log::info!(
+        "[skills] chat block: {} (~{} tokens)",
+        used.join(", "),
+        crate::llm::count_tokens_text(&block).await
+    );
     Ok(format!(
         "You have the following skills - instructions you follow when the task calls for them. Apply the relevant one; ignore the others.{block}"
     ))
