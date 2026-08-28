@@ -1,10 +1,10 @@
 /**
- * The add-ons directory (WeAreFlowsta/add-ons-directory): `index.json` lists
+ * The add-ons directory (WeAreFlowsta/your-own-ai-add-ons): `index.json` lists
  * every reviewed character and skill with raw file URLs. Shelves read it
  * first and fall back to what ships in the app when it cannot be fetched
  * (offline, or before the repo exists). Cached per session.
  */
-export const DIRECTORY_INDEX_URL = "https://raw.githubusercontent.com/WeAreFlowsta/add-ons-directory/main/index.json";
+export const DIRECTORY_INDEX_URL = "https://raw.githubusercontent.com/WeAreFlowsta/your-own-ai-add-ons/main/index.json";
 
 export interface DirectoryItem {
   schema: number;
