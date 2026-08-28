@@ -254,7 +254,8 @@ export default component$(() => {
           <h2 class="mt-8 text-lg font-semibold text-[var(--text-primary)]">Ready to add</h2>
           <div class="mt-3 grid gap-4 sm:grid-cols-2">
             {MCP_PRESETS.map((p) => {
-              const installed = store.servers.some((s) => s.source === `preset:${p.id}`);
+              const pid = p.id;
+              const installed = store.servers.some((s) => s.source === `preset:${pid}`);
               const missing = p.needs.filter((n) => store.have[n.program] === null);
               const checking = p.needs.some((n) => store.have[n.program] === undefined);
               return (
@@ -265,7 +266,9 @@ export default component$(() => {
                   </div>
                   <p class="text-xs text-[var(--text-muted)]">{p.notes}</p>
                   <ul class="text-xs space-y-1">
-                    {p.needs.map((n) => (
+                    {p.needs.map((n) => {
+                      const install = n.install;
+                      return (
                       <li key={n.program} class="flex items-center gap-1.5">
                         {store.have[n.program] === undefined ? (
                           <LuLoader class="h-3.5 w-3.5 animate-spin text-[var(--text-muted)]" />
@@ -276,10 +279,11 @@ export default component$(() => {
                         )}
                         <span class={store.have[n.program] === null ? "text-amber-500" : "text-[var(--text-secondary)]"}>{n.label}</span>
                         {store.have[n.program] === null && (
-                          <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={() => openUrl(n.install)}>install</button>
+                          <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={() => openUrl(install)}>install</button>
                         )}
                       </li>
-                    ))}
+                      );
+                    })}
                   </ul>
                   {p.fetch && !installed && (
                     <p class="text-xs text-[var(--text-muted)]">
@@ -291,7 +295,7 @@ export default component$(() => {
                     <LiquidMetalButton
                       variant={installed ? "secondary" : "primary"}
                       disabled={!!store.busy || checking || missing.length > 0}
-                      onClick$={() => addPreset(p.id)}
+                      onClick$={() => addPreset(pid)}
                       class="flex items-center gap-1.5 h-9 px-4 text-sm"
                     >
                       {store.busy === p.id && <LuLoader class="h-4 w-4 animate-spin" />}
