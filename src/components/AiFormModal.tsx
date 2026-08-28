@@ -1477,7 +1477,7 @@ const AiFormModal = component$<AiFormModalProps>(
                 {shareDone.value ? (
                   <div class="mt-3 space-y-3 text-sm text-[var(--text-secondary)]">
                     <p>
-                      Submitted. {editingAi?.name} is signed with your Flowsta name and waiting for a quick look; once it is listed it lives at{' '}
+                      Submitted. {editingAi?.name} is signed with your Flowsta identity and waiting for a quick look; once it is listed it lives at{' '}
                       <span class="text-[var(--text-primary)] break-all">{shareDone.value.page}</span>
                     </p>
                     <p class="text-xs text-[var(--text-muted)]">
@@ -1495,7 +1495,7 @@ const AiFormModal = component$<AiFormModalProps>(
                   <>
                     <p class="mt-2 text-sm text-[var(--text-secondary)]">
                       Lists {editingAi?.name} on yourownai.net for everyone, as a pack: personality, portrait and Knowledge.
-                      Conversations and personal memories are never included. It goes out signed with your Flowsta name and is
+                      Conversations and personal memories are never included. It goes out signed with your Flowsta identity and is
                       yours to update or remove.
                     </p>
                     {!shareMakerHandle.value && (
@@ -1604,7 +1604,7 @@ const AiFormModal = component$<AiFormModalProps>(
                   >
                     <LuGlobe class="h-5 w-5 text-[var(--text-link)]" aria-hidden="true" />
                     <span class="text-sm font-semibold text-[var(--text-primary)]">Share publicly</span>
-                    <span class="text-xs leading-snug text-[var(--text-secondary)]">Listed on yourownai.net under your name, for anyone to make their own.</span>
+                    <span class="text-xs leading-snug text-[var(--text-secondary)]">Listed on yourownai.net under your Flowsta identity, for anyone to make their own.</span>
                   </button>
                   <button
                     type="button"

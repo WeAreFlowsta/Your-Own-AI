@@ -1613,7 +1613,7 @@ export default component$(() => {
                 <p class="text-sm text-[var(--text-secondary)] mb-4">
                   Restore the app to a fresh start: removes all your AIs,
                   conversations, and learned memory, and brings back the default
-                  AIs. Your Flowsta account and downloaded models are kept. This
+                  AIs. Your Flowsta identity and downloaded models are kept. This
                   can't be undone.
                 </p>
                 <LiquidMetalButton
@@ -1643,7 +1643,7 @@ export default component$(() => {
       <ConfirmModal
         isOpen={resetModalOpen.value}
         title="Reset to defaults?"
-        message="This permanently deletes all your AIs, conversations, and learned memory, and restores the default AIs. Your Flowsta account and downloaded models are kept. This can't be undone, and the app will restart."
+        message="This permanently deletes all your AIs, conversations, and learned memory, and restores the default AIs. Your Flowsta identity and downloaded models are kept. This can't be undone, and the app will restart."
         confirmLabel="Reset everything"
         cancelLabel="Cancel"
         variant="danger"

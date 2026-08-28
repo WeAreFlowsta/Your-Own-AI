@@ -1606,7 +1606,7 @@ export default component$(() => {
                           Sign in to use online models
                         </p>
                         <p class="text-sm text-yellow-700 dark:text-yellow-300 mb-4">
-                          Online models are powered by your Flowsta account,
+                          Online models are powered by your Flowsta identity,
                           via Flowsta Vault on this device. Local models keep
                           working without it.
                         </p>

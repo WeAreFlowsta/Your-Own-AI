@@ -544,7 +544,7 @@ export default component$(() => {
                           <LiquidMetalButton
                             variant="secondary"
                             class="flex items-center gap-1.5 px-3 py-1.5 text-xs"
-                            title="List this skill for everyone, signed with your Flowsta name"
+                            title="List this skill for everyone, signed with your Flowsta identity"
                             onClick$={() => openShare(s)}
                           >
                             <LuShare2 class="h-3.5 w-3.5" />
@@ -596,7 +596,7 @@ export default component$(() => {
             {store.shareDone ? (
               <div class="mt-3 space-y-3 text-sm text-[var(--text-secondary)]">
                 <p>
-                  Submitted, signed with your Flowsta name. After a quick look it lives at{" "}
+                  Submitted, signed with your Flowsta identity. After a quick look it lives at{" "}
                   <span class="text-[var(--text-primary)] break-all">{store.shareDone.page}</span>
                 </p>
                 <button
@@ -616,7 +616,7 @@ export default component$(() => {
             ) : (
               <>
                 <p class="mt-2 text-sm text-[var(--text-secondary)]">
-                  Lists the skill folder on yourownai.net as a zip, signed with your Flowsta name - yours to update or
+                  Lists the skill folder on yourownai.net as a zip, signed with your Flowsta identity - yours to update or
                   remove. It is text; anyone who adds it is told if it ships programs.
                 </p>
                 {!store.shareMaker && (
