@@ -271,14 +271,22 @@ const AiFormModal = component$<AiFormModalProps>(
       return buildAiPack(ai, thumb, knowledge);
     });
 
+    const exportChecking = useSignal(false);
     const openExport = $(async () => {
       exportErr.value = '';
       exportNote.value = '';
-      const vs = await vaultState();
-      exportVaultInstalled.value = vs.installed;
-      exportVaultUnlocked.value = vs.unlocked;
-      shareMakerHandle.value = (await currentMaker())?.handle ?? null;
       exportOpen.value = true;
+      exportChecking.value = true;
+      try {
+        const vs = await vaultState();
+        exportVaultInstalled.value = vs.installed;
+        exportVaultUnlocked.value = vs.unlocked;
+        shareMakerHandle.value = (await currentMaker())?.handle ?? null;
+      } catch (e) {
+        exportErr.value = e instanceof Error ? e.message : String(e);
+      } finally {
+        exportChecking.value = false;
+      }
     });
 
     const doExport = $(async () => {
@@ -1464,7 +1472,7 @@ const AiFormModal = component$<AiFormModalProps>(
                 {shareDone.value ? (
                   <div class="mt-3 space-y-3 text-sm text-[var(--text-secondary)]">
                     <p>
-                      Submitted. {editingAi?.name} is signed with your Flowsta name and waiting for a quick look; once it is on the shelf it lives at{' '}
+                      Submitted. {editingAi?.name} is signed with your Flowsta name and waiting for a quick look; once it is listed it lives at{' '}
                       <span class="text-[var(--text-primary)] break-all">{shareDone.value.page}</span>
                     </p>
                     <p class="text-xs text-[var(--text-muted)]">
@@ -1481,7 +1489,7 @@ const AiFormModal = component$<AiFormModalProps>(
                 ) : (
                   <>
                     <p class="mt-2 text-sm text-[var(--text-secondary)]">
-                      Puts {editingAi?.name} on the Characters shelf for everyone, as a pack: personality, portrait and Knowledge.
+                      Lists {editingAi?.name} on yourownai.net for everyone, as a pack: personality, portrait and Knowledge.
                       Conversations and personal memories are never included. It goes out signed with your Flowsta name and is
                       yours to update or remove.
                     </p>
@@ -1491,10 +1499,10 @@ const AiFormModal = component$<AiFormModalProps>(
                           ? 'Sign in with Flowsta first (Settings) - a share carries your name.'
                           : exportVaultInstalled.value
                             ? 'Your Flowsta Vault is locked. Unlock it, sign in, then share.'
-                            : 'Sharing needs the Flowsta Vault app and a sign-in - it is how the shelf knows it is really you.'}
+                            : 'Sharing needs the Flowsta Vault app and a sign-in - it is how the listing knows it is really you.'}
                       </p>
                     )}
-                    <label class="mt-3 block text-xs font-medium text-[var(--text-secondary)]">One line for the shelf (optional)</label>
+                    <label class="mt-3 block text-xs font-medium text-[var(--text-secondary)]">One line for the listing (optional)</label>
                     <input
                       type="text"
                       value={shareTitle.value}
@@ -1544,7 +1552,7 @@ const AiFormModal = component$<AiFormModalProps>(
                     <p class="mt-4 text-xs text-[var(--text-muted)]">
                       {shareMakerHandle.value
                         ? `Goes out as @${shareMakerHandle.value}, signed with your Flowsta identity.`
-                        : 'Goes out under your Flowsta name - sign in first so the shelf can show who made it.'}
+                        : 'Goes out under your Flowsta name - sign in first so the listing can show who made it.'}
                     </p>
                     <div class="mt-2 flex flex-col gap-2">
                       <LiquidMetalButton
@@ -1588,7 +1596,7 @@ const AiFormModal = component$<AiFormModalProps>(
                   >
                     <LuGlobe class="h-5 w-5 text-[var(--text-link)]" aria-hidden="true" />
                     <span class="text-sm font-semibold text-[var(--text-primary)]">Share publicly</span>
-                    <span class="text-xs leading-snug text-[var(--text-secondary)]">On the Characters shelf at yourownai.net, under your name, for anyone to make their own.</span>
+                    <span class="text-xs leading-snug text-[var(--text-secondary)]">Listed on yourownai.net under your name, for anyone to make their own.</span>
                   </button>
                   <button
                     type="button"
@@ -1601,7 +1609,9 @@ const AiFormModal = component$<AiFormModalProps>(
                     <span class="text-xs leading-snug text-[var(--text-secondary)]">A file to keep, move to another computer, or hand to a friend.</span>
                   </button>
                 </div>
-                {exportVaultUnlocked.value ? (
+                {exportChecking.value ? (
+                  <p class="mt-3 text-xs text-[var(--text-muted)]">Checking your Flowsta Vault...</p>
+                ) : exportVaultUnlocked.value ? (
                   <p class="mt-3 text-xs text-[var(--text-muted)]">
                     Either way it carries your signature, so whoever gets {editingAi?.name} can tell it is really yours
                     {shareMakerHandle.value ? ` - signed as @${shareMakerHandle.value}.` : '.'}

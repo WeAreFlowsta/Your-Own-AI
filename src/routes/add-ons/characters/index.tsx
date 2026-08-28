@@ -218,7 +218,7 @@ export default component$(() => {
           <Callout intent="info" title="A character becomes your AI" id="characters-intro">
             "Make it mine" creates a new AI from the character - persona, portrait and starting memories - and it
             lives in Your AIs from then on: rename it, change its model, give it skills and knowledge. The character
-            on this shelf stays as it is for the next one. Your own AIs can be shared the same way: Export AI on
+            listed here stays as it is for the next one. Your own AIs can be shared the same way: Export AI on
             any card.
           </Callout>
 
