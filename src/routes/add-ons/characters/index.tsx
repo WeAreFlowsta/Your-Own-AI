@@ -25,20 +25,22 @@ const SITE = "https://yourownai.net";
 
 /** The shelf. Same eight as yourownai.net/uses/your-characters; the pack
  *  carries the description, persona, portrait and starting memory. */
-const CHARACTERS: { slug: string; name: string }[] = [
-  { slug: "maeve", name: "Maeve" },
-  { slug: "rook", name: "Rook" },
-  { slug: "sterling", name: "Sterling" },
-  { slug: "emrys", name: "Emrys" },
-  { slug: "patch", name: "Patch" },
-  { slug: "ysolde", name: "Ysolde" },
-  { slug: "juniper", name: "Juniper" },
-  { slug: "cosmo", name: "Cosmo" },
+const CHARACTERS: { slug: string; name: string; title: string }[] = [
+  { slug: "maeve", name: "Maeve", title: "The storyteller" },
+  { slug: "rook", name: "Rook", title: "The traveling gamemaster" },
+  { slug: "sterling", name: "Sterling", title: "The gentleman of the fine print" },
+  { slug: "emrys", name: "Emrys", title: "The wandering wizard" },
+  { slug: "patch", name: "Patch", title: "The arcade-raised pair programmer" },
+  { slug: "ysolde", name: "Ysolde", title: "The knight-errant" },
+  { slug: "juniper", name: "Juniper", title: "The habit gardener" },
+  { slug: "cosmo", name: "Cosmo", title: "The planetarium guide who never stopped" },
 ];
 
 interface ShelfEntry {
   slug: string;
   name: string;
+  /** The site's one-line title ("The storyteller"). */
+  title: string;
   description: string;
   askBlurb: string;
   knowledgeCount: number;
@@ -228,7 +230,9 @@ export default component$(() => {
                       <img src={`${SITE}/characters/${c.slug}.jpg`} alt="" width={56} height={56} class="h-full w-full object-cover" loading="lazy" />
                     </div>
                     <div class="min-w-0">
-                      <h2 class="truncate font-medium text-[var(--text-primary)]">{c.name}</h2>
+                      <h2 class="truncate font-medium text-[var(--text-primary)]">
+                        {c.name} <span class="font-normal text-[var(--text-secondary)]">· {c.title}</span>
+                      </h2>
                       <p class="flex items-center gap-1 text-xs text-[var(--text-muted)]">
                         {c.verify === "verified" && <LuShieldCheck class="h-3.5 w-3.5 text-emerald-500" />}
                         {c.verify === "verified" ? "Made by Flowsta, signed" : c.verify === "tampered" ? "Signature does not match" : "Made by Flowsta"}
