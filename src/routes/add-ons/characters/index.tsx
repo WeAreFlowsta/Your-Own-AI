@@ -10,7 +10,7 @@
 import { component$, useSignal, useStore, useVisibleTask$, $ } from "@builder.io/qwik";
 import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
 import { invoke } from "@tauri-apps/api/core";
-import { LuSparkles, LuChevronLeft, LuLoader, LuAlertTriangle, LuShieldCheck } from "@qwikest/icons/lucide";
+import { LuSparkles, LuChevronLeft, LuLoader, LuAlertTriangle, LuShieldCheck, LuCheck } from "@qwikest/icons/lucide";
 import AppHeader from "../../../components/AppHeader";
 import { useHeaderWorkspace } from "../../../hooks/useHeaderWorkspace";
 import { useAiData, useAiDataActions } from "../../../contexts/AiDataContext";
@@ -245,7 +245,8 @@ export default component$(() => {
 
           <div class="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {store.shelf.map((c) => {
-              const owned = aiData.userDefinedAis.some((a) => a.name === c.name && a.status !== "archived");
+              const mine = aiData.userDefinedAis.find((a) => a.name === c.name && a.status !== "archived");
+              const owned = !!mine;
               return (
                 <div
                   key={c.slug}
@@ -276,16 +277,31 @@ export default component$(() => {
                     </p>
                   )}
                   <div class="flex items-center justify-between gap-2">
-                    <span class="text-xs text-[var(--text-muted)]">{owned ? `${c.name} is already one of your AIs` : ""}</span>
-                    <LiquidMetalButton
-                      variant={owned ? "secondary" : "primary"}
-                      class="flex items-center gap-1.5 h-9 px-4 sm:px-5 text-sm"
-                      disabled={!c.pack || c.verify === "tampered" || !!store.adding}
-                      onClick$={() => makeMine(c.slug)}
-                    >
-                      {store.adding === c.slug && <LuLoader class="h-4 w-4 animate-spin" />}
-                      {owned ? "Make another" : "Make it mine"}
-                    </LiquidMetalButton>
+                    <span class="flex items-center gap-1 text-xs text-[var(--text-muted)]">
+                      {owned && <LuCheck class="h-3.5 w-3.5 text-emerald-500" />}
+                      {owned ? "One of your AIs" : ""}
+                    </span>
+                    {owned ? (
+                      <LiquidMetalButton
+                        variant="secondary"
+                        class="flex items-center gap-1.5 h-9 px-4 sm:px-5 text-sm"
+                        onClick$={() => {
+                          localStorage.setItem("lastAiId", mine!.id);
+                          nav("/chat");
+                        }}
+                      >
+                        Open {c.name}
+                      </LiquidMetalButton>
+                    ) : (
+                      <LiquidMetalButton
+                        class="flex items-center gap-1.5 h-9 px-4 sm:px-5 text-sm"
+                        disabled={!c.pack || c.verify === "tampered" || !!store.adding}
+                        onClick$={() => makeMine(c.slug)}
+                      >
+                        {store.adding === c.slug && <LuLoader class="h-4 w-4 animate-spin" />}
+                        Make it mine
+                      </LiquidMetalButton>
+                    )}
                   </div>
                 </div>
               );
