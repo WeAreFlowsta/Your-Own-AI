@@ -20,12 +20,15 @@ import {
   addMcpServer,
   removeMcpServer,
   whichProgram,
+  requirementPlan,
+  requirementInstall,
   fetchGit,
   mcpUsedBy,
   mcpSummary,
   readyPresets,
   type McpPreset,
   type McpServer,
+  type RequirementPlan,
 } from "../../../utils/mcp";
 
 export default component$(() => {
@@ -44,6 +47,10 @@ export default component$(() => {
     busy: "" as string, // preset id or "manual" while adding
     // preset readiness: program -> path | null (checked on open)
     have: {} as Record<string, string | null>,
+    // a requirement install in flight: program -> what is happening
+    installing: {} as Record<string, string>,
+    // the plan shown before running: program -> plan
+    plans: {} as Record<string, RequirementPlan>,
     confirmRemove: "" as string,
     usedByOpen: "" as string,
     addOpen: false,
@@ -140,9 +147,44 @@ export default component$(() => {
     await editUserAi(aiId, { mcp: cur.includes(name) ? cur.filter((n) => n !== name) : [...cur, name] });
   });
 
-  const openUrl = $(async (url: string) => {
+  const recheck = $(async () => {
+    for (const prog of Object.keys(store.have)) store.have[prog] = await whichProgram(prog);
+  });
+
+  // First click shows what would run; second click runs it (or opens the
+  // terminal / the download page). Nothing runs on the first click.
+  const installRequirement = $(async (program: string, fallbackUrl: string) => {
+    store.error = "";
+    if (!store.plans[program]) {
+      try {
+        store.plans[program] = await requirementPlan(program);
+      } catch (e) {
+        store.error = e instanceof Error ? e.message : String(e);
+      }
+      return;
+    }
+    const plan = store.plans[program];
     const { openUrl } = await import("@tauri-apps/plugin-opener");
-    await openUrl(url);
+    if (plan.mode === "link") {
+      await openUrl(plan.command || fallbackUrl);
+      return;
+    }
+    if (plan.mode === "terminal") {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("open_in_terminal", { command: plan.command, cwd: null });
+      store.installing[program] = "Running in your terminal - press Check again when it is done.";
+      return;
+    }
+    store.installing[program] = "Installing...";
+    try {
+      await requirementInstall(program);
+      store.installing[program] = "";
+      delete store.plans[program];
+      await recheck();
+    } catch (e) {
+      store.installing[program] = "";
+      store.error = e instanceof Error ? e.message : String(e);
+    }
   });
 
   return (
@@ -281,9 +323,29 @@ export default component$(() => {
                           <LuAlertTriangle class="h-3.5 w-3.5 text-amber-500" />
                         )}
                         <span class={store.have[n.program] === null ? "text-amber-500" : "text-[var(--text-secondary)]"}>{n.label}</span>
-                        {store.have[n.program] === null && (
-                          <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={() => openUrl(install)}>install</button>
-                        )}
+                        {store.have[n.program] === null && (() => {
+                          const program = n.program;
+                          const plan = store.plans[program];
+                          const busy = store.installing[program];
+                          return (
+                            <span class="inline-flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                class="text-[var(--text-link)] hover:underline disabled:opacity-60"
+                                disabled={!!busy}
+                                onClick$={() => installRequirement(program, install)}
+                              >
+                                {busy ? busy : plan ? (plan.mode === "run" ? "Run it" : plan.mode === "terminal" ? "Open terminal" : "Open download page") : "Install"}
+                              </button>
+                              {plan && !busy && (
+                                <span class="text-[var(--text-muted)]">
+                                  {plan.mode === "link" ? plan.note : `${plan.note} `}
+                                  {plan.mode !== "link" && <code class="rounded bg-[var(--bg-input)] px-1 py-0.5 text-[10px]">{plan.command}</code>}
+                                </span>
+                              )}
+                            </span>
+                          );
+                        })()}
                       </li>
                       );
                     })}
@@ -294,7 +356,11 @@ export default component$(() => {
                     </p>
                   )}
                   <div class="flex items-center justify-between gap-2 mt-auto">
-                    <span class="text-xs text-[var(--text-muted)]">{installed ? "Added" : ""}</span>
+                    <span class="text-xs text-[var(--text-muted)]">
+                      {installed ? "Added" : missing.length ? (
+                        <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={recheck}>Check again</button>
+                      ) : ""}
+                    </span>
                     <LiquidMetalButton
                       variant={installed ? "secondary" : "primary"}
                       disabled={!!store.busy || checking || missing.length > 0}

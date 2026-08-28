@@ -36,6 +36,15 @@ export function removeMcpServer(name: string): Promise<McpServer[]> {
 export function whichProgram(program: string): Promise<string | null> {
   return invoke<string | null>("mcp_which", { program });
 }
+export interface RequirementPlan { mode: "run" | "terminal" | "link"; command: string; note: string }
+/** How this machine can get a program a tool needs. */
+export function requirementPlan(program: string): Promise<RequirementPlan> {
+  return invoke<RequirementPlan>("mcp_requirement_plan", { program });
+}
+/** Run a "run"-mode plan in the app; resolves with the installer's last lines. */
+export function requirementInstall(program: string): Promise<string> {
+  return invoke<string>("mcp_requirement_install", { program });
+}
 /** Clone (or update) a preset's source under the home folder; returns the path. */
 export function fetchGit(url: string, dest: string): Promise<string> {
   return invoke<string>("mcp_fetch_git", { url, dest });

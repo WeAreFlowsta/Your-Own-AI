@@ -694,6 +694,8 @@ pub fn run() {
             mcp::mcp_remove,
             mcp::mcp_which,
             mcp::mcp_fetch_git,
+            mcp::mcp_requirement_plan,
+            mcp::mcp_requirement_install,
             skills::skills_pack_zip,
             flowsta::share_submit,
         ])

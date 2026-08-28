@@ -71,6 +71,15 @@ fn expand_home(app: &AppHandle, v: &str) -> String {
     v.to_string()
 }
 
+/// A bare program name -> its full path when we can find it (see
+/// `mcp_which`); otherwise unchanged and the agent's own PATH decides.
+fn resolve_program(cmd: &str) -> String {
+    if cmd.contains('/') || cmd.contains('\\') {
+        return cmd.to_string();
+    }
+    which_sync(cmd).unwrap_or_else(|| cmd.to_string())
+}
+
 /// ACP `session/new` entries for the named servers (unknown names are
 /// skipped, never an error - an AI may reference a server that was removed).
 pub(crate) fn acp_entries(app: &AppHandle, names: &[String]) -> Vec<Value> {
@@ -81,7 +90,7 @@ pub(crate) fn acp_entries(app: &AppHandle, names: &[String]) -> Vec<Value> {
         .filter_map(|s| match s.transport.as_str() {
             "stdio" => Some(json!({
                 "name": s.name,
-                "command": expand_home(app, &s.command.clone().unwrap_or_default()),
+                "command": resolve_program(&expand_home(app, &s.command.clone().unwrap_or_default())),
                 "args": s.args.iter().map(|a| expand_home(app, a)).collect::<Vec<_>>(),
                 "env": s.env.iter().map(|(k, v)| json!({ "name": k, "value": v })).collect::<Vec<_>>(),
             })),
@@ -145,14 +154,38 @@ pub async fn mcp_remove(app: AppHandle, name: String) -> Result<Vec<McpServer>, 
 /// it to say "needs uv - install it" before anyone hits a dead session.
 #[tauri::command]
 pub async fn mcp_which(program: String) -> Result<Option<String>, String> {
+    Ok(which_sync(&program))
+}
+
+pub(crate) fn which_sync(program: &str) -> Option<String> {
     let p = program.trim();
     if p.is_empty() {
-        return Ok(None);
+        return None;
     }
     if std::path::Path::new(p).is_file() {
-        return Ok(Some(p.to_string()));
+        return Some(p.to_string());
     }
-    let Some(path_var) = std::env::var_os("PATH") else { return Ok(None) };
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|v| std::env::split_paths(&v).collect()).unwrap_or_default();
+    // Installers put things where a freshly started app may not look yet.
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        let home = PathBuf::from(home);
+        for extra in [".local/bin", ".cargo/bin", ".bun/bin"] {
+            dirs.push(home.join(extra));
+        }
+    }
+    for extra in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"] {
+        dirs.push(PathBuf::from(extra));
+    }
+    if cfg!(windows) {
+        if let Ok(lad) = std::env::var("LOCALAPPDATA") {
+            dirs.push(PathBuf::from(&lad).join("Programs").join("Git").join("cmd"));
+            dirs.push(PathBuf::from(&lad).join("Microsoft").join("WinGet").join("Links"));
+        }
+        if let Ok(pf) = std::env::var("ProgramFiles") {
+            dirs.push(PathBuf::from(&pf).join("Git").join("cmd"));
+            dirs.push(PathBuf::from(&pf).join("nodejs"));
+        }
+    }
     let exts: Vec<String> = if cfg!(windows) {
         std::env::var("PATHEXT")
             .unwrap_or_else(|_| ".EXE;.CMD;.BAT".into())
@@ -162,15 +195,15 @@ pub async fn mcp_which(program: String) -> Result<Option<String>, String> {
     } else {
         vec![String::new()]
     };
-    for dir in std::env::split_paths(&path_var) {
+    for dir in dirs {
         for ext in &exts {
             let cand = dir.join(format!("{p}{ext}"));
             if cand.is_file() {
-                return Ok(Some(cand.to_string_lossy().to_string()));
+                return Some(cand.to_string_lossy().to_string());
             }
         }
     }
-    Ok(None)
+    None
 }
 
 /// Fetch a server's source with git into `~/<dest>` (a preset's one download,
@@ -197,4 +230,85 @@ pub async fn mcp_fetch_git(app: AppHandle, url: String, dest: String) -> Result<
         return Err(format!("git failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
     Ok(target_s)
+}
+
+/// How this machine can get a program a tool needs. `run` = the app can do
+/// it here (an official installer script, or the system's package manager);
+/// `terminal` = we open the person's terminal with the exact command (it
+/// needs their password or an interactive step); `link` = a download page.
+#[derive(Serialize, Clone, Debug)]
+pub struct RequirementPlan {
+    pub mode: String,
+    pub command: String,
+    pub note: String,
+}
+
+fn has(program: &str) -> bool {
+    which_sync(program).is_some()
+}
+
+#[tauri::command]
+pub async fn mcp_requirement_plan(program: String) -> Result<RequirementPlan, String> {
+    let p = program.trim().to_lowercase();
+    let plan = |mode: &str, command: &str, note: &str| RequirementPlan { mode: mode.into(), command: command.into(), note: note.into() };
+    let winget = cfg!(windows) && has("winget");
+    let brew = cfg!(target_os = "macos") && has("brew");
+    let apt = cfg!(target_os = "linux") && has("apt-get");
+    let dnf = cfg!(target_os = "linux") && has("dnf");
+    let pacman = cfg!(target_os = "linux") && has("pacman");
+    Ok(match p.as_str() {
+        "uv" | "uvx" => {
+            if cfg!(windows) {
+                plan("run", "powershell -NoProfile -ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\"", "Runs uv's official installer from astral.sh into your user folder. No admin rights needed.")
+            } else {
+                plan("run", "curl -LsSf https://astral.sh/uv/install.sh | sh", "Runs uv's official installer from astral.sh into ~/.local/bin. No admin rights needed.")
+            }
+        }
+        "git" => {
+            if winget { plan("run", "winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements", "Installs Git with winget, Windows' own package manager.") }
+            else if cfg!(target_os = "macos") { plan("terminal", "xcode-select --install", "macOS installs Git with its command line tools - a system dialog asks you to confirm.") }
+            else if apt { plan("terminal", "sudo apt-get install -y git", "Needs your password, so it runs in your terminal.") }
+            else if dnf { plan("terminal", "sudo dnf install -y git", "Needs your password, so it runs in your terminal.") }
+            else if pacman { plan("terminal", "sudo pacman -S --noconfirm git", "Needs your password, so it runs in your terminal.") }
+            else { plan("link", "https://git-scm.com/downloads", "Download Git from git-scm.com.") }
+        }
+        "node" | "npx" | "npm" => {
+            if winget { plan("run", "winget install --id OpenJS.NodeJS.LTS -e --source winget --accept-package-agreements --accept-source-agreements", "Installs Node.js LTS with winget, Windows' own package manager.") }
+            else if brew { plan("run", "brew install node", "Installs Node.js with Homebrew.") }
+            else if apt { plan("terminal", "sudo apt-get install -y nodejs npm", "Needs your password, so it runs in your terminal.") }
+            else if dnf { plan("terminal", "sudo dnf install -y nodejs npm", "Needs your password, so it runs in your terminal.") }
+            else if pacman { plan("terminal", "sudo pacman -S --noconfirm nodejs npm", "Needs your password, so it runs in your terminal.") }
+            else { plan("link", "https://nodejs.org/en/download", "Download Node.js from nodejs.org.") }
+        }
+        _ => plan("link", "", "No installer known for this program."),
+    })
+}
+
+/// Run a `run`-mode plan here and report the tail of its output. The
+/// button that calls this shows the exact command first.
+#[tauri::command]
+pub async fn mcp_requirement_install(program: String) -> Result<String, String> {
+    let plan = mcp_requirement_plan(program.clone()).await?;
+    if plan.mode != "run" {
+        return Err("this one runs in your terminal".into());
+    }
+    let out = tauri::async_runtime::spawn_blocking(move || {
+        if cfg!(windows) {
+            std::process::Command::new("cmd").args(["/C", &plan.command]).output()
+        } else {
+            std::process::Command::new("sh").args(["-c", &plan.command]).output()
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("could not run the installer: {e}"))?;
+    let text = format!("{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let tail: String = text.lines().rev().take(6).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
+    if !out.status.success() {
+        return Err(format!("installer failed: {}", tail.trim()));
+    }
+    if !has(&program) {
+        return Err(format!("the installer finished but {program} was not found yet - open a new terminal or restart the app, then check again"));
+    }
+    Ok(tail.trim().to_string())
 }
