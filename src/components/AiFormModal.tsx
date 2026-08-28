@@ -256,6 +256,9 @@ const AiFormModal = component$<AiFormModalProps>(
     const exportNote = useSignal('');
     const exportVaultUnlocked = useSignal(false);
     const exportVaultInstalled = useSignal(false);
+    const shareMakerHandle = useSignal<string | null>(null);
+    // What the reader clicked while the Vault was not ready; runs once it is.
+    const exportIntent = useSignal<'share' | 'file' | null>(null);
 
     const buildPack = $(async () => {
       const ai = editingAi!;
@@ -275,6 +278,7 @@ const AiFormModal = component$<AiFormModalProps>(
     const openExport = $(async () => {
       exportErr.value = '';
       exportNote.value = '';
+      exportIntent.value = null;
       exportOpen.value = true;
       exportChecking.value = true;
       try {
@@ -324,7 +328,6 @@ const AiFormModal = component$<AiFormModalProps>(
     const shareTitle = useSignal('');
     const shareLicense = useSignal('CC-BY-4.0');
     const shareLicenseOpen = useSignal(false);
-    const shareMakerHandle = useSignal<string | null>(null);
     const openShare = $(async () => {
       shareErr.value = '';
       shareDone.value = null;
@@ -366,6 +369,8 @@ const AiFormModal = component$<AiFormModalProps>(
         exportVaultInstalled.value = vs.installed;
         exportVaultUnlocked.value = vs.unlocked;
         shareMakerHandle.value = (await currentMaker())?.handle ?? null;
+        if (vs.unlocked && exportIntent.value === 'file') { exportIntent.value = null; await doExport(); }
+        else if (vs.unlocked && exportIntent.value === 'share') { exportIntent.value = null; exportOpen.value = false; await openShare(); }
       } catch {
         exportErr.value = 'Sign-in was cancelled or didn\'t complete.';
       } finally {
@@ -1590,9 +1595,12 @@ const AiFormModal = component$<AiFormModalProps>(
                 <div class="mt-4 grid grid-cols-2 gap-3">
                   <button
                     type="button"
-                    disabled={exportBusy.value || !exportVaultUnlocked.value}
-                    onClick$={$(async () => { exportOpen.value = false; await openShare(); })}
-                    class="flex flex-col items-start gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4 text-left transition-colors hover:border-[var(--text-link)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[var(--border-subtle)]"
+                    disabled={exportBusy.value || exportChecking.value}
+                    onClick$={$(async () => {
+                      if (!exportVaultUnlocked.value) { exportIntent.value = 'share'; return; }
+                      exportOpen.value = false; await openShare();
+                    })}
+                    class={`flex flex-col items-start gap-2 rounded-xl border bg-[var(--bg-card)] p-4 text-left transition-colors hover:border-[var(--text-link)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] disabled:opacity-70 ${exportIntent.value === 'share' ? 'border-[var(--text-link)]' : 'border-[var(--border-subtle)]'}`}
                   >
                     <LuGlobe class="h-5 w-5 text-[var(--text-link)]" aria-hidden="true" />
                     <span class="text-sm font-semibold text-[var(--text-primary)]">Share publicly</span>
@@ -1600,9 +1608,12 @@ const AiFormModal = component$<AiFormModalProps>(
                   </button>
                   <button
                     type="button"
-                    disabled={exportBusy.value || !exportVaultUnlocked.value}
-                    onClick$={doExport}
-                    class="flex flex-col items-start gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4 text-left transition-colors hover:border-[var(--text-link)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[var(--border-subtle)]"
+                    disabled={exportBusy.value || exportChecking.value}
+                    onClick$={$(async () => {
+                      if (!exportVaultUnlocked.value) { exportIntent.value = 'file'; return; }
+                      await doExport();
+                    })}
+                    class={`flex flex-col items-start gap-2 rounded-xl border bg-[var(--bg-card)] p-4 text-left transition-colors hover:border-[var(--text-link)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] disabled:opacity-70 ${exportIntent.value === 'file' ? 'border-[var(--text-link)]' : 'border-[var(--border-subtle)]'}`}
                   >
                     {exportBusy.value ? <LuLoader2 class="h-5 w-5 animate-spin text-[var(--text-link)]" aria-hidden="true" /> : <LuFileDown class="h-5 w-5 text-[var(--text-link)]" aria-hidden="true" />}
                     <span class="text-sm font-semibold text-[var(--text-primary)]">Export to file</span>
@@ -1616,27 +1627,31 @@ const AiFormModal = component$<AiFormModalProps>(
                     Either way it carries your signature, so whoever gets {editingAi?.name} can tell it is really yours
                     {shareMakerHandle.value ? ` - signed as @${shareMakerHandle.value}.` : '.'}
                   </p>
+                ) : !exportIntent.value ? (
+                  <p class="mt-3 text-xs text-[var(--text-muted)]">
+                    Either way it carries your signature, so whoever gets {editingAi?.name} can tell it is really yours.
+                  </p>
                 ) : (
-                  <div class="mt-3 flex gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-input)] p-3">
-                    <LuLock class="mt-0.5 h-4 w-4 flex-shrink-0 text-[var(--text-muted)]" aria-hidden="true" />
+                  <div class="mt-3 flex gap-3 rounded-xl border border-[var(--text-link)]/40 bg-[var(--bg-input)] p-3">
+                    <LuLock class="mt-0.5 h-4 w-4 flex-shrink-0 text-[var(--text-link)]" aria-hidden="true" />
                     <div class="text-xs leading-snug text-[var(--text-secondary)]">
                       {exportVaultInstalled.value ? (
                         <>
                           <p>
-                            Both carry your signature, so whoever gets {editingAi?.name} can tell it is really yours.
+                            To {exportIntent.value === 'share' ? 'share' : 'save'} {editingAi?.name} it gets your signature first.
                             The key that signs lives in your Flowsta Vault, and the Vault is locked right now.
                           </p>
                           <p class="mt-1.5">
                             Unlock it, then{' '}
                             <button type="button" class="font-medium text-[var(--text-link)] hover:underline disabled:opacity-60" disabled={exportBusy.value} onClick$={doExportSignIn}>
-                              {exportBusy.value ? 'checking...' : 'continue'}
+                              {exportBusy.value ? 'checking...' : `continue to ${exportIntent.value === 'share' ? 'sharing' : 'the file'}`}
                             </button>.
                           </p>
                         </>
                       ) : (
                         <>
                           <p>
-                            Both carry your signature, so whoever gets {editingAi?.name} can tell it is really yours.
+                            To {exportIntent.value === 'share' ? 'share' : 'save'} {editingAi?.name} it gets your signature first.
                             The signing key lives in Flowsta Vault - a free app that stays on this computer and holds your Flowsta identity. Nothing about {editingAi?.name} leaves your machine to sign it.
                           </p>
                           <p class="mt-1.5">
