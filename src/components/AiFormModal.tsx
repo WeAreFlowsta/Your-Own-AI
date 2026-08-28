@@ -32,6 +32,9 @@ import {
   LuImagePlus,
   LuFileText,
   LuPuzzle,
+  LuGlobe,
+  LuFileDown,
+  LuLock,
 } from '@qwikest/icons/lucide';
 import { invoke } from '@tauri-apps/api/core';
 import { richModelName } from '../utils/modelNameFormatter';
@@ -274,6 +277,7 @@ const AiFormModal = component$<AiFormModalProps>(
       const vs = await vaultState();
       exportVaultInstalled.value = vs.installed;
       exportVaultUnlocked.value = vs.unlocked;
+      shareMakerHandle.value = (await currentMaker())?.handle ?? null;
       exportOpen.value = true;
     });
 
@@ -353,6 +357,7 @@ const AiFormModal = component$<AiFormModalProps>(
         const vs = await vaultState();
         exportVaultInstalled.value = vs.installed;
         exportVaultUnlocked.value = vs.unlocked;
+        shareMakerHandle.value = (await currentMaker())?.handle ?? null;
       } catch {
         exportErr.value = 'Sign-in was cancelled or didn\'t complete.';
       } finally {
@@ -1563,54 +1568,79 @@ const AiFormModal = component$<AiFormModalProps>(
               </div>
             </div>
           )}
-          {/* Export AI dialog - two ways out, both signed; the Vault status sits under the options. */}
+          {/* Export AI dialog. Two destinations side by side; signing is the
+              shared footnote, and the footer says exactly what stands between
+              the reader and the option they chose (nothing / a locked Vault /
+              no Vault yet). */}
           {exportOpen.value && (
             <div class="absolute inset-0 z-20 flex items-center justify-center rounded-xl bg-black/60 p-6">
-              <div class="w-full max-w-sm rounded-xl bg-[var(--bg-header-footer)] p-6 shadow-2xl border border-[var(--border-subtle)]">
-                <h4 class="text-base font-semibold text-[var(--text-primary)]">Export AI</h4>
-                <p class="mt-2 text-sm text-[var(--text-secondary)]">
-                  Packs up {editingAi?.name}: personality, portrait and Knowledge.
-                  Conversations and personal memories are never included. Every
-                  pack is signed with your Flowsta name, so whoever gets it can
-                  see it really came from you.
+              <div class="w-full max-w-md rounded-xl bg-[var(--bg-header-footer)] p-6 shadow-2xl border border-[var(--border-subtle)]">
+                <h4 class="text-base font-semibold text-[var(--text-primary)]">Export {editingAi?.name}</h4>
+                <p class="mt-1 text-sm text-[var(--text-secondary)]">
+                  A pack holds the personality, portrait and Knowledge. Conversations and personal memories stay here.
                 </p>
-                <div class="mt-4 flex flex-col gap-2">
-                  <LiquidMetalButton
+                <div class="mt-4 grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    disabled={exportBusy.value || !exportVaultUnlocked.value}
                     onClick$={$(async () => { exportOpen.value = false; await openShare(); })}
-                    disabled={exportBusy.value || !exportVaultUnlocked.value}
-                    class="w-full justify-center px-5 py-2 text-sm"
+                    class="flex flex-col items-start gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4 text-left transition-colors hover:border-[var(--text-link)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[var(--border-subtle)]"
                   >
-                    Share publicly
-                  </LiquidMetalButton>
-                  <LiquidMetalButton
-                    variant="secondary"
+                    <LuGlobe class="h-5 w-5 text-[var(--text-link)]" aria-hidden="true" />
+                    <span class="text-sm font-semibold text-[var(--text-primary)]">Share publicly</span>
+                    <span class="text-xs leading-snug text-[var(--text-secondary)]">On the Characters shelf at yourownai.net, under your name, for anyone to make their own.</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={exportBusy.value || !exportVaultUnlocked.value}
                     onClick$={doExport}
-                    disabled={exportBusy.value || !exportVaultUnlocked.value}
-                    class="w-full justify-center px-5 py-2 text-sm"
+                    class="flex flex-col items-start gap-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4 text-left transition-colors hover:border-[var(--text-link)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[var(--border-subtle)]"
                   >
-                    {exportBusy.value ? 'Working...' : 'Export to file'}
-                  </LiquidMetalButton>
+                    {exportBusy.value ? <LuLoader2 class="h-5 w-5 animate-spin text-[var(--text-link)]" aria-hidden="true" /> : <LuFileDown class="h-5 w-5 text-[var(--text-link)]" aria-hidden="true" />}
+                    <span class="text-sm font-semibold text-[var(--text-primary)]">Export to file</span>
+                    <span class="text-xs leading-snug text-[var(--text-secondary)]">A file to keep, move to another computer, or hand to a friend.</span>
+                  </button>
                 </div>
-                <p class="mt-3 text-xs text-[var(--text-muted)]">
-                  {exportVaultUnlocked.value ? (
-                    'Flowsta Vault: unlocked, ready to sign.'
-                  ) : exportVaultInstalled.value ? (
-                    <>
-                      Your Flowsta Vault is locked. Unlock it, then{' '}
-                      <button type="button" class="text-[var(--text-link)] hover:underline disabled:opacity-60" disabled={exportBusy.value} onClick$={doExportSignIn}>
-                        {exportBusy.value ? 'checking...' : 'continue'}
-                      </button>.
-                    </>
-                  ) : (
-                    <>
-                      Both need the Flowsta Vault on this computer - it signs the pack in your name.{' '}
-                      <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={$(async () => {
-                        const { openUrl } = await import('@tauri-apps/plugin-opener');
-                        await openUrl('https://flowsta.com/vault/?from=app&app=your-own-ai');
-                      })}>Get Flowsta Vault</button>
-                    </>
-                  )}
-                </p>
+                {exportVaultUnlocked.value ? (
+                  <p class="mt-3 text-xs text-[var(--text-muted)]">
+                    Either way it carries your signature, so whoever gets {editingAi?.name} can tell it is really yours
+                    {shareMakerHandle.value ? ` - signed as @${shareMakerHandle.value}.` : '.'}
+                  </p>
+                ) : (
+                  <div class="mt-3 flex gap-3 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-input)] p-3">
+                    <LuLock class="mt-0.5 h-4 w-4 flex-shrink-0 text-[var(--text-muted)]" aria-hidden="true" />
+                    <div class="text-xs leading-snug text-[var(--text-secondary)]">
+                      {exportVaultInstalled.value ? (
+                        <>
+                          <p>
+                            Both carry your signature, so whoever gets {editingAi?.name} can tell it is really yours.
+                            The key that signs lives in your Flowsta Vault, and the Vault is locked right now.
+                          </p>
+                          <p class="mt-1.5">
+                            Unlock it, then{' '}
+                            <button type="button" class="font-medium text-[var(--text-link)] hover:underline disabled:opacity-60" disabled={exportBusy.value} onClick$={doExportSignIn}>
+                              {exportBusy.value ? 'checking...' : 'continue'}
+                            </button>.
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <p>
+                            Both carry your signature, so whoever gets {editingAi?.name} can tell it is really yours.
+                            The signing key lives in Flowsta Vault - a free app that stays on this computer and holds your Flowsta identity. Nothing about {editingAi?.name} leaves your machine to sign it.
+                          </p>
+                          <p class="mt-1.5">
+                            <button type="button" class="font-medium text-[var(--text-link)] hover:underline" onClick$={$(async () => {
+                              const { openUrl } = await import('@tauri-apps/plugin-opener');
+                              await openUrl('https://flowsta.com/vault/?from=app&app=your-own-ai');
+                            })}>Get Flowsta Vault</button>
+                            {' '}- a few minutes, then come back here.
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
                 {exportErr.value && (
                   <p class="mt-2 text-xs text-red-400">{exportErr.value}</p>
                 )}
