@@ -48,6 +48,7 @@ import type { GalleryThumb } from '../data/thumbnail-gallery';
 import { buildAiPack, signAiPack, aiPackFilename } from '../utils/aiPack';
 import { vaultState, signInToFlowsta } from '../utils/packSigning';
 import { LICENSES, currentMaker, shareCharacter, shareErrorText, type ShareResult } from '../utils/share';
+import { rememberShare, rememberedShare, fetchShareStatus, shareStatusText, type ShareStatus } from '../utils/shareStatus';
 import { getAiKnowledge } from '../utils/transcriptMemory';
 import { LiquidMetalBorder } from './LiquidMetalBorder';
 import LiquidMetalButton from './LiquidMetalButton';
@@ -259,6 +260,15 @@ const AiFormModal = component$<AiFormModalProps>(
     const shareMakerHandle = useSignal<string | null>(null);
     // What the reader clicked while the Vault was not ready; runs once it is.
     const exportIntent = useSignal<'share' | 'file' | null>(null);
+    // Where an earlier share of this AI got to (read from GitHub when the form opens).
+    const shareStatus = useSignal<ShareStatus | null>(null);
+    const loadShareStatus = $(async () => {
+      shareStatus.value = null;
+      if (!editingAi) return;
+      const r = rememberedShare('character', editingAi.id);
+      if (!r) return;
+      shareStatus.value = await fetchShareStatus(r);
+    });
 
     const buildPack = $(async () => {
       const ai = editingAi!;
@@ -353,6 +363,8 @@ const AiFormModal = component$<AiFormModalProps>(
         pack = { ...pack, description: desc, signature: undefined as never };
         pack = { ...pack, signature: await signAiPack(pack) };
         shareDone.value = await shareCharacter(pack, { description: desc, license: shareLicense.value, title: shareTitle.value.trim() || undefined, maker });
+        rememberShare('character', editingAi!.id, shareDone.value);
+        shareStatus.value = { state: 'checking', page: shareDone.value.page, pr_url: shareDone.value.pr_url };
       } catch (e) {
         shareErr.value = shareErrorText(e);
       } finally {
@@ -397,6 +409,7 @@ const AiFormModal = component$<AiFormModalProps>(
         store.skills = [];
 
         if (editingAi) {
+          void loadShareStatus();
           store.name = editingAi.name;
           store.baseArchetypeId = editingAi.baseArchetypeId;
           store.systemPrompt = editingAi.systemPrompt || '';
@@ -1434,6 +1447,16 @@ const AiFormModal = component$<AiFormModalProps>(
               </div>
             )}
 
+            {shareStatus.value && (
+              <p class="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] px-4 py-2.5 text-xs text-[var(--text-secondary)]">
+                <span class="font-medium text-[var(--text-primary)]">Shared with everyone: </span>
+                {shareStatusText(shareStatus.value, editingAi?.name ?? 'It')}{' '}
+                <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={$(async () => {
+                  const { openUrl } = await import('@tauri-apps/plugin-opener');
+                  await openUrl(shareStatus.value!.state === 'live' ? shareStatus.value!.page : shareStatus.value!.pr_url);
+                })}>{shareStatus.value.state === 'live' ? 'Open the page' : 'See the submission'}</button>
+              </p>
+            )}
             {/* Buttons */}
             <div class="flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-3 pt-2">
               {editingAi && (
@@ -1603,7 +1626,7 @@ const AiFormModal = component$<AiFormModalProps>(
                     class={`flex flex-col items-start gap-2 rounded-xl border bg-[var(--bg-card)] p-4 text-left transition-colors hover:border-[var(--text-link)] focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] disabled:opacity-70 ${exportIntent.value === 'share' ? 'border-[var(--text-link)]' : 'border-[var(--border-subtle)]'}`}
                   >
                     <LuGlobe class="h-5 w-5 text-[var(--text-link)]" aria-hidden="true" />
-                    <span class="text-sm font-semibold text-[var(--text-primary)]">Share publicly</span>
+                    <span class="text-sm font-semibold text-[var(--text-primary)]">{shareStatus.value?.state === 'live' ? 'Share an update' : 'Share publicly'}</span>
                     <span class="text-xs leading-snug text-[var(--text-secondary)]">Listed on yourownai.net under your Flowsta identity, for anyone to make their own.</span>
                   </button>
                   <button

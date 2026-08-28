@@ -43,6 +43,7 @@ import {
 import { RECOMMENDED_SKILLS, SKILL_GROUPS, type RecommendedSkill } from "../../../data/recommended-skills";
 import { directoryItems } from "../../../utils/directory";
 import { LICENSES, currentMaker, shareSkill, shareErrorText, type ShareResult } from "../../../utils/share";
+import { rememberShare, rememberedShare, fetchShareStatus, shareStatusText, type ShareStatus } from "../../../utils/shareStatus";
 import { LuShare2 } from "@qwikest/icons/lucide";
 
 export default component$(() => {
@@ -85,6 +86,7 @@ export default component$(() => {
     shareBusy: false,
     shareErr: "",
     shareDone: null as ShareResult | null,
+    shareStatus: {} as Record<string, ShareStatus>,
   });
 
   const load = $(async () => {
@@ -93,6 +95,12 @@ export default component$(() => {
     if (store.skills.length === 0) store.loading = true;
     store.skills = await listSkills();
     store.loading = false;
+    // Where earlier shares got to - only for skills shared from this device.
+    for (const sk of store.skills) {
+      const r = rememberedShare("skill", sk.name);
+      if (!r) continue;
+      void fetchShareStatus(r).then((st) => { if (st) store.shareStatus[sk.name] = st; });
+    }
     // Quiet update check for link installs - one at a time, never an error.
     const updates: Record<string, string> = {};
     for (const s of store.skills) {
@@ -285,6 +293,8 @@ export default component$(() => {
         runsPrograms: entry.runs_programs,
         maker,
       });
+      rememberShare("skill", entry.name, store.shareDone);
+      store.shareStatus[entry.name] = { state: "checking", page: store.shareDone.page, pr_url: store.shareDone.pr_url };
     } catch (e) {
       store.shareErr = shareErrorText(e);
     } finally {
@@ -499,6 +509,17 @@ export default component$(() => {
                         {s.files} file{s.files === 1 ? "" : "s"} · {tokensLabel(s.tokens)} ·{" "}
                         {s.runs_programs ? "can run programs" : "knowledge only"}
                       </p>
+                      {store.shareStatus[s.name] && (
+                        <p class="text-xs text-[var(--text-secondary)]">
+                          <span class="font-medium text-[var(--text-primary)]">Shared with everyone: </span>
+                          {shareStatusText(store.shareStatus[s.name], s.name)}{" "}
+                          <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={async () => {
+                            const st = store.shareStatus[s.name];
+                            const { openUrl } = await import("@tauri-apps/plugin-opener");
+                            await openUrl(st.state === "live" ? st.page : st.pr_url);
+                          }}>{store.shareStatus[s.name].state === "live" ? "Open the page" : "See the submission"}</button>
+                        </p>
+                      )}
                       <p class="text-xs text-[var(--text-muted)]">
                         {sourceLabel(s.source)}
                         {store.updates[s.name] && (
