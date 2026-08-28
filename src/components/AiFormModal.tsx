@@ -44,6 +44,7 @@ import { ThumbnailGalleryModal } from './ThumbnailGalleryModal';
 import type { GalleryThumb } from '../data/thumbnail-gallery';
 import { buildAiPack, signAiPack, aiPackFilename } from '../utils/aiPack';
 import { vaultState, signInToFlowsta } from '../utils/packSigning';
+import { LICENSES, currentMaker, shareCharacter, shareErrorText, type ShareResult } from '../utils/share';
 import { getAiKnowledge } from '../utils/transcriptMemory';
 import { LiquidMetalBorder } from './LiquidMetalBorder';
 import LiquidMetalButton from './LiquidMetalButton';
@@ -298,6 +299,47 @@ const AiFormModal = component$<AiFormModalProps>(
               : 'Couldn\'t save the pack.';
       } finally {
         exportBusy.value = false;
+      }
+    });
+
+    // Share to the directory: the signed pack + a listing, filed as a pull
+    // request by the share service under the maker's Flowsta name.
+    const shareOpen = useSignal(false);
+    const shareBusy = useSignal(false);
+    const shareErr = useSignal('');
+    const shareDone = useSignal<ShareResult | null>(null);
+    const shareDescription = useSignal('');
+    const shareTitle = useSignal('');
+    const shareLicense = useSignal('CC-BY-4.0');
+    const shareMakerHandle = useSignal<string | null>(null);
+    const openShare = $(async () => {
+      shareErr.value = '';
+      shareDone.value = null;
+      shareDescription.value = editingAi?.description || '';
+      shareTitle.value = '';
+      const maker = await currentMaker();
+      shareMakerHandle.value = maker?.handle ?? null;
+      const vs = await vaultState();
+      exportVaultInstalled.value = vs.installed;
+      exportVaultUnlocked.value = vs.unlocked;
+      shareOpen.value = true;
+    });
+    const doShare = $(async () => {
+      shareBusy.value = true;
+      shareErr.value = '';
+      try {
+        const maker = await currentMaker();
+        if (!maker) throw new Error('Sign in with Flowsta first - a share carries your name.');
+        const desc = shareDescription.value.trim();
+        if (desc.length < 20) throw new Error('Say a little more about it - at least a sentence.');
+        let pack = await buildPack();
+        pack = { ...pack, description: desc, signature: undefined as never };
+        pack = { ...pack, signature: await signAiPack(pack) };
+        shareDone.value = await shareCharacter(pack, { description: desc, license: shareLicense.value, title: shareTitle.value.trim() || undefined, maker });
+      } catch (e) {
+        shareErr.value = shareErrorText(e);
+      } finally {
+        shareBusy.value = false;
       }
     });
 
@@ -1407,6 +1449,95 @@ const AiFormModal = component$<AiFormModalProps>(
             </div>
           </form>
 
+          {/* Share dialog - the one-button path into the add-ons directory. */}
+          {shareOpen.value && (
+            <div class="absolute inset-0 z-20 flex items-center justify-center rounded-xl bg-black/60 p-6">
+              <div class="w-full max-w-md rounded-xl bg-[var(--bg-header-footer)] p-6 shadow-2xl border border-[var(--border-subtle)]">
+                <h4 class="text-base font-semibold text-[var(--text-primary)]">Share {editingAi?.name} with everyone</h4>
+                {shareDone.value ? (
+                  <div class="mt-3 space-y-3 text-sm text-[var(--text-secondary)]">
+                    <p>
+                      Submitted. {editingAi?.name} is signed with your Flowsta name and waiting for a quick look; once it is on the shelf it lives at{' '}
+                      <span class="text-[var(--text-primary)] break-all">{shareDone.value.page}</span>
+                    </p>
+                    <p class="text-xs text-[var(--text-muted)]">
+                      Review status:{' '}
+                      <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={$(async () => {
+                        const { openUrl } = await import('@tauri-apps/plugin-opener');
+                        await openUrl(shareDone.value!.pr_url);
+                      })}>open the submission</button>
+                    </p>
+                    <LiquidMetalButton variant="secondary" onClick$={$(() => { shareOpen.value = false; })} class="w-full justify-center px-5 py-2 text-sm">
+                      Done
+                    </LiquidMetalButton>
+                  </div>
+                ) : (
+                  <>
+                    <p class="mt-2 text-sm text-[var(--text-secondary)]">
+                      Puts {editingAi?.name} on the Characters shelf for everyone, as a pack: personality, portrait and Knowledge.
+                      Conversations and personal memories are never included. It goes out signed with your Flowsta name and is
+                      yours to update or remove.
+                    </p>
+                    {!shareMakerHandle.value && (
+                      <p class="mt-2 text-xs text-amber-400">
+                        {exportVaultUnlocked.value
+                          ? 'Sign in with Flowsta first (Settings) - a share carries your name.'
+                          : exportVaultInstalled.value
+                            ? 'Your Flowsta Vault is locked. Unlock it, sign in, then share.'
+                            : 'Sharing needs the Flowsta Vault app and a sign-in - it is how the shelf knows it is really you.'}
+                      </p>
+                    )}
+                    <label class="mt-3 block text-xs font-medium text-[var(--text-secondary)]">One line for the shelf (optional)</label>
+                    <input
+                      type="text"
+                      value={shareTitle.value}
+                      onInput$={(_, el) => { shareTitle.value = el.value; }}
+                      placeholder="The storyteller"
+                      maxLength={60}
+                      class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none"
+                    />
+                    <label class="mt-3 block text-xs font-medium text-[var(--text-secondary)]">Description</label>
+                    <textarea
+                      value={shareDescription.value}
+                      onInput$={(_, el) => { shareDescription.value = el.value; }}
+                      rows={3}
+                      maxLength={400}
+                      class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-xl px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none"
+                    />
+                    <label class="mt-3 block text-xs font-medium text-[var(--text-secondary)]">License</label>
+                    <select
+                      value={shareLicense.value}
+                      onChange$={(_, el) => { shareLicense.value = el.value; }}
+                      class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)]"
+                    >
+                      {LICENSES.map((l) => (
+                        <option key={l.id} value={l.id}>{l.label}</option>
+                      ))}
+                    </select>
+                    <p class="mt-2 text-xs text-[var(--text-muted)]">Free for everyone. Paid sharing comes later, for makers who have signed their work.</p>
+                    {shareErr.value && <p class="mt-2 text-xs text-red-400">{shareErr.value}</p>}
+                    <div class="mt-4 flex flex-col gap-2">
+                      <LiquidMetalButton
+                        onClick$={doShare}
+                        disabled={shareBusy.value || !shareMakerHandle.value}
+                        class="w-full justify-center px-5 py-2 text-sm"
+                      >
+                        {shareBusy.value ? 'Signing and sending...' : `Share as @${shareMakerHandle.value ?? '...'}`}
+                      </LiquidMetalButton>
+                      <LiquidMetalButton
+                        variant="secondary"
+                        onClick$={$(() => { shareOpen.value = false; })}
+                        disabled={shareBusy.value}
+                        class="w-full justify-center px-5 py-2 text-sm"
+                      >
+                        Cancel
+                      </LiquidMetalButton>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
           {/* Export AI dialog - signed (provenance) or plain file. */}
           {exportOpen.value && (
             <div class="absolute inset-0 z-20 flex items-center justify-center rounded-xl bg-black/60 p-6">
@@ -1463,6 +1594,14 @@ const AiFormModal = component$<AiFormModalProps>(
                     class="w-full justify-center px-5 py-2 text-sm"
                   >
                     Export unsigned
+                  </LiquidMetalButton>
+                  <LiquidMetalButton
+                    variant="secondary"
+                    onClick$={$(async () => { exportOpen.value = false; await openShare(); })}
+                    disabled={exportBusy.value}
+                    class="w-full justify-center px-5 py-2 text-sm"
+                  >
+                    Share it with everyone
                   </LiquidMetalButton>
                   <LiquidMetalButton
                     variant="secondary"

@@ -932,6 +932,44 @@ pub async fn vault_sign(
     }))
 }
 
+/// The add-ons share service (opens the directory pull request for the
+/// person; see build-docs SKILLS.md "Directory + sharing").
+pub fn share_url() -> String {
+    const PROD: &str = "https://yoai-share-386500392150.us-central1.run.app";
+    #[cfg(debug_assertions)]
+    {
+        return dev_override("YOAI_SHARE_URL", "share_url").unwrap_or_else(|| PROD.to_string());
+    }
+    #[cfg(not(debug_assertions))]
+    PROD.to_string()
+}
+
+/// Submit a signed listing (a character pack or a skill zip) to the
+/// directory. The service verifies the signature again, commits the files
+/// and opens the pull request under the maker's Flowsta handle. Returns
+/// what the service says: the PR link and the listing's future page.
+#[tauri::command]
+pub async fn share_submit(app: tauri::AppHandle, submission: serde_json::Value) -> Result<serde_json::Value, String> {
+    let _ = &app;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .post(format!("{}/v1/share", share_url()))
+        .json(&submission)
+        .send()
+        .await
+        .map_err(|e| format!("couldn't reach the share service: {e}"))?;
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
+    if !status.is_success() {
+        let msg = body.get("error").and_then(|v| v.as_str()).unwrap_or("the share service refused the submission");
+        return Err(format!("{msg} ({})", status.as_u16()));
+    }
+    Ok(body)
+}
+
 /// Verify an ed25519 signature over `hash_b64` by the Holochain agent key
 /// `agent_pub_key` ("uhCAk…"). Pure crypto — no Vault needed. Returns whether
 /// the signature is valid (false on any decode/length problem, never panics).

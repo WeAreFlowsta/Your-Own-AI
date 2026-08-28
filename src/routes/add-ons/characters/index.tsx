@@ -20,6 +20,7 @@ import { parseAiPack, verifyAiPack, thumbnailDataUrlToBytes, type AiPack } from 
 import type { VerifyState } from "../../../utils/packSigning";
 import { addKnowledge } from "../../../utils/transcriptMemory";
 import type { UserDefinedAI } from "../../../types";
+import { directoryItems } from "../../../utils/directory";
 
 const SITE = "https://yourownai.net";
 
@@ -39,6 +40,10 @@ const CHARACTERS: { slug: string; name: string; title: string }[] = [
 interface ShelfEntry {
   slug: string;
   name: string;
+  /** Where the pack and portrait come from (the directory, else the site). */
+  packUrl?: string;
+  portraitUrl?: string;
+  maker?: string;
   /** The site's one-line title ("The storyteller"). */
   title: string;
   description: string;
@@ -69,13 +74,34 @@ export default component$(() => {
   useVisibleTask$(async () => {
     currentModel.value = localStorage.getItem("currentModel");
     showModelWidget.value = localStorage.getItem("showModelWidget") === "true";
+    // The directory lists every reviewed character, including ones people
+    // shared; when it answers, the shelf is its list. Otherwise the eight.
+    const dir = await directoryItems();
+    if (dir) {
+      const chars = dir.filter((d) => d.kind === "character" && d.file_url);
+      if (chars.length) {
+        store.shelf = chars.map((d) => ({
+          slug: d.id,
+          name: d.name,
+          title: d.title || (d.maker.handle && d.maker.handle !== "flowsta" ? `by @${d.maker.handle}` : ""),
+          packUrl: d.file_url!,
+          portraitUrl: d.portrait_url || undefined,
+          maker: d.maker.name,
+          description: d.description,
+          askBlurb: "",
+          knowledgeCount: 0,
+          verify: null,
+          pack: null,
+        }));
+      }
+    }
     // The packs are small (tens of KB) and carry the words for the cards;
     // fetch them all, verify each signature, keep going if one fails.
     let anyOk = false;
     await Promise.all(
-      CHARACTERS.map(async (c, i) => {
+      store.shelf.map(async (c, i) => {
         try {
-          const res = await fetch(`${SITE}/characters/${c.slug}-pack.json`, { cache: "force-cache" });
+          const res = await fetch(c.packUrl ?? `${SITE}/characters/${c.slug}-pack.json`, { cache: "force-cache" });
           if (!res.ok) return;
           const pack = parseAiPack(await res.text());
           if (!pack) return;
@@ -96,7 +122,7 @@ export default component$(() => {
     );
     store.offline = !anyOk;
     store.loading = false;
-  });
+  }, { strategy: "document-ready" });
 
   const handleNewQuestion = $(() => {
     nav("/chat");
@@ -227,7 +253,7 @@ export default component$(() => {
                 >
                   <div class="flex items-center gap-3">
                     <div class="h-14 w-14 shrink-0 overflow-hidden rounded-full border border-[var(--border-subtle)] bg-[var(--bg-main)]">
-                      <img src={`${SITE}/characters/${c.slug}.jpg`} alt="" width={56} height={56} class="h-full w-full object-cover" loading="lazy" />
+                      <img src={c.portraitUrl ?? `${SITE}/characters/${c.slug}.jpg`} alt="" width={56} height={56} class="h-full w-full object-cover" loading="lazy" />
                     </div>
                     <div class="min-w-0">
                       <h2 class="truncate font-medium text-[var(--text-primary)]">
@@ -235,7 +261,7 @@ export default component$(() => {
                       </h2>
                       <p class="flex items-center gap-1 text-xs text-[var(--text-muted)]">
                         {c.verify === "verified" && <LuShieldCheck class="h-3.5 w-3.5 text-emerald-500" />}
-                        {c.verify === "verified" ? "Made by Flowsta, signed" : c.verify === "tampered" ? "Signature does not match" : "Made by Flowsta"}
+                        {c.verify === "verified" ? `Made by ${c.maker ?? "Flowsta"}, signed` : c.verify === "tampered" ? "Signature does not match" : `Made by ${c.maker ?? "Flowsta"}`}
                       </p>
                     </div>
                   </div>

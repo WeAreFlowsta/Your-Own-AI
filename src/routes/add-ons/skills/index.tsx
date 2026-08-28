@@ -40,7 +40,10 @@ import {
   LARGE_SKILL_TOKENS,
   type SkillInfo,
 } from "../../../utils/skills";
-import { RECOMMENDED_SKILLS, SKILL_GROUPS } from "../../../data/recommended-skills";
+import { RECOMMENDED_SKILLS, SKILL_GROUPS, type RecommendedSkill } from "../../../data/recommended-skills";
+import { directoryItems } from "../../../utils/directory";
+import { LICENSES, currentMaker, shareSkill, shareErrorText, type ShareResult } from "../../../utils/share";
+import { LuShare2 } from "@qwikest/icons/lucide";
 
 export default component$(() => {
   const nav = useNavigate();
@@ -71,6 +74,17 @@ export default component$(() => {
     usedByOpen: "" as string,
     // Recommended entry being installed (by name)
     installing: "" as string,
+    // The shelf: the directory's skills when it answers, the bundled list otherwise
+    recommended: RECOMMENDED_SKILLS as RecommendedSkill[],
+    // Share dialog: the skill being shared (folder/zip installs only - those are yours)
+    shareFor: "" as string,
+    shareTitle: "",
+    shareDescription: "",
+    shareLicense: "CC-BY-4.0",
+    shareMaker: null as string | null,
+    shareBusy: false,
+    shareErr: "",
+    shareDone: null as ShareResult | null,
   });
 
   const load = $(async () => {
@@ -147,6 +161,22 @@ export default component$(() => {
       /* no session storage */
     }
     await load();
+    const dir = await directoryItems();
+    if (dir) {
+      const skills = dir.filter((d) => d.kind === "skill" && (d.source.url || d.file_url));
+      if (skills.length) {
+        store.recommended = skills.map((d) => ({
+          name: d.id,
+          title: d.name,
+          group: (["Build", "Writing", "Work"].includes(d.group ?? "") ? d.group : "Work") as RecommendedSkill["group"],
+          blurb: d.description,
+          maker: d.maker.name,
+          license: d.license,
+          link: d.source.kind === "github" ? d.source.url! : d.file_url!,
+          sizeChars: d.size_chars ?? 0,
+        }));
+      }
+    }
   });
 
   const handleNewQuestion = $(() => {
@@ -227,6 +257,38 @@ export default component$(() => {
       store.error = typeof e === "string" ? e : e instanceof Error ? e.message : "Couldn't add that skill.";
     } finally {
       store.installing = "";
+    }
+  });
+
+  const openShare = $(async (s: SkillInfo) => {
+    store.shareFor = s.name;
+    store.shareTitle = s.name.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    store.shareDescription = s.description;
+    store.shareErr = "";
+    store.shareDone = null;
+    store.shareMaker = (await currentMaker())?.handle ?? null;
+  });
+
+  const doShare = $(async () => {
+    const entry = store.skills.find((s) => s.name === store.shareFor);
+    if (!entry) return;
+    store.shareBusy = true;
+    store.shareErr = "";
+    try {
+      const maker = await currentMaker();
+      if (!maker) throw new Error("Sign in with Flowsta first - a share carries your name.");
+      if (store.shareDescription.trim().length < 20) throw new Error("Say a little more about it - at least a sentence.");
+      store.shareDone = await shareSkill(entry.name, {
+        title: store.shareTitle.trim() || entry.name,
+        description: store.shareDescription.trim(),
+        license: store.shareLicense,
+        runsPrograms: entry.runs_programs,
+        maker,
+      });
+    } catch (e) {
+      store.shareErr = shareErrorText(e);
+    } finally {
+      store.shareBusy = false;
     }
   });
 
@@ -353,7 +415,7 @@ export default component$(() => {
                   <div key={g} class="mt-3">
                     <p class="text-xs uppercase tracking-wide text-[var(--text-muted)]">{g}</p>
                     <div class="mt-1.5 space-y-1.5">
-                      {RECOMMENDED_SKILLS.filter((r) => r.group === g).map((r) => {
+                      {store.recommended.filter((r) => r.group === g).map((r) => {
                         const installed = store.skills.some((s) => s.name === r.name);
                         return (
                           <div key={r.name} class="flex items-start justify-between gap-3 rounded-xl bg-[var(--bg-main)] px-3 py-2">
@@ -361,7 +423,7 @@ export default component$(() => {
                               <p class="text-sm font-medium text-[var(--text-primary)]">{r.title}</p>
                               <p class="text-xs text-[var(--text-secondary)]">{r.blurb}</p>
                               <p class="text-xs text-[var(--text-muted)]">
-                                {r.maker} · {r.license} · ~{Math.round(r.sizeChars / 4 / 100) * 100} tokens
+                                {r.maker} · {r.license}{r.sizeChars ? ` · ~${Math.round(r.sizeChars / 4 / 100) * 100} tokens` : ""}
                               </p>
                             </div>
                             {installed ? (
@@ -478,6 +540,17 @@ export default component$(() => {
                           <LuFileText class="h-3.5 w-3.5" />
                           {store.previewOpen === s.name ? "Hide SKILL.md" : "Show SKILL.md"}
                         </LiquidMetalButton>
+                        {(s.source?.kind === "folder" || s.source?.kind === "zip" || !s.source) && (
+                          <LiquidMetalButton
+                            variant="secondary"
+                            class="flex items-center gap-1.5 px-3 py-1.5 text-xs"
+                            title="Put this skill on the shelf for everyone, signed with your Flowsta name"
+                            onClick$={() => openShare(s)}
+                          >
+                            <LuShare2 class="h-3.5 w-3.5" />
+                            Share
+                          </LiquidMetalButton>
+                        )}
                         {store.updates[s.name] && (
                           <LiquidMetalButton
                             class="flex items-center gap-1.5 px-3 py-1.5 text-xs"
@@ -515,6 +588,81 @@ export default component$(() => {
           </div>
         </div>
       </div>
+
+      {store.shareFor && (
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div class="w-full max-w-md rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-header-footer)] p-6 shadow-2xl">
+            <h3 class="text-base font-semibold text-[var(--text-primary)]">Share "{store.shareFor}" with everyone</h3>
+            {store.shareDone ? (
+              <div class="mt-3 space-y-3 text-sm text-[var(--text-secondary)]">
+                <p>
+                  Submitted, signed with your Flowsta name. After a quick look it lives at{" "}
+                  <span class="text-[var(--text-primary)] break-all">{store.shareDone.page}</span>
+                </p>
+                <button
+                  type="button"
+                  class="text-xs text-[var(--text-link)] hover:underline"
+                  onClick$={async () => {
+                    const { openUrl } = await import("@tauri-apps/plugin-opener");
+                    await openUrl(store.shareDone!.pr_url);
+                  }}
+                >
+                  Open the submission
+                </button>
+                <LiquidMetalButton variant="secondary" class="w-full justify-center px-5 py-2 text-sm" onClick$={() => { store.shareFor = ""; }}>
+                  Done
+                </LiquidMetalButton>
+              </div>
+            ) : (
+              <>
+                <p class="mt-2 text-sm text-[var(--text-secondary)]">
+                  Puts the skill folder on the Skills shelf as a zip, signed with your Flowsta name - yours to update or
+                  remove. It is text; anyone who adds it is told if it ships programs.
+                </p>
+                {!store.shareMaker && (
+                  <p class="mt-2 text-xs text-amber-400">Sign in with Flowsta first (Settings) - a share carries your name.</p>
+                )}
+                <label class="mt-3 block text-xs font-medium text-[var(--text-secondary)]">Name on the shelf</label>
+                <input
+                  type="text"
+                  value={store.shareTitle}
+                  onInput$={(_, el) => { store.shareTitle = el.value; }}
+                  maxLength={60}
+                  class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none"
+                />
+                <label class="mt-3 block text-xs font-medium text-[var(--text-secondary)]">Description</label>
+                <textarea
+                  value={store.shareDescription}
+                  onInput$={(_, el) => { store.shareDescription = el.value; }}
+                  rows={3}
+                  maxLength={400}
+                  class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-xl px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none"
+                />
+                <label class="mt-3 block text-xs font-medium text-[var(--text-secondary)]">License</label>
+                <select
+                  value={store.shareLicense}
+                  onChange$={(_, el) => { store.shareLicense = el.value; }}
+                  class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)]"
+                >
+                  {LICENSES.map((l) => (
+                    <option key={l.id} value={l.id}>{l.label}</option>
+                  ))}
+                </select>
+                <p class="mt-2 text-xs text-[var(--text-muted)]">Free for everyone. Paid sharing comes later, for makers who have signed their work.</p>
+                {store.shareErr && <p class="mt-2 text-xs text-red-400">{store.shareErr}</p>}
+                <div class="mt-4 flex flex-col gap-2">
+                  <LiquidMetalButton onClick$={doShare} disabled={store.shareBusy || !store.shareMaker} class="w-full justify-center px-5 py-2 text-sm">
+                    {store.shareBusy ? "Signing and sending..." : `Share as @${store.shareMaker ?? "..."}`}
+                  </LiquidMetalButton>
+                  <LiquidMetalButton variant="secondary" onClick$={() => { store.shareFor = ""; }} disabled={store.shareBusy} class="w-full justify-center px-5 py-2 text-sm">
+                    Cancel
+                  </LiquidMetalButton>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       <ConfirmModal
         isOpen={store.confirmRemove !== null}

@@ -1,0 +1,107 @@
+/**
+ * Share an add-on to the directory - the one-button path. The app signs
+ * with the Flowsta Vault (a share carries your name), then hands the
+ * signed file and its listing to the share service, which opens the
+ * directory pull request for you. See build-docs SKILLS.md.
+ */
+import { invoke } from "@tauri-apps/api/core";
+import type { AiPack } from "./aiPack";
+
+export const LICENSES = [
+  { id: "CC-BY-4.0", label: "CC BY 4.0 - anyone may use and adapt it, with credit" },
+  { id: "CC-BY-SA-4.0", label: "CC BY-SA 4.0 - same, and adaptations stay shareable" },
+  { id: "CC0-1.0", label: "CC0 - public domain, no credit needed" },
+  { id: "MIT", label: "MIT" },
+  { id: "Apache-2.0", label: "Apache 2.0" },
+];
+
+export interface Maker {
+  name: string;
+  handle: string;
+  agent_pub_key: string;
+}
+
+export interface ShareResult {
+  ok: boolean;
+  id: string;
+  pr_url: string;
+  page: string;
+}
+
+/** The signed-in Flowsta identity as a maker, or null when not signed in. */
+export async function currentMaker(): Promise<Maker | null> {
+  try {
+    const s = await invoke<{ signed_in: boolean; agent_pub_key?: string | null; display_name?: string | null; web_username?: string | null }>("flowsta_session");
+    if (!s?.signed_in || !s.agent_pub_key || !s.web_username) return null;
+    return { name: s.display_name || s.web_username, handle: s.web_username, agent_pub_key: s.agent_pub_key };
+  } catch {
+    return null;
+  }
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
+/** Share a signed AI pack as a character. */
+export async function shareCharacter(pack: AiPack, opts: { description: string; license: string; title?: string; maker: Maker }): Promise<ShareResult> {
+  if (!pack.signature) throw new Error("pack must be signed");
+  const manifest = {
+    schema: 1,
+    kind: "character",
+    name: pack.name,
+    title: opts.title || undefined,
+    description: opts.description,
+    license: opts.license,
+    terms: "free",
+    maker: opts.maker,
+    portrait: pack.thumbnail || undefined,
+  };
+  const file_b64 = btoa(unescape(encodeURIComponent(JSON.stringify(pack, null, 2))));
+  return invoke<ShareResult>("share_submit", { submission: { kind: "character", manifest, file_b64, signature: pack.signature } });
+}
+
+/** Share an installed skill folder: zip it, sign the zip's digest, submit. */
+export async function shareSkill(
+  name: string,
+  opts: { title: string; description: string; license: string; runsPrograms: boolean; maker: Maker },
+): Promise<ShareResult> {
+  const zipped = await invoke<{ zip_b64: string; sha256: string; files: number; bytes: number }>("skills_pack_zip", { name });
+  const digest = new Uint8Array(zipped.sha256.match(/.{2}/g)!.map((h) => parseInt(h, 16)));
+  const res = await invoke<{ signature: string; agent_pub_key: string }>("vault_sign", {
+    bytesB64: bytesToBase64(digest),
+    reason: `Share skill "${opts.title}"`,
+  });
+  if (!res.signature || !res.agent_pub_key) throw new Error("sign_failed");
+  const signature = {
+    algo: "ed25519",
+    agent_pub_key: res.agent_pub_key,
+    manifest_hash: `sha256:${zipped.sha256}`,
+    signed_at: new Date().toISOString(),
+    value: res.signature,
+  };
+  const manifest = {
+    schema: 1,
+    kind: "skill",
+    name: opts.title,
+    description: opts.description,
+    license: opts.license,
+    terms: "free",
+    maker: opts.maker,
+    sha256: zipped.sha256,
+    runs_programs: opts.runsPrograms,
+  };
+  return invoke<ShareResult>("share_submit", { submission: { kind: "skill", manifest, file_b64: zipped.zip_b64, signature } });
+}
+
+/** A plain error line for the share dialogs. */
+export function shareErrorText(e: unknown): string {
+  const m = e instanceof Error ? e.message : String(e);
+  if (m.includes("vault_locked")) return "Flowsta Vault is locked - unlock it to sign.";
+  if (m.includes("vault_not_found")) return "Flowsta Vault isn't running.";
+  if (m.includes("sign_failed") || m.includes("denied")) return "Signing was declined in Vault.";
+  if (m.includes("share service")) return "The share service could not be reached - check your connection and try again.";
+  return m.length < 160 ? m : "Couldn't share - please try again.";
+}

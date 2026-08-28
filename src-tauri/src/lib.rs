@@ -688,6 +688,8 @@ pub fn run() {
             skills::skills_check_update,
             skills::skills_update,
             skills::skills_in_folder,
+            skills::skills_pack_zip,
+            flowsta::share_submit,
         ])
         .setup(|app| {
             // yourownai:// links (Add to Your Own AI on the site). Registered

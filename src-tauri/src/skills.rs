@@ -538,6 +538,59 @@ pub async fn skills_in_folder(path: String) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
+/// Zip an installed skill folder for sharing: every file except the
+/// provenance sidecar, paths relative to the skill root. Returns the zip
+/// (base64) and its sha256 - the hash is what the Vault signs.
+#[tauri::command]
+pub async fn skills_pack_zip(app: AppHandle, name: String) -> Result<serde_json::Value, String> {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    use std::io::Write as _;
+    let dir = skills_dir(&app)?.join(normalize_name(&name));
+    if !dir.join("SKILL.md").is_file() {
+        return Err("That skill is not installed.".into());
+    }
+    let mut files: Vec<(String, PathBuf)> = Vec::new();
+    let mut stack = vec![dir.clone()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            let fname = e.file_name().to_string_lossy().to_string();
+            if p.is_dir() {
+                if !skip_dir(&fname) {
+                    stack.push(p);
+                }
+            } else if fname != SIDECAR {
+                let rel = p.strip_prefix(&dir).map_err(|e| e.to_string())?.to_string_lossy().replace('\\', "/");
+                files.push((rel, p));
+            }
+        }
+    }
+    files.sort();
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (rel, path) in &files {
+            zip.start_file(rel.clone(), opts).map_err(|e| e.to_string())?;
+            let data = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+            zip.write_all(&data).map_err(|e| e.to_string())?;
+        }
+        zip.finish().map_err(|e| e.to_string())?;
+    }
+    if buf.len() as u64 > MAX_ARCHIVE_BYTES {
+        return Err("That skill is larger than 50 MB - too big to share as a zip.".into());
+    }
+    let sha = hex::encode(sha2::Sha256::digest(&buf));
+    Ok(serde_json::json!({
+        "zip_b64": base64::engine::general_purpose::STANDARD.encode(&buf),
+        "sha256": sha,
+        "files": files.len(),
+        "bytes": buf.len(),
+    }))
+}
+
 /// SKILL.md of one installed skill (for a preview).
 #[tauri::command]
 pub async fn skills_skill_md(app: AppHandle, name: String) -> Result<String, String> {

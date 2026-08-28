@@ -99,6 +99,15 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   answers at once.
 
 ### Add-ons
+- Share it with everyone. An AI's Export dialog and a skill's card now
+  offer sharing to the public add-ons directory: the app signs the pack or
+  the skill folder with your Flowsta identity and files it for review
+  under your Flowsta name - no GitHub account, no upload site. Once it is
+  on the shelf, everyone's Characters and Skills pages list it, with your
+  name on it. Free listings for now.
+- The Characters shelf and the Recommended skills read the directory when
+  it answers, so shared add-ons appear without an app update; the built-in
+  lists remain the fallback offline.
 - Skills. A skill is a folder of instructions an AI reads when the work
   calls for it (the Agent Skills open standard: SKILL.md plus supporting
   files). Add-ons > Skills lists what is installed and adds more from a

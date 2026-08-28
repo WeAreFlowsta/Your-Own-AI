@@ -45,7 +45,7 @@ export const RECOMMENDED_SKILLS: RecommendedSkill[] = [
     blurb: "Find the root cause instead of guessing when a test fails, a build breaks, or behavior does not match expectations.",
     maker: "Addy Osmani",
     license: "MIT",
-    link: "https://github.com/addyosmani/agent-skills/tree/5a5ea45/skills/debugging-and-error-recovery",
+    link: "https://github.com/addyosmani/agent-skills/tree/5a5ea45e806f82273549fd85e60adb95d55f510d/skills/debugging-and-error-recovery",
     sizeChars: 10837,
   },
   {
@@ -55,7 +55,7 @@ export const RECOMMENDED_SKILLS: RecommendedSkill[] = [
     blurb: "Land changes in small, checkable steps when a task touches more than one file or feels too big for one go.",
     maker: "Addy Osmani",
     license: "MIT",
-    link: "https://github.com/addyosmani/agent-skills/tree/5a5ea45/skills/incremental-implementation",
+    link: "https://github.com/addyosmani/agent-skills/tree/5a5ea45e806f82273549fd85e60adb95d55f510d/skills/incremental-implementation",
     sizeChars: 9507,
   },
   {
@@ -65,7 +65,7 @@ export const RECOMMENDED_SKILLS: RecommendedSkill[] = [
     blurb: "Write down the decisions and context the next person (or AI) will need: architecture decision records, API changes, shipped features.",
     maker: "Addy Osmani",
     license: "MIT",
-    link: "https://github.com/addyosmani/agent-skills/tree/5a5ea45/skills/documentation-and-adrs",
+    link: "https://github.com/addyosmani/agent-skills/tree/5a5ea45e806f82273549fd85e60adb95d55f510d/skills/documentation-and-adrs",
     sizeChars: 9782,
   },
   {
@@ -75,7 +75,7 @@ export const RECOMMENDED_SKILLS: RecommendedSkill[] = [
     blurb: "Distinctive, intentional visual design for new or reshaped UI - direction, typography, and choices that do not read as template defaults.",
     maker: "Anthropic",
     license: "Apache-2.0",
-    link: "https://github.com/anthropics/skills/tree/3b3fad9/skills/frontend-design",
+    link: "https://github.com/anthropics/skills/tree/3b3fad96af16a10759d930941b4520ba0c40edae/skills/frontend-design",
     sizeChars: 8260,
   },
   {
@@ -85,7 +85,7 @@ export const RECOMMENDED_SKILLS: RecommendedSkill[] = [
     blurb: "Turn a vague idea into a sharp, testable one: widen the options, stress-test the assumptions, then converge on a plan.",
     maker: "Addy Osmani",
     license: "MIT",
-    link: "https://github.com/addyosmani/agent-skills/tree/5a5ea45/skills/idea-refine",
+    link: "https://github.com/addyosmani/agent-skills/tree/5a5ea45e806f82273549fd85e60adb95d55f510d/skills/idea-refine",
     sizeChars: 8111,
   },
   {
@@ -95,7 +95,7 @@ export const RECOMMENDED_SKILLS: RecommendedSkill[] = [
     blurb: "Status reports, leadership updates, newsletters, FAQs, incident and project updates - in the formats teams actually use.",
     maker: "Anthropic",
     license: "Apache-2.0",
-    link: "https://github.com/anthropics/skills/tree/3b3fad9/skills/internal-comms",
+    link: "https://github.com/anthropics/skills/tree/3b3fad96af16a10759d930941b4520ba0c40edae/skills/internal-comms",
     sizeChars: 1511,
   },
   {
@@ -105,7 +105,7 @@ export const RECOMMENDED_SKILLS: RecommendedSkill[] = [
     blurb: "After advice, a draft, an estimate or an analysis you might act on, the AI adds a short note on what to double-check before relying on it.",
     maker: "Anthropic",
     license: "Apache-2.0",
-    link: "https://github.com/anthropics/skills/tree/3b3fad9/skills/discernment-nudge",
+    link: "https://github.com/anthropics/skills/tree/3b3fad96af16a10759d930941b4520ba0c40edae/skills/discernment-nudge",
     sizeChars: 10592,
   },
 ];
