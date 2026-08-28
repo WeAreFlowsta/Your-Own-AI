@@ -1662,7 +1662,7 @@ export default component$(() => {
                             const { invoke } = await import("@tauri-apps/api/core");
                             const { openUrl } = await import("@tauri-apps/plugin-opener");
                             const url = await invoke<string>("flowsta_link_url").catch(() => null);
-                            await openUrl(url ? url.split("?")[0] : "https://yourownai.net/account/");
+                            await openUrl(url ? url.split("?")[0] : "https://yourownai.net/dashboard/");
                           }}
                           class="px-4 py-2 text-sm"
                         >

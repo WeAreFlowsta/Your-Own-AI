@@ -47,7 +47,7 @@ pub fn proxy_url() -> String {
 }
 
 pub fn account_url() -> String {
-    const PROD: &str = "https://yourownai.net/account/";
+    const PROD: &str = "https://yourownai.net/dashboard/";
     #[cfg(debug_assertions)]
     {
         return dev_override("YOAI_ACCOUNT_URL", "account_url").unwrap_or_else(|| PROD.to_string());
