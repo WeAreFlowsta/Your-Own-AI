@@ -3,7 +3,7 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
-## [0.6.1] - 2026-08-27
+## [0.6.1] - 2026-08-28
 
 ### Models
 - Nemotron 3.5 Lightning loads again. The maker replaced its download after
