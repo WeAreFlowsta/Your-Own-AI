@@ -50,6 +50,27 @@
                 },
                 {
                   "url": "https://flowsta.com/*"
+                },
+                {
+                  "url": "https://docs.astral.sh/*"
+                },
+                {
+                  "url": "https://git-scm.com/*"
+                },
+                {
+                  "url": "https://nodejs.org/*"
+                },
+                {
+                  "url": "https://github.com/*"
+                },
+                {
+                  "url": "https://projects.blender.org/*"
+                },
+                {
+                  "url": "https://www.blender.org/*"
+                },
+                {
+                  "url": "https://blender.org/*"
                 }
               ]
             },
@@ -133,7 +154,9 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["yourownai"]
+        "schemes": [
+          "yourownai"
+        ]
       }
     }
   }

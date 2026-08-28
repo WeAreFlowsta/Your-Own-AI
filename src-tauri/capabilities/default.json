@@ -2,7 +2,9 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "opener:default",
@@ -10,9 +12,36 @@
     {
       "identifier": "opener:allow-open-url",
       "allow": [
-        { "url": "https://yourownai.net/*" },
-        { "url": "https://*.yourownai.net/*" },
-        { "url": "https://flowsta.com/*" }
+        {
+          "url": "https://yourownai.net/*"
+        },
+        {
+          "url": "https://*.yourownai.net/*"
+        },
+        {
+          "url": "https://flowsta.com/*"
+        },
+        {
+          "url": "https://docs.astral.sh/*"
+        },
+        {
+          "url": "https://git-scm.com/*"
+        },
+        {
+          "url": "https://nodejs.org/*"
+        },
+        {
+          "url": "https://github.com/*"
+        },
+        {
+          "url": "https://projects.blender.org/*"
+        },
+        {
+          "url": "https://www.blender.org/*"
+        },
+        {
+          "url": "https://blender.org/*"
+        }
       ]
     },
     "shell:allow-execute",
