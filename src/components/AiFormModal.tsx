@@ -1556,8 +1556,8 @@ const AiFormModal = component$<AiFormModalProps>(
                     {shareErr.value && <p class="mt-2 text-xs text-red-400">{shareErr.value}</p>}
                     <p class="mt-4 text-xs text-[var(--text-muted)]">
                       {shareMakerHandle.value
-                        ? `Goes out as @${shareMakerHandle.value}, signed with your Flowsta identity.`
-                        : 'Goes out under your Flowsta name - sign in first so the listing can show who made it.'}
+                        ? `Listed as @${shareMakerHandle.value} and signed with your Flowsta identity, so people know it is yours.`
+                        : 'Sign in with Flowsta first - the listing shows who made it.'}
                     </p>
                     <div class="mt-2 flex flex-col gap-2">
                       <LiquidMetalButton
