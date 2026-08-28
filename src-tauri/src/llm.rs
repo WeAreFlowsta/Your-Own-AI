@@ -2552,6 +2552,47 @@ async fn ensure_utility_server(
 
 /// One-shot generation on the utility server → the full text (non-streamed).
 /// Lazily starts the server with `model` (the utility GGUF filename). An optional
+/// Warm the chat server's prompt cache with an AI's instructions right
+/// after a load, so the first real question only pays for its own words.
+/// A one-token request straight to llama-server (not the streaming path,
+/// so no speed sample is recorded). Silent no-op when nothing is serving.
+#[tauri::command]
+pub async fn warm_chat_prompt(state: State<'_, LLMState>, system: String) -> Result<u64, String> {
+    if !*state.is_server_running.lock().await || system.trim().is_empty() {
+        return Ok(0);
+    }
+    if state.spawned_backend.lock().await.as_deref() == Some("mlx") {
+        return Ok(0); // the MLX preview keeps its own cache rules
+    }
+    let body = serde_json::json!({
+        "messages": [
+            { "role": "system", "content": system },
+            { "role": "user", "content": "Hi" }
+        ],
+        "max_tokens": 1,
+        "stream": false,
+        "cache_prompt": true
+    });
+    let started = std::time::Instant::now();
+    let resp = reqwest::Client::new()
+        .post(format!("http://localhost:{}/v1/chat/completions", CHAT_PORT))
+        .timeout(std::time::Duration::from_secs(120))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("warm request failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("warm request returned {}", resp.status()));
+    }
+    let parsed: serde_json::Value = resp.json().await.unwrap_or_default();
+    let tokens = parsed["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
+    log::info!(
+        "[LLM] warmed the AI's instructions: {tokens} tokens in {} ms",
+        started.elapsed().as_millis()
+    );
+    Ok(tokens)
+}
+
 /// GBNF `grammar` constrains the output (extraction JSON / classifier one-word).
 #[tauri::command]
 pub async fn utility_chat(

@@ -721,6 +721,9 @@ export default component$(() => {
         console.log("[ChatPage] Model already loaded and ready:", targetModel);
         currentModel.value = targetModel;
         modelTooBig.value = false;
+        // Loaded elsewhere (the wizard's post-download load): warm its
+        // instructions here so the first question is not the first read.
+        void import("../../utils/warmPrompt").then((m) => m.warmSystemPrompt(selectedAi.value, targetModel));
       } else {
         console.log("[ChatPage] Loading model:", targetModel);
         isModelLoading.value = true;
@@ -772,6 +775,7 @@ export default component$(() => {
         }
 
         console.log("[ChatPage] Initial model load complete");
+        void import("../../utils/warmPrompt").then((m) => m.warmSystemPrompt(selectedAi.value, targetModel));
       }
 
       // A local model is now ready — re-run any extraction that was cut off by

@@ -458,6 +458,32 @@ const ActionBar = component$<ActionBarProps>((props) => {
     'once loaded it stays ready - your next questions answer right away',
   ];
 
+  // Nothing is loading, but no words yet: after a few seconds say what the
+  // wait IS (the model reading the question and its instructions - long on
+  // a slow engine, once) so silence never reads as a hang. Chat turns only.
+  const readingHintIdx = useSignal(-1);
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track, cleanup }) => {
+    const active = track(
+      () =>
+        !isShowingModelLoading &&
+        !!props.message.isLoading &&
+        !props.message.content &&
+        !props.message.agentTurn &&
+        !props.message.searchingWeb,
+    );
+    readingHintIdx.value = -1;
+    if (!active) return;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    timers.push(setTimeout(() => (readingHintIdx.value = 0), 5000));
+    timers.push(setTimeout(() => (readingHintIdx.value = 1), 15000));
+    cleanup(() => timers.forEach(clearTimeout));
+  });
+  const READING_HINTS = [
+    'reading your question and its instructions',
+    'a long first read on this engine - the next questions reuse it',
+  ];
+
   const statusType = isShowingModelLoading
     ? 'loading' as const
     : props.isWritingCode
@@ -497,6 +523,14 @@ const ActionBar = component$<ActionBarProps>((props) => {
                   style={{ opacity: props.statusOpacity ?? 1, transition: 'opacity 300ms ease-in-out' }}
                 >
                   {props.dynamicStatus}
+                </em>
+              )}
+              {!isShowingModelLoading && readingHintIdx.value >= 0 && !props.message.content && (
+                <em
+                  key={`r${readingHintIdx.value}`}
+                  class="italic block md:inline md:ml-3 opacity-70 animate-fade-in"
+                >
+                  {READING_HINTS[Math.min(readingHintIdx.value, READING_HINTS.length - 1)]}
                 </em>
               )}
               {isShowingModelLoading && loadingHintIdx.value >= 0 && (

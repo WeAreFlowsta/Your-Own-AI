@@ -579,6 +579,7 @@ pub fn run() {
             fit::assess_model_fit,
             reset::reset_to_defaults,
             llm::download_model,
+            llm::warm_chat_prompt,
             llm::download_status,
             ocr::is_ocr_ready,
             ocr::ocr_scanned_pdf,

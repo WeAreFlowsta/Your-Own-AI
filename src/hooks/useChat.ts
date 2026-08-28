@@ -187,7 +187,7 @@ function extractThinkingFromContent(content: string): {
   return { thinking, contentWithoutThinking };
 }
 
-function buildSystemPrompt(
+export function buildSystemPrompt(
   ai: SelectedAiModel,
   disposition: string,
   turnMode: TurnMode = "chat",
