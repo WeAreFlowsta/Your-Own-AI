@@ -312,7 +312,7 @@ export default component$<FlowstaAccountProps>((props) => {
       {section !== "backups" && (
         <>
       <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela mb-1">
-        Your Flowsta Account
+        Your Flowsta Identity
       </h2>
       <p class="text-sm text-[var(--text-secondary)] mb-3">
         Everything local works without an account, forever. Flowsta Vault is
@@ -697,7 +697,7 @@ export default component$<FlowstaAccountProps>((props) => {
           <p class="mt-2 text-xs text-amber-300">
             Backups are paused: your Vault is unlocked under a different
             identity than the one this device's data belongs to. See Your
-            Flowsta Account above.
+            Flowsta Identity above.
           </p>
         )}
         {signedIn() && (

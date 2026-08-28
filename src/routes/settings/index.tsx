@@ -139,7 +139,7 @@ const OnlineModelPicker = component$<{
 
 /** The page's section order — drives both the layout and the jump nav. */
 const SECTIONS = [
-  { id: "settings-account", label: "Flowsta Account" },
+  { id: "settings-account", label: "Flowsta Identity" },
   { id: "settings-backups", label: "Backups & recovery" },
   { id: "settings-behavior", label: "AI behavior" },
   { id: "settings-memory", label: "Memory" },

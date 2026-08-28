@@ -383,7 +383,7 @@ export const WelcomeModal = component$<WelcomeModalProps>(
                     in the app hinted at it. */}
                 <p class="border-t border-[var(--border-subtle)] pt-3 text-xs text-[var(--text-muted)]">
                   Used Your Own AI before, with a Flowsta Vault backup? Sign
-                  in and restore first - Settings → Your Flowsta Account →
+                  in and restore first - Settings → Your Flowsta Identity →
                   Restore conversations from Vault - so your AIs and
                   conversations come back before you start anything new here.
                 </p>
