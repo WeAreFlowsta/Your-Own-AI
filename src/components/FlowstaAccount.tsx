@@ -370,9 +370,27 @@ export default component$<FlowstaAccountProps>((props) => {
       ) : !session.value?.signed_in ? (
         <div class="space-y-3">
           {!vault.value.unlocked && (
-            <p class="text-sm text-amber-300">
-              Vault is locked — unlock it, then sign in.
-            </p>
+            <div class="space-y-2">
+              <p class="text-sm text-amber-300">
+                A Flowsta Vault on this computer is locked - unlock it, then sign in.
+              </p>
+              {/* A Vault answering on this computer is not always YOURS:
+                  another Windows or macOS account still signed in keeps
+                  its Vault running, and the port is shared. Keep the
+                  install path visible so a fresh account is never told
+                  to unlock something it never installed. */}
+              <p class="text-sm text-[var(--text-muted)]">
+                Not your Vault (another account on this computer)?{" "}
+                <button
+                  type="button"
+                  class="text-[var(--text-link)] hover:underline"
+                  onClick$={() => openUrl(VAULT_DOWNLOAD_URL)}
+                >
+                  Get Flowsta Vault - free
+                </button>
+                , install it under this account, then check again.
+              </p>
+            </div>
           )}
           <button
             type="button"
