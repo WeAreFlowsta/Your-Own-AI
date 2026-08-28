@@ -2,7 +2,7 @@
  * Add-ons > Characters - complete AIs, ready to become yours: a personality,
  * a voice, a portrait and a starting memory, each a signed AI pack from
  * yourownai.net (the same eight as the site's "Your characters" page).
- * "Make it mine" fetches the pack, checks its signature, and creates the
+ * "Add to Your AIs" fetches the pack, checks its signature, and creates the
  * AI exactly as Import AI does - it then lives in Your AIs, where it is
  * edited. The shelf stays as it is for the next one.
  */
@@ -216,7 +216,7 @@ export default component$(() => {
           </p>
 
           <Callout intent="info" title="A character becomes your AI" id="characters-intro">
-            "Make it mine" creates a new AI from the character - persona, portrait and starting memories - and it
+            "Add to Your AIs" creates a new AI from the character - persona, portrait and starting memories - and it
             lives in Your AIs from then on: rename it, change its model, give it skills and knowledge. The character
             listed here stays as it is for the next one. Your own AIs can be shared the same way: Export AI on
             any card.
@@ -299,7 +299,7 @@ export default component$(() => {
                         onClick$={() => makeMine(c.slug)}
                       >
                         {store.adding === c.slug && <LuLoader class="h-4 w-4 animate-spin" />}
-                        Make it mine
+                        Add to Your AIs
                       </LiquidMetalButton>
                     )}
                   </div>
