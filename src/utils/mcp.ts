@@ -5,6 +5,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import type { UserDefinedAI } from "../types";
+import { directoryItems, type DirectoryItem } from "./directory";
 
 export interface McpServer {
   name: string;
@@ -92,3 +93,41 @@ export const MCP_PRESETS: McpPreset[] = [
     }),
   },
 ];
+
+/** A directory tool listing as a preset the page can add. */
+export function presetFromDirectory(d: DirectoryItem): McpPreset | null {
+  const r = d.mcp;
+  if (d.kind !== "mcp" || !r) return null;
+  return {
+    id: d.id,
+    name: d.id,
+    title: d.name,
+    blurb: d.description,
+    needs: r.needs ?? [],
+    notes: r.also ?? "",
+    fetch: r.fetch,
+    build: () => ({
+      name: d.id,
+      description: d.title ? `${d.name} - ${d.title}` : d.name,
+      transport: r.transport,
+      command: r.transport === "stdio" ? r.command : undefined,
+      args: r.transport === "stdio" ? (r.args ?? []) : [],
+      env: [],
+      url: r.transport === "http" ? r.url : undefined,
+      source: `directory:${d.id}`,
+      added_at: 0,
+    }),
+  };
+}
+
+/**
+ * "Ready to add": the directory's tool listings (reviewed, updated without
+ * an app release), with the built-in presets as the offline fallback. Same
+ * id = the directory wins.
+ */
+export async function readyPresets(): Promise<McpPreset[]> {
+  const items = await directoryItems();
+  const fromDir = (items ?? []).map(presetFromDirectory).filter((p): p is McpPreset => !!p);
+  const seen = new Set(fromDir.map((p) => p.id));
+  return [...fromDir, ...MCP_PRESETS.filter((p) => !seen.has(p.id))];
+}

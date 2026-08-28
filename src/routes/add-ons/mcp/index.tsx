@@ -23,7 +23,8 @@ import {
   fetchGit,
   mcpUsedBy,
   mcpSummary,
-  MCP_PRESETS,
+  readyPresets,
+  type McpPreset,
   type McpServer,
 } from "../../../utils/mcp";
 
@@ -36,6 +37,7 @@ export default component$(() => {
   const showModelWidget = useSignal(false);
   const store = useStore({
     servers: [] as McpServer[],
+    presets: [] as McpPreset[],
     loading: true,
     error: "",
     note: "",
@@ -62,8 +64,9 @@ export default component$(() => {
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async () => {
     await load();
+    store.presets = await readyPresets();
     const programs = new Set<string>();
-    for (const p of MCP_PRESETS) for (const n of p.needs) programs.add(n.program);
+    for (const p of store.presets) for (const n of p.needs) programs.add(n.program);
     for (const prog of programs) store.have[prog] = await whichProgram(prog);
   });
 
@@ -71,7 +74,7 @@ export default component$(() => {
   const handleModelsClick = $(() => { nav("/setup"); });
 
   const addPreset = $(async (id: string) => {
-    const preset = MCP_PRESETS.find((p) => p.id === id);
+    const preset = store.presets.find((p) => p.id === id);
     if (!preset) return;
     store.error = "";
     store.note = "";
@@ -253,9 +256,9 @@ export default component$(() => {
           {/* Presets - the ones we know how to set up */}
           <h2 class="mt-8 text-lg font-semibold text-[var(--text-primary)]">Ready to add</h2>
           <div class="mt-3 grid gap-4 sm:grid-cols-2">
-            {MCP_PRESETS.map((p) => {
+            {store.presets.map((p) => {
               const pid = p.id;
-              const installed = store.servers.some((s) => s.source === `preset:${pid}`);
+              const installed = store.servers.some((s) => s.source === `preset:${pid}` || s.source === `directory:${pid}`);
               const missing = p.needs.filter((n) => store.have[n.program] === null);
               const checking = p.needs.some((n) => store.have[n.program] === undefined);
               return (

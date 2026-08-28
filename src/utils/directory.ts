@@ -8,7 +8,7 @@ export const DIRECTORY_INDEX_URL = "https://raw.githubusercontent.com/WeAreFlows
 
 export interface DirectoryItem {
   schema: number;
-  kind: "character" | "skill";
+  kind: "character" | "skill" | "mcp";
   id: string;
   name: string;
   title?: string;
@@ -20,7 +20,17 @@ export interface DirectoryItem {
   file?: string;
   sha256?: string;
   portrait?: string;
-  source: { kind: string; repo?: string; commit?: string; path?: string; url?: string };
+  source: { kind: string; repo?: string; commit?: string; path?: string; url?: string; ref?: string };
+  /** Tools (kind "mcp"): how to start the server and what it needs. */
+  mcp?: {
+    transport: "stdio" | "http";
+    command?: string;
+    args?: string[];
+    url?: string;
+    needs?: { program: string; label: string; install: string }[];
+    fetch?: { url: string; dest: string; size: string };
+    also?: string;
+  };
   size_chars?: number;
   runs_programs?: boolean;
   signed: boolean;
