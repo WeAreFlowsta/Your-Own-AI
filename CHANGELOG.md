@@ -52,6 +52,22 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   the rail says why the picture was not looked at - a line that stays
   readable after the steps fold and is kept in your records.
 
+### First run
+- The welcome offers one model, the one graded best for this computer, and
+  nothing that leads away from it. Close the app mid-download and the
+  welcome picks the download up where it stopped the next time, never
+  from zero; a download still running when you come back is joined, not
+  restarted.
+- Honest words for small machines: a processor-only pick says "good for
+  everyday chat, slower on long answers"; a machine below what the
+  smallest model needs is told so, in amber, with the optional online plan
+  named as the fast route. The old "fast and efficient on your CPU" line
+  is gone.
+- The first question after a model loads pays only for its own words: the
+  AI's instructions are read into the engine right after the load. While
+  the model reads a question, the bubble says so after a few seconds
+  instead of a generic thinking line.
+
 ### Projects
 - Checks after edits. When the agent thinks a turn is done, the project's
   own check command runs first - a typecheck, check or lint script from

@@ -19,6 +19,7 @@ import type { SystemInfo } from './ModelDownloader';
 import { modelFamilies, getBestFamilyForRAM, getBestVariantForSystem, getRunMode, type ModelVariant } from '../data/recommended-models';
 import { modelManager, type DownloadProgress } from '../utils/modelManager';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
 interface RecommendedModel {
   familyId: string;
@@ -26,6 +27,8 @@ interface RecommendedModel {
   variant: ModelVariant;
   reason: string;
   hasGPU: boolean;
+  /** The smallest model we ship is still a stretch for this machine - say so. */
+  tight?: boolean;
 }
 
 interface WelcomeModalProps {
@@ -91,14 +94,14 @@ function getRecommendedModel(
         familyName: best.family.name,
         variant: best.variant,
         reason: isUnified
-          ? `Your ${gpuName} runs models in its shared memory — ${best.family.name} ${best.variant.parameterCount} fits comfortably with room for the system.`
-          : `Your GPU (${gpuName}) has ${totalVRAM.toFixed(1)}GB VRAM — ${best.family.name} ${best.variant.parameterCount} fits entirely on GPU for maximum speed!`,
+          ? `Your ${gpuName} runs models in its shared memory - ${best.family.name} ${best.variant.parameterCount} fits comfortably with room for the system.`
+          : `Your GPU (${gpuName}) has ${totalVRAM.toFixed(1)}GB VRAM - ${best.family.name} ${best.variant.parameterCount} fits entirely on GPU for maximum speed!`,
         hasGPU: true,
       };
     }
   }
 
-  // No GPU or nothing fits in VRAM — find best model for CPU
+  // No GPU or nothing fits in VRAM - find best model for CPU
   // Pick the largest model from recommended families that fits in RAM with overhead
   const bestFamily = getBestFamilyForRAM(totalRAM, null, freeRAM); // null VRAM = CPU-only calc
 
@@ -110,8 +113,8 @@ function getRecommendedModel(
         familyName: bestFamily.name,
         variant: bestVariant,
         reason: systemInfo?.gpu_integrated
-          ? `Your graphics share system memory, so compact models are the quick ones here — ${bestFamily.name} ${bestVariant.parameterCount} runs nimbly and leaves room for everything else.`
-          : `With ${totalRAM.toFixed(0)}GB RAM, ${bestFamily.name} ${bestVariant.parameterCount} is optimized for your system — fast and efficient on CPU!`,
+          ? `Your graphics share system memory, so compact models are the quick ones here. ${bestFamily.name} ${bestVariant.parameterCount} runs on your processor: good for everyday chat, slower on long answers. Everything stays private and free.`
+          : `With ${totalRAM.toFixed(0)}GB RAM, ${bestFamily.name} ${bestVariant.parameterCount} runs on your processor: good for everyday chat, slower on long answers. Everything stays private and free.`,
         hasGPU: false,
       };
     }
@@ -127,8 +130,9 @@ function getRecommendedModel(
     familyId: fallbackFamily.id,
     familyName: fallbackFamily.name,
     variant: fallbackVariant,
-    reason: 'Fast and efficient on your CPU — perfect for getting started with private AI conversations!',
+    reason: `Your computer has ${totalRAM.toFixed(0)}GB of memory, which is below what the smallest model we ship (${fallbackVariant.size}GB) needs to run well. It will download and it may answer, slowly, on your processor. Everything else in Your Own AI works as normal, and everything offline stays private and free.`,
     hasGPU: false,
+    tight: true,
   };
 }
 
@@ -176,14 +180,19 @@ export const WelcomeModal = component$<WelcomeModalProps>(
 
     const recommendedModel = getRecommendedModel(systemInfo, gpuUnusable.value);
 
-    // Reset state when modal opens
-    // eslint-disable-next-line qwik/no-use-visible-task
-    useVisibleTask$(({ track }) => {
-      track(() => isOpen);
-      if (isOpen) {
-        error.value = null;
-        downloadProgress.value = null;
+    // A download that was interrupted (the app closed, the page changed)
+    // continues by itself when the welcome comes back - never from zero.
+    const resumed = useSignal(false);
+    const finishFirstModel$ = $(async () => {
+      // Load the model in the background
+      try {
+        console.log('[WelcomeModal] Loading model in background:', recommendedModel.variant.filename);
+        await invoke('load_model', { filename: recommendedModel.variant.filename, withVision: false, reason: "welcome" });
+      } catch (loadError) {
+        console.error('[WelcomeModal] Failed to load model:', loadError);
       }
+      onModelDownloaded$(recommendedModel.variant.filename);
+      onClose$();
     });
 
     const handleDownload$ = $(async () => {
@@ -199,26 +208,59 @@ export const WelcomeModal = component$<WelcomeModalProps>(
             downloadProgress.value = progress;
           }
         );
-
-        // Load the model in the background
-        try {
-          console.log('[WelcomeModal] Loading model in background:', recommendedModel.variant.filename);
-          await invoke('load_model', { filename: recommendedModel.variant.filename, withVision: false, reason: "welcome" });
-        } catch (loadError) {
-          console.error('[WelcomeModal] Failed to load model:', loadError);
-        }
-
-        // Notify parent that model was downloaded
-        onModelDownloaded$(recommendedModel.variant.filename);
-
-        // Auto-close modal after successful download
-        onClose$();
+        await finishFirstModel$();
       } catch (err) {
         console.error('[WelcomeModal] Download failed:', err);
         error.value = getUserFriendlyErrorMessage(err);
       } finally {
         isDownloading.value = false;
         downloadProgress.value = null;
+      }
+    });
+
+    // Reset state when the modal opens - and pick the download back up: a
+    // .part on disk resumes through the same call (the engine continues it
+    // with a range request); a download the engine is STILL running (the
+    // page changed mid-way) is attached to, never started twice.
+    // eslint-disable-next-line qwik/no-use-visible-task
+    useVisibleTask$(async ({ track, cleanup }) => {
+      track(() => isOpen);
+      if (!isOpen) return;
+      error.value = null;
+      downloadProgress.value = null;
+      const filename = recommendedModel.variant.filename;
+      const st = await modelManager.downloadStatus(filename);
+      if (st.downloading) {
+        resumed.value = true;
+        isDownloading.value = true;
+        if (st.total_bytes > 0) {
+          downloadProgress.value = {
+            filename,
+            downloaded: st.downloaded_bytes,
+            total: st.total_bytes,
+            percent: Math.floor((st.downloaded_bytes / st.total_bytes) * 100),
+          } as DownloadProgress;
+        }
+        const unProgress = await listen<DownloadProgress>('model-download-progress', (e) => {
+          if (e.payload.filename === filename) downloadProgress.value = e.payload;
+        });
+        const unDone = await listen<{ filename: string }>('model-download-complete', async (e) => {
+          if (e.payload.filename !== filename) return;
+          try {
+            await finishFirstModel$();
+          } finally {
+            isDownloading.value = false;
+          }
+        });
+        cleanup(() => {
+          unProgress();
+          unDone();
+        });
+        return;
+      }
+      if (st.has_partial) {
+        resumed.value = true;
+        void handleDownload$();
       }
     });
 
@@ -272,10 +314,16 @@ export const WelcomeModal = component$<WelcomeModalProps>(
                       deliberately NO link and no second button: the
                       welcome's single job is the first offline download,
                       and nothing here may route away from it. */}
-                  {!recommendedModel.hasGPU && (
+                  {recommendedModel.tight && (
+                    <p class="mt-2 text-xs text-amber-500">
+                      Expect slow answers on this machine. For fast ones, the optional plan adds GPT, Grok, Kimi, DeepSeek and more, running online at full speed on any computer - every price shown up front, in Settings after this download.
+                    </p>
+                  )}
+                  {!recommendedModel.hasGPU && !recommendedModel.tight && (
                     <p class="mt-2 text-xs text-[var(--text-muted)]">
-                      And later, if you ever want more: an optional plan adds
-                      online models that run at full speed on any machine.
+                      And whenever you want more: the optional plan adds GPT,
+                      Grok, Kimi, DeepSeek and more, running online at full
+                      speed on any machine, every price shown up front.
                       Everything offline stays free and private either way.
                     </p>
                   )}
@@ -300,7 +348,7 @@ export const WelcomeModal = component$<WelcomeModalProps>(
                 <div class="flex items-center gap-3 mb-3 justify-center">
                   <div class="w-5 h-5 border-2 border-[var(--text-primary)] border-t-transparent rounded-full animate-spin" />
                   <span class="text-base font-medium text-[var(--text-primary)]">
-                    Downloading {modelDisplayName}...
+                    {resumed.value ? `Continuing your download of ${modelDisplayName}...` : `Downloading ${modelDisplayName}...`}
                   </span>
                 </div>
                 {downloadProgress.value && (
@@ -328,13 +376,6 @@ export const WelcomeModal = component$<WelcomeModalProps>(
                   <LuHardDriveDownload class="w-6 h-6" />
                   Download {modelDisplayName}
                 </LiquidMetalButton>
-
-                <button
-                  onClick$={() => (window.location.href = '/setup')}
-                  class="w-full py-3 text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors text-sm"
-                >
-                  Or browse all available models →
-                </button>
 
                 {/* Returning users must learn their world is recoverable
                     BEFORE they start chatting - this modal is the only
