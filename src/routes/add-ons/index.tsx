@@ -10,7 +10,6 @@ import { LuFolderOpen, LuPuzzle, LuSparkles, LuChevronRight } from "@qwikest/ico
 import AppHeader from "../../components/AppHeader";
 import { useHeaderWorkspace } from "../../hooks/useHeaderWorkspace";
 import { listSkills } from "../../utils/skills";
-import { getArchetypeTemplates } from "../../data/bundled-archetypes";
 
 export default component$(() => {
   const nav = useNavigate();
@@ -54,8 +53,8 @@ export default component$(() => {
       id: "characters",
       icon: LuSparkles,
       title: "Characters",
-      blurb: "Ready-made starting points for a new AI - a voice, a role, a look. Pick one and make it yours.",
-      meta: `${getArchetypeTemplates().length} characters`,
+      blurb: "Complete AIs ready to become yours - a personality, a voice, a portrait and a starting memory. Made by Flowsta, signed, free.",
+      meta: "8 characters",
       href: "/add-ons/characters",
     },
   ];

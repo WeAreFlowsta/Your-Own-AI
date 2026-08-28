@@ -127,9 +127,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   folders) shows "N skills" on its pill in the header.
 - yourownai:// links open the app at the matching page; a skills link
   arrives with the source filled in, ready to add.
-- Characters. Every built-in personality on one shelf, each with "Make an
-  AI from this" - New AI opens with that character chosen. A character is
-  a starting point you stamp an AI from; the AI is then yours in Your AIs.
+- Characters. The eight from yourownai.net on one shelf - complete AIs
+  with a personality, a portrait and starting memories, signed by Flowsta.
+  "Make it mine" creates the AI here, the same way Import AI does, and it
+  lives in Your AIs from then on; the shelf stays for the next one.
 - Add-ons has its own place in the menu: Projects, Skills, Characters, and
   the kinds that follow.
 

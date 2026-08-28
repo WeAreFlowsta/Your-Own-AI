@@ -205,8 +205,6 @@ export default component$(() => {
   const isDeleteAiModalOpen = useSignal(false);
   const isLastActiveAiModalOpen = useSignal(false);
   const editingAi = useSignal<UserDefinedAI | null>(null);
-  // Character preset for New AI (from Add-ons > Characters), else the default.
-  const newAiCharacter = useSignal<string | null>(null);
   const aiToDelete = useSignal<{ id: string; name: string } | null>(null);
   const cardVersion = useSignal(0);
   const lastActiveAiName = useSignal("");
@@ -372,25 +370,6 @@ export default component$(() => {
 
   const handleCreateNewAi = $(() => {
     editingAi.value = null;
-    newAiCharacter.value = null;
-    isAiModalOpen.value = true;
-  });
-
-  // Arriving from Add-ons > Characters ("Make an AI from this"): open New AI
-  // with that character chosen. Handed over in sessionStorage - query
-  // params do not survive the static adapter inside Tauri.
-  // eslint-disable-next-line qwik/no-use-visible-task
-  useVisibleTask$(() => {
-    let id: string | null = null;
-    try {
-      id = sessionStorage.getItem("newAiFromCharacter");
-      if (id) sessionStorage.removeItem("newAiFromCharacter");
-    } catch {
-      id = null;
-    }
-    if (!id) return;
-    editingAi.value = null;
-    newAiCharacter.value = id;
     isAiModalOpen.value = true;
   });
 
@@ -727,7 +706,6 @@ export default component$(() => {
             cardVersion.value++;
           })}
           editingAi={editingAi.value}
-          initialArchetypeId={newAiCharacter.value}
           currentDisplayableThumbnailUrl={
             editingAi.value
               ? (aiData.thumbnailObjectUrls[editingAi.value.id] &&
