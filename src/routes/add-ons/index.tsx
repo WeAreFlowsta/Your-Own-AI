@@ -6,7 +6,7 @@
 
 import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
 import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
-import { LuFolderOpen, LuPuzzle, LuSparkles, LuChevronRight } from "@qwikest/icons/lucide";
+import { LuFolderOpen, LuPuzzle, LuSparkles, LuWrench, LuChevronRight } from "@qwikest/icons/lucide";
 import AppHeader from "../../components/AppHeader";
 import { useHeaderWorkspace } from "../../hooks/useHeaderWorkspace";
 import { listSkills } from "../../utils/skills";
@@ -48,6 +48,14 @@ export default component$(() => {
       blurb: "What your AIs know how to do. A skill is a folder of instructions an AI reads when the work calls for it.",
       meta: skillCount.value === null ? "" : skillCount.value === 0 ? "None yet" : `${skillCount.value} installed`,
       href: "/add-ons/skills",
+    },
+    {
+      id: "tools",
+      icon: LuWrench,
+      title: "Tools",
+      blurb: "Programs your AIs can work in - Blender, a browser, a 3D printer, your smart home. Chosen per AI, every action approved by you.",
+      meta: "In projects",
+      href: "/add-ons/mcp",
     },
     {
       id: "characters",

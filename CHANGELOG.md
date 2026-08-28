@@ -99,6 +99,12 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   answers at once.
 
 ### Add-ons
+- Tools (Add-ons > Tools): MCP servers your AIs can work in during a
+  project - Blender first, with a one-button setup that checks what it
+  needs and fetches the server only when you say so; or add any server of
+  your own (a program to run, or a local address). Chosen per AI in the
+  new Tools section, handed to the agent for that session; every action
+  goes through the approve step.
 - Share it with everyone. An AI's Export dialog is now two choices, Share
   publicly or Export to file, both signed with your Flowsta name (the Vault
   status sits under them); a skill's card offers the same share. Both go to

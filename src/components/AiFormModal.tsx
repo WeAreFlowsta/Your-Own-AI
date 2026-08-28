@@ -32,6 +32,7 @@ import {
   LuImagePlus,
   LuFileText,
   LuPuzzle,
+  LuWrench,
   LuGlobe,
   LuFileDown,
   LuLock,
@@ -43,6 +44,7 @@ import { autoOptions, offeredOnlineModels } from '../utils/modelOptions';
 import { ImageCropModal } from './ImageCropModal';
 import { KnowledgeSection } from './KnowledgeSection';
 import { listSkills, tokensLabel, type SkillInfo } from '../utils/skills';
+import { listMcpServers, mcpSummary, type McpServer } from '../utils/mcp';
 import { ThumbnailGalleryModal } from './ThumbnailGalleryModal';
 import type { GalleryThumb } from '../data/thumbnail-gallery';
 import { buildAiPack, signAiPack, aiPackFilename } from '../utils/aiPack';
@@ -104,9 +106,11 @@ const AiFormModal = component$<AiFormModalProps>(
       localPreviewOverride: null as string | null,
       originalImageSrc: null as string | null,
       showCropModal: false,
-      activeSection: 'basics' as 'basics' | 'behaviour' | 'details' | 'knowledge' | 'skills' | 'appearance',
+      activeSection: 'basics' as 'basics' | 'behaviour' | 'details' | 'knowledge' | 'skills' | 'appearance' | 'tools',
       // Skills chosen for this AI (none unless chosen).
       skills: [] as string[],
+      mcp: [] as string[],
+      installedMcp: [] as McpServer[],
       installedSkills: [] as SkillInfo[],
       skillFilter: '',
       knowledgeDocs: [] as import('../utils/transcriptMemory').KnowledgeDocument[],
@@ -126,6 +130,7 @@ const AiFormModal = component$<AiFormModalProps>(
       track(() => isOpen);
       if (!isOpen) return;
       store.installedSkills = await listSkills();
+      store.installedMcp = await listMcpServers();
     });
 
     const thumbnailFile = useSignal<File | null>(null);
@@ -407,6 +412,7 @@ const AiFormModal = component$<AiFormModalProps>(
 
         const templates = getArchetypeTemplates();
         store.skills = [];
+        store.mcp = [];
 
         if (editingAi) {
           void loadShareStatus();
@@ -419,6 +425,7 @@ const AiFormModal = component$<AiFormModalProps>(
           store.askBlurb = editingAi.askBlurb || '';
           store.useEmojis = editingAi.useEmojis ?? false;
           store.skills = Array.isArray(editingAi.skills) ? [...editingAi.skills] : [];
+          store.mcp = Array.isArray(editingAi.mcp) ? [...editingAi.mcp] : [];
 
           const defaultDescription = generateDefaultDescription(
             editingAi.name,
@@ -611,6 +618,7 @@ const AiFormModal = component$<AiFormModalProps>(
           askBlurb: store.askBlurb.trim(),
           useEmojis: store.useEmojis,
           skills: store.skills,
+          mcp: store.mcp,
         };
 
         if (editingAi) {
@@ -726,6 +734,7 @@ const AiFormModal = component$<AiFormModalProps>(
                   { id: 'details', label: 'Details', icon: LuFileText },
                   { id: 'knowledge', label: 'Knowledge', icon: LuBookOpen },
                   { id: 'skills', label: 'Skills', icon: LuPuzzle },
+                  { id: 'tools', label: 'Tools', icon: LuWrench },
                   { id: 'appearance', label: 'Appearance', icon: LuImagePlus },
                 ].map((sec) => {
                   const Icon = sec.icon;
@@ -1295,6 +1304,51 @@ const AiFormModal = component$<AiFormModalProps>(
             </>)}
             {(!editingAi || store.activeSection === 'knowledge') && editingAi && (
               <KnowledgeSection aiId={editingAi.id} store={store} />
+            )}
+            {editingAi && store.activeSection === 'tools' && (
+              <div class="space-y-3">
+                <p class="block text-sm font-medium text-[var(--text-secondary)]">Tools</p>
+                <p class="text-sm text-[var(--text-muted)]">
+                  Programs this AI may use in a project: Blender, a browser, a printer, your smart home. Tick the ones this
+                  AI should carry; every tool call goes through your approve step, like a file edit.
+                </p>
+                {store.installedMcp.length === 0 ? (
+                  <p class="text-sm text-[var(--text-secondary)]">
+                    No tools added yet.{' '}
+                    <a href="/add-ons/mcp" class="text-[var(--text-link)] hover:underline">Add some in Add-ons</a>.
+                  </p>
+                ) : (
+                  <>
+                    <p class="text-xs text-[var(--text-muted)]">
+                      {store.mcp.length} of {store.installedMcp.length} chosen · used in projects only for now
+                    </p>
+                    <div class="max-h-64 overflow-y-auto space-y-1.5 pr-1">
+                      {store.installedMcp.map((t) => {
+                        const on = store.mcp.includes(t.name);
+                        return (
+                          <label key={t.name} class="flex items-start gap-2 text-sm text-[var(--text-primary)]">
+                            <input
+                              type="checkbox"
+                              checked={on}
+                              onChange$={() => {
+                                store.mcp = on ? store.mcp.filter((n) => n !== t.name) : [...store.mcp, t.name];
+                              }}
+                              class="mt-0.5"
+                            />
+                            <span class="min-w-0">
+                              <span class="font-medium">{t.name}</span>
+                              {t.description && (
+                                <span class="block text-xs text-[var(--text-secondary)] line-clamp-2">{t.description}</span>
+                              )}
+                              <span class="block text-xs text-[var(--text-muted)] truncate">{mcpSummary(t)}</span>
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
             )}
             {editingAi && store.activeSection === 'skills' && (
               <div class="space-y-3">

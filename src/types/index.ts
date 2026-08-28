@@ -26,6 +26,7 @@ export interface UserDefinedAI {
   defaultMode?: TurnMode;  // the turn mode this AI defaults to (chat unless e.g. a report/coding AI)
   useEmojis?: boolean;  // Whether to use emojis in responses
   skills?: string[];  // skills chosen for this AI (none unless chosen)
+  mcp?: string[];  // MCP servers (Add-ons > Tools) this AI carries into project sessions
   agentPubKey?: string;  // Holochain agent public key (set on first provisioning)
   archivedAt?: number;  // ms epoch when the AI was archived (set on archive, cleared on restore)
 }
@@ -42,6 +43,7 @@ export interface CreateUserAiData {
   askBlurb?: string;
   useEmojis?: boolean;
   skills?: string[];
+  mcp?: string[];
 }
 
 export interface UpdateUserAiData {
@@ -56,6 +58,7 @@ export interface UpdateUserAiData {
   askBlurb?: string;
   useEmojis?: boolean;
   skills?: string[];
+  mcp?: string[];
 }
 
 /** The AI's resting length lean — a soft default, not a cap. */

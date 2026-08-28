@@ -37,6 +37,7 @@ mod process_ext;           // Windows: hide sidecar consoles + kill-on-close job
 mod instance_guard;        // single-instance port lock + orphan-process sweep
 mod clipboard;
 mod skills;               // Add-ons > Skills: SKILL.md folders the AIs read
+mod mcp;                  // Add-ons > Tools: MCP servers an AI carries into a project session
 mod checks;               // Projects: the project's own checks run before a turn ends (agent Stop hook)             // Rust-side copy (WebView2 denies navigator.clipboard)
 
 use llm::LLMState;
@@ -688,6 +689,11 @@ pub fn run() {
             skills::skills_check_update,
             skills::skills_update,
             skills::skills_in_folder,
+            mcp::mcp_list,
+            mcp::mcp_add,
+            mcp::mcp_remove,
+            mcp::mcp_which,
+            mcp::mcp_fetch_git,
             skills::skills_pack_zip,
             flowsta::share_submit,
         ])

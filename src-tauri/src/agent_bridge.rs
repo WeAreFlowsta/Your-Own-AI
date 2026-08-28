@@ -304,6 +304,9 @@ pub async fn start_build_agent(
     ai_label: Option<String>,
     // Permission mode for THIS session: "ask" (default) | "auto" | "all".
     permission_mode: Option<String>,
+    // MCP servers this AI carries (names from Add-ons > Tools); resolved
+    // here and handed to the agent on session/new beside project memory.
+    mcp_names: Option<Vec<String>>,
 ) -> Result<(), String> {
     // One agent at a time: replace any previous instance. Bumping the
     // generation FIRST makes the old process's reader stand down - its
@@ -394,6 +397,13 @@ pub async fn start_build_agent(
     );
     let session_auto_mode = auto_mode;
     let session_approve_all = approve_all;
+    let session_mcp = crate::mcp::acp_entries(&app_handle, &mcp_names.unwrap_or_default());
+    if !session_mcp.is_empty() {
+        log::info!(
+            "[agent] MCP servers for this session: {}",
+            session_mcp.iter().filter_map(|v| v["name"].as_str()).collect::<Vec<_>>().join(", ")
+        );
+    }
     let reader_app = app_handle.clone();
     tauri::async_runtime::spawn(async move {
         let mut exit_code: Option<i32> = None;
@@ -409,7 +419,7 @@ pub async fn start_build_agent(
                     let Ok(msg) = serde_json::from_str::<Value>(&text) else {
                         continue;
                     };
-                    handle_agent_message(&reader_app, &workspace, &session_model, &memory_identity, session_auto_mode, session_approve_all, msg).await;
+                    handle_agent_message(&reader_app, &workspace, &session_model, &memory_identity, &session_mcp, session_auto_mode, session_approve_all, msg).await;
                 }
                 CommandEvent::Stderr(line) => {
                     if !stale {
@@ -471,6 +481,7 @@ async fn handle_agent_message(
     workspace: &str,
     session_model: &Option<String>,
     memory_identity: &(String, String),
+    extra_mcp: &[Value],
     session_auto_mode: bool,
     session_approve_all: bool,
     msg: Value,
@@ -547,7 +558,7 @@ async fn handle_agent_message(
             // the moment it learns them (remember_for_project) and can read
             // what's already known. Served by our own :11435; the headers
             // carry the project + the writing AI's identity.
-            let mcp_servers = if memory_identity.0.is_empty() {
+            let mut mcp_servers = if memory_identity.0.is_empty() {
                 json!([])
             } else {
                 json!([{
@@ -561,6 +572,10 @@ async fn handle_agent_message(
                     ]
                 }])
             };
+            // The AI's own tools (Add-ons > Tools) ride beside project memory.
+            if let Some(arr) = mcp_servers.as_array_mut() {
+                arr.extend(extra_mcp.iter().cloned());
+            }
             log::info!("[agent] initialized in {}ms - creating session", startup_ms(app));
             let request = json!({
                 "jsonrpc": "2.0",

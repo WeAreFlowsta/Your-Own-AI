@@ -871,6 +871,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
         agentKey: props.selectedAi.value.aiConfig?.agentPubKey ?? null,
         aiLabel: props.selectedAi.value.label ?? null,
         permissionMode: state.permissionMode,
+        // Tools this AI carries (Add-ons > Tools) - the bridge resolves them.
+        mcpNames: props.selectedAi.value.aiConfig?.mcp ?? [],
       });
     } catch (err) {
       state.status = "idle";
