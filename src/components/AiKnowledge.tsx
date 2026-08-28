@@ -452,7 +452,7 @@ export default component$<Props>(({ aiId, aiName }) => {
                 <LiquidMetalButton
                   onClick$={$(async () => {
                     const { openUrl } = await import("@tauri-apps/plugin-opener");
-                    await openUrl("https://flowsta.com/vault/");
+                    await openUrl("https://flowsta.com/vault/?from=app&app=your-own-ai");
                   })}
                   disabled={exporting.value}
                   class="flex items-center justify-center gap-2 px-4 py-2 text-sm"

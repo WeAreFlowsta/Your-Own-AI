@@ -2,7 +2,7 @@
  * Online Models page.
  *
  * Frontier models (e.g. Claude) reached through Flowsta's privacy-preserving
- * passthrough proxy. Local features never need any of this — online models are
+ * passthrough proxy. Local features never need any of this - online models are
  * the one Pro feature gated behind a Flowsta sign-in (via Vault) + a plan.
  *
  * States: no Vault → get Vault; Vault locked → unlock; signed out → sign in
@@ -56,10 +56,10 @@ interface OnlineModel {
   display_name: string;
   description: string;
   context_window?: number;
-  category?: string; // primary shelf — "chat" | "web_search" | "coding"
+  category?: string; // primary shelf - "chat" | "web_search" | "coding"
   categories?: string[]; // every shelf this model belongs to (newer catalogs)
-  released?: string; // ISO date the provider shipped it — drives "Newest"
-  pricing?: OnlinePricing; // USD, margin applied — what the user pays
+  released?: string; // ISO date the provider shipped it - drives "Newest"
+  pricing?: OnlinePricing; // USD, margin applied - what the user pays
 }
 
 const SORT_OPTIONS = [
@@ -104,7 +104,7 @@ const AUTO_DEFAULTS: Record<string, string> = {
   'online:gpt-5.6-terra': 'Auto pick · hard questions',
 };
 
-const VAULT_DOWNLOAD_URL = 'https://flowsta.com/vault';
+const VAULT_DOWNLOAD_URL = 'https://flowsta.com/vault/?from=app&app=your-own-ai';
 
 function formatContext(n?: number): string | null {
   if (!n || n <= 0) return null;
@@ -115,7 +115,7 @@ function fmtUsd(n: number): string {
   return `$${n.toFixed(2)}`;
 }
 
-// Per-search fees are sub-cent — keep precision so they don't round to $0.01.
+// Per-search fees are sub-cent - keep precision so they don't round to $0.01.
 function fmtUsdSmall(n: number): string {
   if (n >= 0.01) return `$${n.toFixed(2)}`;
   return `$${n.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`;
@@ -185,9 +185,9 @@ export const OnlineModels = component$(() => {
     } catch (e) {
       const msg = String(e);
       if (msg.includes('vault_locked')) {
-        store.error = 'Your Vault is locked — unlock it and try again.';
+        store.error = 'Your Vault is locked - unlock it and try again.';
       } else if (msg.includes('vault_not_found')) {
-        store.error = "Flowsta Vault isn't running — start it and try again.";
+        store.error = "Flowsta Vault isn't running - start it and try again.";
       } else if (msg.includes('vault_interrupted')) {
         store.error =
           'Vault stopped responding before sign-in finished (it may have locked). Unlock Vault and try again.';
@@ -256,15 +256,15 @@ export const OnlineModels = component$(() => {
           Online Models
         </h2>
         <p class="text-sm text-[var(--text-secondary)] mb-4">
-          Powerful cloud models you reach through Flowsta — for tasks beyond what
+          Powerful cloud models you reach through Flowsta - for tasks beyond what
           your own hardware can run.
         </p>
 
         <div class="space-y-3">
           <Callout intent="premium" title="What you get" id="online-what-you-get">
             <ul class="list-disc space-y-1.5 pl-5 marker:text-[var(--text-muted)]">
-              <li>More capable than the models your own computer can run — for harder or bigger tasks.</li>
-              <li>Some can search the web for current, up-to-date answers — look for "Web" in the model name.</li>
+              <li>More capable than the models your own computer can run - for harder or bigger tasks.</li>
+              <li>Some can search the web for current, up-to-date answers - look for "Web" in the model name.</li>
             </ul>
           </Callout>
 
@@ -274,11 +274,11 @@ export const OnlineModels = component$(() => {
               <li>
                 But the message itself reaches that provider, and we can't control what
                 they do with it. If you'd rather no one outside ever sees a query, use an{' '}
-                <strong class="text-[var(--text-primary)]">Offline model</strong> — it
+                <strong class="text-[var(--text-primary)]">Offline model</strong> - it
                 never leaves your device.
               </li>
               <li>
-                Either way, your chat history — online and offline — is{' '}
+                Either way, your chat history - online and offline - is{' '}
                 <strong class="text-[var(--text-primary)]">encrypted inside Your Own AI</strong>.
                 No one can read it unless you grant access.
               </li>
@@ -302,12 +302,21 @@ export const OnlineModels = component$(() => {
       ) : !store.vault.installed ? (
         <div class="generic-container rounded-2xl p-6 mb-8 space-y-3">
           <h3 class="text-lg font-semibold text-[var(--text-primary)]">
-            Step 1 — Get Flowsta Vault
+            Online models, the most private way there is
           </h3>
           <p class="text-sm text-[var(--text-secondary)]">
-            Vault holds your Flowsta identity on your own device — no passwords on
-            servers — and is how Your Own AI signs you in. Install it, then come
-            back here.
+            Online models come with a Flowsta identity, which lives in Flowsta
+            Vault - a free app on your own computer. No password, nothing of
+            yours on our servers, and nobody can lock you out, not even us.
+            The Vault signs you in, and your name and account never travel
+            with your messages. It also backs up your AIs and conversations
+            and signs your exports.
+          </p>
+          <p class="text-xs text-[var(--text-muted)]">
+            Free, about two minutes. The Vault gives you 24 recovery words to
+            keep on paper - the only way back in, which is exactly why no one
+            can take it from you. Get it, create your identity, and come
+            back: this page notices the moment it is ready.
           </p>
           <div>
             <LiquidMetalButton onClick$={() => openUrl(VAULT_DOWNLOAD_URL)}>
@@ -317,7 +326,7 @@ export const OnlineModels = component$(() => {
               class="ml-3 text-sm text-[var(--text-link)] hover:underline"
               onClick$={refresh}
             >
-              I've installed it — check again
+              Not showing up? Check again
             </button>
           </div>
         </div>
@@ -330,7 +339,7 @@ export const OnlineModels = component$(() => {
                 Sign in to turn on online models
               </h3>
               <p class="text-sm text-[var(--text-secondary)]">
-                Online models are a Pro feature. Here's how to enable them:
+                Online models come with the optional plan. How it works:
               </p>
             </div>
           </div>
@@ -340,7 +349,7 @@ export const OnlineModels = component$(() => {
               <span class="text-[var(--text-muted)]">1.</span>
               <span>
                 <span class="text-[var(--text-primary)] font-medium">Install &amp; unlock Flowsta Vault</span>
-                {' '}— it holds your Flowsta identity on this device.
+                {' '}- it holds your Flowsta identity on this device.
                 {store.vault.installed && (
                   <span class="text-emerald-400"> ✓ installed</span>
                 )}
@@ -350,21 +359,21 @@ export const OnlineModels = component$(() => {
               <span class="text-[var(--text-muted)]">2.</span>
               <span>
                 <span class="text-[var(--text-primary)] font-medium">Sign in with Flowsta</span>
-                {' '}— Vault asks you to approve; nothing happens without your say-so.
+                {' '}- Vault asks you to approve; nothing happens without your say-so.
               </span>
             </li>
             <li class="flex gap-2">
               <span class="text-[var(--text-muted)]">3.</span>
               <span>
                 <span class="text-[var(--text-primary)] font-medium">Choose a plan</span>
-                {' '}at yourownai.net — usage is metered, no lock-in.
+                {' '}at yourownai.net - usage metered, no lock-in, every price shown up front.
               </span>
             </li>
           </ol>
 
           {!store.vault.unlocked && (
             <p class="text-sm text-amber-300 mb-3">
-              Vault is locked — unlock it, then sign in.
+              Vault is locked - unlock it, then sign in.
             </p>
           )}
 
@@ -454,13 +463,13 @@ export const OnlineModels = component$(() => {
           Available Models
         </h3>
         <p class="text-xs text-[var(--text-muted)] mb-4">
-          Pay-as-you-go — prices are per million tokens (≈ 750,000 words) and count
+          Pay-as-you-go - prices are per million tokens (≈ 750,000 words) and count
           against your plan's monthly allowance.
         </p>
 
         {store.modelsError ? (
           <p class="text-center py-8 text-sm text-[var(--text-muted)]">
-            Couldn't reach the online model catalog — check your connection and try again.
+            Couldn't reach the online model catalog - check your connection and try again.
           </p>
         ) : store.models.length === 0 ? (
           <p class="text-center py-8 text-sm text-[var(--text-muted)]">
@@ -498,7 +507,7 @@ export const OnlineModels = component$(() => {
               })}
               </div>
 
-              {/* Sort — custom dropdown (a native <select> popup is GTK-themed
+              {/* Sort - custom dropdown (a native <select> popup is GTK-themed
                   on webkit and ignores our light/dark vars). */}
               <div class="flex items-center gap-2 shrink-0">
                 <label class="text-sm text-[var(--text-muted)] whitespace-nowrap">Sort</label>

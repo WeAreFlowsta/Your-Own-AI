@@ -1453,7 +1453,7 @@ const AiFormModal = component$<AiFormModalProps>(
                     <LiquidMetalButton
                       onClick$={$(async () => {
                         const { openUrl } = await import('@tauri-apps/plugin-opener');
-                        await openUrl('https://flowsta.com/vault/');
+                        await openUrl('https://flowsta.com/vault/?from=app&app=your-own-ai');
                       })}
                       disabled={exportBusy.value}
                       class="w-full justify-center px-5 py-2 text-sm"

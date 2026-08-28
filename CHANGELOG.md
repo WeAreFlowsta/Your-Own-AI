@@ -52,6 +52,16 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   the rail says why the picture was not looked at - a line that stays
   readable after the steps fold and is kept in your records.
 
+### Flowsta Vault - the path to backups and online models
+- Settings and the Online Models page now tell the same story before the
+  click: what the Vault is (your identity on your own computer, no
+  password, nobody can lock you out), what it does for you here (backups
+  with one-click recovery, signed exports, online models the most private
+  way there is), and what it takes (free, about two minutes, 24 recovery
+  words to keep on paper). "Get Flowsta Vault" opens the handoff page that
+  says to come back to Your Own AI - both pages notice the moment the
+  Vault is ready. "Pro feature" is gone; it is the optional plan.
+
 ### First run
 - The welcome offers one model, the one graded best for this computer, and
   nothing that leads away from it. Close the app mid-download and the

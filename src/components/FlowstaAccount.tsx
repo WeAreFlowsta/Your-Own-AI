@@ -60,7 +60,7 @@ interface RestoreStats {
   knowledge_restored: number;
 }
 
-const VAULT_DOWNLOAD_URL = "https://flowsta.com/vault";
+const VAULT_DOWNLOAD_URL = "https://flowsta.com/vault/?from=app&app=your-own-ai";
 
 /**
  * Flowsta account + backups settings. Vault detection, sign in with
@@ -247,10 +247,10 @@ export default component$<FlowstaAccountProps>((props) => {
       (event) => (lastBackup.value = event.payload)
     );
     cleanup(() => unlistenBackup());
-    // Live-poll Vault state until signed in — installing or unlocking
+    // Live-poll Vault state until signed in - installing or unlocking
     // Vault updates this section without restarting the app.
     const interval = setInterval(async () => {
-      // Don't poll while a sign-in is in flight — the authenticate call
+      // Don't poll while a sign-in is in flight - the authenticate call
       // holds a long request open on Vault, and concurrent /status polls
       // pile up against it. Also stop once signed in.
       if (!session.value?.signed_in && !busy.value) await refresh();
@@ -271,9 +271,9 @@ export default component$<FlowstaAccountProps>((props) => {
     } catch (e) {
       const msg = String(e);
       if (msg.includes("vault_locked")) {
-        error.value = "Your Vault is locked — unlock it and try again.";
+        error.value = "Your Vault is locked - unlock it and try again.";
       } else if (msg.includes("vault_not_found")) {
-        error.value = "Flowsta Vault isn't running — start it and try again.";
+        error.value = "Flowsta Vault isn't running - start it and try again.";
       } else if (msg.includes("vault_interrupted")) {
         error.value =
           "Vault stopped responding before sign-in finished (it may have locked). Unlock Vault and try again.";
@@ -314,32 +314,45 @@ export default component$<FlowstaAccountProps>((props) => {
       <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela mb-1">
         Your Flowsta Account
       </h2>
-      <p class="text-sm text-[var(--text-secondary)] mb-4">
-        Everything local works without an account, forever. Connecting your
-        Flowsta Vault — on this device, no passwords on servers — adds:
+      <p class="text-sm text-[var(--text-secondary)] mb-3">
+        Everything local works without an account, forever. Flowsta Vault is
+        a free app that holds your identity on your own computer - no
+        password, nothing of yours on our servers, and nobody can lock you
+        out, not even us. Connect it and Your Own AI can:
       </p>
       {!signedIn() && (
-        <ul class="mb-4 space-y-1.5 text-sm text-[var(--text-secondary)]">
-          <li class="flex items-start gap-2">
-            <span class="text-emerald-400 mt-0.5">✓</span>
-            <span>
-              Your AI world backed up automatically — conversations, memory,
-              and AI personalities — with one-click recovery if you ever lose
-              this device.
-            </span>
-          </li>
-          <li class="flex items-start gap-2">
-            <span class="text-emerald-400 mt-0.5">✓</span>
-            <span>
-              Exports signed with your identity, so anyone can verify they
-              really came from you.
-            </span>
-          </li>
-          <li class="flex items-start gap-2">
-            <span class="text-emerald-400 mt-0.5">✓</span>
-            <span>Online frontier models, when you want them.</span>
-          </li>
-        </ul>
+        <>
+          <ul class="mb-3 space-y-1.5 text-sm text-[var(--text-secondary)]">
+            <li class="flex items-start gap-2">
+              <span class="text-emerald-400 mt-0.5">✓</span>
+              <span>
+                Back up your AI world automatically - conversations, memory,
+                and your AIs - and bring it all back on a new device with one
+                click.
+              </span>
+            </li>
+            <li class="flex items-start gap-2">
+              <span class="text-emerald-400 mt-0.5">✓</span>
+              <span>
+                Sign your exports with your identity, so anyone can verify
+                they really came from you.
+              </span>
+            </li>
+            <li class="flex items-start gap-2">
+              <span class="text-emerald-400 mt-0.5">✓</span>
+              <span>
+                Run online models the most private way there is: the Vault
+                signs you in, and your name and account never travel with
+                your messages.
+              </span>
+            </li>
+          </ul>
+          <p class="mb-4 text-xs text-[var(--text-muted)]">
+            Free, about two minutes. The Vault gives you 24 recovery words to
+            keep on paper - the only way back in, which is exactly why no one
+            can take it from you.
+          </p>
+        </>
       )}
 
       {error.value && (
@@ -353,9 +366,8 @@ export default component$<FlowstaAccountProps>((props) => {
       ) : !vault.value.installed ? (
         <div class="space-y-3">
           <p class="text-sm text-[var(--text-secondary)]">
-            All of it comes with Flowsta Vault - the free app that holds your
-            identity on your own device, no passwords on servers. Install it,
-            unlock it, and this page signs you in automatically.
+            Get the Vault, create your identity in it, and come back - this
+            page notices the moment it is ready and signs you in.
           </p>
           <LiquidMetalButton onClick$={() => openUrl(VAULT_DOWNLOAD_URL)}>
             <span class="px-5 py-2.5 text-sm">Get Flowsta Vault - free</span>
@@ -364,7 +376,7 @@ export default component$<FlowstaAccountProps>((props) => {
             class="ml-3 text-sm text-[var(--text-link)] hover:underline"
             onClick$={refresh}
           >
-            I've installed it — check again
+            Not showing up? Check again
           </button>
         </div>
       ) : !session.value?.signed_in ? (
@@ -573,7 +585,7 @@ export default component$<FlowstaAccountProps>((props) => {
         </>
       )}
 
-      {/* Backups & recovery — the CAL story. The recovery KEY is escrowed
+      {/* Backups & recovery - the CAL story. The recovery KEY is escrowed
           automatically when signed in; the copy stays precise about which
           is which. Standalone section when `section === "backups"`. */}
       {section !== "account" && (
