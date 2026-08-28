@@ -99,8 +99,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   answers at once.
 
 ### Add-ons
-- Share it with everyone. An AI's Export dialog and a skill's card now
-  offer sharing to the public add-ons directory: the app signs the pack or
+- Share it with everyone. An AI's Export dialog is now two choices, Share
+  publicly or Export to file, both signed with your Flowsta name (the Vault
+  status sits under them); a skill's card offers the same share. Both go to
+  the public add-ons directory: the app signs the pack or
   the skill folder with your Flowsta identity and files it for review
   under your Flowsta name - no GitHub account, no upload site. Once it is
   on the shelf, everyone's Characters and Skills pages list it, with your

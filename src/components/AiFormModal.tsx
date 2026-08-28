@@ -246,7 +246,7 @@ const AiFormModal = component$<AiFormModalProps>(
       });
     });
 
-    // Export AI - the whole character as a shareable pack (signed or not).
+    // Export AI - the whole character as a signed pack (file or directory).
     const exportOpen = useSignal(false);
     const exportBusy = useSignal(false);
     const exportErr = useSignal('');
@@ -277,23 +277,23 @@ const AiFormModal = component$<AiFormModalProps>(
       exportOpen.value = true;
     });
 
-    const doExport = $(async (signed: boolean) => {
+    const doExport = $(async () => {
       exportBusy.value = true;
       exportErr.value = '';
       try {
         let pack = await buildPack();
-        if (signed) pack = { ...pack, signature: await signAiPack(pack) };
+        pack = { ...pack, signature: await signAiPack(pack) };
         const path = await invoke<string>('save_text_download', {
           filename: aiPackFilename(pack),
           content: JSON.stringify(pack, null, 2),
         });
         exportOpen.value = false;
-        exportNote.value = `${signed ? 'Signed pack' : 'Pack'} saved to ${path}`;
+        exportNote.value = `Signed pack saved to ${path}`;
       } catch (e) {
         const m = e instanceof Error ? e.message : String(e);
         exportErr.value =
           m === 'vault_locked'
-            ? 'Flowsta Vault is locked — unlock it to sign.'
+            ? 'Flowsta Vault is locked - unlock it to sign.'
             : m === 'vault_not_found'
               ? 'Flowsta Vault isn\'t running.'
               : 'Couldn\'t save the pack.';
@@ -311,12 +311,14 @@ const AiFormModal = component$<AiFormModalProps>(
     const shareDescription = useSignal('');
     const shareTitle = useSignal('');
     const shareLicense = useSignal('CC-BY-4.0');
+    const shareLicenseOpen = useSignal(false);
     const shareMakerHandle = useSignal<string | null>(null);
     const openShare = $(async () => {
       shareErr.value = '';
       shareDone.value = null;
       shareDescription.value = editingAi?.description || '';
       shareTitle.value = '';
+      shareLicenseOpen.value = false;
       const maker = await currentMaker();
       shareMakerHandle.value = maker?.handle ?? null;
       const vs = await vaultState();
@@ -1505,24 +1507,47 @@ const AiFormModal = component$<AiFormModalProps>(
                       class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-xl px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none"
                     />
                     <label class="mt-3 block text-xs font-medium text-[var(--text-secondary)]">License</label>
-                    <select
-                      value={shareLicense.value}
-                      onChange$={(_, el) => { shareLicense.value = el.value; }}
-                      class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)]"
-                    >
-                      {LICENSES.map((l) => (
-                        <option key={l.id} value={l.id}>{l.label}</option>
-                      ))}
-                    </select>
+                    <div class="relative mt-1">
+                      <button
+                        type="button"
+                        class="relative w-full cursor-default rounded-full bg-[var(--bg-input)] py-2 pl-4 pr-10 text-left text-sm text-[var(--text-primary)] border border-[var(--border-subtle)] focus:outline-none"
+                        onClick$={() => { shareLicenseOpen.value = !shareLicenseOpen.value; }}
+                      >
+                        <span class="block truncate">{LICENSES.find((l) => l.id === shareLicense.value)?.label ?? shareLicense.value}</span>
+                        <span class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
+                          <LuChevronDown class="h-4 w-4 text-[var(--text-muted)]" aria-hidden="true" />
+                        </span>
+                      </button>
+                      {shareLicenseOpen.value && (
+                        <ul class="absolute z-10 mt-1 max-h-48 w-full overflow-auto rounded-2xl bg-[var(--bg-card)] py-1 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
+                          {LICENSES.map((l) => (
+                            <li
+                              key={l.id}
+                              class={`cursor-default select-none py-2 px-4 text-sm hover:bg-[var(--bg-dropdown-hover)] hover:text-[var(--text-primary)] ${
+                                shareLicense.value === l.id ? 'bg-[var(--bg-dropdown-hover)] text-[var(--text-primary)] font-medium' : 'text-[var(--text-dropdown)]'
+                              }`}
+                              onClick$={() => { shareLicense.value = l.id; shareLicenseOpen.value = false; }}
+                            >
+                              <span class="block truncate">{l.label}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
                     <p class="mt-2 text-xs text-[var(--text-muted)]">Free for everyone. Paid sharing comes later, for makers who have signed their work.</p>
                     {shareErr.value && <p class="mt-2 text-xs text-red-400">{shareErr.value}</p>}
-                    <div class="mt-4 flex flex-col gap-2">
+                    <p class="mt-4 text-xs text-[var(--text-muted)]">
+                      {shareMakerHandle.value
+                        ? `Goes out as @${shareMakerHandle.value}, signed with your Flowsta identity.`
+                        : 'Goes out under your Flowsta name - sign in first so the shelf can show who made it.'}
+                    </p>
+                    <div class="mt-2 flex flex-col gap-2">
                       <LiquidMetalButton
                         onClick$={doShare}
                         disabled={shareBusy.value || !shareMakerHandle.value}
                         class="w-full justify-center px-5 py-2 text-sm"
                       >
-                        {shareBusy.value ? 'Signing and sending...' : `Share as @${shareMakerHandle.value ?? '...'}`}
+                        {shareBusy.value ? 'Signing and sending...' : 'Share'}
                       </LiquidMetalButton>
                       <LiquidMetalButton
                         variant="secondary"
@@ -1538,71 +1563,58 @@ const AiFormModal = component$<AiFormModalProps>(
               </div>
             </div>
           )}
-          {/* Export AI dialog - signed (provenance) or plain file. */}
+          {/* Export AI dialog - two ways out, both signed; the Vault status sits under the options. */}
           {exportOpen.value && (
             <div class="absolute inset-0 z-20 flex items-center justify-center rounded-xl bg-black/60 p-6">
               <div class="w-full max-w-sm rounded-xl bg-[var(--bg-header-footer)] p-6 shadow-2xl border border-[var(--border-subtle)]">
                 <h4 class="text-base font-semibold text-[var(--text-primary)]">Export AI</h4>
                 <p class="mt-2 text-sm text-[var(--text-secondary)]">
-                  Saves {editingAi?.name} as a shareable pack: personality,
-                  appearance, and its Knowledge. Conversations and personal
-                  memories are never included.
+                  Packs up {editingAi?.name}: personality, portrait and Knowledge.
+                  Conversations and personal memories are never included. Every
+                  pack is signed with your Flowsta name, so whoever gets it can
+                  see it really came from you.
                 </p>
-                <p class="mt-2 text-xs text-[var(--text-muted)]">
-                  {exportVaultUnlocked.value
-                    ? "Signing with your Flowsta identity lets anyone who imports it see it really came from you."
-                    : exportVaultInstalled.value
-                      ? "Your Flowsta Vault is locked. Unlock it to sign - or export unsigned."
-                      : "Signing needs the Flowsta Vault app on this computer. You can still export unsigned."}
+                <div class="mt-4 flex flex-col gap-2">
+                  <LiquidMetalButton
+                    onClick$={$(async () => { exportOpen.value = false; await openShare(); })}
+                    disabled={exportBusy.value || !exportVaultUnlocked.value}
+                    class="w-full justify-center px-5 py-2 text-sm"
+                  >
+                    Share publicly
+                  </LiquidMetalButton>
+                  <LiquidMetalButton
+                    variant="secondary"
+                    onClick$={doExport}
+                    disabled={exportBusy.value || !exportVaultUnlocked.value}
+                    class="w-full justify-center px-5 py-2 text-sm"
+                  >
+                    {exportBusy.value ? 'Working...' : 'Export to file'}
+                  </LiquidMetalButton>
+                </div>
+                <p class="mt-3 text-xs text-[var(--text-muted)]">
+                  {exportVaultUnlocked.value ? (
+                    'Flowsta Vault: unlocked, ready to sign.'
+                  ) : exportVaultInstalled.value ? (
+                    <>
+                      Your Flowsta Vault is locked. Unlock it, then{' '}
+                      <button type="button" class="text-[var(--text-link)] hover:underline disabled:opacity-60" disabled={exportBusy.value} onClick$={doExportSignIn}>
+                        {exportBusy.value ? 'checking...' : 'continue'}
+                      </button>.
+                    </>
+                  ) : (
+                    <>
+                      Both need the Flowsta Vault on this computer - it signs the pack in your name.{' '}
+                      <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={$(async () => {
+                        const { openUrl } = await import('@tauri-apps/plugin-opener');
+                        await openUrl('https://flowsta.com/vault/?from=app&app=your-own-ai');
+                      })}>Get Flowsta Vault</button>
+                    </>
+                  )}
                 </p>
                 {exportErr.value && (
                   <p class="mt-2 text-xs text-red-400">{exportErr.value}</p>
                 )}
                 <div class="mt-4 flex flex-col gap-2">
-                  {exportVaultUnlocked.value ? (
-                    <LiquidMetalButton
-                      onClick$={$(() => doExport(true))}
-                      disabled={exportBusy.value}
-                      class="w-full justify-center px-5 py-2 text-sm"
-                    >
-                      {exportBusy.value ? 'Working...' : 'Export signed'}
-                    </LiquidMetalButton>
-                  ) : exportVaultInstalled.value ? (
-                    <LiquidMetalButton
-                      onClick$={doExportSignIn}
-                      disabled={exportBusy.value}
-                      class="w-full justify-center px-5 py-2 text-sm"
-                    >
-                      {exportBusy.value ? 'Working...' : "I've unlocked it — sign in"}
-                    </LiquidMetalButton>
-                  ) : (
-                    <LiquidMetalButton
-                      onClick$={$(async () => {
-                        const { openUrl } = await import('@tauri-apps/plugin-opener');
-                        await openUrl('https://flowsta.com/vault/?from=app&app=your-own-ai');
-                      })}
-                      disabled={exportBusy.value}
-                      class="w-full justify-center px-5 py-2 text-sm"
-                    >
-                      Get Flowsta Vault
-                    </LiquidMetalButton>
-                  )}
-                  <LiquidMetalButton
-                    variant="secondary"
-                    onClick$={$(() => doExport(false))}
-                    disabled={exportBusy.value}
-                    class="w-full justify-center px-5 py-2 text-sm"
-                  >
-                    Export unsigned
-                  </LiquidMetalButton>
-                  <LiquidMetalButton
-                    variant="secondary"
-                    onClick$={$(async () => { exportOpen.value = false; await openShare(); })}
-                    disabled={exportBusy.value}
-                    class="w-full justify-center px-5 py-2 text-sm"
-                  >
-                    Share it with everyone
-                  </LiquidMetalButton>
                   <LiquidMetalButton
                     variant="secondary"
                     onClick$={$(() => { exportOpen.value = false; })}
