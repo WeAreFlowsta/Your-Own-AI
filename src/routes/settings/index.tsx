@@ -3,7 +3,6 @@ import {
   useSignal,
   useVisibleTask$,
   useContext,
-  useVisibleTask$,
   Slot,
   $,
   type Signal,
