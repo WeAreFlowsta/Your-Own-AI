@@ -18,6 +18,29 @@ import type {
  * Start a new conversation for an AI agent.
  * Returns the conversation hash, or null on failure.
  */
+/**
+ * A record that lands late beats one that never lands. The conductor can be
+ * still starting (first minute after launch) or too busy to answer a zome
+ * call in time (a heavy engine turn, Blender): both are transient - retry
+ * with a pause, up to about 40 s. Anything else fails at once.
+ */
+const TRANSIENT = /still starting|timeout|timed out|no answer|websocket|not ready|connection refused/i;
+async function withTransientRetry<T>(label: string, run: () => Promise<T>): Promise<T | null> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await run();
+    } catch (e) {
+      const text = String(e);
+      if (!TRANSIENT.test(text) || attempt >= 8) {
+        console.warn(`[Holochain] ${label} failed${attempt > 1 ? ` after ${attempt} attempts` : ""}:`, e);
+        return null;
+      }
+      if (attempt === 1) console.log(`[Holochain] ${label}: records not answering yet - retrying (${text.slice(0, 80)})`);
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+  }
+}
+
 export async function startConversation(
   agentKey: string,
   aiName: string,
@@ -25,18 +48,15 @@ export async function startConversation(
   title?: string,
   source?: string,
 ): Promise<string | null> {
-  try {
-    return await invoke<string>("start_conversation", {
+  return withTransientRetry("start conversation", () =>
+    invoke<string>("start_conversation", {
       agentKey,
       aiName,
       model,
       title: title ?? null,
       source: source ?? null,
-    });
-  } catch (e) {
-    console.warn("[Holochain] Failed to start conversation:", e);
-    return null;
-  }
+    }),
+  );
 }
 
 /**
@@ -83,10 +103,10 @@ export async function recordMessage(
    *  Client-side schema, encrypted before the zome sees it - no DNA change. */
   agentExtras?: { agentLog?: unknown; folderPath?: string },
 ): Promise<string | null> {
-  try {
-    // Returns the entry's Holochain action hash (hex) — used as the
-    // provenance anchor when memory extraction learns a fact from this turn.
-    const actionHash = await invoke<string>("record_transcript_entry", {
+  // Returns the entry's Holochain action hash (hex) — used as the
+  // provenance anchor when memory extraction learns a fact from this turn.
+  return withTransientRetry("record message", () =>
+    invoke<string>("record_transcript_entry", {
       agentKey,
       conversationHash,
       role,
@@ -103,12 +123,8 @@ export async function recordMessage(
       provenance: provenance ?? null,
       agentLog: agentExtras?.agentLog ?? null,
       folderPath: agentExtras?.folderPath ?? null,
-    });
-    return actionHash;
-  } catch (e) {
-    console.warn("[Holochain] Failed to record message:", e);
-    return null;
-  }
+    }),
+  );
 }
 
 /**
