@@ -73,7 +73,7 @@ export const RequirementLine = component$<RequirementLineProps>((props) => {
       {props.have === null && (
         <span class="inline-flex flex-wrap items-center gap-2">
           <button type="button" class="text-[var(--text-link)] hover:underline disabled:opacity-60" disabled={!!busy.value} onClick$={act}>
-            {busy.value ? busy.value : plan.value ? (plan.value.mode === "run" ? "Run it" : plan.value.mode === "terminal" ? "Open terminal" : "Open download page") : "Install"}
+            {busy.value ? busy.value : plan.value ? (plan.value.mode === "run" ? "Run it here" : plan.value.mode === "terminal" ? "Open terminal" : "Open download page") : "Install"}
           </button>
           {busy.value && <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={recheck}>Check again</button>}
           {plan.value && !busy.value && (

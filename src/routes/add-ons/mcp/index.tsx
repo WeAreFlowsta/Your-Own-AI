@@ -24,6 +24,8 @@ import {
   addMcpServer,
   removeMcpServer,
   whichProgram,
+  requirementPlan,
+  requirementInstall,
   fetchGit,
   mcpUsedBy,
   mcpSummary,
@@ -32,6 +34,7 @@ import {
   toolConfigStatus,
   type McpPreset,
   type McpServer,
+  type RequirementPlan,
 } from "../../../utils/mcp";
 
 export default component$(() => {
@@ -50,6 +53,10 @@ export default component$(() => {
     busy: "" as string, // preset id or "manual" while adding
     // preset readiness: program -> path | null (checked on open)
     have: {} as Record<string, string | null>,
+    // "Install what it needs": the preset whose plan panel is open, its plans, progress
+    installFor: "" as string,
+    installPlans: [] as { program: string; label: string; install: string; plan: RequirementPlan }[],
+    installStage: "" as string,
     confirmRemove: "" as string,
     // settings form: which tool, the draft values, and what is filled in
     configFor: "" as string,
@@ -167,6 +174,69 @@ export default component$(() => {
 
   const handleNewQuestion = $(() => { nav("/chat"); });
   const handleModelsClick = $(() => { nav("/setup"); });
+
+  // One button for everything a tool needs: show every step first (what
+  // runs, from where), then run them in order; things that need a password
+  // open the terminal; when all are present, carry on to the add itself.
+  const openInstallAll = $(async (id: string) => {
+    const preset = store.presets.find((p) => p.id === id);
+    if (!preset) return;
+    store.error = "";
+    store.installStage = "";
+    const missing = preset.needs.filter((n) => store.have[n.program] === null);
+    const plans = [];
+    for (const n of missing) {
+      try { plans.push({ ...n, plan: await requirementPlan(n.program) }); }
+      catch (e) { store.error = e instanceof Error ? e.message : String(e); return; }
+    }
+    store.installPlans = plans;
+    store.installFor = id;
+  });
+  const runInstallAll = $(async () => {
+    const id = store.installFor;
+    const preset = store.presets.find((p) => p.id === id);
+    if (!preset) return;
+    store.busy = id;
+    let needsTerminal = false;
+    try {
+      for (const item of store.installPlans) {
+        if (item.plan.mode === "run") {
+          store.installStage = `Installing ${item.program}...`;
+          await requirementInstall(item.program);
+        } else if (item.plan.mode === "terminal") {
+          const { invoke } = await import("@tauri-apps/api/core");
+          await invoke("open_in_terminal", { command: item.plan.command, cwd: null });
+          needsTerminal = true;
+        } else {
+          const { openUrl } = await import("@tauri-apps/plugin-opener");
+          await openUrl(item.plan.command || item.install);
+          needsTerminal = true;
+        }
+      }
+      for (const n of preset.needs) store.have[n.program] = await whichProgram(n.program);
+      const stillMissing = preset.needs.filter((n) => store.have[n.program] === null);
+      if (stillMissing.length) {
+        store.installStage = needsTerminal
+          ? `Finish ${stillMissing.map((n) => n.program).join(", ")} in your terminal, then press Check again.`
+          : `${stillMissing.map((n) => n.program).join(", ")} still not found - open a new terminal or restart the app, then Check again.`;
+        return;
+      }
+      store.installFor = "";
+      store.installStage = "";
+      store.busy = "";
+      await addPreset(id);
+    } catch (e) {
+      store.error = e instanceof Error ? e.message : String(e);
+    } finally {
+      if (store.busy === id) store.busy = "";
+    }
+  });
+  const recheckPreset = $(async (id: string) => {
+    const preset = store.presets.find((p) => p.id === id);
+    if (!preset) return;
+    for (const n of preset.needs) store.have[n.program] = await whichProgram(n.program);
+    if (!preset.needs.some((n) => store.have[n.program] === null)) { store.installFor = ""; store.installStage = ""; }
+  });
 
   const addPreset = $(async (id: string) => {
     const preset = store.presets.find((p) => p.id === id);
@@ -382,6 +452,30 @@ export default component$(() => {
                       Adding fetches the server ({p.fetch.size}) from {p.fetch.url.replace(/^https:\/\//, "").replace(/\.git$/, "")} into your home folder.
                     </p>
                   )}
+                  {store.installFor === pid && (
+                    <div class="rounded-xl border border-[var(--text-link)]/40 bg-[var(--bg-input)] p-3 text-xs">
+                      <p class="font-medium text-[var(--text-primary)]">This will:</p>
+                      <ul class="mt-1.5 space-y-1.5">
+                        {store.installPlans.map((it) => (
+                          <li key={it.program} class="text-[var(--text-secondary)]">
+                            <span class="font-medium text-[var(--text-primary)]">{it.program}</span>
+                            {" - "}
+                            {it.plan.mode === "run" ? "runs here: " : it.plan.mode === "terminal" ? "opens your terminal (needs your password): " : "opens the download page: "}
+                            {it.plan.note}{" "}
+                            <code class="rounded bg-[var(--bg-card)] px-1 py-0.5 text-[10px] break-all">{it.plan.command || it.install}</code>
+                          </li>
+                        ))}
+                      </ul>
+                      {store.installStage && <p class="mt-2 text-amber-500">{store.installStage}</p>}
+                      <div class="mt-3 flex flex-wrap gap-2">
+                        <LiquidMetalButton onClick$={runInstallAll} disabled={!!store.busy} class="h-8 px-3 text-xs">
+                          {store.busy === pid ? "Installing..." : "Install"}
+                        </LiquidMetalButton>
+                        <LiquidMetalButton variant="secondary" onClick$={() => recheckPreset(pid)} disabled={!!store.busy} class="h-8 px-3 text-xs">Check again</LiquidMetalButton>
+                        <LiquidMetalButton variant="secondary" onClick$={() => { store.installFor = ""; store.installStage = ""; }} disabled={!!store.busy} class="h-8 px-3 text-xs">Cancel</LiquidMetalButton>
+                      </div>
+                    </div>
+                  )}
                   <div class="flex items-center justify-between gap-2 mt-auto">
                     <span class="text-xs text-[var(--text-muted)]">
                       {installed ? "In your tools below - give it to an AI" : ""}
@@ -391,13 +485,13 @@ export default component$(() => {
                     ) : (
                       <LiquidMetalButton
                         variant={installed ? "secondary" : "primary"}
-                        disabled={!!store.busy || checking || missing.length > 0}
-                        onClick$={() => addPreset(pid)}
+                        disabled={!!store.busy || checking}
+                        onClick$={() => (missing.length ? openInstallAll(pid) : addPreset(pid))}
                         class="flex items-center gap-1.5 h-9 px-4 text-sm"
                         title={installed ? "Fetch the latest source again" : undefined}
                       >
                         {store.busy === p.id && <LuLoader class="h-4 w-4 animate-spin" />}
-                        {installed ? "Update source" : missing.length ? "Install what it needs first" : p.fetch ? "Fetch and add" : "Add"}
+                        {installed ? "Update source" : missing.length ? "Install what it needs" : p.fetch ? "Fetch and add" : "Add"}
                       </LiquidMetalButton>
                     )}
                   </div>
