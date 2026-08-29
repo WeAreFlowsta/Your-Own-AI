@@ -14,6 +14,8 @@ export const LICENSES = [
   { id: "CC0-1.0", label: "CC0 - public domain, no credit needed" },
   { id: "MIT", label: "MIT" },
   { id: "Apache-2.0", label: "Apache 2.0" },
+  { id: "GPL-3.0-or-later", label: "GPL 3.0 or later" },
+  { id: "GPL-2.0-or-later", label: "GPL 2.0 or later" },
 ];
 
 export interface Maker {
