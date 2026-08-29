@@ -8,7 +8,7 @@
  */
 import { component$, useSignal, useStore, useVisibleTask$, $ } from "@builder.io/qwik";
 import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
-import { LuWrench, LuTrash2, LuLoader, LuChevronLeft, LuUsers, LuAlertTriangle, LuCheck } from "@qwikest/icons/lucide";
+import { LuWrench, LuTrash2, LuChevronLeft, LuUsers, LuAlertTriangle, LuCheck, LuLoader2 } from "@qwikest/icons/lucide";
 import AppHeader from "../../../components/AppHeader";
 import { useHeaderWorkspace } from "../../../hooks/useHeaderWorkspace";
 import { useAiData, useAiDataActions } from "../../../contexts/AiDataContext";
@@ -27,6 +27,8 @@ import {
   requirementPlan,
   requirementInstall,
   fetchGit,
+  checkToolSource,
+  updateToolSource,
   mcpUsedBy,
   mcpSummary,
   readyPresets,
@@ -57,6 +59,8 @@ export default component$(() => {
     installFor: "" as string,
     installPlans: [] as { program: string; label: string; install: string; plan: RequirementPlan }[],
     installStage: "" as string,
+    // explicit source checks: preset id -> "checking" | "up-to-date" | "behind" | "updating" | "updated"
+    sourceState: {} as Record<string, string>,
     confirmRemove: "" as string,
     // settings form: which tool, the draft values, and what is filled in
     configFor: "" as string,
@@ -229,6 +233,28 @@ export default component$(() => {
       store.error = e instanceof Error ? e.message : String(e);
     } finally {
       if (store.busy === id) store.busy = "";
+    }
+  });
+  const checkSource = $(async (id: string) => {
+    store.error = "";
+    store.sourceState[id] = "checking";
+    try {
+      const st = await checkToolSource(id);
+      store.sourceState[id] = st.behind ? "behind" : "up-to-date";
+    } catch (e) {
+      store.sourceState[id] = "";
+      store.error = e instanceof Error ? e.message : String(e);
+    }
+  });
+  const updateSource = $(async (id: string) => {
+    store.error = "";
+    store.sourceState[id] = "updating";
+    try {
+      await updateToolSource(id);
+      store.sourceState[id] = "updated";
+    } catch (e) {
+      store.sourceState[id] = "behind";
+      store.error = e instanceof Error ? e.message : String(e);
     }
   });
   const recheckPreset = $(async (id: string) => {
@@ -480,18 +506,34 @@ export default component$(() => {
                     <span class="text-xs text-[var(--text-muted)]">
                       {installed ? "In your tools below - give it to an AI" : ""}
                     </span>
-                    {installed && !p.fetch ? (
-                      <span class="inline-flex items-center gap-1.5 h-9 px-4 text-sm text-emerald-500"><LuCheck class="h-4 w-4" /> Added</span>
+                    {installed ? (
+                      <span class="inline-flex flex-wrap items-center gap-2 h-9 px-1 text-sm">
+                        <span class="inline-flex items-center gap-1.5 text-emerald-500"><LuCheck class="h-4 w-4" /> Added</span>
+                        {p.fetch && (() => {
+                          const st = store.sourceState[pid] ?? "";
+                          return st === "checking" ? (
+                            <span class="text-xs text-[var(--text-muted)]">Checking...</span>
+                          ) : st === "up-to-date" ? (
+                            <span class="text-xs text-[var(--text-muted)]">Up to date</span>
+                          ) : st === "behind" ? (
+                            <button type="button" class="text-xs text-[var(--text-link)] hover:underline" onClick$={() => updateSource(pid)}>Update available - update</button>
+                          ) : st === "updating" ? (
+                            <span class="text-xs text-[var(--text-muted)]">Updating...</span>
+                          ) : st === "updated" ? (
+                            <span class="text-xs text-[var(--text-muted)]">Updated</span>
+                          ) : (
+                            <button type="button" class="text-xs text-[var(--text-link)] hover:underline" title="One check against the tool's source - nothing is checked unless you press this" onClick$={() => checkSource(pid)}>Check for updates</button>
+                          );
+                        })()}
+                      </span>
                     ) : (
                       <LiquidMetalButton
-                        variant={installed ? "secondary" : "primary"}
                         disabled={!!store.busy || checking}
                         onClick$={() => (missing.length ? openInstallAll(pid) : addPreset(pid))}
                         class="flex items-center gap-1.5 h-9 px-4 text-sm"
-                        title={installed ? "Fetch the latest source again" : undefined}
                       >
-                        {store.busy === p.id && <LuLoader class="h-4 w-4 animate-spin" />}
-                        {installed ? "Update source" : missing.length ? "Install what it needs" : p.fetch ? "Fetch and add" : "Add"}
+                        {store.busy === p.id && <LuLoader2 class="h-4 w-4 animate-spin" />}
+                        {missing.length ? "Install what it needs" : p.fetch ? "Fetch and add" : "Add"}
                       </LiquidMetalButton>
                     )}
                   </div>

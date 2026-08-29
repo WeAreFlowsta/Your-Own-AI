@@ -4,7 +4,7 @@
  * page). Nothing runs on the first click.
  */
 import { component$, useSignal, $ } from "@builder.io/qwik";
-import { LuCheck, LuLoader, LuAlertTriangle } from "@qwikest/icons/lucide";
+import { LuCheck, LuLoader2, LuAlertTriangle } from "@qwikest/icons/lucide";
 import { requirementPlan, requirementInstall, whichProgram, type RequirementPlan } from "../utils/mcp";
 
 export interface RequirementLineProps {
@@ -63,7 +63,7 @@ export const RequirementLine = component$<RequirementLineProps>((props) => {
   return (
     <li class="flex flex-wrap items-center gap-1.5 text-xs">
       {props.have === undefined ? (
-        <LuLoader class="h-3.5 w-3.5 animate-spin text-[var(--text-muted)]" />
+        <LuLoader2 class="h-3.5 w-3.5 animate-spin text-[var(--text-muted)]" />
       ) : props.have ? (
         <LuCheck class="h-3.5 w-3.5 text-emerald-500" />
       ) : (

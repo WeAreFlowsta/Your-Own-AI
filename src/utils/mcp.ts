@@ -28,7 +28,18 @@ export interface McpServer {
   config?: ConfigField[];
   values?: Record<string, string>;
   source: string;
+  /** The clone the app fetched (`~/<dest>`), if any - for "Check for updates". */
+  fetch_dir?: string;
   added_at: number;
+}
+export interface SourceStatus { behind: boolean; local: string; remote: string }
+/** One explicit network call: is the fetched source behind? */
+export function checkToolSource(name: string): Promise<SourceStatus> {
+  return invoke<SourceStatus>("mcp_source_check", { name });
+}
+/** Fast-forward the fetched source; resolves with the new short commit. */
+export function updateToolSource(name: string): Promise<string> {
+  return invoke<string>("mcp_source_update", { name });
 }
 /** Save a tool's settings; secret-kind fields go to the encrypted store. */
 export function setToolConfig(name: string, values: Record<string, string>): Promise<McpServer[]> {
@@ -118,6 +129,7 @@ export const MCP_PRESETS: McpPreset[] = [
       args: ["--directory", "~/blender_mcp/mcp", "run", "blender-mcp"],
       env: [],
       source: "preset:blender",
+      fetch_dir: "~/blender_mcp",
       added_at: 0,
     }),
   },
@@ -145,6 +157,7 @@ export function presetFromDirectory(d: DirectoryItem): McpPreset | null {
       url: r.transport === "http" ? r.url : undefined,
       config: r.config ?? [],
       source: `directory:${d.id}`,
+      fetch_dir: r.fetch ? `~/${r.fetch.dest}` : undefined,
       added_at: 0,
     }),
   };

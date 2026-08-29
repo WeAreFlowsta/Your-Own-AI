@@ -698,6 +698,8 @@ pub fn run() {
             mcp::mcp_requirement_install,
             mcp::mcp_set_config,
             mcp::mcp_config_status,
+            mcp::mcp_source_check,
+            mcp::mcp_source_update,
             skills::skills_pack_zip,
             flowsta::share_submit,
         ])

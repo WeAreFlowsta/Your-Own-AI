@@ -62,6 +62,10 @@ pub struct McpServer {
     /// Where it came from: "manual" | "directory:<id>" | a preset id.
     #[serde(default)]
     pub source: String,
+    /// The clone this tool runs from (`~/<dest>`), when the app fetched it -
+    /// what "Check for updates" looks at. Never checked without a click.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetch_dir: Option<String>,
     #[serde(default)]
     pub added_at: u64,
 }
@@ -498,4 +502,62 @@ pub async fn mcp_config_status(app: AppHandle, name: String) -> Result<HashMap<S
             (f.key.clone(), present)
         })
         .collect())
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct SourceStatus {
+    pub behind: bool,
+    pub local: String,
+    pub remote: String,
+}
+
+fn fetch_dir_of(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
+    let list = load(app)?;
+    let s = list.iter().find(|s| s.name == name).ok_or("no such tool")?;
+    let d = s.fetch_dir.clone().ok_or("this tool was not fetched by the app")?;
+    let dir = PathBuf::from(expand_home(app, &d));
+    if !dir.join(".git").is_dir() {
+        return Err("the tool's source folder is missing - fetch it again".into());
+    }
+    Ok(dir)
+}
+
+/// One explicit network call: fetch the tool's source and say whether the
+/// local copy is behind. Only ever on a click.
+#[tauri::command]
+pub async fn mcp_source_check(app: AppHandle, name: String) -> Result<SourceStatus, String> {
+    let dir = fetch_dir_of(&app, &name)?;
+    let d = dir.to_string_lossy().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let run = |args: &[&str]| -> Result<String, String> {
+            let out = std::process::Command::new("git").arg("-C").arg(&d).args(args).output().map_err(|e| format!("git could not run: {e}"))?;
+            if !out.status.success() {
+                return Err(format!("git failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        };
+        run(&["fetch", "--quiet"])?;
+        let local = run(&["rev-parse", "HEAD"])?;
+        let remote = run(&["rev-parse", "@{u}"])?;
+        Ok(SourceStatus { behind: local != remote, local: local[..7.min(local.len())].to_string(), remote: remote[..7.min(remote.len())].to_string() })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Bring the fetched source up to date (fast-forward only).
+#[tauri::command]
+pub async fn mcp_source_update(app: AppHandle, name: String) -> Result<String, String> {
+    let dir = fetch_dir_of(&app, &name)?;
+    let d = dir.to_string_lossy().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let out = std::process::Command::new("git").args(["-C", &d, "pull", "--ff-only", "--quiet"]).output().map_err(|e| format!("git could not run: {e}"))?;
+        if !out.status.success() {
+            return Err(format!("update failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
+        }
+        let head = std::process::Command::new("git").args(["-C", &d, "rev-parse", "--short", "HEAD"]).output().map_err(|e| e.to_string())?;
+        Ok(String::from_utf8_lossy(&head.stdout).trim().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
