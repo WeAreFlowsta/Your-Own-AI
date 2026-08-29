@@ -1122,6 +1122,15 @@ export function useChat(props: UseChatProps) {
         );
         if (skillsBlock.block) systemPrompt += "\n\n" + skillsBlock.block;
         const skillsUsed = skillsBlock.names;
+        // Tools (MCP servers) work in projects only for now - chat has no
+        // tool loop. Tell the model, so an AI that carries Playwright says
+        // "open a project with me" instead of guessing what a page says.
+        const tools = selectedAi.aiConfig.mcp ?? [];
+        if (tools.length) {
+          systemPrompt +=
+            `\n\nTools you carry: ${tools.join(", ")}. They work only inside a project (a folder opened in the conversation), not in this chat. ` +
+            "If the person asks for something one of these tools would do - opening a web page, controlling a program or a device - say plainly that you can do it in a project and suggest opening a folder as a project with you. Do not pretend to have done it.";
+        }
 
         // Generous ceiling — the prompt shapes the actual length; this just prevents
         // truncation. Report mode gets extra headroom because the <think> pass + a
