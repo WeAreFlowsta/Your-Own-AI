@@ -561,3 +561,52 @@ pub async fn mcp_source_update(app: AppHandle, name: String) -> Result<String, S
     .await
     .map_err(|e| e.to_string())?
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fill_replaces_every_known_key() {
+        let mut v = HashMap::new();
+        v.insert("HASS_URL".to_string(), "http://ha.local:8123".to_string());
+        assert_eq!(fill("${HASS_URL}/api/mcp", &v), "http://ha.local:8123/api/mcp");
+        assert_eq!(fill("${OTHER}/x", &v), "${OTHER}/x");
+    }
+
+    #[test]
+    fn local_and_lan_only() {
+        for ok in ["http://127.0.0.1:9191/mcp", "http://localhost/mcp", "http://homeassistant.local:8123/api/mcp", "http://192.168.1.5/", "http://10.0.0.2:3000/mcp", "http://172.16.0.9/", "${HASS_URL}/api/mcp", "https://printer.lan/"] {
+            assert!(is_local_or_lan(ok), "{ok}");
+        }
+        for bad in ["https://example.com/mcp", "http://172.32.0.1/", "ftp://127.0.0.1/", "http://evil.example/x"] {
+            assert!(!is_local_or_lan(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn requirement_plan_knows_the_common_programs() {
+        for p in ["uv", "git", "npx", "python3", "docker"] {
+            let plan = tauri::async_runtime::block_on(mcp_requirement_plan(p.to_string())).unwrap();
+            assert!(["run", "terminal", "link"].contains(&plan.mode.as_str()), "{p}: {}", plan.mode);
+            assert!(!plan.command.is_empty() || plan.mode == "link", "{p} has no command");
+        }
+        let unknown = tauri::async_runtime::block_on(mcp_requirement_plan("nonesuch".to_string())).unwrap();
+        assert_eq!(unknown.mode, "link");
+    }
+
+    #[test]
+    fn which_finds_a_shell_and_not_nonsense() {
+        assert!(which_sync("sh").is_some() || cfg!(windows));
+        assert!(which_sync("definitely-not-a-program-xyz").is_none());
+        assert!(which_sync("").is_none());
+    }
+
+    #[test]
+    fn add_validates_transport_and_urls() {
+        // pure checks mirrored from mcp_add: the LAN rule and the launcher shape
+        assert!(!is_local_or_lan("http://example.com/"));
+        assert!(is_local_or_lan("http://127.0.0.1:3000/mcp"));
+        assert_eq!(crate::skills::normalize_name("My Tool!"), "my-tool");
+    }
+}
