@@ -10,6 +10,8 @@ import { isHelpDismissed } from '../utils/helpPrefs';
 
 interface ChatInputBarProps {
   input: Signal<string>;
+  /** "blender, playwright" when this AI carries tools that run right here in chat. */
+  toolsCue?: string;
   handleSubmit$: QRL<() => void>;
   isLoading: boolean;
   currentPlaceholder: string;
@@ -33,6 +35,7 @@ interface ChatInputBarProps {
 }
 
 export const ChatInputBar = component$<ChatInputBarProps>(({
+  toolsCue,
   input,
   handleSubmit$,
   isLoading,
@@ -184,6 +187,11 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
         onSubmit$={() => { handleSubmit$(); }}
         class="flex-grow"
       >
+        {toolsCue && (
+          <p class="mb-1 px-3 text-[11px] text-[var(--text-muted)]" title="Every action a tool takes goes through your approve step">
+            Tools on: {toolsCue}
+          </p>
+        )}
         <LiquidMetalBorder borderRadius="1.5rem" theme={theme}>
           <ContentEditor
             input={input}

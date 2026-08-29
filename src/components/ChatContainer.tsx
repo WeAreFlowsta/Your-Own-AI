@@ -46,6 +46,8 @@ interface ChatContainerProps {
   showPermissionPill?: boolean;
   /** True while a folder-agent turn is streaming (turn-scoped scroll space). */
   agentStreaming?: boolean;
+  /** Passed to the input bar: the tools this AI carries, when they work in chat. */
+  toolsCue?: string;
   /** Current agent activity ("Reading config.mjs..") for the live pill. */
   liveStatus?: string;
   /** Jump to the pending permission card (pill click). */
@@ -212,6 +214,7 @@ export default component$<ChatContainerProps>((props) => {
       )}
       <div class="shrink-0 px-4 py-2 sm:py-4 border-t border-[var(--border-subtle)]">
         <ChatInputBar
+          toolsCue={props.toolsCue}
           input={props.input}
           handleSubmit$={props.handleSubmit$}
           isLoading={props.isLoading}

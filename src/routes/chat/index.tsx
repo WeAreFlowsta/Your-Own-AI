@@ -1372,6 +1372,13 @@ export default component$(() => {
               agentStreaming={
                 agentState.folderPath !== null && chatState.isLoading
               }
+              toolsCue={
+                buildInstalled.value && !agentState.folderPath && selectedAi.value.aiConfig?.mcp?.length
+                  ? selectedAi.value.aiConfig.mcp.join(", ")
+                  : agentState.mode === "tools" && selectedAi.value.aiConfig?.mcp?.length
+                    ? selectedAi.value.aiConfig.mcp.join(", ")
+                    : undefined
+              }
               liveStatus={agentState.liveStatus}
               agentRetryStatus={agentState.retryStatus || undefined}
               agentWaitingOn={agentState.waitingOn || undefined}
