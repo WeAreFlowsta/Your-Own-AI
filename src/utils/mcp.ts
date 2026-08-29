@@ -150,7 +150,7 @@ export const MCP_PRESETS: McpPreset[] = [
       // mcp pinned below 2.0: the Blender Lab code still uses the older Python API (2026-08).
       args: ["--directory", "~/blender_mcp/mcp", "run", "--with", "mcp[cli]<2", "blender-mcp"],
       env: [],
-      guidance: "Blender is open and connected to you through its add-on. Make every change with execute_blender_code in that live session - the person watches it happen in their viewport. Never run blender --background, --python or --python-expr from the terminal on the open file: that edits a second copy on disk that the open Blender does not show. Look before you act (get_objects_summary), do not save the file unless asked, and use the _for_cli variants only when no Blender is open.",
+      guidance: "Blender is open and connected to you through its add-on. Make every change with execute_blender_code in that live session - the person watches it happen in their viewport. Work in small steps: several short calls of a few seconds each rather than one long script, so Blender stays responsive and the person sees progress; keep geometry simple unless asked for detail. Never run blender --background, --python or --python-expr from the terminal on the open file: that edits a second copy on disk that the open Blender does not show. Look before you act (get_objects_summary), do not save the file unless asked, and use the _for_cli variants only when no Blender is open.",
       source: "preset:blender",
       fetch_dir: "~/blender_mcp",
       added_at: 0,
