@@ -1,6 +1,7 @@
 import {
   component$,
   useSignal,
+  useVisibleTask$,
   useContext,
   useVisibleTask$,
   Slot,
@@ -43,7 +44,7 @@ import {
   setDefaultPermissionMode,
   type AgentPermissionMode,
 } from "../../utils/agentPermissions";
-import { LuChevronDown } from "@qwikest/icons/lucide";
+import { LuChevronDown, LuChevronLeft } from "@qwikest/icons/lucide";
 
 /** One "which online model answers" row: label + recommended-or-override
     dropdown. Native <select> popups are GTK-themed on webkit (they ignore our
@@ -264,6 +265,17 @@ const RememberDestinationPicker = component$<{
 
 export default component$(() => {
   const nav = useNavigate();
+  // Where the person came from (Add-ons > Components -> Engines, etc.): one
+  // back link at the top, cleared once used. The sender sets sessionStorage;
+  // query params do not survive the static adapter in Tauri.
+  const cameFrom = useSignal<{ label: string; href: string } | null>(null);
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(() => {
+    try {
+      const raw = sessionStorage.getItem("settings-from");
+      if (raw) cameFrom.value = JSON.parse(raw);
+    } catch { /* no back link */ }
+  });
   const headerWs = useHeaderWorkspace();
 
   const showModelWidget = useSignal(false);
@@ -746,6 +758,20 @@ export default component$(() => {
 
       <div class="flex-1 overflow-y-auto">
         <div class="max-w-5xl mx-auto px-4 py-8">
+          {cameFrom.value && (
+            <button
+              type="button"
+              onClick$={async () => {
+                const href = cameFrom.value!.href;
+                try { sessionStorage.removeItem("settings-from"); } catch { /* fine */ }
+                cameFrom.value = null;
+                await nav(href);
+              }}
+              class="mb-3 inline-flex items-center gap-1 text-sm text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+            >
+              <LuChevronLeft class="h-4 w-4" /> {cameFrom.value.label}
+            </button>
+          )}
           {/* Page title */}
           <h1 class="text-2xl font-bold text-[var(--text-primary)] font-varela mb-6 border-b border-[var(--border-subtle)] pb-2">
             Settings

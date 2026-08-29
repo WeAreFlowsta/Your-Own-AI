@@ -416,46 +416,6 @@ export default component$(() => {
                 A GitHub link is pinned to the commit it points at today. A link into a subfolder (…/tree/main/skills/name) works too.
               </p>
 
-              <div class="pt-2 border-t border-[var(--border-subtle)]">
-                <p class="text-sm font-medium text-[var(--text-primary)]">Recommended</p>
-                <p class="text-xs text-[var(--text-muted)]">
-                  Open-standard skills we have read and pinned. Knowledge only, permissive licenses, sized for a local model.
-                </p>
-                {SKILL_GROUPS.map((g) => (
-                  <div key={g} class="mt-3">
-                    <p class="text-xs uppercase tracking-wide text-[var(--text-muted)]">{g}</p>
-                    <div class="mt-1.5 space-y-1.5">
-                      {store.recommended.filter((r) => r.group === g).map((r) => {
-                        const installed = store.skills.some((s) => s.name === r.name);
-                        return (
-                          <div key={r.name} class="flex items-start justify-between gap-3 rounded-xl bg-[var(--bg-main)] px-3 py-2">
-                            <div class="min-w-0">
-                              <p class="text-sm font-medium text-[var(--text-primary)]">{r.title}</p>
-                              <p class="text-xs text-[var(--text-secondary)]">{r.blurb}</p>
-                              <p class="text-xs text-[var(--text-muted)]">
-                                {r.maker} · {r.license}{r.sizeChars ? ` · ~${Math.round(r.sizeChars / 4 / 100) * 100} tokens` : ""}
-                              </p>
-                            </div>
-                            {installed ? (
-                              <span class="shrink-0 text-xs text-[var(--text-muted)] pt-1">Installed</span>
-                            ) : (
-                              <LiquidMetalButton
-                                variant="secondary"
-                                class="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-xs"
-                                disabled={!!store.busy || !!store.installing}
-                                onClick$={() => installRecommended(r.name, r.link)}
-                              >
-                                {store.installing === r.name && <LuLoader class="h-3.5 w-3.5 animate-spin" />}
-                                Add
-                              </LiquidMetalButton>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
             </div>
           )}
 
@@ -607,6 +567,46 @@ export default component$(() => {
               </div>
             )}
           </div>
+          <div class="mt-8">
+            <h2 class="text-lg font-semibold text-[var(--text-primary)]">Ready to add</h2>
+            <p class="mt-1 text-sm text-[var(--text-muted)]">
+              Open-standard skills we have read and pinned - knowledge only, permissive licenses, sized for a local model. One tap adds; then choose which AIs use it.
+            </p>
+                {SKILL_GROUPS.filter((g) => store.recommended.some((r) => r.group === g && !store.skills.some((s) => s.name === r.name))).map((g) => (
+                  <div key={g} class="mt-3">
+                    <p class="text-xs uppercase tracking-wide text-[var(--text-muted)]">{g}</p>
+                    <div class="mt-1.5 space-y-1.5">
+                      {store.recommended.filter((r) => r.group === g && !store.skills.some((s) => s.name === r.name)).map((r) => {
+                        const installed = false;
+                        return (
+                          <div key={r.name} class="flex items-start justify-between gap-3 rounded-xl bg-[var(--bg-main)] px-3 py-2">
+                            <div class="min-w-0">
+                              <p class="text-sm font-medium text-[var(--text-primary)]">{r.title}</p>
+                              <p class="text-xs text-[var(--text-secondary)]">{r.blurb}</p>
+                              <p class="text-xs text-[var(--text-muted)]">
+                                {r.maker} · {r.license}{r.sizeChars ? ` · ~${Math.round(r.sizeChars / 4 / 100) * 100} tokens` : ""}
+                              </p>
+                            </div>
+                            {installed ? (
+                              <span class="shrink-0 text-xs text-[var(--text-muted)] pt-1">Installed</span>
+                            ) : (
+                              <LiquidMetalButton
+                                variant="secondary"
+                                class="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-xs"
+                                disabled={!!store.busy || !!store.installing}
+                                onClick$={() => installRecommended(r.name, r.link)}
+                              >
+                                {store.installing === r.name && <LuLoader class="h-3.5 w-3.5 animate-spin" />}
+                                Add
+                              </LiquidMetalButton>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
         </div>
       </div>
 

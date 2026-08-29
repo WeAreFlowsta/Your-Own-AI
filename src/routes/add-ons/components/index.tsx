@@ -82,11 +82,17 @@ export default component$(() => {
             Everything here downloads only when you ask, and says how big it is first. Where it lives, how much space it takes and removing it are in Settings › Storage.
           </Callout>
 
+          <h2 class="mt-8 text-lg font-semibold text-[var(--text-primary)]">Projects</h2>
+          <div class="mt-3"><BuildComponentCard /></div>
+
           <h2 class="mt-8 text-lg font-semibold text-[var(--text-primary)]">Engines</h2>
           <p class="mt-1 text-sm text-[var(--text-muted)]">The bundled engine runs on any GPU. Optional engines help specific hardware and are managed under Settings › Engines.</p>
           <button
             type="button"
-            onClick$={async () => { await nav("/settings#settings-engines"); }}
+            onClick$={async () => {
+              try { sessionStorage.setItem("settings-from", JSON.stringify({ label: "Components", href: "/add-ons/components" })); } catch { /* fine */ }
+              await nav("/settings#settings-engines");
+            }}
             class="mt-3 flex w-full items-center gap-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4 text-left transition-colors hover:border-[var(--text-link)]"
           >
             <div class="w-10 h-10 rounded-lg bg-[var(--bg-dropdown)] flex items-center justify-center flex-shrink-0">
@@ -104,9 +110,6 @@ export default component$(() => {
             </div>
             <LuChevronRight class="h-5 w-5 text-[var(--text-muted)]" />
           </button>
-
-          <h2 class="mt-8 text-lg font-semibold text-[var(--text-primary)]">Projects</h2>
-          <div class="mt-3"><BuildComponentCard /></div>
 
           <h2 class="mt-8 text-lg font-semibold text-[var(--text-primary)]">Memory, vision and reading</h2>
           <div class="mt-3 flex flex-col gap-3">
@@ -130,7 +133,10 @@ export default component$(() => {
           </ul>
 
           <div class="mt-8">
-            <LiquidMetalButton variant="secondary" onClick$={async () => { await nav("/settings#settings-components"); }} class="h-9 px-4 text-sm">
+            <LiquidMetalButton variant="secondary" onClick$={async () => {
+              try { sessionStorage.setItem("settings-from", JSON.stringify({ label: "Components", href: "/add-ons/components" })); } catch { /* fine */ }
+              await nav("/settings#settings-components");
+            }} class="h-9 px-4 text-sm">
               Manage storage in Settings
             </LiquidMetalButton>
           </div>

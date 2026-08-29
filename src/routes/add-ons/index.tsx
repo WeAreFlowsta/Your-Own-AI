@@ -6,7 +6,7 @@
 
 import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
 import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
-import { LuFolderOpen, LuPuzzle, LuSparkles, LuWrench, LuBoxes, LuChevronRight } from "@qwikest/icons/lucide";
+import { LuPuzzle, LuSparkles, LuWrench, LuBoxes, LuChevronRight } from "@qwikest/icons/lucide";
 import AppHeader from "../../components/AppHeader";
 import { useHeaderWorkspace } from "../../hooks/useHeaderWorkspace";
 import { listSkills } from "../../utils/skills";
@@ -33,14 +33,6 @@ export default component$(() => {
   });
 
   const kinds = [
-    {
-      id: "projects",
-      icon: LuFolderOpen,
-      title: "Projects",
-      blurb: "Open a folder in a conversation and the AI works in it - reads, edits, runs, with every step in your records.",
-      meta: headerWs.buildInstalled.value ? "Installed" : "Installs on first use",
-      href: "/chat",
-    },
     {
       id: "skills",
       icon: LuPuzzle,
