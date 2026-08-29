@@ -244,6 +244,8 @@ export default component$(() => {
   // Conversations: the temporal lens - every conversation is a place.
   const conversationsOpen = useSignal(false);
   const conversationsLoading = useSignal(false);
+  // The live read timed out for the AI in view and the drawer shows the cache.
+  const conversationsStale = useSignal(false);
   const conversationsWarming = useSignal(false);
   const conversationItems = useSignal<ConversationListItem[]>([]);
   const lastConversation = useSignal<LastConversationPointer | null>(null);
@@ -484,6 +486,13 @@ export default component$(() => {
         // A live result never DOWNGRADES what the user is looking at:
         // merge per AI - an AI whose live read failed (timed out -> no
         // rows) keeps its cached rows instead of vanishing.
+        // Live rows for the AI in view? If not, and the cache has some, the
+        // read timed out for it (a 60 s zome call) - say so, offer a retry.
+        const viewAi = selectedAi.value.aiConfig?.id;
+        conversationsStale.value =
+          !!viewAi &&
+          !items.some((i) => i.aiId === viewAi) &&
+          conversationItems.value.some((i) => i.aiId === viewAi);
         if (items.length > 0 && conversationItems.value.length > 0) {
           const liveAis = new Set(items.map((i) => i.aiId));
           const kept = conversationItems.value.filter((i) => !liveAis.has(i.aiId));
@@ -1942,6 +1951,8 @@ export default component$(() => {
         items={conversationItems.value}
         loading={conversationsLoading.value}
         warming={conversationsWarming.value}
+        stale={conversationsStale.value}
+        onRefresh$={openConversations}
         onClose$={$(() => {
           conversationsOpen.value = false;
         })}
