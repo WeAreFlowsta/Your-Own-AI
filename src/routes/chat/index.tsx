@@ -168,6 +168,9 @@ export default component$(() => {
   const showCloseFolderConfirm = useSignal(false);
   // The header workspace slot: exists only when Build is installed.
   const buildInstalled = useSignal(false);
+  // Projects installing from the tools cue: progress on the line itself.
+  const buildInstalling = useSignal(false);
+  const buildInstallPercent = useSignal(0);
   const recentFolders = useSignal<string[]>([]);
 
 
@@ -201,8 +204,15 @@ export default component$(() => {
     }
     // Install/uninstall can land while any page is open - flip the gate.
     import("@tauri-apps/api/event").then(({ listen }) => {
-      listen("build-install-done", () => (buildInstalled.value = true));
+      listen("build-install-done", () => { buildInstalled.value = true; buildInstalling.value = false; });
+      listen("build-install-failed", () => { buildInstalling.value = false; });
       listen("build-uninstalled", () => (buildInstalled.value = false));
+      listen<{ filename?: string; percent?: number }>("model-download-progress", (e) => {
+        if (typeof e.payload?.filename === "string" && e.payload.filename.startsWith("your-own-ai-build-")) {
+          buildInstalling.value = true;
+          buildInstallPercent.value = Math.round(e.payload.percent ?? 0);
+        }
+      });
     });
     // The bridge owns the workspace: after navigating away and back (the
     // route remounts), pick the open folder back up from its status.
@@ -1373,12 +1383,25 @@ export default component$(() => {
                 agentState.folderPath !== null && chatState.isLoading
               }
               toolsCue={
-                buildInstalled.value && !agentState.folderPath && selectedAi.value.aiConfig?.mcp?.length
-                  ? selectedAi.value.aiConfig.mcp.join(", ")
-                  : agentState.mode === "tools" && selectedAi.value.aiConfig?.mcp?.length
-                    ? selectedAi.value.aiConfig.mcp.join(", ")
-                    : undefined
+                !selectedAi.value.aiConfig?.mcp?.length || (agentState.folderPath && agentState.mode === "project")
+                  ? undefined
+                  : buildInstalled.value
+                    ? { text: `Tools on: ${selectedAi.value.aiConfig.mcp.join(", ")}`, action: "manage", actionLabel: "Manage" }
+                    : buildInstalling.value
+                      ? { text: `Installing Projects for your tools (${selectedAi.value.aiConfig.mcp.join(", ")})... ${buildInstallPercent.value}%` }
+                      : { text: `Tools (${selectedAi.value.aiConfig.mcp.join(", ")}) need Projects, a free ~50 MB helper`, action: "install-projects", actionLabel: "Install it" }
               }
+              onToolsAction$={$(async (action: "install-projects" | "manage") => {
+                if (action === "manage") { await nav("/add-ons/mcp"); return; }
+                // The same consented download as the projects menu; the
+                // header's install listeners flip buildInstalled when done.
+                buildInstalling.value = true;
+                buildInstallPercent.value = 0;
+                try { await invoke("download_build_agent"); } catch (e) {
+                  buildInstalling.value = false;
+                  chatState.error = JSON.stringify({ code: "BUILD_INSTALL_FAILED", message: String(e) });
+                }
+              })}
               liveStatus={agentState.liveStatus}
               agentRetryStatus={agentState.retryStatus || undefined}
               agentWaitingOn={agentState.waitingOn || undefined}

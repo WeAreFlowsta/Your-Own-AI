@@ -10,8 +10,10 @@ import { isHelpDismissed } from '../utils/helpPrefs';
 
 interface ChatInputBarProps {
   input: Signal<string>;
-  /** "blender, playwright" when this AI carries tools that run right here in chat. */
-  toolsCue?: string;
+  /** The tools line above the message field: what this AI carries, and the
+   *  one thing standing in the way when there is one (Projects not installed). */
+  toolsCue?: { text: string; action?: "install-projects" | "manage"; actionLabel?: string };
+  onToolsAction$?: QRL<(action: "install-projects" | "manage") => void>;
   handleSubmit$: QRL<() => void>;
   isLoading: boolean;
   currentPlaceholder: string;
@@ -36,6 +38,7 @@ interface ChatInputBarProps {
 
 export const ChatInputBar = component$<ChatInputBarProps>(({
   toolsCue,
+  onToolsAction$,
   input,
   handleSubmit$,
   isLoading,
@@ -189,7 +192,19 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
       >
         {toolsCue && (
           <p class="mb-1 px-3 text-[11px] text-[var(--text-muted)]" title="Every action a tool takes goes through your approve step">
-            Tools on: {toolsCue}
+            {toolsCue.text}
+            {toolsCue.action && (
+              <>
+                {" · "}
+                <button
+                  type="button"
+                  class="text-[var(--text-link)] hover:underline"
+                  onClick$={() => { onToolsAction$?.(toolsCue.action!); }}
+                >
+                  {toolsCue.actionLabel ?? (toolsCue.action === "install-projects" ? "Install" : "Manage")}
+                </button>
+              </>
+            )}
           </p>
         )}
         <LiquidMetalBorder borderRadius="1.5rem" theme={theme}>
