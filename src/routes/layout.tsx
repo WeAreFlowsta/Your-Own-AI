@@ -13,6 +13,7 @@ import { AiDataProvider } from "../contexts/AiDataContext";
 import { VisionDownloadProvider } from "../contexts/VisionDownloadContext";
 import { VisionDownloadIndicator } from "../components/VisionDownloadIndicator";
 import { WorkspaceMemoryModal } from "../components/WorkspaceMemoryModal";
+import ConfirmModal from "../components/ConfirmModal";
 import { prefetchModels } from "../utils/modelCache";
 import { mirrorPausedModels } from "../utils/modelPrefs";
 
@@ -306,6 +307,29 @@ export default component$(() => {
   // yourownai:// links ("Add to Your Own AI" on the site). The path maps
   // onto the app's own routes; a skills link carries the source to add.
   const nav = useNavigate();
+
+  // A turn in flight lives in the chat page's listeners; leaving the page
+  // mid-turn loses its answer (the agent finishes, nothing records it).
+  // Until the session is lifted to app level, hold in-app link clicks with
+  // a question while the chat hook says a turn is running.
+  const leaveAsk = useSignal<string | null>(null);
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ cleanup }) => {
+    const onClick = (e: MouseEvent) => {
+      const running = (window as unknown as { __yoaiTurnRunning?: boolean }).__yoaiTurnRunning;
+      if (!running) return;
+      const a = (e.target as HTMLElement | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
+      if (!a) return;
+      const href = a.getAttribute("href") || "";
+      if (!href.startsWith("/") || href.startsWith("//")) return; // external links open elsewhere
+      if (href.replace(/\/$/, "") === window.location.pathname.replace(/\/$/, "")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      leaveAsk.value = href;
+    };
+    document.addEventListener("click", onClick, true);
+    cleanup(() => document.removeEventListener("click", onClick, true));
+  });
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async ({ cleanup }) => {
     try {
@@ -346,6 +370,21 @@ export default component$(() => {
           <VisionDownloadIndicator />
           {/* Root-level so no route stacking context can bury it. */}
           <WorkspaceMemoryModal folderPath={projectMemoryFolder} />
+          <ConfirmModal
+            isOpen={leaveAsk.value !== null}
+            title="Your AI is mid-turn"
+            message="If you leave this page now, the turn keeps running but its answer will not be saved to the conversation. Wait for it to finish, or leave anyway."
+            confirmLabel="Leave anyway"
+            cancelLabel="Stay"
+            variant="danger"
+            onConfirm$={async () => {
+              const href = leaveAsk.value;
+              leaveAsk.value = null;
+              try { (window as unknown as { __yoaiTurnRunning?: boolean }).__yoaiTurnRunning = false; } catch { /* fine */ }
+              if (href) await nav(href);
+            }}
+            onCancel$={() => { leaveAsk.value = null; }}
+          />
         </VisionDownloadProvider>
       </AiDataProvider>
     </ModeProvider>

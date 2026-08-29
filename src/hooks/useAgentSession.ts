@@ -664,6 +664,10 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.status = "working";
     state.liveStatus = "Thinking..";
     props.chatState.isLoading = true;
+    // A turn in flight is lost if the chat page unmounts (its listeners go
+    // with it). The root layout reads this flag to hold navigation with a
+    // question until the session is lifted to app level.
+    try { (window as unknown as { __yoaiTurnRunning?: boolean }).__yoaiTurnRunning = true; } catch { /* fine */ }
     // First prompt after a resume: the restored-context digest rides ahead
     // of the question ON THE WIRE only - the bubble and the transcript keep
     // the clean question (the digest is derived from the chain; recording
@@ -1885,6 +1889,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     };
 
     const unTurn = await listen<any>("agent-turn", async (e) => {
+      try { (window as unknown as { __yoaiTurnRunning?: boolean }).__yoaiTurnRunning = false; } catch { /* fine */ }
       const err = e.payload?.error;
       const stop = e.payload?.result?.stopReason;
       if (err) {
@@ -1969,6 +1974,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     });
 
     const unExit = await listen<{ code: number | null }>("agent-exit", (e) => {
+      try { (window as unknown as { __yoaiTurnRunning?: boolean }).__yoaiTurnRunning = false; } catch { /* fine */ }
       const wasOpen = state.folderPath !== null;
       const midTurn = props.chatState.isLoading;
       state.status = wasOpen ? "stopped" : "idle";
