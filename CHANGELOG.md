@@ -3,7 +3,7 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
-## [0.6.1] - 2026-08-28
+## [0.7.0] - 2026-08-29
 
 ### Models
 - Nemotron 3.5 Lightning loads again. The maker replaced its download after
@@ -98,6 +98,52 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   walk every memory revision - close to a minute on a busy machine - now
   answers at once.
 
+### Tools - programs your AIs can work in
+- Tools (Add-ons > Tools): MCP servers your AIs can use - Blender, a browser
+  (Playwright), FreeCAD, Home Assistant, a 3D printer - listed in the
+  directory and reviewed like every add-on. Chosen per AI; every action a
+  tool takes goes through your approve step.
+- Tools work in chat, not only in projects: an AI that carries tools runs
+  its turns through the same machinery behind the scenes, with the same
+  steps and approvals in the thread. "Tools on" shows by the message field;
+  if Projects is not installed yet, that line installs it right there.
+- Install what it needs: a tool's requirements (uv, Git, Node.js, Python,
+  Docker) are checked against your computer; one button shows every step
+  that would run, runs them, and carries on to the add. Nothing runs before
+  you see it. Tools that bring their source say what they fetch first.
+- Settings a tool asks for - an address, a token, a printer - are described
+  by the listing and filled in by you; kept on this computer, secrets
+  encrypted, sent only to that tool.
+- Blender: the app installs and enables Blender's own MCP add-on through
+  Blender's extension installer, and says plainly that it turns on Blender's
+  "Allow Online Access" setting, which the add-on requires - our connection
+  to Blender stays on this computer.
+- Each tool listing carries guidance for the AI (Blender: work in the open
+  scene through the live connection, in small steps, never save unless
+  asked) that rides into every session the tool is part of.
+- A tool that fails to start is said on the turn, with the reason from its
+  log, instead of the AI quietly improvising around it.
+- Share a tool of your own: the recipe goes out signed with your Flowsta
+  identity - never your settings or their values - and shared tools may
+  start only through programs that verify what they fetch.
+
+### Components and Storage
+- Add-ons > Components is where this computer gets things: Projects, the
+  engines for your hardware, the models behind memory, vision and OCR, and
+  the programs tools need. Settings > Storage is where you manage them -
+  location, what is installed, remove.
+
+### Records
+- A turn taken while your records are still starting, or while they are too
+  busy to answer, is recorded once they are - it used to be lost.
+- The conversations list can no longer be emptied by a slow read after
+  launch: a read that does not answer keeps the saved list.
+- Leaving the chat while your AI is mid-turn asks first.
+
+### Words
+- "Flowsta identity" everywhere, never "account" or "name"; the signed-in
+  page is /dashboard.
+
 ### Add-ons
 - Tools (Add-ons > Tools): MCP servers your AIs can work in during a
   project - Blender first, with a one-button setup that checks what it
@@ -113,9 +159,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   for you) on the AI's edit form and the skill's card: the app signs the pack or
   the skill folder with your Flowsta identity and files it for review
   under your Flowsta name - no GitHub account, no upload site. Once it is
-  on the shelf, everyone's Characters and Skills pages list it, with your
+  on the listing, everyone's Characters and Skills pages list it, with your
   name on it. Free listings for now.
-- The Characters shelf and the Recommended skills read the directory when
+- The Characters list and the Recommended skills read the directory when
   it answers, so shared add-ons appear without an app update; the built-in
   lists remain the fallback offline.
 - Skills. A skill is a folder of instructions an AI reads when the work
@@ -146,15 +192,12 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   folders) shows "N skills" on its pill in the header.
 - yourownai:// links open the app at the matching page; a skills link
   arrives with the source filled in, ready to add.
-- Characters. The eight from yourownai.net on one shelf - complete AIs
+- Characters. The eight from yourownai.net in one list - complete AIs
   with a personality, a portrait and starting memories, signed by Flowsta.
   "Make it mine" creates the AI here, the same way Import AI does, and it
-  lives in Your AIs from then on; the shelf stays for the next one.
-- Add-ons has its own place in the menu: Projects, Skills, Characters, and
-  the kinds that follow.
-
-
-## [0.6.0] - 2026-08-25
+  lives in Your AIs from then on; the listing stays for the next one.
+- Add-ons has its own place in the menu, with four kinds: Skills, Tools and
+  Characters for your AIs, and Components for this computer.## [0.6.0] - 2026-08-25
 
 Your AIs know you better, run bigger models on the machine you already
 have, and choose between them by what actually runs well on it.
