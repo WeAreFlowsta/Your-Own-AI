@@ -1386,7 +1386,7 @@ export default component$(() => {
                 !selectedAi.value.aiConfig?.mcp?.length || (agentState.folderPath && agentState.mode === "project")
                   ? undefined
                   : buildInstalled.value
-                    ? { text: `Tools on: ${selectedAi.value.aiConfig.mcp.join(", ")}`, action: "manage", actionLabel: "Manage" }
+                    ? { text: `Tools on: ${selectedAi.value.aiConfig.mcp.join(", ")}` }
                     : buildInstalling.value
                       ? { text: `Installing Projects for your tools (${selectedAi.value.aiConfig.mcp.join(", ")})... ${buildInstallPercent.value}%` }
                       : { text: `Tools (${selectedAi.value.aiConfig.mcp.join(", ")}) need Projects, a free ~50 MB helper`, action: "install-projects", actionLabel: "Install it" }
