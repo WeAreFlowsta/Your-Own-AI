@@ -8,7 +8,7 @@
  */
 import { component$, useSignal, useStore, useVisibleTask$, $ } from "@builder.io/qwik";
 import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
-import { LuWrench, LuTrash2, LuChevronLeft, LuUsers, LuAlertTriangle, LuCheck, LuLoader2 } from "@qwikest/icons/lucide";
+import { LuWrench, LuTrash2, LuChevronLeft, LuUsers, LuAlertTriangle, LuCheck, LuLoader2, LuChevronDown } from "@qwikest/icons/lucide";
 import AppHeader from "../../../components/AppHeader";
 import { useHeaderWorkspace } from "../../../hooks/useHeaderWorkspace";
 import { useAiData, useAiDataActions } from "../../../contexts/AiDataContext";
@@ -41,6 +41,9 @@ import {
   type McpServer,
   type RequirementPlan,
 } from "../../../utils/mcp";
+
+/** Programs a shared tool may start through (the directory's rule) - they verify what they fetch. */
+const SHARE_LAUNCHERS = ["uv", "uvx", "npx", "pipx", "docker", "python", "python3", "node", "deno", "bunx"];
 
 export default component$(() => {
   const nav = useNavigate();
@@ -84,6 +87,10 @@ export default component$(() => {
     shareErr: "",
     shareDone: null as ShareResult | null,
     shareMaker: null as string | null,
+    shareLicenseOpen: false,
+    // the launcher rule the directory applies - checked here before signing
+    shareLauncherOk: true,
+    shareLauncher: "",
     shareStatus: {} as Record<string, ShareStatus>,
     usedByOpen: "" as string,
     addOpen: false,
@@ -120,6 +127,10 @@ export default component$(() => {
     store.shareErr = "";
     store.shareDone = null;
     store.shareMaker = (await currentMaker())?.handle ?? null;
+    store.shareLicenseOpen = false;
+    const launcher = (s.command ?? "").split(/[\\/]/).pop() ?? "";
+    store.shareLauncher = launcher;
+    store.shareLauncherOk = s.transport === "http" || SHARE_LAUNCHERS.includes(launcher);
   });
   const doShare = $(async () => {
     const entry = store.servers.find((s) => s.name === store.shareFor);
@@ -690,18 +701,35 @@ export default component$(() => {
                 <label class="mt-3 block text-xs font-medium text-[var(--text-secondary)]">Anything people need to know first (optional)</label>
                 <input type="text" value={store.shareAlso} onInput$={(_, el) => { store.shareAlso = el.value; }} placeholder="Needs the app running with…" maxLength={240} class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none" />
                 <label class="mt-3 block text-xs font-medium text-[var(--text-secondary)]">License</label>
-                <select value={store.shareLicense} onChange$={(_, el) => { store.shareLicense = el.value; }} class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)]">
-                  {LICENSES.map((l) => (<option key={l.id} value={l.id}>{l.label}</option>))}
-                </select>
+                <div class="relative mt-1">
+                  <button type="button" onClick$={() => { store.shareLicenseOpen = !store.shareLicenseOpen; }} class="relative w-full cursor-default rounded-full bg-[var(--bg-input)] py-2 pl-4 pr-10 text-left text-sm text-[var(--text-primary)] border border-[var(--border-subtle)] focus:outline-none">
+                    <span class="block truncate">{LICENSES.find((l) => l.id === store.shareLicense)?.label ?? store.shareLicense}</span>
+                    <span class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3"><LuChevronDown class="h-4 w-4 text-[var(--text-muted)]" aria-hidden="true" /></span>
+                  </button>
+                  {store.shareLicenseOpen && (
+                    <ul class="absolute z-10 mt-1 max-h-48 w-full overflow-auto rounded-2xl bg-[var(--bg-card)] py-1 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
+                      {LICENSES.map((l) => (
+                        <li key={l.id} class={`cursor-default select-none py-2 px-4 text-sm hover:bg-[var(--bg-dropdown-hover)] hover:text-[var(--text-primary)] ${store.shareLicense === l.id ? "bg-[var(--bg-dropdown-hover)] text-[var(--text-primary)] font-medium" : "text-[var(--text-dropdown)]"}`} onClick$={() => { store.shareLicense = l.id; store.shareLicenseOpen = false; }}>
+                          <span class="block truncate">{l.label}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                {!store.shareLauncherOk && (
+                  <p class="mt-3 text-xs text-amber-500">
+                    This tool starts with "{store.shareLauncher}". Shared tools must start through uv, npx, pipx, docker, python, node, deno or bunx - programs that fetch and verify their own packages - so this one can't be listed as it is.
+                  </p>
+                )}
                 <p class="mt-3 text-xs text-[var(--text-muted)]">
                   {store.shareMaker ? `Listed as @${store.shareMaker} and signed with your Flowsta identity, so people know it is yours.` : "Sign in with Flowsta first - the listing shows who made it."}
                 </p>
                 {store.shareErr && <p class="mt-2 text-xs text-red-400">{store.shareErr}</p>}
-                <div class="mt-4 flex flex-col gap-2">
-                  <LiquidMetalButton onClick$={doShare} disabled={store.shareBusy || !store.shareMaker} class="w-full justify-center px-5 py-2 text-sm">
+                <div class="mt-4 flex justify-end gap-2">
+                  <LiquidMetalButton variant="secondary" onClick$={() => { store.shareFor = ""; }} disabled={store.shareBusy} class="h-9 px-5 text-sm">Cancel</LiquidMetalButton>
+                  <LiquidMetalButton onClick$={doShare} disabled={store.shareBusy || !store.shareMaker || !store.shareLauncherOk} class="h-9 px-5 text-sm">
                     {store.shareBusy ? "Signing and sending..." : "Share"}
                   </LiquidMetalButton>
-                  <LiquidMetalButton variant="secondary" onClick$={() => { store.shareFor = ""; }} disabled={store.shareBusy} class="w-full justify-center px-5 py-2 text-sm">Cancel</LiquidMetalButton>
                 </div>
               </>
             )}

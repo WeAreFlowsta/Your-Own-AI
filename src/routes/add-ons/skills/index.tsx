@@ -24,6 +24,7 @@ import {
   LuRefreshCw,
   LuFileText,
   LuUsers,
+  LuChevronDown,
 } from "@qwikest/icons/lucide";
 import AppHeader from "../../../components/AppHeader";
 import { useHeaderWorkspace } from "../../../hooks/useHeaderWorkspace";
@@ -86,6 +87,7 @@ export default component$(() => {
     shareBusy: false,
     shareErr: "",
     shareDone: null as ShareResult | null,
+    shareLicenseOpen: false,
     shareStatus: {} as Record<string, ShareStatus>,
   });
 
@@ -660,23 +662,32 @@ export default component$(() => {
                   class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-xl px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none"
                 />
                 <label class="mt-3 block text-xs font-medium text-[var(--text-secondary)]">License</label>
-                <select
-                  value={store.shareLicense}
-                  onChange$={(_, el) => { store.shareLicense = el.value; }}
-                  class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)]"
-                >
-                  {LICENSES.map((l) => (
-                    <option key={l.id} value={l.id}>{l.label}</option>
-                  ))}
-                </select>
+                <div class="relative mt-1">
+                  <button type="button" onClick$={() => { store.shareLicenseOpen = !store.shareLicenseOpen; }} class="relative w-full cursor-default rounded-full bg-[var(--bg-input)] py-2 pl-4 pr-10 text-left text-sm text-[var(--text-primary)] border border-[var(--border-subtle)] focus:outline-none">
+                    <span class="block truncate">{LICENSES.find((l) => l.id === store.shareLicense)?.label ?? store.shareLicense}</span>
+                    <span class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3"><LuChevronDown class="h-4 w-4 text-[var(--text-muted)]" aria-hidden="true" /></span>
+                  </button>
+                  {store.shareLicenseOpen && (
+                    <ul class="absolute z-10 mt-1 max-h-48 w-full overflow-auto rounded-2xl bg-[var(--bg-card)] py-1 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
+                      {LICENSES.map((l) => (
+                        <li key={l.id} class={`cursor-default select-none py-2 px-4 text-sm hover:bg-[var(--bg-dropdown-hover)] hover:text-[var(--text-primary)] ${store.shareLicense === l.id ? "bg-[var(--bg-dropdown-hover)] text-[var(--text-primary)] font-medium" : "text-[var(--text-dropdown)]"}`} onClick$={() => { store.shareLicense = l.id; store.shareLicenseOpen = false; }}>
+                          <span class="block truncate">{l.label}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
                 <p class="mt-2 text-xs text-[var(--text-muted)]">Free for everyone. Paid sharing comes later, for makers who have signed their work.</p>
+                <p class="mt-3 text-xs text-[var(--text-muted)]">
+                  {store.shareMaker ? `Listed as @${store.shareMaker} and signed with your Flowsta identity, so people know it is yours.` : "Sign in with Flowsta first - the listing shows who made it."}
+                </p>
                 {store.shareErr && <p class="mt-2 text-xs text-red-400">{store.shareErr}</p>}
-                <div class="mt-4 flex flex-col gap-2">
-                  <LiquidMetalButton onClick$={doShare} disabled={store.shareBusy || !store.shareMaker} class="w-full justify-center px-5 py-2 text-sm">
-                    {store.shareBusy ? "Signing and sending..." : `Share as @${store.shareMaker ?? "..."}`}
-                  </LiquidMetalButton>
-                  <LiquidMetalButton variant="secondary" onClick$={() => { store.shareFor = ""; }} disabled={store.shareBusy} class="w-full justify-center px-5 py-2 text-sm">
+                <div class="mt-4 flex justify-end gap-2">
+                  <LiquidMetalButton variant="secondary" onClick$={() => { store.shareFor = ""; }} disabled={store.shareBusy} class="h-9 px-5 text-sm">
                     Cancel
+                  </LiquidMetalButton>
+                  <LiquidMetalButton onClick$={doShare} disabled={store.shareBusy || !store.shareMaker} class="h-9 px-5 text-sm">
+                    {store.shareBusy ? "Signing and sending..." : "Share"}
                   </LiquidMetalButton>
                 </div>
               </>

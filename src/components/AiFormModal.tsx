@@ -1636,21 +1636,21 @@ const AiFormModal = component$<AiFormModalProps>(
                         ? `Listed as @${shareMakerHandle.value} and signed with your Flowsta identity, so people know it is yours.`
                         : 'Sign in with Flowsta first - the listing shows who made it.'}
                     </p>
-                    <div class="mt-2 flex flex-col gap-2">
-                      <LiquidMetalButton
-                        onClick$={doShare}
-                        disabled={shareBusy.value || !shareMakerHandle.value}
-                        class="w-full justify-center px-5 py-2 text-sm"
-                      >
-                        {shareBusy.value ? 'Signing and sending...' : 'Share'}
-                      </LiquidMetalButton>
+                    <div class="mt-2 flex justify-end gap-2">
                       <LiquidMetalButton
                         variant="secondary"
                         onClick$={$(() => { shareOpen.value = false; })}
                         disabled={shareBusy.value}
-                        class="w-full justify-center px-5 py-2 text-sm"
+                        class="h-9 px-5 text-sm"
                       >
                         Cancel
+                      </LiquidMetalButton>
+                      <LiquidMetalButton
+                        onClick$={doShare}
+                        disabled={shareBusy.value || !shareMakerHandle.value}
+                        class="h-9 px-5 text-sm"
+                      >
+                        {shareBusy.value ? 'Signing and sending...' : 'Share'}
                       </LiquidMetalButton>
                     </div>
                   </>
