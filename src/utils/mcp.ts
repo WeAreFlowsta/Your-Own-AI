@@ -27,6 +27,8 @@ export interface McpServer {
   /** Settings the tool asks for (from its listing); values are kept on this device. */
   config?: ConfigField[];
   values?: Record<string, string>;
+  /** How to use it well - handed to the agent with the tool. */
+  guidance?: string;
   source: string;
   /** The clone the app fetched (`~/<dest>`), if any - for "Check for updates". */
   fetch_dir?: string;
@@ -91,6 +93,18 @@ export function mcpUsedBy(ais: UserDefinedAI[], name: string): string[] {
   return ais.filter((a) => a.status === "active" && Array.isArray(a.mcp) && a.mcp.includes(name)).map((a) => a.name);
 }
 
+/** The block the first project prompt carries for the tools an AI has: how to use each well. */
+export async function toolsGuidanceBlock(names: string[] | undefined): Promise<string> {
+  if (!names?.length) return "";
+  const all = await listMcpServers();
+  const lines = names
+    .map((n) => all.find((s) => s.name === n))
+    .filter((s): s is McpServer => !!s && !!s.guidance)
+    .map((s) => `- ${s.name}: ${s.guidance}`);
+  if (!lines.length) return "";
+  return `<tools_you_carry>\nThese tool servers are attached to this session. Prefer their tools over terminal workarounds - they act where the person is looking.\n${lines.join("\n")}\n</tools_you_carry>\n\n`;
+}
+
 /** One line of what a server is, for lists. */
 export function mcpSummary(s: McpServer): string {
   if (s.transport === "http") return s.url ?? "";
@@ -136,6 +150,7 @@ export const MCP_PRESETS: McpPreset[] = [
       // mcp pinned below 2.0: the Blender Lab code still uses the older Python API (2026-08).
       args: ["--directory", "~/blender_mcp/mcp", "run", "--with", "mcp[cli]<2", "blender-mcp"],
       env: [],
+      guidance: "Blender is open and connected to you through its add-on. Make every change with execute_blender_code in that live session - the person watches it happen in their viewport. Never run blender --background, --python or --python-expr from the terminal on the open file: that edits a second copy on disk that the open Blender does not show. Look before you act (get_objects_summary), do not save the file unless asked, and use the _for_cli variants only when no Blender is open.",
       source: "preset:blender",
       fetch_dir: "~/blender_mcp",
       added_at: 0,
@@ -164,6 +179,7 @@ export function presetFromDirectory(d: DirectoryItem): McpPreset | null {
       env: [],
       url: r.transport === "http" ? r.url : undefined,
       config: r.config ?? [],
+      guidance: r.guidance,
       source: `directory:${d.id}`,
       fetch_dir: r.fetch ? `~/${r.fetch.dest}` : undefined,
       added_at: 0,

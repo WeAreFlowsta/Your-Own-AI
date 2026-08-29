@@ -62,6 +62,10 @@ pub struct McpServer {
     /// Where it came from: "manual" | "directory:<id>" | a preset id.
     #[serde(default)]
     pub source: String,
+    /// How to use it well, from the listing - handed to the agent at the
+    /// start of every project session that carries this tool.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub guidance: String,
     /// The clone this tool runs from (`~/<dest>`), when the app fetched it -
     /// what "Check for updates" looks at. Never checked without a click.
     #[serde(default, skip_serializing_if = "Option::is_none")]

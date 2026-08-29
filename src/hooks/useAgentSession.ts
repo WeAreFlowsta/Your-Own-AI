@@ -390,6 +390,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
   // happened.
   const workspaceMemory = useSignal("");
   const memoryPending = useSignal(false);
+  const toolsPending = useSignal(false);
   const sessionTurns = useSignal(0);
   // Rolling digest refreshed at every turn end - session-end paths (New,
   // close, folder switch) fire AFTER the chat may already be reset, so the
@@ -666,6 +667,16 @@ export function useAgentSession(props: UseAgentSessionProps) {
       // conversation context, then the question.
       const block = memoryPromptBlock(workspaceMemory.value);
       if (block) wire = block + wire;
+    }
+    if (toolsPending.value) {
+      toolsPending.value = false;
+      // How to use the tools this AI carries (from their listings) - once
+      // per session, ahead of the first question, on the wire only.
+      try {
+        const { toolsGuidanceBlock } = await import("../utils/mcp");
+        const block = await toolsGuidanceBlock(props.selectedAi.value.aiConfig?.mcp);
+        if (block) wire = block + wire;
+      } catch { /* no guidance this session */ }
     }
     try {
       await invokeTauri("send_agent_prompt", { text: wire });
@@ -1105,6 +1116,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       // a prompt sent before it lands simply goes without (next session
       // catches up).
       memoryPending.value = false;
+      toolsPending.value = !!props.selectedAi.value.aiConfig?.mcp?.length;
       const folder = state.folderPath;
       if (folder) {
         // The first prompt always carries at least the tool hint; the
