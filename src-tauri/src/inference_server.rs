@@ -1213,21 +1213,36 @@ fn spawn_record(rec: RecordCtx, assistant: String) {
             Some(existing) => existing,
             None => {
                 let title = Some(rec.user_text.chars().take(80).collect::<String>());
-                match crate::commands_holochain::start_conversation(
-                    rec.app.clone(),
-                    rec.agent_key.clone(),
-                    rec.ai_name.clone(),
-                    rec.model.clone(),
-                    title,
-                    Some(rec.app_name.clone()), // source → the calling app (badge)
-                    hc_state.clone(),
-                )
-                .await
-                {
-                    Ok(h) => (h, 0u32),
-                    Err(e) => {
-                        log::warn!("[inference] start_conversation failed: {e}");
-                        return;
+                // The first minute after launch: the conductor is still
+                // coming up and this used to drop the turn's record on the
+                // floor. Wait for it - a record that lands a minute late is
+                // a record; one that never lands is a lost conversation.
+                let mut attempt = 0u32;
+                loop {
+                    match crate::commands_holochain::start_conversation(
+                        rec.app.clone(),
+                        rec.agent_key.clone(),
+                        rec.ai_name.clone(),
+                        rec.model.clone(),
+                        title.clone(),
+                        Some(rec.app_name.clone()), // source → the calling app (badge)
+                        hc_state.clone(),
+                    )
+                    .await
+                    {
+                        Ok(h) => break (h, 0u32),
+                        Err(e) => {
+                            let transient = e.contains("still starting") || e.contains("Timeout") || e.contains("timed out") || e.contains("not ready");
+                            attempt += 1;
+                            if !transient || attempt > 30 {
+                                log::warn!("[inference] start_conversation failed after {attempt} attempt(s): {e}");
+                                return;
+                            }
+                            if attempt == 1 {
+                                log::info!("[inference] start_conversation waiting for the conductor: {e}");
+                            }
+                            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                        }
                     }
                 }
             }

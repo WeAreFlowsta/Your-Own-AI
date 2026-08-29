@@ -18,7 +18,7 @@
 import { skillNameFromPath } from "../utils/skills";
 import { $, useSignal, useStore, useVisibleTask$, type Signal } from "@builder.io/qwik";
 import { v4 as uuidv4 } from "uuid";
-import { startConversation, recordMessage } from "../utils/holochainTranscripts";
+import { startConversation, recordMessage, waitForHolochainReady } from "../utils/holochainTranscripts";
 import {
   rememberConversationFolder,
   rememberLastConversation,
@@ -465,6 +465,10 @@ export function useAgentSession(props: UseAgentSessionProps) {
     const model = ai.aiConfig?.model || "agent";
     if (!props.chatState.conversationHash) {
       const title = text.length > 80 ? text.slice(0, 80) + "..." : text;
+      // Right after launch the conductor may still be starting; a record
+      // that lands late beats a conversation that never exists. This runs
+      // off the turn's critical path (fire-and-forget from the bubble).
+      await waitForHolochainReady(90_000);
       const hash = await startConversation(agentKey, ai.label, model, title);
       if (!hash) {
         console.error("[Agent] User turn NOT recorded - starting the conversation failed (see warning above)");
