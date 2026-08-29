@@ -510,7 +510,7 @@ export default component$(() => {
                             {store.blenderAddonBusy === "installing" ? "Installing..." : store.blenderAddonBusy === "confirm" ? "Install it now" : "Install the add-on"}
                           </button>
                           {store.blenderAddonBusy === "confirm" && (
-                            <span class="text-[var(--text-muted)]">Runs Blender's own extension installer on the add-on that came with the fetch, enables it, and turns on Blender's "Allow Online Access" setting (the add-on will not open its local connection without it). Restart Blender afterwards if it is open.</span>
+                            <span class="text-[var(--text-muted)]">Runs Blender's own extension installer on the add-on that came with the fetch, enables it, and turns on Blender's "Allow Online Access" setting - the add-on will not open its connection without it. That connection is local (this computer only); the setting is Blender's, and also lets Blender check its own extensions site for updates. Restart Blender afterwards if it is open.</span>
                           )}
                         </>
                       )}
