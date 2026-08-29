@@ -8,9 +8,7 @@ interface ConversationsDrawerProps {
   loading: boolean;
   /** Records answered empty inside the launch grace window - "not yet", not "none". */
   warming?: boolean;
-  /** The live read did not answer (timed out) and the list is the saved copy. */
-  stale?: boolean;
-  onRefresh$?: QRL<() => void>;
+
   onClose$: QRL<() => void>;
   onResume$: QRL<(item: ConversationListItem) => void>;
   onRename$: QRL<(hash: string, title: string) => void>;
@@ -46,7 +44,7 @@ function whenText(us: number): string {
  * data.)
  */
 export const ConversationsDrawer = component$<ConversationsDrawerProps>(
-  ({ open, items, loading, warming, stale, onRefresh$, onClose$, onResume$, onRename$ }) => {
+  ({ open, items, loading, warming, onClose$, onResume$, onRename$ }) => {
     const renamingHash = useSignal<string | null>(null);
     const renameDraft = useSignal("");
     /** Filter by AI - null = all. Cleared when the filtered AI has no rows. */
@@ -154,12 +152,6 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
             {loading && !warming && (
               <p class="px-4 py-3 text-sm text-[var(--text-muted)]">
                 Loading your conversations..
-              </p>
-            )}
-            {stale && !loading && (
-              <p class="mx-4 mb-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-2 text-xs text-[var(--text-secondary)]">
-                Showing your saved list - your latest records did not answer in time.{" "}
-                <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={() => { onRefresh$?.(); }}>Try again</button>
               </p>
             )}
             {warming && items.length === 0 && (
