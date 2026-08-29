@@ -48,6 +48,9 @@ import { extractOnlineError } from "../utils/onlineErrors";
 
 export interface AgentSessionState {
   folderPath: string | null;
+  /** project = a folder the person opened; tools = a scratch workspace the
+   *  chat runs its tool-carrying turns in (no folder shown, no folder memory). */
+  mode: "project" | "tools" | null;
   /** idle = no folder open; starting = process/handshake in flight;
    *  ready = session open, waiting for input; working = turn in flight;
    *  stopped = process exited while a folder was open (needs reopen). */
@@ -361,6 +364,7 @@ function actionOutput(update: any): { output?: string; outputLines?: number } {
 export function useAgentSession(props: UseAgentSessionProps) {
   const state = useStore<AgentSessionState>({
     folderPath: null,
+    mode: null,
     status: "idle",
     statusNote: "",
     pendingPermissionId: null,
@@ -464,7 +468,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       }
       props.chatState.conversationHash = hash;
       props.chatState.messageSequence = 0;
-      if (state.folderPath) rememberConversationFolder(hash, state.folderPath);
+      if (state.folderPath && state.mode === "project") rememberConversationFolder(hash, state.folderPath);
       rememberLastConversation({ hash, agentKey, aiId: ai.id, title });
     }
     const seq = props.chatState.messageSequence;
@@ -846,6 +850,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       reviseMemory$(outgoing).catch(() => {});
     }
     state.folderPath = path;
+    state.mode = "project";
     state.status = "starting";
     state.statusNote = "Starting the agent...";
     state.touchedFiles = [];
@@ -895,12 +900,79 @@ export function useAgentSession(props: UseAgentSessionProps) {
     }
   });
 
+  /**
+   * Tools in chat: the agent harness behind an ordinary conversation. The AI
+   * carries MCP tools, so its turns run through a session in a per-AI
+   * scratch workspace - same loop, same approvals, same steps in the thread -
+   * with none of the project trappings (no folder pill, no recent folder, no
+   * folder memory, no project-memory notes). Returns false when it cannot
+   * start (Build not installed, no agent-ready model): the caller answers
+   * directly instead.
+   */
+  const openToolsSession$ = $(async (): Promise<boolean> => {
+    const ai = props.selectedAi.value;
+    const aiId = ai.aiConfig?.id;
+    if (!aiId || !ai.aiConfig?.mcp?.length) return false;
+    let path: string;
+    try {
+      path = (await invokeTauri("tool_session_dir", { aiId })) as string;
+    } catch {
+      return false;
+    }
+    if (state.folderPath === path && (state.status === "ready" || state.status === "working" || state.status === "starting")) {
+      return true;
+    }
+    if (state.folderPath && state.mode === "project" && sessionTurns.value > 0) {
+      reviseMemory$(state.folderPath).catch(() => {});
+    }
+    state.folderPath = path;
+    state.mode = "tools";
+    state.status = "starting";
+    state.statusNote = "Getting your tools ready...";
+    state.touchedFiles = [];
+    try {
+      const st = (await invokeTauri("build_install_status")) as { installed: boolean; installed_version: string | null };
+      if (!st.installed) {
+        state.folderPath = null;
+        state.mode = null;
+        state.status = "idle";
+        return false;
+      }
+      state.autoPermissionsSupported = buildSupportsAutoPermissions(st.installed_version);
+    } catch {
+      state.autoPermissionsSupported = true;
+    }
+    state.permissionMode = state.autoPermissionsSupported ? permissionModeForFolder(path) : "ask";
+    try {
+      await invokeTauri("start_build_agent", {
+        binary: resolveBinaryPath(),
+        cwd: path,
+        model: aiModelSlug(ai),
+        aiModel: ai.aiConfig?.model ?? null,
+        eagerness: localStorage.getItem("smartRoutingEagerness") || "balanced",
+        // No project-memory server for a tools session: notes belong to folders.
+        agentKey: null,
+        aiLabel: ai.label ?? null,
+        permissionMode: state.permissionMode,
+        mcpNames: ai.aiConfig?.mcp ?? [],
+      });
+      return true;
+    } catch (err) {
+      state.status = "idle";
+      state.folderPath = null;
+      state.mode = null;
+      console.warn("[Agent] tools session did not start:", err);
+      return false;
+    }
+  });
+
   const closeFolder$ = $(async () => {
     const closing = state.folderPath;
-    if (closing && sessionTurns.value > 0) {
+    if (closing && sessionTurns.value > 0 && state.mode === "project") {
       reviseMemory$(closing).catch(() => {});
     }
     state.folderPath = null;
+    state.mode = null;
     state.status = "idle";
     state.statusNote = "";
     state.pendingPermissionId = null;
@@ -1117,7 +1189,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       // catches up).
       memoryPending.value = false;
       toolsPending.value = !!props.selectedAi.value.aiConfig?.mcp?.length;
-      const folder = state.folderPath;
+      const folder = state.mode === "project" ? state.folderPath : null;
       if (folder) {
         // The first prompt always carries at least the tool hint; the
         // memory content joins it when the chain read lands in time.
@@ -1952,6 +2024,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
 
   return {
     agentState: state,
+    openToolsSession$,
     undoTurn$,
     openFolder$,
     closeFolder$,

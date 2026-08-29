@@ -1128,8 +1128,8 @@ export function useChat(props: UseChatProps) {
         const tools = selectedAi.aiConfig.mcp ?? [];
         if (tools.length) {
           systemPrompt +=
-            `\n\nTools you carry: ${tools.join(", ")}. They work only inside a project (a folder opened in the conversation), not in this chat. ` +
-            "If the person asks for something one of these tools would do - opening a web page, controlling a program or a device - say plainly that you can do it in a project and suggest opening a folder as a project with you. Do not pretend to have done it.";
+            `\n\nTools you carry: ${tools.join(", ")}. They are not available on this turn - the helper that runs them (Projects, from Add-ons > Components) is not installed or could not start. ` +
+            "If the person asks for something one of these tools would do - opening a web page, controlling a program or a device - say plainly that it needs Projects installed, and do not pretend to have done it.";
         }
 
         // Generous ceiling — the prompt shapes the actual length; this just prevents

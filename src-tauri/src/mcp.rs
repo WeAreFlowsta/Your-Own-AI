@@ -724,3 +724,22 @@ pub async fn mcp_blender_addon_install(app: AppHandle) -> Result<String, String>
     .map_err(|e| e.to_string())??;
     Ok(result)
 }
+
+/// The scratch workspace a chat "tools session" runs in - the agent needs a
+/// folder, the conversation is not about one. Per AI, under app data, kept
+/// between turns (a tool may leave files there; the person can find them).
+#[tauri::command]
+pub async fn tool_session_dir(app: AppHandle, ai_id: String) -> Result<String, String> {
+    let safe: String = ai_id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').collect();
+    if safe.is_empty() {
+        return Err("no AI id".into());
+    }
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("cannot resolve app data dir: {e}"))?
+        .join("tool-sessions")
+        .join(safe);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create the tools workspace: {e}"))?;
+    Ok(dir.to_string_lossy().to_string())
+}

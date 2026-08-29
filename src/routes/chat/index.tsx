@@ -154,6 +154,7 @@ export default component$(() => {
   const {
     agentState,
     openFolder$,
+    openToolsSession$,
     closeFolder$,
     sendPrompt$: sendAgentPrompt$,
     cancelTurn$,
@@ -212,6 +213,7 @@ export default component$(() => {
         .then((status) => {
           if (status.folder && !agentState.folderPath) {
             agentState.folderPath = status.folder;
+            agentState.mode = status.folder.includes("tool-sessions") ? "tools" : "project";
             // Mid-startup remount keeps the starting state; the hook's own
             // agent-ready listener flips it live.
             agentState.status = status.running
@@ -434,7 +436,7 @@ export default component$(() => {
       // silently swap it. The transcript's own record wins; the client map
       // covers conversations from before the transcript carried it.
       const folder = folderPath ?? getConversationFolder(target.hash);
-      if (folder && folder !== agentState.folderPath) {
+      if (folder && !folder.includes("tool-sessions") && folder !== agentState.folderPath) {
         resumeFolderAsk.value = folder;
       }
     },
@@ -943,6 +945,26 @@ export default component$(() => {
       return;
     }
 
+    // No folder, but the AI carries tools: run the turn through a tools
+    // session (the harness in a scratch workspace) so Blender, a browser or
+    // the printer work right here in chat. Falls back to a direct answer
+    // when the session cannot start (Build not installed, no agent-ready
+    // model) - the AI then says tools need Projects.
+    if (
+      selectedAi.value.aiConfig?.mcp?.length &&
+      attachedImages.value.length === 0 &&
+      (await openToolsSession$())
+    ) {
+      sendAgentPrompt$(finalInput, {
+        context: fileContext,
+        files: attachedFiles.value.map((f) => f.filename),
+      });
+      input.value = "";
+      selectedAction.value = null;
+      attachedFiles.value = [];
+      return;
+    }
+
     const images = attachedImages.value.map((i) => i.dataUrl);
     sendMessage(finalInput, selectedAction.value, fileContext, images);
     input.value = "";
@@ -992,8 +1014,10 @@ export default component$(() => {
     attachedImages.value = [];
     // The workspace is app-wide: a new conversation starts IN it, with a
     // fresh agent session in the same folder. (Process restart for now -
-    // the generation guard makes it safe; session-in-place later.)
-    if (agentState.folderPath) openFolder$(agentState.folderPath);
+    // the generation guard makes it safe; session-in-place later.) A tools
+    // session simply ends - the next tool-carrying turn starts a fresh one.
+    if (agentState.mode === "tools") closeFolder$();
+    else if (agentState.folderPath) openFolder$(agentState.folderPath);
   });
 
   // Send a suggested command to the user's own terminal - visible,
@@ -1260,9 +1284,9 @@ export default component$(() => {
           isModelLoading={isModelLoading.value}
           modelTooBig={modelTooBig.value}
           showModelWidget={showModelWidget.value && currentModel.value !== null}
-          folderPath={agentState.folderPath}
+          folderPath={agentState.mode === "tools" ? null : agentState.folderPath}
           folderStatus={
-            agentState.status === "idle" ? undefined : agentState.status
+            agentState.status === "idle" || agentState.mode === "tools" ? undefined : agentState.status
           }
           onCloseFolder$={handleCloseFolder}
           permissionMode={agentState.permissionMode}
