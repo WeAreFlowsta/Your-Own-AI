@@ -51,6 +51,9 @@ export interface AgentSessionState {
   /** project = a folder the person opened; tools = a scratch workspace the
    *  chat runs its tool-carrying turns in (no folder shown, no folder memory). */
   mode: "project" | "tools" | null;
+  /** Tool servers that failed to start for this session (from their stderr
+   *  logs) - surfaced as notices on the next turn, then cleared. */
+  toolStartFailures: { name: string; tail: string }[];
   /** idle = no folder open; starting = process/handshake in flight;
    *  ready = session open, waiting for input; working = turn in flight;
    *  stopped = process exited while a folder was open (needs reopen). */
@@ -365,6 +368,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
   const state = useStore<AgentSessionState>({
     folderPath: null,
     mode: null,
+    toolStartFailures: [],
     status: "idle",
     statusNote: "",
     pendingPermissionId: null,
@@ -640,9 +644,16 @@ export function useAgentSession(props: UseAgentSessionProps) {
         aiImageUrl: props.selectedAi.value.imageUrl || undefined,
         isLoading: true,
         agentTurn: true,
-        agentLog: [],
+        // A tool server that died at start is invisible otherwise - say so
+        // on the turn, once, with the reason its log gave.
+        agentLog: state.toolStartFailures.map((f) => ({
+          id: `toolstart-${f.name}-${id}`,
+          type: "notice" as const,
+          text: `${f.name} didn't start, so its tools are not available this session. Its log says: ${f.tail}`,
+        })),
       },
     ];
+    state.toolStartFailures = [];
     props.chatState.isLoading = true;
     // Fire-and-forget - chat always works even if the conductor is down.
     recordUserTurn(userText).catch(() => {});
@@ -1183,6 +1194,30 @@ export function useAgentSession(props: UseAgentSessionProps) {
       );
       sessionTurns.value = 0;
       sessionDigest.value = "";
+      // Tool servers start with the session; a few seconds later their
+      // stderr logs know whether they lived. Ask once, surface on the turn.
+      state.toolStartFailures = [];
+      const carried = props.selectedAi.value.aiConfig?.mcp ?? [];
+      if (carried.length) {
+        setTimeout(async () => {
+          try {
+            const failures = (await invokeTauri("mcp_start_failures", { names: carried })) as { name: string; tail: string }[];
+            if (failures?.length) {
+              state.toolStartFailures = failures;
+              // A turn already on screen (typed during startup) gets it now.
+              const current = turnId.value;
+              if (current && props.chatState.isLoading) {
+                props.chatState.messages = props.chatState.messages.map((m) =>
+                  m.id === current
+                    ? { ...m, agentLog: [...(m.agentLog ?? []), ...failures.map((f) => ({ id: `toolstart-${f.name}-${current}`, type: "notice" as const, text: `${f.name} didn't start, so its tools are not available this session. Its log says: ${f.tail}` }))] }
+                    : m,
+                );
+                state.toolStartFailures = [];
+              }
+            }
+          } catch { /* no verdict */ }
+        }, 4000);
+      }
       // Load this folder's workspace memory; the first prompt carries it.
       // Fire-and-forget - a slow chain read must not delay readiness, and
       // a prompt sent before it lands simply goes without (next session

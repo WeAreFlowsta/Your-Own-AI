@@ -743,3 +743,35 @@ pub async fn tool_session_dir(app: AppHandle, ai_id: String) -> Result<String, S
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create the tools workspace: {e}"))?;
     Ok(dir.to_string_lossy().to_string())
 }
+
+#[derive(Serialize, Clone, Debug)]
+pub struct StartFailure {
+    pub name: String,
+    pub tail: String,
+}
+
+/// Which of the named servers failed to start in the last minute, judged
+/// from the agent's per-server stderr logs (`~/.your-own-ai-build/logs/mcp/
+/// <name>.stderr.log`). The only place a dead server shows up otherwise.
+#[tauri::command]
+pub async fn mcp_start_failures(names: Vec<String>) -> Result<Vec<StartFailure>, String> {
+    let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from) else { return Ok(vec![]) };
+    let dir = home.join(".your-own-ai-build").join("logs").join("mcp");
+    let mut out = vec![];
+    for name in names {
+        let p = dir.join(format!("{name}.stderr.log"));
+        let Ok(meta) = std::fs::metadata(&p) else { continue };
+        let fresh = meta.modified().ok().and_then(|m| m.elapsed().ok()).map(|d| d.as_secs() < 90).unwrap_or(false);
+        if !fresh {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&p) else { continue };
+        let recent: Vec<&str> = text.lines().rev().take(40).collect::<Vec<_>>().into_iter().rev().collect();
+        let failed = recent.iter().any(|l| l.contains("Traceback") || l.contains("Error:") || l.contains("error:") || l.contains("ModuleNotFoundError") || l.contains("command not found") || l.contains("No such file"));
+        if failed {
+            let tail = recent.iter().rev().filter(|l| !l.trim().is_empty()).take(3).collect::<Vec<_>>().into_iter().rev().map(|l| l.trim()).collect::<Vec<_>>().join(" | ");
+            out.push(StartFailure { name, tail: tail.chars().take(300).collect() });
+        }
+    }
+    Ok(out)
+}

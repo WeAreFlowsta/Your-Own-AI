@@ -703,6 +703,7 @@ pub fn run() {
             mcp::mcp_blender_addon_status,
             mcp::mcp_blender_addon_install,
             mcp::tool_session_dir,
+            mcp::mcp_start_failures,
             skills::skills_pack_zip,
             flowsta::share_submit,
         ])
