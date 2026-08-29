@@ -51,6 +51,8 @@ export interface AgentSessionState {
   /** project = a folder the person opened; tools = a scratch workspace the
    *  chat runs its tool-carrying turns in (no folder shown, no folder memory). */
   mode: "project" | "tools" | null;
+  /** The AI a tools session belongs to - another AI's turns never ride it. */
+  sessionAiId: string | null;
   /** Tool servers that failed to start for this session (from their stderr
    *  logs) - surfaced as notices on the next turn, then cleared. */
   toolStartFailures: { name: string; tail: string }[];
@@ -368,6 +370,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
   const state = useStore<AgentSessionState>({
     folderPath: null,
     mode: null,
+    sessionAiId: null,
     toolStartFailures: [],
     status: "idle",
     statusNote: "",
@@ -938,7 +941,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     } catch {
       return false;
     }
-    if (state.folderPath === path && (state.status === "ready" || state.status === "working" || state.status === "starting")) {
+    if (state.folderPath === path && state.sessionAiId === aiId && (state.status === "ready" || state.status === "working" || state.status === "starting")) {
       return true;
     }
     if (state.folderPath && state.mode === "project" && sessionTurns.value > 0) {
@@ -946,6 +949,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     }
     state.folderPath = path;
     state.mode = "tools";
+    state.sessionAiId = aiId;
     state.status = "starting";
     state.statusNote = "Getting your tools ready...";
     state.touchedFiles = [];
@@ -992,6 +996,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     }
     state.folderPath = null;
     state.mode = null;
+    state.sessionAiId = null;
     state.status = "idle";
     state.statusNote = "";
     state.pendingPermissionId = null;

@@ -222,8 +222,15 @@ export default component$(() => {
       )
         .then((status) => {
           if (status.folder && !agentState.folderPath) {
+            const isTools = status.folder.includes("tool-sessions");
+            if (isTools && !selectedAi.value.aiConfig?.mcp?.length) {
+              // Left over from an AI that carries tools; this one does not.
+              invoke("stop_build_agent").catch(() => {});
+              return;
+            }
             agentState.folderPath = status.folder;
-            agentState.mode = status.folder.includes("tool-sessions") ? "tools" : "project";
+            agentState.mode = isTools ? "tools" : "project";
+            if (isTools) agentState.sessionAiId = selectedAi.value.aiConfig?.id ?? null;
             // Mid-startup remount keeps the starting state; the hook's own
             // agent-ready listener flips it live.
             agentState.status = status.running
@@ -907,6 +914,12 @@ export default component$(() => {
     if (id && id !== "__placeholder__") {
       localStorage.setItem("lastAiId", id);
     }
+    // A tools session belongs to one AI. Switching to another ends it -
+    // the next tool-carrying turn starts its own.
+    const aiId = selectedAi.value.aiConfig?.id;
+    if (agentState.mode === "tools" && aiId && agentState.sessionAiId && agentState.sessionAiId !== aiId && !chatState.isLoading) {
+      closeFolder$();
+    }
   });
 
   // --- Callbacks (replace useCallback with $()) ---
@@ -941,7 +954,11 @@ export default component$(() => {
     // Folder open -> the agent session is the one brain for this
     // conversation. Attached-file text rides along; images are a direct-chat
     // feature for now.
-    if (agentState.folderPath) {
+    const toolsSessionIsThisAis =
+      agentState.mode === "tools" &&
+      !!selectedAi.value.aiConfig?.mcp?.length &&
+      (!agentState.sessionAiId || agentState.sessionAiId === selectedAi.value.aiConfig?.id);
+    if (agentState.folderPath && (agentState.mode === "project" || toolsSessionIsThisAis)) {
       // Document text goes to the model as context; the bubble shows file
       // chips - never the extracted text (a PDF used to land wholesale in
       // the user's bubble on this path).
