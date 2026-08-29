@@ -145,7 +145,7 @@ const SECTIONS = [
   { id: "settings-memory", label: "Memory" },
   { id: "settings-routing", label: "Routing" },
   { id: "settings-agent", label: "Agent" },
-  { id: "settings-components", label: "Components" },
+  { id: "settings-components", label: "Storage" },
   { id: "settings-engines", label: "Engines" },
   { id: "settings-external", label: "External access" },
   { id: "settings-appearance", label: "Appearance" },
@@ -1427,7 +1427,7 @@ export default component$(() => {
                 </p>
               </section>
 
-              {/* On-demand capability models (memory recall, etc.) */}
+              {/* Storage: location + what is installed (get more in Add-ons > Components) */}
               <div id="settings-components" class="scroll-mt-4">
                 <ComponentsSettings />
               </div>

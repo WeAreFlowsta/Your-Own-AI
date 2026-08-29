@@ -405,6 +405,22 @@ pub async fn mcp_requirement_plan(program: String) -> Result<RequirementPlan, St
             else if pacman { plan("terminal", "sudo pacman -S --noconfirm nodejs npm", "Needs your password, so it runs in your terminal.") }
             else { plan("link", "https://nodejs.org/en/download", "Download Node.js from nodejs.org.") }
         }
+        "python" | "python3" => {
+            if winget { plan("run", "winget install --id Python.Python.3.12 -e --source winget --accept-package-agreements --accept-source-agreements", "Installs Python 3.12 with winget, Windows' own package manager.") }
+            else if brew { plan("run", "brew install python", "Installs Python with Homebrew.") }
+            else if apt { plan("terminal", "sudo apt-get install -y python3 python3-venv python3-pip", "Needs your password, so it runs in your terminal.") }
+            else if dnf { plan("terminal", "sudo dnf install -y python3 python3-pip", "Needs your password, so it runs in your terminal.") }
+            else if pacman { plan("terminal", "sudo pacman -S --noconfirm python python-pip", "Needs your password, so it runs in your terminal.") }
+            else { plan("link", "https://www.python.org/downloads/", "Download Python from python.org.") }
+        }
+        "docker" => {
+            if winget { plan("run", "winget install --id Docker.DockerDesktop -e --source winget --accept-package-agreements --accept-source-agreements", "Installs Docker Desktop with winget; it asks you to sign out and in once.") }
+            else if brew { plan("run", "brew install --cask docker", "Installs Docker Desktop with Homebrew; open it once to finish setup.") }
+            else if apt { plan("terminal", "sudo apt-get install -y docker.io && sudo usermod -aG docker $USER", "Needs your password, so it runs in your terminal; sign out and in afterwards.") }
+            else if dnf { plan("terminal", "sudo dnf install -y docker && sudo systemctl enable --now docker && sudo usermod -aG docker $USER", "Needs your password, so it runs in your terminal.") }
+            else if pacman { plan("terminal", "sudo pacman -S --noconfirm docker && sudo systemctl enable --now docker && sudo usermod -aG docker $USER", "Needs your password, so it runs in your terminal.") }
+            else { plan("link", "https://docs.docker.com/get-docker/", "Get Docker from docker.com.") }
+        }
         _ => plan("link", "", "No installer known for this program."),
     })
 }

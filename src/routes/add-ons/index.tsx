@@ -6,7 +6,7 @@
 
 import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
 import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
-import { LuFolderOpen, LuPuzzle, LuSparkles, LuWrench, LuChevronRight } from "@qwikest/icons/lucide";
+import { LuFolderOpen, LuPuzzle, LuSparkles, LuWrench, LuBoxes, LuChevronRight } from "@qwikest/icons/lucide";
 import AppHeader from "../../components/AppHeader";
 import { useHeaderWorkspace } from "../../hooks/useHeaderWorkspace";
 import { listSkills } from "../../utils/skills";
@@ -56,6 +56,14 @@ export default component$(() => {
       blurb: "Programs your AIs can work in - Blender, a browser, a 3D printer, your smart home. Chosen per AI, every action approved by you.",
       meta: "In projects",
       href: "/add-ons/mcp",
+    },
+    {
+      id: "components",
+      icon: LuBoxes,
+      title: "Components",
+      blurb: "What this computer can get: engines for your hardware, memory, vision and OCR models, and the programs tools need. Manage them in Settings.",
+      meta: "For this computer",
+      href: "/add-ons/components",
     },
     {
       id: "characters",
