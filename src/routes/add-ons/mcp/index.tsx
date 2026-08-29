@@ -8,7 +8,7 @@
  */
 import { component$, useSignal, useStore, useVisibleTask$, $ } from "@builder.io/qwik";
 import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
-import { LuWrench, LuTrash2, LuLoader, LuChevronLeft, LuUsers, LuAlertTriangle } from "@qwikest/icons/lucide";
+import { LuWrench, LuTrash2, LuLoader, LuChevronLeft, LuUsers, LuAlertTriangle, LuCheck } from "@qwikest/icons/lucide";
 import AppHeader from "../../../components/AppHeader";
 import { useHeaderWorkspace } from "../../../hooks/useHeaderWorkspace";
 import { useAiData, useAiDataActions } from "../../../contexts/AiDataContext";
@@ -384,17 +384,22 @@ export default component$(() => {
                   )}
                   <div class="flex items-center justify-between gap-2 mt-auto">
                     <span class="text-xs text-[var(--text-muted)]">
-                      {installed ? "Added" : ""}
+                      {installed ? "In your tools below - give it to an AI" : ""}
                     </span>
-                    <LiquidMetalButton
-                      variant={installed ? "secondary" : "primary"}
-                      disabled={!!store.busy || checking || missing.length > 0}
-                      onClick$={() => addPreset(pid)}
-                      class="flex items-center gap-1.5 h-9 px-4 text-sm"
-                    >
-                      {store.busy === p.id && <LuLoader class="h-4 w-4 animate-spin" />}
-                      {installed ? "Update" : missing.length ? "Install what it needs first" : p.fetch ? "Fetch and add" : "Add"}
-                    </LiquidMetalButton>
+                    {installed && !p.fetch ? (
+                      <span class="inline-flex items-center gap-1.5 h-9 px-4 text-sm text-emerald-500"><LuCheck class="h-4 w-4" /> Added</span>
+                    ) : (
+                      <LiquidMetalButton
+                        variant={installed ? "secondary" : "primary"}
+                        disabled={!!store.busy || checking || missing.length > 0}
+                        onClick$={() => addPreset(pid)}
+                        class="flex items-center gap-1.5 h-9 px-4 text-sm"
+                        title={installed ? "Fetch the latest source again" : undefined}
+                      >
+                        {store.busy === p.id && <LuLoader class="h-4 w-4 animate-spin" />}
+                        {installed ? "Update source" : missing.length ? "Install what it needs first" : p.fetch ? "Fetch and add" : "Add"}
+                      </LiquidMetalButton>
+                    )}
                   </div>
                 </div>
               );
