@@ -7,6 +7,15 @@ import { invoke } from "@tauri-apps/api/core";
 import type { UserDefinedAI } from "../types";
 import { directoryItems, type DirectoryItem } from "./directory";
 
+export interface ConfigField {
+  key: string;
+  label: string;
+  kind: "url" | "secret" | "text" | "path";
+  required?: boolean;
+  hint?: string;
+  where?: string;
+  prefix?: string;
+}
 export interface McpServer {
   name: string;
   description: string;
@@ -15,8 +24,19 @@ export interface McpServer {
   args: string[];
   env: [string, string][];
   url?: string;
+  /** Settings the tool asks for (from its listing); values are kept on this device. */
+  config?: ConfigField[];
+  values?: Record<string, string>;
   source: string;
   added_at: number;
+}
+/** Save a tool's settings; secret-kind fields go to the encrypted store. */
+export function setToolConfig(name: string, values: Record<string, string>): Promise<McpServer[]> {
+  return invoke<McpServer[]>("mcp_set_config", { name, values });
+}
+/** Which settings are filled in (secrets reported as present, never returned). */
+export function toolConfigStatus(name: string): Promise<Record<string, boolean>> {
+  return invoke<Record<string, boolean>>("mcp_config_status", { name });
 }
 
 export async function listMcpServers(): Promise<McpServer[]> {
@@ -123,6 +143,7 @@ export function presetFromDirectory(d: DirectoryItem): McpPreset | null {
       args: r.transport === "stdio" ? (r.args ?? []) : [],
       env: [],
       url: r.transport === "http" ? r.url : undefined,
+      config: r.config ?? [],
       source: `directory:${d.id}`,
       added_at: 0,
     }),

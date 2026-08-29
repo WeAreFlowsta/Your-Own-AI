@@ -30,6 +30,7 @@ export interface DirectoryItem {
     needs?: { program: string; label: string; install: string }[];
     fetch?: { url: string; dest: string; size: string };
     also?: string;
+    config?: { key: string; label: string; kind: "url" | "secret" | "text" | "path"; required?: boolean; hint?: string; where?: string; prefix?: string }[];
   };
   size_chars?: number;
   runs_programs?: boolean;

@@ -9,8 +9,33 @@
 //! tool call goes through the same approval step as a file edit.
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
+
+/// A setting a tool asks for. The listing describes it; the person fills it
+/// in on Add; the app keeps it on this device (secrets encrypted with the
+/// same key that protects transcripts). `where_` says how the value reaches
+/// the server: "env" (default), "arg" (replaces `${KEY}` in args/command/url),
+/// or "header:<Name>" for the http transport.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct ConfigField {
+    pub key: String,
+    #[serde(default)]
+    pub label: String,
+    /// "url" | "secret" | "text" | "path"
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub hint: String,
+    #[serde(default, rename = "where")]
+    pub where_: String,
+    /// Put in front of the value on the way out ("Bearer " for a token header).
+    #[serde(default)]
+    pub prefix: String,
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct McpServer {
@@ -28,6 +53,12 @@ pub struct McpServer {
     pub env: Vec<(String, String)>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Settings the tool asks for (from its listing).
+    #[serde(default)]
+    pub config: Vec<ConfigField>,
+    /// Filled-in values for non-secret settings; secrets live encrypted apart.
+    #[serde(default)]
+    pub values: HashMap<String, String>,
     /// Where it came from: "manual" | "directory:<id>" | a preset id.
     #[serde(default)]
     pub source: String,
@@ -60,6 +91,50 @@ fn save(app: &AppHandle, list: &[McpServer]) -> Result<(), String> {
     std::fs::write(&p, text).map_err(|e| format!("cannot write {}: {e}", p.display()))
 }
 
+// --- secrets: `<app data>/mcp-secrets.json` = secretbox of a JSON map
+// "<server>:<KEY>" -> value, under the user's transcript data key.
+fn secrets_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().app_data_dir().map_err(|e| format!("cannot resolve app data dir: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create app data dir: {e}"))?;
+    Ok(dir.join("mcp-secrets.json"))
+}
+fn secrets_key(app: &AppHandle) -> Result<[u8; 32], String> {
+    let dir = app.path().app_data_dir().map_err(|e| format!("cannot resolve app data dir: {e}"))?;
+    crate::transcript_crypto::ensure_recovery_material(&dir)?.data_key()
+}
+fn secrets_load(app: &AppHandle) -> Result<HashMap<String, String>, String> {
+    let p = secrets_path(app)?;
+    if !p.is_file() {
+        return Ok(HashMap::new());
+    }
+    #[derive(Deserialize)]
+    struct Sealed { nonce: String, cipher: String }
+    let sealed: Sealed = serde_json::from_str(&std::fs::read_to_string(&p).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let nonce = b64.decode(sealed.nonce).map_err(|e| e.to_string())?;
+    let cipher = b64.decode(sealed.cipher).map_err(|e| e.to_string())?;
+    let plain = crate::transcript_crypto::decrypt(&secrets_key(app)?, &nonce, &cipher)?;
+    serde_json::from_slice(&plain).map_err(|e| e.to_string())
+}
+fn secrets_save(app: &AppHandle, map: &HashMap<String, String>) -> Result<(), String> {
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let plain = serde_json::to_vec(map).map_err(|e| e.to_string())?;
+    let (nonce, cipher) = crate::transcript_crypto::encrypt(&secrets_key(app)?, &plain)?;
+    let text = serde_json::to_string(&json!({ "nonce": b64.encode(nonce), "cipher": b64.encode(cipher) })).map_err(|e| e.to_string())?;
+    std::fs::write(secrets_path(app)?, text).map_err(|e| e.to_string())
+}
+
+/// `${KEY}` -> value, for every known value.
+fn fill(template: &str, vals: &HashMap<String, String>) -> String {
+    let mut out = template.to_string();
+    for (k, v) in vals {
+        out = out.replace(&format!("${{{k}}}"), v);
+    }
+    out
+}
+
 /// `~/x` -> the user's home; presets store paths that way so one entry
 /// works on every machine.
 fn expand_home(app: &AppHandle, v: &str) -> String {
@@ -84,25 +159,70 @@ fn resolve_program(cmd: &str) -> String {
 /// skipped, never an error - an AI may reference a server that was removed).
 pub(crate) fn acp_entries(app: &AppHandle, names: &[String]) -> Vec<Value> {
     let Ok(list) = load(app) else { return vec![] };
+    let secrets = secrets_load(app).unwrap_or_default();
     names
         .iter()
         .filter_map(|n| list.iter().find(|s| &s.name == n))
-        .filter_map(|s| match s.transport.as_str() {
-            "stdio" => Some(json!({
-                "name": s.name,
-                "command": resolve_program(&expand_home(app, &s.command.clone().unwrap_or_default())),
-                "args": s.args.iter().map(|a| expand_home(app, a)).collect::<Vec<_>>(),
-                "env": s.env.iter().map(|(k, v)| json!({ "name": k, "value": v })).collect::<Vec<_>>(),
-            })),
-            "http" => Some(json!({
-                "type": "http",
-                "name": s.name,
-                "url": s.url.clone().unwrap_or_default(),
-                "headers": [],
-            })),
-            _ => None,
+        .filter_map(|s| {
+            // Every value the tool asked for, secrets included.
+            let mut vals = s.values.clone();
+            for f in &s.config {
+                if f.kind == "secret" {
+                    if let Some(v) = secrets.get(&format!("{}:{}", s.name, f.key)) {
+                        vals.insert(f.key.clone(), v.clone());
+                    }
+                }
+            }
+            if let Some(missing) = s.config.iter().find(|f| f.required && vals.get(&f.key).map(|v| v.trim().is_empty()).unwrap_or(true)) {
+                log::warn!("[mcp] {} skipped: setting {} not filled in", s.name, missing.key);
+                return None;
+            }
+            let mut env: Vec<Value> = s.env.iter().map(|(k, v)| json!({ "name": k, "value": v })).collect();
+            let mut headers: Vec<Value> = vec![];
+            for f in &s.config {
+                let Some(v) = vals.get(&f.key) else { continue };
+                let v = format!("{}{}", f.prefix, v);
+                if let Some(h) = f.where_.strip_prefix("header:") {
+                    headers.push(json!({ "name": h, "value": v }));
+                } else if f.where_ != "arg" {
+                    env.push(json!({ "name": f.key, "value": v }));
+                }
+            }
+            match s.transport.as_str() {
+                "stdio" => Some(json!({
+                    "name": s.name,
+                    "command": resolve_program(&expand_home(app, &fill(&s.command.clone().unwrap_or_default(), &vals))),
+                    "args": s.args.iter().map(|a| expand_home(app, &fill(a, &vals))).collect::<Vec<_>>(),
+                    "env": env,
+                })),
+                "http" => Some(json!({
+                    "type": "http",
+                    "name": s.name,
+                    "url": fill(&s.url.clone().unwrap_or_default(), &vals),
+                    "headers": headers,
+                })),
+                _ => None,
+            }
         })
         .collect()
+}
+
+/// Local, LAN, or a template the person's settings fill in - never the
+/// open internet (a tool server is something on your machine or your network).
+fn is_local_or_lan(url: &str) -> bool {
+    if url.contains("${") {
+        return true;
+    }
+    let Some(rest) = url.strip_prefix("http://").or_else(|| url.strip_prefix("https://")) else { return false };
+    let host = rest.split(['/', ':']).next().unwrap_or("").to_lowercase();
+    host == "localhost"
+        || host.ends_with(".local")
+        || host.ends_with(".lan")
+        || host.ends_with(".home")
+        || host.starts_with("127.")
+        || host.starts_with("10.")
+        || host.starts_with("192.168.")
+        || (host.starts_with("172.") && host.split('.').nth(1).and_then(|s| s.parse::<u8>().ok()).map(|n| (16..=31).contains(&n)).unwrap_or(false))
 }
 
 #[tauri::command]
@@ -124,14 +244,19 @@ pub async fn mcp_add(app: AppHandle, server: McpServer) -> Result<Vec<McpServer>
         }
         "http" => {
             let url = server.url.as_deref().unwrap_or("").trim();
-            if !(url.starts_with("http://127.0.0.1") || url.starts_with("http://localhost")) {
-                return Err("only local servers (127.0.0.1 or localhost) can be added here".into());
+            if !is_local_or_lan(url) {
+                return Err("only servers on this computer or your own network can be added here".into());
             }
         }
         _ => return Err("transport must be stdio or http".into()),
     }
     let mut list = load(&app)?;
+    let previous_values = list.iter().find(|s| s.name == name).map(|s| s.values.clone()).unwrap_or_default();
     list.retain(|s| s.name != name);
+    let mut server = server;
+    for (k, v) in previous_values {
+        server.values.entry(k).or_insert(v);
+    }
     let added_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -311,4 +436,50 @@ pub async fn mcp_requirement_install(program: String) -> Result<String, String> 
         return Err(format!("the installer finished but {program} was not found yet - open a new terminal or restart the app, then check again"));
     }
     Ok(tail.trim().to_string())
+}
+
+/// Save the settings a tool asked for. Secret-kind fields go to the
+/// encrypted store; the rest sit with the server entry. An empty value
+/// clears the setting.
+#[tauri::command]
+pub async fn mcp_set_config(app: AppHandle, name: String, values: HashMap<String, String>) -> Result<Vec<McpServer>, String> {
+    let mut list = load(&app)?;
+    let Some(server) = list.iter_mut().find(|s| s.name == name) else { return Err("no such tool".into()) };
+    let mut secrets = secrets_load(&app).unwrap_or_default();
+    for f in &server.config {
+        let Some(v) = values.get(&f.key) else { continue };
+        let v = v.trim().to_string();
+        if f.kind == "secret" {
+            let k = format!("{}:{}", server.name, f.key);
+            if v.is_empty() { secrets.remove(&k); } else { secrets.insert(k, v); }
+        } else if v.is_empty() {
+            server.values.remove(&f.key);
+        } else {
+            server.values.insert(f.key.clone(), v);
+        }
+    }
+    secrets_save(&app, &secrets)?;
+    save(&app, &list)?;
+    Ok(list)
+}
+
+/// Which of a tool's settings are filled in (secrets reported as present,
+/// never returned). The page uses it for the "needs its settings" line.
+#[tauri::command]
+pub async fn mcp_config_status(app: AppHandle, name: String) -> Result<HashMap<String, bool>, String> {
+    let list = load(&app)?;
+    let Some(server) = list.iter().find(|s| s.name == name) else { return Err("no such tool".into()) };
+    let secrets = secrets_load(&app).unwrap_or_default();
+    Ok(server
+        .config
+        .iter()
+        .map(|f| {
+            let present = if f.kind == "secret" {
+                secrets.get(&format!("{}:{}", server.name, f.key)).map(|v| !v.is_empty()).unwrap_or(false)
+            } else {
+                server.values.get(&f.key).map(|v| !v.trim().is_empty()).unwrap_or(false)
+            };
+            (f.key.clone(), present)
+        })
+        .collect())
 }

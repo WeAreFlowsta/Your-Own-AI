@@ -26,6 +26,8 @@ import {
   mcpUsedBy,
   mcpSummary,
   readyPresets,
+  setToolConfig,
+  toolConfigStatus,
   type McpPreset,
   type McpServer,
   type RequirementPlan,
@@ -52,6 +54,11 @@ export default component$(() => {
     // the plan shown before running: program -> plan
     plans: {} as Record<string, RequirementPlan>,
     confirmRemove: "" as string,
+    // settings form: which tool, the draft values, and what is filled in
+    configFor: "" as string,
+    configDraft: {} as Record<string, string>,
+    configOk: {} as Record<string, Record<string, boolean>>,
+    configSaving: false,
     usedByOpen: "" as string,
     addOpen: false,
     // manual add form
@@ -66,7 +73,40 @@ export default component$(() => {
   const load = $(async () => {
     store.servers = await listMcpServers();
     store.loading = false;
+    for (const s of store.servers) {
+      if (s.config?.length) {
+        try { store.configOk[s.name] = await toolConfigStatus(s.name); } catch { /* shown as unfilled */ }
+      }
+    }
   });
+
+  const openConfig = $((name: string) => {
+    const s = store.servers.find((x) => x.name === name);
+    store.configFor = name;
+    store.configDraft = {};
+    for (const f of s?.config ?? []) store.configDraft[f.key] = f.kind === "secret" ? "" : (s?.values?.[f.key] ?? "");
+  });
+  const saveConfig = $(async () => {
+    store.configSaving = true;
+    store.error = "";
+    try {
+      const values: Record<string, string> = {};
+      for (const [k, v] of Object.entries(store.configDraft)) if (v.trim()) values[k] = v.trim();
+      store.servers = await setToolConfig(store.configFor, values);
+      store.configOk[store.configFor] = await toolConfigStatus(store.configFor);
+      store.configFor = "";
+      store.note = "Settings saved on this computer.";
+    } catch (e) {
+      store.error = e instanceof Error ? e.message : String(e);
+    } finally {
+      store.configSaving = false;
+    }
+  });
+  const missingSettings = (name: string): string[] => {
+    const s = store.servers.find((x) => x.name === name);
+    const ok = store.configOk[name] ?? {};
+    return (s?.config ?? []).filter((f) => f.required && !ok[f.key]).map((f) => f.label || f.key);
+  };
 
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async () => {
@@ -88,8 +128,14 @@ export default component$(() => {
     store.busy = id;
     try {
       if (preset.fetch) await fetchGit(preset.fetch.url, preset.fetch.dest);
-      store.servers = await addMcpServer(preset.build());
-      store.note = `${preset.title} added. Give it to an AI: Your AIs, edit, Tools.`;
+      const built = preset.build();
+      store.servers = await addMcpServer(built);
+      if (built.config?.length) {
+        store.note = `${preset.title} added - it needs a few settings first.`;
+        await openConfig(built.name);
+      } else {
+        store.note = `${preset.title} added. Give it to an AI: Your AIs, edit, Tools.`;
+      }
     } catch (e) {
       store.error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -394,10 +440,22 @@ export default component$(() => {
                         {s.description && <p class="text-sm text-[var(--text-secondary)]">{s.description}</p>}
                         <p class="text-xs text-[var(--text-muted)] font-mono truncate">{mcpSummary(s)}</p>
                       </div>
-                      <LiquidMetalButton variant="secondary" onClick$={() => { store.confirmRemove = s.name; }} class="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-xs">
-                        <LuTrash2 class="h-3.5 w-3.5" /> Remove
-                      </LiquidMetalButton>
+                      <div class="flex shrink-0 gap-2">
+                        {s.config?.length ? (
+                          <LiquidMetalButton variant="secondary" onClick$={() => openConfig(s.name)} class="flex items-center gap-1.5 px-3 py-1.5 text-xs">
+                            Settings
+                          </LiquidMetalButton>
+                        ) : null}
+                        <LiquidMetalButton variant="secondary" onClick$={() => { store.confirmRemove = s.name; }} class="flex items-center gap-1.5 px-3 py-1.5 text-xs">
+                          <LuTrash2 class="h-3.5 w-3.5" /> Remove
+                        </LiquidMetalButton>
+                      </div>
                     </div>
+                    {missingSettings(s.name).length > 0 && (
+                      <p class="flex items-center gap-1.5 text-xs text-amber-500">
+                        <LuAlertTriangle class="h-3.5 w-3.5" /> Needs its settings before an AI can use it: {missingSettings(s.name).join(", ")}
+                      </p>
+                    )}
                     <button
                       type="button"
                       onClick$={() => { store.usedByOpen = store.usedByOpen === s.name ? "" : s.name; }}
@@ -429,6 +487,44 @@ export default component$(() => {
           )}
         </div>
       </div>
+
+      {store.configFor && (() => {
+        const s = store.servers.find((x) => x.name === store.configFor);
+        return (
+          <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+            <div class="w-full max-w-md rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-header-footer)] p-6 shadow-2xl">
+              <h3 class="text-base font-semibold text-[var(--text-primary)]">Settings for {s?.name}</h3>
+              <p class="mt-1 text-xs text-[var(--text-muted)]">
+                Kept on this computer only. Secrets are stored encrypted and are sent only to this tool.
+              </p>
+              <div class="mt-4 space-y-3">
+                {(s?.config ?? []).map((f) => {
+                  const key = f.key;
+                  const filled = store.configOk[store.configFor]?.[key];
+                  return (
+                    <label key={key} class="block text-xs text-[var(--text-secondary)]">
+                      {f.label || f.key}{f.required ? "" : " (optional)"}
+                      {f.kind === "secret" && filled && <span class="ml-2 text-emerald-500">set - leave blank to keep</span>}
+                      <input
+                        type={f.kind === "secret" ? "password" : "text"}
+                        value={store.configDraft[key] ?? ""}
+                        onInput$={(_, el) => { store.configDraft[key] = el.value; }}
+                        placeholder={f.hint ?? ""}
+                        autocomplete="off"
+                        class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none"
+                      />
+                    </label>
+                  );
+                })}
+              </div>
+              <div class="mt-5 flex justify-end gap-2">
+                <LiquidMetalButton variant="secondary" onClick$={() => { store.configFor = ""; }} disabled={store.configSaving} class="h-9 px-4 text-sm">Cancel</LiquidMetalButton>
+                <LiquidMetalButton onClick$={saveConfig} disabled={store.configSaving} class="h-9 px-4 text-sm">{store.configSaving ? "Saving..." : "Save"}</LiquidMetalButton>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       <ConfirmModal
         isOpen={!!store.confirmRemove}
