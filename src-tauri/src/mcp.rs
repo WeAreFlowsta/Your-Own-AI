@@ -313,6 +313,13 @@ pub(crate) fn which_sync(program: &str) -> Option<String> {
         if let Ok(lad) = std::env::var("LOCALAPPDATA") {
             dirs.push(PathBuf::from(&lad).join("Programs").join("Git").join("cmd"));
             dirs.push(PathBuf::from(&lad).join("Microsoft").join("WinGet").join("Links"));
+            dirs.push(PathBuf::from(&lad).join("Programs").join("uv"));
+            dirs.push(PathBuf::from(&lad).join("uv"));
+            dirs.push(PathBuf::from(&lad).join("Programs").join("Python").join("Launcher"));
+        }
+        if let Some(up) = std::env::var_os("USERPROFILE") {
+            dirs.push(PathBuf::from(&up).join(".local").join("bin"));
+            dirs.push(PathBuf::from(&up).join(".cargo").join("bin"));
         }
         if let Ok(pf) = std::env::var("ProgramFiles") {
             dirs.push(PathBuf::from(&pf).join("Git").join("cmd"));
@@ -443,7 +450,14 @@ pub async fn mcp_requirement_install(program: String) -> Result<String, String> 
     }
     let out = tauri::async_runtime::spawn_blocking(move || {
         if cfg!(windows) {
-            std::process::Command::new("cmd").args(["/C", &plan.command]).output()
+            // PowerShell directly - a quoted pipe inside `cmd /C` is not the
+            // same command the person was shown.
+            if let Some(rest) = plan.command.strip_prefix("powershell ") {
+                let args: Vec<String> = shell_words(rest);
+                std::process::Command::new("powershell").args(args).output()
+            } else {
+                std::process::Command::new("cmd").args(["/C", &plan.command]).output()
+            }
         } else {
             std::process::Command::new("sh").args(["-c", &plan.command]).output()
         }
@@ -457,9 +471,35 @@ pub async fn mcp_requirement_install(program: String) -> Result<String, String> 
         return Err(format!("installer failed: {}", tail.trim()));
     }
     if !has(&program) {
-        return Err(format!("the installer finished but {program} was not found yet - open a new terminal or restart the app, then check again"));
+        return Err(format!(
+            "the installer finished but {program} was not found in the usual places - its last lines: {} - open a new terminal or restart the app, then Check again",
+            tail.trim()
+        ));
     }
     Ok(tail.trim().to_string())
+}
+
+/// Split a command line the way a shell would for our own plans: words,
+/// double-quoted strings kept whole (quotes removed).
+fn shell_words(s: &str) -> Vec<String> {
+    let mut out = vec![];
+    let mut cur = String::new();
+    let mut quoted = false;
+    for c in s.chars() {
+        match c {
+            '"' => quoted = !quoted,
+            ' ' if !quoted => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            _ => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
 }
 
 /// Save the settings a tool asked for. Secret-kind fields go to the
