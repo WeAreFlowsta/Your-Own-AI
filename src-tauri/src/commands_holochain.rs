@@ -1067,6 +1067,11 @@ pub async fn get_conversations(
 
     let data_key = manager.data_key()?;
     let mut conversations = Vec::new();
+    // Agents whose read did not answer (a 60 s zome timeout right after
+    // launch, a websocket drop): their conversations are still on disk and
+    // still in the cache. They must not vanish from a list that is about
+    // to be written back as the last-known-good one.
+    let mut unanswered: Vec<String> = Vec::new();
     for key in &lineage {
         let payload = ExternIO::encode(())
             .map_err(|e| format!("Failed to encode: {}", e))?;
@@ -1078,6 +1083,9 @@ pub async fn get_conversations(
             Ok(r) => r,
             Err(e) => {
                 log::warn!("get_all_conversations failed for lineage agent {}: {}", key, e);
+                if !e.contains("Agent not found") {
+                    unanswered.push(key.clone());
+                }
                 continue;
             }
         };
@@ -1119,12 +1127,28 @@ pub async fn get_conversations(
     // Last activity lives only in the local cache (the records entry knows
     // when a conversation started, not when it was last continued) - carry
     // it over so a live refresh never resets the order.
-    let known: std::collections::HashMap<String, i64> =
-        crate::conversation_cache::read_cache(&app, &agent_key)
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|c| c.last_active_at.map(|t| (c.hash, t)))
-            .collect();
+    let cached = crate::conversation_cache::read_cache(&app, &agent_key).unwrap_or_default();
+    if !unanswered.is_empty() {
+        // Keep what the cache knows for the agents that did not answer -
+        // a partial live read must never overwrite a fuller saved list.
+        let have: std::collections::HashSet<String> = conversations.iter().map(|c| c.hash.clone()).collect();
+        let mut kept = 0usize;
+        for c in cached.iter() {
+            if unanswered.contains(&c.agent_key) && !have.contains(&c.hash) {
+                conversations.push(c.clone());
+                kept += 1;
+            }
+        }
+        log::info!(
+            "[conv-cache] {} agent(s) did not answer; kept {} cached conversation(s) for them",
+            unanswered.len(),
+            kept
+        );
+    }
+    let known: std::collections::HashMap<String, i64> = cached
+        .iter()
+        .filter_map(|c| c.last_active_at.map(|t| (c.hash.clone(), t)))
+        .collect();
     for c in conversations.iter_mut() {
         c.last_active_at = known.get(&c.hash).copied();
     }
