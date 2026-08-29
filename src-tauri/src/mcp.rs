@@ -706,6 +706,15 @@ pub async fn mcp_blender_addon_install(app: AppHandle) -> Result<String, String>
             .max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok())
             .ok_or("the add-on package was not built")?;
         run(&["install-file", &zip.to_string_lossy(), "--repo=user_default", "--enable"])?;
+        // `--enable` in a headless run installs the files but the GUI does not
+        // see the enabled flag until preferences are saved: enable + save.
+        let out = std::process::Command::new(&blender)
+            .args(["-b", "--python-expr", "import bpy; bpy.ops.preferences.addon_enable(module='bl_ext.user_default.mcp'); bpy.ops.wm.save_userpref()"])
+            .output()
+            .map_err(|e| format!("Blender could not run: {e}"))?;
+        if !out.status.success() {
+            return Err("the add-on installed but could not be enabled - enable MCP under Edit > Preferences > Extensions".into());
+        }
         Ok("installed".into())
     })
     .await
