@@ -700,6 +700,8 @@ pub fn run() {
             mcp::mcp_config_status,
             mcp::mcp_source_check,
             mcp::mcp_source_update,
+            mcp::mcp_blender_addon_status,
+            mcp::mcp_blender_addon_install,
             skills::skills_pack_zip,
             flowsta::share_submit,
         ])

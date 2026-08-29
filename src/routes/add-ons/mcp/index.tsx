@@ -29,6 +29,9 @@ import {
   fetchGit,
   checkToolSource,
   updateToolSource,
+  blenderAddonStatus,
+  blenderAddonInstall,
+  type BlenderAddonStatus,
   mcpUsedBy,
   mcpSummary,
   readyPresets,
@@ -61,6 +64,9 @@ export default component$(() => {
     installStage: "" as string,
     // explicit source checks: preset id -> "checking" | "up-to-date" | "behind" | "updating" | "updated"
     sourceState: {} as Record<string, string>,
+    // Blender's own add-on (only meaningful once the blender tool is added)
+    blenderAddon: null as BlenderAddonStatus | null,
+    blenderAddonBusy: "" as string,
     confirmRemove: "" as string,
     // settings form: which tool, the draft values, and what is filled in
     configFor: "" as string,
@@ -93,6 +99,9 @@ export default component$(() => {
   const load = $(async () => {
     store.servers = await listMcpServers();
     store.loading = false;
+    if (store.servers.some((s) => s.name === "blender")) {
+      try { store.blenderAddon = await blenderAddonStatus(); } catch { /* no line */ }
+    }
     for (const s of store.servers) {
       if (s.config?.length) {
         try { store.configOk[s.name] = await toolConfigStatus(s.name); } catch { /* shown as unfilled */ }
@@ -254,6 +263,20 @@ export default component$(() => {
       store.sourceState[id] = "updated";
     } catch (e) {
       store.sourceState[id] = "behind";
+      store.error = e instanceof Error ? e.message : String(e);
+    }
+  });
+  const installBlenderAddon = $(async () => {
+    store.error = "";
+    if (store.blenderAddonBusy !== "confirm") { store.blenderAddonBusy = "confirm"; return; }
+    store.blenderAddonBusy = "installing";
+    try {
+      await blenderAddonInstall();
+      store.blenderAddon = await blenderAddonStatus();
+      store.blenderAddonBusy = "";
+      store.note = "Blender add-on installed and enabled. If Blender is open, restart it once.";
+    } catch (e) {
+      store.blenderAddonBusy = "";
       store.error = e instanceof Error ? e.message : String(e);
     }
   });
@@ -473,6 +496,26 @@ export default component$(() => {
                       />
                     ))}
                   </ul>
+                  {pid === "blender" && installed && store.blenderAddon && (
+                    <p class="flex flex-wrap items-center gap-1.5 text-xs">
+                      {store.blenderAddon.installed ? (
+                        <><LuCheck class="h-3.5 w-3.5 text-emerald-500" /><span class="text-[var(--text-secondary)]">Blender add-on installed</span></>
+                      ) : !store.blenderAddon.blender ? (
+                        <><LuAlertTriangle class="h-3.5 w-3.5 text-amber-500" /><span class="text-amber-500">Blender 5.1+ not found on this computer</span></>
+                      ) : (
+                        <>
+                          <LuAlertTriangle class="h-3.5 w-3.5 text-amber-500" />
+                          <span class="text-amber-500">Blender add-on not installed</span>
+                          <button type="button" class="text-[var(--text-link)] hover:underline disabled:opacity-60" disabled={store.blenderAddonBusy === "installing"} onClick$={installBlenderAddon}>
+                            {store.blenderAddonBusy === "installing" ? "Installing..." : store.blenderAddonBusy === "confirm" ? "Install it now" : "Install the add-on"}
+                          </button>
+                          {store.blenderAddonBusy === "confirm" && (
+                            <span class="text-[var(--text-muted)]">Runs Blender's own extension installer on the add-on that came with the fetch, and enables it. Restart Blender afterwards if it is open.</span>
+                          )}
+                        </>
+                      )}
+                    </p>
+                  )}
                   {p.fetch && !installed && (
                     <p class="text-xs text-[var(--text-muted)]">
                       Adding fetches the server ({p.fetch.size}) from {p.fetch.url.replace(/^https:\/\//, "").replace(/\.git$/, "")} into your home folder.

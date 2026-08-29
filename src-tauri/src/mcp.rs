@@ -610,3 +610,101 @@ mod tests {
         assert_eq!(crate::skills::normalize_name("My Tool!"), "my-tool");
     }
 }
+
+// --- Blender's own add-on (the Lab server talks to it inside Blender).
+// Blender ships an extension CLI: build the package from the clone we
+// fetched, then install + enable it. Only behind a button that says so.
+
+fn blender_binary() -> Option<String> {
+    if let Some(p) = which_sync("blender") {
+        return Some(p);
+    }
+    let mut cands: Vec<PathBuf> = vec![PathBuf::from("/snap/bin/blender"), PathBuf::from("/Applications/Blender.app/Contents/MacOS/Blender")];
+    if let Ok(pf) = std::env::var("ProgramFiles") {
+        if let Ok(rd) = std::fs::read_dir(PathBuf::from(&pf).join("Blender Foundation")) {
+            let mut dirs: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
+            dirs.sort();
+            for d in dirs.into_iter().rev() {
+                cands.push(d.join("blender.exe"));
+            }
+        }
+    }
+    cands.into_iter().find(|c| c.is_file()).map(|c| c.to_string_lossy().to_string())
+}
+
+/// Blender's per-version config roots that may hold user extensions.
+fn blender_extension_dirs() -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = vec![];
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        roots.push(home.join(".config").join("blender"));
+        roots.push(home.join("snap").join("blender").join("current").join(".config").join("blender"));
+        roots.push(home.join("Library").join("Application Support").join("Blender"));
+    }
+    if let Ok(ad) = std::env::var("APPDATA") {
+        roots.push(PathBuf::from(ad).join("Blender Foundation").join("Blender"));
+    }
+    let mut out = vec![];
+    for r in roots {
+        if let Ok(rd) = std::fs::read_dir(&r) {
+            for e in rd.flatten() {
+                let p = e.path().join("extensions").join("user_default");
+                if p.is_dir() {
+                    out.push(p);
+                }
+            }
+        }
+    }
+    out
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct BlenderAddonStatus {
+    pub blender: Option<String>,
+    pub installed: bool,
+    pub source_present: bool,
+}
+
+#[tauri::command]
+pub async fn mcp_blender_addon_status(app: AppHandle) -> Result<BlenderAddonStatus, String> {
+    let installed = blender_extension_dirs().iter().any(|d| d.join("mcp").is_dir());
+    let src = PathBuf::from(expand_home(&app, "~/blender_mcp/addon/blender_mcp_addon"));
+    Ok(BlenderAddonStatus { blender: blender_binary(), installed, source_present: src.join("blender_manifest.toml").is_file() })
+}
+
+/// Build the add-on package from the fetched clone and install + enable it
+/// with Blender's extension CLI. Blender must be closed or it will not see
+/// the new add-on until restarted - the page says so.
+#[tauri::command]
+pub async fn mcp_blender_addon_install(app: AppHandle) -> Result<String, String> {
+    let blender = blender_binary().ok_or("Blender was not found on this computer")?;
+    let src = PathBuf::from(expand_home(&app, "~/blender_mcp/addon/blender_mcp_addon"));
+    if !src.join("blender_manifest.toml").is_file() {
+        return Err("fetch the Blender tool first - the add-on's source comes with it".into());
+    }
+    let out_dir = std::env::temp_dir().join("your-own-ai-blender-addon");
+    std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+    let s = src.to_string_lossy().to_string();
+    let o = out_dir.to_string_lossy().to_string();
+    let result = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let run = |args: &[&str]| -> Result<String, String> {
+            let out = std::process::Command::new(&blender).arg("-b").arg("--command").arg("extension").args(args).output().map_err(|e| format!("Blender could not run: {e}"))?;
+            let text = format!("{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+            if !out.status.success() {
+                return Err(format!("Blender's installer failed: {}", text.lines().filter(|l| !l.trim().is_empty()).last().unwrap_or("").trim()));
+            }
+            Ok(text)
+        };
+        run(&["build", "--source-dir", &s, "--output-dir", &o])?;
+        let zip = std::fs::read_dir(&o).map_err(|e| e.to_string())?
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().map(|x| x == "zip").unwrap_or(false))
+            .max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok())
+            .ok_or("the add-on package was not built")?;
+        run(&["install-file", &zip.to_string_lossy(), "--repo=user_default", "--enable"])?;
+        Ok("installed".into())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(result)
+}

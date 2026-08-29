@@ -41,6 +41,13 @@ export function checkToolSource(name: string): Promise<SourceStatus> {
 export function updateToolSource(name: string): Promise<string> {
   return invoke<string>("mcp_source_update", { name });
 }
+export interface BlenderAddonStatus { blender: string | null; installed: boolean; source_present: boolean }
+export function blenderAddonStatus(): Promise<BlenderAddonStatus> {
+  return invoke<BlenderAddonStatus>("mcp_blender_addon_status");
+}
+export function blenderAddonInstall(): Promise<string> {
+  return invoke<string>("mcp_blender_addon_install");
+}
 /** Save a tool's settings; secret-kind fields go to the encrypted store. */
 export function setToolConfig(name: string, values: Record<string, string>): Promise<McpServer[]> {
   return invoke<McpServer[]>("mcp_set_config", { name, values });
