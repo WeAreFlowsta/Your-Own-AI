@@ -126,7 +126,8 @@ export const MCP_PRESETS: McpPreset[] = [
       description: "Blender - scenes, the Python API, code, screenshots, renders (Blender Lab)",
       transport: "stdio",
       command: "uv",
-      args: ["--directory", "~/blender_mcp/mcp", "run", "blender-mcp"],
+      // mcp pinned below 2.0: the Blender Lab code still uses the older Python API (2026-08).
+      args: ["--directory", "~/blender_mcp/mcp", "run", "--with", "mcp[cli]<2", "blender-mcp"],
       env: [],
       source: "preset:blender",
       fetch_dir: "~/blender_mcp",
