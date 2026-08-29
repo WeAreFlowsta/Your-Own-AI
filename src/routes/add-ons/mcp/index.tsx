@@ -16,6 +16,9 @@ import LiquidMetalButton from "../../../components/LiquidMetalButton";
 import ConfirmModal from "../../../components/ConfirmModal";
 import { Callout } from "../../../components/Callout";
 import { RequirementLine } from "../../../components/RequirementLine";
+import { LICENSES, currentMaker, shareTool, shareErrorText, type ShareResult } from "../../../utils/share";
+import { rememberShare, rememberedShare, fetchShareStatus, shareStatusText, type ShareStatus } from "../../../utils/shareStatus";
+import { LuShare2 } from "@qwikest/icons/lucide";
 import {
   listMcpServers,
   addMcpServer,
@@ -53,6 +56,18 @@ export default component$(() => {
     configDraft: {} as Record<string, string>,
     configOk: {} as Record<string, Record<string, boolean>>,
     configSaving: false,
+    // share dialog (your own tools only)
+    shareFor: "" as string,
+    shareTitle: "",
+    shareDescription: "",
+    shareLicense: "MIT",
+    shareSource: "",
+    shareAlso: "",
+    shareBusy: false,
+    shareErr: "",
+    shareDone: null as ShareResult | null,
+    shareMaker: null as string | null,
+    shareStatus: {} as Record<string, ShareStatus>,
     usedByOpen: "" as string,
     addOpen: false,
     // manual add form
@@ -71,6 +86,45 @@ export default component$(() => {
       if (s.config?.length) {
         try { store.configOk[s.name] = await toolConfigStatus(s.name); } catch { /* shown as unfilled */ }
       }
+      const r = rememberedShare("mcp", s.name);
+      if (r) void fetchShareStatus(r).then((st) => { if (st) store.shareStatus[s.name] = st; });
+    }
+  });
+
+  const openShare = $(async (s: McpServer) => {
+    store.shareFor = s.name;
+    store.shareTitle = s.name.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    store.shareDescription = s.description;
+    store.shareSource = "";
+    store.shareAlso = "";
+    store.shareErr = "";
+    store.shareDone = null;
+    store.shareMaker = (await currentMaker())?.handle ?? null;
+  });
+  const doShare = $(async () => {
+    const entry = store.servers.find((s) => s.name === store.shareFor);
+    if (!entry) return;
+    store.shareBusy = true;
+    store.shareErr = "";
+    try {
+      const maker = await currentMaker();
+      if (!maker) throw new Error("Sign in with Flowsta first - a share carries your name.");
+      if (store.shareDescription.trim().length < 20) throw new Error("Say a little more about it - at least a sentence.");
+      if (!/^https:\/\//.test(store.shareSource.trim())) throw new Error("Give the tool's home page or repository (an https link) so people can see where it comes from.");
+      store.shareDone = await shareTool(entry, {
+        title: store.shareTitle.trim() || entry.name,
+        description: store.shareDescription.trim(),
+        license: store.shareLicense,
+        sourceUrl: store.shareSource.trim(),
+        also: store.shareAlso.trim(),
+        maker,
+      });
+      rememberShare("mcp", entry.name, store.shareDone);
+      store.shareStatus[entry.name] = { state: "checking", page: store.shareDone.page, pr_url: store.shareDone.pr_url };
+    } catch (e) {
+      store.shareErr = shareErrorText(e);
+    } finally {
+      store.shareBusy = false;
     }
   });
 
@@ -366,6 +420,11 @@ export default component$(() => {
                         <p class="text-xs text-[var(--text-muted)] font-mono truncate">{mcpSummary(s)}</p>
                       </div>
                       <div class="flex shrink-0 gap-2">
+                        {s.source === "manual" && (
+                          <LiquidMetalButton variant="secondary" onClick$={() => openShare(s)} class="flex items-center gap-1.5 px-3 py-1.5 text-xs" title="List this tool for everyone, signed with your Flowsta identity">
+                            <LuShare2 class="h-3.5 w-3.5" /> Share
+                          </LiquidMetalButton>
+                        )}
                         {s.config?.length ? (
                           <LiquidMetalButton variant="secondary" onClick$={() => openConfig(s.name)} class="flex items-center gap-1.5 px-3 py-1.5 text-xs">
                             Settings
@@ -376,6 +435,17 @@ export default component$(() => {
                         </LiquidMetalButton>
                       </div>
                     </div>
+                    {store.shareStatus[s.name] && (
+                      <p class="text-xs text-[var(--text-secondary)]">
+                        <span class="font-medium text-[var(--text-primary)]">Shared with everyone: </span>
+                        {shareStatusText(store.shareStatus[s.name], s.name)}{" "}
+                        <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={async () => {
+                          const st = store.shareStatus[s.name];
+                          const { openUrl } = await import("@tauri-apps/plugin-opener");
+                          await openUrl(st.state === "live" ? st.page : st.pr_url);
+                        }}>{store.shareStatus[s.name].state === "live" ? "Open the page" : "See the submission"}</button>
+                      </p>
+                    )}
                     {missingSettings(s.name).length > 0 && (
                       <p class="flex items-center gap-1.5 text-xs text-amber-500">
                         <LuAlertTriangle class="h-3.5 w-3.5" /> Needs its settings before an AI can use it: {missingSettings(s.name).join(", ")}
@@ -412,6 +482,48 @@ export default component$(() => {
           )}
         </div>
       </div>
+
+      {store.shareFor && (
+        <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div class="w-full max-w-md rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-header-footer)] p-6 shadow-2xl">
+            <h3 class="text-base font-semibold text-[var(--text-primary)]">Share "{store.shareFor}" with everyone</h3>
+            {store.shareDone ? (
+              <div class="mt-3 space-y-3 text-sm text-[var(--text-secondary)]">
+                <p>Submitted, signed with your Flowsta identity. After a quick look it lives at <span class="text-[var(--text-primary)] break-all">{store.shareDone.page}</span></p>
+                <LiquidMetalButton variant="secondary" class="w-full justify-center px-5 py-2 text-sm" onClick$={() => { store.shareFor = ""; }}>Done</LiquidMetalButton>
+              </div>
+            ) : (
+              <>
+                <p class="mt-2 text-sm text-[var(--text-secondary)]">
+                  Lists the recipe - how to start it, what it needs, the settings it asks for - never your settings or their values. It goes out signed with your Flowsta identity and is yours to update or remove.
+                </p>
+                <label class="mt-3 block text-xs font-medium text-[var(--text-secondary)]">Name in the listing</label>
+                <input type="text" value={store.shareTitle} onInput$={(_, el) => { store.shareTitle = el.value; }} maxLength={60} class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none" />
+                <label class="mt-3 block text-xs font-medium text-[var(--text-secondary)]">Description</label>
+                <textarea value={store.shareDescription} onInput$={(_, el) => { store.shareDescription = el.value; }} rows={3} maxLength={400} class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-xl px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none" />
+                <label class="mt-3 block text-xs font-medium text-[var(--text-secondary)]">Where it comes from (https link)</label>
+                <input type="text" value={store.shareSource} onInput$={(_, el) => { store.shareSource = el.value; }} placeholder="https://github.com/…" class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none" />
+                <label class="mt-3 block text-xs font-medium text-[var(--text-secondary)]">Anything people need to know first (optional)</label>
+                <input type="text" value={store.shareAlso} onInput$={(_, el) => { store.shareAlso = el.value; }} placeholder="Needs the app running with…" maxLength={240} class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none" />
+                <label class="mt-3 block text-xs font-medium text-[var(--text-secondary)]">License</label>
+                <select value={store.shareLicense} onChange$={(_, el) => { store.shareLicense = el.value; }} class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)]">
+                  {LICENSES.map((l) => (<option key={l.id} value={l.id}>{l.label}</option>))}
+                </select>
+                <p class="mt-3 text-xs text-[var(--text-muted)]">
+                  {store.shareMaker ? `Listed as @${store.shareMaker} and signed with your Flowsta identity, so people know it is yours.` : "Sign in with Flowsta first - the listing shows who made it."}
+                </p>
+                {store.shareErr && <p class="mt-2 text-xs text-red-400">{store.shareErr}</p>}
+                <div class="mt-4 flex flex-col gap-2">
+                  <LiquidMetalButton onClick$={doShare} disabled={store.shareBusy || !store.shareMaker} class="w-full justify-center px-5 py-2 text-sm">
+                    {store.shareBusy ? "Signing and sending..." : "Share"}
+                  </LiquidMetalButton>
+                  <LiquidMetalButton variant="secondary" onClick$={() => { store.shareFor = ""; }} disabled={store.shareBusy} class="w-full justify-center px-5 py-2 text-sm">Cancel</LiquidMetalButton>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {store.configFor && (() => {
         const s = store.servers.find((x) => x.name === store.configFor);

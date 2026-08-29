@@ -6,6 +6,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import type { AiPack } from "./aiPack";
+import type { McpServer } from "./mcp";
 
 export const LICENSES = [
   { id: "CC-BY-4.0", label: "CC BY 4.0 - anyone may use and adapt it, with credit" },
@@ -104,4 +105,76 @@ export function shareErrorText(e: unknown): string {
   if (m.includes("sign_failed") || m.includes("denied")) return "Signing was declined in Vault.";
   if (m.includes("share service")) return "The share service could not be reached - check your connection and try again.";
   return m.length < 160 ? m : "Couldn't share - please try again.";
+}
+
+/** The canonical recipe bytes a maker signs (mirrors the directory's recipeDigest). */
+export function recipeCanonical(m: { name: string; description: string; license: string; source_url: string; mcp: Record<string, unknown> }): string {
+  const r = m.mcp as { transport?: string; command?: string; args?: string[]; url?: string; needs?: { program: string; label: string; install: string }[]; config?: { key: string; label: string; kind: string; required?: boolean; hint?: string; where?: string; prefix?: string }[]; fetch?: { url: string; dest: string } | null };
+  return JSON.stringify({
+    kind: "mcp",
+    name: m.name,
+    description: m.description,
+    license: m.license,
+    source_url: m.source_url,
+    mcp: {
+      transport: r.transport,
+      command: r.command ?? "",
+      args: r.args ?? [],
+      url: r.url ?? "",
+      needs: (r.needs ?? []).map((n) => ({ program: n.program, label: n.label, install: n.install })),
+      config: (r.config ?? []).map((f) => ({ key: f.key, label: f.label, kind: f.kind, required: !!f.required, hint: f.hint ?? "", where: f.where ?? "", prefix: f.prefix ?? "" })),
+      fetch: r.fetch ? { url: r.fetch.url, dest: r.fetch.dest } : null,
+    },
+  });
+}
+
+/** Programs the app can install, with the labels and pages a listing carries. */
+const KNOWN_NEEDS: Record<string, { label: string; install: string }> = {
+  uv: { label: "uv (runs the Python server)", install: "https://docs.astral.sh/uv/getting-started/installation/" },
+  uvx: { label: "uv (uvx runs the Python server)", install: "https://docs.astral.sh/uv/getting-started/installation/" },
+  npx: { label: "Node.js (npx runs the server)", install: "https://nodejs.org/en/download" },
+  node: { label: "Node.js", install: "https://nodejs.org/en/download" },
+  python: { label: "Python", install: "https://www.python.org/downloads/" },
+  python3: { label: "Python", install: "https://www.python.org/downloads/" },
+  docker: { label: "Docker", install: "https://docs.docker.com/get-docker/" },
+  pipx: { label: "pipx (runs the Python server)", install: "https://pipx.pypa.io/stable/installation/" },
+};
+
+/** Share one of your own tools as a recipe: signed with your Flowsta identity, no file, nothing of yours in it. */
+export async function shareTool(
+  server: McpServer,
+  opts: { title: string; description: string; license: string; sourceUrl: string; also?: string; maker: Maker },
+): Promise<ShareResult> {
+  const launcher = (server.command ?? "").split(/[\\/]/).pop() ?? "";
+  const needs = launcher && KNOWN_NEEDS[launcher] ? [{ program: launcher, ...KNOWN_NEEDS[launcher] }] : [];
+  const mcp = {
+    transport: server.transport,
+    command: server.transport === "stdio" ? server.command : undefined,
+    args: server.transport === "stdio" ? server.args : undefined,
+    url: server.transport === "http" ? server.url : undefined,
+    needs,
+    config: (server.config ?? []).map((f) => ({ key: f.key, label: f.label, kind: f.kind, required: !!f.required, hint: f.hint ?? "", where: f.where ?? "", prefix: f.prefix ?? "" })),
+    also: opts.also || undefined,
+  };
+  const canonical = recipeCanonical({ name: opts.title, description: opts.description, license: opts.license, source_url: opts.sourceUrl, mcp });
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical)));
+  const res = await invoke<{ signature: string; agent_pub_key: string }>("vault_sign", {
+    bytesB64: bytesToBase64(digest),
+    reason: `Share tool "${opts.title}"`,
+  });
+  if (!res.signature || !res.agent_pub_key) throw new Error("sign_failed");
+  const signature = { algo: "ed25519", agent_pub_key: res.agent_pub_key, value: res.signature };
+  const manifest = {
+    schema: 1,
+    kind: "mcp",
+    name: opts.title,
+    description: opts.description,
+    license: opts.license,
+    terms: "free",
+    maker: opts.maker,
+    source: { kind: "url", url: opts.sourceUrl },
+    runs_programs: true,
+    mcp,
+  };
+  return invoke<ShareResult>("share_submit", { submission: { kind: "mcp", manifest, signature } });
 }

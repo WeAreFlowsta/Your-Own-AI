@@ -8,7 +8,7 @@
 import type { ShareResult } from "./share";
 
 const KEY = "yoai.shares";
-export type ShareKind = "character" | "skill";
+export type ShareKind = "character" | "skill" | "mcp";
 
 interface Remembered { pr_url: string; page: string; id: string; at: string }
 
