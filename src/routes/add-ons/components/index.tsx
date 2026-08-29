@@ -90,7 +90,7 @@ export default component$(() => {
           <button
             type="button"
             onClick$={async () => {
-              try { sessionStorage.setItem("settings-from", JSON.stringify({ label: "Components", href: "/add-ons/components" })); } catch { /* fine */ }
+              try { sessionStorage.setItem("settings-from", JSON.stringify({ label: "Components", href: "/add-ons/components", at: "settings-engines" })); } catch { /* fine */ }
               await nav("/settings#settings-engines");
             }}
             class="mt-3 flex w-full items-center gap-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4 text-left transition-colors hover:border-[var(--text-link)]"
@@ -134,7 +134,7 @@ export default component$(() => {
 
           <div class="mt-8">
             <LiquidMetalButton variant="secondary" onClick$={async () => {
-              try { sessionStorage.setItem("settings-from", JSON.stringify({ label: "Components", href: "/add-ons/components" })); } catch { /* fine */ }
+              try { sessionStorage.setItem("settings-from", JSON.stringify({ label: "Components", href: "/add-ons/components", at: "settings-components" })); } catch { /* fine */ }
               await nav("/settings#settings-components");
             }} class="h-9 px-4 text-sm">
               Manage storage in Settings

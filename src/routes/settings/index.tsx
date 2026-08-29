@@ -267,7 +267,13 @@ export default component$(() => {
   // Where the person came from (Add-ons > Components -> Engines, etc.): one
   // back link at the top, cleared once used. The sender sets sessionStorage;
   // query params do not survive the static adapter in Tauri.
-  const cameFrom = useSignal<{ label: string; href: string } | null>(null);
+  const cameFrom = useSignal<{ label: string; href: string; at?: string } | null>(null);
+  const goBack = $(async () => {
+    const href = cameFrom.value?.href;
+    try { sessionStorage.removeItem("settings-from"); } catch { /* fine */ }
+    cameFrom.value = null;
+    if (href) await nav(href);
+  });
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(() => {
     try {
@@ -757,20 +763,6 @@ export default component$(() => {
 
       <div class="flex-1 overflow-y-auto">
         <div class="max-w-5xl mx-auto px-4 py-8">
-          {cameFrom.value && (
-            <button
-              type="button"
-              onClick$={async () => {
-                const href = cameFrom.value!.href;
-                try { sessionStorage.removeItem("settings-from"); } catch { /* fine */ }
-                cameFrom.value = null;
-                await nav(href);
-              }}
-              class="mb-3 inline-flex items-center gap-1 text-sm text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
-            >
-              <LuChevronLeft class="h-4 w-4" /> {cameFrom.value.label}
-            </button>
-          )}
           {/* Page title */}
           <h1 class="text-2xl font-bold text-[var(--text-primary)] font-varela mb-6 border-b border-[var(--border-subtle)] pb-2">
             Settings
@@ -1454,11 +1446,21 @@ export default component$(() => {
 
               {/* Storage: location + what is installed (get more in Add-ons > Components) */}
               <div id="settings-components" class="scroll-mt-4">
+                {cameFrom.value?.at === "settings-components" && (
+                  <button type="button" onClick$={goBack} class="mb-2 inline-flex items-center gap-1 text-sm text-[var(--text-muted)] hover:text-[var(--text-secondary)]">
+                    <LuChevronLeft class="h-4 w-4" /> {cameFrom.value.label}
+                  </button>
+                )}
                 <ComponentsSettings />
               </div>
 
               {/* Inference engines (bundled + optional hardware-specific) */}
               <div id="settings-engines" class="scroll-mt-4">
+                {cameFrom.value?.at === "settings-engines" && (
+                  <button type="button" onClick$={goBack} class="mb-2 inline-flex items-center gap-1 text-sm text-[var(--text-muted)] hover:text-[var(--text-secondary)]">
+                    <LuChevronLeft class="h-4 w-4" /> {cameFrom.value.label}
+                  </button>
+                )}
                 <EnginesSettings />
               </div>
 
