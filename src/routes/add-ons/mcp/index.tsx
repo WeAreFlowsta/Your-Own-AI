@@ -274,7 +274,7 @@ export default component$(() => {
       await blenderAddonInstall();
       store.blenderAddon = await blenderAddonStatus();
       store.blenderAddonBusy = "";
-      store.note = "Blender add-on installed and enabled. If Blender is open, restart it once.";
+      store.note = "Blender add-on installed and enabled (and Blender's Allow Online Access turned on). If Blender is open, restart it once.";
     } catch (e) {
       store.blenderAddonBusy = "";
       store.error = e instanceof Error ? e.message : String(e);
@@ -510,7 +510,7 @@ export default component$(() => {
                             {store.blenderAddonBusy === "installing" ? "Installing..." : store.blenderAddonBusy === "confirm" ? "Install it now" : "Install the add-on"}
                           </button>
                           {store.blenderAddonBusy === "confirm" && (
-                            <span class="text-[var(--text-muted)]">Runs Blender's own extension installer on the add-on that came with the fetch, and enables it. Restart Blender afterwards if it is open.</span>
+                            <span class="text-[var(--text-muted)]">Runs Blender's own extension installer on the add-on that came with the fetch, enables it, and turns on Blender's "Allow Online Access" setting (the add-on will not open its local connection without it). Restart Blender afterwards if it is open.</span>
                           )}
                         </>
                       )}

@@ -709,7 +709,10 @@ pub async fn mcp_blender_addon_install(app: AppHandle) -> Result<String, String>
         // `--enable` in a headless run installs the files but the GUI does not
         // see the enabled flag until preferences are saved: enable + save.
         let out = std::process::Command::new(&blender)
-            .args(["-b", "--python-expr", "import bpy; bpy.ops.preferences.addon_enable(module='bl_ext.user_default.mcp'); bpy.ops.wm.save_userpref()"])
+            // Blender gates the add-on's LOCAL socket behind its own "Allow
+            // Online Access" preference (off on a fresh install) - the add-on
+            // refuses to start without it. The card says so before this runs.
+            .args(["-b", "--python-expr", "import bpy; bpy.context.preferences.system.use_online_access = True; bpy.ops.preferences.addon_enable(module='bl_ext.user_default.mcp'); bpy.ops.wm.save_userpref()"])
             .output()
             .map_err(|e| format!("Blender could not run: {e}"))?;
         if !out.status.success() {
