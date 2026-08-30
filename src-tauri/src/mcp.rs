@@ -360,10 +360,13 @@ pub async fn mcp_fetch_git(app: AppHandle, url: String, dest: String) -> Result<
     let home = app.path().home_dir().map_err(|e| format!("cannot resolve home dir: {e}"))?;
     let target = home.join(&dest);
     let target_s = target.to_string_lossy().to_string();
+    // Just-installed Git is not on the PATH this process was launched with;
+    // the same lookup that gave the green tick finds it.
+    let git = which_sync("git").ok_or("git was not found - install it, then try again")?;
     let out = if target.join(".git").is_dir() {
-        std::process::Command::new("git").args(["-C", &target_s, "pull", "--ff-only"]).output()
+        std::process::Command::new(&git).args(["-C", &target_s, "pull", "--ff-only"]).output()
     } else {
-        std::process::Command::new("git").args(["clone", "--depth", "1", &url, &target_s]).output()
+        std::process::Command::new(&git).args(["clone", "--depth", "1", &url, &target_s]).output()
     }
     .map_err(|e| format!("git could not run: {e}"))?;
     if !out.status.success() {
@@ -573,8 +576,9 @@ pub async fn mcp_source_check(app: AppHandle, name: String) -> Result<SourceStat
     let dir = fetch_dir_of(&app, &name)?;
     let d = dir.to_string_lossy().to_string();
     tauri::async_runtime::spawn_blocking(move || {
+        let git = which_sync("git").ok_or("git was not found")?;
         let run = |args: &[&str]| -> Result<String, String> {
-            let out = std::process::Command::new("git").arg("-C").arg(&d).args(args).output().map_err(|e| format!("git could not run: {e}"))?;
+            let out = std::process::Command::new(&git).arg("-C").arg(&d).args(args).output().map_err(|e| format!("git could not run: {e}"))?;
             if !out.status.success() {
                 return Err(format!("git failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
             }
@@ -595,11 +599,12 @@ pub async fn mcp_source_update(app: AppHandle, name: String) -> Result<String, S
     let dir = fetch_dir_of(&app, &name)?;
     let d = dir.to_string_lossy().to_string();
     tauri::async_runtime::spawn_blocking(move || {
-        let out = std::process::Command::new("git").args(["-C", &d, "pull", "--ff-only", "--quiet"]).output().map_err(|e| format!("git could not run: {e}"))?;
+        let git = which_sync("git").ok_or("git was not found")?;
+        let out = std::process::Command::new(&git).args(["-C", &d, "pull", "--ff-only", "--quiet"]).output().map_err(|e| format!("git could not run: {e}"))?;
         if !out.status.success() {
             return Err(format!("update failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
         }
-        let head = std::process::Command::new("git").args(["-C", &d, "rev-parse", "--short", "HEAD"]).output().map_err(|e| e.to_string())?;
+        let head = std::process::Command::new(&git).args(["-C", &d, "rev-parse", "--short", "HEAD"]).output().map_err(|e| e.to_string())?;
         Ok(String::from_utf8_lossy(&head.stdout).trim().to_string())
     })
     .await

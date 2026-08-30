@@ -199,6 +199,29 @@ export default component$(() => {
   const handleNewQuestion = $(() => { nav("/chat"); });
   const handleModelsClick = $(() => { nav("/setup"); });
 
+  const addPreset = $(async (id: string) => {
+    const preset = store.presets.find((p) => p.id === id);
+    if (!preset) return;
+    store.error = "";
+    store.note = "";
+    store.busy = id;
+    try {
+      if (preset.fetch) await fetchGit(preset.fetch.url, preset.fetch.dest);
+      const built = preset.build();
+      store.servers = await addMcpServer(built);
+      if (built.config?.length) {
+        store.note = `${preset.title} added - it needs a few settings first.`;
+        await openConfig(built.name);
+      } else {
+        store.note = `${preset.title} added. Give it to an AI: Your AIs, edit, Tools.`;
+      }
+    } catch (e) {
+      store.error = e instanceof Error ? e.message : String(e);
+    } finally {
+      store.busy = "";
+    }
+  });
+
   // One button for everything a tool needs: show every step first (what
   // runs, from where), then run them in order; things that need a password
   // open the terminal; when all are present, carry on to the add itself.
@@ -298,28 +321,6 @@ export default component$(() => {
     if (!preset.needs.some((n) => store.have[n.program] === null)) { store.installFor = ""; store.installStage = ""; }
   });
 
-  const addPreset = $(async (id: string) => {
-    const preset = store.presets.find((p) => p.id === id);
-    if (!preset) return;
-    store.error = "";
-    store.note = "";
-    store.busy = id;
-    try {
-      if (preset.fetch) await fetchGit(preset.fetch.url, preset.fetch.dest);
-      const built = preset.build();
-      store.servers = await addMcpServer(built);
-      if (built.config?.length) {
-        store.note = `${preset.title} added - it needs a few settings first.`;
-        await openConfig(built.name);
-      } else {
-        store.note = `${preset.title} added. Give it to an AI: Your AIs, edit, Tools.`;
-      }
-    } catch (e) {
-      store.error = e instanceof Error ? e.message : String(e);
-    } finally {
-      store.busy = "";
-    }
-  });
 
   const addManual = $(async () => {
     store.error = "";
