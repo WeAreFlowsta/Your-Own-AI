@@ -62,6 +62,9 @@ export interface AgentSessionState {
   /** Tool servers that failed to start for this session (from their stderr
    *  logs) - surfaced as notices on the next turn, then cleared. */
   toolStartFailures: { name: string; tail: string }[];
+  /** App hints that arrived before a turn existed (a session-start notice,
+   *  e.g. a tight context window) - shown on the next turn, once each. */
+  startNotices: { kind: string; text: string }[];
   /** idle = no folder open; starting = process/handshake in flight;
    *  ready = session open, waiting for input; working = turn in flight;
    *  stopped = process exited while a folder was open (needs reopen). */
@@ -379,6 +382,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     sessionAiId: null,
     sessionTools: "",
     toolStartFailures: [],
+    startNotices: [],
     status: "idle",
     statusNote: "",
     pendingPermissionId: null,
@@ -660,14 +664,22 @@ export function useAgentSession(props: UseAgentSessionProps) {
         agentTurn: true,
         // A tool server that died at start is invisible otherwise - say so
         // on the turn, once, with the reason its log gave.
-        agentLog: state.toolStartFailures.map((f) => ({
-          id: `toolstart-${f.name}-${id}`,
-          type: "notice" as const,
-          text: `${f.name} didn't start, so its tools are not available this session. Its log says: ${f.tail}`,
-        })),
+        agentLog: [
+          ...state.toolStartFailures.map((f) => ({
+            id: `toolstart-${f.name}-${id}`,
+            type: "notice" as const,
+            text: `${f.name} didn't start, so its tools are not available this session. Its log says: ${f.tail}`,
+          })),
+          ...state.startNotices.map((n) => ({
+            id: `hint-${n.kind || uuidv4()}`,
+            type: "notice" as const,
+            text: n.text,
+          })),
+        ],
       },
     ];
     state.toolStartFailures = [];
+    state.startNotices = [];
     props.chatState.isLoading = true;
     // Fire-and-forget - chat always works even if the conductor is down.
     recordUserTurn(userText).catch(() => {});
@@ -1557,10 +1569,16 @@ export function useAgentSession(props: UseAgentSessionProps) {
     const unHint = await listen<any>("agent-hint", (e) => {
       const text = typeof e.payload?.text === "string" ? e.payload.text : "";
       if (!text) return;
+      const kind = String(e.payload?.kind ?? "");
+      // Before any turn exists (a session-start notice): keep it for the
+      // first turn's bubble instead of dropping it on the floor.
+      if (!turnId.value) {
+        if (!state.startNotices.some((n) => kind && n.kind === kind)) state.startNotices.push({ kind, text });
+        return;
+      }
       mutateTurn((m) => {
         const log = [...(m.agentLog ?? [])];
         // Once per turn per hint kind - the agent may retry the tool.
-        const kind = String(e.payload?.kind ?? "");
         if (kind && log.some((i) => i.id === `hint-${kind}`)) return m;
         // sticky = must outlive the fold: a notice, not narration.
         const type = e.payload?.sticky ? ("notice" as const) : ("narration" as const);
