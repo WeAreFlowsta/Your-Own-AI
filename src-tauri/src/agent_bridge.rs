@@ -334,6 +334,44 @@ pub async fn start_build_agent(
         // context_window = the SERVING model's window per slot (an online
         // Sol session has a million-token window; a local one has the
         // loaded size - the agent's compaction must believe the truth).
+        // A session that carries tools starts ~10k tokens deep: the tool
+        // schemas ride in every call. A local model sized to 16k walls on
+        // its first big tool result (seen live: Nemotron on an 8 GB card,
+        // "request (17248 tokens) exceeds the available context size
+        // (16384)", the harness's condensing never got its turn). Ask for
+        // reading room BEFORE the window is written into the agent's
+        // config: reload at the rung that holds it when the machine can
+        // afford it; say so plainly when it cannot.
+        let carries_tools = mcp_names.as_ref().map(|m| !m.is_empty()).unwrap_or(false);
+        if carries_tools {
+            const TOOLS_ROOM: u32 = 24_576;
+            let room = crate::llm::ensure_context(
+                app_handle.clone(),
+                app_handle.state::<crate::llm::LLMState>(),
+                TOOLS_ROOM,
+            )
+            .await;
+            let short = match &room {
+                Ok(r) if r.grew => {
+                    log::info!("[agent] tools session: context grown to {} for the tool schemas", r.ctx);
+                    None
+                }
+                Ok(r) if r.model.is_some() && r.ctx < TOOLS_ROOM => Some(r.ctx),
+                Ok(_) => None,
+                Err(e) => {
+                    log::warn!("[agent] tools session: could not grow the context: {e}");
+                    Some(crate::llm::current_ctx_size())
+                }
+            };
+            if let Some(ctx) = short {
+                let text = format!(
+                    "This model gets a {}k-token window on your computer, and the tools this AI carries take about 10k of it - a session can run out of room mid-task. A model with a bigger window, or fewer tools on this AI, gives it more to work with.",
+                    ctx / 1024
+                );
+                log::warn!("[agent] tools session on a {ctx}-token window - tight");
+                let _ = app_handle.emit("agent-hint", json!({ "kind": "context-room", "sticky": true, "text": text }));
+            }
+        }
         let eag = eagerness.as_deref().unwrap_or("balanced");
         let (agent_ctx, plan_ctx) = match ai_model.as_deref() {
             Some(m) => (

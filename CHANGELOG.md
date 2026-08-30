@@ -122,6 +122,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   the whole session onto the vision model for the rest of the turn; the
   session keeps its agent model and is told to check its work through the
   tool's text outputs instead.
+- A session that carries tools asks for reading room before it starts:
+  the tool descriptions alone take about 10k tokens, so a local model
+  sized to a 16k window is reloaded at a bigger one when your computer can
+  afford it, and told plainly when it cannot, instead of running out of
+  room on the first big result.
 - The tools workspace behind a chat is not a project: it no longer shows as
   an open folder in the header on other pages, and a reply from a tools
   turn is not offered to a folder memory.
