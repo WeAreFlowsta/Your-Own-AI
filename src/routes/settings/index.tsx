@@ -285,6 +285,7 @@ export default component$(() => {
 
   const showModelWidget = useSignal(false);
   const showChatModelChip = useSignal(true);
+  const showChatCarryChip = useSignal(true);
   const showHelpTips = useSignal(true);
   const allowAttachmentsOnline = useSignal(false);
   // Agent: the permission default for new projects - ask unless set.
@@ -359,6 +360,8 @@ export default component$(() => {
     // Default ON - only an explicit "false" hides the chip.
     showChatModelChip.value =
       localStorage.getItem("showChatModelChip") !== "false";
+    showChatCarryChip.value =
+      localStorage.getItem("showChatCarryChip") !== "false";
     showHelpTips.value = helpTipsEnabled();
     allowAttachmentsOnline.value =
       localStorage.getItem("allowAttachmentsOnline") === "true";
@@ -513,6 +516,16 @@ export default component$(() => {
     window.dispatchEvent(
       new CustomEvent("settingsChanged", {
         detail: { showChatModelChip: showChatModelChip.value },
+      })
+    );
+  });
+
+  const toggleChatCarryChip = $(() => {
+    showChatCarryChip.value = !showChatCarryChip.value;
+    localStorage.setItem("showChatCarryChip", showChatCarryChip.value.toString());
+    window.dispatchEvent(
+      new CustomEvent("settingsChanged", {
+        detail: { showChatCarryChip: showChatCarryChip.value },
       })
     );
   });
@@ -1494,6 +1507,16 @@ export default component$(() => {
                     arrangement the current AI uses, tap to change it. Turn off
                     for a cleaner chat; you can always switch models from the
                     Your AIs page.
+                  </SettingToggle>
+                  <SettingToggle
+                    title="Tools and skills chip in chat"
+                    checked={showChatCarryChip}
+                    onToggle$={toggleChatCarryChip}
+                  >
+                    The small chip beside the model chip - what the current AI
+                    carries, each tool and skill on or off, and approvals for
+                    tools. Turn off for a cleaner chat; tools and skills stay
+                    on and can be changed from the AI's form.
                   </SettingToggle>
                   <SettingToggle
                     title="Show help tips"

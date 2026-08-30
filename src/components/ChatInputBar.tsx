@@ -71,6 +71,7 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
   // opt-out for people who want the Ask row bare. Reacts live to the
   // settingsChanged event so no chat reload is needed.
   const showModelChip = useSignal(true);
+  const showCarryChip = useSignal(true);
   // Background memory extraction after a turn: otherwise felt only as a
   // pause. A quiet hint in the Ask row while it runs.
   const remembering = useSignal(false);
@@ -82,6 +83,7 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(({ cleanup }) => {
     showModelChip.value = localStorage.getItem('showChatModelChip') !== 'false';
+    showCarryChip.value = localStorage.getItem('showChatCarryChip') !== 'false';
     const checkUnlock = () => {
       if (onlineUnlockPending() && isHelpDismissed(ONLINE_UNLOCK_TIP_ID)) {
         clearOnlineUnlockPending();
@@ -95,6 +97,9 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
       const detail = (e as CustomEvent).detail;
       if (detail && 'showChatModelChip' in detail) {
         showModelChip.value = !!detail.showChatModelChip;
+      }
+      if (detail && 'showChatCarryChip' in detail) {
+        showCarryChip.value = !!detail.showChatCarryChip;
       }
     };
     const onMemory = (e: Event) => {
@@ -193,7 +198,7 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
             {/* What the AI carries: tools and skills, on or off. Renders
                 nothing when it carries nothing. The chat holds a snapshot
                 of the selected AI - patch it alongside the chip's save. */}
-            {carry && selectedAi.aiConfig && (
+            {carry && showCarryChip.value && selectedAi.aiConfig && (
               <CarryChip
                 ai={selectedAi.aiConfig}
                 dropUp={isBottomBar}
