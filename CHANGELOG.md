@@ -107,6 +107,16 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   its turns through the same machinery behind the scenes, with the same
   steps and approvals in the thread. "Tools on" shows by the message field;
   if Projects is not installed yet, that line installs it right there.
+- Approvals for tools in chat are chosen on that same line - Ask every
+  time, Auto, or Approve everything - remembered per AI and applied to the
+  open session at once.
+- A picture a tool returns (a Blender viewport shot, say) no longer moves
+  the whole session onto the vision model for the rest of the turn; the
+  session keeps its agent model and is told to check its work through the
+  tool's text outputs instead.
+- The tools workspace behind a chat is not a project: it no longer shows as
+  an open folder in the header on other pages, and a reply from a tools
+  turn is not offered to a folder memory.
 - Install what it needs: a tool's requirements (uv, Git, Node.js, Python,
   Docker) are checked against your computer; one button shows every step
   that would run, runs them, and carries on to the add. Nothing runs before
