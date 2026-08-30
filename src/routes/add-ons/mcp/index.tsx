@@ -510,8 +510,15 @@ export default component$(() => {
                   </ul>
                   {pid === "blender" && installed && store.blenderAddon && (
                     <p class="flex flex-wrap items-center gap-1.5 text-xs">
-                      {store.blenderAddon.installed ? (
-                        <><LuCheck class="h-3.5 w-3.5 text-emerald-500" /><span class="text-[var(--text-secondary)]">Blender add-on installed</span></>
+                      {store.blenderAddon.installed && store.blenderAddon.listening ? (
+                        <><LuCheck class="h-3.5 w-3.5 text-emerald-500" /><span class="text-[var(--text-secondary)]">Blender add-on installed and running - your AI can reach Blender</span></>
+                      ) : store.blenderAddon.installed ? (
+                        <>
+                          <LuAlertTriangle class="h-3.5 w-3.5 text-amber-500" />
+                          <span class="text-amber-500">Blender add-on installed, not running</span>
+                          <span class="text-[var(--text-muted)]">- open Blender (or restart it if it was open during the install), then</span>
+                          <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={async () => { try { store.blenderAddon = await blenderAddonStatus(); } catch { /* keep */ } }}>Check again</button>
+                        </>
                       ) : !store.blenderAddon.blender ? (
                         <><LuAlertTriangle class="h-3.5 w-3.5 text-amber-500" /><span class="text-amber-500">Blender 5.1+ not found on this computer</span></>
                       ) : (

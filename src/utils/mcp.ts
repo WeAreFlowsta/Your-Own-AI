@@ -43,7 +43,7 @@ export function checkToolSource(name: string): Promise<SourceStatus> {
 export function updateToolSource(name: string): Promise<string> {
   return invoke<string>("mcp_source_update", { name });
 }
-export interface BlenderAddonStatus { blender: string | null; installed: boolean; source_present: boolean }
+export interface BlenderAddonStatus { blender: string | null; installed: boolean; source_present: boolean; listening: boolean }
 export function blenderAddonStatus(): Promise<BlenderAddonStatus> {
   return invoke<BlenderAddonStatus>("mcp_blender_addon_status");
 }

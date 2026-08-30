@@ -711,13 +711,17 @@ pub struct BlenderAddonStatus {
     pub blender: Option<String>,
     pub installed: bool,
     pub source_present: bool,
+    /// The add-on's socket answers on 127.0.0.1:9876 - Blender is open with
+    /// the add-on loaded. False after an install into a running Blender.
+    pub listening: bool,
 }
 
 #[tauri::command]
 pub async fn mcp_blender_addon_status(app: AppHandle) -> Result<BlenderAddonStatus, String> {
     let installed = blender_extension_dirs().iter().any(|d| d.join("mcp").is_dir());
     let src = PathBuf::from(expand_home(&app, "~/blender_mcp/addon/blender_mcp_addon"));
-    Ok(BlenderAddonStatus { blender: blender_binary(), installed, source_present: src.join("blender_manifest.toml").is_file() })
+    let listening = std::net::TcpStream::connect_timeout(&"127.0.0.1:9876".parse().unwrap(), std::time::Duration::from_millis(400)).is_ok();
+    Ok(BlenderAddonStatus { blender: blender_binary(), installed, source_present: src.join("blender_manifest.toml").is_file(), listening })
 }
 
 /// Build the add-on package from the fetched clone and install + enable it
