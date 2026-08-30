@@ -3,7 +3,8 @@ import CudaOfferCallout from './CudaOfferCallout';
 import GpuFallbackCallout from './GpuFallbackCallout';
 import UpdateAvailableCallout from './UpdateAvailableCallout';
 import { ChatInputBar } from './ChatInputBar';
-import { SelectedAiModel, ChatAction, AttachedFile, AttachedImage } from '../types';
+import { SelectedAiModel, ChatAction, AttachedFile, AttachedImage, UserDefinedAI } from '../types';
+import type { AgentPermissionMode } from '../utils/agentPermissions';
 
 interface InitialViewProps {
   input: Signal<string>;
@@ -24,6 +25,11 @@ interface InitialViewProps {
   onAttachFiles$: QRL<(paths: string[]) => void>;
   /** Open a folder for this conversation (Build agent). */
   onOpenFolder$?: QRL<(path: string) => void>;
+  /** The tools-and-skills chip beside the model chip - same as in the chat. */
+  carry?: { buildInstalled: boolean; installing?: boolean; installPercent?: number; permissionMode?: AgentPermissionMode; live?: boolean };
+  onCarryChanged$?: QRL<(patch: Partial<UserDefinedAI>) => void>;
+  onToolsPermission$?: QRL<(mode: AgentPermissionMode) => void>;
+  onToolsAction$?: QRL<(action: "install-projects" | "manage") => void>;
   /** Quiet continuity line: the last conversation, one click to re-enter. */
   lastConversationTitle?: string;
   /** The resume's visible state: opening (conductor + first read) or
@@ -54,6 +60,10 @@ export default component$<InitialViewProps>((props) => {
         contextCeiling={props.contextCeiling}
         onAttachFiles$={props.onAttachFiles$}
         onOpenFolder$={props.onOpenFolder$}
+        carry={props.carry}
+        onCarryChanged$={props.onCarryChanged$}
+        onToolsPermission$={props.onToolsPermission$}
+        onToolsAction$={props.onToolsAction$}
         theme={props.theme}
       />
       {props.lastConversationTitle && props.onContinueLast$ && (
