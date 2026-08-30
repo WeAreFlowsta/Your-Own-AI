@@ -7,19 +7,16 @@ import { LiquidMetalBorder } from './LiquidMetalBorder';
 import { Callout } from './Callout';
 import { ONLINE_UNLOCK_TIP_ID, clearOnlineUnlockPending, onlineUnlockPending } from '../utils/entitlement';
 import { isHelpDismissed } from '../utils/helpPrefs';
-import { PERMISSION_MODE_COPY, type AgentPermissionMode } from '../utils/agentPermissions';
+import type { AgentPermissionMode } from '../utils/agentPermissions';
+import type { UserDefinedAI } from '../types';
+import { CarryChip } from './CarryChip';
 
 interface ChatInputBarProps {
   input: Signal<string>;
-  /** The tools line above the message field: what this AI carries, and the
-   *  one thing standing in the way when there is one (Projects not installed). */
-  toolsCue?: {
-    text: string;
-    action?: "install-projects" | "manage";
-    actionLabel?: string;
-    /** Approvals for this AI's tools sessions - shown as a one-click choice. */
-    permissionMode?: AgentPermissionMode;
-  };
+  /** The chip beside the model chip: what this AI carries (tools, skills),
+   *  each on or off, approvals for tools, and the helper install if missing. */
+  carry?: { buildInstalled: boolean; installing?: boolean; installPercent?: number; permissionMode?: AgentPermissionMode; live?: boolean };
+  onCarryChanged$?: QRL<(patch: Partial<UserDefinedAI>) => void>;
   onToolsAction$?: QRL<(action: "install-projects" | "manage") => void>;
   onToolsPermission$?: QRL<(mode: AgentPermissionMode) => void>;
   handleSubmit$: QRL<() => void>;
@@ -45,7 +42,8 @@ interface ChatInputBarProps {
 }
 
 export const ChatInputBar = component$<ChatInputBarProps>(({
-  toolsCue,
+  carry,
+  onCarryChanged$,
   onToolsPermission$,
   onToolsAction$,
   input,
@@ -175,22 +173,47 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
               screens - the Your AIs cards cover it there. The chat holds a
               snapshot of the selected AI, so patch it alongside the
               context-level save the chip performs. */}
-          {selectedAi.aiConfig?.model && showModelChip.value && (
-            <span class="ml-auto pl-2 hidden sm:inline-flex min-w-0">
-              <ModelChip
-                aiId={selectedAi.aiConfig.id}
-                model={selectedAi.aiConfig.model}
-                variant="header"
+          <span class="ml-auto pl-2 inline-flex min-w-0 items-center gap-3">
+            {selectedAi.aiConfig?.model && showModelChip.value && (
+              <span class="hidden sm:inline-flex min-w-0">
+                <ModelChip
+                  aiId={selectedAi.aiConfig.id}
+                  model={selectedAi.aiConfig.model}
+                  variant="header"
+                  dropUp={isBottomBar}
+                  onChanged$={(m) => {
+                    setSelectedAi$({
+                      ...selectedAi,
+                      aiConfig: { ...selectedAi.aiConfig, model: m },
+                    });
+                  }}
+                />
+              </span>
+            )}
+            {/* What the AI carries: tools and skills, on or off. Renders
+                nothing when it carries nothing. The chat holds a snapshot
+                of the selected AI - patch it alongside the chip's save. */}
+            {carry && selectedAi.aiConfig && (
+              <CarryChip
+                ai={selectedAi.aiConfig}
                 dropUp={isBottomBar}
-                onChanged$={(m) => {
+                buildInstalled={carry.buildInstalled}
+                installing={carry.installing}
+                installPercent={carry.installPercent}
+                permissionMode={carry.permissionMode}
+                live={carry.live}
+                onChanged$={(patch) => {
                   setSelectedAi$({
                     ...selectedAi,
-                    aiConfig: { ...selectedAi.aiConfig, model: m },
+                    aiConfig: { ...selectedAi.aiConfig, ...patch },
                   });
+                  onCarryChanged$?.(patch);
                 }}
+                onPermission$={onToolsPermission$}
+                onInstall$={() => { onToolsAction$?.("install-projects"); }}
               />
-            </span>
-          )}
+            )}
+          </span>
         </div>
       </div>
 
@@ -199,46 +222,6 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
         onSubmit$={() => { handleSubmit$(); }}
         class="flex-grow"
       >
-        {toolsCue && (
-          <p class="mb-1 px-3 text-[11px] text-[var(--text-muted)]" title="Every action a tool takes is written to your records">
-            {toolsCue.text}
-            {toolsCue.permissionMode && (
-              <>
-                {" · Approvals: "}
-                {(["ask", "auto", "all"] as AgentPermissionMode[]).map((mode, i) => (
-                  <span key={mode}>
-                    {i > 0 && " / "}
-                    <button
-                      type="button"
-                      class={
-                        mode === toolsCue.permissionMode
-                          ? "font-medium text-[var(--text-primary)]"
-                          : "text-[var(--text-link)] hover:underline"
-                      }
-                      title={PERMISSION_MODE_COPY[mode].hint}
-                      aria-pressed={mode === toolsCue.permissionMode}
-                      onClick$={() => { onToolsPermission$?.(mode); }}
-                    >
-                      {PERMISSION_MODE_COPY[mode].label}
-                    </button>
-                  </span>
-                ))}
-              </>
-            )}
-            {toolsCue.action && (
-              <>
-                {" · "}
-                <button
-                  type="button"
-                  class="text-[var(--text-link)] hover:underline"
-                  onClick$={() => { onToolsAction$?.(toolsCue.action!); }}
-                >
-                  {toolsCue.actionLabel ?? (toolsCue.action === "install-projects" ? "Install" : "Manage")}
-                </button>
-              </>
-            )}
-          </p>
-        )}
         <LiquidMetalBorder borderRadius="1.5rem" theme={theme}>
           <ContentEditor
             input={input}

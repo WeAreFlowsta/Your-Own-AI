@@ -39,6 +39,7 @@ import {
   type AgentPermissionMode,
 } from "../utils/agentPermissions";
 import { computeLineDiff } from "../utils/lineDiff";
+import { activeTools } from "../utils/carry";
 import {
   getWorkspaceMemory,
   memoryPromptBlock,
@@ -55,6 +56,9 @@ export interface AgentSessionState {
   mode: "project" | "tools" | null;
   /** The AI a tools session belongs to - another AI's turns never ride it. */
   sessionAiId: string | null;
+  /** The tool set the open tools session started with (joined names) - a
+   *  changed set opens a fresh session, since the harness fixes tools at start. */
+  sessionTools: string;
   /** Tool servers that failed to start for this session (from their stderr
    *  logs) - surfaced as notices on the next turn, then cleared. */
   toolStartFailures: { name: string; tail: string }[];
@@ -373,6 +377,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     folderPath: null,
     mode: null,
     sessionAiId: null,
+    sessionTools: "",
     toolStartFailures: [],
     status: "idle",
     statusNote: "",
@@ -702,7 +707,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       // per session, ahead of the first question, on the wire only.
       try {
         const { toolsGuidanceBlock } = await import("../utils/mcp");
-        const block = await toolsGuidanceBlock(props.selectedAi.value.aiConfig?.mcp);
+        const block = await toolsGuidanceBlock(activeTools(props.selectedAi.value.aiConfig), state.mode === "tools");
         if (block) wire = block + wire;
       } catch { /* no guidance this session */ }
     }
@@ -912,7 +917,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         aiLabel: props.selectedAi.value.label ?? null,
         permissionMode: state.permissionMode,
         // Tools this AI carries (Add-ons > Tools) - the bridge resolves them.
-        mcpNames: props.selectedAi.value.aiConfig?.mcp ?? [],
+        mcpNames: activeTools(props.selectedAi.value.aiConfig),
       });
     } catch (err) {
       state.status = "idle";
@@ -936,14 +941,20 @@ export function useAgentSession(props: UseAgentSessionProps) {
   const openToolsSession$ = $(async (): Promise<boolean> => {
     const ai = props.selectedAi.value;
     const aiId = ai.aiConfig?.id;
-    if (!aiId || !ai.aiConfig?.mcp?.length) return false;
+    const names = activeTools(ai.aiConfig);
+    if (!aiId || !names.length) return false;
     let path: string;
     try {
       path = (await invokeTauri("tool_session_dir", { aiId })) as string;
     } catch {
       return false;
     }
-    if (state.folderPath === path && state.sessionAiId === aiId && (state.status === "ready" || state.status === "working" || state.status === "starting")) {
+    if (
+      state.folderPath === path &&
+      state.sessionAiId === aiId &&
+      state.sessionTools === names.join(",") &&
+      (state.status === "ready" || state.status === "working" || state.status === "starting")
+    ) {
       return true;
     }
     if (state.folderPath && state.mode === "project" && sessionTurns.value > 0) {
@@ -952,6 +963,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.folderPath = path;
     state.mode = "tools";
     state.sessionAiId = aiId;
+    state.sessionTools = names.join(",");
     state.status = "starting";
     state.statusNote = "Getting your tools ready...";
     state.touchedFiles = [];
@@ -979,7 +991,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         agentKey: null,
         aiLabel: ai.label ?? null,
         permissionMode: state.permissionMode,
-        mcpNames: ai.aiConfig?.mcp ?? [],
+        mcpNames: names,
       });
       return true;
     } catch (err) {
@@ -999,6 +1011,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.folderPath = null;
     state.mode = null;
     state.sessionAiId = null;
+    state.sessionTools = "";
     state.status = "idle";
     state.statusNote = "";
     try { (window as unknown as { __yoaiTurnRunning?: boolean }).__yoaiTurnRunning = false; } catch { /* fine */ }

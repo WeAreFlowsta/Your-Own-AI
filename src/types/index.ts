@@ -27,6 +27,8 @@ export interface UserDefinedAI {
   useEmojis?: boolean;  // Whether to use emojis in responses
   skills?: string[];  // skills chosen for this AI (none unless chosen)
   mcp?: string[];  // MCP servers (Add-ons > Tools) this AI carries into project sessions
+  mcpOff?: string[];  // carried tools switched off (the chip by the message field); still "used by" this AI
+  skillsOff?: string[];  // carried skills switched off the same way
   agentPubKey?: string;  // Holochain agent public key (set on first provisioning)
   archivedAt?: number;  // ms epoch when the AI was archived (set on archive, cleared on restore)
 }
@@ -59,6 +61,8 @@ export interface UpdateUserAiData {
   useEmojis?: boolean;
   skills?: string[];
   mcp?: string[];
+  mcpOff?: string[];
+  skillsOff?: string[];
 }
 
 /** The AI's resting length lean — a soft default, not a cap. */

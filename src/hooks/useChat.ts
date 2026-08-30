@@ -9,6 +9,7 @@
  */
 
 import { skillsPromptBlock } from "../utils/skills";
+import { activeSkills, activeTools } from "../utils/carry";
 import { useStore, useSignal, $, noSerialize, type Signal, type NoSerialize } from "@builder.io/qwik";
 import type { Message, ChatMessage, SelectedAiModel, ChatAction, TurnMode } from "../types";
 import { v4 as uuidv4 } from "uuid";
@@ -1116,7 +1117,7 @@ export function useChat(props: UseChatProps) {
         // Rust side picks the skill whose description matches the question
         // and sends its full text; the rest ride as a one-line index.
         const skillsBlock = await skillsPromptBlock(
-          selectedAi.aiConfig.skills,
+          activeSkills(selectedAi.aiConfig),
           userInput,
           await queryVecPromise,
         );
@@ -1125,7 +1126,7 @@ export function useChat(props: UseChatProps) {
         // Tools (MCP servers) work in projects only for now - chat has no
         // tool loop. Tell the model, so an AI that carries Playwright says
         // "open a project with me" instead of guessing what a page says.
-        const tools = selectedAi.aiConfig.mcp ?? [];
+        const tools = activeTools(selectedAi.aiConfig);
         if (tools.length) {
           systemPrompt +=
             `\n\nTools you carry: ${tools.join(", ")}. They are not available on this turn - the helper that runs them (Projects, from Add-ons > Components) is not installed or could not start. ` +

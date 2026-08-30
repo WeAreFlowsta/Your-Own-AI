@@ -50,7 +50,8 @@ import CodePanel from "../../components/CodePanel";
 import AppHeader from "../../components/AppHeader";
 import WelcomeModal from "../../components/WelcomeModal";
 
-import type { SelectedAiModel, ChatAction, AttachedFile, AttachedImage } from "../../types";
+import type { SelectedAiModel, ChatAction, AttachedFile, AttachedImage, UserDefinedAI } from "../../types";
+import { activeTools } from "../../utils/carry";
 import LiquidMetalButton from "../../components/LiquidMetalButton";
 import veeboThumb from "../../assets/veebo-thumb.jpg";
 
@@ -225,7 +226,7 @@ export default component$(() => {
           if (status.folder && !agentState.folderPath) {
             const isTools = status.tools ?? status.folder.includes("tool-sessions");
             const aiKnown = selectedAi.value.id !== "__placeholder__";
-            if (isTools && aiKnown && !selectedAi.value.aiConfig?.mcp?.length) {
+            if (isTools && aiKnown && !activeTools(selectedAi.value.aiConfig).length) {
               // Left over from an AI that carries tools; this one does not.
               invoke("stop_build_agent").catch(() => {});
               return;
@@ -988,7 +989,7 @@ export default component$(() => {
     // feature for now.
     const toolsSessionIsThisAis =
       agentState.mode === "tools" &&
-      !!selectedAi.value.aiConfig?.mcp?.length &&
+      activeTools(selectedAi.value.aiConfig).length > 0 &&
       (!agentState.sessionAiId || agentState.sessionAiId === selectedAi.value.aiConfig?.id);
     if (agentState.folderPath && (agentState.mode === "project" || toolsSessionIsThisAis)) {
       // Document text goes to the model as context; the bubble shows file
@@ -1011,7 +1012,7 @@ export default component$(() => {
     // when the session cannot start (Build not installed, no agent-ready
     // model) - the AI then says tools need Projects.
     if (
-      selectedAi.value.aiConfig?.mcp?.length &&
+      activeTools(selectedAi.value.aiConfig).length > 0 &&
       attachedImages.value.length === 0 &&
       (await openToolsSession$())
     ) {
@@ -1432,18 +1433,31 @@ export default component$(() => {
               agentStreaming={
                 agentState.folderPath !== null && chatState.isLoading
               }
-              toolsCue={
-                !selectedAi.value.aiConfig?.mcp?.length || (agentState.folderPath && agentState.mode === "project")
-                  ? undefined
-                  : buildInstalled.value
-                    ? {
-                        text: `Tools on: ${selectedAi.value.aiConfig.mcp.join(", ")}`,
-                        permissionMode: agentState.autoPermissionsSupported ? toolsPermMode.value : undefined,
-                      }
-                    : buildInstalling.value
-                      ? { text: `Installing Projects for your tools (${selectedAi.value.aiConfig.mcp.join(", ")})... ${buildInstallPercent.value}%` }
-                      : { text: `Tools (${selectedAi.value.aiConfig.mcp.join(", ")}) need Projects, a free ~50 MB helper`, action: "install-projects", actionLabel: "Install it" }
-              }
+              carry={{
+                buildInstalled: buildInstalled.value,
+                installing: buildInstalling.value,
+                installPercent: buildInstallPercent.value,
+                // In a project the header's own chip holds approvals.
+                permissionMode:
+                  agentState.autoPermissionsSupported && !(agentState.folderPath && agentState.mode === "project")
+                    ? toolsPermMode.value
+                    : undefined,
+                live: agentState.mode === "tools" && chatState.isLoading,
+              }}
+              onCarryChanged$={$(async (patch: Partial<UserDefinedAI>) => {
+                // A changed tool set needs a fresh session (the harness fixes
+                // tools at start): end this AI's idle session; the next
+                // message opens one with the new set. Mid-turn, the open
+                // path notices the change itself.
+                if (
+                  "mcpOff" in patch &&
+                  agentState.mode === "tools" &&
+                  agentState.sessionAiId === selectedAi.value.aiConfig?.id &&
+                  !chatState.isLoading
+                ) {
+                  await closeFolder$();
+                }
+              })}
               onToolsPermission$={setToolsPermission$}
               onToolsAction$={$(async (action: "install-projects" | "manage") => {
                 if (action === "manage") { await nav("/add-ons/mcp"); return; }

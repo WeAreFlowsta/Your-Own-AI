@@ -94,7 +94,7 @@ export function mcpUsedBy(ais: UserDefinedAI[], name: string): string[] {
 }
 
 /** The block the first project prompt carries for the tools an AI has: how to use each well. */
-export async function toolsGuidanceBlock(names: string[] | undefined): Promise<string> {
+export async function toolsGuidanceBlock(names: string[] | undefined, inChat = false): Promise<string> {
   if (!names?.length) return "";
   const all = await listMcpServers();
   const lines = names
@@ -102,7 +102,12 @@ export async function toolsGuidanceBlock(names: string[] | undefined): Promise<s
     .filter((s): s is McpServer => !!s && !!s.guidance)
     .map((s) => `- ${s.name}: ${s.guidance}`);
   if (!lines.length) return "";
-  return `<tools_you_carry>\nThese tool servers are attached to this session. Do the work through their tools, not terminal workarounds (no python, pip or app binaries from the shell to reach what a tool already reaches) - the tools act where the person is looking.\n${lines.join("\n")}\n</tools_you_carry>\n\n`;
+  // Tools in a conversation: two voices. What the AI says is for the person
+  // (spoken one day); what it did is recorded on its own, folded under.
+  const voice = inChat
+    ? "\nThis is a conversation, not a project. Before you act, say in one plain sentence what you are about to do. When done, answer in two or three spoken sentences - what changed and what you noticed - with no code, tool names or step lists; the steps are recorded on their own.\n"
+    : "";
+  return `<tools_you_carry>\nThese tool servers are attached to this session. Do the work through their tools, not terminal workarounds (no python, pip or app binaries from the shell to reach what a tool already reaches) - the tools act where the person is looking.\n${lines.join("\n")}${voice}</tools_you_carry>\n\n`;
 }
 
 /** One line of what a server is, for lists. */

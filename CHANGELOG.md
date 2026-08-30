@@ -105,11 +105,19 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   tool takes goes through your approve step.
 - Tools work in chat, not only in projects: an AI that carries tools runs
   its turns through the same machinery behind the scenes, with the same
-  steps and approvals in the thread. "Tools on" shows by the message field;
-  if Projects is not installed yet, that line installs it right there.
-- Approvals for tools in chat are chosen on that same line - Ask every
-  time, Auto, or Approve everything - remembered per AI and applied to the
-  open session at once.
+  steps and approvals in the thread.
+- A chip beside the model chip shows what the AI carries - tools and
+  skills, an icon and a count each, nothing when it carries nothing. It
+  opens one panel: every tool and skill with an on/off switch, approvals
+  for tools (Ask every time, Auto, Approve everything - remembered per AI,
+  applied to the open session at once), and the Projects install when the
+  helper is missing. Off keeps a tool on the AI; it just sits out - all
+  tools off and the AI answers directly. Changes apply from the next
+  message.
+- A tools turn in chat speaks like chat: the AI says in one plain sentence
+  what it is about to do, then answers in a few spoken sentences with no
+  code or step lists; the steps fold under the reply and are recorded as
+  before.
 - A picture a tool returns (a Blender viewport shot, say) no longer moves
   the whole session onto the vision model for the rest of the turn; the
   session keeps its agent model and is told to check its work through the
