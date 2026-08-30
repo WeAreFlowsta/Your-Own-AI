@@ -726,6 +726,7 @@ pub async fn mcp_blender_addon_status(app: AppHandle) -> Result<BlenderAddonStat
 #[tauri::command]
 pub async fn mcp_blender_addon_install(app: AppHandle) -> Result<String, String> {
     let blender = blender_binary().ok_or("Blender was not found on this computer")?;
+    log::info!("[blender] add-on install: blender at {blender}");
     let src = PathBuf::from(expand_home(&app, "~/blender_mcp/addon/blender_mcp_addon"));
     if !src.join("blender_manifest.toml").is_file() {
         return Err("fetch the Blender tool first - the add-on's source comes with it".into());
@@ -750,7 +751,9 @@ pub async fn mcp_blender_addon_install(app: AppHandle) -> Result<String, String>
             .filter(|p| p.extension().map(|x| x == "zip").unwrap_or(false))
             .max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok())
             .ok_or("the add-on package was not built")?;
+        log::info!("[blender] add-on built: {}", zip.display());
         run(&["install-file", &zip.to_string_lossy(), "--repo=user_default", "--enable"])?;
+        log::info!("[blender] add-on installed; enabling + Allow Online Access + save prefs");
         // `--enable` in a headless run installs the files but the GUI does not
         // see the enabled flag until preferences are saved: enable + save.
         let out = std::process::Command::new(&blender)

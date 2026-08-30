@@ -223,7 +223,8 @@ export default component$(() => {
         .then((status) => {
           if (status.folder && !agentState.folderPath) {
             const isTools = status.folder.includes("tool-sessions");
-            if (isTools && !selectedAi.value.aiConfig?.mcp?.length) {
+            const aiKnown = selectedAi.value.id !== "__placeholder__";
+            if (isTools && aiKnown && !selectedAi.value.aiConfig?.mcp?.length) {
               // Left over from an AI that carries tools; this one does not.
               invoke("stop_build_agent").catch(() => {});
               return;
@@ -388,9 +389,17 @@ export default component$(() => {
     setTimeout(jump, 0);
   });
 
+  const resumeGeneration = useSignal(0);
   const resumeConversation = $(
     async (target: { hash: string; agentKey: string; aiId?: string; title?: string }) => {
-      if (chatState.isLoading || resumeState.value !== "idle") return;
+      if (chatState.isLoading) {
+        console.warn("[Resume] ignored: a reply is still in flight");
+        return;
+      }
+      // A click while an earlier open is still reading (a slow records read
+      // can take a minute) SUPERSEDES it - a second click must never be a
+      // dead click. The older open checks its generation before applying.
+      const gen = ++resumeGeneration.value;
       // Visible state FIRST - everything below can take seconds.
       openingTitle.value = target.title ?? null;
       resumeState.value = emptyMayBeWarmup() ? "warming" : "opening";
@@ -416,15 +425,18 @@ export default component$(() => {
         // there made "Continue" a dead click - poll through the window with
         // a visible state instead (utils/recordsWarmup).
         loaded = await loadConversationMessages(target.agentKey, target.hash, ai);
-        while (loaded.messages.length === 0 && emptyMayBeWarmup()) {
+        while (loaded.messages.length === 0 && emptyMayBeWarmup() && resumeGeneration.value === gen) {
           resumeState.value = "warming";
           await new Promise((r) => setTimeout(r, WARMUP_POLL_MS));
           loaded = await loadConversationMessages(target.agentKey, target.hash, ai);
         }
       } finally {
-        resumeState.value = "idle";
-        openingTitle.value = null;
+        if (resumeGeneration.value === gen) {
+          resumeState.value = "idle";
+          openingTitle.value = null;
+        }
       }
+      if (resumeGeneration.value !== gen) return; // superseded by a newer click
       const { messages, nextSequence, folderPath } = loaded;
       if (messages.length > 0) noteRecordsSeen();
       if (messages.length === 0) {

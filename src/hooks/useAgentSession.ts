@@ -999,6 +999,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.sessionAiId = null;
     state.status = "idle";
     state.statusNote = "";
+    try { (window as unknown as { __yoaiTurnRunning?: boolean }).__yoaiTurnRunning = false; } catch { /* fine */ }
     state.pendingPermissionId = null;
     state.overloadOffer = null;
     queued.value = null;
