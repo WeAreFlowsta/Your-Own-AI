@@ -128,7 +128,7 @@ export default component$(() => {
     store.shareDone = null;
     store.shareMaker = (await currentMaker())?.handle ?? null;
     store.shareLicenseOpen = false;
-    const launcher = (s.command ?? "").split(/[\\/]/).pop() ?? "";
+    const launcher = (s.command ?? "").trim().split(/\s+/)[0].split(/[\\/]/).pop() ?? "";
     store.shareLauncher = launcher;
     store.shareLauncherOk = s.transport === "http" || SHARE_LAUNCHERS.includes(launcher);
   });
@@ -327,12 +327,15 @@ export default component$(() => {
     store.note = "";
     store.busy = "manual";
     try {
-      const args = store.mArgs.trim() ? store.mArgs.trim().split(/\s+/) : [];
+      // "Program" may hold the whole line (npx -y @playwright/mcp@latest):
+      // first word = program, the rest lead the arguments.
+      const line = store.mCommand.trim().split(/\s+/).filter(Boolean);
+      const args = [...line.slice(1), ...(store.mArgs.trim() ? store.mArgs.trim().split(/\s+/) : [])];
       store.servers = await addMcpServer({
         name: store.mName,
         description: store.mDescription.trim(),
         transport: store.mTransport,
-        command: store.mTransport === "stdio" ? store.mCommand.trim() : undefined,
+        command: store.mTransport === "stdio" ? line[0] ?? "" : undefined,
         args: store.mTransport === "stdio" ? args : [],
         env: [],
         url: store.mTransport === "http" ? store.mUrl.trim() : undefined,
@@ -451,12 +454,12 @@ export default component$(() => {
                 <div class="grid gap-3 sm:grid-cols-2">
                   <label class="text-xs text-[var(--text-secondary)]">
                     Program
-                    <input type="text" value={store.mCommand} onInput$={(_, el) => { store.mCommand = el.value; }} placeholder="npx"
+                    <input type="text" value={store.mCommand} onInput$={(_, el) => { store.mCommand = el.value; }} placeholder="npx (or paste the whole line)"
                       class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none font-mono" />
                   </label>
                   <label class="text-xs text-[var(--text-secondary)]">
                     Arguments
-                    <input type="text" value={store.mArgs} onInput$={(_, el) => { store.mArgs = el.value; }} placeholder="-y @playwright/mcp"
+                    <input type="text" value={store.mArgs} onInput$={(_, el) => { store.mArgs = el.value; }} placeholder="-y @playwright/mcp@latest"
                       class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none font-mono" />
                   </label>
                 </div>

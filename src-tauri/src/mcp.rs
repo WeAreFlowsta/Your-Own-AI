@@ -262,6 +262,22 @@ pub async fn mcp_add(app: AppHandle, server: McpServer) -> Result<Vec<McpServer>
     let previous_values = list.iter().find(|s| s.name == name).map(|s| s.values.clone()).unwrap_or_default();
     list.retain(|s| s.name != name);
     let mut server = server;
+    // A whole line pasted as the program ("npx -y @playwright/mcp@latest")
+    // is the natural thing to do: split it, the first word is the program
+    // and the rest lead the arguments. Otherwise the launcher check reads
+    // "mcp@latest" and the program lookup fails on a name with spaces.
+    if server.transport == "stdio" {
+        let line = server.command.clone().unwrap_or_default();
+        if line.trim().contains(char::is_whitespace) {
+            let mut words: Vec<String> = line.split_whitespace().map(String::from).collect();
+            if !words.is_empty() {
+                let program = words.remove(0);
+                words.extend(server.args.drain(..));
+                server.command = Some(program);
+                server.args = words;
+            }
+        }
+    }
     for (k, v) in previous_values {
         server.values.entry(k).or_insert(v);
     }

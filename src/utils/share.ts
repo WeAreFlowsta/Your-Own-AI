@@ -147,7 +147,7 @@ export async function shareTool(
   server: McpServer,
   opts: { title: string; description: string; license: string; sourceUrl: string; also?: string; maker: Maker },
 ): Promise<ShareResult> {
-  const launcher = (server.command ?? "").split(/[\\/]/).pop() ?? "";
+  const launcher = (server.command ?? "").trim().split(/\s+/)[0].split(/[\\/]/).pop() ?? "";
   const needs = launcher && KNOWN_NEEDS[launcher] ? [{ program: launcher, ...KNOWN_NEEDS[launcher] }] : [];
   const mcp = {
     transport: server.transport,
