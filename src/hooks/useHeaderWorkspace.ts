@@ -33,9 +33,12 @@ export function useHeaderWorkspace() {
         running: boolean;
         sessionId: string | null;
         folder: string | null;
+        tools?: boolean;
       }>("build_agent_status");
+      // A tools-in-chat session is not a project: the header stays empty.
+      if (status.tools) status.folder = null;
       folderPath.value = status.folder;
-    permissionMode.value = status.folder ? permissionModeForFolder(status.folder) : "ask";
+      permissionMode.value = status.folder ? permissionModeForFolder(status.folder) : "ask";
       // Running without a session id = still starting (the orange state
       // must survive navigation - the session lives in Rust, not the page).
       folderStatus.value = status.folder

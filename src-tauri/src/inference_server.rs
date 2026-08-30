@@ -606,7 +606,19 @@ async fn chat_completions(
     // picker the chat uses for an image turn (fit-graded, medical-aware).
     // The text router never sees images, so left alone it picks a model on
     // text merit that may have no eyes.
-    if requested_model.starts_with("auto:") && has_image_parts && !ai.model.starts_with("online:") {
+    //
+    // Never for the session's own turns (":agent" and its role variants): a
+    // screenshot a tool returned stays in the history, so the swap would
+    // move the whole session onto the vision model for good - a chat model
+    // finishing agent work, and a server restart plus a full re-read of the
+    // context on every call. Those turns keep the agent model and the image
+    // becomes a note (below); the harness's separate image_description role
+    // (plain slug) still gets the eyes for a picture the person attached.
+    let session_turn = {
+        let m = model.trim();
+        m.ends_with(":agent") || m.ends_with(":plan") || m.ends_with(":agent-device") || m.ends_with(":summary")
+    };
+    if requested_model.starts_with("auto:") && has_image_parts && !ai.model.starts_with("online:") && !session_turn {
         match crate::llm::find_vision_model(app.clone(), Some(query.clone()), None).await {
             Ok(Some(pick)) if pick.model != ai.model => {
                 log::info!(
@@ -983,7 +995,7 @@ fn header_str(h: &HeaderMap, name: &str) -> Option<String> {
 /// one system message; this keeps us compatible without losing any instruction.
 /// Stands in for an image the serving model cannot see. Worded for the
 /// model: it says what to do next instead of what went wrong.
-const NO_VISION_NOTE: &str = "[Image not read: this AI's model can't see images. If this was a PDF, read it again with output format \"text\". A vision-capable model with its projector downloaded (Offline Models) would let the AI look at pictures.]";
+const NO_VISION_NOTE: &str = "[Image not read: this AI's model can't see images. If this was a PDF, read it again with output format \"text\"; if a tool returned it, check your work through the tool's text outputs instead. A vision-capable model with its projector downloaded (Offline Models) would let the AI look at pictures.]";
 
 /// Replace every image part with `NO_VISION_NOTE`. Text parts and plain
 /// string contents are untouched. Returns how many images were replaced.

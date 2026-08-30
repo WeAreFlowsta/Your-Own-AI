@@ -19,6 +19,7 @@ import { ThemeContext } from "../layout";
 import { useAiData, useAiDataActions } from "../../contexts/AiDataContext";
 import { useChat } from "../../hooks/useChat";
 import { useAgentSession, readRecentFolders, resolveBinaryPath } from "../../hooks/useAgentSession";
+import { permissionModeForTools, setPermissionModeForTools, type AgentPermissionMode } from "../../utils/agentPermissions";
 import { ConversationsDrawer } from "../../components/ConversationsDrawer";
 import { loadModelBounded } from "../../utils/loadModelBounded";
 import {
@@ -217,12 +218,12 @@ export default component$(() => {
     // The bridge owns the workspace: after navigating away and back (the
     // route remounts), pick the open folder back up from its status.
     if (!agentState.folderPath) {
-      invoke<{ running: boolean; sessionId: string | null; folder: string | null }>(
+      invoke<{ running: boolean; sessionId: string | null; folder: string | null; tools?: boolean }>(
         "build_agent_status",
       )
         .then((status) => {
           if (status.folder && !agentState.folderPath) {
-            const isTools = status.folder.includes("tool-sessions");
+            const isTools = status.tools ?? status.folder.includes("tool-sessions");
             const aiKnown = selectedAi.value.id !== "__placeholder__";
             if (isTools && aiKnown && !selectedAi.value.aiConfig?.mcp?.length) {
               // Left over from an AI that carries tools; this one does not.
@@ -243,6 +244,25 @@ export default component$(() => {
         })
         .catch(() => {});
     }
+  });
+
+  // Approvals for tools in chat: the open session's live mode when it is
+  // this AI's, else the AI's remembered choice (what its next session opens with).
+  const toolsPermMode = useSignal<AgentPermissionMode>("ask");
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    const id = track(() => selectedAi.value.aiConfig?.id);
+    const live = track(() => agentState.permissionMode);
+    const mode = track(() => agentState.mode);
+    const sessionAi = track(() => agentState.sessionAiId);
+    toolsPermMode.value = mode === "tools" && sessionAi === id ? live : permissionModeForTools(id);
+  });
+  const setToolsPermission$ = $(async (mode: AgentPermissionMode) => {
+    const id = selectedAi.value.aiConfig?.id;
+    if (!id) return;
+    setPermissionModeForTools(id, mode);
+    toolsPermMode.value = mode;
+    if (agentState.mode === "tools" && agentState.sessionAiId === id) await setPermissionMode$(mode);
   });
 
   // --- Build dynamic model options from unified AI list ---
@@ -1416,11 +1436,15 @@ export default component$(() => {
                 !selectedAi.value.aiConfig?.mcp?.length || (agentState.folderPath && agentState.mode === "project")
                   ? undefined
                   : buildInstalled.value
-                    ? { text: `Tools on: ${selectedAi.value.aiConfig.mcp.join(", ")}` }
+                    ? {
+                        text: `Tools on: ${selectedAi.value.aiConfig.mcp.join(", ")}`,
+                        permissionMode: agentState.autoPermissionsSupported ? toolsPermMode.value : undefined,
+                      }
                     : buildInstalling.value
                       ? { text: `Installing Projects for your tools (${selectedAi.value.aiConfig.mcp.join(", ")})... ${buildInstallPercent.value}%` }
                       : { text: `Tools (${selectedAi.value.aiConfig.mcp.join(", ")}) need Projects, a free ~50 MB helper`, action: "install-projects", actionLabel: "Install it" }
               }
+              onToolsPermission$={setToolsPermission$}
               onToolsAction$={$(async (action: "install-projects" | "manage") => {
                 if (action === "manage") { await nav("/add-ons/mcp"); return; }
                 // The same consented download as the projects menu; the

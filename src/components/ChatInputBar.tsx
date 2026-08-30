@@ -7,13 +7,21 @@ import { LiquidMetalBorder } from './LiquidMetalBorder';
 import { Callout } from './Callout';
 import { ONLINE_UNLOCK_TIP_ID, clearOnlineUnlockPending, onlineUnlockPending } from '../utils/entitlement';
 import { isHelpDismissed } from '../utils/helpPrefs';
+import { PERMISSION_MODE_COPY, type AgentPermissionMode } from '../utils/agentPermissions';
 
 interface ChatInputBarProps {
   input: Signal<string>;
   /** The tools line above the message field: what this AI carries, and the
    *  one thing standing in the way when there is one (Projects not installed). */
-  toolsCue?: { text: string; action?: "install-projects" | "manage"; actionLabel?: string };
+  toolsCue?: {
+    text: string;
+    action?: "install-projects" | "manage";
+    actionLabel?: string;
+    /** Approvals for this AI's tools sessions - shown as a one-click choice. */
+    permissionMode?: AgentPermissionMode;
+  };
   onToolsAction$?: QRL<(action: "install-projects" | "manage") => void>;
+  onToolsPermission$?: QRL<(mode: AgentPermissionMode) => void>;
   handleSubmit$: QRL<() => void>;
   isLoading: boolean;
   currentPlaceholder: string;
@@ -38,6 +46,7 @@ interface ChatInputBarProps {
 
 export const ChatInputBar = component$<ChatInputBarProps>(({
   toolsCue,
+  onToolsPermission$,
   onToolsAction$,
   input,
   handleSubmit$,
@@ -191,8 +200,31 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
         class="flex-grow"
       >
         {toolsCue && (
-          <p class="mb-1 px-3 text-[11px] text-[var(--text-muted)]" title="Every action a tool takes goes through your approve step">
+          <p class="mb-1 px-3 text-[11px] text-[var(--text-muted)]" title="Every action a tool takes is written to your records">
             {toolsCue.text}
+            {toolsCue.permissionMode && (
+              <>
+                {" · Approvals: "}
+                {(["ask", "auto", "all"] as AgentPermissionMode[]).map((mode, i) => (
+                  <span key={mode}>
+                    {i > 0 && " / "}
+                    <button
+                      type="button"
+                      class={
+                        mode === toolsCue.permissionMode
+                          ? "font-medium text-[var(--text-primary)]"
+                          : "text-[var(--text-link)] hover:underline"
+                      }
+                      title={PERMISSION_MODE_COPY[mode].hint}
+                      aria-pressed={mode === toolsCue.permissionMode}
+                      onClick$={() => { onToolsPermission$?.(mode); }}
+                    >
+                      {PERMISSION_MODE_COPY[mode].label}
+                    </button>
+                  </span>
+                ))}
+              </>
+            )}
             {toolsCue.action && (
               <>
                 {" · "}

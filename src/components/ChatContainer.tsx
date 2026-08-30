@@ -1,4 +1,5 @@
 import { component$, useSignal, useVisibleTask$, type Signal, type QRL, $ } from '@builder.io/qwik';
+import type { AgentPermissionMode } from '../utils/agentPermissions';
 import InitialView from './InitialView';
 import ConversationView from './ConversationView';
 import SelectionRemember from './SelectionRemember';
@@ -47,7 +48,8 @@ interface ChatContainerProps {
   /** True while a folder-agent turn is streaming (turn-scoped scroll space). */
   agentStreaming?: boolean;
   /** Passed to the input bar: the tools this AI carries, and the one thing in the way if any. */
-  toolsCue?: { text: string; action?: "install-projects" | "manage"; actionLabel?: string };
+  toolsCue?: { text: string; action?: "install-projects" | "manage"; actionLabel?: string; permissionMode?: AgentPermissionMode };
+  onToolsPermission$?: QRL<(mode: AgentPermissionMode) => void>;
   onToolsAction$?: QRL<(action: "install-projects" | "manage") => void>;
   /** Current agent activity ("Reading config.mjs..") for the live pill. */
   liveStatus?: string;
@@ -216,6 +218,7 @@ export default component$<ChatContainerProps>((props) => {
       <div class="shrink-0 px-4 py-2 sm:py-4 border-t border-[var(--border-subtle)]">
         <ChatInputBar
           toolsCue={props.toolsCue}
+          onToolsPermission$={props.onToolsPermission$}
           onToolsAction$={props.onToolsAction$}
           input={props.input}
           handleSubmit$={props.handleSubmit$}

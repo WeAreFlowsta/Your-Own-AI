@@ -71,6 +71,30 @@ export function setPermissionModeForFolder(path: string, mode: AgentPermissionMo
   write(KEY_BY_FOLDER, Object.keys(map).length ? JSON.stringify(map) : null);
 }
 
+const KEY_BY_TOOLS_AI = "agentPermissionsByToolsAi";
+
+function byToolsAi(): Record<string, AgentPermissionMode> {
+  try {
+    const raw = read(KEY_BY_TOOLS_AI);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : null;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, AgentPermissionMode>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** The mode an AI's tools-in-chat session opens with: its own choice, else the default. */
+export function permissionModeForTools(aiId: string | undefined | null): AgentPermissionMode {
+  return (aiId ? asMode(byToolsAi()[aiId]) : null) ?? defaultPermissionMode();
+}
+
+/** Remember an AI's choice for its tools-in-chat sessions. */
+export function setPermissionModeForTools(aiId: string, mode: AgentPermissionMode): void {
+  const map = byToolsAi();
+  map[aiId] = mode;
+  write(KEY_BY_TOOLS_AI, JSON.stringify(map));
+}
+
 /** One-line description per mode - the same words everywhere. */
 export const PERMISSION_MODE_COPY: Record<AgentPermissionMode, { label: string; hint: string }> = {
   ask: { label: "Ask every time", hint: "Your AI asks before every command and file change." },

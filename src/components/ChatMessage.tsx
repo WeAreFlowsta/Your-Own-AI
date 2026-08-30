@@ -373,8 +373,8 @@ const ActionBar = component$<ActionBarProps>((props) => {
     if (props.message.agentTurn) {
       try {
         const { invoke } = await import('@tauri-apps/api/core');
-        const status = await invoke<{ folder: string | null }>('build_agent_status');
-        if (status.folder) {
+        const status = await invoke<{ folder: string | null; tools?: boolean }>('build_agent_status');
+        if (status.folder && !status.tools) {
           rememberFolder.value = status.folder;
           rememberMenuOpen.value = true;
           return;

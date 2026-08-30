@@ -938,11 +938,22 @@ pub fn path_is_file(path: String) -> bool {
 }
 
 #[tauri::command]
-pub async fn build_agent_status(state: State<'_, AgentBridgeState>) -> Result<Value, String> {
+pub async fn build_agent_status(app: AppHandle, state: State<'_, AgentBridgeState>) -> Result<Value, String> {
     let running = state.child.lock().await.is_some();
     let session = state.session_id.lock().await.clone();
     let folder = state.folder.lock().await.clone();
-    Ok(json!({ "running": running, "sessionId": session, "folder": folder }))
+    // A tools-in-chat session works in a per-AI scratch workspace under the
+    // app's data dir: not a project, so no page shows it as one.
+    let tools = folder
+        .as_deref()
+        .map(|f| {
+            app.path()
+                .app_data_dir()
+                .map(|d| std::path::Path::new(f).starts_with(d.join("tool-sessions")))
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+    Ok(json!({ "running": running, "sessionId": session, "folder": folder, "tools": tools }))
 }
 
 /// Kill the agent on app exit (called from the RunEvent::ExitRequested handler).

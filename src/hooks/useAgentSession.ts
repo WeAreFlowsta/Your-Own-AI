@@ -33,7 +33,9 @@ import type {
 import {
   buildSupportsAutoPermissions,
   permissionModeForFolder,
+  permissionModeForTools,
   setPermissionModeForFolder,
+  setPermissionModeForTools,
   type AgentPermissionMode,
 } from "../utils/agentPermissions";
 import { computeLineDiff } from "../utils/lineDiff";
@@ -965,7 +967,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     } catch {
       state.autoPermissionsSupported = true;
     }
-    state.permissionMode = state.autoPermissionsSupported ? permissionModeForFolder(path) : "ask";
+    state.permissionMode = state.autoPermissionsSupported ? permissionModeForTools(aiId) : "ask";
     try {
       await invokeTauri("start_build_agent", {
         binary: resolveBinaryPath(),
@@ -1044,7 +1046,11 @@ export function useAgentSession(props: UseAgentSessionProps) {
   const setPermissionMode$ = $(async (mode: AgentPermissionMode) => {
     if (mode !== "ask" && !state.autoPermissionsSupported) return;
     state.permissionMode = mode;
-    if (state.folderPath) setPermissionModeForFolder(state.folderPath, mode);
+    if (state.mode === "tools") {
+      if (state.sessionAiId) setPermissionModeForTools(state.sessionAiId, mode);
+    } else if (state.folderPath) {
+      setPermissionModeForFolder(state.folderPath, mode);
+    }
     if (state.status !== "idle" && state.status !== "stopped") {
       try {
         await invokeTauri("set_agent_permission_mode", { mode });
