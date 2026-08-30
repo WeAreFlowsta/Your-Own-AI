@@ -90,7 +90,34 @@ pub(crate) fn load(app: &AppHandle) -> Result<Vec<McpServer>, String> {
         return Ok(vec![]);
     }
     let text = std::fs::read_to_string(&p).map_err(|e| format!("cannot read {}: {e}", p.display()))?;
-    serde_json::from_str::<Vec<McpServer>>(&text).map_err(|e| format!("mcp-servers.json is not valid: {e}"))
+    let mut list = serde_json::from_str::<Vec<McpServer>>(&text).map_err(|e| format!("mcp-servers.json is not valid: {e}"))?;
+    // Entries saved before the program/arguments split existed.
+    for s in &mut list {
+        split_program_line(s);
+    }
+    Ok(list)
+}
+
+/// A whole line pasted as the program ("npx -y @playwright/mcp@latest") is
+/// the natural thing to do: the first word is the program and the rest
+/// lead the arguments. Left as one string, the launcher check reads
+/// "mcp@latest" and the program lookup fails on a name with spaces.
+fn split_program_line(server: &mut McpServer) {
+    if server.transport != "stdio" {
+        return;
+    }
+    let line = server.command.clone().unwrap_or_default();
+    if !line.trim().contains(char::is_whitespace) {
+        return;
+    }
+    let mut words: Vec<String> = line.split_whitespace().map(String::from).collect();
+    if words.is_empty() {
+        return;
+    }
+    let program = words.remove(0);
+    words.extend(server.args.drain(..));
+    server.command = Some(program);
+    server.args = words;
 }
 
 fn save(app: &AppHandle, list: &[McpServer]) -> Result<(), String> {
@@ -262,22 +289,7 @@ pub async fn mcp_add(app: AppHandle, server: McpServer) -> Result<Vec<McpServer>
     let previous_values = list.iter().find(|s| s.name == name).map(|s| s.values.clone()).unwrap_or_default();
     list.retain(|s| s.name != name);
     let mut server = server;
-    // A whole line pasted as the program ("npx -y @playwright/mcp@latest")
-    // is the natural thing to do: split it, the first word is the program
-    // and the rest lead the arguments. Otherwise the launcher check reads
-    // "mcp@latest" and the program lookup fails on a name with spaces.
-    if server.transport == "stdio" {
-        let line = server.command.clone().unwrap_or_default();
-        if line.trim().contains(char::is_whitespace) {
-            let mut words: Vec<String> = line.split_whitespace().map(String::from).collect();
-            if !words.is_empty() {
-                let program = words.remove(0);
-                words.extend(server.args.drain(..));
-                server.command = Some(program);
-                server.args = words;
-            }
-        }
-    }
+    split_program_line(&mut server);
     for (k, v) in previous_values {
         server.values.entry(k).or_insert(v);
     }
@@ -629,6 +641,23 @@ pub async fn mcp_source_update(app: AppHandle, name: String) -> Result<String, S
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pasted_line_splits_into_program_and_arguments() {
+        let mut s = super::McpServer {
+            name: "playwright".into(),
+            transport: "stdio".into(),
+            command: Some("npx -y @playwright/mcp@latest".into()),
+            args: vec!["--headless".into()],
+            ..Default::default()
+        };
+        super::split_program_line(&mut s);
+        assert_eq!(s.command.as_deref(), Some("npx"));
+        assert_eq!(s.args, vec!["-y", "@playwright/mcp@latest", "--headless"]);
+        let mut plain = super::McpServer { command: Some("uv".into()), transport: "stdio".into(), ..Default::default() };
+        super::split_program_line(&mut plain);
+        assert_eq!(plain.command.as_deref(), Some("uv"));
+    }
+
     use super::*;
 
     #[test]
