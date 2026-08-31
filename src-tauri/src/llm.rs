@@ -1504,6 +1504,16 @@ fn too_big_set() -> &'static std::sync::Mutex<std::collections::HashSet<String>>
     S.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
 }
 
+/// A changed fine-tune for a model clears its "too big this session" memo:
+/// the old setting was likely the cause, and the new one deserves a try.
+pub(crate) fn forgive_too_big(filename: &str) {
+    if let Ok(mut set) = too_big_set().lock() {
+        if set.remove(filename) {
+            log::info!("[LLM] '{filename}' allowed to try loading again - its fine-tune changed");
+        }
+    }
+}
+
 /// True if `filename` already OOM'd the GPU this session (see `too_big_set`).
 #[tauri::command]
 pub fn is_model_too_big(filename: String) -> bool {

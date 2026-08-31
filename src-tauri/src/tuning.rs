@@ -63,11 +63,12 @@ pub async fn tuning_get(app: AppHandle, model: String) -> Result<ModelTuning, St
 
 #[tauri::command]
 pub async fn tuning_set(app: AppHandle, model: String, tuning: ModelTuning) -> Result<(), String> {
+    crate::llm::forgive_too_big(&model);
     let mut all = load_all(&app);
     if tuning.is_empty() {
         all.remove(&model);
     } else {
-        all.insert(model, tuning);
+        all.insert(model.clone(), tuning);
     }
     let p = path(&app).ok_or("cannot resolve app data dir")?;
     std::fs::write(&p, serde_json::to_string_pretty(&all).map_err(|e| e.to_string())?)

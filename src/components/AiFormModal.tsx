@@ -783,7 +783,9 @@ const AiFormModal = component$<AiFormModalProps>(
             )}
 
             {/* Section content (edit: one active pane; create: all stacked) */}
-            <div class={editingAi ? 'flex-1 min-w-0 space-y-4 md:space-y-6 max-h-[65vh] overflow-y-auto pr-1' : 'contents'}>
+            {/* Create mode: a real block with its own rhythm - display:contents
+                let the form's spacing classes miss every field group. */}
+            <div class={editingAi ? 'flex-1 min-w-0 space-y-4 md:space-y-6 max-h-[65vh] overflow-y-auto pr-1' : 'space-y-6'}>
             {(!editingAi || store.activeSection === 'basics') && (<>
             {/* AI Name */}
             <div>

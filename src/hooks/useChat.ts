@@ -8,6 +8,7 @@
  * flushSync is not needed — Qwik signals auto-update the DOM.
  */
 
+import { invoke } from "@tauri-apps/api/core";
 import { skillsPromptBlock } from "../utils/skills";
 import { wireSampling } from "../utils/sampling";
 import { activeSkills, activeTools } from "../utils/carry";
@@ -794,8 +795,17 @@ export function useChat(props: UseChatProps) {
             // Show it red in the header (name visible, not loaded) and tell the user.
             props.currentModel.value = preferredModel;
             props.modelTooBig.value = true;
+            // A fine-tune override (context pin, everything-on-the-card) is
+            // the likely cause when one exists - say so, not "pick smaller".
+            let tuned = false;
+            try {
+              const t = await invoke<{ context?: number; moe_cpu_layers?: number }>("tuning_get", { model: preferredModel });
+              tuned = !!(t && (t.context != null || t.moe_cpu_layers != null));
+            } catch { /* no tuning store */ }
             abortWith(
-              `${selectedAi.label}'s model is too large for your graphics card. Pick a smaller model on the Offline Models page (look for the "Your GPU" badge).`
+              tuned
+                ? `${selectedAi.label}'s model didn't fit - its Fine-tune settings ask for more graphics memory than this machine has. On the Offline Models page, open Fine-tune on that model and set the rows back to Auto, then try again.`
+                : `${selectedAi.label}'s model is too large for your graphics card. Pick a smaller model on the Offline Models page (look for the "Your GPU" badge).`
             );
           } else if (errorMessage.includes("MODEL_LOAD_TIMEOUT")) {
             props.currentModel.value = preferredModel;
