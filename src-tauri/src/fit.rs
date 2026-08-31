@@ -474,7 +474,22 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
         let mut fit = grade(need_gb, free_vram_gb, free_ram_gb);
         let mut moe_offload = false;
         let mut moe_cpu_layers_pick: Option<u32> = None;
-        if meta.is_moe() {
+        // The tuned expert split replaces the automatics here too - the
+        // badge, the router and the loader must tell one story. 0 =
+        // everything on the card: the plain grade above already says
+        // whether THAT fits (red on a small card, honestly).
+        let tuned_moe = crate::tuning::get(app, &m.name).moe_cpu_layers;
+        if meta.is_moe() && tuned_moe == Some(0) {
+            // No offload will be attempted; the full-weights grade stands.
+        } else if meta.is_moe() && tuned_moe.is_some() {
+            if let Some(vram) = free_vram_gb {
+                let n = (tuned_moe.unwrap() as usize).min(meta.expert_bytes_per_layer.len().max(1));
+                let on_card = moe_need_gb(&meta, n, kv_gb);
+                fit = if on_card <= vram - MOE_VRAM_HEADROOM_GB + 0.5 { Fit::Split } else { Fit::Yellow };
+                moe_offload = true;
+                moe_cpu_layers_pick = Some(n as u32);
+            }
+        } else if meta.is_moe() {
             if let Some(vram) = free_vram_gb {
                 if moe_offload_wanted(need_gb, vram)
                     && moe_offload_fits(

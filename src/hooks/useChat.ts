@@ -1767,7 +1767,16 @@ export function useChat(props: UseChatProps) {
               (m) => m.id !== assistantId
             );
           } else if (isModelLoadError) {
-            state.error = `This model couldn't be loaded — it's likely too large for your computer's memory. Try a smaller model from the Offline Models page.`;
+            // Same honesty as the too-large branch: a fine-tune override is
+            // the likely cause when the model carries one.
+            let tunedHere = false;
+            try {
+              const t = await invoke<{ context?: number; moe_cpu_layers?: number }>("tuning_get", { model: preferredModel || "" });
+              tunedHere = !!(t && (t.context != null || t.moe_cpu_layers != null));
+            } catch { /* no tuning store */ }
+            state.error = tunedHere
+              ? `This model couldn't be loaded - its Fine-tune settings ask for more memory than this machine has. On the Offline Models page, open Fine-tune on it and set the rows back to Auto, then try again.`
+              : `This model couldn't be loaded — it's likely too large for your computer's memory. Try a smaller model from the Offline Models page.`;
             state.messages = state.messages.filter(
               (m) => m.id !== assistantId
             );
