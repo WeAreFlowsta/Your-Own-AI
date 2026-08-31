@@ -9,6 +9,7 @@
  */
 
 import { skillsPromptBlock } from "../utils/skills";
+import { wireSampling } from "../utils/sampling";
 import { activeSkills, activeTools } from "../utils/carry";
 import { useStore, useSignal, $, noSerialize, type Signal, type NoSerialize } from "@builder.io/qwik";
 import type { Message, ChatMessage, SelectedAiModel, ChatAction, TurnMode } from "../types";
@@ -1142,6 +1143,9 @@ export function useChat(props: UseChatProps) {
         );
         const maxTokens =
           turnMode === "report" ? 16384 : (dispositionOption?.maxTokens || 8192);
+        // Per-AI generation settings: this AI's own values over the global
+        // layer; undefined = the model default in Rust. Live, per request.
+        const sampling = wireSampling(selectedAi.aiConfig);
 
         let fullResponse = "";
         let updateCount = 0;
@@ -1273,7 +1277,8 @@ export function useChat(props: UseChatProps) {
           preferredModel || undefined,
           undefined,
           reasoningEffort,
-          state.cacheKey
+          state.cacheKey,
+          sampling
         )) {
           if (chunk.type === "status") {
             props.isModelLoading.value = true;

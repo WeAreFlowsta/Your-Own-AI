@@ -3854,6 +3854,14 @@ fn translate_gemma_thought_markers(chunk: &str) -> String {
 /// Stream chat completion from llama-server
 /// This bypasses CORS by making the HTTP request from Rust
 /// and forwarding chunks to the frontend via Tauri events
+#[derive(serde::Deserialize, Clone, Copy, Default)]
+pub struct SamplingParams {
+    pub temperature: Option<f64>,
+    pub top_p: Option<f64>,
+    pub min_p: Option<f64>,
+    pub repeat_penalty: Option<f64>,
+}
+
 #[tauri::command]
 pub async fn stream_chat_completion(
     app: AppHandle,
@@ -3867,6 +3875,9 @@ pub async fn stream_chat_completion(
     grammar: Option<String>,
     reasoning_effort: Option<String>,
     conversation_key: Option<String>,
+    // Per-AI generation settings (FINE_TUNE_PANEL layer 3): only overridden
+    // fields arrive; the constants below stay the fallback.
+    sampling: Option<SamplingParams>,
 ) -> Result<(), String> {
     // Online models ("online:<id>") route to the YOAI proxy with the
     // Flowsta (Vault-grant) token; external models ("external:<id>") post to
@@ -3953,15 +3964,19 @@ pub async fn stream_chat_completion(
         "stream": true,
         "stream_options": { "include_usage": true },
         "max_tokens": max_tokens.unwrap_or(4096),
-        "temperature": 0.7,
-        "repeat_penalty": 1.1,
-        "top_p": 0.9,
+        "temperature": sampling.as_ref().and_then(|s| s.temperature).unwrap_or(0.7),
+        "repeat_penalty": sampling.as_ref().and_then(|s| s.repeat_penalty).unwrap_or(1.1),
+        "top_p": sampling.as_ref().and_then(|s| s.top_p).unwrap_or(0.9),
         "top_k": 40,
         // Explicit stop sequences — ensures generation stops even when
         // llama-server applies -inf logit bias to EOS tokens (which
         // prevents models like Phi-4 from ever stopping on their own).
         "stop": chat_stop_strings(&model_name),
     });
+    // min_p only when chosen: the engine's own default (0.05) rules otherwise.
+    if let Some(mp) = sampling.as_ref().and_then(|s| s.min_p) {
+        body["min_p"] = serde_json::json!(mp);
+    }
     {
         let mut tpl_kwargs = serde_json::Map::new();
         if should_think {
@@ -4021,8 +4036,11 @@ pub async fn stream_chat_completion(
             "stream": true,
             "stream_options": { "include_usage": true },
             "max_tokens": max_tokens.unwrap_or(4096),
-            "temperature": 0.7,
+            "temperature": sampling.as_ref().and_then(|s| s.temperature).unwrap_or(0.7),
         });
+        if let Some(tp) = sampling.as_ref().and_then(|s| s.top_p) {
+            remote_body["top_p"] = serde_json::json!(tp);
+        }
         // Latency/quality dial for reasoning models: plain conversational
         // turns ask for low effort so the first token isn't behind seconds
         // of default-depth thinking. Online only - the proxy strips it for

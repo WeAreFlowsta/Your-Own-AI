@@ -158,6 +158,14 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   the programs tools need. Settings > Storage is where you manage them -
   location, what is installed, remove.
 
+### Your AIs
+- Advanced generation settings, per AI: creativity (temperature), word
+  variety (top-p), rare-word floor (min-p) and the repetition brake
+  (repeat penalty), under an Advanced fold in the AI's form. Empty fields
+  mean the model default (shown in the box); a value applies to new
+  replies immediately - two AIs on the same model can answer with
+  different temperaments. Works for offline and online models.
+
 ### Records
 - A turn taken while your records are still starting, or while they are too
   busy to answer, is recorded once they are - it used to be lost.

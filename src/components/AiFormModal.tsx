@@ -91,6 +91,11 @@ const AiFormModal = component$<AiFormModalProps>(
       model: 'auto:offline',
       askBlurb: '',
       useEmojis: false,
+      advancedOpen: false,
+      sTemperature: null as number | null,
+      sTopP: null as number | null,
+      sMinP: null as number | null,
+      sRepeatPenalty: null as number | null,
       localModels: [] as LocalModel[],
       onlineModels: [] as { id: string; display_name: string; description: string }[],
       // Models served by the user's connected external engine (Settings → Engines).
@@ -424,6 +429,10 @@ const AiFormModal = component$<AiFormModalProps>(
           store.model = editingAi.model || 'auto:offline';
           store.askBlurb = editingAi.askBlurb || '';
           store.useEmojis = editingAi.useEmojis ?? false;
+          store.sTemperature = editingAi.sampling?.temperature ?? null;
+          store.sTopP = editingAi.sampling?.topP ?? null;
+          store.sMinP = editingAi.sampling?.minP ?? null;
+          store.sRepeatPenalty = editingAi.sampling?.repeatPenalty ?? null;
           store.skills = Array.isArray(editingAi.skills) ? [...editingAi.skills] : [];
           store.mcp = Array.isArray(editingAi.mcp) ? [...editingAi.mcp] : [];
 
@@ -450,6 +459,11 @@ const AiFormModal = component$<AiFormModalProps>(
           store.model = 'auto:offline';
           store.askBlurb = '';
           store.useEmojis = false;
+          store.advancedOpen = false;
+          store.sTemperature = null;
+          store.sTopP = null;
+          store.sMinP = null;
+          store.sRepeatPenalty = null;
           store.isDescriptionCustomized = false;
           store.useArchetypeThumbnail = true;
         }
@@ -619,6 +633,14 @@ const AiFormModal = component$<AiFormModalProps>(
           useEmojis: store.useEmojis,
           skills: store.skills,
           mcp: store.mcp,
+          sampling: (() => {
+            const s: { temperature?: number; topP?: number; minP?: number; repeatPenalty?: number } = {};
+            if (store.sTemperature != null) s.temperature = store.sTemperature;
+            if (store.sTopP != null) s.topP = store.sTopP;
+            if (store.sMinP != null) s.minP = store.sMinP;
+            if (store.sRepeatPenalty != null) s.repeatPenalty = store.sRepeatPenalty;
+            return Object.keys(s).length ? s : undefined;
+          })(),
         };
 
         if (editingAi) {
@@ -1236,6 +1258,55 @@ const AiFormModal = component$<AiFormModalProps>(
                   </button>
                 </div>
               </LiquidMetalBorder>
+            </div>
+
+            {/* Advanced: how this AI samples its words - per AI, live. */}
+            <div>
+              <button
+                type="button"
+                onClick$={() => { store.advancedOpen = !store.advancedOpen; }}
+                class="text-sm text-[var(--text-link)] hover:underline"
+              >
+                {store.advancedOpen ? 'Hide advanced generation settings' : 'Advanced generation settings'}
+              </button>
+              {store.advancedOpen && (
+                <div class="mt-3 space-y-3">
+                  <p class="text-xs text-[var(--text-muted)]">
+                    Leave a field empty for the model default (shown in the box); a number here wins
+                    for this AI only and applies to new replies immediately.
+                  </p>
+                  <div class="grid gap-3 sm:grid-cols-2">
+                    <label class="block text-xs text-[var(--text-secondary)]">
+                      Creativity (temperature)
+                      <input type="number" min="0" max="2" step="0.05" value={store.sTemperature ?? ''}
+                        placeholder={samplingPlaceholder('temperature')}
+                        onInput$={(_, el) => { store.sTemperature = el.value === '' ? null : Number(el.value); }}
+                        class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none" />
+                    </label>
+                    <label class="block text-xs text-[var(--text-secondary)]">
+                      Word variety (top-p)
+                      <input type="number" min="0.05" max="1" step="0.01" value={store.sTopP ?? ''}
+                        placeholder={samplingPlaceholder('topP')}
+                        onInput$={(_, el) => { store.sTopP = el.value === '' ? null : Number(el.value); }}
+                        class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none" />
+                    </label>
+                    <label class="block text-xs text-[var(--text-secondary)]">
+                      Rare-word floor (min-p)
+                      <input type="number" min="0" max="0.5" step="0.01" value={store.sMinP ?? ''}
+                        placeholder={samplingPlaceholder('minP')}
+                        onInput$={(_, el) => { store.sMinP = el.value === '' ? null : Number(el.value); }}
+                        class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none" />
+                    </label>
+                    <label class="block text-xs text-[var(--text-secondary)]">
+                      Repetition brake (repeat penalty)
+                      <input type="number" min="1" max="1.5" step="0.01" value={store.sRepeatPenalty ?? ''}
+                        placeholder={samplingPlaceholder('repeatPenalty')}
+                        onInput$={(_, el) => { store.sRepeatPenalty = el.value === '' ? null : Number(el.value); }}
+                        class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none" />
+                    </label>
+                  </div>
+                </div>
+              )}
             </div>
 
             </>)}

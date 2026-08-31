@@ -29,6 +29,8 @@ export interface UserDefinedAI {
   mcp?: string[];  // MCP servers (Add-ons > Tools) this AI carries into project sessions
   mcpOff?: string[];  // carried tools switched off (the chip by the message field); still "used by" this AI
   skillsOff?: string[];  // carried skills switched off the same way
+  /** Advanced generation settings for this AI (fields unset = model default). */
+  sampling?: { temperature?: number; topP?: number; minP?: number; repeatPenalty?: number };
   agentPubKey?: string;  // Holochain agent public key (set on first provisioning)
   archivedAt?: number;  // ms epoch when the AI was archived (set on archive, cleared on restore)
 }
@@ -46,6 +48,7 @@ export interface CreateUserAiData {
   useEmojis?: boolean;
   skills?: string[];
   mcp?: string[];
+  sampling?: { temperature?: number; topP?: number; minP?: number; repeatPenalty?: number };
 }
 
 export interface UpdateUserAiData {
@@ -63,6 +66,7 @@ export interface UpdateUserAiData {
   mcp?: string[];
   mcpOff?: string[];
   skillsOff?: string[];
+  sampling?: { temperature?: number; topP?: number; minP?: number; repeatPenalty?: number };
 }
 
 /** The AI's resting length lean — a soft default, not a cap. */
