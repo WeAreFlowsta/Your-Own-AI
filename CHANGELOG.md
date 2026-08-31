@@ -108,7 +108,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   steps and approvals in the thread.
 - A chip beside the model chip shows what the AI carries - tools and
   skills, an icon and a count each, nothing when it carries nothing. It
-  opens one panel: every tool and skill with an on/off switch, approvals
+  opens one panel: every tool and skill installed on this computer with an
+  on/off switch - the ones this AI carries are on, switching another on
+  gives it to the AI right there - plus approvals
   for tools (Ask every time, Auto, Approve everything - remembered per AI,
   applied to the open session at once), and the Projects install when the
   helper is missing. Off keeps a tool on the AI; it just sits out - all
