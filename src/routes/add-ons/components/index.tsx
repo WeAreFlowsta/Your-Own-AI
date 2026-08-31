@@ -134,7 +134,6 @@ export default component$(() => {
 
           <div class="mt-8">
             <LiquidMetalButton variant="secondary" onClick$={async () => {
-              try { sessionStorage.setItem("settings-from", JSON.stringify({ label: "Components", href: "/add-ons/components", at: "settings-components" })); } catch { /* fine */ }
               await nav("/settings#settings-components");
             }} class="h-9 px-4 text-sm">
               Manage storage in Settings

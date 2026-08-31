@@ -21,8 +21,9 @@ export default component$(() => {
       </p>
       <h3 class="font-semibold text-[var(--text-primary)] mb-1">Storage location</h3>
       <p class="text-sm text-[var(--text-secondary)] mb-3">
-        Models and the other large components download to one folder. Move it to any drive - an
-        external SSD, a roomier partition - and future downloads follow.
+        Models - and the vision, OCR and helper models beside them - live in one folder. Pick a new
+        place and everything in it moves there (nothing runs while it moves, and a failed move puts
+        it all back); future downloads follow. Engines and Projects are small and stay with the app.
       </p>
       <ModelStorageLocation showPath />
       <div class="mt-6 pt-5 border-t border-[var(--border-subtle)]">

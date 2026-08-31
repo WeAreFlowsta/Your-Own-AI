@@ -280,6 +280,11 @@ export default component$(() => {
       const raw = sessionStorage.getItem("settings-from");
       if (raw) cameFrom.value = JSON.parse(raw);
     } catch { /* no back link */ }
+    // Land on the section a link asked for (/settings#settings-components):
+    // the page renders long, so scroll once everything has laid out. The
+    // static adapter keeps the hash but nothing scrolled to it before.
+    const h = window.location.hash.slice(1);
+    if (h) setTimeout(() => document.getElementById(h)?.scrollIntoView({ block: "start" }), 80);
   });
   const headerWs = useHeaderWorkspace();
 
@@ -1459,11 +1464,6 @@ export default component$(() => {
 
               {/* Storage: location + what is installed (get more in Add-ons > Components) */}
               <div id="settings-components" class="scroll-mt-4">
-                {cameFrom.value?.at === "settings-components" && (
-                  <button type="button" onClick$={goBack} class="mb-2 inline-flex items-center gap-1 text-sm text-[var(--text-muted)] hover:text-[var(--text-secondary)]">
-                    <LuChevronLeft class="h-4 w-4" /> {cameFrom.value.label}
-                  </button>
-                )}
                 <ComponentsSettings />
               </div>
 
