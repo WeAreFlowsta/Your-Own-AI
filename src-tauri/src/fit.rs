@@ -452,7 +452,12 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
         }
         // Grade at the context the server would actually start this model
         // with - per model, since choose_ctx is VRAM- and size-aware.
-        let ctx = choose_ctx(&meta, m.size_bytes, total_ram_gb, free_vram_gb);
+        // A fine-tune pin replaces the sizing here too, so the grade, the
+        // router and the "runs at" line all tell the same story.
+        let ctx = crate::tuning::get(app, &m.name)
+            .context
+            .map(|c| if meta.context_length > 0 { c.clamp(4096, meta.context_length.max(4096)) } else { c.max(4096) })
+            .unwrap_or_else(|| choose_ctx(&meta, m.size_bytes, total_ram_gb, free_vram_gb));
         let (weights_gb, kv_gb, mut need_gb) = model_need(&meta, m.size_bytes, ctx);
         // A model with a downloaded projector (mmproj) auto-loads it for vision, so
         // its ~1 GB lives in VRAM whenever this model runs — count it toward fit.

@@ -7,6 +7,7 @@ mod model_stats;         // per-machine measured tok/s + load time, shared by ro
 mod conversation_import;  // bring-your-history: parse + archive exported chats
 mod diagnostics;          // one-click diagnostic report (Settings > Help & diagnostics)
 mod llm;                  // llama-server module
+mod tuning;               // per-model fine-tune overrides (FINE_TUNE_PANEL layer 2)
 mod engine;               // optional inference engines (pinned tag; CUDA backend later)
 mod ocr;                  // OCR for scanned PDFs (pdfium render + ocrs)
 mod lair;
@@ -566,6 +567,10 @@ pub fn run() {
             llm::get_system_info,
             llm::list_local_models,
             llm::register_model_draft,
+            tuning::tuning_get,
+            tuning::tuning_set,
+            tuning::tuning_set_engine_threads,
+            tuning::tuning_apply_now,
             model_stats::model_stats,
             model_caps::model_caps_for,
             engine::engine_status,

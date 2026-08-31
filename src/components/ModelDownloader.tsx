@@ -67,6 +67,7 @@ import { formatModelDisplayName } from '../utils/modelNameFormatter';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import DeleteModelModal from './DeleteModelModal';
+import ModelTuneDialog from './ModelTuneDialog';
 import CustomModelModal from './CustomModelModal';
 import { useAiData, useAiDataActions } from '../contexts/AiDataContext';
 
@@ -260,6 +261,8 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
       }
     >,
     appVersion: '',
+    /** Model name whose fine-tune dialog is open ('' = none). */
+    tuneFor: '',
     /** The GPU exists but cannot run models (safe mode, or the engine's
      *  own device verdict) - every sizing decision on this page then plans
      *  for the processor instead. */
@@ -1958,6 +1961,26 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                           </button>
                         );
                       })()
+                    )}
+                    {!unusable && !model.damaged && (
+                      <button
+                        type="button"
+                        onClick$={() => { store.tuneFor = model.name; }}
+                        title="Fine-tune how this model runs on this computer: context size, expert offload, the speed-up file. Everything stays automatic unless you set a number."
+                        class="mt-0.5 text-xs text-[var(--text-secondary)] underline underline-offset-2 bg-transparent border-none p-0 cursor-pointer hover:text-[var(--text-primary)]"
+                      >
+                        Fine-tune
+                      </button>
+                    )}
+                    {store.tuneFor === model.name && (
+                      <ModelTuneDialog
+                        model={model.name}
+                        autoCtx={fitInfo?.context_runtime}
+                        isMoe={!!fitInfo?.moe_offload || fitInfo?.moe_cpu_layers != null}
+                        autoMoeN={fitInfo?.moe_cpu_layers}
+                        hasDraft={!!model.draft}
+                        onClose$={() => { store.tuneFor = ''; }}
+                      />
                     )}
                   </div>
                   {!unusable && (

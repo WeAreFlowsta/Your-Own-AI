@@ -1074,6 +1074,12 @@ pub async fn ensure_context(
     if have >= need {
         return Ok(unchanged(Some(filename)));
     }
+    if crate::tuning::get(&app_handle, &filename).context.is_some() {
+        // The person pinned this model's context - reading room never
+        // overrides a pin. The caller's shortfall handling says so.
+        log::info!("[LLM] reading room: '{}' context is pinned by its fine-tune setting - not growing", filename);
+        return Ok(unchanged(Some(filename)));
+    }
     let (meta, size, total_ram_gb, free_vram_gb) = fit_inputs(&app_handle, &filename, have).await?;
     match crate::fit::ctx_for_need(&meta, size, total_ram_gb, free_vram_gb, need) {
         Some(target) => {
@@ -1715,6 +1721,23 @@ pub async fn start_llama_server(
     } else {
         ctx_size
     };
+    // A fine-tune pin wins over the sizing AND over a growth request: the
+    // person said this number. Clamped to the model's trained context.
+    let ctx_size: u64 = if let Some(pin) = model_filename
+        .as_ref()
+        .and_then(|f| crate::tuning::get(&app_handle, f).context)
+    {
+        let cap = header
+            .as_ref()
+            .map(|(m, _)| m.context_length)
+            .filter(|&c| c > 0)
+            .unwrap_or(u64::MAX);
+        let pinned = pin.clamp(4096, cap.max(4096));
+        log::info!("[LLM] context {pinned} - your fine-tune setting (sizing said {ctx_size})");
+        pinned
+    } else {
+        ctx_size
+    };
     CURRENT_CTX_SIZE.store(ctx_size as u32, std::sync::atomic::Ordering::Relaxed);
     println!(
         "[LLM] System RAM: {:.1}GB, model size: {}, using context size: {}",
@@ -1747,6 +1770,13 @@ pub async fn start_llama_server(
         "--fit".to_string(),
         "off".to_string(),
     ];
+    // Machine fine-tune: a chosen worker-thread count; the engine's own
+    // default otherwise (settings.json engineThreads).
+    if let Some(t) = crate::tuning::engine_threads(&app_handle) {
+        log::info!("[LLM] worker threads: {t} - your fine-tune setting");
+        args.push("--threads".to_string());
+        args.push(t.to_string());
+    }
     
     // If a model is specified, load it on startup
     *state.current_mmproj.lock().await = None;
@@ -1826,7 +1856,9 @@ pub async fn start_llama_server(
     // by reading expert weights per token). Measured per machine by the
     // tok/s stamp like everything else; the model runs without it.
     if let Some(ref filename) = loading_name {
-        if let Some(d) = model_draft_for(&models_dir, filename) {
+        if crate::tuning::get(&app_handle, filename).draft_off.unwrap_or(false) {
+            log::info!("[LLM] speed-up draft left out - your fine-tune setting");
+        } else if let Some(d) = model_draft_for(&models_dir, filename) {
             log::info!("[LLM] speculative decoding: {} ({})", d.draft, d.draft_type);
             args.push("--spec-type".to_string());
             args.push(d.draft_type.clone());
@@ -1843,7 +1875,28 @@ pub async fn start_llama_server(
             if let Some(free_mib) = available_vram_mib(&app_handle).await {
                 let free_gb = free_mib as f64 / 1024.0;
                 let (_, _, need_gb) = crate::fit::model_need(meta, *size_bytes, ctx_size);
-                if crate::fit::moe_offload_wanted(need_gb, free_gb) {
+                let tuned_moe = loading_name
+                    .as_ref()
+                    .and_then(|f| crate::tuning::get(&app_handle, f).moe_cpu_layers);
+                if let Some(tn) = tuned_moe {
+                    // The person's own split: 0 = everything on the card
+                    // (no offload flags at all), N = that many expert
+                    // layers' weights in main memory, clamped to the layer
+                    // count (an out-of-range N is a hard abort upstream).
+                    let n_layers = meta.expert_bytes_per_layer.len();
+                    if tn == 0 {
+                        log::info!("[LLM] MoE offload: all experts on the card - your fine-tune setting");
+                    } else {
+                        let n = (tn as usize).min(n_layers.max(1));
+                        let (_, kv_gb, _) = crate::fit::model_need(meta, *size_bytes, ctx_size);
+                        log::info!(
+                            "[LLM] MoE offload: experts of {n} of {n_layers} layers on CPU (--n-cpu-moe {n}) - your fine-tune setting"
+                        );
+                        args.push("--n-cpu-moe".to_string());
+                        args.push(n.to_string());
+                        moe_plan = Some((n, crate::fit::moe_need_gb(meta, n, kv_gb), free_gb));
+                    }
+                } else if crate::fit::moe_offload_wanted(need_gb, free_gb) {
                     // How many layers' experts go to the CPU: the smallest
                     // count that leaves the headroom (from the file's own
                     // tensor table), corrected by what the last measured
