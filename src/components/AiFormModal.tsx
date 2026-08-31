@@ -6,7 +6,8 @@ import {
   $,
   type QRL,
 } from '@builder.io/qwik';
-import { samplingPlaceholder } from '../utils/sampling';
+import { SAMPLING_BOUNDS, samplingAutoValue, samplingPlaceholder } from '../utils/sampling';
+import TuneSlider from './TuneSlider';
 import type { UserDefinedAI, CreateUserAiData, UpdateUserAiData, LocalModel, LengthDisposition, TurnMode } from '../types';
 import { getCachedModels, refreshLocalModels, refreshFits, refreshOnlineModels } from '../utils/modelCache';
 
@@ -1273,38 +1274,27 @@ const AiFormModal = component$<AiFormModalProps>(
               {store.advancedOpen && (
                 <div class="mt-3 space-y-3">
                   <p class="text-xs text-[var(--text-muted)]">
-                    Leave a field empty for the model default (shown in the box); a number here wins
-                    for this AI only and applies to new replies immediately.
+                    Automatic unless you move a slider - the grey line names the layer that answers.
+                    A value here wins for this AI only and applies to new replies immediately; Auto
+                    puts a row back to automatic.
                   </p>
-                  <div class="grid gap-3 sm:grid-cols-2">
-                    <label class="block text-xs text-[var(--text-secondary)]">
-                      Creativity (temperature)
-                      <input type="number" min="0" max="2" step="0.05" value={store.sTemperature ?? ''}
-                        placeholder={samplingPlaceholder('temperature')}
-                        onInput$={(_, el) => { store.sTemperature = el.value === '' ? null : Number(el.value); }}
-                        class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none" />
-                    </label>
-                    <label class="block text-xs text-[var(--text-secondary)]">
-                      Word variety (top-p)
-                      <input type="number" min="0.05" max="1" step="0.01" value={store.sTopP ?? ''}
-                        placeholder={samplingPlaceholder('topP')}
-                        onInput$={(_, el) => { store.sTopP = el.value === '' ? null : Number(el.value); }}
-                        class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none" />
-                    </label>
-                    <label class="block text-xs text-[var(--text-secondary)]">
-                      Rare-word floor (min-p)
-                      <input type="number" min="0" max="0.5" step="0.01" value={store.sMinP ?? ''}
-                        placeholder={samplingPlaceholder('minP')}
-                        onInput$={(_, el) => { store.sMinP = el.value === '' ? null : Number(el.value); }}
-                        class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none" />
-                    </label>
-                    <label class="block text-xs text-[var(--text-secondary)]">
-                      Repetition brake (repeat penalty)
-                      <input type="number" min="1" max="1.5" step="0.01" value={store.sRepeatPenalty ?? ''}
-                        placeholder={samplingPlaceholder('repeatPenalty')}
-                        onInput$={(_, el) => { store.sRepeatPenalty = el.value === '' ? null : Number(el.value); }}
-                        class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none" />
-                    </label>
+                  <div class="grid gap-4 sm:grid-cols-2">
+                    <TuneSlider label="Creativity (temperature)" value={store.sTemperature}
+                      autoLabel={samplingPlaceholder('temperature')} autoValue={samplingAutoValue('temperature')}
+                      min={SAMPLING_BOUNDS.temperature.min} max={SAMPLING_BOUNDS.temperature.max} step={SAMPLING_BOUNDS.temperature.step}
+                      onChange$={(v) => { store.sTemperature = v; }} />
+                    <TuneSlider label="Word variety (top-p)" value={store.sTopP}
+                      autoLabel={samplingPlaceholder('topP')} autoValue={samplingAutoValue('topP')}
+                      min={SAMPLING_BOUNDS.topP.min} max={SAMPLING_BOUNDS.topP.max} step={SAMPLING_BOUNDS.topP.step}
+                      onChange$={(v) => { store.sTopP = v; }} />
+                    <TuneSlider label="Rare-word floor (min-p)" value={store.sMinP}
+                      autoLabel={samplingPlaceholder('minP')} autoValue={samplingAutoValue('minP')}
+                      min={SAMPLING_BOUNDS.minP.min} max={SAMPLING_BOUNDS.minP.max} step={SAMPLING_BOUNDS.minP.step}
+                      onChange$={(v) => { store.sMinP = v; }} />
+                    <TuneSlider label="Repetition brake (repeat penalty)" value={store.sRepeatPenalty}
+                      autoLabel={samplingPlaceholder('repeatPenalty')} autoValue={samplingAutoValue('repeatPenalty')}
+                      min={SAMPLING_BOUNDS.repeatPenalty.min} max={SAMPLING_BOUNDS.repeatPenalty.max} step={SAMPLING_BOUNDS.repeatPenalty.step}
+                      onChange$={(v) => { store.sRepeatPenalty = v; }} />
                   </div>
                 </div>
               )}

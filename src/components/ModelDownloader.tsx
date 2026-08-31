@@ -1976,6 +1976,8 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                       <ModelTuneDialog
                         model={model.name}
                         autoCtx={fitInfo?.context_runtime}
+                        maxCtx={fitInfo?.context_max}
+                        nLayers={fitInfo?.n_layers}
                         isMoe={!!fitInfo?.moe_offload || fitInfo?.moe_cpu_layers != null}
                         autoMoeN={fitInfo?.moe_cpu_layers}
                         hasDraft={!!model.draft}

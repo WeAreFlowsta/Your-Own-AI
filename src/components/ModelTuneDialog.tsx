@@ -12,6 +12,7 @@ interface TuneResult {
   failed?: string | null;
 }
 import LiquidMetalButton from './LiquidMetalButton';
+import TuneSlider from './TuneSlider';
 
 /**
  * Fine-tune one model on this computer (FINE_TUNE_PANEL layer 2). Empty
@@ -21,6 +22,10 @@ import LiquidMetalButton from './LiquidMetalButton';
  */
 interface ModelTuneDialogProps {
   model: string;
+  /** The model's trained context limit (caps the slider). */
+  maxCtx?: number;
+  /** MoE: total expert-carrying layers (caps the split slider). */
+  nLayers?: number;
   /** The context the automatics start this model with (fit's number). */
   autoCtx?: number;
   /** MoE model: the automatics' expert-layers-on-CPU pick, when known. */
@@ -32,8 +37,8 @@ interface ModelTuneDialogProps {
 }
 
 export default component$<ModelTuneDialogProps>((props) => {
-  const ctx = useSignal<string>('');
-  const moeN = useSignal<string>('');
+  const ctx = useSignal<number | null>(null);
+  const moeN = useSignal<number | null>(null);
   const draftOff = useSignal(false);
   const note = useSignal('');
   const busy = useSignal(false);
@@ -48,8 +53,8 @@ export default component$<ModelTuneDialogProps>((props) => {
         'tuning_get',
         { model: props.model },
       );
-      ctx.value = t.context != null ? String(t.context) : '';
-      moeN.value = t.moe_cpu_layers != null ? String(t.moe_cpu_layers) : '';
+      ctx.value = t.context ?? null;
+      moeN.value = t.moe_cpu_layers ?? null;
       draftOff.value = !!t.draft_off;
     } catch {
       /* fresh dialog */
@@ -78,35 +83,27 @@ export default component$<ModelTuneDialogProps>((props) => {
       <div class="w-full max-w-md rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-header-footer)] p-6 shadow-2xl">
         <h3 class="text-base font-semibold text-[var(--text-primary)]">Fine-tune {props.model.replace(/\.gguf$/, '')}</h3>
         <p class="mt-2 text-xs text-[var(--text-muted)]">
-          For this computer only. Empty = automatic (the number in the box). A change applies when the
-          model next loads - Save reloads it right away if it is running now.
+          For this computer only. Automatic unless you move a slider - Auto puts a row back. A change
+          applies when the model next loads; Save reloads it right away if it is running now.
         </p>
-        <div class="mt-4 space-y-3">
-          <label class="block text-xs text-[var(--text-secondary)]">
-            Context size (tokens of reading room)
-            <input
-              type="number" min="4096" step="4096" value={ctx.value}
-              placeholder={props.autoCtx ? `Auto (${props.autoCtx})` : 'Auto'}
-              onInput$={(_, el) => { ctx.value = el.value; note.value = ''; }}
-              class={inputClass}
-            />
-          </label>
-          {ctx.value !== '' && props.autoCtx && Number(ctx.value) > props.autoCtx && (
+        <div class="mt-4 space-y-4">
+          <TuneSlider label="Context size (tokens of reading room)" value={ctx.value}
+            autoLabel={props.autoCtx ? `Auto (${props.autoCtx})` : 'Auto'} autoValue={props.autoCtx}
+            ticks={[4096, 8192, 16384, 32768, 65536, 131072].filter((c) => !props.maxCtx || c <= props.maxCtx)}
+            unit="tokens"
+            onChange$={(v) => { ctx.value = v; note.value = ''; }} />
+          {ctx.value != null && props.autoCtx && ctx.value > props.autoCtx && (
             <p class="text-xs text-amber-500">
               More than the automatics predict fits on this machine - it may load slowly or fail; the
               model's trained limit still caps it.
             </p>
           )}
           {props.isMoe && (
-            <label class="block text-xs text-[var(--text-secondary)]">
-              Expert layers in main memory (0 = everything on the card)
-              <input
-                type="number" min="0" step="1" value={moeN.value}
-                placeholder={props.autoMoeN != null ? `Auto (${props.autoMoeN})` : 'Auto'}
-                onInput$={(_, el) => { moeN.value = el.value; note.value = ''; }}
-                class={inputClass}
-              />
-            </label>
+            <TuneSlider label="Expert layers in main memory (0 = everything on the card)" value={moeN.value}
+              autoLabel={props.autoMoeN != null ? `Auto (${props.autoMoeN})` : 'Auto'}
+              autoValue={props.autoMoeN ?? 0}
+              min={0} max={props.nLayers || 64} step={1} unit="layers"
+              onChange$={(v) => { moeN.value = v; note.value = ''; }} />
           )}
           {props.hasDraft && (
             <label class="flex items-center gap-2 text-xs text-[var(--text-secondary)]">
@@ -177,8 +174,8 @@ export default component$<ModelTuneDialogProps>((props) => {
                     sliderPos.value = Number(el.value);
                     const p = positions[Number(el.value)];
                     if (!p) return;
-                    ctx.value = String(p.ctx);
-                    if (p.moe_cpu_layers != null) moeN.value = String(p.moe_cpu_layers);
+                    ctx.value = p.ctx;
+                    if (p.moe_cpu_layers != null) moeN.value = p.moe_cpu_layers;
                     draftOff.value = !p.draft && props.hasDraft;
                     note.value = 'Pick filled in above - Save to keep it.';
                   }}
@@ -203,8 +200,8 @@ export default component$<ModelTuneDialogProps>((props) => {
               busy.value = true;
               try {
                 const tuning: Record<string, unknown> = {};
-                if (ctx.value !== '' && Number(ctx.value) > 0) tuning.context = Math.round(Number(ctx.value));
-                if (moeN.value !== '' && Number(moeN.value) >= 0) tuning.moe_cpu_layers = Math.round(Number(moeN.value));
+                if (ctx.value != null && ctx.value > 0) tuning.context = Math.round(ctx.value);
+                if (moeN.value != null && moeN.value >= 0) tuning.moe_cpu_layers = Math.round(moeN.value);
                 if (draftOff.value) tuning.draft_off = true;
                 await invoke('tuning_set', { model: props.model, tuning });
                 const reloaded = await invoke<boolean>('tuning_apply_now', { model: props.model });

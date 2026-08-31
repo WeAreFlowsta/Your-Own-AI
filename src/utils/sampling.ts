@@ -49,6 +49,12 @@ export function setGlobalSampling(s: SamplingOverrides): void {
   }
 }
 
+/** The number the automatic layer answers with (global, else the default). */
+export function samplingAutoValue(field: keyof SamplingOverrides): number {
+  const g = globalSampling()[field];
+  return typeof g === "number" ? g : SAMPLING_DEFAULTS[field];
+}
+
 /** Placeholder text for an empty field: names the layer that answers. */
 export function samplingPlaceholder(field: keyof SamplingOverrides): string {
   const g = globalSampling()[field];
