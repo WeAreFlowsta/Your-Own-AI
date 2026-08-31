@@ -6,6 +6,7 @@ import {
   $,
   type QRL,
 } from '@builder.io/qwik';
+import { samplingPlaceholder } from '../utils/sampling';
 import type { UserDefinedAI, CreateUserAiData, UpdateUserAiData, LocalModel, LengthDisposition, TurnMode } from '../types';
 import { getCachedModels, refreshLocalModels, refreshFits, refreshOnlineModels } from '../utils/modelCache';
 
