@@ -618,8 +618,12 @@ export default component$(() => {
             <h3 class="text-base font-semibold text-[var(--text-primary)]">Share "{store.shareFor}" with everyone</h3>
             {store.shareDone ? (
               <div class="mt-3 space-y-3 text-sm text-[var(--text-secondary)]">
+                <p>Submitted, signed with your Flowsta identity.</p>
                 <p>
-                  Submitted, signed with your Flowsta identity. An AI reviewer reads it against the directory rules and posts what it finds, then a person on the Your Own AI team decides; updates to your own listing go through on their own once the checks pass. Once it is listed it lives at{" "}
+                  An AI reviewer reads it against the directory rules and posts what it finds, then a person on the Your Own AI team decides. Updates to your own listing go through on their own once the checks pass.
+                </p>
+                <p>
+                  Once it is listed it lives at{" "}
                   <span class="text-[var(--text-primary)] break-all">{store.shareDone.page}</span> - the card here shows where it stands.
                 </p>
                 <button
