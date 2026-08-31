@@ -11,6 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { LuCheck, LuCpu, LuDownload, LuLink, LuTrash2, LuZap } from "@qwikest/icons/lucide";
 import LiquidMetalButton from "./LiquidMetalButton";
+import { SAMPLING_BOUNDS, SAMPLING_DEFAULTS, globalSampling, setGlobalSampling, type SamplingOverrides } from "../utils/sampling";
 
 interface ExternalEngineInfo {
   url: string | null;
@@ -234,6 +235,46 @@ export default component$(() => {
   // engine is already installed (always removable) or was laddered out.
   const showCuda =
     !!s && s.supported && (isNvidia.value || s.installed || s.stale_version_installed);
+
+  // Machine fine-tune (FINE_TUNE_PANEL): worker threads + the global
+  // generation layer every AI inherits unless it sets its own.
+  const threads = useSignal<string>("");
+  const gTemp = useSignal<string>("");
+  const gTopP = useSignal<string>("");
+  const gMinP = useSignal<string>("");
+  const gRepeat = useSignal<string>("");
+  const tuneNote = useSignal("");
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async () => {
+    const g = globalSampling();
+    gTemp.value = g.temperature != null ? String(g.temperature) : "";
+    gTopP.value = g.topP != null ? String(g.topP) : "";
+    gMinP.value = g.minP != null ? String(g.minP) : "";
+    gRepeat.value = g.repeatPenalty != null ? String(g.repeatPenalty) : "";
+    try {
+      const { load } = await import("@tauri-apps/plugin-store");
+      const store = await load("settings.json");
+      const t = await store.get<number>("engineThreads");
+      threads.value = t ? String(t) : "";
+    } catch { /* fresh */ }
+  });
+  const saveTune = $(async () => {
+    tuneNote.value = "";
+    const g: SamplingOverrides = {};
+    if (gTemp.value !== "") g.temperature = Number(gTemp.value);
+    if (gTopP.value !== "") g.topP = Number(gTopP.value);
+    if (gMinP.value !== "") g.minP = Number(gMinP.value);
+    if (gRepeat.value !== "") g.repeatPenalty = Number(gRepeat.value);
+    setGlobalSampling(g);
+    try {
+      await invoke("tuning_set_engine_threads", {
+        threads: threads.value !== "" && Number(threads.value) >= 1 ? Math.round(Number(threads.value)) : null,
+      });
+      tuneNote.value = "Saved. Generation settings apply to new replies now; threads when a model next loads.";
+    } catch (e) {
+      tuneNote.value = `Could not save: ${e}`;
+    }
+  });
 
   return (
     <section class="bg-[var(--bg-card)] rounded-2xl p-6 border border-[var(--border-subtle)]">
@@ -510,6 +551,57 @@ export default component$(() => {
               </LiquidMetalButton>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Machine fine-tune: this computer's overrides. Empty = automatic. */}
+      <div class="mt-6 pt-5 border-t border-[var(--border-subtle)]">
+        <h3 class="font-semibold text-[var(--text-primary)] mb-1">Fine-tune this computer</h3>
+        <p class="text-sm text-[var(--text-secondary)] mb-3">
+          For people who like to turn the dials. Empty fields mean the automatics decide (the value in
+          the box). Generation settings here are the layer every AI inherits unless it sets its own in
+          its form; each model also has its own Fine-tune on the Offline Models page.
+        </p>
+        <div class="grid gap-3 sm:grid-cols-2">
+          <label class="block text-xs text-[var(--text-secondary)]">
+            Worker threads (next model load)
+            <input type="number" min="1" max="256" step="1" value={threads.value} placeholder="Auto (engine default)"
+              onInput$={(_, el) => { threads.value = el.value; }}
+              class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none" />
+          </label>
+          <div class="hidden sm:block" />
+          <label class="block text-xs text-[var(--text-secondary)]">
+            Creativity (temperature)
+            <input type="number" min={SAMPLING_BOUNDS.temperature.min} max={SAMPLING_BOUNDS.temperature.max} step={SAMPLING_BOUNDS.temperature.step}
+              value={gTemp.value} placeholder={`Model default (${SAMPLING_DEFAULTS.temperature})`}
+              onInput$={(_, el) => { gTemp.value = el.value; }}
+              class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none" />
+          </label>
+          <label class="block text-xs text-[var(--text-secondary)]">
+            Word variety (top-p)
+            <input type="number" min={SAMPLING_BOUNDS.topP.min} max={SAMPLING_BOUNDS.topP.max} step={SAMPLING_BOUNDS.topP.step}
+              value={gTopP.value} placeholder={`Model default (${SAMPLING_DEFAULTS.topP})`}
+              onInput$={(_, el) => { gTopP.value = el.value; }}
+              class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none" />
+          </label>
+          <label class="block text-xs text-[var(--text-secondary)]">
+            Rare-word floor (min-p)
+            <input type="number" min={SAMPLING_BOUNDS.minP.min} max={SAMPLING_BOUNDS.minP.max} step={SAMPLING_BOUNDS.minP.step}
+              value={gMinP.value} placeholder={`Model default (${SAMPLING_DEFAULTS.minP})`}
+              onInput$={(_, el) => { gMinP.value = el.value; }}
+              class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none" />
+          </label>
+          <label class="block text-xs text-[var(--text-secondary)]">
+            Repetition brake (repeat penalty)
+            <input type="number" min={SAMPLING_BOUNDS.repeatPenalty.min} max={SAMPLING_BOUNDS.repeatPenalty.max} step={SAMPLING_BOUNDS.repeatPenalty.step}
+              value={gRepeat.value} placeholder={`Model default (${SAMPLING_DEFAULTS.repeatPenalty})`}
+              onInput$={(_, el) => { gRepeat.value = el.value; }}
+              class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none" />
+          </label>
+        </div>
+        <div class="mt-3 flex items-center gap-3">
+          <LiquidMetalButton class="px-4 py-2 text-sm" onClick$={saveTune}>Save</LiquidMetalButton>
+          {tuneNote.value && <p class="text-xs text-[var(--text-secondary)]">{tuneNote.value}</p>}
         </div>
       </div>
     </section>

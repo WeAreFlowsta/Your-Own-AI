@@ -166,6 +166,17 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   replies immediately - two AIs on the same model can answer with
   different temperaments. Works for offline and online models.
 
+### Fine-tune (for people who like to turn the dials)
+- Every installed model has a Fine-tune on the Offline Models page:
+  context size, MoE expert layers in main memory (0 = everything on the
+  card), and the speed-up file on or off - for this computer only. Empty
+  fields mean the automatics decide, shown in the box; the fit grade,
+  the router and "runs at" all follow an override, and Save reloads the
+  model right away when it is the one running.
+- Settings > Engines gained "Fine-tune this computer": worker threads and
+  the machine-wide generation layer (creativity, word variety, rare-word
+  floor, repetition brake) that every AI inherits unless it sets its own.
+
 ### Records
 - A turn taken while your records are still starting, or while they are too
   busy to answer, is recorded once they are - it used to be lost.
