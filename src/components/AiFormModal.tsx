@@ -747,7 +747,7 @@ const AiFormModal = component$<AiFormModalProps>(
             </button>
           </div>
 
-          <form preventdefault:submit onSubmit$={handleSubmit$} class={editingAi ? 'flex flex-col gap-5' : 'space-y-4 md:space-y-6'}>
+          <form preventdefault:submit onSubmit$={handleSubmit$} class={editingAi ? 'flex flex-col gap-5' : 'space-y-6 md:space-y-7'}>
             <div class={editingAi ? 'flex gap-6' : 'contents'}>
             {/* Section nav (edit only) - mirrors the Settings page pattern. */}
             {editingAi && (
