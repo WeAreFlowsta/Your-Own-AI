@@ -75,8 +75,6 @@ export default component$<ModelTuneDialogProps>((props) => {
     cleanup(() => un());
   });
 
-  const inputClass =
-    'mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none';
 
   return (
     <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
