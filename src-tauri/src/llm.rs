@@ -3919,6 +3919,26 @@ fn translate_gemma_thought_markers(chunk: &str) -> String {
 /// Stream chat completion from llama-server
 /// This bypasses CORS by making the HTTP request from Rust
 /// and forwarding chunks to the frontend via Tauri events
+/// The one place sampling reaches a request body. Local: the app's
+/// constants as the fallback, min_p only when chosen (the engine's own
+/// default rules otherwise). Remote: a minimal standard body - temperature
+/// always, top_p only when chosen, nothing provider-specific.
+pub(crate) fn apply_sampling(body: &mut serde_json::Value, s: Option<&SamplingParams>, remote: bool) {
+    let t = s.and_then(|s| s.temperature).unwrap_or(0.7);
+    body["temperature"] = serde_json::json!(t);
+    if remote {
+        if let Some(tp) = s.and_then(|s| s.top_p) {
+            body["top_p"] = serde_json::json!(tp);
+        }
+        return;
+    }
+    body["top_p"] = serde_json::json!(s.and_then(|s| s.top_p).unwrap_or(0.9));
+    body["repeat_penalty"] = serde_json::json!(s.and_then(|s| s.repeat_penalty).unwrap_or(1.1));
+    if let Some(mp) = s.and_then(|s| s.min_p) {
+        body["min_p"] = serde_json::json!(mp);
+    }
+}
+
 #[derive(serde::Deserialize, Clone, Copy, Default)]
 pub struct SamplingParams {
     pub temperature: Option<f64>,
@@ -4029,19 +4049,13 @@ pub async fn stream_chat_completion(
         "stream": true,
         "stream_options": { "include_usage": true },
         "max_tokens": max_tokens.unwrap_or(4096),
-        "temperature": sampling.as_ref().and_then(|s| s.temperature).unwrap_or(0.7),
-        "repeat_penalty": sampling.as_ref().and_then(|s| s.repeat_penalty).unwrap_or(1.1),
-        "top_p": sampling.as_ref().and_then(|s| s.top_p).unwrap_or(0.9),
         "top_k": 40,
         // Explicit stop sequences — ensures generation stops even when
         // llama-server applies -inf logit bias to EOS tokens (which
         // prevents models like Phi-4 from ever stopping on their own).
         "stop": chat_stop_strings(&model_name),
     });
-    // min_p only when chosen: the engine's own default (0.05) rules otherwise.
-    if let Some(mp) = sampling.as_ref().and_then(|s| s.min_p) {
-        body["min_p"] = serde_json::json!(mp);
-    }
+    apply_sampling(&mut body, sampling.as_ref(), false);
     {
         let mut tpl_kwargs = serde_json::Map::new();
         if should_think {
@@ -4101,11 +4115,8 @@ pub async fn stream_chat_completion(
             "stream": true,
             "stream_options": { "include_usage": true },
             "max_tokens": max_tokens.unwrap_or(4096),
-            "temperature": sampling.as_ref().and_then(|s| s.temperature).unwrap_or(0.7),
         });
-        if let Some(tp) = sampling.as_ref().and_then(|s| s.top_p) {
-            remote_body["top_p"] = serde_json::json!(tp);
-        }
+        apply_sampling(&mut remote_body, sampling.as_ref(), true);
         // Latency/quality dial for reasoning models: plain conversational
         // turns ask for low effort so the first token isn't behind seconds
         // of default-depth thinking. Online only - the proxy strips it for

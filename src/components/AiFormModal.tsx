@@ -1272,7 +1272,7 @@ const AiFormModal = component$<AiFormModalProps>(
                 {store.advancedOpen ? 'Hide advanced generation settings' : 'Advanced generation settings'}
               </button>
               {store.advancedOpen && (
-                <div class="mt-3 space-y-3">
+                <div class="mt-3 space-y-3 pr-3">
                   <p class="text-xs text-[var(--text-muted)]">
                     Automatic unless you move a slider - the grey line names the layer that answers.
                     A value here wins for this AI only and applies to new replies immediately; Auto

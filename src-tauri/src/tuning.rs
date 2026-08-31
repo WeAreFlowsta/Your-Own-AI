@@ -513,6 +513,140 @@ mod tests {
     }
 
     #[test]
+    fn sampling_reaches_the_body_with_the_right_precedence() {
+        use crate::llm::{apply_sampling, SamplingParams};
+        // No overrides: the app's constants, min_p absent (engine default rules).
+        let mut b = serde_json::json!({});
+        apply_sampling(&mut b, None, false);
+        assert_eq!(b["temperature"], serde_json::json!(0.7));
+        assert_eq!(b["top_p"], serde_json::json!(0.9));
+        assert_eq!(b["repeat_penalty"], serde_json::json!(1.1));
+        assert!(b.get("min_p").is_none());
+        // Overrides win field by field; min_p appears only when chosen.
+        let s = SamplingParams { temperature: Some(0.2), min_p: Some(0.1), ..Default::default() };
+        let mut b = serde_json::json!({});
+        apply_sampling(&mut b, Some(&s), false);
+        assert_eq!(b["temperature"], serde_json::json!(0.2));
+        assert_eq!(b["top_p"], serde_json::json!(0.9));
+        assert_eq!(b["min_p"], serde_json::json!(0.1));
+        // Remote: minimal standard body - temperature always, top_p only when chosen.
+        let mut b = serde_json::json!({});
+        apply_sampling(&mut b, Some(&s), true);
+        assert_eq!(b["temperature"], serde_json::json!(0.2));
+        assert!(b.get("top_p").is_none());
+        assert!(b.get("min_p").is_none());
+        let mut b = serde_json::json!({});
+        apply_sampling(&mut b, Some(&SamplingParams { top_p: Some(0.5), ..Default::default() }), true);
+        assert_eq!(b["top_p"], serde_json::json!(0.5));
+    }
+
+    /// Headless matrix leg: the sampling knobs REACH the engine. One server,
+    /// three completions through `apply_sampling`: temperature 0 twice must
+    /// answer identically (greedy is deterministic); high temperature with
+    /// two seeds must not both reproduce the greedy text.
+    #[tokio::test]
+    #[ignore]
+    async fn live_matrix_sampling() {
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+        let _one_at_a_time = crate::llm::LIVE_MATRIX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        const PORT: u16 = 18097;
+        let home = std::env::var("HOME").unwrap_or_default();
+        let dir = std::env::var("YOAI_MODELS_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::Path::new(&home).join(".local/share/com.solar.yourowai/models"));
+        let model = std::env::var("YOAI_MATRIX_MODEL").unwrap_or_else(|_| "LFM2.5-8B-A1B-Q4_K_M.gguf".into());
+        if !dir.join(&model).exists() {
+            eprintln!("[matrix] SKIP: {} not present", dir.join(&model).display());
+            return;
+        }
+        let triple = if cfg!(target_os = "windows") { "x86_64-pc-windows-msvc.exe" }
+            else if cfg!(target_os = "macos") { if cfg!(target_arch = "aarch64") { "aarch64-apple-darwin" } else { "x86_64-apple-darwin" } }
+            else { "x86_64-unknown-linux-gnu" };
+        let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bin").join(format!("llama-server-{triple}"));
+        assert!(bin.exists());
+        let meta = crate::gguf::read_meta(&dir.join(&model)).expect("header");
+        let size = std::fs::metadata(dir.join(&model)).unwrap().len();
+        let free = Command::new(&bin).arg("--list-devices").output().ok().and_then(|out| {
+            let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+            text.push_str(&String::from_utf8_lossy(&out.stderr));
+            let d: Vec<_> = crate::llm::parse_gpu_devices(&text).into_iter().filter(|d| !d.integrated).collect();
+            if d.is_empty() { None } else { Some(d.iter().map(|x| x.free_mib).sum::<u64>() as f64 / 1024.0) }
+        });
+        let mut args: Vec<String> = vec![
+            "--port".into(), PORT.to_string(), "--host".into(), "127.0.0.1".into(),
+            "--no-webui".into(), "--reasoning".into(), "off".into(),
+            "--ctx-size".into(), "4096".into(), "--fit".into(), "off".into(),
+            "--model".into(), model.clone(),
+        ];
+        if meta.is_moe() {
+            if let Some(f) = free {
+                let (_, kv, need) = crate::fit::model_need(&meta, size, 4096);
+                if crate::fit::moe_offload_wanted(need, f) {
+                    match crate::fit::moe_cpu_layers(&meta, kv, f) {
+                        Some(n) if n < meta.expert_bytes_per_layer.len() => {
+                            args.push("--n-cpu-moe".into()); args.push(n.to_string());
+                        }
+                        _ => args.push("--cpu-moe".into()),
+                    }
+                }
+            }
+        }
+        let mut child = Command::new(&bin).args(&args).current_dir(&dir).stdout(Stdio::null()).stderr(Stdio::null()).spawn().expect("spawn");
+        struct Kill<'a>(&'a mut std::process::Child);
+        impl Drop for Kill<'_> { fn drop(&mut self) { let _ = self.0.kill(); let _ = self.0.wait(); } }
+        let guard = Kill(&mut child);
+        let client = reqwest::Client::new();
+        let deadline = Instant::now() + Duration::from_secs(240);
+        loop {
+            if let Ok(Some(st)) = guard.0.try_wait() { panic!("server exited during load: {st}"); }
+            if let Ok(r) = client.get(format!("http://127.0.0.1:{PORT}/health")).send().await {
+                if r.status().is_success() { break; }
+            }
+            assert!(Instant::now() < deadline, "not healthy in 240 s");
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        let ask = |sampling: Option<crate::llm::SamplingParams>, seed: Option<u64>| {
+            let client = client.clone();
+            let model = model.clone();
+            async move {
+                let mut body = serde_json::json!({
+                    "model": model,
+                    "messages": [{"role": "user", "content": "Describe an imaginary small town in about 60 words."}],
+                    "max_tokens": 80,
+                    "stream": false,
+                    "stop": crate::llm::chat_stop_strings(&model),
+                });
+                let (budget, effort) = crate::llm::chat_turn_reasoning_controls(&model);
+                if let Some(b) = budget { body["reasoning_budget_tokens"] = serde_json::json!(b); }
+                if let Some(e) = effort { body["reasoning_effort"] = serde_json::json!(e); }
+                crate::llm::apply_sampling(&mut body, sampling.as_ref(), false);
+                if let Some(sd) = seed { body["seed"] = serde_json::json!(sd); }
+                let v: serde_json::Value = client
+                    .post(format!("http://127.0.0.1:{PORT}/v1/chat/completions"))
+                    .json(&body).timeout(Duration::from_secs(180))
+                    .send().await.expect("request").json().await.expect("json");
+                v["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string()
+            }
+        };
+        let greedy = crate::llm::SamplingParams { temperature: Some(0.0), ..Default::default() };
+        let a1 = ask(Some(greedy), None).await;
+        let a2 = ask(Some(greedy), None).await;
+        eprintln!("[matrix] sampling greedy len {}: {}", a1.len(), a1.chars().take(80).collect::<String>());
+        assert!(!a1.trim().is_empty());
+        assert_eq!(a1, a2, "temperature 0 must be deterministic - the knob did not reach the engine?");
+        let wild = crate::llm::SamplingParams { temperature: Some(1.8), top_p: Some(1.0), ..Default::default() };
+        let b1 = ask(Some(wild), Some(7)).await;
+        let b2 = ask(Some(wild), Some(8)).await;
+        eprintln!("[matrix] sampling wild lens {} / {}", b1.len(), b2.len());
+        assert!(!b1.trim().is_empty() && !b2.trim().is_empty());
+        assert!(
+            !(b1 == a1 && b2 == a1),
+            "high temperature reproduced the greedy text twice - sampling not applied"
+        );
+    }
+
+    #[test]
     fn arms_cover_rungs_draft_and_leaner_split() {
         let meta = moe_meta();
         let arms = arms_for(&meta, 4_800_000_000, 31.0, Some(2.0), true);
