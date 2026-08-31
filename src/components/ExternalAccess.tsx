@@ -1,5 +1,7 @@
-import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
+import { component$, useSignal, useVisibleTask$, $, useContext } from "@builder.io/qwik";
 import { invoke } from "@tauri-apps/api/core";
+import LiquidMetalButton from "./LiquidMetalButton";
+import { ThemeContext } from "../routes/layout";
 import { LuCheck, LuCopy, LuChevronDown, LuLink } from "@qwikest/icons/lucide";
 import { getLocalCustomAis } from "../utils/localAiStorage";
 
@@ -48,6 +50,7 @@ interface LanStatus {
  * present the auto-minted access key as their API key.
  */
 export default component$(() => {
+  const { theme } = useContext(ThemeContext);
   const copiedKey = useSignal("");
   const showHow = useSignal(false);
   const ais = useSignal<{ name: string; model: string }[]>([]);
@@ -127,10 +130,10 @@ export default component$(() => {
         <code class="flex-1 text-sm font-mono px-3 py-2 rounded-lg bg-[var(--bg-main)] border border-[var(--border-subtle)] text-[var(--text-primary)] truncate">
           {ENDPOINT}
         </code>
-        <button
+        <LiquidMetalButton
+          variant="secondary"
           onClick$={() => copy(ENDPOINT, "endpoint")}
-          title="Copy endpoint"
-          class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:bg-[var(--bg-main)] hover:text-[var(--text-primary)] transition-colors"
+          class="flex items-center gap-1.5 px-3 py-2 text-sm"
         >
           {copiedKey.value === "endpoint" ? (
             <LuCheck class="w-4 h-4 text-emerald-500" />
@@ -138,7 +141,7 @@ export default component$(() => {
             <LuCopy class="w-4 h-4" />
           )}
           {copiedKey.value === "endpoint" ? "Copied" : "Copy"}
-        </button>
+        </LiquidMetalButton>
       </div>
       <p class="mt-1.5 text-xs text-[var(--text-muted)]">
         Apps on this computer need no key — being here is the credential.
@@ -159,16 +162,23 @@ export default component$(() => {
           <button
             onClick$={toggleLan}
             disabled={lanBusy.value}
-            class={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
-              lan.value.enabled
-                ? "bg-emerald-500"
-                : "bg-[var(--border-subtle)]"
-            }`}
+            class="gradient-border-target relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors"
+            style={{
+              backgroundColor: lan.value.enabled
+                ? theme.value === "dark"
+                  ? "#16a34a"
+                  : "var(--bg-button-primary)"
+                : "var(--border-subtle)",
+              border: "none",
+              padding: "0",
+            }}
+            role="switch"
+            aria-checked={lan.value.enabled}
             aria-label="Allow other devices on this network"
           >
             <span
-              class={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${
-                lan.value.enabled ? "left-[22px]" : "left-0.5"
+              class={`inline-block h-4 w-4 transform rounded-full bg-white shadow-md transition-transform ${
+                lan.value.enabled ? "translate-x-6" : "translate-x-1"
               }`}
             />
           </button>
@@ -184,10 +194,10 @@ export default component$(() => {
                 <code class="flex-1 text-sm font-mono px-3 py-2 rounded-lg bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[var(--text-primary)] truncate">
                   {lanBase()}
                 </code>
-                <button
+                <LiquidMetalButton
+                  variant="secondary"
                   onClick$={() => copy(lanBase(), "lan-endpoint")}
-                  title="Copy network endpoint"
-                  class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] transition-colors"
+                  class="flex items-center gap-1.5 px-3 py-2 text-sm"
                 >
                   {copiedKey.value === "lan-endpoint" ? (
                     <LuCheck class="w-4 h-4 text-emerald-500" />
@@ -195,7 +205,7 @@ export default component$(() => {
                     <LuCopy class="w-4 h-4" />
                   )}
                   {copiedKey.value === "lan-endpoint" ? "Copied" : "Copy"}
-                </button>
+                </LiquidMetalButton>
               </div>
             </div>
             <div>
@@ -206,10 +216,10 @@ export default component$(() => {
                 <code class="flex-1 text-sm font-mono px-3 py-2 rounded-lg bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[var(--text-primary)] truncate">
                   {lan.value.key}
                 </code>
-                <button
+                <LiquidMetalButton
+                  variant="secondary"
                   onClick$={() => copy(lan.value.key, "lan-key")}
-                  title="Copy access key"
-                  class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] transition-colors"
+                  class="flex items-center gap-1.5 px-3 py-2 text-sm"
                 >
                   {copiedKey.value === "lan-key" ? (
                     <LuCheck class="w-4 h-4 text-emerald-500" />
@@ -217,8 +227,9 @@ export default component$(() => {
                     <LuCopy class="w-4 h-4" />
                   )}
                   {copiedKey.value === "lan-key" ? "Copied" : "Copy"}
-                </button>
-                <button
+                </LiquidMetalButton>
+                <LiquidMetalButton
+                  variant="secondary"
                   onClick$={$(async () => {
                     try {
                       const key = await invoke<string>("lan_access_regenerate_key");
@@ -228,10 +239,10 @@ export default component$(() => {
                     }
                   })}
                   title="Make a new key - devices using the old one will need the new key"
-                  class="px-3 py-2 rounded-lg text-sm border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] transition-colors"
+                  class="px-3 py-2 text-sm"
                 >
                   New key
-                </button>
+                </LiquidMetalButton>
               </div>
             </div>
             <p class="text-xs text-[var(--text-muted)]">
