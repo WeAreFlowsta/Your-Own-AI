@@ -456,6 +456,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn live_matrix_tune_bench() {
+        let _one_at_a_time = crate::llm::LIVE_MATRIX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let home = std::env::var("HOME").unwrap_or_default();
         let dir = std::env::var("YOAI_MODELS_DIR")
             .map(std::path::PathBuf::from)
@@ -473,7 +474,21 @@ mod tests {
         assert!(bin.exists(), "shipped engine binary missing at {}", bin.display());
         let meta = crate::gguf::read_meta(&path).expect("model header reads");
         let size = std::fs::metadata(&path).unwrap().len();
-        let arms = arms_for(&meta, size, 31.0, None, false);
+        // Free VRAM the way the app sees it, so the arms carry the real MoE
+        // decision - without it a bigger-than-the-card model has no split
+        // and the engine's default full offload fails to load.
+        let free_vram_gb = std::process::Command::new(&bin)
+            .arg("--list-devices")
+            .output()
+            .ok()
+            .and_then(|out| {
+                let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+                text.push_str(&String::from_utf8_lossy(&out.stderr));
+                let discrete: Vec<_> = crate::llm::parse_gpu_devices(&text).into_iter().filter(|d| !d.integrated).collect();
+                if discrete.is_empty() { None } else { Some(discrete.iter().map(|d| d.free_mib).sum::<u64>() as f64 / 1024.0) }
+            });
+        eprintln!("[matrix] tune bench free VRAM: {free_vram_gb:?}");
+        let arms = arms_for(&meta, size, 31.0, free_vram_gb, false);
         assert!(!arms.is_empty());
         for arm in arms.into_iter().take(2) {
             let r = bench_one(&bin, &dir, &model, arm, None, None, &[]).await;

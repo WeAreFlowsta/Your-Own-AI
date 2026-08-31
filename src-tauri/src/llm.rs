@@ -462,11 +462,11 @@ pub async fn kill_port_8080() -> Result<String, String> {
 }
 
 /// A GPU as reported by `llama-server --list-devices`.
-struct GpuDevice {
-    id: String,        // e.g. "Vulkan1" / "CUDA0" — what the --device flag wants
-    name: String,
-    free_mib: u64,
-    integrated: bool,  // uma: 1 (shares system RAM — iGPU / Apple unified)
+pub(crate) struct GpuDevice {
+    pub(crate) id: String,        // e.g. "Vulkan1" / "CUDA0" — what the --device flag wants
+    pub(crate) name: String,
+    pub(crate) free_mib: u64,
+    pub(crate) integrated: bool,  // uma: 1 (shares system RAM — iGPU / Apple unified)
 }
 
 /// Command for the CHAT-server binary, honoring the active engine backend:
@@ -567,7 +567,7 @@ fn is_integrated_gpu(name: &str) -> bool {
 /// before it (inner parens like `(R)` / `(CFL GT2)` included) is the name.
 /// ⚠ Re-verify this parse on every engine bump — the format is not stable
 /// (b9637 dropped the `uma:` flag this parser once used).
-fn parse_gpu_devices(text: &str) -> Vec<GpuDevice> {
+pub(crate) fn parse_gpu_devices(text: &str) -> Vec<GpuDevice> {
     let mut devices = Vec::new();
     for line in text.lines() {
         let l = line.trim();
@@ -4724,6 +4724,11 @@ mod gemma_thought_tests {
 /// way the app does: same flags, same fit math, same MoE decision, a real
 /// chat completion, the server's own timings. Needs a MoE model in the
 /// models dir that does not fit the card (LFM2.5-8B-A1B on the dev box).
+/// One live-matrix leg at a time: each spawns a llama-server that owns the
+/// card; in parallel they starve each other and both fail to load.
+#[cfg(test)]
+pub(crate) static LIVE_MATRIX_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod live_matrix {
     use super::*;
@@ -4781,6 +4786,7 @@ mod live_matrix {
     #[tokio::test]
     #[ignore]
     async fn moe_offload_end_to_end() {
+        let _one_at_a_time = LIVE_MATRIX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let bin = shipped_binary();
         assert!(bin.exists(), "shipped engine binary missing at {}", bin.display());
         let dir = models_dir();
