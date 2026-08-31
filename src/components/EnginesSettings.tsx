@@ -261,6 +261,9 @@ export default component$(() => {
       threads.value = t || null;
     } catch { /* fresh */ }
   });
+  // Pages apply instantly (modals are where Save lives): every slider
+  // release persists after a beat, and Auto is the undo.
+  const saveTimer = useSignal(0);
   const saveTune = $(async () => {
     tuneNote.value = "";
     const g: SamplingOverrides = {};
@@ -273,10 +276,14 @@ export default component$(() => {
       await invoke("tuning_set_engine_threads", {
         threads: threads.value != null && threads.value >= 1 ? Math.round(threads.value) : null,
       });
-      tuneNote.value = "Saved. Generation settings apply to new replies now; threads when a model next loads.";
+      tuneNote.value = "Saved - generation settings reach new replies now; threads at the next model load.";
     } catch (e) {
       tuneNote.value = `Could not save: ${e}`;
     }
+  });
+  const saveSoon = $(() => {
+    clearTimeout(saveTimer.value);
+    saveTimer.value = window.setTimeout(() => saveTune(), 400);
   });
 
   return (
@@ -570,29 +577,26 @@ export default component$(() => {
             <TuneSlider label="Worker threads (next model load)" value={threads.value}
               autoLabel="Auto (engine default)" autoValue={Math.round(maxThreads.value / 2)}
               min={1} max={maxThreads.value} step={1} unit="threads"
-              onChange$={(v) => { threads.value = v; }} />
+              onChange$={(v) => { threads.value = v; saveSoon(); }} />
           </div>
           <TuneSlider label="Creativity (temperature)" value={gTemp.value}
             autoLabel={`Model default (${SAMPLING_DEFAULTS.temperature})`} autoValue={SAMPLING_DEFAULTS.temperature}
             min={SAMPLING_BOUNDS.temperature.min} max={SAMPLING_BOUNDS.temperature.max} step={SAMPLING_BOUNDS.temperature.step}
-            onChange$={(v) => { gTemp.value = v; }} />
+            onChange$={(v) => { gTemp.value = v; saveSoon(); }} />
           <TuneSlider label="Word variety (top-p)" value={gTopP.value}
             autoLabel={`Model default (${SAMPLING_DEFAULTS.topP})`} autoValue={SAMPLING_DEFAULTS.topP}
             min={SAMPLING_BOUNDS.topP.min} max={SAMPLING_BOUNDS.topP.max} step={SAMPLING_BOUNDS.topP.step}
-            onChange$={(v) => { gTopP.value = v; }} />
+            onChange$={(v) => { gTopP.value = v; saveSoon(); }} />
           <TuneSlider label="Rare-word floor (min-p)" value={gMinP.value}
             autoLabel={`Model default (${SAMPLING_DEFAULTS.minP})`} autoValue={SAMPLING_DEFAULTS.minP}
             min={SAMPLING_BOUNDS.minP.min} max={SAMPLING_BOUNDS.minP.max} step={SAMPLING_BOUNDS.minP.step}
-            onChange$={(v) => { gMinP.value = v; }} />
+            onChange$={(v) => { gMinP.value = v; saveSoon(); }} />
           <TuneSlider label="Repetition brake (repeat penalty)" value={gRepeat.value}
             autoLabel={`Model default (${SAMPLING_DEFAULTS.repeatPenalty})`} autoValue={SAMPLING_DEFAULTS.repeatPenalty}
             min={SAMPLING_BOUNDS.repeatPenalty.min} max={SAMPLING_BOUNDS.repeatPenalty.max} step={SAMPLING_BOUNDS.repeatPenalty.step}
-            onChange$={(v) => { gRepeat.value = v; }} />
+            onChange$={(v) => { gRepeat.value = v; saveSoon(); }} />
         </div>
-        <div class="mt-3 flex items-center gap-3">
-          <LiquidMetalButton class="px-4 py-2 text-sm" onClick$={saveTune}>Save</LiquidMetalButton>
-          {tuneNote.value && <p class="text-xs text-[var(--text-secondary)]">{tuneNote.value}</p>}
-        </div>
+        {tuneNote.value && <p class="mt-3 text-xs text-[var(--text-secondary)]">{tuneNote.value}</p>}
       </div>
     </section>
   );
