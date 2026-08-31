@@ -1450,7 +1450,7 @@ export default component$(() => {
                 // message opens one with the new set. Mid-turn, the open
                 // path notices the change itself.
                 if (
-                  "mcpOff" in patch &&
+                  ("mcpOff" in patch || "mcp" in patch) &&
                   agentState.mode === "tools" &&
                   agentState.sessionAiId === selectedAi.value.aiConfig?.id &&
                   !chatState.isLoading

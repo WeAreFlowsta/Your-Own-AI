@@ -7,12 +7,13 @@ import { activeSkills, activeTools } from '../utils/carry';
 import { PERMISSION_MODE_COPY, type AgentPermissionMode } from '../utils/agentPermissions';
 
 /**
- * The chip beside the model chip: what this AI carries - tools and skills -
- * as an icon and a count each, and nothing at all when it carries nothing.
- * Opens one panel: every tool and skill with an on/off switch, approvals
- * for tools sessions, and the way to Add-ons. Off keeps a tool on the AI
- * (Add-ons still says "used by"); it just sits out. All tools off = the AI
- * answers directly, no agent machinery.
+ * The chip beside the model chip: tools and skills for this AI - an icon
+ * and the active count each, and nothing at all when this computer has
+ * none installed. Opens one panel listing EVERY installed tool and skill
+ * (like the model chip lists every model): the ones this AI carries are
+ * on; switching one on gives it to the AI right here, switching one off
+ * lets it rest (still carried - Add-ons still says "used by"). All tools
+ * off = the AI answers directly, no agent machinery.
  */
 interface CarryChipProps {
   ai: UserDefinedAI;
@@ -52,25 +53,58 @@ export const CarryChip = component$<CarryChipProps>((props) => {
     });
   });
 
-  const toggleTool = $(async (name: string) => {
-    const off = new Set(props.ai.mcpOff ?? []);
-    if (off.has(name)) off.delete(name);
-    else off.add(name);
-    const mcpOff = [...off];
-    await actions.updateCustomAi(props.ai.id, { mcpOff });
-    await props.onChanged$({ mcpOff });
-  });
-  const toggleSkill = $(async (name: string) => {
-    const off = new Set(props.ai.skillsOff ?? []);
-    if (off.has(name)) off.delete(name);
-    else off.add(name);
-    const skillsOff = [...off];
-    await actions.updateCustomAi(props.ai.id, { skillsOff });
-    await props.onChanged$({ skillsOff });
+  // Everything installed on this computer - the panel lists it all, the
+  // way the model chip lists every model. Loaded once per mount.
+  const installed = useStore({ tools: [] as string[], skills: [] as string[], loaded: false });
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async () => {
+    try {
+      const { listMcpServers } = await import('../utils/mcp');
+      installed.tools = (await listMcpServers()).map((t) => t.name);
+    } catch { /* list is a convenience */ }
+    try {
+      const { listSkills } = await import('../utils/skills');
+      installed.skills = (await listSkills()).map((k) => k.name);
+    } catch { /* list is a convenience */ }
+    installed.loaded = true;
   });
 
-  const tools = props.ai.mcp ?? [];
-  const skills = props.ai.skills ?? [];
+  const toggleTool = $(async (name: string) => {
+    const carried = new Set(props.ai.mcp ?? []);
+    const off = new Set(props.ai.mcpOff ?? []);
+    if (!carried.has(name)) {
+      carried.add(name);
+      off.delete(name);
+    } else if (off.has(name)) {
+      off.delete(name);
+    } else {
+      off.add(name);
+    }
+    const patch = { mcp: [...carried], mcpOff: [...off] };
+    await actions.updateCustomAi(props.ai.id, patch);
+    await props.onChanged$(patch);
+  });
+  const toggleSkill = $(async (name: string) => {
+    const carried = new Set(props.ai.skills ?? []);
+    const off = new Set(props.ai.skillsOff ?? []);
+    if (!carried.has(name)) {
+      carried.add(name);
+      off.delete(name);
+    } else if (off.has(name)) {
+      off.delete(name);
+    } else {
+      off.add(name);
+    }
+    const patch = { skills: [...carried], skillsOff: [...off] };
+    await actions.updateCustomAi(props.ai.id, patch);
+    await props.onChanged$(patch);
+  });
+
+  // Carried first (the AI's own), then the rest of the machine's, once known.
+  const carriedTools = props.ai.mcp ?? [];
+  const carriedSkills = props.ai.skills ?? [];
+  const tools = [...carriedTools, ...installed.tools.filter((n) => !carriedTools.includes(n))];
+  const skills = [...carriedSkills, ...installed.skills.filter((n) => !carriedSkills.includes(n))];
   if (!tools.length && !skills.length) return null;
   const onTools = activeTools(props.ai);
   const onSkills = activeSkills(props.ai);
@@ -139,7 +173,12 @@ export const CarryChip = component$<CarryChipProps>((props) => {
                 {tools.map((name) => {
                   const on = onTools.includes(name);
                   return (
-                    <div key={name} class={rowClass} onClick$={() => toggleTool(name)}>
+                    <div
+                      key={name}
+                      class={rowClass}
+                      title={carriedTools.includes(name) ? undefined : 'On this computer - switch on to give it to this AI'}
+                      onClick$={() => toggleTool(name)}
+                    >
                       <span class={`truncate ${on ? 'text-[var(--text-primary)]' : ''}`}>{name}</span>
                       {Switch(on)}
                     </div>
@@ -192,7 +231,12 @@ export const CarryChip = component$<CarryChipProps>((props) => {
                 {skills.map((name) => {
                   const on = onSkills.includes(name);
                   return (
-                    <div key={name} class={rowClass} onClick$={() => toggleSkill(name)}>
+                    <div
+                      key={name}
+                      class={rowClass}
+                      title={carriedSkills.includes(name) ? undefined : 'On this computer - switch on to give it to this AI'}
+                      onClick$={() => toggleSkill(name)}
+                    >
                       <span class={`truncate ${on ? 'text-[var(--text-primary)]' : ''}`}>{name}</span>
                       {Switch(on)}
                     </div>
