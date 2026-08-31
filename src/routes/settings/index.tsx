@@ -779,7 +779,11 @@ export default component$(() => {
         showModelWidget={showModelWidget.value && currentModel.value !== null}
       />
 
-      <div class="flex-1 overflow-y-auto">
+      {/* No overflow wrapper here: the page root is min-h-screen, so the
+          WINDOW is what scrolls - an overflow-y-auto div that never
+          actually scrolls becomes the scrollport the sticky nav binds to,
+          and the nav never moves. Body scrolling lets it stick. */}
+      <div class="flex-1">
         <div class="max-w-5xl mx-auto px-4 py-8">
           {/* Page title */}
           <h1 class="text-2xl font-bold text-[var(--text-primary)] font-varela mb-6 border-b border-[var(--border-subtle)] pb-2">
