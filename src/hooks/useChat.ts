@@ -1767,6 +1767,10 @@ export function useChat(props: UseChatProps) {
               (m) => m.id !== assistantId
             );
           } else if (isModelLoadError) {
+            // The header must not keep a green chip over a dead server -
+            // same red state as the too-large branch.
+            props.currentModel.value = preferredModel;
+            props.modelTooBig.value = true;
             // Same honesty as the too-large branch: a fine-tune override is
             // the likely cause when the model carries one.
             let tunedHere = false;

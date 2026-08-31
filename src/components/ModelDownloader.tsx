@@ -253,6 +253,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
         agent_template_ok: boolean;
         need_gb: number;
         moe_offload?: boolean;
+        is_moe?: boolean;
         moe_cpu_layers?: number | null;
         n_layers?: number;
         measured_tps?: number | null;
@@ -378,6 +379,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
           agent_template_ok: boolean;
           need_gb: number;
           moe_offload?: boolean;
+          is_moe?: boolean;
           moe_cpu_layers?: number | null;
           n_layers?: number;
           measured_tps?: number | null;
@@ -1978,7 +1980,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                         autoCtx={fitInfo?.context_runtime}
                         maxCtx={fitInfo?.context_max}
                         nLayers={fitInfo?.n_layers}
-                        isMoe={!!fitInfo?.moe_offload || fitInfo?.moe_cpu_layers != null}
+                        isMoe={!!fitInfo?.is_moe}
                         autoMoeN={fitInfo?.moe_cpu_layers}
                         hasDraft={!!model.draft}
                         onClose$={() => { store.tuneFor = ''; }}

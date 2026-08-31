@@ -63,6 +63,9 @@ pub struct ModelFit {
     /// The context the server would actually start this model with on this
     /// machine right now (choose_ctx) - what "runs at" means in the UI.
     pub context_runtime: u64,
+    /// Mixture-of-experts model (the Fine-tune dialog shows the split
+    /// slider from this fact, never from the current offload decision).
+    pub is_moe: bool,
     /// A mixture-of-experts model bigger than the graphics card that runs
     /// with its experts in main memory (`--cpu-moe`): fits, and fast for its
     /// size - graded yellow with this flag so the UI can say why.
@@ -517,6 +520,12 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
         let measured_tps = stats.get(&m.name).and_then(|s| s.tps);
         let measured_tps_mlx = stats.get(&format!("mlx:{}", m.name)).and_then(|s| s.tps);
         let load_secs = stats.get(&m.name).and_then(|s| s.load_secs);
+        // Evidence beats estimate: this machine has RUN this model (a
+        // recorded speed stamp) - "too large" would contradict its own
+        // record. An estimated shortfall may claim "runs slower" at worst.
+        if fit == Fit::Red && measured_tps.is_some() {
+            fit = Fit::Yellow;
+        }
         out.push(ModelFit {
             name: m.name,
             agent_template_ok: meta.agent_template_ok(),
@@ -529,6 +538,7 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
             n_layers: meta.n_layers,
             context_max: meta.context_length,
             context_runtime: ctx,
+            is_moe: meta.is_moe(),
             moe_offload,
             moe_cpu_layers: moe_cpu_layers_pick,
             measured_tps,
