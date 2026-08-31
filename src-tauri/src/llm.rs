@@ -649,7 +649,7 @@ pub(crate) fn chat_turn_reasoning_controls(model_name: &str) -> (Option<i64>, Op
 /// models like Phi-4 from ever stopping on their own). gpt-oss gets none:
 /// `<|end|>` is its analysis-channel close, and the server already handles
 /// its real end-of-turn tokens (`<|return|>` / `<|call|>`).
-fn chat_stop_strings(model_name: &str) -> serde_json::Value {
+pub(crate) fn chat_stop_strings(model_name: &str) -> serde_json::Value {
     if is_harmony_model(model_name) {
         return serde_json::json!([]);
     }
@@ -671,7 +671,7 @@ fn args_force_cpu(args: &[String]) -> bool {
     })
 }
 
-async fn select_gpu_device_args(app_handle: &AppHandle) -> Vec<String> {
+pub(crate) async fn select_gpu_device_args(app_handle: &AppHandle) -> Vec<String> {
     // Escape hatch: force CPU-only inference with FLOWSTA_CPU_ONLY=1. Some
     // setups (notably NVIDIA + Wayland + Vulkan compute) hard-hang the whole
     // system under GPU load; `-ngl 0` keeps every layer on the CPU. Slower, but
@@ -1308,6 +1308,18 @@ pub static FORCE_RELOAD_NEXT: std::sync::atomic::AtomicBool = std::sync::atomic:
 /// `only_if_backend` limits it to a currently spawned backend ("mlx" when
 /// the MLX engine was removed). No model loaded: nothing to do - the next
 /// load picks the new engine anyway.
+/// Stop the running chat server for maintenance (a storage move, a tune
+/// run): the loaded model holds VRAM and its file open. The next turn
+/// reloads whatever the router asks for.
+pub(crate) async fn stop_chat_server_for_maintenance(state: &LLMState) {
+    let mut server_process = state.server_process.lock().await;
+    if let Some(child) = server_process.take() {
+        let _ = child.kill();
+    }
+    *state.is_server_running.lock().await = false;
+    *state.current_model.lock().await = None;
+}
+
 pub async fn reload_for_engine_change(
     app: AppHandle,
     state: State<'_, LLMState>,

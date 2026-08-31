@@ -176,6 +176,12 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - Settings > Engines gained "Fine-tune this computer": worker threads and
   the machine-wide generation layer (creativity, word variety, rare-word
   floor, repetition brake) that every AI inherits unless it sets its own.
+- Tune on this computer: the Fine-tune dialog can measure a handful of
+  setups on your own hardware - context sizes, the expert split, the
+  speed-up file - a few minutes, chats paused, the model loaded
+  repeatedly, each setup timed by the engine itself. A Speed-Room slider
+  then picks between the measured setups, with the real numbers under
+  it; Save keeps the pick. Nothing runs without the click.
 
 ### Records
 - A turn taken while your records are still starting, or while they are too

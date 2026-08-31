@@ -10,7 +10,7 @@
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct GgufMeta {
     pub architecture: String,
     /// The chat template declares tool support (contains a tools branch).

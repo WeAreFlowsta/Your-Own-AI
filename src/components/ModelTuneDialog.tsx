@@ -1,5 +1,16 @@
 import { component$, useSignal, useVisibleTask$, type QRL } from '@builder.io/qwik';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+
+interface TuneResult {
+  ctx: number;
+  moe_cpu_layers?: number | null;
+  draft: boolean;
+  load_secs: number;
+  pp_tps: number;
+  gen_tps: number;
+  failed?: string | null;
+}
 import LiquidMetalButton from './LiquidMetalButton';
 
 /**
@@ -26,6 +37,9 @@ export default component$<ModelTuneDialogProps>((props) => {
   const draftOff = useSignal(false);
   const note = useSignal('');
   const busy = useSignal(false);
+  const results = useSignal<TuneResult[]>([]);
+  const tuning = useSignal<{ done: number; total: number; current: string } | null>(null);
+  const sliderPos = useSignal(0);
 
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async () => {
@@ -40,6 +54,20 @@ export default component$<ModelTuneDialogProps>((props) => {
     } catch {
       /* fresh dialog */
     }
+    try {
+      const p = await invoke<{ results: TuneResult[] } | null>('tune_profiles_get', { model: props.model });
+      if (p?.results) results.value = p.results;
+    } catch { /* no profile yet */ }
+  });
+
+  // Tune-run progress (chats pause while it runs; every number measured here).
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async ({ cleanup }) => {
+    const un = await listen<{ model: string; done: number; total: number; current: string }>('tune-run', (e) => {
+      if (e.payload.model !== props.model) return;
+      tuning.value = e.payload.done >= e.payload.total ? null : e.payload;
+    });
+    cleanup(() => un());
   });
 
   const inputClass =
@@ -91,6 +119,78 @@ export default component$<ModelTuneDialogProps>((props) => {
             </label>
           )}
           {note.value && <p class="text-xs text-[var(--text-secondary)]">{note.value}</p>}
+        </div>
+        <div class="mt-4 border-t border-[var(--border-subtle)] pt-3">
+          <p class="text-xs text-[var(--text-muted)]">
+            Tune on this computer measures a handful of setups on your own hardware - context sizes,
+            the expert split, the speed-up file. It takes a few minutes, loads the model repeatedly,
+            and chats pause while it runs. Every number below was measured here, not promised.
+          </p>
+          {tuning.value ? (
+            <div class="mt-2 flex items-center gap-3 text-xs text-[var(--text-secondary)]">
+              <span class="inline-block h-3 w-3 rounded-full border-2 border-[var(--border-subtle)] border-t-[var(--text-secondary)] animate-spin" />
+              Measuring {tuning.value.done + 1} of {tuning.value.total}: {tuning.value.current}
+              <button type="button" class="text-[var(--text-link)] hover:underline"
+                onClick$={async () => { try { await invoke('tune_cancel'); } catch { /* already done */ } }}>
+                Stop
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              class="mt-2 text-xs text-[var(--text-link)] hover:underline"
+              onClick$={async () => {
+                note.value = '';
+                tuning.value = { done: 0, total: 1, current: 'starting' };
+                try {
+                  const p = await invoke<{ results: TuneResult[] }>('tune_run', { model: props.model });
+                  results.value = p.results;
+                } catch (e) {
+                  note.value = `Tune run failed: ${e}`;
+                } finally {
+                  tuning.value = null;
+                }
+              }}
+            >
+              {results.value.length ? 'Measure again' : 'Tune on this computer'}
+            </button>
+          )}
+          {(() => {
+            const ok = results.value.filter((r) => !r.failed);
+            const byCtx = new Map<number, TuneResult>();
+            for (const r of ok) {
+              const b = byCtx.get(r.ctx);
+              if (!b || r.gen_tps > b.gen_tps) byCtx.set(r.ctx, r);
+            }
+            const positions = [...byCtx.values()].sort((a, b) => a.ctx - b.ctx);
+            if (positions.length < 2) return null;
+            const pos = positions[Math.min(sliderPos.value, positions.length - 1)];
+            return (
+              <div class="mt-3">
+                <div class="flex items-center justify-between text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
+                  <span>Speed</span><span>Room</span>
+                </div>
+                <input
+                  type="range" min={0} max={positions.length - 1} step={1} value={sliderPos.value}
+                  class="w-full accent-[var(--text-link)]"
+                  onInput$={(_, el) => {
+                    sliderPos.value = Number(el.value);
+                    const p = positions[Number(el.value)];
+                    if (!p) return;
+                    ctx.value = String(p.ctx);
+                    if (p.moe_cpu_layers != null) moeN.value = String(p.moe_cpu_layers);
+                    draftOff.value = !p.draft && props.hasDraft;
+                    note.value = 'Pick filled in above - Save to keep it.';
+                  }}
+                />
+                <p class="text-xs text-[var(--text-secondary)]">
+                  {pos.ctx} context · ~{Math.round(pos.gen_tps)} tok/s (reads at ~{Math.round(pos.pp_tps)})
+                  {pos.moe_cpu_layers != null ? pos.moe_cpu_layers === 0 ? ' · all on the card' : ` · ${pos.moe_cpu_layers} expert layers in RAM` : ''}
+                  {props.hasDraft ? (pos.draft ? ' · speed-up on' : ' · speed-up off') : ''}
+                </p>
+              </div>
+            );
+          })()}
         </div>
         <div class="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           <LiquidMetalButton variant="secondary" class="px-4 py-2 text-sm" onClick$={props.onClose$}>
