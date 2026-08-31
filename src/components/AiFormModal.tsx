@@ -1262,7 +1262,10 @@ const AiFormModal = component$<AiFormModalProps>(
               </LiquidMetalBorder>
             </div>
 
-            {/* Advanced: how this AI samples its words - per AI, live. */}
+            {/* Advanced: how this AI samples its words - per AI, live.
+                EDIT ONLY: the create dialog stays lean (Eric 09-01) - new
+                settings land in Edit, never in Create. */}
+            {editingAi && (
             <div>
               <button
                 type="button"
@@ -1299,6 +1302,7 @@ const AiFormModal = component$<AiFormModalProps>(
                 </div>
               )}
             </div>
+            )}
 
             </>)}
             {(!editingAi || store.activeSection === 'details') && (<>

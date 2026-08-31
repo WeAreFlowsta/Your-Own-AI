@@ -61,7 +61,19 @@ export default component$<ModelTuneDialogProps>((props) => {
     }
     try {
       const p = await invoke<{ results: TuneResult[] } | null>('tune_profiles_get', { model: props.model });
-      if (p?.results) results.value = p.results;
+      if (p?.results) {
+        results.value = p.results;
+        // Open on the saved pick, not the leftmost: find the position whose
+        // context matches the saved (or automatic) value.
+        const ok = p.results.filter((r) => !r.failed);
+        const byCtx = [...new Map(ok.map((r) => [r.ctx, r])).keys()].sort((a, b) => a - b);
+        const current = ctx.value ?? props.autoCtx;
+        if (current != null) {
+          let best = 0;
+          byCtx.forEach((c, i) => { if (Math.abs(c - current) < Math.abs(byCtx[best] - current)) best = i; });
+          sliderPos.value = best;
+        }
+      }
     } catch { /* no profile yet */ }
   });
 
