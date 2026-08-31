@@ -566,11 +566,12 @@ export default component$(() => {
           its form; each model also has its own Fine-tune on the Offline Models page.
         </p>
         <div class="grid gap-4 sm:grid-cols-2">
-          <TuneSlider label="Worker threads (next model load)" value={threads.value}
-            autoLabel="Auto (engine default)" autoValue={Math.round(maxThreads.value / 2)}
-            min={1} max={maxThreads.value} step={1} unit="threads"
-            onChange$={(v) => { threads.value = v; }} />
-          <div class="hidden sm:block" />
+          <div class="sm:col-span-2">
+            <TuneSlider label="Worker threads (next model load)" value={threads.value}
+              autoLabel="Auto (engine default)" autoValue={Math.round(maxThreads.value / 2)}
+              min={1} max={maxThreads.value} step={1} unit="threads"
+              onChange$={(v) => { threads.value = v; }} />
+          </div>
           <TuneSlider label="Creativity (temperature)" value={gTemp.value}
             autoLabel={`Model default (${SAMPLING_DEFAULTS.temperature})`} autoValue={SAMPLING_DEFAULTS.temperature}
             min={SAMPLING_BOUNDS.temperature.min} max={SAMPLING_BOUNDS.temperature.max} step={SAMPLING_BOUNDS.temperature.step}
