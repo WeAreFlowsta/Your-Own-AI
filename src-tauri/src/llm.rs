@@ -3991,6 +3991,32 @@ pub async fn stream_chat_completion(
 
     println!("[LLM] Starting stream_chat_completion for request: {}", request_id);
 
+    // A question is a first-class reason to load the model. The UI's
+    // page-ensure is refused by the crash sentinel after an unclean stop,
+    // and waiting for a server nobody starts was the "couldn't be loaded"
+    // dead end (fit-truth 09-01, round 5). Reason "chat" is deliberate -
+    // the sentinel only blocks automatic reasons.
+    {
+        let is_remote = model
+            .as_deref()
+            .map(|m| m.starts_with("online:") || m.starts_with("external:"))
+            .unwrap_or(false);
+        if !is_remote {
+            if let Some(wanted) = model.clone().filter(|m| m.ends_with(".gguf")) {
+                let healthy = chat_server_health_ok().await;
+                let cur = state.current_model.lock().await.clone();
+                if !healthy || cur.as_deref() != Some(wanted.as_str()) {
+                    log::info!(
+                        "[LLM] the question loads '{wanted}' (server {}, current {:?})",
+                        if healthy { "up" } else { "down" },
+                        cur
+                    );
+                    load_model(app.clone(), app.state(), wanted, false, "chat".into()).await?;
+                }
+            }
+        }
+    }
+
     // Build messages with system prompt if provided
     let mut all_messages = Vec::new();
     if let Some(prompt) = system_prompt {
