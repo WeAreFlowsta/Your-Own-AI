@@ -117,57 +117,6 @@ async fn spawn_bench_server(
     }
 }
 
-pub struct TuneResultWithVram {
-    pub load_secs: f32,
-    pub pp_tps: f32,
-    pub gen_tps: f32,
-    pub failed: Option<String>,
-    pub during_free: Option<f64>,
-}
-
-/// bench_one, plus a free-VRAM probe taken while the server is up: start
-/// the bench in a task, poll health from here, read the devices mid-flight.
-pub async fn bench_one_measure(
-    bin: &Path,
-    dir: &Path,
-    model: &str,
-    arm: TuneArm,
-    probe: impl Fn() -> Option<f64> + Send + Sync,
-) -> TuneResultWithVram {
-    let bin2 = bin.to_path_buf();
-    let dir2 = dir.to_path_buf();
-    let model2 = model.to_string();
-    let handle =
-        tokio::spawn(async move { bench_one(&bin2, &dir2, &model2, arm, None, None, &[]).await });
-    let client = reqwest::Client::new();
-    let mut during_free = None;
-    for _ in 0..480 {
-        if handle.is_finished() {
-            break;
-        }
-        if let Ok(r) = client
-            .get(format!("http://127.0.0.1:{BENCH_PORT}/health"))
-            .send()
-            .await
-        {
-            if r.status().is_success() {
-                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-                during_free = probe();
-                break;
-            }
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    }
-    let r = handle.await.expect("bench task");
-    TuneResultWithVram {
-        load_secs: r.load_secs,
-        pp_tps: r.pp_tps,
-        gen_tps: r.gen_tps,
-        failed: r.failed,
-        during_free,
-    }
-}
-
 /// Ask one running bench server every scenario; verdict line back (first
 /// failure wins). `tool_marker` extends the stop list the app's way.
 async fn ask_scenarios(
@@ -366,18 +315,32 @@ pub async fn leg_fit_truth(bin: &Path, dir: &Path, only: &[String], sink: Sink<'
         let grade = crate::fit::grade(need, free, total_ram);
         let arm = TuneArm { ctx, moe_cpu_layers: moe_decision(&meta, size, ctx, free), draft: false };
         let before = free_vram();
-        let r = bench_one_measure(bin, dir, &name, arm, free_vram).await;
+        let r = bench_one(bin, dir, &name, arm, None, None, &[], Some(&free_vram)).await;
         let after_kill = free_vram();
         let real = match (before, r.during_free) {
             (Some(b), Some(d)) => format!("{:.2}", b - d),
             _ => "?".into(),
         };
+        // A non-red grade that loads and then generates at a crawl on a
+        // discrete card is the Windows CUDA sysmem-fallback shape: the
+        // driver spills to system RAM instead of failing, so the model
+        // "fits" and runs an order of magnitude slow (4060 Ti report:
+        // Ornith 2.5 tok/s where its size class does 26). A split MoE is
+        // exempt - CPU experts are slow honestly.
+        let crawled = r.failed.is_none()
+            && grade != crate::fit::Fit::Red
+            && arm.moe_cpu_layers.is_none()
+            && before.is_some()
+            && r.gen_tps > 0.0
+            && r.gen_tps < 6.0;
         let verdict = if r.failed.is_some() {
             if grade == crate::fit::Fit::Red {
                 "red CONFIRMED (did not load)"
             } else {
                 "CLAIMED ok, DID NOT LOAD"
             }
+        } else if crawled {
+            "ran but CRAWLED - likely spilled off the card"
         } else if grade == crate::fit::Fit::Red {
             "claimed RED, actually RAN"
         } else {
@@ -411,6 +374,11 @@ pub async fn leg_fit_truth(bin: &Path, dir: &Path, only: &[String], sink: Sink<'
         ));
         if verdict == "CLAIMED ok, DID NOT LOAD" {
             failures.push(format!("{name}: {verdict}"));
+        } else if crawled {
+            failures.push(format!(
+                "{name}: graded {:?} but generated at {:.1} tok/s - likely spilled off the card",
+                grade, r.gen_tps
+            ));
         }
     }
     failures
@@ -553,7 +521,7 @@ pub async fn leg_tune_bench(bin: &Path, dir: &Path, model: &str, sink: Sink<'_>)
         if cancelled() {
             return Err("cancelled".into());
         }
-        let r = bench_one(bin, dir, model, arm, None, None, &[]).await;
+        let r = bench_one(bin, dir, model, arm, None, None, &[], None).await;
         sink(format!(
             "arm ctx {} moe {:?} draft {}: load {:.1} s, prompt {:.0} tok/s, gen {:.1} tok/s, failed {:?}",
             r.ctx, r.moe_cpu_layers, r.draft, r.load_secs, r.pp_tps, r.gen_tps, r.failed

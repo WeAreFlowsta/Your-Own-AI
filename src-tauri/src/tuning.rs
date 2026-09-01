@@ -137,6 +137,11 @@ pub struct TuneResult {
     pub gen_tps: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failed: Option<String>,
+    /// Free VRAM read by the caller's probe right AFTER the measured
+    /// completion, server still up - the honest moment (CUDA allocates
+    /// lazily; a probe racing the load reads 0). Matrix-only; never stored.
+    #[serde(skip, default)]
+    pub during_free: Option<f64>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
@@ -242,6 +247,7 @@ pub async fn bench_one(
     draft_file: Option<(String, String)>,
     threads: Option<u32>,
     gpu_args: &[String],
+    vram_probe: Option<&(dyn Fn() -> Option<f64> + Send + Sync)>,
 ) -> TuneResult {
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
@@ -253,6 +259,7 @@ pub async fn bench_one(
         pp_tps: 0.0,
         gen_tps: 0.0,
         failed: None,
+        during_free: None,
     };
     let mut args: Vec<String> = vec![
         "--port".into(), BENCH_PORT.to_string(),
@@ -388,6 +395,12 @@ pub async fn bench_one(
         },
         Err(e) => result.failed = Some(format!("request failed: {e}")),
     }
+    // The server is still up and has just computed a full turn - every
+    // buffer it will ever allocate is allocated NOW. This is the only
+    // honest moment for a free-VRAM reading.
+    if let Some(probe) = vram_probe {
+        result.during_free = probe();
+    }
     result
 }
 
@@ -439,7 +452,7 @@ pub async fn tune_run(
             if draft_file.is_some() { if arm.draft { " - speed-up on" } else { " - speed-up off" } } else { "" }
         );
         let _ = app.emit("tune-run", serde_json::json!({ "model": model, "done": i, "total": total, "current": desc }));
-        let r = bench_one(&bin, &models_dir, &model, arm, draft_file.clone(), engine_threads(&app), &gpu_args).await;
+        let r = bench_one(&bin, &models_dir, &model, arm, draft_file.clone(), engine_threads(&app), &gpu_args, None).await;
         log::info!(
             "[tune] {model} arm {desc}: load {:.1} s, prompt {:.0} tok/s, gen {:.1} tok/s{}",
             r.load_secs, r.pp_tps, r.gen_tps,
@@ -505,7 +518,7 @@ mod tests {
         let arms = arms_for(&meta, size, 31.0, free_vram_gb, false);
         assert!(!arms.is_empty());
         for arm in arms.into_iter().take(2) {
-            let r = bench_one(&bin, &dir, &model, arm, None, None, &[]).await;
+            let r = bench_one(&bin, &dir, &model, arm, None, None, &[], None).await;
             eprintln!(
                 "[matrix] tune arm ctx {} moe {:?} draft {}: load {:.1} s, prompt {:.0} tok/s, gen {:.1} tok/s, failed {:?}",
                 r.ctx, r.moe_cpu_layers, r.draft, r.load_secs, r.pp_tps, r.gen_tps, r.failed
