@@ -66,6 +66,13 @@ pub struct ModelFit {
     /// Mixture-of-experts model (the Fine-tune dialog shows the split
     /// slider from this fact, never from the current offload decision).
     pub is_moe: bool,
+    /// What the automatics would pick RIGHT NOW for the expert split
+    /// (0 = everything fits on the card) - always computed for a MoE with
+    /// a VRAM figure, independent of any tuned decision. The dialog's
+    /// "Auto (n)" label reads this, never the decision field.
+    pub moe_auto_pick: Option<u32>,
+    /// This model carries fine-tune overrides on this machine.
+    pub tuned: bool,
     /// A mixture-of-experts model bigger than the graphics card that runs
     /// with its experts in main memory (`--cpu-moe`): fits, and fast for its
     /// size - graded yellow with this flag so the UI can say why.
@@ -531,7 +538,19 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
         // badge, the router and the loader must tell one story. 0 =
         // everything on the card: the plain grade above already says
         // whether THAT fits (red on a small card, honestly).
-        let tuned_moe = crate::tuning::get(app, &m.name).moe_cpu_layers;
+        let tuning_now = crate::tuning::get(app, &m.name);
+        let tuned_moe = tuning_now.moe_cpu_layers;
+        let moe_auto_pick: Option<u32> = if meta.is_moe() {
+            free_vram_gb.map(|vram| {
+                if !moe_offload_wanted(need_gb, vram) {
+                    0
+                } else {
+                    moe_cpu_layers(&meta, kv_gb, vram).unwrap_or(meta.expert_bytes_per_layer.len()) as u32
+                }
+            })
+        } else {
+            None
+        };
         if meta.is_moe() && tuned_moe == Some(0) {
             // No offload will be attempted; the full-weights grade stands.
         } else if meta.is_moe() && tuned_moe.is_some() {
@@ -589,6 +608,8 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
             context_max: meta.context_length,
             context_runtime: ctx,
             is_moe: meta.is_moe(),
+            moe_auto_pick,
+            tuned: !tuning_now.is_empty(),
             moe_offload,
             moe_cpu_layers: moe_cpu_layers_pick,
             measured_tps,
