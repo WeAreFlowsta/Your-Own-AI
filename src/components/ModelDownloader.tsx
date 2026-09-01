@@ -254,6 +254,8 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
         need_gb: number;
         moe_offload?: boolean;
         is_moe?: boolean;
+        moe_auto_pick?: number | null;
+        tuned?: boolean;
         moe_cpu_layers?: number | null;
         n_layers?: number;
         measured_tps?: number | null;
@@ -380,6 +382,8 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
           need_gb: number;
           moe_offload?: boolean;
           is_moe?: boolean;
+          moe_auto_pick?: number | null;
+          tuned?: boolean;
           moe_cpu_layers?: number | null;
           n_layers?: number;
           measured_tps?: number | null;
@@ -1926,6 +1930,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                         ? ` · ~${Math.round(fitInfo.measured_tps)} tok/s measured`
                         : ''}
                       {!unusable && model.draft ? ' · speed-up file on' : ''}
+                      {!unusable && fitInfo?.tuned ? ' · fine-tuned' : ''}
                       {mlxServes ? ' · chats run on MLX' : ''}
                     </p>
                     {!unusable && !model.draft && catalogMatch?.variant.draft && (
@@ -1981,7 +1986,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                         maxCtx={fitInfo?.context_max}
                         nLayers={fitInfo?.n_layers}
                         isMoe={!!fitInfo?.is_moe}
-                        autoMoeN={fitInfo?.moe_cpu_layers}
+                        autoMoeN={fitInfo?.moe_auto_pick ?? fitInfo?.moe_cpu_layers}
                         hasDraft={!!model.draft}
                         onClose$={() => { store.tuneFor = ''; }}
                       />

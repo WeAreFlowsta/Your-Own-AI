@@ -108,6 +108,12 @@ export default component$<ModelTuneDialogProps>((props) => {
               model's trained limit still caps it.
             </p>
           )}
+          {props.isMoe && moeN.value != null && props.autoMoeN != null && props.autoMoeN > 0 && moeN.value < props.autoMoeN && (
+            <p class="text-xs text-amber-500">
+              Fewer expert layers in main memory than the automatics pick ({props.autoMoeN}) - the rest
+              must fit on the card, and may not.
+            </p>
+          )}
           {props.isMoe && (
             <TuneSlider label="Expert layers in main memory (0 = everything on the card)" value={moeN.value}
               autoLabel={props.autoMoeN != null ? `Auto (${props.autoMoeN})` : 'Auto'}
