@@ -1512,7 +1512,15 @@ fn looks_like_oom(line: &str) -> bool {
         || l.contains("cannot allocate")
         || l.contains("insufficient memory")
         || l.contains("not enough memory")
-        || l.contains("oom")
+        || has_word_oom(&l)
+}
+
+/// "oom" as a word of its own (CUDA OOM, oom-killed, OOM error) - never a
+/// fragment of "room", "bloom" or "zoom".
+fn has_word_oom(lower: &str) -> bool {
+    lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|w| w == "oom")
 }
 
 async fn chat_server_health_ok() -> bool {
@@ -1796,7 +1804,8 @@ pub async fn start_llama_server(
     let header = model_filename.as_ref().and_then(|f| {
         let path = models_dir.join(f);
         let meta = crate::gguf::read_meta(&path).ok()?;
-        let size_bytes = std::fs::metadata(&path).ok()?.len();
+        // Every shard of a sharded file - the engine loads the set.
+        let size_bytes = crate::fit::model_bytes_on_disk(&path, &meta);
         Some((meta, size_bytes))
     });
     let ctx_size: u64 = match &header {
@@ -1891,14 +1900,13 @@ pub async fn start_llama_server(
             // (see chat_server_command) - never an absolute path in argv.
             args.push("--model".to_string());
             args.push(filename.clone());
-            // MedGemma 1.5 reasons in Gemma thought markers that detokenize
-            // to nothing - without --special the reasoning prints as normal
-            // text fused to the answer with no recoverable boundary. With it,
-            // the markers reach the stream loop, which rewrites them to
-            // <think> tags (translate_gemma_thought_markers). MedGemma only:
-            // --special surfaces every special token as text, which other
-            // models neither need nor expect.
-            if filename.to_lowercase().contains("medgemma") {
+            // Gemma-architecture models reason in thought markers that
+            // detokenize to nothing - without --special the reasoning prints
+            // as normal text fused to the answer with no recoverable
+            // boundary. With it, the markers reach the stream loop, which
+            // rewrites them to <think> tags (translate_gemma_thought_markers).
+            // Decided from the header's architecture, never the filename.
+            if header.as_ref().is_some_and(|(m, _)| m.surfaces_special_tokens()) {
                 args.push("--special".to_string());
             }
             log::info!("[LLM] Starting server with model: {}", filename);
@@ -3997,7 +4005,7 @@ fn streaming_http() -> &'static reqwest::Client {
 /// <think>…</think> tags the frontend already renders as the thinking box.
 /// The markers contain no newline, so line-based emission never splits one.
 /// No other model produces these strings - a no-op elsewhere.
-fn translate_gemma_thought_markers(chunk: &str) -> String {
+pub(crate) fn translate_gemma_thought_markers(chunk: &str) -> String {
     if !chunk.contains("<unused9") {
         return chunk.to_string();
     }
@@ -4755,6 +4763,14 @@ mod load_failure_classification_tests {
         assert!(looks_like_open_failure(lines[0]));
         assert!(!looks_like_oom(lines[0]));
         assert!(!looks_like_oom(lines[1]));
+    }
+
+    #[test]
+    fn oom_is_matched_as_a_word_not_a_fragment() {
+        assert!(looks_like_oom("CUDA error: OOM while allocating"));
+        assert!(looks_like_oom("process was oom-killed"));
+        assert!(!looks_like_oom("not enough room in the context window"));
+        assert!(!looks_like_oom("tensor 'blk.0.ffn_up_exps.weight' zoomed past the bloom filter"));
     }
 
     #[test]

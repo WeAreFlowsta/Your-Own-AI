@@ -171,12 +171,18 @@ async fn ask_scenarios(
             .as_str()
             .unwrap_or("")
             .to_string();
+        // Read the reply the app's way: thought markers become <think>
+        // blocks (Gemma family under --special), and the thinking - in
+        // the body or in the server's reasoning field - counts as thought,
+        // not as words.
+        let content = crate::llm::translate_gemma_thought_markers(&content);
+        let (visible, inline_thought) = split_think_blocks(&content);
         let reasoning_chars = v["choices"][0]["message"]["reasoning_content"]
             .as_str()
             .map(|r| r.chars().count())
-            .unwrap_or(0);
+            .unwrap_or(0)
+            + inline_thought;
         thought_chars = thought_chars.max(reasoning_chars);
-        let visible = content.replace("<think>", "").replace("</think>", "");
         if crate::llm::contains_channel_marker(&content) {
             return format!(
                 "FAIL scenario {i} marker leak: {:?}",
@@ -206,6 +212,31 @@ async fn ask_scenarios(
     )
 }
 
+/// Split `<think>…</think>` blocks out of a reply: (the words that remain,
+/// the thinking's length). An unterminated block counts as thinking to
+/// the end - the same reading the app's stream parser gives it.
+fn split_think_blocks(text: &str) -> (String, usize) {
+    let mut out = String::new();
+    let mut thought = 0usize;
+    let mut rest = text;
+    while let Some(i) = rest.find("<think>") {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + "<think>".len()..];
+        match after.find("</think>") {
+            Some(j) => {
+                thought += after[..j].chars().count();
+                rest = &after[j + "</think>".len()..];
+            }
+            None => {
+                thought += after.chars().count();
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    (out, thought)
+}
+
 /// One model through the chat-format check: load on the bench port with
 /// the app's MoE decision, ask every scenario, kill.
 pub async fn bench_chat_format(
@@ -229,13 +260,17 @@ pub async fn bench_chat_format(
             args.push(n.to_string());
         }
     }
+    let meta = crate::gguf::read_meta(&dir.join(model)).ok();
+    // The app's own flags for this family (thought markers surfaced so
+    // they can be translated) - the bench must load what the app loads.
+    if meta.as_ref().is_some_and(|m| m.surfaces_special_tokens()) {
+        args.push("--special".into());
+    }
     let guard = match spawn_bench_server(bin, dir, args).await {
         Ok(g) => g,
         Err(e) => return format!("FAIL load: {e}"),
     };
-    let marker = crate::gguf::read_meta(&dir.join(model))
-        .ok()
-        .and_then(|m| m.tool_call_marker);
+    let marker = meta.and_then(|m| m.tool_call_marker);
     let verdict = ask_scenarios(model, scenarios, marker).await;
     drop(guard);
     verdict

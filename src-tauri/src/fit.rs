@@ -367,11 +367,12 @@ pub fn moe_need_gb(meta: &GgufMeta, n_cpu_layers: usize, kv_gb: f64) -> f64 {
 pub const MOE_VRAM_HEADROOM_GB: f64 = 1.0;
 
 /// How many layers' experts to pin to the CPU: the SMALLEST n whose
-/// footprint leaves the headroom on (pooled) free VRAM. `None` when the
-/// file's expert split is unknown - the caller then pins all experts
-/// (`--cpu-moe`, the safe floor). Returns `Some(n_layers)` when even the
-/// all-on-CPU footprint does not fit - the caller still pins everything
-/// (the alternative is an OOM or a crawl) and the fit grade says red.
+/// footprint leaves the headroom on (pooled) free VRAM. Two answers mean
+/// "pin every expert" (`--cpu-moe`) and callers treat them alike on
+/// purpose: `None` = the file's expert table could not be read (nothing
+/// to model, the floor is the only safe move); `Some(n_layers)` = the
+/// table was read and even the all-on-CPU footprint does not fit (the
+/// floor is still the least bad move, and the grade says so).
 pub fn moe_cpu_layers(meta: &GgufMeta, kv_gb: f64, free_vram_gb: f64) -> Option<usize> {
     moe_cpu_layers_with(meta, kv_gb, free_vram_gb, 0.0)
 }
@@ -424,6 +425,22 @@ pub fn grade(need_gb: f64, free_vram_gb: Option<f64>, free_ram_gb: f64) -> Fit {
                 Fit::Red
             }
         }
+    }
+}
+
+/// What a model occupies on disk: every shard of a sharded file, not just
+/// the first (the engine loads the set; the first part alone under-counts
+/// a 35B by two thirds). Missing shards count zero - the inventory marks
+/// such a set unusable anyway.
+pub fn model_bytes_on_disk(path: &std::path::Path, meta: &GgufMeta) -> u64 {
+    if meta.split_count > 1 {
+        crate::gguf::shard_paths(path, meta.split_count)
+            .iter()
+            .filter_map(|p| std::fs::metadata(p).ok())
+            .map(|m| m.len())
+            .sum()
+    } else {
+        std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
     }
 }
 
@@ -530,8 +547,10 @@ pub async fn figures_slot_free(app: &AppHandle, dir: &std::path::Path) -> Machin
             }
             let path = dir.join(&name);
             let meta = crate::gguf::read_meta(&path).ok()?;
-            let size = std::fs::metadata(&path).ok()?.len();
-            let ctx = choose_ctx(&meta, size, total_ram_gb, free_vram_gb);
+            let size = model_bytes_on_disk(&path, &meta);
+            // The incumbent runs at ITS context - a fine-tune pin included -
+            // so the footprint handed back is the one it actually holds.
+            let ctx = pinned_or_chosen_ctx(app, &name, &meta, size, total_ram_gb, free_vram_gb);
             let (_, _, mut need) = model_need(&meta, size, ctx);
             if let Some(proj) = crate::llm::find_projector_for(&dir, &name) {
                 if let Ok(pm) = std::fs::metadata(&proj) {
@@ -623,6 +642,45 @@ pub async fn grade_catalog(app: AppHandle, variants: Vec<CatalogVariantIn>) -> R
     Ok(variants.iter().map(|v| grade_catalog_variant(v, &figures, unified)).collect())
 }
 
+/// The context a model runs at here: its fine-tune pin (clamped to the
+/// trained window) or the automatic sizing - one rule for the grade, the
+/// reclaim and the "runs at" line.
+pub(crate) fn pinned_or_chosen_ctx(
+    app: &AppHandle,
+    name: &str,
+    meta: &GgufMeta,
+    size_bytes: u64,
+    total_ram_gb: f64,
+    free_vram_gb: Option<f64>,
+) -> u64 {
+    crate::tuning::get(app, name)
+        .context
+        .map(|c| if meta.context_length > 0 { c.clamp(4096, meta.context_length.max(4096)) } else { c.max(4096) })
+        .unwrap_or_else(|| choose_ctx(meta, size_bytes, total_ram_gb, free_vram_gb))
+}
+
+/// The grade for a user-pinned expert split of `tuned_n` layers on the
+/// CPU, under the same headroom (and learned correction) the loader's
+/// picker uses. An unreadable tensor table cannot model a split at all:
+/// the loader pins every expert (`--cpu-moe`) and the honest grade is
+/// "runs, slower" with the pick unknown - never a phantom 1-layer split.
+pub fn tuned_split_fit(
+    meta: &GgufMeta,
+    tuned_n: u32,
+    kv_gb: f64,
+    free_vram_gb: f64,
+    correction_gb: f64,
+) -> (Fit, Option<u32>) {
+    let n_layers = meta.expert_bytes_per_layer.len();
+    if n_layers == 0 {
+        return (Fit::Yellow, None);
+    }
+    let n = (tuned_n as usize).min(n_layers);
+    let on_card = moe_need_gb(meta, n, kv_gb);
+    let fit = if on_card <= free_vram_gb - MOE_VRAM_HEADROOM_GB + correction_gb { Fit::Split } else { Fit::Yellow };
+    (fit, Some(n as u32))
+}
+
 /// Assess every downloaded model. Reuses free-VRAM (cached) + system RAM.
 pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
     let models = crate::llm::list_local_models(app.clone()).await.unwrap_or_default();
@@ -650,10 +708,7 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
         // with - per model, since choose_ctx is VRAM- and size-aware.
         // A fine-tune pin replaces the sizing here too, so the grade, the
         // router and the "runs at" line all tell the same story.
-        let ctx = crate::tuning::get(app, &m.name)
-            .context
-            .map(|c| if meta.context_length > 0 { c.clamp(4096, meta.context_length.max(4096)) } else { c.max(4096) })
-            .unwrap_or_else(|| choose_ctx(&meta, m.size_bytes, total_ram_gb, free_vram_gb));
+        let ctx = pinned_or_chosen_ctx(app, &m.name, &meta, m.size_bytes, total_ram_gb, free_vram_gb);
         let (weights_gb, kv_gb, mut need_gb) = model_need(&meta, m.size_bytes, ctx);
         // A model with a downloaded projector (mmproj) auto-loads it for vision, so
         // its ~1 GB lives in VRAM whenever this model runs — count it toward fit.
@@ -676,12 +731,19 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
         // whether THAT fits (red on a small card, honestly).
         let tuning_now = crate::tuning::get(app, &m.name);
         let tuned_moe = tuning_now.moe_cpu_layers;
+        // What the last measured load on this machine taught the split
+        // budget - the loader applies it, so the grade and the Auto label
+        // apply the same correction or they describe a different load.
+        let correction = crate::llm::moe_calibration_read(app, &m.name)
+            .map(|c| moe_budget_correction_gb(c.predicted_gb, c.actual_gb))
+            .unwrap_or(0.0);
         let moe_auto_pick: Option<u32> = if meta.is_moe() {
             free_vram_gb.map(|vram| {
                 if !moe_offload_wanted(need_gb, vram) {
                     0
                 } else {
-                    moe_cpu_layers(&meta, kv_gb, vram).unwrap_or(meta.expert_bytes_per_layer.len()) as u32
+                    moe_cpu_layers_with(&meta, kv_gb, vram, correction)
+                        .unwrap_or(meta.expert_bytes_per_layer.len()) as u32
                 }
             })
         } else {
@@ -691,11 +753,10 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
             // No offload will be attempted; the full-weights grade stands.
         } else if meta.is_moe() && tuned_moe.is_some() {
             if let Some(vram) = free_vram_gb {
-                let n = (tuned_moe.unwrap() as usize).min(meta.expert_bytes_per_layer.len().max(1));
-                let on_card = moe_need_gb(&meta, n, kv_gb);
-                fit = if on_card <= vram - MOE_VRAM_HEADROOM_GB + 0.5 { Fit::Split } else { Fit::Yellow };
+                let (f, pick) = tuned_split_fit(&meta, tuned_moe.unwrap(), kv_gb, vram, correction);
+                fit = f;
                 moe_offload = true;
-                moe_cpu_layers_pick = Some(n as u32);
+                moe_cpu_layers_pick = pick;
             }
         } else if meta.is_moe() {
             if let Some(vram) = free_vram_gb {
@@ -710,7 +771,7 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
                     if moe_active_fraction(&meta).map_or(true, |f| f <= MOE_HIGH_ACTIVE_FRACTION) {
                         fit = Fit::Split;
                         moe_offload = true;
-                        moe_cpu_layers_pick = moe_cpu_layers(&meta, kv_gb, vram)
+                        moe_cpu_layers_pick = moe_cpu_layers_with(&meta, kv_gb, vram, correction)
                             .filter(|&n| n < meta.expert_bytes_per_layer.len())
                             .map(|n| n as u32);
                     } else {
@@ -726,9 +787,11 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
         let measured_tps_mlx = stats.get(&format!("mlx:{}", m.name)).and_then(|s| s.tps);
         let load_secs = stats.get(&m.name).and_then(|s| s.load_secs);
         // Evidence beats estimate: this machine has RUN this model (a
-        // recorded speed stamp) - "too large" would contradict its own
-        // record. An estimated shortfall may claim "runs slower" at worst.
-        if fit == Fit::Red && measured_tps.is_some() {
+        // recorded speed stamp, on either engine - the MLX artifact of the
+        // same model lives in the same memory) - "too large" would
+        // contradict its own record. An estimated shortfall may claim
+        // "runs slower" at worst.
+        if fit == Fit::Red && (measured_tps.is_some() || measured_tps_mlx.is_some()) {
             fit = Fit::Yellow;
         }
         out.push(ModelFit {
@@ -1069,5 +1132,39 @@ mod catalog_grade_tests {
         let f = MachineFigures { total_ram_gb: 32.0, avail_ram_gb: 20.0, free_vram_gb: Some(7.0) };
         let need = estimate_need_gb(5.0);
         assert_eq!(grade(need, f.free_vram_gb, f.avail_ram_gb), grade_catalog_variant(&v(5.0, 8.0, false), &f, false).fit);
+    }
+}
+
+#[cfg(test)]
+mod tuned_split_tests {
+    use super::*;
+
+    #[test]
+    fn unreadable_table_is_runs_slower_with_pick_unknown_not_one_layer() {
+        let meta = GgufMeta { n_layers: 24, n_experts: 32, n_experts_used: 4, ..Default::default() };
+        assert_eq!(tuned_split_fit(&meta, 5, 0.3, 7.0, 0.0), (Fit::Yellow, None));
+    }
+
+    #[test]
+    fn tuned_split_uses_the_picker_headroom_and_correction() {
+        let meta = GgufMeta {
+            n_layers: 24,
+            n_experts: 32,
+            n_experts_used: 4,
+            expert_bytes_per_layer: vec![150_000_000; 24],
+            non_expert_bytes: 1_000_000_000,
+            ..Default::default()
+        };
+        // All experts on the CPU: ~0.93 GB non-expert + 0.3 kv + 0.8 = 2.03 on the card.
+        let (fit, pick) = tuned_split_fit(&meta, 24, 0.3, 3.5, 0.0);
+        assert_eq!((fit, pick), (Fit::Split, Some(24)));
+        // Zero on the CPU on a small card: over the headroom - runs slower, pick kept.
+        let (fit, pick) = tuned_split_fit(&meta, 0, 0.3, 3.5, 0.0);
+        assert_eq!((fit, pick), (Fit::Yellow, Some(0)));
+        // A learned correction widens the budget exactly like the loader's picker.
+        let (fit, _) = tuned_split_fit(&meta, 0, 0.3, 3.5, 3.0);
+        assert_eq!(fit, Fit::Split);
+        // A pin past the layer count clamps to the table, never below it.
+        assert_eq!(tuned_split_fit(&meta, 99, 0.3, 7.0, 0.0).1, Some(24));
     }
 }

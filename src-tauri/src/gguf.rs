@@ -96,6 +96,16 @@ pub struct GgufMeta {
 }
 
 impl GgufMeta {
+    /// Gemma-architecture models reason inside unused-token thought
+    /// markers (`<unused94>thought ... <unused95>`) that detokenize to
+    /// nothing - without the engine surfacing special tokens as text the
+    /// reasoning prints fused to the answer with no boundary to translate.
+    /// Read off the header's architecture, never a filename: any model of
+    /// this family gets the same treatment, whatever it is called.
+    pub fn surfaces_special_tokens(&self) -> bool {
+        self.architecture.starts_with("gemma")
+    }
+
     /// Can this file's template host an agent conversation (tools present,
     /// no strict-alternation guard)?
     pub fn agent_template_ok(&self) -> bool {
