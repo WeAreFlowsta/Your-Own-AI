@@ -707,6 +707,14 @@ mod tests {
             if d.is_empty() { None } else { Some(d.iter().map(|x| x.free_mib).sum::<u64>() as f64 / 1024.0) }
         };
         let persona = "You are Terra, a warm, thoughtful companion. Ground rules: peers not tool and owner; honest; never invent a human life you don't have; care, don't capture. Keep replies conversational, a few sentences. The user's name is Sam. Feel free to use emojis naturally.";
+        // Second shape: an emotional-support persona with a feelings question.
+        // This is the request shape that provoked tool-channel replies
+        // (generate_emotional_response) where the science ask stayed clean.
+        let feelings_persona = "You are Teresa, an emotionally attuned companion who helps people understand their feelings. You listen closely, name emotions gently, and respond with warmth and empathy. Keep replies conversational, a few sentences. The user's name is Sam.";
+        let scenarios: [(&str, &str); 2] = [
+            (persona, "why is the sky blue"),
+            (feelings_persona, "i've been feeling really overwhelmed lately and i don't know why"),
+        ];
         let mut files: Vec<String> = std::fs::read_dir(&dir).unwrap()
             .filter_map(|e| e.ok())
             .filter_map(|e| e.file_name().to_str().map(String::from))
@@ -729,7 +737,7 @@ mod tests {
                 })
             } else { None };
             let arm = TuneArm { ctx: 4096, moe_cpu_layers: moe, draft: false };
-            let r = bench_chat_format(&bin, &dir, &name, arm, persona).await;
+            let r = bench_chat_format(&bin, &dir, &name, arm, &scenarios).await;
             eprintln!("[chat-format] {:<38} {}", name, r);
             if r.starts_with("FAIL") {
                 failures.push(format!("{name}: {r}"));
@@ -738,13 +746,14 @@ mod tests {
         assert!(failures.is_empty(), "chat-format failures:\n{}", failures.join("\n"));
     }
 
-    /// One persona-carrying completion the app's way; returns a verdict line.
+    /// Persona-carrying completions the app's way, all scenarios on one
+    /// server load; returns a verdict line (first failure wins).
     async fn bench_chat_format(
         bin: &std::path::Path,
         dir: &std::path::Path,
         model: &str,
         arm: TuneArm,
-        persona: &str,
+        scenarios: &[(&str, &str)],
     ) -> String {
         use std::process::{Command, Stdio};
         use std::time::{Duration, Instant};
@@ -779,38 +788,42 @@ mod tests {
             if Instant::now() >= deadline { return "FAIL load: not healthy in 240 s".into(); }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
-        let mut body = serde_json::json!({
-            "model": model,
-            "messages": [
-                {"role": "system", "content": persona},
-                {"role": "user", "content": "why is the sky blue"}
-            ],
-            "max_tokens": 96,
-            "stream": false,
-            "top_k": 40,
-            "stop": crate::llm::chat_stop_strings_with(model, crate::gguf::read_meta(&dir.join(model)).ok().and_then(|m| m.tool_call_marker)),
-        });
-        crate::llm::apply_sampling(&mut body, None, false);
-        let (budget, effort) = crate::llm::chat_turn_reasoning_controls(model);
-        if let Some(b) = budget { body["reasoning_budget_tokens"] = serde_json::json!(b); }
-        if let Some(e) = effort { body["reasoning_effort"] = serde_json::json!(e); }
-        let v: serde_json::Value = match client
-            .post(format!("http://127.0.0.1:{BENCH_PORT}/v1/chat/completions"))
-            .json(&body).timeout(Duration::from_secs(300))
-            .send().await
-        {
-            Ok(r) => match r.json().await { Ok(v) => v, Err(e) => return format!("FAIL json: {e}") },
-            Err(e) => return format!("FAIL request: {e}"),
-        };
-        let content = v["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string();
-        let visible = content.replace("<think>", "").replace("</think>", "");
-        if crate::llm::contains_channel_marker(&content) {
-            return format!("FAIL marker leak: {:?}", content.chars().take(80).collect::<String>());
+        let mut last_snippet = String::new();
+        for (i, (persona, question)) in scenarios.iter().enumerate() {
+            let mut body = serde_json::json!({
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": persona},
+                    {"role": "user", "content": question}
+                ],
+                "max_tokens": 96,
+                "stream": false,
+                "top_k": 40,
+                "stop": crate::llm::chat_stop_strings_with(model, crate::gguf::read_meta(&dir.join(model)).ok().and_then(|m| m.tool_call_marker)),
+            });
+            crate::llm::apply_sampling(&mut body, None, false);
+            let (budget, effort) = crate::llm::chat_turn_reasoning_controls(model);
+            if let Some(b) = budget { body["reasoning_budget_tokens"] = serde_json::json!(b); }
+            if let Some(e) = effort { body["reasoning_effort"] = serde_json::json!(e); }
+            let v: serde_json::Value = match client
+                .post(format!("http://127.0.0.1:{BENCH_PORT}/v1/chat/completions"))
+                .json(&body).timeout(Duration::from_secs(300))
+                .send().await
+            {
+                Ok(r) => match r.json().await { Ok(v) => v, Err(e) => return format!("FAIL scenario {i} json: {e}") },
+                Err(e) => return format!("FAIL scenario {i} request: {e}"),
+            };
+            let content = v["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string();
+            let visible = content.replace("<think>", "").replace("</think>", "");
+            if crate::llm::contains_channel_marker(&content) {
+                return format!("FAIL scenario {i} marker leak: {:?}", content.chars().take(80).collect::<String>());
+            }
+            if visible.trim().is_empty() {
+                return format!("FAIL scenario {i} empty reply");
+            }
+            last_snippet = visible.trim().chars().take(60).collect::<String>();
         }
-        if visible.trim().is_empty() {
-            return "FAIL empty reply".into();
-        }
-        format!("ok: {:?}", visible.trim().chars().take(60).collect::<String>())
+        format!("ok ({} scenarios): {:?}", scenarios.len(), last_snippet)
     }
 
     /// Headless matrix leg: the sampling knobs REACH the engine. One server,

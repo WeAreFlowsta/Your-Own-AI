@@ -1362,6 +1362,55 @@ export function useChat(props: UseChatProps) {
           );
         }
 
+        // A reply with no text at all (not even thinking): the model spent
+        // its whole turn on a non-text channel - a tool-call format the stop
+        // list cut before it streamed, or a bare end-of-turn. Ask once more,
+        // steered plainly to words; works for any model, no name checks. A
+        // second empty run falls through to the honest message below.
+        if (!fullResponse.trim() && !controller.signal.aborted) {
+          console.warn("[Chat] empty reply - one retry with a plain-words steer");
+          state.messages = state.messages.map((m) =>
+            m.id === assistantId
+              ? { ...m, statusText: "Asking again...", isLoading: true }
+              : m
+          );
+          const steer =
+            systemPrompt +
+            "\n\nAnswer in plain sentences only. Do not use any tool-call or function-call format - no tools are available in this conversation.";
+          try {
+            for await (const chunk of llamaServerApi.chatCompletion(
+              chatHistory,
+              steer,
+              controller.signal,
+              maxTokens,
+              captureThinking,
+              preferredModel || undefined,
+              undefined,
+              reasoningEffort,
+              state.cacheKey,
+              sampling
+            )) {
+              if (chunk.type === "usage") {
+                tokenUsage = chunk.data;
+                continue;
+              }
+              if (chunk.type !== "text") continue;
+              if (firstChunkTime === null) firstChunkTime = Date.now();
+              fullResponse += chunk.content;
+              const now = Date.now();
+              if (now - lastFlushAt < 50) continue;
+              lastFlushAt = now;
+              state.messages = state.messages.map((m) =>
+                m.id === assistantId
+                  ? { ...m, content: fullResponse, statusText: undefined, isLoading: true }
+                  : m
+              );
+            }
+          } catch (e) {
+            console.warn("[Chat] plain-words retry failed:", e);
+          }
+        }
+
         // Calculate tokens per second
         const streamEndTime = Date.now();
         let tokensPerSecond: number | undefined;
@@ -1388,8 +1437,16 @@ export function useChat(props: UseChatProps) {
         const { thinking: finalThinking, contentWithoutThinking: finalContent } =
           extractThinkingFromContent(fullResponse);
 
-        // If the model only produced thinking with no visible content, show a fallback
-        const displayContent = finalContent || (finalThinking ? "(The model's response was all internal reasoning. Try asking again or use a different model.)" : "");
+        // If the model only produced thinking with no visible content, show a
+        // fallback. Empty even after the plain-words retry gets an honest
+        // sentence instead of a blank bubble (a canceled turn stays blank).
+        const displayContent =
+          finalContent ||
+          (finalThinking
+            ? "(The model's response was all internal reasoning. Try asking again or use a different model.)"
+            : controller.signal.aborted
+              ? ""
+              : "(The model returned an empty reply twice - it may not sit well with this AI's setup. Try asking again, or pick a different model for this AI.)");
 
         state.messages = state.messages.map((m) =>
           m.id === assistantId
