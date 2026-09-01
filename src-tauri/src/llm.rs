@@ -650,6 +650,19 @@ pub(crate) fn chat_turn_reasoning_controls(model_name: &str) -> (Option<i64>, Op
 /// `<|end|>` is its analysis-channel close, and the server already handles
 /// its real end-of-turn tokens (`<|return|>` / `<|call|>`).
 pub(crate) fn chat_stop_strings(model_name: &str) -> serde_json::Value {
+    chat_stop_strings_with(model_name, tool_marker_for_current(model_name))
+}
+
+/// The template-declared tool-call opener for a model in the models dir
+/// (cheap: the parsed header is cached by mtime).
+fn tool_marker_for_current(model_name: &str) -> Option<&'static str> {
+    let dir = CURRENT_MODELS_DIR.lock().ok()?.clone()?;
+    crate::gguf::read_meta(&dir.join(model_name)).ok()?.tool_call_marker
+}
+
+static CURRENT_MODELS_DIR: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+
+pub(crate) fn chat_stop_strings_with(model_name: &str, tool_call_marker: Option<&'static str>) -> serde_json::Value {
     if is_harmony_model(model_name) {
         return serde_json::json!([]);
     }
@@ -661,14 +674,14 @@ pub(crate) fn chat_stop_strings(model_name: &str) -> serde_json::Value {
         "</s>",              // Mistral, Llama
         "<|eot_id|>",        // Llama 3
     ];
-    // LFM is tool-trained and sometimes answers a PLAIN chat in its
+    // A tool-trained model sometimes answers a PLAIN chat in its
     // tool-call channel ("<|tool_call_start|>[code_blocks()]..."). Chat
-    // turns carry no tools, so that channel is always noise here - stop
-    // before it. Per-format on purpose (the gpt-oss lesson: never share
-    // one family's stops with another); the agent path through the local
-    // server declares real tools and is not affected.
-    if model_name.to_lowercase().contains("lfm") {
-        stops.push("<|tool_call_start|>");
+    // turns carry no tools, so that channel is noise for ANY model - and
+    // the model's own template says which opener its format uses (read
+    // at parse time, never from a name). The agent path through the
+    // local server declares real tools and does not use these stops.
+    if let Some(marker) = tool_call_marker {
+        stops.push(marker);
     }
     serde_json::json!(stops)
 }
@@ -896,6 +909,11 @@ pub async fn find_vision_model(
     query_vec: Option<Vec<f32>>,
 ) -> Result<Option<VisionPick>, String> {
     let models_dir = get_models_dir(&app_handle)?;
+    // Remembered so the per-format stop strings can read the loaded
+    // model's template-declared tool marker without an AppHandle.
+    if let Ok(mut d) = CURRENT_MODELS_DIR.lock() {
+        *d = Some(models_dir.clone());
+    }
     // Every downloaded model with a paired projector is a candidate (skip any
     // already proven too large this session).
     let mut candidates: Vec<String> = Vec::new();

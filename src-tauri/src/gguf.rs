@@ -68,6 +68,10 @@ pub struct GgufMeta {
     pub swa_pattern_read: bool,
     pub key_length_swa: u64,
     pub value_length_swa: u64,
+    /// The tool-call channel opener this model's own chat template uses
+    /// (None = the template declares no such channel). Read from the
+    /// template, never from the model's name.
+    pub tool_call_marker: Option<&'static str>,
     /// Bytes of the token-embedding table - the engine keeps it in system
     /// memory even under full offload, so it never costs the card.
     pub embd_bytes: u64,
@@ -534,6 +538,7 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
         swa_pattern_read: false,
         key_length_swa: 0,
         value_length_swa: 0,
+        tool_call_marker: None,
         embd_bytes: 0,
         expert_bytes_per_layer: Vec::new(),
         non_expert_bytes: 0,
@@ -575,6 +580,13 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
             m.template_tools = tpl.contains("tools") || tpl.contains("tool_call");
             m.template_strict_alternation =
                 tpl.contains("raise_exception") && tpl.contains("alternate");
+            // Which channel opener this format emits for tool calls - the
+            // known openers, matched against the template itself. A plain
+            // chat (no tools) treats that channel as noise, per format,
+            // never per model name.
+            const TOOL_CALL_OPENERS: [&str; 4] =
+                ["<|tool_call_start|>", "<|tool▁calls▁begin|>", "<|tool_call|>", "<tool_call>"];
+            m.tool_call_marker = TOOL_CALL_OPENERS.iter().copied().find(|o| tpl.contains(o));
         } else if key == "general.architecture" && vtype == 8 {
             m.architecture = r.read_gstr().map_err(io)?;
         } else if key == "general.size_label" && vtype == 8 {
