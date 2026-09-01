@@ -4881,6 +4881,32 @@ mod gemma_thought_tests {
 pub(crate) static LIVE_MATRIX_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
+mod stop_chain_tests {
+    use super::*;
+
+    /// The full runtime chain the leak escaped through: models-dir memo ->
+    /// header read -> template marker -> stop list. Skips when the model
+    /// file is not on this machine.
+    #[test]
+    fn tool_marker_reaches_the_stop_list() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let dir = std::path::Path::new(&home).join(".local/share/com.solar.yourowai/models");
+        let model = "LFM2.5-8B-A1B-Q4_K_M.gguf";
+        if !dir.join(model).exists() {
+            eprintln!("SKIP: {model} not present");
+            return;
+        }
+        remember_models_dir(&dir);
+        let stops = chat_stop_strings(model);
+        let listed: Vec<&str> = stops.as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+        assert!(
+            listed.contains(&"<|tool_call_start|>"),
+            "the template-declared tool marker must reach the stop list: {listed:?}"
+        );
+    }
+}
+
+#[cfg(test)]
 mod live_matrix {
     use super::*;
     use std::process::{Child, Command, Stdio};
