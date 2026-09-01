@@ -427,6 +427,44 @@ pub fn grade(need_gb: f64, free_vram_gb: Option<f64>, free_ram_gb: f64) -> Fit {
     }
 }
 
+/// The machine as every grader must see it - ONE source, so the fit
+/// badges, the router, the catalog cards and the truth matrix cannot
+/// disagree about the hardware. `avail_ram_gb` is what the OS would hand
+/// a new allocation NOW (vm_stat on macOS - strict free pages sit near
+/// zero on any settled Mac and graded an 8 GB Air's 2.3 GB models "Too
+/// large" while they loaded and ran at 29 tok/s); `free_vram_gb` is the
+/// discrete cards' pooled free memory, None on CPU-only, integrated and
+/// Apple unified memory (those grade against RAM).
+#[derive(Clone, Copy, Debug)]
+pub struct MachineFigures {
+    pub total_ram_gb: f64,
+    pub avail_ram_gb: f64,
+    pub free_vram_gb: Option<f64>,
+}
+
+impl MachineFigures {
+    /// From a free-VRAM reading the caller already holds (the matrix
+    /// probes the engine binary directly; tests pass what they measured).
+    pub fn with_vram(free_vram_gb: Option<f64>) -> Self {
+        let mut sys = sysinfo::System::new();
+        sys.refresh_memory();
+        Self {
+            total_ram_gb: sys.total_memory() as f64 / GIB,
+            avail_ram_gb: crate::llm::available_memory_bytes() as f64 / GIB,
+            free_vram_gb,
+        }
+    }
+}
+
+/// The app's own reading: cached free VRAM through the engine the app
+/// would chat with, honoring GPU safe mode and the device verdict.
+pub async fn machine_figures(app: &AppHandle) -> MachineFigures {
+    let free_vram_gb = crate::llm::available_vram_mib(app)
+        .await
+        .map(|mib| mib as f64 / 1024.0);
+    MachineFigures::with_vram(free_vram_gb)
+}
+
 /// Hand the incumbent's estimated footprint back to the free figures
 /// candidates are graded against ("as if the slot were free"). The
 /// incumbent lives in VRAM when a GPU budget exists, in RAM otherwise -
@@ -450,21 +488,14 @@ fn models_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
     crate::llm::get_models_dir(app).ok()
 }
 
-/// Assess every downloaded model. Reuses free-VRAM (cached) + system RAM.
-pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
-    let models = crate::llm::list_local_models(app.clone()).await.unwrap_or_default();
-    let dir = match models_dir(app) {
-        Some(d) => d,
-        None => return vec![],
-    };
-
-    let mut sys = sysinfo::System::new();
-    sys.refresh_memory();
-    let total_ram_gb = sys.total_memory() as f64 / GIB;
-    let free_ram_gb = sys.available_memory() as f64 / GIB;
-    let free_vram_gb = crate::llm::available_vram_mib(app)
-        .await
-        .map(|mib| mib as f64 / 1024.0);
+/// The machine figures every grader reads, with the loaded model's
+/// footprint handed back ("as if the chat slot were free") - the same
+/// numbers for the downloaded rows, the catalog cards and the router.
+pub async fn figures_slot_free(app: &AppHandle, dir: &std::path::Path) -> MachineFigures {
+    let figures = machine_figures(app).await;
+    let total_ram_gb = figures.total_ram_gb;
+    let free_ram_gb = figures.avail_ram_gb;
+    let free_vram_gb = figures.free_vram_gb;
 
     // Grade every candidate AS IF the chat slot were free. Loading any
     // candidate evicts the incumbent (loaded or mid-load), yet the free
@@ -511,6 +542,99 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
         })
         .unwrap_or(0.0);
     let (free_vram_gb, free_ram_gb) = reclaim_adjust(free_vram_gb, free_ram_gb, reclaim_gb);
+    MachineFigures { total_ram_gb, avail_ram_gb: free_ram_gb, free_vram_gb }
+}
+
+/// A catalog entry before download: no header to read, so the footprint
+/// is a stand-in - the file plus the KV cache and compute overhead at
+/// everyday context. The exact header estimate takes over once the file
+/// is on disk (assess); the grade thresholds are the same either way.
+pub fn estimate_need_gb(size_gb: f64) -> f64 {
+    size_gb * 1.05 + 0.85
+}
+
+#[derive(serde::Deserialize, Clone, Debug)]
+pub struct CatalogVariantIn {
+    /// The variant's filename - the key the UI maps the answer back by.
+    pub key: String,
+    pub size_gb: f64,
+    pub min_ram_gb: f64,
+    pub is_moe: bool,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct CatalogGrade {
+    pub key: String,
+    /// Where it would run: "gpu" | "moe-split" | "cpu" | "too-big".
+    pub mode: String,
+    pub fit: Fit,
+}
+
+/// One rule for a not-yet-downloaded model, from the same figures and
+/// thresholds `grade` applies to downloaded ones. With a discrete card a
+/// dense model runs on it or not at all; a mixture-of-experts file too big
+/// for the card runs with its experts in main memory when RAM carries it.
+/// Without a card (CPU, integrated, Apple unified memory) RAM decides:
+/// "gpu" on Apple Silicon means Metal in shared memory - fast - and
+/// `unified` names that case so the copy can too.
+pub fn grade_catalog_variant(v: &CatalogVariantIn, f: &MachineFigures, unified: bool) -> CatalogGrade {
+    let need = estimate_need_gb(v.size_gb);
+    let (mode, fit) = match f.free_vram_gb {
+        Some(vram) => {
+            let g = grade(need, Some(vram), f.avail_ram_gb);
+            if g == Fit::Green && v.min_ram_gb <= f.total_ram_gb {
+                ("gpu", Fit::Green)
+            } else if v.is_moe
+                && moe_offload_fits(v.size_gb, need, vram, moe_ram_budget_gb(f.avail_ram_gb, f.total_ram_gb))
+            {
+                ("moe-split", Fit::Split)
+            } else {
+                ("too-big", Fit::Red)
+            }
+        }
+        None => {
+            if v.min_ram_gb > f.total_ram_gb {
+                ("too-big", Fit::Red)
+            } else {
+                match grade(need, None, f.avail_ram_gb) {
+                    Fit::Green => (if unified { "gpu" } else { "cpu" }, Fit::Green),
+                    Fit::Yellow => ("cpu", Fit::Yellow),
+                    _ => ("too-big", Fit::Red),
+                }
+            }
+        }
+    };
+    CatalogGrade { key: v.key.clone(), mode: mode.to_string(), fit }
+}
+
+/// Apple Silicon runs models in unified memory through Metal: no discrete
+/// card, but not a processor-only machine either.
+pub fn unified_memory_gpu() -> bool {
+    cfg!(all(target_os = "macos", target_arch = "aarch64"))
+}
+
+/// Grade catalog entries for the UI - the cards, the pickers and the
+/// welcome recommendation read this, never their own arithmetic.
+#[tauri::command]
+pub async fn grade_catalog(app: AppHandle, variants: Vec<CatalogVariantIn>) -> Result<Vec<CatalogGrade>, String> {
+    let dir = models_dir(&app).unwrap_or_else(std::env::temp_dir);
+    let figures = figures_slot_free(&app, &dir).await;
+    let unified = unified_memory_gpu() && figures.free_vram_gb.is_none();
+    Ok(variants.iter().map(|v| grade_catalog_variant(v, &figures, unified)).collect())
+}
+
+/// Assess every downloaded model. Reuses free-VRAM (cached) + system RAM.
+pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
+    let models = crate::llm::list_local_models(app.clone()).await.unwrap_or_default();
+    let dir = match models_dir(app) {
+        Some(d) => d,
+        None => return vec![],
+    };
+
+    let figures = figures_slot_free(app, &dir).await;
+    let total_ram_gb = figures.total_ram_gb;
+    let free_ram_gb = figures.avail_ram_gb;
+    let free_vram_gb = figures.free_vram_gb;
 
     let stats = crate::model_stats::read_all(app);
     let mut out = Vec::new();
@@ -897,5 +1021,53 @@ mod tests {
             eprintln!("{name}: weights={w:.2}GB kv@8k={kv:.2}GB need={need:.2}GB");
             assert!(w > 0.1 && need > w);
         }
+    }
+}
+
+#[cfg(test)]
+mod catalog_grade_tests {
+    use super::*;
+
+    fn v(size: f64, min_ram: f64, moe: bool) -> CatalogVariantIn {
+        CatalogVariantIn { key: "x".into(), size_gb: size, min_ram_gb: min_ram, is_moe: moe }
+    }
+
+    #[test]
+    fn dense_on_a_card_is_gpu_or_too_big_never_cpu() {
+        let f = MachineFigures { total_ram_gb: 32.0, avail_ram_gb: 20.0, free_vram_gb: Some(7.0) };
+        assert_eq!(grade_catalog_variant(&v(4.0, 8.0, false), &f, false).mode, "gpu");
+        assert_eq!(grade_catalog_variant(&v(6.0, 8.0, false), &f, false).mode, "too-big");
+    }
+
+    #[test]
+    fn moe_bigger_than_the_card_splits_when_ram_carries_it() {
+        let f = MachineFigures { total_ram_gb: 32.0, avail_ram_gb: 20.0, free_vram_gb: Some(7.0) };
+        assert_eq!(grade_catalog_variant(&v(21.0, 16.0, true), &f, false).mode, "moe-split");
+        let small = MachineFigures { total_ram_gb: 16.0, avail_ram_gb: 8.0, free_vram_gb: Some(7.0) };
+        assert_eq!(grade_catalog_variant(&v(21.0, 16.0, true), &small, false).mode, "too-big");
+    }
+
+    #[test]
+    fn no_card_grades_against_available_ram_and_names_unified_gpu() {
+        // The 8 GB Air: 2.3 GB models graded "Too large" from strict free
+        // pages; against vm_stat's available figure they are green - and
+        // the matrix loaded them at 29 tok/s.
+        let air = MachineFigures { total_ram_gb: 8.0, avail_ram_gb: 5.5, free_vram_gb: None };
+        let g = grade_catalog_variant(&v(2.3, 8.0, false), &air, true);
+        assert_eq!((g.mode.as_str(), g.fit), ("gpu", Fit::Green));
+        let cpu_box = MachineFigures { total_ram_gb: 8.0, avail_ram_gb: 5.5, free_vram_gb: None };
+        assert_eq!(grade_catalog_variant(&v(2.3, 8.0, false), &cpu_box, false).mode, "cpu");
+        assert_eq!(grade_catalog_variant(&v(4.0, 8.0, false), &cpu_box, false).fit, Fit::Yellow);
+        assert_eq!(grade_catalog_variant(&v(9.0, 8.0, false), &cpu_box, false).mode, "too-big");
+        assert_eq!(grade_catalog_variant(&v(2.3, 16.0, false), &cpu_box, false).mode, "too-big");
+    }
+
+    #[test]
+    fn catalog_estimate_and_header_estimate_share_thresholds() {
+        // Same grade() call underneath: a stand-in need that the card holds
+        // at 90% is green exactly like a header-measured one.
+        let f = MachineFigures { total_ram_gb: 32.0, avail_ram_gb: 20.0, free_vram_gb: Some(7.0) };
+        let need = estimate_need_gb(5.0);
+        assert_eq!(grade(need, f.free_vram_gb, f.avail_ram_gb), grade_catalog_variant(&v(5.0, 8.0, false), &f, false).fit);
     }
 }

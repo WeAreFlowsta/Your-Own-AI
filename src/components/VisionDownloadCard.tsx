@@ -2,6 +2,7 @@ import { component$, useStore, useVisibleTask$, $, type QRL } from '@builder.io/
 import LiquidMetalButton from './LiquidMetalButton';
 import { modelManager } from '../utils/modelManager';
 import { modelFamilies, VISION_PROJECTORS, isVariantSuitable } from '../data/recommended-models';
+import { refreshCatalogModes } from '../utils/modelCache';
 import type { VisionPlanFile } from '../contexts/VisionDownloadContext';
 
 interface VisionDownloadCardProps {
@@ -42,7 +43,9 @@ export const VisionDownloadCard = component$<VisionDownloadCardProps>((props) =>
       // has it, OR if their hardware can comfortably run it; otherwise the lighter
       // E2B (the safe floor that runs on anything). They can always upgrade later.
       const hasE4B = e4b ? await modelManager.isModelDownloaded(e4b.filename) : false;
-      const e4bFits = !!e4b && isVariantSuitable(e4b, props.ram ?? 8, props.vram ?? null);
+      // Graded by the app's one grader, never by this card's own arithmetic.
+      const modes = await refreshCatalogModes().catch(() => null);
+      const e4bFits = !!e4b && !!modes && isVariantSuitable(e4b, modes);
       const useE4B = hasE4B || e4bFits;
       const base = useE4B ? e4b! : e2b!;
       const proj = useE4B ? e4bProj! : e2bProj!;

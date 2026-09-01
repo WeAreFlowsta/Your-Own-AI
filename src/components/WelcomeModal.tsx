@@ -16,7 +16,8 @@ import {
 import { LuHardDriveDownload, LuAlertTriangle, LuZap } from '@qwikest/icons/lucide';
 import LiquidMetalButton from './LiquidMetalButton';
 import type { SystemInfo } from './ModelDownloader';
-import { modelFamilies, getBestFamilyForRAM, getBestVariantForSystem, getRunMode, type ModelVariant } from '../data/recommended-models';
+import { modelFamilies, getBestFamilyForRAM, getBestVariantForSystem, getRunMode, type ModelVariant, type CatalogModes } from '../data/recommended-models';
+import { refreshCatalogModes } from '../utils/modelCache';
 import { modelManager, type DownloadProgress } from '../utils/modelManager';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -29,6 +30,8 @@ interface RecommendedModel {
   hasGPU: boolean;
   /** The smallest model we ship is still a stretch for this machine - say so. */
   tight?: boolean;
+  /** The catalog has not been graded yet - show a checking state, never a guess. */
+  pending?: boolean;
 }
 
 interface WelcomeModalProps {
@@ -46,8 +49,23 @@ interface WelcomeModalProps {
 function getRecommendedModel(
   systemInfo: SystemInfo | null,
   gpuUnusable = false,
+  modes: CatalogModes | null = null,
 ): RecommendedModel {
   const totalRAM = systemInfo?.total_memory_gb || 4;
+  if (!modes) {
+    // Graded by the app's one grader (Rust) - until it answers there is
+    // no honest pick, only a placeholder the button cannot act on.
+    const family = modelFamilies.find((f) => f.recommended) || modelFamilies[0];
+    const variant = [...family.variants].sort((a, b) => a.size - b.size)[0];
+    return {
+      familyId: family.id,
+      familyName: family.name,
+      variant,
+      reason: 'Checking which model fits this computer…',
+      hasGPU: false,
+      pending: true,
+    };
+  }
   // Integrated graphics share system RAM - recommend as CPU, not as a card.
   // gpuUnusable: the card exists but cannot run models (safe mode, or the
   // engine's own device verdict) - sizing must plan for the processor, or
@@ -56,7 +74,6 @@ function getRecommendedModel(
     gpuUnusable || systemInfo?.gpu_integrated
       ? null
       : systemInfo?.total_vram_gb || null;
-  const freeRAM = systemInfo ? Math.max(1, systemInfo.total_memory_gb - systemInfo.used_memory_gb) : null;
   const hasGPU = !!systemInfo?.gpu_name && (totalVRAM || 0) > 0;
   const gpuName = systemInfo?.gpu_name || 'GPU';
 
@@ -71,7 +88,7 @@ function getRecommendedModel(
     for (const family of modelFamilies) {
       if (family.category === 'specialist') continue;
       for (const variant of family.variants) {
-        if (getRunMode(variant, totalRAM, totalVRAM, freeRAM) === 'gpu') {
+        if (getRunMode(variant, modes) === 'gpu') {
           candidates.push({ family, variant });
         }
       }
@@ -103,10 +120,10 @@ function getRecommendedModel(
 
   // No GPU or nothing fits in VRAM - find best model for CPU
   // Pick the largest model from recommended families that fits in RAM with overhead
-  const bestFamily = getBestFamilyForRAM(totalRAM, null, freeRAM); // null VRAM = CPU-only calc
+  const bestFamily = getBestFamilyForRAM(modes);
 
   if (bestFamily) {
-    const bestVariant = getBestVariantForSystem(bestFamily, totalRAM, null, freeRAM);
+    const bestVariant = getBestVariantForSystem(bestFamily, modes);
     if (bestVariant) {
       return {
         familyId: bestFamily.id,
@@ -165,6 +182,8 @@ export const WelcomeModal = component$<WelcomeModalProps>(
     // The GPU may be present but unusable (safe mode / device verdict) -
     // the recommendation recomputes to CPU sizing once the status answers.
     const gpuUnusable = useSignal(false);
+    // The catalog graded by Rust for this machine; the pick waits for it.
+    const catalogModes = useSignal<CatalogModes | null>(null);
 
     // eslint-disable-next-line qwik/no-use-visible-task
     useVisibleTask$(async () => {
@@ -176,9 +195,14 @@ export const WelcomeModal = component$<WelcomeModalProps>(
       } catch {
         /* GPU sizing stands */
       }
+      try {
+        catalogModes.value = await refreshCatalogModes();
+      } catch (e) {
+        console.warn('[WelcomeModal] catalog grading failed:', e);
+      }
     });
 
-    const recommendedModel = getRecommendedModel(systemInfo, gpuUnusable.value);
+    const recommendedModel = getRecommendedModel(systemInfo, gpuUnusable.value, catalogModes.value);
 
     // A download that was interrupted (the app closed, the page changed)
     // continues by itself when the welcome comes back - never from zero.
@@ -225,7 +249,8 @@ export const WelcomeModal = component$<WelcomeModalProps>(
     // eslint-disable-next-line qwik/no-use-visible-task
     useVisibleTask$(async ({ track, cleanup }) => {
       track(() => isOpen);
-      if (!isOpen) return;
+      track(() => catalogModes.value);
+      if (!isOpen || !catalogModes.value) return;
       error.value = null;
       downloadProgress.value = null;
       const filename = recommendedModel.variant.filename;
@@ -305,7 +330,7 @@ export const WelcomeModal = component$<WelcomeModalProps>(
                     Recommended for Your System
                   </h2>
                   <h3 class="text-xl font-semibold text-[var(--text-primary)] mb-2">
-                    {modelDisplayName} ({recommendedModel.variant.size}GB)
+                    {recommendedModel.pending ? 'One moment…' : `${modelDisplayName} (${recommendedModel.variant.size}GB)`}
                   </h3>
                   <p class="text-sm text-[var(--text-secondary)] leading-relaxed">
                     {recommendedModel.reason}
@@ -371,10 +396,11 @@ export const WelcomeModal = component$<WelcomeModalProps>(
               <div class="space-y-4">
                 <LiquidMetalButton
                   onClick$={handleDownload$}
+                  disabled={!!recommendedModel.pending}
                   class="w-full py-4 font-semibold text-lg flex items-center justify-center gap-3"
                 >
                   <LuHardDriveDownload class="w-6 h-6" />
-                  Download {modelDisplayName}
+                  {recommendedModel.pending ? 'Checking what fits this computer…' : `Download ${modelDisplayName}`}
                 </LiquidMetalButton>
 
                 {/* Returning users must learn their world is recoverable

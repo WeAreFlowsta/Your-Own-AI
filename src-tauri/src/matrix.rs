@@ -305,12 +305,20 @@ fn moe_decision(meta: &crate::gguf::GgufMeta, size: u64, ctx: u64, free: Option<
 /// reported but not a failure.
 pub async fn leg_fit_truth(bin: &Path, dir: &Path, only: &[String], sink: Sink<'_>) -> Vec<String> {
     let free_vram = || free_vram_gb(bin);
-    let total_ram = total_ram_gb();
+    // The same figures assess() grades with - the badge and the matrix
+    // must read one machine (the Air's MedGemma said "Too large" in the
+    // app and Green in the matrix until they did).
+    let figures = crate::fit::MachineFigures::with_vram(free_vram());
+    let total_ram = figures.total_ram_gb;
+    let avail_ram = figures.avail_ram_gb;
     let files: Vec<String> = gguf_files(dir)
         .into_iter()
         .filter(|n| only.is_empty() || only.iter().any(|o| n == o))
         .collect();
-    sink(format!("{} models, total RAM {total_ram:.1} GB", files.len()));
+    sink(format!(
+        "{} models, RAM {total_ram:.1} GB total / {avail_ram:.1} GB available now (graded against available, as the app does)",
+        files.len()
+    ));
     if cfg!(windows) {
         // WDDM virtualizes GPU memory per process: a probe from a second
         // process cannot see the bench server's allocations, so the delta
@@ -346,7 +354,7 @@ pub async fn leg_fit_truth(bin: &Path, dir: &Path, only: &[String], sink: Sink<'
         let free = free_vram();
         let ctx = crate::fit::choose_ctx(&meta, size, total_ram, free);
         let (w, kv, need) = crate::fit::model_need(&meta, size, ctx);
-        let grade = crate::fit::grade(need, free, total_ram);
+        let grade = crate::fit::grade(need, free, avail_ram);
         let arm = TuneArm { ctx, moe_cpu_layers: moe_decision(&meta, size, ctx, free), draft: false };
         let before = free_vram();
         let r = bench_one(bin, dir, &name, arm, None, None, &[], Some(&free_vram)).await;

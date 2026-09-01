@@ -13,6 +13,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import type { LocalModel } from "../types";
+import { catalogVariantsForGrading, type CatalogModes, type RunMode } from "../data/recommended-models";
 
 /** green = fits fully on the GPU; split = GPU + RAM (MoE experts in main
  *  memory, fast for its size); yellow = runs slower (CPU-only, tight RAM);
@@ -31,6 +32,7 @@ export interface OnlineModel {
 let localCache: LocalModel[] | null = null;
 let fitsCache: FitMap | null = null;
 let onlineCache: OnlineModel[] | null = null;
+let catalogModesCache: CatalogModes | null = null;
 
 /** Whatever's cached right now (null = never fetched yet). */
 export function getCachedModels(): {
@@ -54,6 +56,20 @@ export async function refreshFits(): Promise<FitMap> {
   return fitsCache;
 }
 
+/** The catalog graded by the app's one grader (Rust `grade_catalog`):
+ *  where every not-yet-downloaded variant would run on THIS machine. */
+export async function refreshCatalogModes(): Promise<CatalogModes> {
+  const grades = await invoke<{ key: string; mode: RunMode }[]>("grade_catalog", {
+    variants: catalogVariantsForGrading(),
+  });
+  catalogModesCache = Object.fromEntries(grades.map((g) => [g.key, g.mode]));
+  return catalogModesCache;
+}
+
+export function getCachedCatalogModes(): CatalogModes | null {
+  return catalogModesCache;
+}
+
 export async function refreshOnlineModels(): Promise<OnlineModel[]> {
   const models = await invoke<OnlineModel[]>("list_online_models");
   onlineCache = models;
@@ -68,6 +84,7 @@ export async function refreshOnlineModels(): Promise<OnlineModel[]> {
 export function prefetchModels(): void {
   void refreshLocalModels().catch(() => {});
   void refreshFits().catch(() => {});
+  void refreshCatalogModes().catch(() => {});
   // The online catalog warms ONLY for a signed-in session. Signed out,
   // online models cannot be used, so the warm-up was a pointless launch
   // request to the relay - identity-free, but still "an install woke

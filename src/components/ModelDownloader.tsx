@@ -23,9 +23,9 @@ import {
   getBestVariantForSystem,
   isVariantSuitable,
   isFamilyRunnable,
-  getGPUStatus,
   getModality,
   getRunMode,
+  type CatalogModes,
   shardFilename,
   shardUrl,
   isMoeVariant,
@@ -35,6 +35,7 @@ import {
   capabilityInfo,
 } from '../data/recommended-models';
 import { modelManager, type DownloadProgress } from '../utils/modelManager';
+import { refreshCatalogModes } from '../utils/modelCache';
 import ConfirmModal from './ConfirmModal';
 import ModelStorageLocation from './ModelStorageLocation';
 import {
@@ -264,6 +265,9 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
       }
     >,
     appVersion: '',
+    /** The catalog graded by the app's one grader (Rust): where each
+     *  not-yet-downloaded variant would run here. Null until graded. */
+    catalogModes: null as CatalogModes | null,
     /** Model name whose fine-tune dialog is open ('' = none). */
     tuneFor: '',
     /** The GPU exists but cannot run models (safe mode, or the engine's
@@ -335,16 +339,18 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     } catch {
       /* GPU sizing stands */
     }
-    const totalRAM = systemInfo?.total_memory_gb || 8;
-    // Integrated graphics share system RAM - size them as CPU, not as a card.
-    const totalVRAM = store.gpuUnusable
-      ? null
-      : systemInfo?.gpu_integrated ? null : (systemInfo?.total_vram_gb || null);
-    const freeRAM = systemInfo ? Math.max(1, systemInfo.total_memory_gb - systemInfo.used_memory_gb) : null;
+    // The catalog's grades come from the app's one grader (Rust) - the same
+    // machine figures and thresholds the downloaded rows use - BEFORE the
+    // default variant per family is chosen from them.
+    try {
+      store.catalogModes = await refreshCatalogModes();
+    } catch (e) {
+      console.warn('Catalog grading failed:', e);
+    }
 
     const initialVariants: Record<string, ModelVariant> = {};
     modelFamilies.forEach((family) => {
-      const bestVariant = getBestVariantForSystem(family, totalRAM, totalVRAM, freeRAM);
+      const bestVariant = getBestVariantForSystem(family, store.catalogModes);
       if (bestVariant) {
         initialVariants[family.id] = bestVariant;
       } else if (family.variants.length > 0) {
@@ -392,6 +398,8 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
         }[]
       >('assess_model_fit');
       store.modelFits = Object.fromEntries(fits.map((f) => [f.name, f]));
+      // The catalog is graded from the same figures at the same moment.
+      store.catalogModes = await refreshCatalogModes();
     } catch (e) {
       console.warn('Fit assessment failed:', e);
     }
@@ -1105,8 +1113,9 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
   });
 
   const totalRAM = systemInfo?.total_memory_gb || 8;
-  // Integrated graphics share system RAM - size them as CPU, not as a card.
-  // An unusable GPU (safe mode / device verdict) sizes as CPU too.
+  // Display only (the header line and the too-big tooltip wording): every
+  // fit decision on this page reads store.catalogModes / store.modelFits,
+  // graded in Rust from one set of machine figures.
   const totalVRAM = store.gpuUnusable
     ? null
     : systemInfo?.gpu_integrated ? null : (systemInfo?.total_vram_gb || null);
@@ -1137,7 +1146,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
   // MoE split / fast-class, then an oversized CPU run - the welcome modal's
   // order, so both screens name the same model for the same machine.
   const modeClass = (v: ModelVariant) => {
-    const m = getRunMode(v, totalRAM, totalVRAM, freeRAM);
+    const m = getRunMode(v, store.catalogModes);
     return m === 'gpu' ? 2 : m === 'moe-split' || v.size <= 5 ? 1 : 0;
   };
 
@@ -1145,11 +1154,10 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
   // Prefers models that fit fully in VRAM (fastest), then largest suitable.
   const bestPick = (() => {
     const candidates = modelFamilies
-      .filter(f => f.recommended && getBestVariantForSystem(f, totalRAM, totalVRAM, freeRAM) !== null)
+      .filter(f => f.recommended && getBestVariantForSystem(f, store.catalogModes) !== null)
       .map(f => {
-        const variant = getBestVariantForSystem(f, totalRAM, totalVRAM, freeRAM)!;
-        const gpu = getGPUStatus(variant, totalVRAM);
-        return { family: f, variant, gpu };
+        const variant = getBestVariantForSystem(f, store.catalogModes)!;
+        return { family: f, variant };
       });
 
     // Sort by where it runs (getRunMode, not raw file size vs VRAM), then
@@ -1178,7 +1186,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     const order = catOrder ?? catRank;
     const candidates = modelFamilies
       .filter(match)
-      .map(f => ({ f, v: getBestVariantForSystem(f, totalRAM, totalVRAM, freeRAM) }))
+      .map(f => ({ f, v: getBestVariantForSystem(f, store.catalogModes) }))
       .filter((x): x is { f: ModelFamily; v: ModelVariant } => x.v !== null);
     candidates.sort((a, b) => {
       if (preferId) {
@@ -1278,8 +1286,8 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
   // Split into what this machine can run vs. what needs more memory. The latter
   // is grouped under a collapsible divider (in-place), not just greyed at the
   // bottom — so the action and its effect sit in the same spot.
-  const runnableFamilies = visibleFamilies.filter(f => isFamilyRunnable(f, totalRAM, totalVRAM, freeRAM));
-  const tooBigFamilies = visibleFamilies.filter(f => !isFamilyRunnable(f, totalRAM, totalVRAM, freeRAM));
+  const runnableFamilies = visibleFamilies.filter(f => isFamilyRunnable(f, store.catalogModes));
+  const tooBigFamilies = visibleFamilies.filter(f => !isFamilyRunnable(f, store.catalogModes));
 
 
   /** Render a single model card */
@@ -1312,8 +1320,8 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     const download = store.downloads[family.id];
     const isDownloading = !!download;
     const projector = projectorFor(family, selectedVariant);
-    const isSuitable = isVariantSuitable(selectedVariant, totalRAM, totalVRAM, freeRAM);
-    const runMode = getRunMode(selectedVariant, totalRAM, totalVRAM, freeRAM);
+    const isSuitable = isVariantSuitable(selectedVariant, store.catalogModes);
+    const runMode = getRunMode(selectedVariant, store.catalogModes);
     const isExpanded = store.expandedDetails[family.id];
 
     // "Best for you" only shows when the selected variant matches the recommended one
@@ -1447,7 +1455,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                       }} />
                       <ul class="absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-2xl bg-[var(--bg-card)] py-1 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none text-sm">
                         {family.variants.map((variant, idx) => {
-                          const variantSuitable = isVariantSuitable(variant, totalRAM, totalVRAM, freeRAM);
+                          const variantSuitable = isVariantSuitable(variant, store.catalogModes);
                           return (
                             <li
                               key={idx}

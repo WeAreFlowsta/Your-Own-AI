@@ -1521,38 +1521,28 @@ export function getModality(family: ModelFamily): { in: Modality[]; out: Modalit
 }
 
 /**
- * Get the best variant for a model family based on system RAM/VRAM
+ * The best variant of a family for this machine, from the graded catalog
+ * (`CatalogModes` - Rust's verdict per filename). Null until graded, or
+ * when nothing fits.
  */
-export function getBestVariantForSystem(
-  family: ModelFamily,
-  totalRAM: number,
-  totalVRAM: number | null,
-  freeRamGb?: number | null
-): ModelVariant | null {
-  const suitable = family.variants.filter(
-    v => getRunMode(v, totalRAM, totalVRAM, freeRamGb) !== 'too-big',
-  );
+export function getBestVariantForSystem(family: ModelFamily, modes: CatalogModes | null): ModelVariant | null {
+  if (!modes) return null;
+  const suitable = family.variants.filter(v => {
+    const m = getRunMode(v, modes);
+    return m !== null && m !== 'too-big';
+  });
   if (suitable.length === 0) return null;
 
   // Prefer the largest variant that runs on the GPU (fast). On CPU, biggest
   // is NOT best - tokens/sec falls with size - so prefer the largest
   // fast-class (≤5GB) variant and only exceed it when nothing smaller exists.
-  const onGpu = suitable.filter(v => getRunMode(v, totalRAM, totalVRAM, freeRamGb) === 'gpu');
+  const onGpu = suitable.filter(v => getRunMode(v, modes) === 'gpu');
   if (onGpu.length) return onGpu.sort((a, b) => b.size - a.size)[0];
-  const fast = suitable.filter(
-    v => v.size <= 5 || getRunMode(v, totalRAM, totalVRAM, freeRamGb) === 'moe-split',
-  );
+  const fast = suitable.filter(v => v.size <= 5 || getRunMode(v, modes) === 'moe-split');
   if (fast.length) return fast.sort((a, b) => b.size - a.size)[0];
   return suitable.sort((a, b) => a.size - b.size)[0];
 }
 
-/** RAM to leave for the OS, this app, and everything else when sizing a
- *  CPU-only run. Scales down on small machines: a flat desktop-sized 7GB
- *  reserve marked EVERY model "too big" on an 8GB laptop, hiding even the
- *  2GB ones (found on an 8GB MacBook Air). */
-function reservedRamGb(totalRAM: number): number {
-  return Math.min(7, Math.max(3, totalRAM * 0.4));
-}
 
 /**
  * Where a variant would actually run on this machine — grounded in VRAM, not just
@@ -1571,6 +1561,8 @@ export function shardUrl(firstUrl: string, i: number): string {
 }
 
 export type RunMode = 'gpu' | 'cpu' | 'moe-split' | 'too-big';
+/** The grader's verdict per catalog filename (see getRunMode). */
+export type CatalogModes = Record<string, RunMode>;
 
 /** A mixture-of-experts artifact: its experts (most of the file) can live in
  *  main memory while attention and the KV cache use the graphics card, so it
@@ -1581,14 +1573,6 @@ export function isMoeVariant(variant: ModelVariant): boolean {
   return /\bMoE\b/i.test(label) || /\bactive\b/i.test(label) || /\d+B-A\d+(\.\d+)?B/i.test(label);
 }
 
-/** Approx VRAM (GB) to load a model of `sizeGb` on the GPU. A pre-download estimate
- *  — the exact header-based number drives the real load decision. NB: sizing here
- *  and in getRunMode grades the GGUF artifact (`variant.size`); when a non-gguf
- *  engine lands, size must come from `artifactFor(v, activeEngineFormat())` and the
- *  fit math gets a per-engine strategy. */
-export function estimateVramGb(sizeGb: number): number {
-  return sizeGb * 1.05 + 0.85;
-}
 
 /** Human-readable context window, e.g. 262144 → "256K", 1048576 → "1M". */
 export function formatContext(tokens: number): string {
@@ -1600,86 +1584,53 @@ export function formatContext(tokens: number): string {
   return String(tokens);
 }
 
-/** CPU-run size budget. Sized from total RAM minus the OS reserve - and,
- *  when the caller knows how much RAM is actually FREE right now, clamped
- *  to that too (minus headroom for the KV cache and whatever the user has
- *  open staying open). Totals alone recommended a 7.1GB model to a machine
- *  with half its 16GB already in use; the load then OOM-killed the app. */
-function cpuBudgetGb(totalRAM: number, freeRamGb?: number | null): number {
-  const fromTotal = totalRAM - reservedRamGb(totalRAM);
-  if (freeRamGb == null) return fromTotal;
-  return Math.min(fromTotal, Math.max(1, freeRamGb - 1.5));
+
+/**
+ * Where a variant would run on this machine, as graded by the app's ONE
+ * grader (`grade_catalog` in Rust - the same figures and thresholds the
+ * downloaded rows and the router use; the UI never does this arithmetic).
+ * `modes` is that verdict keyed by filename; null = not graded yet.
+ */
+export function getRunMode(variant: ModelVariant, modes: CatalogModes | null): RunMode | null {
+  return modes?.[variant.filename] ?? null;
 }
 
-export function getRunMode(
-  variant: ModelVariant,
-  totalRAM: number,
-  totalVRAM: number | null,
-  freeRamGb?: number | null,
-): RunMode {
-  // With a GPU, a model runs on it or not at all — we don't fall back to a slow
-  // CPU run (a too-large model is flagged so, not crawled). Without a discrete GPU,
-  // the CPU is the only path, so RAM is what matters. Integrated GPUs share
-  // system RAM - callers pass totalVRAM = null for them so they size as CPU.
-  if (totalVRAM && totalVRAM > 0) {
-    // The card alone is not enough: loading stages weights through system
-    // memory and the OS still has to live in what remains, so the
-    // catalog's minRAM floor applies even to a full-GPU run (field case:
-    // a 10 GB card on a RAM-poor machine crashed the app at first load).
-    if (estimateVramGb(variant.size) <= totalVRAM && variant.minRAM <= totalRAM) {
-      return 'gpu';
+/** Everything the grader needs about every catalog variant, for one
+ *  `grade_catalog` call. MoE is read off the variant's own label. */
+export function catalogVariantsForGrading(): { key: string; size_gb: number; min_ram_gb: number; is_moe: boolean }[] {
+  const out: { key: string; size_gb: number; min_ram_gb: number; is_moe: boolean }[] = [];
+  for (const f of modelFamilies) {
+    for (const v of f.variants) {
+      out.push({ key: v.filename, size_gb: v.size, min_ram_gb: v.minRAM, is_moe: isMoeVariant(v) });
     }
-    // A mixture-of-experts model bigger than the card runs with its experts
-    // in main memory (the loader pins them to the CPU): the gate is RAM, not
-    // VRAM. A 32 GB box carries the 21 GB 35B-A3B; a 16 GB box does not.
-    // TOTAL memory minus the OS reserve, not what is free this minute: the
-    // file is memory-mapped and the OS makes room for it when it loads -
-    // a box that happens to have 18 GB in use right now still qualifies.
-    if (isMoeVariant(variant) && variant.size * 1.1 <= totalRAM - reservedRamGb(totalRAM)) {
-      return 'moe-split';
-    }
-    return 'too-big';
   }
-  return variant.size * 1.2 <= cpuBudgetGb(totalRAM, freeRamGb) ? 'cpu' : 'too-big';
+  return out;
 }
 
 /**
- * Get the best model family for user's system
+ * Get the best model family for this machine, from the graded catalog.
  */
-export function getBestFamilyForRAM(totalRAM: number, totalVRAM: number | null, freeRamGb?: number | null): ModelFamily | undefined {
-  // Get families that have at least one suitable variant
-  const suitableFamilies = modelFamilies.filter(family => {
-    return getBestVariantForSystem(family, totalRAM, totalVRAM, freeRamGb) !== null;
-  });
-
-  // Filter to recommended families
+export function getBestFamilyForRAM(modes: CatalogModes | null): ModelFamily | undefined {
+  if (!modes) return undefined;
+  const suitableFamilies = modelFamilies.filter(family => getBestVariantForSystem(family, modes) !== null);
   const recommended = suitableFamilies.filter(f => f.recommended);
-
   if (recommended.length === 0) return suitableFamilies[0];
 
-  // Rank families by the SAME philosophy the variant picker uses, instead
-  // of raw pick size. Sorting by size descending contradicted the variant
-  // rule ("on CPU, biggest is NOT best") one level up: a family whose only
-  // variant was a 15.7GB 27B outranked a sensible 4GB pick on a 32GB-RAM /
-  // 2GB-VRAM machine BECAUSE it was huge - a 75-minute welcome download
-  // into CPU-crawl territory (seen in the field). Preference order:
+  // Rank families by the SAME philosophy the variant picker uses:
   //   1. a pick that runs on the GPU (fast) beats any CPU pick;
   //      among GPU picks, larger = more capable and still fast.
   //   2. among CPU picks, a fast-class (<=5GB) pick beats an oversized
   //      one; larger wins WITHIN fast-class, smaller wins outside it.
   const rank = (f: ModelFamily) => {
-    const v = getBestVariantForSystem(f, totalRAM, totalVRAM, freeRamGb);
+    const v = getBestVariantForSystem(f, modes);
     if (!v) return { mode: -1, size: 0 };
-    const mode = getRunMode(v, totalRAM, totalVRAM, freeRamGb);
-    // moe-split runs fast for its size (experts in RAM, the rest on the
-    // card) - a fast-class pick, below a fully-on-GPU one.
+    const mode = getRunMode(v, modes);
     return { mode: mode === 'gpu' ? 2 : mode === 'moe-split' || v.size <= 5 ? 1 : 0, size: v.size };
   };
   return recommended.sort((a, b) => {
     const ra = rank(a);
     const rb = rank(b);
     if (ra.mode !== rb.mode) return rb.mode - ra.mode;
-    // GPU and fast-class CPU: bigger is better. Oversized CPU: smaller is.
     return ra.mode === 0 ? ra.size - rb.size : rb.size - ra.size;
   })[0];
 }
@@ -1692,52 +1643,32 @@ export function getModelFamilyById(id: string): ModelFamily | undefined {
 }
 
 /**
- * Check if a variant is suitable for the system
+ * Not graded too-big. Ungraded (modes still loading) counts as suitable so
+ * nothing is dimmed or blocked on a guess.
  */
-export function isVariantSuitable(variant: ModelVariant, totalRAM: number, totalVRAM: number | null, freeRamGb?: number | null): boolean {
-  return getRunMode(variant, totalRAM, totalVRAM, freeRamGb) !== 'too-big';
+export function isVariantSuitable(variant: ModelVariant, modes: CatalogModes | null): boolean {
+  return getRunMode(variant, modes) !== 'too-big';
 }
 
 /**
  * Can this system run ANY variant of the family? Used to sort runnable models
  * first and to power the "show only models I can run" filter.
  */
-export function isFamilyRunnable(family: ModelFamily, totalRAM: number, totalVRAM: number | null, freeRamGb?: number | null): boolean {
-  return family.variants.some(v => isVariantSuitable(v, totalRAM, totalVRAM, freeRamGb));
+export function isFamilyRunnable(family: ModelFamily, modes: CatalogModes | null): boolean {
+  return family.variants.some(v => isVariantSuitable(v, modes));
 }
 
 /**
  * Routing-ready lookup: families that provide a capability, optionally limited
- * to what the system can actually run. A future query router shortlists
- * candidate models for a task by calling this — same metadata the UI uses.
+ * to what the graded catalog says this machine can run.
  */
-export function getFamiliesByCapability(
-  capability: Capability,
-  system?: { totalRAM: number; totalVRAM: number | null }
-): ModelFamily[] {
+export function getFamiliesByCapability(capability: Capability, modes?: CatalogModes | null): ModelFamily[] {
   return modelFamilies.filter(f =>
     f.capabilities.includes(capability) &&
-    (!system || isFamilyRunnable(f, system.totalRAM, system.totalVRAM))
+    (modes === undefined || isFamilyRunnable(f, modes))
   );
 }
 
-/**
- * Get GPU acceleration status for a variant
- */
-export function getGPUStatus(variant: ModelVariant, totalVRAM: number | null): {
-  isAccelerated: boolean;
-  isFull: boolean;
-  isPartial: boolean;
-} {
-  const hasFullGPU = totalVRAM !== null && totalVRAM >= variant.size;
-  const hasPartialGPU = totalVRAM !== null && totalVRAM > 0 && totalVRAM < variant.size;
-
-  return {
-    isAccelerated: hasFullGPU || hasPartialGPU,
-    isFull: hasFullGPU,
-    isPartial: hasPartialGPU
-  };
-}
 
 /**
  * Get model families grouped by category, sorted by category order

@@ -589,6 +589,7 @@ pub fn run() {
             router::is_medical_query,
             router::routing_specialist_tasks,
             fit::assess_model_fit,
+            fit::grade_catalog,
             reset::reset_to_defaults,
             llm::download_model,
             llm::warm_chat_prompt,
