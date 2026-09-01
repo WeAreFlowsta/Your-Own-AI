@@ -672,6 +672,147 @@ mod tests {
         during_free: Option<f64>,
     }
 
+    #[test]
+    fn channel_markers_strip_and_detect() {
+        use crate::llm::{contains_channel_marker, strip_channel_markers};
+        assert!(contains_channel_marker("<|tool_call_start|>[code_blocks()]<|tool_call_end|>"));
+        assert_eq!(strip_channel_markers("hi <|tool_call_start|>[x()]<|tool_call_end|> there"), "hi  there");
+        assert_eq!(strip_channel_markers("lead <tool_call>{}"), "lead ");
+        assert_eq!(strip_channel_markers("plain words"), "plain words");
+        assert!(!contains_channel_marker("plain words"));
+    }
+
+    /// Headless matrix leg: every downloaded chat model answers an
+    /// app-shaped, persona-carrying request with WORDS - non-empty, no
+    /// channel markers of any format. The chat-format truth table.
+    #[tokio::test]
+    #[ignore]
+    async fn live_matrix_chat_format() {
+        use std::process::Command;
+        let _one_at_a_time = crate::llm::LIVE_MATRIX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = std::env::var("HOME").unwrap_or_default();
+        let dir = std::env::var("YOAI_MODELS_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::Path::new(&home).join(".local/share/com.solar.yourowai/models"));
+        let triple = if cfg!(target_os = "windows") { "x86_64-pc-windows-msvc.exe" }
+            else if cfg!(target_os = "macos") { if cfg!(target_arch = "aarch64") { "aarch64-apple-darwin" } else { "x86_64-apple-darwin" } }
+            else { "x86_64-unknown-linux-gnu" };
+        let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bin").join(format!("llama-server-{triple}"));
+        assert!(bin.exists());
+        let free_vram = || -> Option<f64> {
+            let out = Command::new(&bin).arg("--list-devices").output().ok()?;
+            let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+            text.push_str(&String::from_utf8_lossy(&out.stderr));
+            let d: Vec<_> = crate::llm::parse_gpu_devices(&text).into_iter().filter(|d| !d.integrated).collect();
+            if d.is_empty() { None } else { Some(d.iter().map(|x| x.free_mib).sum::<u64>() as f64 / 1024.0) }
+        };
+        let persona = "You are Terra, a warm, thoughtful companion. Ground rules: peers not tool and owner; honest; never invent a human life you don't have; care, don't capture. Keep replies conversational, a few sentences. The user's name is Sam. Feel free to use emojis naturally.";
+        let mut files: Vec<String> = std::fs::read_dir(&dir).unwrap()
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.file_name().to_str().map(String::from))
+            .filter(|n| n.ends_with(".gguf") && !n.contains("mmproj"))
+            .collect();
+        files.sort();
+        let mut failures: Vec<String> = Vec::new();
+        for name in files {
+            let path = dir.join(&name);
+            let meta = match crate::gguf::read_meta(&path) { Ok(m) => m, Err(_) => continue };
+            if meta.is_embedding() { continue; }
+            let size = std::fs::metadata(&path).unwrap().len();
+            let free = free_vram();
+            let moe: Option<u32> = if meta.is_moe() {
+                free.and_then(|f| {
+                    let (_, kv, need) = crate::fit::model_need(&meta, size, 4096);
+                    if crate::fit::moe_offload_wanted(need, f) {
+                        Some(crate::fit::moe_cpu_layers(&meta, kv, f).unwrap_or(meta.expert_bytes_per_layer.len()) as u32)
+                    } else { None }
+                })
+            } else { None };
+            let arm = TuneArm { ctx: 4096, moe_cpu_layers: moe, draft: false };
+            let r = bench_chat_format(&bin, &dir, &name, arm, persona).await;
+            eprintln!("[chat-format] {:<38} {}", name, r);
+            if r.starts_with("FAIL") {
+                failures.push(format!("{name}: {r}"));
+            }
+        }
+        assert!(failures.is_empty(), "chat-format failures:\n{}", failures.join("\n"));
+    }
+
+    /// One persona-carrying completion the app's way; returns a verdict line.
+    async fn bench_chat_format(
+        bin: &std::path::Path,
+        dir: &std::path::Path,
+        model: &str,
+        arm: TuneArm,
+        persona: &str,
+    ) -> String {
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+        let mut args: Vec<String> = vec![
+            "--port".into(), BENCH_PORT.to_string(),
+            "--host".into(), "127.0.0.1".into(),
+            "--no-webui".into(), "--reasoning".into(), "off".into(),
+            "--ctx-size".into(), arm.ctx.to_string(),
+            "--fit".into(), "off".into(),
+            "--model".into(), model.to_string(),
+        ];
+        if let Some(n) = arm.moe_cpu_layers {
+            if n > 0 {
+                args.push("--n-cpu-moe".into());
+                args.push(n.to_string());
+            }
+        }
+        let mut child = match Command::new(bin).args(&args).current_dir(dir).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
+            Ok(c) => c,
+            Err(e) => return format!("FAIL spawn: {e}"),
+        };
+        struct Kill<'a>(&'a mut std::process::Child);
+        impl Drop for Kill<'_> { fn drop(&mut self) { let _ = self.0.kill(); let _ = self.0.wait(); } }
+        let guard = Kill(&mut child);
+        let client = reqwest::Client::new();
+        let deadline = Instant::now() + Duration::from_secs(240);
+        loop {
+            if let Ok(Some(st)) = guard.0.try_wait() { return format!("FAIL load: exited {st}"); }
+            if let Ok(r) = client.get(format!("http://127.0.0.1:{BENCH_PORT}/health")).send().await {
+                if r.status().is_success() { break; }
+            }
+            if Instant::now() >= deadline { return "FAIL load: not healthy in 240 s".into(); }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        let mut body = serde_json::json!({
+            "model": model,
+            "messages": [
+                {"role": "system", "content": persona},
+                {"role": "user", "content": "why is the sky blue"}
+            ],
+            "max_tokens": 96,
+            "stream": false,
+            "top_k": 40,
+            "stop": crate::llm::chat_stop_strings_with(model, crate::gguf::read_meta(&dir.join(model)).ok().and_then(|m| m.tool_call_marker)),
+        });
+        crate::llm::apply_sampling(&mut body, None, false);
+        let (budget, effort) = crate::llm::chat_turn_reasoning_controls(model);
+        if let Some(b) = budget { body["reasoning_budget_tokens"] = serde_json::json!(b); }
+        if let Some(e) = effort { body["reasoning_effort"] = serde_json::json!(e); }
+        let v: serde_json::Value = match client
+            .post(format!("http://127.0.0.1:{BENCH_PORT}/v1/chat/completions"))
+            .json(&body).timeout(Duration::from_secs(300))
+            .send().await
+        {
+            Ok(r) => match r.json().await { Ok(v) => v, Err(e) => return format!("FAIL json: {e}") },
+            Err(e) => return format!("FAIL request: {e}"),
+        };
+        let content = v["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string();
+        let visible = content.replace("<think>", "").replace("</think>", "");
+        if crate::llm::contains_channel_marker(&content) {
+            return format!("FAIL marker leak: {:?}", content.chars().take(80).collect::<String>());
+        }
+        if visible.trim().is_empty() {
+            return "FAIL empty reply".into();
+        }
+        format!("ok: {:?}", visible.trim().chars().take(60).collect::<String>())
+    }
+
     /// Headless matrix leg: the sampling knobs REACH the engine. One server,
     /// three completions through `apply_sampling`: temperature 0 twice must
     /// answer identically (greedy is deterministic); high temperature with

@@ -649,6 +649,37 @@ pub(crate) fn chat_turn_reasoning_controls(model_name: &str) -> (Option<i64>, Op
 /// models like Phi-4 from ever stopping on their own). gpt-oss gets none:
 /// `<|end|>` is its analysis-channel close, and the server already handles
 /// its real end-of-turn tokens (`<|return|>` / `<|call|>`).
+/// Channel openers across the formats we ship - used to sanitize history
+/// and to notice a leak, never to special-case a model by name.
+pub(crate) const CHANNEL_MARKERS: [(&str, &str); 5] = [
+    ("<|tool_call_start|>", "<|tool_call_end|>"),
+    ("<|tool▁calls▁begin|>", "<|tool▁calls▁end|>"),
+    ("<|tool_call|>", "<|/tool_call|>"),
+    ("<tool_call>", "</tool_call>"),
+    ("<|channel|>", "<|message|>"),
+];
+
+/// Remove channel-marker spans from text (marker to its closer, or to the
+/// end when unterminated). Plain chats carry no tools, so these spans are
+/// never legitimate content there - a reply that leaked one must not
+/// re-enter the context as history and breed.
+pub(crate) fn strip_channel_markers(text: &str) -> String {
+    let mut out = text.to_string();
+    for (open, close) in CHANNEL_MARKERS {
+        while let Some(i) = out.find(open) {
+            match out[i..].find(close) {
+                Some(j) => out.replace_range(i..i + j + close.len(), ""),
+                None => out.truncate(i),
+            }
+        }
+    }
+    out
+}
+
+pub(crate) fn contains_channel_marker(text: &str) -> bool {
+    CHANNEL_MARKERS.iter().any(|(open, _)| text.contains(open))
+}
+
 pub(crate) fn chat_stop_strings(model_name: &str) -> serde_json::Value {
     chat_stop_strings_with(model_name, tool_marker_for_current(model_name))
 }
@@ -661,6 +692,16 @@ fn tool_marker_for_current(model_name: &str) -> Option<&'static str> {
 }
 
 static CURRENT_MODELS_DIR: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+
+/// Template-declared reasoning_strength kwarg (Muse-style), from the
+/// loaded model's own header - never from its name.
+fn current_meta_flag_reasoning_strength(model_name: &str) -> bool {
+    (|| {
+        let dir = CURRENT_MODELS_DIR.lock().ok()?.clone()?;
+        Some(crate::gguf::read_meta(&dir.join(model_name)).ok()?.template_reasoning_strength)
+    })()
+    .unwrap_or(false)
+}
 
 pub(crate) fn chat_stop_strings_with(model_name: &str, tool_call_marker: Option<&'static str>) -> serde_json::Value {
     if is_harmony_model(model_name) {
@@ -4068,9 +4109,19 @@ pub async fn stream_chat_completion(
                 }
             }
         }
+        // Assistant history is sanitized of channel-marker spans: a turn
+        // that leaked its tool channel once must not teach the model to
+        // do it again (generic across formats, never per model).
+        let content = match (&msg.role[..], &msg.content) {
+            ("assistant", serde_json::Value::String(t)) if contains_channel_marker(t) => {
+                log::warn!("[LLM] channel markers stripped from an assistant history turn");
+                serde_json::Value::String(strip_channel_markers(t))
+            }
+            _ => msg.content.clone(),
+        };
         all_messages.push(serde_json::json!({
             "role": msg.role,
-            "content": msg.content
+            "content": content
         }));
     }
 
@@ -4130,7 +4181,7 @@ pub async fn stream_chat_completion(
         // conversational turns pass low (the same classifier decision that
         // sets online reasoning_effort); report/code turns keep the model's
         // default depth. The template also accepts the current date.
-        if model_name.to_lowercase().contains("muse-glimmer") {
+        if current_meta_flag_reasoning_strength(&model_name) {
             if let Some(effort) = reasoning_effort.as_deref().filter(|e| !e.is_empty()) {
                 tpl_kwargs.insert(
                     "reasoning_strength".to_string(),
@@ -4428,7 +4479,18 @@ pub async fn stream_chat_completion(
                             // Emit any remaining buffered content
                             if !content_buffer.is_empty() {
                                 let _ = app.emit(&format!("chat-stream-{}", request_id), StreamChunkData {
-                                    chunk: translate_gemma_thought_markers(&content_buffer),
+                                    chunk: {
+                                        // Leak telemetry: a channel marker in a plain
+                                        // chat reply is a format leak - log the SHAPE
+                                        // (model + message count, never content).
+                                        if contains_channel_marker(&content_buffer) {
+                                            log::warn!(
+                                                "[LLM] channel marker leaked into a chat reply (model {}, {} messages) - stops were {:?}",
+                                                model_name, all_messages.len(), chat_stop_strings(&model_name)
+                                            );
+                                        }
+                                        translate_gemma_thought_markers(&content_buffer)
+                                    },
                                 });
                                 content_buffer.clear();
                             }
@@ -4547,7 +4609,15 @@ pub async fn stream_chat_completion(
 
                                     // Emit complete line to frontend
                                     let _ = app.emit(&format!("chat-stream-{}", request_id), StreamChunkData {
-                                        chunk: translate_gemma_thought_markers(&complete_line),
+                                        chunk: {
+                                            if contains_channel_marker(&complete_line) {
+                                                log::warn!(
+                                                    "[LLM] channel marker leaked into a chat reply (model {}, {} messages) - stops were {:?}",
+                                                    model_name, all_messages.len(), chat_stop_strings(&model_name)
+                                                );
+                                            }
+                                            translate_gemma_thought_markers(&complete_line)
+                                        },
                                     });
                                 }
                             }

@@ -68,6 +68,8 @@ pub struct GgufMeta {
     pub swa_pattern_read: bool,
     pub key_length_swa: u64,
     pub value_length_swa: u64,
+    /// The template accepts a `reasoning_strength` kwarg (Muse-style).
+    pub template_reasoning_strength: bool,
     /// The tool-call channel opener this model's own chat template uses
     /// (None = the template declares no such channel). Read from the
     /// template, never from the model's name.
@@ -538,6 +540,7 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
         swa_pattern_read: false,
         key_length_swa: 0,
         value_length_swa: 0,
+        template_reasoning_strength: false,
         tool_call_marker: None,
         embd_bytes: 0,
         expert_bytes_per_layer: Vec::new(),
@@ -587,6 +590,7 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
             const TOOL_CALL_OPENERS: [&str; 4] =
                 ["<|tool_call_start|>", "<|tool▁calls▁begin|>", "<|tool_call|>", "<tool_call>"];
             m.tool_call_marker = TOOL_CALL_OPENERS.iter().copied().find(|o| tpl.contains(o));
+            m.template_reasoning_strength = tpl.contains("reasoning_strength");
         } else if key == "general.architecture" && vtype == 8 {
             m.architecture = r.read_gstr().map_err(io)?;
         } else if key == "general.size_label" && vtype == 8 {
