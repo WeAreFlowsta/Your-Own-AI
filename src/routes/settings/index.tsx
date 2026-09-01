@@ -732,6 +732,50 @@ export default component$(() => {
       tidyBusy.value = false;
     }
   });
+  // Truth matrix (beta builds): every downloaded model, claim vs reality,
+  // on THIS machine - fit grades, chat format, sampling, tune arms. One
+  // report file out; progress streams line by line.
+  const matrixBusy = useSignal(false);
+  const matrixLines = useSignal<string[]>([]);
+  const matrixPath = useSignal("");
+  const matrixError = useSignal("");
+  const runMatrix = $(async () => {
+    matrixError.value = "";
+    matrixPath.value = "";
+    matrixLines.value = [];
+    matrixBusy.value = true;
+    let unlisten: (() => void) | undefined;
+    try {
+      const [{ invoke }, { listen }] = await Promise.all([
+        import("@tauri-apps/api/core"),
+        import("@tauri-apps/api/event"),
+      ]);
+      unlisten = await listen<string>("matrix-progress", (e) => {
+        matrixLines.value = [...matrixLines.value.slice(-199), e.payload];
+      });
+      const now = new Date();
+      const stamp = `${now.toISOString().slice(0, 10)}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+      matrixPath.value = await invoke<string>("matrix_run", { stamp });
+    } catch (e) {
+      matrixError.value = String(e);
+    } finally {
+      unlisten?.();
+      matrixBusy.value = false;
+    }
+  });
+  const cancelMatrix = $(async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("matrix_cancel").catch(() => {});
+  });
+  const revealMatrix = $(async () => {
+    try {
+      const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
+      await revealItemInDir(matrixPath.value);
+    } catch {
+      // Reveal is a convenience; the path text remains the fallback.
+    }
+  });
+
   const doReset = $(async () => {
     resetting.value = true;
     try {
@@ -1651,6 +1695,59 @@ export default component$(() => {
                 )}
                 {censusError.value && (
                   <p class="mt-3 text-xs text-red-400">{censusError.value}</p>
+                )}
+                <p class="mt-5 text-sm text-[var(--text-secondary)] mb-3">
+                  <span class="font-semibold text-[var(--text-primary)]">
+                    Truth matrix
+                  </span>{" "}
+                  - loads every downloaded model on this computer and checks
+                  the app's claims against what really happens: does each
+                  model load at the promised size, answer in plain words, and
+                  respect the generation settings. Unloads your current model
+                  first and takes roughly 10-20 minutes; writes a report file
+                  you can send back.
+                </p>
+                <div class="flex flex-wrap items-center gap-3">
+                  <LiquidMetalButton
+                    variant="secondary"
+                    onClick$={runMatrix}
+                    disabled={matrixBusy.value}
+                    class="px-4 py-2 text-sm"
+                  >
+                    {matrixBusy.value ? "Running…" : "Run truth matrix"}
+                  </LiquidMetalButton>
+                  {matrixBusy.value && (
+                    <LiquidMetalButton
+                      variant="secondary"
+                      onClick$={cancelMatrix}
+                      class="px-4 py-2 text-sm"
+                    >
+                      Stop
+                    </LiquidMetalButton>
+                  )}
+                  {matrixPath.value && !matrixBusy.value && (
+                    <button
+                      type="button"
+                      onClick$={revealMatrix}
+                      class="text-sm text-[var(--text-link)] hover:underline"
+                    >
+                      Show in folder
+                    </button>
+                  )}
+                </div>
+                {matrixLines.value.length > 0 && (
+                  <pre class="mt-3 max-h-64 overflow-auto rounded-lg border border-[var(--border-subtle)] bg-black/20 p-3 text-[11px] leading-relaxed text-[var(--text-muted)]">
+                    {matrixLines.value.join("\n")}
+                  </pre>
+                )}
+                {matrixPath.value && !matrixBusy.value && (
+                  <p class="mt-3 text-xs text-[var(--text-muted)] break-all">
+                    Report saved to {matrixPath.value} - attach this file when
+                    reporting how this computer runs.
+                  </p>
+                )}
+                {matrixError.value && (
+                  <p class="mt-3 text-xs text-red-400">{matrixError.value}</p>
                 )}
                 </>
                 )}

@@ -220,6 +220,12 @@ pub fn arms_for(
 
 static TUNE_CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// The matrix runner shares the bench's cancel switch (bench_one is the
+/// only place that can abort a load in flight).
+pub(crate) fn tune_cancel_flag_set(v: bool) {
+    TUNE_CANCEL.store(v, std::sync::atomic::Ordering::SeqCst);
+}
+
 #[tauri::command]
 pub async fn tune_cancel() -> Result<(), String> {
     TUNE_CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -275,12 +281,19 @@ pub async fn bench_one(
             args.push(df.clone());
         }
     }
-    let child = Command::new(bin)
-        .args(&args)
+    let mut cmd = Command::new(bin);
+    cmd.args(&args)
         .current_dir(models_dir)
         .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn();
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        // The app's shell-plugin spawns hide consoles; this direct spawn
+        // must do it itself or every bench arm flashes a window.
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let child = cmd.spawn();
     let mut child = match child {
         Ok(c) => c,
         Err(e) => {
@@ -550,7 +563,6 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn live_matrix_fit_truth() {
-        use std::process::Command;
         let _one_at_a_time = crate::llm::LIVE_MATRIX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let home = std::env::var("HOME").unwrap_or_default();
         let dir = std::env::var("YOAI_MODELS_DIR")
@@ -561,115 +573,12 @@ mod tests {
             else { "x86_64-unknown-linux-gnu" };
         let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bin").join(format!("llama-server-{triple}"));
         assert!(bin.exists());
-        let free_vram = || -> Option<f64> {
-            let out = Command::new(&bin).arg("--list-devices").output().ok()?;
-            let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
-            text.push_str(&String::from_utf8_lossy(&out.stderr));
-            let d: Vec<_> = crate::llm::parse_gpu_devices(&text).into_iter().filter(|d| !d.integrated).collect();
-            if d.is_empty() { None } else { Some(d.iter().map(|x| x.free_mib).sum::<u64>() as f64 / 1024.0) }
-        };
-        let sys = sysinfo::System::new_with_specifics(
-            sysinfo::RefreshKind::nothing().with_memory(sysinfo::MemoryRefreshKind::everything()),
-        );
-        let total_ram = sys.total_memory() as f64 / (1024.0 * 1024.0 * 1024.0);
         let only: Vec<String> = std::env::var("YOAI_FIT_TRUTH_MODELS").ok()
             .map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
             .unwrap_or_default();
-        let mut files: Vec<String> = std::fs::read_dir(&dir).unwrap()
-            .filter_map(|e| e.ok())
-            .filter_map(|e| e.file_name().to_str().map(String::from))
-            .filter(|n| n.ends_with(".gguf") && !n.contains("mmproj"))
-            .filter(|n| only.is_empty() || only.iter().any(|o| n == o))
-            .collect();
-        files.sort();
-        eprintln!("[fit-truth] {} models, total RAM {total_ram:.1} GB", files.len());
-        eprintln!("[fit-truth] {:<38} {:>5} {:>6} {:>6} {:>6} | {:>7} {:>6} {:>6} {:>7}  verdict",
-            "model", "grade", "ctx", "estGB", "freeGB", "realGB", "load_s", "gen", "prompt");
-        for name in files {
-            let path = dir.join(&name);
-            let meta = match crate::gguf::read_meta(&path) { Ok(m) => m, Err(e) => { eprintln!("[fit-truth] {name}: header error {e:?}"); continue; } };
-            if meta.is_embedding() { continue; }
-            let size = std::fs::metadata(&path).unwrap().len();
-            let free = free_vram();
-            let ctx = crate::fit::choose_ctx(&meta, size, total_ram, free);
-            let (w, kv, need) = crate::fit::model_need(&meta, size, ctx);
-            let grade = crate::fit::grade(need, free, total_ram);
-            // MoE decision the app's way
-            let moe: Option<u32> = if meta.is_moe() {
-                free.and_then(|f| {
-                    if crate::fit::moe_offload_wanted(need, f) {
-                        Some(crate::fit::moe_cpu_layers(&meta, kv, f).unwrap_or(meta.expert_bytes_per_layer.len()) as u32)
-                    } else { None }
-                })
-            } else { None };
-            let arm = TuneArm { ctx, moe_cpu_layers: moe, draft: false };
-            let before = free_vram();
-            let r = bench_one_measure(&bin, &dir, &name, arm, free_vram).await;
-            let after_kill = free_vram();
-            let real = match (before, r.during_free) {
-                (Some(b), Some(d)) => format!("{:.2}", b - d),
-                _ => "?".into(),
-            };
-            let verdict = if r.failed.is_some() {
-                if grade == crate::fit::Fit::Red { "red CONFIRMED (did not load)" } else { "CLAIMED ok, DID NOT LOAD" }
-            } else if grade == crate::fit::Fit::Red {
-                "claimed RED, actually RAN"
-            } else { "ok" };
-            eprintln!("[fit-truth] {:<38} {:>5} {:>6} {:>6.2} {:>6} | {:>7} {:>6.1} {:>6.1} {:>7.0}  {}{}",
-                name, format!("{:?}", grade), ctx, need,
-                before.map(|b| format!("{b:.2}")).unwrap_or("-".into()),
-                real, r.load_secs, r.gen_tps, r.pp_tps, verdict,
-                r.failed.as_deref().map(|f| format!("  [{}]", &f[..f.len().min(80)])).unwrap_or_default());
-            eprintln!("[fit-truth]   est: weights {w:.2} + kv {kv:.2} + 0.8 | parser: layers {} attn {} kv_heads {} dim {} moe_flag {:?} | freed-after-kill {:?}",
-                meta.n_layers, meta.n_attn_layers, meta.n_kv_heads, meta.head_dim(), arm.moe_cpu_layers, after_kill.map(|a| format!("{a:.2}")));
-        }
-    }
-
-    /// bench_one, plus a free-VRAM probe taken while the server is up.
-    async fn bench_one_measure(
-        bin: &std::path::Path,
-        dir: &std::path::Path,
-        model: &str,
-        arm: TuneArm,
-        probe: impl Fn() -> Option<f64>,
-    ) -> TuneResultWithVram {
-        // Reuse bench_one for the load+measure, but we need the free
-        // reading while it runs - so replicate the tail: spawn via
-        // bench_one is not possible. Instead call bench_one and accept
-        // the during-free from a mid-flight probe thread is overkill:
-        // simplest honest read = probe right after health from HERE by
-        // racing. We keep it simple: bench_one measures; the during
-        // probe happens inside via this wrapper spawning first.
-        // Implementation: spawn our own copy would duplicate; instead we
-        // time-slice: start bench in a task, poll health, probe, join.
-        let bin2 = bin.to_path_buf();
-        let dir2 = dir.to_path_buf();
-        let model2 = model.to_string();
-        let handle = tokio::spawn(async move { bench_one(&bin2, &dir2, &model2, arm, None, None, &[]).await });
-        // Wait for the bench server to answer health, then take the reading.
-        let client = reqwest::Client::new();
-        let mut during_free = None;
-        for _ in 0..480 {
-            if handle.is_finished() { break; }
-            if let Ok(r) = client.get(format!("http://127.0.0.1:{BENCH_PORT}/health")).send().await {
-                if r.status().is_success() {
-                    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-                    during_free = probe();
-                    break;
-                }
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        }
-        let r = handle.await.expect("bench task");
-        TuneResultWithVram { load_secs: r.load_secs, pp_tps: r.pp_tps, gen_tps: r.gen_tps, failed: r.failed, during_free }
-    }
-
-    struct TuneResultWithVram {
-        load_secs: f32,
-        pp_tps: f32,
-        gen_tps: f32,
-        failed: Option<String>,
-        during_free: Option<f64>,
+        let sink = |l: String| eprintln!("[fit-truth] {l}");
+        let failures = crate::matrix::leg_fit_truth(&bin, &dir, &only, &sink).await;
+        assert!(failures.is_empty(), "grades lied green:\n{}", failures.join("\n"));
     }
 
     #[test]
@@ -682,13 +591,12 @@ mod tests {
         assert!(!contains_channel_marker("plain words"));
     }
 
-    /// Headless matrix leg: every downloaded chat model answers an
-    /// app-shaped, persona-carrying request with WORDS - non-empty, no
+    /// Headless matrix leg: every downloaded chat model answers every
+    /// app-shaped, persona-carrying scenario with WORDS - non-empty, no
     /// channel markers of any format. The chat-format truth table.
     #[tokio::test]
     #[ignore]
     async fn live_matrix_chat_format() {
-        use std::process::Command;
         let _one_at_a_time = crate::llm::LIVE_MATRIX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let home = std::env::var("HOME").unwrap_or_default();
         let dir = std::env::var("YOAI_MODELS_DIR")
@@ -699,131 +607,9 @@ mod tests {
             else { "x86_64-unknown-linux-gnu" };
         let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bin").join(format!("llama-server-{triple}"));
         assert!(bin.exists());
-        let free_vram = || -> Option<f64> {
-            let out = Command::new(&bin).arg("--list-devices").output().ok()?;
-            let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
-            text.push_str(&String::from_utf8_lossy(&out.stderr));
-            let d: Vec<_> = crate::llm::parse_gpu_devices(&text).into_iter().filter(|d| !d.integrated).collect();
-            if d.is_empty() { None } else { Some(d.iter().map(|x| x.free_mib).sum::<u64>() as f64 / 1024.0) }
-        };
-        let persona = "You are Terra, a warm, thoughtful companion. Ground rules: peers not tool and owner; honest; never invent a human life you don't have; care, don't capture. Keep replies conversational, a few sentences. The user's name is Sam. Feel free to use emojis naturally.";
-        // Second shape: an emotional-support persona with a feelings question.
-        // This is the request shape that provoked tool-channel replies
-        // (generate_emotional_response) where the science ask stayed clean.
-        let feelings_persona = "You are Teresa, an emotionally attuned companion who helps people understand their feelings. You listen closely, name emotions gently, and respond with warmth and empathy. Keep replies conversational, a few sentences. The user's name is Sam.";
-        let scenarios: [(&str, &str); 2] = [
-            (persona, "why is the sky blue"),
-            (feelings_persona, "i've been feeling really overwhelmed lately and i don't know why"),
-        ];
-        let mut files: Vec<String> = std::fs::read_dir(&dir).unwrap()
-            .filter_map(|e| e.ok())
-            .filter_map(|e| e.file_name().to_str().map(String::from))
-            .filter(|n| n.ends_with(".gguf") && !n.contains("mmproj"))
-            .collect();
-        files.sort();
-        let mut failures: Vec<String> = Vec::new();
-        for name in files {
-            let path = dir.join(&name);
-            let meta = match crate::gguf::read_meta(&path) { Ok(m) => m, Err(_) => continue };
-            if meta.is_embedding() { continue; }
-            let size = std::fs::metadata(&path).unwrap().len();
-            let free = free_vram();
-            let moe: Option<u32> = if meta.is_moe() {
-                free.and_then(|f| {
-                    let (_, kv, need) = crate::fit::model_need(&meta, size, 4096);
-                    if crate::fit::moe_offload_wanted(need, f) {
-                        Some(crate::fit::moe_cpu_layers(&meta, kv, f).unwrap_or(meta.expert_bytes_per_layer.len()) as u32)
-                    } else { None }
-                })
-            } else { None };
-            let arm = TuneArm { ctx: 4096, moe_cpu_layers: moe, draft: false };
-            let r = bench_chat_format(&bin, &dir, &name, arm, &scenarios).await;
-            eprintln!("[chat-format] {:<38} {}", name, r);
-            if r.starts_with("FAIL") {
-                failures.push(format!("{name}: {r}"));
-            }
-        }
+        let sink = |l: String| eprintln!("[chat-format] {l}");
+        let failures = crate::matrix::leg_chat_format(&bin, &dir, &sink).await;
         assert!(failures.is_empty(), "chat-format failures:\n{}", failures.join("\n"));
-    }
-
-    /// Persona-carrying completions the app's way, all scenarios on one
-    /// server load; returns a verdict line (first failure wins).
-    async fn bench_chat_format(
-        bin: &std::path::Path,
-        dir: &std::path::Path,
-        model: &str,
-        arm: TuneArm,
-        scenarios: &[(&str, &str)],
-    ) -> String {
-        use std::process::{Command, Stdio};
-        use std::time::{Duration, Instant};
-        let mut args: Vec<String> = vec![
-            "--port".into(), BENCH_PORT.to_string(),
-            "--host".into(), "127.0.0.1".into(),
-            "--no-webui".into(), "--reasoning".into(), "off".into(),
-            "--ctx-size".into(), arm.ctx.to_string(),
-            "--fit".into(), "off".into(),
-            "--model".into(), model.to_string(),
-        ];
-        if let Some(n) = arm.moe_cpu_layers {
-            if n > 0 {
-                args.push("--n-cpu-moe".into());
-                args.push(n.to_string());
-            }
-        }
-        let mut child = match Command::new(bin).args(&args).current_dir(dir).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
-            Ok(c) => c,
-            Err(e) => return format!("FAIL spawn: {e}"),
-        };
-        struct Kill<'a>(&'a mut std::process::Child);
-        impl Drop for Kill<'_> { fn drop(&mut self) { let _ = self.0.kill(); let _ = self.0.wait(); } }
-        let guard = Kill(&mut child);
-        let client = reqwest::Client::new();
-        let deadline = Instant::now() + Duration::from_secs(240);
-        loop {
-            if let Ok(Some(st)) = guard.0.try_wait() { return format!("FAIL load: exited {st}"); }
-            if let Ok(r) = client.get(format!("http://127.0.0.1:{BENCH_PORT}/health")).send().await {
-                if r.status().is_success() { break; }
-            }
-            if Instant::now() >= deadline { return "FAIL load: not healthy in 240 s".into(); }
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        }
-        let mut last_snippet = String::new();
-        for (i, (persona, question)) in scenarios.iter().enumerate() {
-            let mut body = serde_json::json!({
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": persona},
-                    {"role": "user", "content": question}
-                ],
-                "max_tokens": 96,
-                "stream": false,
-                "top_k": 40,
-                "stop": crate::llm::chat_stop_strings_with(model, crate::gguf::read_meta(&dir.join(model)).ok().and_then(|m| m.tool_call_marker)),
-            });
-            crate::llm::apply_sampling(&mut body, None, false);
-            let (budget, effort) = crate::llm::chat_turn_reasoning_controls(model);
-            if let Some(b) = budget { body["reasoning_budget_tokens"] = serde_json::json!(b); }
-            if let Some(e) = effort { body["reasoning_effort"] = serde_json::json!(e); }
-            let v: serde_json::Value = match client
-                .post(format!("http://127.0.0.1:{BENCH_PORT}/v1/chat/completions"))
-                .json(&body).timeout(Duration::from_secs(300))
-                .send().await
-            {
-                Ok(r) => match r.json().await { Ok(v) => v, Err(e) => return format!("FAIL scenario {i} json: {e}") },
-                Err(e) => return format!("FAIL scenario {i} request: {e}"),
-            };
-            let content = v["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string();
-            let visible = content.replace("<think>", "").replace("</think>", "");
-            if crate::llm::contains_channel_marker(&content) {
-                return format!("FAIL scenario {i} marker leak: {:?}", content.chars().take(80).collect::<String>());
-            }
-            if visible.trim().is_empty() {
-                return format!("FAIL scenario {i} empty reply");
-            }
-            last_snippet = visible.trim().chars().take(60).collect::<String>();
-        }
-        format!("ok ({} scenarios): {:?}", scenarios.len(), last_snippet)
     }
 
     /// Headless matrix leg: the sampling knobs REACH the engine. One server,
@@ -833,10 +619,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn live_matrix_sampling() {
-        use std::process::{Command, Stdio};
-        use std::time::{Duration, Instant};
         let _one_at_a_time = crate::llm::LIVE_MATRIX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        const PORT: u16 = 18097;
         let home = std::env::var("HOME").unwrap_or_default();
         let dir = std::env::var("YOAI_MODELS_DIR")
             .map(std::path::PathBuf::from)
@@ -851,85 +634,10 @@ mod tests {
             else { "x86_64-unknown-linux-gnu" };
         let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bin").join(format!("llama-server-{triple}"));
         assert!(bin.exists());
-        let meta = crate::gguf::read_meta(&dir.join(&model)).expect("header");
-        let size = std::fs::metadata(dir.join(&model)).unwrap().len();
-        let free = Command::new(&bin).arg("--list-devices").output().ok().and_then(|out| {
-            let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
-            text.push_str(&String::from_utf8_lossy(&out.stderr));
-            let d: Vec<_> = crate::llm::parse_gpu_devices(&text).into_iter().filter(|d| !d.integrated).collect();
-            if d.is_empty() { None } else { Some(d.iter().map(|x| x.free_mib).sum::<u64>() as f64 / 1024.0) }
-        });
-        let mut args: Vec<String> = vec![
-            "--port".into(), PORT.to_string(), "--host".into(), "127.0.0.1".into(),
-            "--no-webui".into(), "--reasoning".into(), "off".into(),
-            "--ctx-size".into(), "4096".into(), "--fit".into(), "off".into(),
-            "--model".into(), model.clone(),
-        ];
-        if meta.is_moe() {
-            if let Some(f) = free {
-                let (_, kv, need) = crate::fit::model_need(&meta, size, 4096);
-                if crate::fit::moe_offload_wanted(need, f) {
-                    match crate::fit::moe_cpu_layers(&meta, kv, f) {
-                        Some(n) if n < meta.expert_bytes_per_layer.len() => {
-                            args.push("--n-cpu-moe".into()); args.push(n.to_string());
-                        }
-                        _ => args.push("--cpu-moe".into()),
-                    }
-                }
-            }
-        }
-        let mut child = Command::new(&bin).args(&args).current_dir(&dir).stdout(Stdio::null()).stderr(Stdio::null()).spawn().expect("spawn");
-        struct Kill<'a>(&'a mut std::process::Child);
-        impl Drop for Kill<'_> { fn drop(&mut self) { let _ = self.0.kill(); let _ = self.0.wait(); } }
-        let guard = Kill(&mut child);
-        let client = reqwest::Client::new();
-        let deadline = Instant::now() + Duration::from_secs(240);
-        loop {
-            if let Ok(Some(st)) = guard.0.try_wait() { panic!("server exited during load: {st}"); }
-            if let Ok(r) = client.get(format!("http://127.0.0.1:{PORT}/health")).send().await {
-                if r.status().is_success() { break; }
-            }
-            assert!(Instant::now() < deadline, "not healthy in 240 s");
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        }
-        let ask = |sampling: Option<crate::llm::SamplingParams>, seed: Option<u64>| {
-            let client = client.clone();
-            let model = model.clone();
-            async move {
-                let mut body = serde_json::json!({
-                    "model": model,
-                    "messages": [{"role": "user", "content": "Describe an imaginary small town in about 60 words."}],
-                    "max_tokens": 80,
-                    "stream": false,
-                    "stop": crate::llm::chat_stop_strings(&model),
-                });
-                let (budget, effort) = crate::llm::chat_turn_reasoning_controls(&model);
-                if let Some(b) = budget { body["reasoning_budget_tokens"] = serde_json::json!(b); }
-                if let Some(e) = effort { body["reasoning_effort"] = serde_json::json!(e); }
-                crate::llm::apply_sampling(&mut body, sampling.as_ref(), false);
-                if let Some(sd) = seed { body["seed"] = serde_json::json!(sd); }
-                let v: serde_json::Value = client
-                    .post(format!("http://127.0.0.1:{PORT}/v1/chat/completions"))
-                    .json(&body).timeout(Duration::from_secs(180))
-                    .send().await.expect("request").json().await.expect("json");
-                v["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string()
-            }
-        };
-        let greedy = crate::llm::SamplingParams { temperature: Some(0.0), ..Default::default() };
-        let a1 = ask(Some(greedy), None).await;
-        let a2 = ask(Some(greedy), None).await;
-        eprintln!("[matrix] sampling greedy len {}: {}", a1.len(), a1.chars().take(80).collect::<String>());
-        assert!(!a1.trim().is_empty());
-        assert_eq!(a1, a2, "temperature 0 must be deterministic - the knob did not reach the engine?");
-        let wild = crate::llm::SamplingParams { temperature: Some(1.8), top_p: Some(1.0), ..Default::default() };
-        let b1 = ask(Some(wild), Some(7)).await;
-        let b2 = ask(Some(wild), Some(8)).await;
-        eprintln!("[matrix] sampling wild lens {} / {}", b1.len(), b2.len());
-        assert!(!b1.trim().is_empty() && !b2.trim().is_empty());
-        assert!(
-            !(b1 == a1 && b2 == a1),
-            "high temperature reproduced the greedy text twice - sampling not applied"
-        );
+        let sink = |l: String| eprintln!("[matrix] sampling {l}");
+        crate::matrix::leg_sampling(&bin, &dir, &model, &sink)
+            .await
+            .expect("sampling leg");
     }
 
     #[test]
