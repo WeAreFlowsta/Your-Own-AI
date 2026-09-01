@@ -1561,8 +1561,10 @@ export function shardUrl(firstUrl: string, i: number): string {
 }
 
 export type RunMode = 'gpu' | 'cpu' | 'moe-split' | 'too-big';
+/** The grader's fit, the same four words the downloaded rows use. */
+export type CatalogFit = 'green' | 'split' | 'yellow' | 'red';
 /** The grader's verdict per catalog filename (see getRunMode). */
-export type CatalogModes = Record<string, RunMode>;
+export type CatalogModes = Record<string, { mode: RunMode; fit: CatalogFit }>;
 
 /** A mixture-of-experts artifact: its experts (most of the file) can live in
  *  main memory while attention and the KV cache use the graphics card, so it
@@ -1592,7 +1594,13 @@ export function formatContext(tokens: number): string {
  * `modes` is that verdict keyed by filename; null = not graded yet.
  */
 export function getRunMode(variant: ModelVariant, modes: CatalogModes | null): RunMode | null {
-  return modes?.[variant.filename] ?? null;
+  return modes?.[variant.filename]?.mode ?? null;
+}
+
+/** The grader's fit for a catalog variant - the badge word the downloaded
+ *  rows would show for the same file on this machine. Null until graded. */
+export function getCatalogFit(variant: ModelVariant, modes: CatalogModes | null): CatalogFit | null {
+  return modes?.[variant.filename]?.fit ?? null;
 }
 
 /** Everything the grader needs about every catalog variant, for one

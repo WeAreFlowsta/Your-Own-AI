@@ -25,6 +25,7 @@ import {
   isFamilyRunnable,
   getModality,
   getRunMode,
+  getCatalogFit,
   type CatalogModes,
   shardFilename,
   shardUrl,
@@ -939,8 +940,8 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
       }
 
       // A vision model is only half-installed without its projector (the "eyes").
-      // Pull the matching one too — paired by the same filename-prefix rule the
-      // conductor uses — so "download a vision model" actually enables vision.
+      // Pull the matching one too - paired by the same filename-prefix rule the
+      // conductor uses - so "download a vision model" actually enables vision.
       {
         const proj = projectorFor(family, variant);
         if (proj && !(await modelManager.isModelDownloaded(proj.filename))) {
@@ -1128,11 +1129,11 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
   const downloadedFilenames = new Set(
     store.downloadedModels.filter((m) => !m.damaged).map((m) => m.name),
   );
-  // Task filters — the capability axis users actually shop by ("what's it for").
+  // Task filters - the capability axis users actually shop by ("what's it for").
   // Size is handled separately by the runnable / "needs more memory" split below,
   // so these tabs don't need to repeat it. Order = most-shopped first.
   const TASK_FILTERS: Capability[] = ['coding', 'reasoning', 'agentic', 'writing', 'math'];
-  // A family matches a tab by capability — except 'vision', which is a modality
+  // A family matches a tab by capability - except 'vision', which is a modality
   // (the model sees images), not a "good at" capability.
   const matchesTask = (f: ModelFamily, task: 'all' | Capability | 'vision') =>
     task === 'all' ? true
@@ -1289,7 +1290,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
 
   // Split into what this machine can run vs. what needs more memory. The latter
   // is grouped under a collapsible divider (in-place), not just greyed at the
-  // bottom — so the action and its effect sit in the same spot.
+  // bottom - so the action and its effect sit in the same spot.
   const runnableFamilies = visibleFamilies.filter(f => isFamilyRunnable(f, store.catalogModes));
   const tooBigFamilies = visibleFamilies.filter(f => !isFamilyRunnable(f, store.catalogModes));
 
@@ -1297,7 +1298,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
   /** Render a single model card */
   // Variant picker writes through data-attrs + closest(), NOT an inline closure:
   // Qwik's `$()` closures inside `.map()` don't reliably capture loop variables
-  // (here NESTED maps — family × variant), so an inline handler could write the
+  // (here NESTED maps - family × variant), so an inline handler could write the
   // wrong/stale variant and make the card look frozen. See qwik-pitfalls.md
   // "Event handling in `.map()` loops".
   const selectVariant$ = $((e: Event) => {
@@ -1325,7 +1326,46 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     const isDownloading = !!download;
     const projector = projectorFor(family, selectedVariant);
     const isSuitable = isVariantSuitable(selectedVariant, store.catalogModes);
-    const runMode = getRunMode(selectedVariant, store.catalogModes);
+    // One vocabulary with the downloaded rows: the badge is the grader's
+    // fit in the rows' four words, never a second set of names for the
+    // same machine.
+    const catalogFit = getCatalogFit(selectedVariant, store.catalogModes);
+    const onCard = !!(totalVRAM && totalVRAM > 0);
+    const unifiedMemory = (systemInfo?.gpu_name || '').toLowerCase().includes('apple');
+    const fitBadge = catalogFit
+      ? {
+          green: {
+            label: 'Full speed',
+            cls: 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400',
+            tip: onCard
+              ? 'Fits entirely in your graphics card’s memory.'
+              : unifiedMemory
+                ? 'Runs in your Mac’s shared memory at full speed.'
+                : 'Fits comfortably in main memory.',
+          },
+          split: {
+            label: 'GPU + RAM',
+            cls: 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400',
+            tip: "Bigger than your graphics card's memory. The model's less-used parts stay in main memory while the rest runs on the card - fast for its size.",
+          },
+          yellow: {
+            label: 'Runs slower',
+            cls: 'bg-amber-500/10 border-amber-500/25 text-amber-400',
+            tip: systemInfo?.gpu_integrated
+              ? 'Your graphics share system memory, so this model runs on the processor - slower on long answers.'
+              : 'Tight in main memory - it runs on the processor, slower on long answers.',
+          },
+          red: {
+            label: 'Too large',
+            cls: 'bg-red-500/10 border-red-500/25 text-red-400',
+            tip: onCard
+              ? (isMoeVariant(selectedVariant)
+                ? "This mixture-of-experts model's file does not fit this machine's main memory."
+                : 'A dense model has to fit in graphics memory to run well; unlike a mixture-of-experts model it has no part that can stay in main memory.')
+              : 'Needs more main memory than this machine has.',
+          },
+        }[catalogFit]
+      : null;
     const isExpanded = store.expandedDetails[family.id];
 
     // "Best for you" only shows when the selected variant matches the recommended one
@@ -1343,45 +1383,17 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
         {/* One consistent vertical rhythm for the whole card body (space-y) instead of
             ad-hoc per-element margins, which drifted and looked squished. */}
         <div class="p-5 space-y-3.5">
-          {/* Header: name on its own line, badges wrapping on a row below — so a long
+          {/* Header: name on its own line, badges wrapping on a row below - so a long
               name never squishes the badges or pushes them off the card. */}
           <div>
             <h3 class="text-lg font-semibold text-[var(--text-primary)] leading-tight">{family.name}</h3>
             <div class="flex flex-wrap gap-1 mt-2.5">
-              {!isSuitable && (
+              {fitBadge && (
                 <span
-                  title={totalVRAM && totalVRAM > 0
-                    ? (isMoeVariant(selectedVariant)
-                      ? "This mixture-of-experts model's file does not fit this machine's main memory."
-                      : "A dense model has to fit in graphics memory to run well; unlike a mixture-of-experts model it has no part that can stay in main memory.")
-                    : 'Needs more main memory than this machine has.'}
-                  class="px-2 py-0.5 bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/40 text-[10px] rounded-full font-semibold whitespace-nowrap">
-                  {totalVRAM && totalVRAM > 0
-                    ? "Too big for your GPU"
-                    : systemInfo?.gpu_integrated
-                      ? "Too big for your memory"
-                      : `Needs ${selectedVariant.minRAM}GB RAM`}
-                </span>
-              )}
-              {isSuitable && runMode === 'gpu' && (
-                <span class="px-2 py-0.5 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/40 text-[10px] rounded-full font-semibold whitespace-nowrap">
-                  Your GPU
-                </span>
-              )}
-              {isSuitable && runMode === 'moe-split' && (
-                <span
-                  title="Bigger than your graphics card's memory. The model's less-used parts stay in main memory while the rest runs on the card - fast for its size."
-                  class="px-2 py-0.5 bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/40 text-[10px] rounded-full font-semibold whitespace-nowrap"
+                  title={fitBadge.tip}
+                  class={`px-2 py-0.5 border text-[10px] rounded-full font-semibold whitespace-nowrap ${fitBadge.cls}`}
                 >
-                  GPU + RAM
-                </span>
-              )}
-              {isSuitable && runMode === 'cpu' && systemInfo?.gpu_integrated && (
-                <span
-                  title="Your graphics share system memory, so this model runs on the processor"
-                  class="px-2 py-0.5 bg-sky-500/15 text-sky-700 dark:text-sky-400 border border-sky-500/40 text-[10px] rounded-full font-semibold whitespace-nowrap"
-                >
-                  Integrated graphics
+                  {fitBadge.label}
                 </span>
               )}
               {isBestPick && (
@@ -1413,7 +1425,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
             </div>
           </div>
 
-          {/* Description — full, not clamped (curated + short; truncating them read as broken).
+          {/* Description - full, not clamped (curated + short; truncating them read as broken).
               min-h keeps cards in a row roughly aligned when descriptions differ in length. */}
           <p class="text-sm text-[var(--text-secondary)] min-h-[2.5rem]">
             {family.description}
@@ -1478,7 +1490,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                                 }`}
                               >
                                 {variant.parameterCount} ({variant.size}GB)
-                                {!variantSuitable && ' — needs more RAM'}
+                                {!variantSuitable && ' - needs more RAM'}
                               </span>
                               {selectedVariant.filename === variant.filename && (
                                 <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-[var(--text-link)]">
@@ -1496,7 +1508,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
             </div>
           )}
 
-          {/* Capability chips — what it's good at (also the future routing signal) */}
+          {/* Capability chips - what it's good at (also the future routing signal) */}
           <div class="flex flex-wrap gap-1">
             {family.capabilities.slice(0, 4).map((cap) => (
               <span
@@ -1516,7 +1528,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
             )}
           </div>
 
-          {/* Expandable technical details — button + panel grouped so they stay tight
+          {/* Expandable technical details - button + panel grouped so they stay tight
               (one rhythm unit; the panel hugs its toggle rather than floating away). */}
           <div>
           <button
@@ -1636,7 +1648,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
 
   return (
     <div class="max-w-7xl mx-auto px-6">
-      {/* Help tip — privacy (verifiable, not trust-based) */}
+      {/* Help tip - privacy (verifiable, not trust-based) */}
       <Callout
         intent="success"
         title="Private, and verifiable"
@@ -1645,7 +1657,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
         class="mb-6"
       >
         Offline models run entirely on your device, and Your Own AI is open
-        source — so this isn't "trust us." Anyone can read the code and confirm
+        source - so this isn't "trust us." Anyone can read the code and confirm
         your conversations never leave your computer. No account or internet
         needed once a model's downloaded.
       </Callout>
@@ -2033,7 +2045,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
         </div>
       )}
 
-      {/* Model Catalog — tab bar + filtered grid */}
+      {/* Model Catalog - tab bar + filtered grid */}
       <div class="mb-8">
         <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela mb-4 border-b border-[var(--border-subtle)] pb-2">
           Available Offline Models
@@ -2072,7 +2084,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
           })}
           </div>
 
-          {/* Sort — custom dropdown (a native <select> popup is GTK-themed on
+          {/* Sort - custom dropdown (a native <select> popup is GTK-themed on
               webkit and ignores our light/dark vars); right-aligned in the row. */}
           <div class="flex items-center gap-2 shrink-0">
             <label class="text-sm text-[var(--text-muted)] whitespace-nowrap">Sort</label>
@@ -2110,7 +2122,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
           </div>
         </div>
 
-        {/* Model grid — what you can run, then a collapsible "needs more memory" group */}
+        {/* Model grid - what you can run, then a collapsible "needs more memory" group */}
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
           {runnableFamilies.map((family) => (
             <div class="contents" key={`${family.id}:${store.selectedVariants[family.id]?.filename ?? ''}`}>
@@ -2129,7 +2141,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                 <LuChevronDown class={`w-3.5 h-3.5 transition-transform ${store.showTooBig ? '' : '-rotate-90'}`} />
                 {store.showTooBig
                   ? 'Needs more memory than this machine has'
-                  : `${tooBigFamilies.length} model${tooBigFamilies.length === 1 ? '' : 's'} need more memory — show`}
+                  : `${tooBigFamilies.length} model${tooBigFamilies.length === 1 ? '' : 's'} need more memory - show`}
               </span>
               <div class="h-px flex-1 bg-[var(--border-subtle)]" />
             </button>

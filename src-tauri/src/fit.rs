@@ -1,4 +1,4 @@
-//! VRAM/RAM fit for downloaded models — does a model fit, and how well?
+//! VRAM/RAM fit for downloaded models - does a model fit, and how well?
 //!
 //! Uses the GGUF header (exact layers / GQA kv-heads / head_dim / quant) for the
 //! weights + KV-cache size, and the **free** VRAM (after the webview's usage)
@@ -55,7 +55,7 @@ pub struct ModelFit {
     pub need_gb: f64,
     pub weights_gb: f64,
     pub kv_gb: f64,
-    /// Header-derived (exact) — replaces the often-"Unknown" filename guesses.
+    /// Header-derived (exact) - replaces the often-"Unknown" filename guesses.
     pub quant: String,
     pub params_b: f64, // approx, from size_bytes / effective-bpw
     pub n_layers: u64,
@@ -702,7 +702,7 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
             continue; // skip unreadable files
         };
         if meta.is_embedding() {
-            continue; // bge etc. — not a chat model; never a routing candidate
+            continue; // bge etc. - not a chat model; never a routing candidate
         }
         // Grade at the context the server would actually start this model
         // with - per model, since choose_ctx is VRAM- and size-aware.
@@ -711,7 +711,7 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
         let ctx = pinned_or_chosen_ctx(app, &m.name, &meta, m.size_bytes, total_ram_gb, free_vram_gb);
         let (weights_gb, kv_gb, mut need_gb) = model_need(&meta, m.size_bytes, ctx);
         // A model with a downloaded projector (mmproj) auto-loads it for vision, so
-        // its ~1 GB lives in VRAM whenever this model runs — count it toward fit.
+        // its ~1 GB lives in VRAM whenever this model runs - count it toward fit.
         if let Some(proj) = crate::llm::find_projector_for(&dir, &m.name) {
             if let Ok(md) = std::fs::metadata(&proj) {
                 need_gb += md.len() as f64 / GIB;

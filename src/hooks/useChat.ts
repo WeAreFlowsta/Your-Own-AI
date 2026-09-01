@@ -5,7 +5,7 @@
  * Handles streaming responses and personality system prompts.
  *
  * In Qwik, state is held in a useStore and actions are $() QRLs.
- * flushSync is not needed — Qwik signals auto-update the DOM.
+ * flushSync is not needed - Qwik signals auto-update the DOM.
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -88,8 +88,8 @@ async function buildImageAttachmentInfo(dataUrl: string, index: number) {
 }
 
 // Does a follow-up (with no image attached this turn) actually refer back to an
-// earlier image? Deliberately specific — image nouns, visual attributes, and
-// strong visual verbs — so generic follow-ups ("tell me more", "summarise that")
+// earlier image? Deliberately specific - image nouns, visual attributes, and
+// strong visual verbs - so generic follow-ups ("tell me more", "summarise that")
 // fall through to the preferred text model (which still has the assistant's earlier
 // description in context). Erring toward keeping vision is the mild failure; sending
 // a "look at the corner" question to a blind model is the jarring one.
@@ -198,7 +198,7 @@ export function buildSystemPrompt(
   hasImages: boolean = false
 ): string {
   // Assemble the shared mission-core + the AI's CURRENT persona template, looked
-  // up live by personality rather than a copy baked at creation — so changing the
+  // up live by personality rather than a copy baked at creation - so changing the
   // personality (or us improving a persona) applies immediately, with no
   // re-create. Core first so the character is the most recent thing before the
   // reply. If the archetype is somehow missing, fall back to the stored prompt,
@@ -236,13 +236,13 @@ export function buildSystemPrompt(
 
   // Vision: small models reflexively disclaim ("I'm a text-only language model, I
   // can't see images") even when an image is attached through their vision
-  // capability — then describe it anyway. This counters that false disclaimer.
+  // capability - then describe it anyway. This counters that false disclaimer.
   if (hasImages) {
     systemPrompt +=
-      "\n\nThe user has attached one or more images to this message, and you can see them directly through your vision capability. Look at the image and answer about what is actually in it. Never say that you cannot see images or that you are a text-only model — you can see this one.";
+      "\n\nThe user has attached one or more images to this message, and you can see them directly through your vision capability. Look at the image and answer about what is actually in it. Never say that you cannot see images or that you are a text-only model - you can see this one.";
   }
 
-  // Per-turn mode block (report ceremony / code-first) — decoupled from length.
+  // Per-turn mode block (report ceremony / code-first) - decoupled from length.
   systemPrompt += getModePrompt(turnMode);
 
   const useEmojis = ai.aiConfig.useEmojis ?? false;
@@ -260,7 +260,7 @@ export interface UseChatState {
   messages: Message[];
   isLoading: boolean;
   error: string | null;
-  /** A turn parked because the user must resolve something before it sends —
+  /** A turn parked because the user must resolve something before it sends  - 
    *  pick/download a vision model, or consent to sending an attachment to the
    *  cloud. The inline card (chat route) resends it once resolved. */
   /** A resend after the app grew the context (context_grown) must not
@@ -362,7 +362,7 @@ export function useChat(props: UseChatProps) {
       const disposition = selectedAi.aiConfig.lengthDisposition || "conversational";
       const actionMode = getTurnModeFromAction(chatAction);
       // Provisional mode for the optimistic bubble below (shown the instant Enter is
-      // pressed). The classifier refines it AFTER the bubble is on screen — so Enter
+      // pressed). The classifier refines it AFTER the bubble is on screen - so Enter
       // never waits on classification.
       const provisionalMode: TurnMode =
         actionMode || selectedAi.aiConfig.defaultMode || "chat";
@@ -370,7 +370,7 @@ export function useChat(props: UseChatProps) {
       // Vision is needed if THIS turn has an image, or a recent turn had one AND
       // this message actually refers back to it. Without the reference check, the
       // whole conversation would stick on the (often weaker) vision model once any
-      // image appeared — so a plain "now write me code" follow-up wrongly skipped
+      // image appeared - so a plain "now write me code" follow-up wrongly skipped
       // the user's preferred text model. The image stays in the transcript and the
       // assistant's earlier description stays in context, so generic follow-ups are
       // still answered well by the text model.
@@ -451,7 +451,7 @@ export function useChat(props: UseChatProps) {
       });
 
       // Optimistic UI: show the user's message and a pending assistant bubble
-      // IMMEDIATELY — before routing or any model load — so pressing Enter flips
+      // IMMEDIATELY - before routing or any model load - so pressing Enter flips
       // straight to the conversation view instead of sitting on the empty hero
       // for the few seconds it takes to resolve/load the model. The existing
       // model-loading indicator and the bubble's "thinking" state cover the wait.
@@ -499,7 +499,7 @@ export function useChat(props: UseChatProps) {
         queryVec: queryVecPromise,
       }).catch(() => "");
 
-      // Phase D: NOW that the bubble + action bar are on screen, classify the turn —
+      // Phase D: NOW that the bubble + action bar are on screen, classify the turn  - 
       // the classify call no longer makes Enter feel laggy (it's absorbed into the
       // loading state). With no explicit sparkle, it can upgrade chat → report/code
       // from the message (keyword-gated so casual chat skips it; never throws).
@@ -540,7 +540,7 @@ export function useChat(props: UseChatProps) {
       };
 
       // Resolve the model for THIS question (auto:* → concrete) via the backend
-      // router — the single source of truth.
+      // router - the single source of truth.
       // A modelOverride (the user accepted the "use a vision model for this image"
       // card) pins this turn to that model and skips routing.
       let preferredModel = modelOverride ?? selectedAi.aiConfig.model ?? null;
@@ -549,14 +549,14 @@ export function useChat(props: UseChatProps) {
       let routedReason: string | undefined;
       let routedTask: string | undefined;
       // Auto modes may transparently switch an image turn to a vision model; a
-      // pinned model is left as-is (we ask before switching — see vision block).
+      // pinned model is left as-is (we ask before switching - see vision block).
       // An "auto:" override is a request to ROUTE this turn (the banner's
       // "let Auto choose"), not a file to load.
       const isAutoMode = !!preferredModel?.startsWith("auto:");
 
       // Vision-aware routing: for an image turn in an Auto mode, vision capability
       // takes priority over the freshness route. Prefer a ready OFFLINE vision
-      // model — private, silent, free. If none and the AI is Online+Offline (they
+      // model - private, silent, free. If none and the AI is Online+Offline (they
       // opted into cloud), route to a vision-capable ONLINE model (consent is asked
       // below). Offline-only with no offline vision falls through to the freshness
       // route, which lands on the download card.
@@ -594,10 +594,10 @@ export function useChat(props: UseChatProps) {
               const visionOnline = onlineModels.find((m) => m.vision === true);
               if (visionOnline) {
                 preferredModel = visionOnline.id; // "online:…" → consent asked below
-                console.log(`[Vision] no offline vision — routing image to online ${visionOnline.id}`);
+                console.log(`[Vision] no offline vision - routing image to online ${visionOnline.id}`);
               }
             } else if (medicalImage) {
-              console.log("[Vision] health image, no offline vision — staying local (download card)");
+              console.log("[Vision] health image, no offline vision - staying local (download card)");
             }
           }
         } catch (e) {
@@ -633,19 +633,19 @@ export function useChat(props: UseChatProps) {
         if (mode !== requestedMode) {
           console.log("[Router] attachment without online consent - routing offline");
         }
-        // Eagerness (online FRESHNESS threshold) — Settings → Routing.
+        // Eagerness (online FRESHNESS threshold) - Settings → Routing.
         const eagerness =
           localStorage.getItem("smartRoutingEagerness") || "balanced";
-        // Offline model-pick lean (speed / balanced / quality) — Settings → Routing.
+        // Offline model-pick lean (speed / balanced / quality) - Settings → Routing.
         const lean = localStorage.getItem("routingOfflineLean") || "balanced";
-        // Per-slot online model choices — Settings → Routing ("" / absent =
+        // Per-slot online model choices - Settings → Routing ("" / absent =
         // the router's recommended default for that slot).
         const onlineFresh = localStorage.getItem("routingOnlineFresh") || undefined;
         const onlineHardCode = localStorage.getItem("routingOnlineHardCode") || undefined;
         const onlineHardGeneral = localStorage.getItem("routingOnlineHardGeneral") || undefined;
         // Routing task: the report/code classifier's CODE signal is a free base
         // hint; the dedicated routing-task classifier upgrades it ONLY when a
-        // specialist model is installed (otherwise it's gated off — no cost).
+        // specialist model is installed (otherwise it's gated off - no cost).
         // See ROUTING_TASK_COMPLEXITY.md.
         // Keyword hint only - the classifier is still in flight (parallel).
         // The routing-task classifier upgrades/corrects this where it matters.
@@ -736,7 +736,7 @@ export function useChat(props: UseChatProps) {
       }
 
       // Switch model if needed (online models live on the proxy, external
-      // models on the user's own server — nothing to load locally either way).
+      // models on the user's own server - nothing to load locally either way).
       const isOnlineModel = !!preferredModel?.startsWith("online:");
       const isExternalModel = !!preferredModel?.startsWith("external:");
       if (!isOnlineModel && !isExternalModel && preferredModel && preferredModel !== currentModel) {
@@ -805,13 +805,13 @@ export function useChat(props: UseChatProps) {
             abortWith(
               tuned
                 ? `${selectedAi.label}'s model didn't fit - its Fine-tune settings ask for more graphics memory than this machine has. On the Offline Models page, open Fine-tune on that model and set the rows back to Auto, then try again.`
-                : `${selectedAi.label}'s model is too large for your graphics card. Pick a smaller model on the Offline Models page (look for the "Your GPU" badge).`
+                : `${selectedAi.label}'s model is too large for your graphics card. Pick a smaller model on the Offline Models page (look for the "Full speed" badge).`
             );
           } else if (errorMessage.includes("MODEL_LOAD_TIMEOUT")) {
             props.currentModel.value = preferredModel;
             props.modelTooBig.value = true;
             abortWith(
-              `${selectedAi.label}'s model took too long to load on this hardware, so the attempt was stopped. It won't be retried this session - a smaller model will load quickly (look for the "Your GPU" badge on the Offline Models page).`
+              `${selectedAi.label}'s model took too long to load on this hardware, so the attempt was stopped. It won't be retried this session - a smaller model will load quickly (look for the "Full speed" badge on the Offline Models page).`
             );
           } else if (errorMessage.includes("MODEL_FILE_UNREADABLE")) {
             props.currentModel.value = preferredModel;
@@ -836,7 +836,7 @@ export function useChat(props: UseChatProps) {
       }
 
       // Vision: an image turn needs the server to have a projector loaded.
-      //  1. Reload the resolved model — pairs its own projector if it has one.
+      //  1. Reload the resolved model - pairs its own projector if it has one.
       //  2. Still can't see + Auto mode → transparently switch this turn to a
       //     downloaded vision model (Auto modes just do it).
       //  3. Still can't see → can't proceed (a pinned non-vision model, or no
@@ -852,7 +852,7 @@ export function useChat(props: UseChatProps) {
         try {
           visionReady = await invoke<boolean>("is_vision_ready");
           console.log(
-            `[Vision] image turn — model=${preferredModel} auto=${isAutoMode} ready=${visionReady}`,
+            `[Vision] image turn - model=${preferredModel} auto=${isAutoMode} ready=${visionReady}`,
           );
           // Turn-owned loads announce themselves on the bubble (the action
           // bar is turn-scoped and silent without a statusText).
@@ -908,7 +908,7 @@ export function useChat(props: UseChatProps) {
             );
             visionModel = pick?.model ?? null;
           } catch {
-            /* old backend / no command — treat as none */
+            /* old backend / no command - treat as none */
           }
           state.pendingTurn = {
             userInput,
@@ -932,7 +932,7 @@ export function useChat(props: UseChatProps) {
       // Online vision: don't send an image to an online model that can't see it
       // (the grok-search 422). If it isn't vision-capable per the proxy catalog,
       // offer the offline vision path (or a download) via the same card. Checked
-      // before consent — no point asking to send an image that won't be used.
+      // before consent - no point asking to send an image that won't be used.
       if (needsVision && isOnlineModel && preferredModel) {
         try {
           const { invoke } = await import("@tauri-apps/api/core");
@@ -1144,7 +1144,7 @@ export function useChat(props: UseChatProps) {
             "If the person asks for something one of these tools would do - opening a web page, controlling a program or a device - say plainly that it needs Projects installed, and do not pretend to have done it.";
         }
 
-        // Generous ceiling — the prompt shapes the actual length; this just prevents
+        // Generous ceiling - the prompt shapes the actual length; this just prevents
         // truncation. Report mode gets extra headroom because the <think> pass + a
         // comprehensive report can crowd the base ceiling. Capable/online models use
         // it; local models are capped to their context window by the server anyway.
@@ -1348,7 +1348,7 @@ export function useChat(props: UseChatProps) {
             ? extractThinkingFromContent(fullResponse)
             : { thinking: "", contentWithoutThinking: fullResponse };
 
-          // Always save thinking — models like Qwen 3.5 produce <think> even in chat mode
+          // Always save thinking - models like Qwen 3.5 produce <think> even in chat mode
           state.messages = state.messages.map((m) =>
             m.id === assistantId
               ? {
@@ -1473,7 +1473,7 @@ export function useChat(props: UseChatProps) {
         );
 
         // Memory: learn durable user facts from this turn. Fire this BEFORE and
-        // INDEPENDENTLY of the Holochain transcript write below — memory must
+        // INDEPENDENTLY of the Holochain transcript write below - memory must
         // work even when transcripts aren't recording (agent not yet
         // provisioned, conductor still warming), and starting it early maximizes
         // the chance it finishes before the user closes the app.
@@ -1487,7 +1487,7 @@ export function useChat(props: UseChatProps) {
         // link each learned fact back to its conversation. But the hash comes
         // from the Holochain write below, which runs in parallel and may be slow
         // or fail. So hand extraction a PROMISE for the hash instead of blocking
-        // on it — extraction spends seconds generating before it saves, by which
+        // on it - extraction spends seconds generating before it saves, by which
         // time the write has resolved this (or settled it to null if Holochain
         // is down, degrading gracefully to an unlinked fact).
         let settleUserMsgHash: (h: string | null) => void = () => {};
@@ -1498,9 +1498,9 @@ export function useChat(props: UseChatProps) {
         const localCurrent = props.currentModel.value;
         // Extraction worker (see ON_DEVICE_COMPONENTS.md): the on-device utility
         // model is preferred inside extractAndStoreFacts; this is the FALLBACK
-        // for when it isn't installed — a warm offline model, or the online model
+        // for when it isn't installed - a warm offline model, or the online model
         // for an online-capable AI (the turn already went online, so no new
-        // exposure). Offline / offline-auto AIs never get an online fallback —
+        // exposure). Offline / offline-auto AIs never get an online fallback  - 
         // the hard privacy wall.
         const warmOffline =
           !isOnlineModel && !isExternalModel && preferredModel
@@ -1511,7 +1511,7 @@ export function useChat(props: UseChatProps) {
               ? localCurrent
               : null;
         // Remote turns (proxy or the user's own external server) may extract
-        // via the same remote model — the content already went there.
+        // via the same remote model - the content already went there.
         let extractionFallback =
           warmOffline ?? (isOnlineModel || isExternalModel ? preferredModel : null);
         // gpt-oss speaks its own channel format and fights the extraction
@@ -1537,7 +1537,7 @@ export function useChat(props: UseChatProps) {
           });
         } else {
           console.log(
-            `[Memory] Extraction skipped — ${!extractionFallback ? "no model" : "no personal fact in message"}`,
+            `[Memory] Extraction skipped - ${!extractionFallback ? "no model" : "no personal fact in message"}`,
           );
         }
 
@@ -1575,7 +1575,7 @@ export function useChat(props: UseChatProps) {
 
             // Source-grounding: anchor the answer's factual claims to the attached
             // document (verbatim quote + char span) and link any attached image,
-            // recorded on the ASSISTANT message's provenance — the verifiable chain
+            // recorded on the ASSISTANT message's provenance - the verifiable chain
             // claim → quote+offset → doc SHA-256 → DHT. Local + best-effort.
             const grounded: GroundedSource[] = [];
             for (const img of imageInfos ?? []) {
@@ -1590,7 +1590,7 @@ export function useChat(props: UseChatProps) {
               const autoGround =
                 localStorage.getItem("groundDocumentsAuto") === "true";
               if (autoGround && warmOffline) {
-                // Flag "verifying sources…" — the doc-grounding pass is a full
+                // Flag "verifying sources…" - the doc-grounding pass is a full
                 // local inference and can take many seconds on modest hardware.
                 state.messages = state.messages.map((m) =>
                   m.id === assistantId ? { ...m, groundingPending: true } : m,
@@ -1633,7 +1633,7 @@ export function useChat(props: UseChatProps) {
                 : m,
             );
 
-            // Record assistant message — with full provenance: sources, the
+            // Record assistant message - with full provenance: sources, the
             // exact system prompt it ran under, mode, and the runtime/build.
             const assistantMsgHash = await recordMessage(
               holochainId,
@@ -1656,7 +1656,7 @@ export function useChat(props: UseChatProps) {
                 grounded: grounded.length > 0 ? grounded : undefined,
                 runtime: {
                   // "online" in the receipt means the reply was generated
-                  // outside this app — the proxy OR the user's own external
+                  // outside this app - the proxy OR the user's own external
                   // server both qualify.
                   online: isOnlineModel || isExternalModel,
                   app_version: appVersion,
@@ -1837,7 +1837,7 @@ export function useChat(props: UseChatProps) {
             } catch { /* no tuning store */ }
             state.error = tunedHere
               ? `This model couldn't be loaded - its Fine-tune settings ask for more memory than this machine has. On the Offline Models page, open Fine-tune on it and set the rows back to Auto, then try again.`
-              : `This model couldn't be loaded — it's likely too large for your computer's memory. Try a smaller model from the Offline Models page.`;
+              : `This model couldn't be loaded - it's likely too large for your computer's memory. Try a smaller model from the Offline Models page (look for the "Full speed" badge).`;
             state.messages = state.messages.filter(
               (m) => m.id !== assistantId
             );

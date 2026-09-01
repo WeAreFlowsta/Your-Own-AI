@@ -13,7 +13,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import type { LocalModel } from "../types";
-import { catalogVariantsForGrading, type CatalogModes, type RunMode } from "../data/recommended-models";
+import { catalogVariantsForGrading, type CatalogFit, type CatalogModes, type RunMode } from "../data/recommended-models";
 
 /** green = fits fully on the GPU; split = GPU + RAM (MoE experts in main
  *  memory, fast for its size); yellow = runs slower (CPU-only, tight RAM);
@@ -59,10 +59,10 @@ export async function refreshFits(): Promise<FitMap> {
 /** The catalog graded by the app's one grader (Rust `grade_catalog`):
  *  where every not-yet-downloaded variant would run on THIS machine. */
 export async function refreshCatalogModes(): Promise<CatalogModes> {
-  const grades = await invoke<{ key: string; mode: RunMode }[]>("grade_catalog", {
+  const grades = await invoke<{ key: string; mode: RunMode; fit: CatalogFit }[]>("grade_catalog", {
     variants: catalogVariantsForGrading(),
   });
-  catalogModesCache = Object.fromEntries(grades.map((g) => [g.key, g.mode]));
+  catalogModesCache = Object.fromEntries(grades.map((g) => [g.key, { mode: g.mode, fit: g.fit }]));
   return catalogModesCache;
 }
 

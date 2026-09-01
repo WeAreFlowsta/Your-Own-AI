@@ -82,20 +82,20 @@ pub struct LLMState {
     /// picked 3s into a Qwythos load for "why is the sky blue").
     pub loading_model: Mutex<Option<String>>,
     /// Multimodal projector (mmproj) filename the server was started with, if the
-    /// current model had a paired projector downloaded — i.e. the server can see
+    /// current model had a paired projector downloaded - i.e. the server can see
     /// images this run. `None` = text-only.
     pub current_mmproj: Mutex<Option<String>>,
     pub server_process: Mutex<Option<CommandChild>>, // llama-server process
     pub is_server_running: Mutex<bool>,
     /// Which engine backend the RUNNING chat server was spawned with
-    /// ("cuda" | "bundled") — the Engines card reports the truth of what's
+    /// ("cuda" | "bundled") - the Engines card reports the truth of what's
     /// serving right now, not just what's installed.
     pub spawned_backend: Mutex<Option<String>>,
     /// Cancellation token for the active streaming request.
     /// Set to true to abort the current stream_chat_completion.
     pub cancel_stream: std::sync::atomic::AtomicBool,
     /// Second llama-server, run in `--embedding` mode on a separate port for
-    /// memory retrieval. Same binary as the chat server (no extra download) —
+    /// memory retrieval. Same binary as the chat server (no extra download)  - 
     /// just a second process, started on demand. Runs CPU-only so it never
     /// contends with the chat model for VRAM.
     pub embed_process: Mutex<Option<CommandChild>>,
@@ -106,7 +106,7 @@ pub struct LLMState {
     pub embed_startup: Mutex<()>,
     /// Third llama-server: a small GENERATIVE utility model on its own port, run
     /// CPU-only for on-device fact extraction + report/code classification. An
-    /// OPTIONAL component (Settings) — when absent those features ride the
+    /// OPTIONAL component (Settings) - when absent those features ride the
     /// chat/online model. Same bundled binary, separate process, never contends
     /// with the chat model for VRAM.
     pub util_process: Mutex<Option<CommandChild>>,
@@ -478,16 +478,16 @@ pub async fn kill_port_8080() -> Result<String, String> {
 
 /// A GPU as reported by `llama-server --list-devices`.
 pub(crate) struct GpuDevice {
-    pub(crate) id: String,        // e.g. "Vulkan1" / "CUDA0" — what the --device flag wants
+    pub(crate) id: String,        // e.g. "Vulkan1" / "CUDA0" - what the --device flag wants
     pub(crate) name: String,
     pub(crate) free_mib: u64,
-    pub(crate) integrated: bool,  // uma: 1 (shares system RAM — iGPU / Apple unified)
+    pub(crate) integrated: bool,  // uma: 1 (shares system RAM - iGPU / Apple unified)
 }
 
 /// Command for the CHAT-server binary, honoring the active engine backend:
 /// the downloaded CUDA build when installed and not laddered out by GPU
 /// safe mode, else the bundled sidecar. The embedding and utility servers
-/// deliberately do NOT use this — they are CPU-only and always bundled.
+/// deliberately do NOT use this - they are CPU-only and always bundled.
 ///
 /// The working directory is the MODELS dir and model/projector args must be
 /// bare filenames: llama-server reads argv through the ANSI code page on
@@ -554,7 +554,7 @@ fn bundled_llama_command(
 /// older discrete card with a Vulkan `ErrorDeviceLost` mid-compute.
 fn is_integrated_gpu(name: &str) -> bool {
     let n = name.to_lowercase();
-    // Software rasterisers — never offload to these.
+    // Software rasterisers - never offload to these.
     if n.contains("llvmpipe") || n.contains("swiftshader") || n.contains("software") {
         return true;
     }
@@ -580,7 +580,7 @@ fn is_integrated_gpu(name: &str) -> bool {
 /// (the prefix matches the backend the queried binary was built with). The
 /// trailing `(NNNNN MiB, NNNN MiB free)` is the memory group; everything
 /// before it (inner parens like `(R)` / `(CFL GT2)` included) is the name.
-/// ⚠ Re-verify this parse on every engine bump — the format is not stable
+/// ⚠ Re-verify this parse on every engine bump - the format is not stable
 /// (b9637 dropped the `uma:` flag this parser once used).
 pub(crate) fn parse_gpu_devices(text: &str) -> Vec<GpuDevice> {
     let mut devices = Vec::new();
@@ -624,12 +624,12 @@ pub(crate) fn parse_gpu_devices(text: &str) -> Vec<GpuDevice> {
 
 /// Decide which GPU(s) llama-server should offload to, returning the extra CLI
 /// args to append. **Policy (Phase 2 device selection):**
-/// - If one or more DISCRETE GPUs exist, use ONLY those — exclude integrated
+/// - If one or more DISCRETE GPUs exist, use ONLY those - exclude integrated
 ///   iGPUs. (llama.cpp's default `--split-mode layer` otherwise spreads the
 ///   model across every Vulkan device, including a slow iGPU that often reports
 ///   *more* memory, which is a net performance loss.) With 2+ discrete GPUs we
 ///   add `--tensor-split` weighted by free VRAM to pool them.
-/// - Otherwise — integrated-only, a single Metal GPU on macOS, or no GPU — we
+/// - Otherwise - integrated-only, a single Metal GPU on macOS, or no GPU - we
 ///   return no args and let llama.cpp's default behaviour stand.
 /// gpt-oss speaks OpenAI's channel ("harmony") format: its reasoning is the
 /// `analysis` channel, closed by `<|end|>`, and the visible answer follows in
@@ -756,14 +756,14 @@ pub(crate) async fn select_gpu_device_args(app_handle: &AppHandle) -> Vec<String
     // system under GPU load; `-ngl 0` keeps every layer on the CPU. Slower, but
     // it takes the GPU out of the loop entirely (no Vulkan enumeration either).
     if std::env::var("FLOWSTA_CPU_ONLY").map(|v| v != "0").unwrap_or(false) {
-        log::info!("[LLM] FLOWSTA_CPU_ONLY set — forcing CPU inference (-ngl 0)");
+        log::info!("[LLM] FLOWSTA_CPU_ONLY set - forcing CPU inference (-ngl 0)");
         return vec!["-ngl".to_string(), "0".to_string()];
     }
 
     // GPU crash-loop safety net: if recent GPU runs hard-crashed the system
     // (e.g. an NVIDIA+Wayland Vulkan hang), fall back to CPU automatically.
     if !crate::gpu_safety::gpu_allowed(app_handle) {
-        log::warn!("[LLM] GPU safe mode active — running on CPU (-ngl 0)");
+        log::warn!("[LLM] GPU safe mode active - running on CPU (-ngl 0)");
         return vec!["-ngl".to_string(), "0".to_string()];
     }
 
@@ -772,7 +772,7 @@ pub(crate) async fn select_gpu_device_args(app_handle: &AppHandle) -> Vec<String
     // reproduces the same crash, so go straight to CPU until the user
     // retries from Settings (e.g. after a driver update).
     if let Some(reason) = crate::gpu_safety::device_unsupported(app_handle) {
-        log::warn!("[LLM] GPU marked unsupported ({reason}) — running on CPU (-ngl 0)");
+        log::warn!("[LLM] GPU marked unsupported ({reason}) - running on CPU (-ngl 0)");
         return vec!["-ngl".to_string(), "0".to_string()];
     }
 
@@ -822,7 +822,7 @@ pub(crate) async fn select_gpu_device_args(app_handle: &AppHandle) -> Vec<String
     let devices = parse_gpu_devices(&combined);
     let discrete: Vec<&GpuDevice> = devices.iter().filter(|d| !d.integrated).collect();
     if discrete.is_empty() {
-        return Vec::new(); // iGPU-only / Metal / CPU — leave the default alone
+        return Vec::new(); // iGPU-only / Metal / CPU - leave the default alone
     }
 
     let device_list = discrete
@@ -842,12 +842,12 @@ pub(crate) async fn select_gpu_device_args(app_handle: &AppHandle) -> Vec<String
         args.push(split);
     }
     let names = discrete.iter().map(|d| d.name.as_str()).collect::<Vec<_>>().join(", ");
-    log::info!("[LLM] GPU selection — using discrete only: {} ({:?})", names, args);
+    log::info!("[LLM] GPU selection - using discrete only: {} ({:?})", names, args);
     args
 }
 
 /// Free VRAM (MiB) on the discrete GPU(s) the chat server uses, from
-/// `--list-devices` — this reflects what's ACTUALLY free after the webview etc.
+/// `--list-devices` - this reflects what's ACTUALLY free after the webview etc.
 /// (unlike total heap size, which over-counts on small cards). `None` in CPU
 /// mode → caller falls back to system RAM. Cached ~20s so the router can call it
 /// per request without re-spawning the probe.
@@ -912,7 +912,7 @@ async fn compute_available_vram_mib(app_handle: &AppHandle) -> Option<u64> {
 
 /// Find the multimodal projector (mmproj) paired with a chat model, if one is
 /// downloaded. A projector pairs with a model family+variant (e.g. `gemma-4-E2B`),
-/// not a specific quant — so we match by the projector's key (its name before
+/// not a specific quant - so we match by the projector's key (its name before
 /// `-mmproj`) being a prefix of the model filename. That's variant-safe: an E2B
 /// projector never pairs with an E4B model. Returns the projector path, or None
 /// (the model then runs text-only).
@@ -947,7 +947,7 @@ pub(crate) fn find_projector_for(
     None
 }
 
-/// Whether the chat server currently has a multimodal projector loaded — i.e. it
+/// Whether the chat server currently has a multimodal projector loaded - i.e. it
 /// can accept images this run. The frontend checks this before sending an image
 /// turn; if false, it reloads the model so the projector gets paired.
 #[tauri::command]
@@ -955,7 +955,7 @@ pub async fn is_vision_ready(state: State<'_, LLMState>) -> Result<bool, String>
     Ok(state.current_mmproj.lock().await.is_some())
 }
 
-/// Find a downloaded chat model that is vision-ready — i.e. it has its mmproj
+/// Find a downloaded chat model that is vision-ready - i.e. it has its mmproj
 /// projector downloaded too. Used to transparently route an image turn to a vision
 /// model when the AI is in an Auto mode. Returns the model filename, or None.
 #[tauri::command]
@@ -1079,12 +1079,12 @@ pub async fn find_vision_model(
 
     let reason = if medical {
         if pick.to_lowercase().contains("medgemma") {
-            "a health image — kept on your device, using your medical model"
+            "a health image - kept on your device, using your medical model"
         } else {
-            "a health image — kept on your device"
+            "a health image - kept on your device"
         }
     } else {
-        "an image — using your vision model"
+        "an image - using your vision model"
     };
     Ok(Some(VisionPick {
         model: pick,
@@ -1103,7 +1103,7 @@ pub struct VisionPick {
 /**
  * Start bundled llama-server
  */
-/// Set true when the chat server (`:8080`) exits during a load — i.e. it failed to
+/// Set true when the chat server (`:8080`) exits during a load - i.e. it failed to
 /// fit (out of GPU memory) or otherwise died. `start_llama_server` watches it to
 /// turn a dead server into a clear "too large" error instead of a silent hang.
 /// The context size the chat server was last started with - the truth the
@@ -1872,8 +1872,8 @@ pub async fn start_llama_server(
         "--ctx-size".to_string(),
         ctx_size.to_string(),
         // Disable the auto-fit-to-device-memory feature (new in recent llama.cpp).
-        // When a model has to be split hard between a small GPU and CPU — common
-        // when the GPU has limited free VRAM (e.g. the webview is using some) —
+        // When a model has to be split hard between a small GPU and CPU - common
+        // when the GPU has limited free VRAM (e.g. the webview is using some)  - 
         // auto-fit can blow past GGML_SCHED_MAX_SPLIT_INPUTS and crash the server
         // (GGML_ASSERT in ggml-backend.cpp). `--fit off` uses the classic offload
         // path (what the previous engine did), which loads reliably.
@@ -1945,7 +1945,7 @@ pub async fn start_llama_server(
 
     // Offload to the GPU whenever one is present. A model that doesn't fit will FAIL
     // to load (surfaced as "too large for your graphics card" by the load-failure
-    // path) rather than crawling on the CPU — a slow CPU fallback was worse than an
+    // path) rather than crawling on the CPU - a slow CPU fallback was worse than an
     // honest stop, and small-GPU is the case we optimise for. A machine with no
     // discrete GPU gets `-ngl 0` from here and runs on the CPU (its only path).
     args.extend(select_gpu_device_args(&app_handle).await);
@@ -2063,7 +2063,7 @@ pub async fn start_llama_server(
     // build when installed, else the bundled sidecar). Clear the death-flag
     // first so the wait below reads THIS load's outcome (ready vs
     // out-of-memory), not a prior one's. Record the backend for the GPU
-    // safety ladder — a crash steps down the right rung next launch.
+    // safety ladder - a crash steps down the right rung next launch.
     let backend = crate::engine::active_backend(&app_handle);
     crate::gpu_safety::note_backend(
         &app_handle,
@@ -2154,7 +2154,7 @@ pub async fn start_llama_server(
                 }
                 tauri_plugin_shell::process::CommandEvent::Terminated(payload) => {
                     log::warn!("[llama-server] Process terminated with code: {:?}", payload.code);
-                    // A NON-ZERO exit means the server died on its own — almost always
+                    // A NON-ZERO exit means the server died on its own - almost always
                     // out of GPU memory loading a too-large model. A `None` code means
                     // WE killed it (a model swap / shutdown), which is not a failure;
                     // flagging it would make a superseded load wrongly report "too large".
@@ -2172,7 +2172,7 @@ pub async fn start_llama_server(
     // polls need it).
     drop(is_running);
 
-    // If we asked for a model, wait until it's actually serving — or until the server
+    // If we asked for a model, wait until it's actually serving - or until the server
     // dies trying (out of GPU memory on a too-large model). Surface that as a clear,
     // recognisable error rather than leaving a dead server for the next request to
     // hit. ~60s ceiling covers a slow but legitimate load.
@@ -2417,7 +2417,7 @@ async fn ensure_embedding_server(
     model_filename: &str,
 ) -> Result<(), String> {
     // Serialize startup: overlapping embed calls (e.g. recall + indexing) must
-    // not both try to start the server — that's what collided on the port.
+    // not both try to start the server - that's what collided on the port.
     let _startup = state.embed_startup.lock().await;
 
     {
@@ -2425,7 +2425,7 @@ async fn ensure_embedding_server(
         let same_model = state.embed_model.lock().await.as_deref() == Some(model_filename);
         if running && same_model {
             // Already serving (or still loading) this model. If ready, done; if
-            // still warming up, WAIT for it rather than restarting — a restart
+            // still warming up, WAIT for it rather than restarting - a restart
             // races the old process for the port. Only fall through to a real
             // restart if it never becomes ready (genuinely stuck).
             for _ in 0..60 {
@@ -2464,7 +2464,7 @@ async fn ensure_embedding_server(
     // the Vulkan backend still allocates a device compute buffer, which OOMs
     // on a card the chat model has filled - and llama-server's OOM error
     // path segfaults instead of exiting. NB: pooling + ctx are
-    // model-specific — swapping the embedding model (see EMBEDDING_MODEL)
+    // model-specific - swapping the embedding model (see EMBEDDING_MODEL)
     // may require changing these.
     let args = vec![
         // Bare filename + models-dir working directory: absolute paths under
@@ -2879,7 +2879,7 @@ fn get_gpu_info() -> (Option<String>, Option<f64>) {
     }
     unsafe { instance.destroy_instance(None) };
 
-    // Report the DISCRETE pool when present — this matches the offload
+    // Report the DISCRETE pool when present - this matches the offload
     // device-selection policy (integrated GPUs are excluded when a discrete one
     // exists), and VRAM is SUMMED so multi-GPU sizing reflects the pooled
     // capacity we actually use. Falls back to the best single device otherwise.
@@ -3069,7 +3069,7 @@ pub async fn list_local_models(
             let size_gb = size_bytes as f64 / (1024_f64.powi(3));
 
             // Quant/param labels: start from the filename, then upgrade with the
-            // GGUF header where it's better — the exact quant from `file_type`,
+            // GGUF header where it's better - the exact quant from `file_type`,
             // and `size_label` as a fallback when the filename has no numeric
             // param tag (e.g. "E2B"/"E4B" names the filename parser can't read).
             let (mut param_size, mut quant) = parse_model_info(&filename);
@@ -3111,14 +3111,14 @@ pub async fn list_local_models(
  * Parse model information from filename using regex.
  * Extracts parameter size (e.g. "3.8B", "0.8B", "27B") and quantization (e.g. "Q4_K_M", "Q5_0").
  * Examples:
- *   "Phi-4-mini-instruct-Q4_K_M.gguf"           → ("3.8B", "Q4_K_M")  — via known model lookup
+ *   "Phi-4-mini-instruct-Q4_K_M.gguf"           → ("3.8B", "Q4_K_M")  - via known model lookup
  *   "Qwen3.5-2B-Q4_K_M.gguf"                    → ("2B", "Q4_K_M")
  *   "DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf"     → ("8B", "Q4_K_M")
  */
 fn parse_model_info(filename: &str) -> (String, String) {
     let lower = filename.to_lowercase();
 
-    // Extract parameter size — look for patterns like "0.8b", "3.8b", "27b"
+    // Extract parameter size - look for patterns like "0.8b", "3.8b", "27b"
     // Use regex-like matching: find a number (with optional decimal) followed by 'b'
     // but NOT preceded by another letter (to avoid matching "q4_k_m" as "4b")
     let param_size = {
@@ -3149,7 +3149,7 @@ fn parse_model_info(filename: &str) -> (String, String) {
         found
     };
 
-    // Extract quantization — look for Q followed by a number and optional suffix
+    // Extract quantization - look for Q followed by a number and optional suffix
     let quant = {
         let mut found = String::from("Unknown");
         // Common patterns: Q4_K_M, Q4_K_S, Q5_0, Q6_K, Q8_0, etc.
@@ -3175,7 +3175,7 @@ fn parse_model_info(filename: &str) -> (String, String) {
     (param_size, quant)
 }
 
-/// Filenames with an in-flight `download_model` — prevents two concurrent
+/// Filenames with an in-flight `download_model` - prevents two concurrent
 /// downloads writing the same `.part` (corruption), and lets the UI reattach to a
 /// download in progress after the user navigates away.
 fn downloading_set() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
@@ -3234,7 +3234,7 @@ pub struct DownloadStatus {
     pub total_bytes: u64,
 }
 
-/// Lets the UI reattach to / resume a download started elsewhere — the parity fix
+/// Lets the UI reattach to / resume a download started elsewhere - the parity fix
 /// so Settings → Components survives navigation like the other download surfaces.
 #[tauri::command]
 pub async fn download_status(
@@ -3297,11 +3297,11 @@ pub async fn download_model(
             None => return Err("Model already downloaded".to_string()),
         }
     }
-    // NOTE: we deliberately do NOT delete an existing `.part` — a partial from a
+    // NOTE: we deliberately do NOT delete an existing `.part` - a partial from a
     // dropped connection is RESUMED via an HTTP Range request below. HF model
     // files are immutable per URL, so resuming is safe.
 
-    // Refuse a second concurrent download of the same file — two writers would
+    // Refuse a second concurrent download of the same file - two writers would
     // corrupt the `.part`. A caller that finds it already running should reattach
     // (download_status), not restart. The guard clears the mark on every exit.
     {
@@ -3448,12 +3448,12 @@ pub async fn download_model(
         attempt += 1;
         if attempt > MAX_RETRIES {
             return Err(format!(
-                "Download failed after {} retries ({:.1} of {:.1} GB). Your connection may be down — the partial download is saved, so trying again resumes it.",
+                "Download failed after {} retries ({:.1} of {:.1} GB). Your connection may be down - the partial download is saved, so trying again resumes it.",
                 MAX_RETRIES, part_len as f64 / 1024_f64.powi(3), total_size as f64 / 1024_f64.powi(3)
             ));
         }
         if let Some(e) = &attempt_err {
-            log::warn!("[LLM] Download attempt {} interrupted: {} — resuming in a moment", attempt, e);
+            log::warn!("[LLM] Download attempt {} interrupted: {} - resuming in a moment", attempt, e);
         }
         let backoff = std::cmp::min(2u64.saturating_pow(attempt), 30);
         tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
@@ -3671,7 +3671,7 @@ pub async fn load_model(
     // TRACE: who asked for this chat-model (re)load, and with what flags. Lets us
     // see model thrash (A→B→A) and pin the trigger that fires an unwanted reload.
     log::info!(
-        "[LLM] load_model '{}' — reason: {} (with_vision={})",
+        "[LLM] load_model '{}' - reason: {} (with_vision={})",
         filename, reason, with_vision
     );
 
@@ -3695,7 +3695,7 @@ pub async fn load_model(
             && !FORCE_RELOAD_NEXT.swap(false, std::sync::atomic::Ordering::SeqCst)
             && chat_server_health_ok().await
         {
-            log::info!("[LLM] '{}' already loaded and healthy — nothing to do", filename);
+            log::info!("[LLM] '{}' already loaded and healthy - nothing to do", filename);
             return Ok(());
         }
     }
@@ -3707,7 +3707,7 @@ pub async fn load_model(
         return Err("Model file not found".to_string());
     }
 
-    // Never load an embedding/encoder model (bge etc.) into the chat server —
+    // Never load an embedding/encoder model (bge etc.) into the chat server  - 
     // it can't do causal generation, so completions 500 with "context does not
     // [support] logits computation". The embedding server (port 8091) loads it
     // separately. This is a safety net behind the router, which already excludes
@@ -3721,11 +3721,11 @@ pub async fn load_model(
         }
     }
 
-    // Already proven too large for the GPU this session — reject instantly instead of
+    // Already proven too large for the GPU this session - reject instantly instead of
     // tearing down the running server to spend ~30s re-confirming the OOM. Returns
     // BEFORE the stop below, so a working model stays loaded. Clears on restart.
     if is_model_too_big(filename.clone()) {
-        log::info!("[LLM] '{}' is known too-large this session — skipping load", filename);
+        log::info!("[LLM] '{}' is known too-large this session - skipping load", filename);
         return Err("MODEL_TOO_LARGE".to_string());
     }
     if is_model_rejected(filename.clone()) {
@@ -3746,7 +3746,7 @@ pub async fn load_model(
             if let Ok(prev) = std::fs::read_to_string(p) {
                 if prev.trim() == filename {
                     log::warn!(
-                        "[LLM] '{}' was mid-load when the app last stopped — not reloading automatically",
+                        "[LLM] '{}' was mid-load when the app last stopped - not reloading automatically",
                         filename
                     );
                     return Err("MODEL_LOAD_CRASHED_LAST_RUN".to_string());
@@ -3891,7 +3891,7 @@ pub async fn load_model(
 }
 
 /// Make the loaded model's vision state match what this turn needs, reloading only
-/// when it must change — so text turns stay fast and image turns get the projector.
+/// when it must change - so text turns stay fast and image turns get the projector.
 /// No-op when nothing needs to change (e.g. a vision model that fits the GPU stays
 /// put). The frontend calls this each turn with `want_vision = turn has an image`.
 #[tauri::command]
@@ -4185,7 +4185,7 @@ pub async fn stream_chat_completion(
         "stream_options": { "include_usage": true },
         "max_tokens": max_tokens.unwrap_or(4096),
         "top_k": 40,
-        // Explicit stop sequences — ensures generation stops even when
+        // Explicit stop sequences - ensures generation stops even when
         // llama-server applies -inf logit bias to EOS tokens (which
         // prevents models like Phi-4 from ever stopping on their own).
         "stop": chat_stop_strings(&model_name),
@@ -4235,14 +4235,14 @@ pub async fn stream_chat_completion(
             body["reasoning_effort"] = serde_json::Value::String(e.to_string());
         }
     }
-    // Optional GBNF grammar to constrain output (local llama.cpp only — used by
+    // Optional GBNF grammar to constrain output (local llama.cpp only - used by
     // memory extraction to force schema-valid JSON). Online providers don't take
     // it; their minimal body below omits it.
     if let Some(g) = grammar.filter(|g| !g.is_empty()) {
         body["grammar"] = serde_json::Value::String(g);
     }
     let request_body = if let Some(remote_id) = online_model.as_ref().or(external_model.as_ref()) {
-        // Minimal standard body — provider-specific extras (stop lists,
+        // Minimal standard body - provider-specific extras (stop lists,
         // chat_template_kwargs, top_k/repeat_penalty) stay local-only.
         let mut remote_body = serde_json::json!({
             "model": remote_id,
@@ -4274,7 +4274,7 @@ pub async fn stream_chat_completion(
         body
     };
 
-    // Log a COMPACT summary to the log file — never the full body, whose base64
+    // Log a COMPACT summary to the log file - never the full body, whose base64
     // image data floods the console and buries everything useful.
     let summary: Vec<String> = all_messages
         .iter()
@@ -4579,7 +4579,7 @@ pub async fn stream_chat_completion(
                             }
                             // If the server streams reasoning_content (native thinking from
                             // reasoning models like Grok), always wrap it in <think> tags and
-                            // forward it. The UI decides how to present it — expanded in report
+                            // forward it. The UI decides how to present it - expanded in report
                             // mode, collapsed-but-live in chat. Online reasoning models bill for
                             // these tokens whether shown or not, so we never discard them.
                             // (Local models don't emit reasoning_content in chat, so they stay
@@ -4643,7 +4643,7 @@ pub async fn stream_chat_completion(
                             }
 
                             // Live search progress from the proxy's search adapter
-                            // ("Searching the web (3)..." / the executed query) —
+                            // ("Searching the web (3)..." / the executed query)  - 
                             // forwarded on its own channel so the frontend can show
                             // it without touching the model-loading state.
                             if let Some(status) = parsed.get("search_status").and_then(|v| v.as_str()) {
