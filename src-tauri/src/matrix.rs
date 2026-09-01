@@ -737,10 +737,24 @@ pub async fn matrix_run(
         bin.file_name().and_then(|n| n.to_str()).unwrap_or("?")
     ));
     sink(format!("GPUs: {gpus}"));
+    // The report is made to be sent to other people: the models path is
+    // shown with the home directory folded to ~ so the OS account name
+    // never rides along.
+    let dir_shown = {
+        let home = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .unwrap_or_default();
+        let d = dir.display().to_string();
+        if !home.is_empty() && d.starts_with(&home) {
+            format!("~{}", &d[home.len()..])
+        } else {
+            d
+        }
+    };
     sink(format!(
         "RAM: {:.1} GB | models: {} ({} GGUF, {} MLX)",
         total_ram_gb(),
-        dir.display(),
+        dir_shown,
         ggufs.len(),
         mlxs.len()
     ));
