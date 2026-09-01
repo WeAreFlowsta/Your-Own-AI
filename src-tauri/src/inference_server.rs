@@ -804,6 +804,19 @@ async fn chat_completions(
         let state = app.state::<crate::llm::LLMState>();
         let has_eyes = state.current_mmproj.lock().await.is_some();
         if !has_eyes {
+            // The caption sidecar: before a picture becomes a note, let the
+            // vision pick describe it once (cached by the image's bytes, so
+            // the history's older pictures never cost a second look), then
+            // put the session's own model back. The agent "sees" through
+            // words and the session never changes model.
+            let captioned = if let Some(msgs) = body.get_mut("messages").and_then(Value::as_array_mut) {
+                caption_image_parts(&app, msgs, &ai.model, agent_mode).await
+            } else {
+                0
+            };
+            if captioned > 0 {
+                log::info!("[inference] {captioned} picture(s) described for '{}' by the vision sidecar", ai.name);
+            }
             if let Some(msgs) = body.get_mut("messages").and_then(Value::as_array_mut) {
                 let replaced = strip_image_parts(msgs);
                 if replaced > 0 {
@@ -993,6 +1006,180 @@ fn header_str(h: &HeaderMap, name: &str) -> Option<String> {
 /// Merge all `system` messages into one leading system message (joined in
 /// order), keeping the rest as-is. Mistral-family templates reject more than
 /// one system message; this keeps us compatible without losing any instruction.
+/// Captions by image content hash: the harness re-sends the whole
+/// conversation every call, so a picture a tool returned three turns ago
+/// arrives again and again - described once, remembered here. Bounded.
+static CAPTION_CACHE: OnceLock<Mutex<HashMap<u64, String>>> = OnceLock::new();
+const CAPTION_CACHE_MAX: usize = 128;
+const CAPTION_PROMPT: &str = "Describe this picture precisely for someone who cannot see it and is working in the program that produced it: what it shows, any text and numbers exactly as written, the state of controls or objects, and anything that looks wrong. Plain sentences, no preamble.";
+
+fn image_part_url(p: &Value) -> Option<String> {
+    match p.get("type").and_then(Value::as_str) {
+        Some("image_url") => p.get("image_url").and_then(|u| u.get("url")).and_then(Value::as_str).map(str::to_string),
+        Some("input_image") => p.get("image_url").and_then(Value::as_str).map(str::to_string),
+        _ => None,
+    }
+}
+
+fn caption_key(url: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    url.hash(&mut h);
+    h.finish()
+}
+
+/// Ask the loaded vision model for one caption (non-streaming, bounded).
+async fn caption_one(model: &str, image_part: &Value) -> Result<String, String> {
+    let body = json!({
+        "model": model,
+        "messages": [{
+            "role": "user",
+            "content": [
+                { "type": "text", "text": CAPTION_PROMPT },
+                image_part
+            ]
+        }],
+        "max_tokens": 350,
+        "temperature": 0.2,
+        "stream": false,
+    });
+    let resp = reqwest::Client::new()
+        .post(format!("http://localhost:{}/v1/chat/completions", crate::llm::CHAT_PORT))
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(180))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let v: Value = resp.json().await.map_err(|e| e.to_string())?;
+    let text = v["choices"][0]["message"]["content"].as_str().unwrap_or("").trim().to_string();
+    if text.is_empty() {
+        return Err("empty caption".into());
+    }
+    Ok(text)
+}
+
+/// Replace every image part the serving model cannot see with a caption
+/// from the vision pick. Returns how many were captioned; images that
+/// could not be captioned are left in place for `strip_image_parts`.
+/// Loads the vision model for the uncached pictures, then puts `session_model`
+/// back, so the session's own model answers the turn.
+async fn caption_image_parts(app: &AppHandle, messages: &mut [Value], session_model: &str, agent_mode: bool) -> usize {
+    use tauri::Emitter as _;
+    // What needs a look, and what the cache already knows.
+    let mut pending: Vec<(usize, usize, Value)> = Vec::new();
+    let mut captioned = 0usize;
+    for (mi, m) in messages.iter_mut().enumerate() {
+        let Some(parts) = m.get_mut("content").and_then(Value::as_array_mut) else { continue };
+        for (pi, p) in parts.iter_mut().enumerate() {
+            let Some(url) = image_part_url(p) else { continue };
+            let key = caption_key(&url);
+            let cached = CAPTION_CACHE.get_or_init(|| Mutex::new(HashMap::new())).lock().ok().and_then(|c| c.get(&key).cloned());
+            if let Some(text) = cached {
+                *p = json!({ "type": "text", "text": text });
+                captioned += 1;
+            } else {
+                pending.push((mi, pi, p.clone()));
+            }
+        }
+    }
+    if pending.is_empty() {
+        return captioned;
+    }
+    let pick = match crate::llm::find_vision_model(app.clone(), None, None).await {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            log::info!("[inference] no vision-ready model downloaded - {} picture(s) become notes", pending.len());
+            return captioned;
+        }
+        Err(e) => {
+            log::warn!("[inference] vision pick failed: {e}");
+            return captioned;
+        }
+    };
+    if agent_mode {
+        let _ = app.emit(
+            "agent-route",
+            json!({ "model": pick.model, "online": false, "reason": "looking at the picture the tool returned" }),
+        );
+    }
+    let state = app.state::<crate::llm::LLMState>();
+    let t0 = std::time::Instant::now();
+    if let Err(e) = crate::llm::load_model(app.clone(), state.clone(), pick.model.clone(), true, "vision-sidecar".to_string()).await {
+        log::warn!("[inference] vision sidecar could not load {}: {e}", pick.model);
+        return captioned;
+    }
+    for _ in 0..120 {
+        if matches!(crate::llm::is_llama_server_ready().await, Ok(true)) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    let label = format!("Picture the tool returned, as described by {}", pretty_model_name(&pick.model));
+    let mut fresh = 0usize;
+    for (mi, pi, part) in &pending {
+        match caption_one(&pick.model, part).await {
+            Ok(text) => {
+                let note = format!("[{label}: {text}]");
+                if let Some(url) = image_part_url(part) {
+                    if let Ok(mut c) = CAPTION_CACHE.get_or_init(|| Mutex::new(HashMap::new())).lock() {
+                        if c.len() >= CAPTION_CACHE_MAX {
+                            c.clear();
+                        }
+                        c.insert(caption_key(&url), note.clone());
+                    }
+                }
+                if let Some(p) = messages.get_mut(*mi).and_then(|m| m.get_mut("content")).and_then(Value::as_array_mut).and_then(|parts| parts.get_mut(*pi)) {
+                    *p = json!({ "type": "text", "text": note });
+                    captioned += 1;
+                    fresh += 1;
+                }
+            }
+            Err(e) => log::warn!("[inference] caption failed: {e}"),
+        }
+    }
+    log::info!(
+        "[inference] vision sidecar: {} of {} new picture(s) described by {} in {:.1} s",
+        fresh,
+        pending.len(),
+        pick.model,
+        t0.elapsed().as_secs_f32()
+    );
+    // The session's own model back before the turn is answered.
+    if let Err(e) = crate::llm::load_model(app.clone(), state, session_model.to_string(), false, "inference-api".to_string()).await {
+        log::warn!("[inference] could not put {session_model} back after the vision sidecar: {e}");
+    } else {
+        for _ in 0..120 {
+            if matches!(crate::llm::is_llama_server_ready().await, Ok(true)) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+    }
+    if agent_mode {
+        let _ = app.emit(
+            "agent-route",
+            json!({ "model": session_model, "online": false, "reason": "back on the session's model" }),
+        );
+        if fresh > 0 {
+            let _ = app.emit(
+                "agent-hint",
+                json!({
+                    "kind": "vision-sidecar",
+                    "sticky": false,
+                    "text": format!(
+                        "Looked at {} the tool returned with {} and described {} in words for {}.",
+                        if fresh == 1 { "the picture" } else { "the pictures" },
+                        pretty_model_name(&pick.model),
+                        if fresh == 1 { "it" } else { "them" },
+                        pretty_model_name(session_model)
+                    )
+                }),
+            );
+        }
+    }
+    captioned
+}
+
 /// Stands in for an image the serving model cannot see. Worded for the
 /// model: it says what to do next instead of what went wrong.
 const NO_VISION_NOTE: &str = "[Image not read: this AI's model can't see images. If this was a PDF, read it again with output format \"text\"; if a tool returned it, check your work through the tool's text outputs instead. A vision-capable model with its projector downloaded (Offline Models) would let the AI look at pictures.]";
