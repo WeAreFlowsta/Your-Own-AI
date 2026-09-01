@@ -386,9 +386,17 @@ pub async fn leg_fit_truth(bin: &Path, dir: &Path, only: &[String], sink: Sink<'
 
 /// Every downloaded chat model answers every scenario with WORDS -
 /// non-empty, no channel markers of any format. Returns the failures.
+/// `YOAI_CHAT_FORMAT_MODELS=a.gguf,b.gguf` filters (repro runs).
 pub async fn leg_chat_format(bin: &Path, dir: &Path, sink: Sink<'_>) -> Vec<String> {
+    let only: Vec<String> = std::env::var("YOAI_CHAT_FORMAT_MODELS")
+        .ok()
+        .map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+        .unwrap_or_default();
     let mut failures = Vec::new();
-    for name in gguf_files(dir) {
+    for name in gguf_files(dir)
+        .into_iter()
+        .filter(|n| only.is_empty() || only.iter().any(|o| n == o))
+    {
         if cancelled() {
             sink("cancelled".into());
             break;
@@ -565,6 +573,15 @@ pub async fn leg_mlx(app: &AppHandle, bin_dir_hint: &Path, sink: Sink<'_>) -> Ve
             break;
         }
         let model_dir = bin_dir_hint.join(&name);
+        // Bench only what the app would serve: a half-downloaded artifact
+        // (disk filled mid-download, say) is not a finding about the model.
+        if !crate::mlx_artifacts::artifact_complete(&model_dir) {
+            sink(format!(
+                "{:<38} skipped - download incomplete (the app will not serve it either)",
+                name
+            ));
+            continue;
+        }
         let args = vec![
             "--model".into(),
             model_dir.display().to_string(),
