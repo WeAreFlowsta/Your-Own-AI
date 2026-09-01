@@ -206,6 +206,24 @@ pub fn choose_ctx(
     if meta.context_length > 0 {
         pick = pick.min(meta.context_length.max(4096));
     }
+    // 3. The card has the last word for DENSE models (fit-truth 09-01: on
+    //    a 4 GB card the 32k RAM-tier floor made 2-3 GB models fail to
+    //    load - the engine puts the whole cache in graphics memory). Step
+    //    down the ladder until the need fits; never below 4096. MoE models
+    //    keep their rung - the expert split is their pressure valve.
+    if let Some(vram) = free_vram_gb {
+        if !meta.is_moe() {
+            while pick > 4096 && model_need(meta, size_bytes, pick).2 > 0.9 * vram {
+                let lower = CTX_LADDER
+                    .iter()
+                    .copied()
+                    .filter(|&c| c < pick)
+                    .max()
+                    .unwrap_or(4096);
+                pick = lower;
+            }
+        }
+    }
     pick
 }
 
@@ -228,11 +246,36 @@ pub fn model_need(meta: &GgufMeta, size_bytes: u64, ctx: u64) -> (f64, f64, f64)
     } else {
         meta.n_layers
     };
-    let kv_gb = 2.0
-        * kv_layers as f64
-        * meta.n_kv_heads as f64
-        * meta.head_dim() as f64
-        * eff_ctx
+    // KV cache, per what the header really says (fit-truth audit 09-01):
+    // - per-layer head arrays: the SUM over attention layers, not a mean
+    //   diluted by recurrent layers' zeros (LFM2 was 4x under);
+    // - K and V dims separately when declared (gemma4's V != K);
+    // - sliding-window layers pay min(ctx, window), not the full context
+    //   (gemma3/4 were ~5x over at 32k); without a pattern array a
+    //   declared window is assumed on every attention layer;
+    // - hybrid blocks were already excluded from kv_layers by the tensor
+    //   walk (fused QKV beside recurrent tensors no longer counts).
+    let heads_avg = if meta.kv_heads_sum > 0 && kv_layers > 0 {
+        (meta.kv_heads_sum as f64 / kv_layers as f64).max(1.0)
+    } else {
+        meta.n_kv_heads as f64
+    };
+    let kd = meta.head_dim() as f64;
+    let vd = if meta.value_length > 0 { meta.value_length as f64 } else { kd };
+    let kd_swa = if meta.key_length_swa > 0 { meta.key_length_swa as f64 } else { kd };
+    let vd_swa = if meta.value_length_swa > 0 { meta.value_length_swa as f64 } else { vd };
+    let windowed = meta.sliding_window > 0 && (meta.sliding_window as f64) < eff_ctx;
+    let swa_layers = if !windowed {
+        0.0
+    } else if meta.swa_pattern_read {
+        (meta.swa_layers as f64).min(kv_layers as f64)
+    } else {
+        kv_layers as f64
+    };
+    let full_layers = kv_layers as f64 - swa_layers;
+    let swa_ctx = (meta.sliding_window as f64).min(eff_ctx);
+    let kv_gb = heads_avg
+        * (full_layers * (kd + vd) * eff_ctx + swa_layers * (kd_swa + vd_swa) * swa_ctx)
         * 2.0
         / GIB;
     let overhead_gb = 0.8;
@@ -651,6 +694,7 @@ mod tests {
             split_no: 0,
             split_count: 1,
             total_bytes: 0,
+            ..GgufMeta::default()
         }
     }
 
@@ -727,14 +771,51 @@ mod tests {
     }
 
     #[test]
+    fn kv_estimate_reads_windows_and_per_layer_heads() {
+        // gemma4-shaped: 35 layers, 28 sliding at 512 tokens, K/V 512
+        // full / 256 windowed, 1 KV head. At 32k the old math charged all
+        // 35 layers at full context (~2.2 GB); the honest figure is the 7
+        // global layers plus a whisper for the windowed ones.
+        let mut g = meta(35, 1, 512, 131072);
+        g.value_length = 512;
+        g.sliding_window = 512;
+        g.swa_pattern_read = true;
+        g.swa_layers = 28;
+        g.key_length_swa = 256;
+        g.value_length_swa = 256;
+        let (_, kv, _) = model_need(&g, 3 * 1024 * 1024 * 1024, 32768);
+        assert!(kv < 0.55, "windowed layers must not pay full context: {kv}");
+        assert!(kv > 0.40, "the 7 global layers still count: {kv}");
+        // Same header without the window: all 35 at full context.
+        let mut g2 = meta(35, 1, 512, 131072);
+        g2.value_length = 512;
+        let (_, kv_full, _) = model_need(&g2, 3 * 1024 * 1024 * 1024, 32768);
+        assert!(kv_full > 2.0, "full attention keeps the old cost: {kv_full}");
+
+        // lfm2-shaped hybrid: 24 layers, only 6 attention, per-layer head
+        // sum 48 (mean 2 diluted by zeros). The sum wins: 8 heads on the
+        // 6 real layers, not 2 on 24.
+        let mut l = meta(24, 2, 64, 128000);
+        l.n_attn_layers = 6;
+        l.kv_heads_sum = 48;
+        let (_, kv_l, _) = model_need(&l, 4 * 1024 * 1024 * 1024, 8192);
+        let expected = 8.0 * 6.0 * (64.0 + 64.0) * 8192.0 * 2.0 / (1024.0 * 1024.0 * 1024.0);
+        assert!((kv_l - expected).abs() < 0.01, "sum-based KV: {kv_l} vs {expected}");
+    }
+
+    #[test]
     fn choose_ctx_covers_the_configs_that_matter() {
         const GB: u64 = 1024 * 1024 * 1024;
         let muse = meta(48, 8, 128, 131072); // ~12GB file below
         let small = meta(30, 8, 256, 32768); // ~4.6GB file below
 
         // The flagship: 32GB machine (reports 31.8) + 8GB card (7.8 free).
-        // Muse partial-offloads; the agent floor must give it 16k.
-        assert_eq!(choose_ctx(&muse, 12 * GB, 31.8, Some(7.8)), 16384);
+        // A DENSE 12GB model cannot load on an 8GB card at any context
+        // (fit-truth 09-01: the engine puts weights + cache in graphics
+        // memory); the card-aware floor bottoms out at 4096 and the grade
+        // is red regardless. (Real Muse is MoE and keeps its 16k via the
+        // expert split - the MoE case below.)
+        assert_eq!(choose_ctx(&muse, 12 * GB, 31.8, Some(7.8)), 4096);
 
         // Same machine, CPU-only (safe mode): RAM tier holds - 16384 for a
         // big model on a 30GB+ box.
@@ -744,9 +825,9 @@ mod tests {
         // + overhead < 21.6) - take the green rung.
         assert_eq!(choose_ctx(&muse, 12 * GB, 31.8, Some(24.0)), 32768);
 
-        // Muse on a 16GB-RAM / 4GB-VRAM box: 16k does not fit the pools
-        // (need ~19GB vs 4 + 9.6) - stays at the 8k RAM tier.
-        assert_eq!(choose_ctx(&muse, 12 * GB, 15.8, Some(4.0)), 8192);
+        // Muse on a 16GB-RAM / 4GB-VRAM box: dense past the card - the
+        // card-aware floor steps to the bottom rung (red either way).
+        assert_eq!(choose_ctx(&muse, 12 * GB, 15.8, Some(4.0)), 4096);
 
         // Small model on an 8GB-RAM box (reports 7.8): tier says 8k, but a
         // 12GB card carries 16k+ KV fully on GPU - upgraded, RAM untouched.

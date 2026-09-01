@@ -53,6 +53,21 @@ pub struct GgufMeta {
     /// so charging every layer over-counts their context cost several
     /// times over. 0 = unknown (table unreadable): callers use n_layers.
     pub n_attn_layers: u64,
+    /// Sum of `attention.head_count_kv` over all layers when the header
+    /// stores it per layer (hybrids keep 0 on recurrent layers); 0 = the
+    /// header had one scalar - use n_kv_heads x attention layers.
+    pub kv_heads_sum: u64,
+    /// `attention.value_length` when present; 0 = same as the key length.
+    pub value_length: u64,
+    /// Sliding-attention window in tokens; 0 = none declared.
+    pub sliding_window: u64,
+    /// Layers using the sliding window, from `sliding_window_pattern`.
+    pub swa_layers: u64,
+    /// Whether the pattern array was present (without it, a declared
+    /// window is assumed to cover every attention layer).
+    pub swa_pattern_read: bool,
+    pub key_length_swa: u64,
+    pub value_length_swa: u64,
     /// Bytes of expert tensors per layer (index = block), from the tensor
     /// table (sizes = offset deltas, no type table needed). Empty for dense
     /// models, and for files whose tensor table could not be read - the
@@ -273,6 +288,56 @@ impl<R: Read + Seek> Bounded<R> {
         Ok(if n > 0 { Some((sum + n - 1) / n) } else { None })
     }
 
+    /// Like `read_int_array_mean`, also returning the SUM - the honest
+    /// figure for per-layer head counts where recurrent layers store 0.
+    fn read_int_array_stats(&mut self) -> std::io::Result<Option<(u64, u64)>> {
+        let elem_t = self.read_u32()?;
+        let count = self.read_u64()?;
+        let Some(w) = scalar_width(elem_t) else {
+            return Err(damaged("unexpected array element type under an integer key"));
+        };
+        if count == 0 || count > 4096 {
+            self.skip(w.checked_mul(count).ok_or_else(|| damaged("array size overflows"))?)?;
+            return Ok(None);
+        }
+        let mut sum = 0u64;
+        let mut n = 0u64;
+        for _ in 0..count {
+            match self.read_int_value(elem_t)? {
+                Some(v) => {
+                    sum += v;
+                    n += 1;
+                }
+                None => {
+                    self.skip(w)?;
+                }
+            }
+        }
+        Ok(if n > 0 { Some(((sum + n - 1) / n, sum)) } else { None })
+    }
+
+    /// Bool array -> (count of true, total). Non-bool arrays are skipped.
+    fn read_bool_array_counts(&mut self) -> std::io::Result<Option<(u64, u64)>> {
+        let elem_t = self.read_u32()?;
+        let count = self.read_u64()?;
+        let Some(w) = scalar_width(elem_t) else {
+            return Err(damaged("unexpected array element type under a pattern key"));
+        };
+        if elem_t != 7 || count == 0 || count > 4096 {
+            self.skip(w.checked_mul(count).ok_or_else(|| damaged("array size overflows"))?)?;
+            return Ok(None);
+        }
+        let mut on = 0u64;
+        for _ in 0..count {
+            let mut b = [0u8; 1];
+            self.read_exact(&mut b)?;
+            if b[0] != 0 {
+                on += 1;
+            }
+        }
+        Ok(Some((on, count)))
+    }
+
     /// Read an integer-valued scalar as u64 (for the count keys we care about).
     fn read_int_value(&mut self, t: u32) -> std::io::Result<Option<u64>> {
         Ok(match t {
@@ -459,6 +524,13 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
         ff_expert_len: 0,
         ff_shared_expert_len: 0,
         n_attn_layers: 0,
+        kv_heads_sum: 0,
+        value_length: 0,
+        sliding_window: 0,
+        swa_layers: 0,
+        swa_pattern_read: false,
+        key_length_swa: 0,
+        value_length_swa: 0,
         expert_bytes_per_layer: Vec::new(),
         non_expert_bytes: 0,
         split_no: 0,
@@ -479,6 +551,10 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
             || key.ends_with(".attention.head_count_kv")
             || key.ends_with(".attention.head_count")
             || key.ends_with(".attention.key_length")
+            || key.ends_with(".attention.value_length")
+            || key.ends_with(".attention.key_length_swa")
+            || key.ends_with(".attention.value_length_swa")
+            || key.ends_with(".attention.sliding_window")
             || key.ends_with(".embedding_length")
             || key.ends_with(".context_length")
             || key.ends_with(".expert_count")
@@ -502,11 +578,15 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
         } else if want_int && vtype == 9 {
             // Per-layer arrays under a count key (gemma4's head_count_kv):
             // one representative figure for the fit math.
-            if let Some(v) = r.read_int_array_mean().map_err(io)? {
+            if let Some((mean, sum)) = r.read_int_array_stats().map_err(io)? {
                 if key.ends_with(".attention.head_count_kv") {
-                    m.n_kv_heads = v;
+                    // Hybrid models store 0 for their non-attention layers:
+                    // the SUM is the honest KV figure, the mean stays for
+                    // display compatibility.
+                    m.n_kv_heads = mean;
+                    m.kv_heads_sum = sum;
                 } else if key.ends_with(".attention.head_count") {
-                    m.n_heads = v;
+                    m.n_heads = mean;
                 }
             }
         } else if want_int && scalar_width(vtype).is_some() {
@@ -522,8 +602,16 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
                 m.n_layers = v;
             } else if key.ends_with(".attention.head_count_kv") {
                 m.n_kv_heads = v;
+            } else if key.ends_with(".attention.key_length_swa") {
+                m.key_length_swa = v;
+            } else if key.ends_with(".attention.value_length_swa") {
+                m.value_length_swa = v;
             } else if key.ends_with(".attention.key_length") {
                 m.key_length = v;
+            } else if key.ends_with(".attention.value_length") {
+                m.value_length = v;
+            } else if key.ends_with(".attention.sliding_window") {
+                m.sliding_window = v;
             } else if key.ends_with(".attention.head_count") {
                 m.n_heads = v;
             } else if key.ends_with(".embedding_length") {
@@ -546,6 +634,13 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
                 m.split_no = v as u32;
             } else if key == "split.count" {
                 m.split_count = (v as u32).max(1);
+            }
+        } else if key.ends_with(".attention.sliding_window_pattern") && vtype == 9 {
+            // Which layers use the sliding window (true) vs full attention.
+            if let Some((swa, total)) = r.read_bool_array_counts().map_err(io)? {
+                let _ = total;
+                m.swa_layers = swa;
+                m.swa_pattern_read = true;
             }
         } else {
             r.skip_value(vtype).map_err(io)?;
@@ -597,7 +692,17 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
                 Ok((len, t)) => {
                     total += len;
                     accumulate_expert_split(&t, &mut per_layer, &mut non_expert);
-                    attn_blocks.extend(t.iter().filter_map(|e| e.attn_block));
+                    attn_blocks.extend(t.iter().filter_map(|e| match e.attn_block {
+                        Some((b, BlockMark::K)) => Some(b),
+                        Some((b, BlockMark::Qkv)) => Some(b),
+                        _ => None,
+                    }));
+                    // Recurrent blocks never count, even with a fused QKV.
+                    for e in &t {
+                        if let Some((b, BlockMark::Recurrent)) = e.attn_block {
+                            attn_blocks.remove(&b);
+                        }
+                    }
                 }
                 Err(e) => {
                     log::warn!("[gguf] shard {} of {}: {e}", sib.display(), path.display());
@@ -658,25 +763,59 @@ struct TensorBytes {
     expert_block: Option<usize>,
     /// The block this tensor belongs to when it is an attention K weight
     /// (the layer carries a KV cache); None otherwise.
-    attn_block: Option<usize>,
+    attn_block: Option<(usize, BlockMark)>,
 }
 
 /// Attention layers are the ones with a K projection (`blk.N.attn_k.*`,
 /// `attn_k_norm` only appears beside one) or a fused `attn_qkv`. Recurrent
-/// layers of hybrid models carry `ssm_*` tensors and no K - no KV cache.
-fn attn_block_of(name: &str) -> Option<usize> {
+/// layers of hybrid models carry `ssm_*`/`shortconv` tensors - and some
+/// (Qwen 3.5/3.8) put a fused `attn_qkv` on their LINEAR blocks too, so a
+/// fused projection only counts when the block has no recurrent tensors.
+fn attn_block_of(name: &str) -> Option<(usize, BlockMark)> {
     let rest = name.strip_prefix("blk.")?;
     let dot = rest.find('.')?;
     let block: usize = rest[..dot].parse().ok()?;
     let tail = &rest[dot..];
-    let is_attn = tail.starts_with(".attn_k.") || tail.starts_with(".attn_k_") || tail.starts_with(".attn_qkv");
-    is_attn.then_some(block)
+    let mark = if tail.starts_with(".attn_k.") || tail.starts_with(".attn_k_") {
+        BlockMark::K
+    } else if tail.starts_with(".attn_qkv") {
+        BlockMark::Qkv
+    } else if tail.starts_with(".ssm_") || tail.starts_with(".shortconv") {
+        BlockMark::Recurrent
+    } else {
+        return None;
+    };
+    Some((block, mark))
 }
 
-/// Distinct blocks with an attention K weight - the layers a KV cache
-/// actually costs for.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum BlockMark {
+    K,
+    Qkv,
+    Recurrent,
+}
+
+/// Distinct blocks that truly carry a KV cache: a K projection, or a fused
+/// QKV in a block with no recurrent tensors.
 fn count_attention_layers(t: &[TensorBytes]) -> u64 {
-    let blocks: std::collections::HashSet<usize> = t.iter().filter_map(|e| e.attn_block).collect();
+    use std::collections::HashSet;
+    let mut k: HashSet<usize> = HashSet::new();
+    let mut qkv: HashSet<usize> = HashSet::new();
+    let mut rec: HashSet<usize> = HashSet::new();
+    for e in t {
+        match e.attn_block {
+            Some((b, BlockMark::K)) => { k.insert(b); }
+            Some((b, BlockMark::Qkv)) => { qkv.insert(b); }
+            Some((b, BlockMark::Recurrent)) => { rec.insert(b); }
+            None => {}
+        }
+    }
+    let mut blocks = k;
+    for b in qkv {
+        if !rec.contains(&b) {
+            blocks.insert(b);
+        }
+    }
     blocks.len() as u64
 }
 
@@ -759,7 +898,7 @@ fn read_tensor_table<R: Read + Seek>(
     alignment: u64,
 ) -> std::io::Result<Vec<TensorBytes>> {
     // (offset, expert block or None, attention block or None)
-    let mut tensors: Vec<(u64, Option<usize>, Option<usize>)> =
+    let mut tensors: Vec<(u64, Option<usize>, Option<(usize, BlockMark)>)> =
         Vec::with_capacity(tensor_count as usize);
     for _ in 0..tensor_count {
         let name = r.read_gstr()?;
