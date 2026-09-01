@@ -653,14 +653,24 @@ pub(crate) fn chat_stop_strings(model_name: &str) -> serde_json::Value {
     if is_harmony_model(model_name) {
         return serde_json::json!([]);
     }
-    serde_json::json!([
+    let mut stops = vec![
         "<|end|>",           // Phi-4, Phi-3
         "<|endoftext|>",     // Phi-4, Phi-3
         "<|im_end|>",        // Qwen, DeepSeek
         "<end_of_turn>",     // Gemma
         "</s>",              // Mistral, Llama
         "<|eot_id|>",        // Llama 3
-    ])
+    ];
+    // LFM is tool-trained and sometimes answers a PLAIN chat in its
+    // tool-call channel ("<|tool_call_start|>[code_blocks()]..."). Chat
+    // turns carry no tools, so that channel is always noise here - stop
+    // before it. Per-format on purpose (the gpt-oss lesson: never share
+    // one family's stops with another); the agent path through the local
+    // server declares real tools and is not affected.
+    if model_name.to_lowercase().contains("lfm") {
+        stops.push("<|tool_call_start|>");
+    }
+    serde_json::json!(stops)
 }
 
 /// True when the device args put every layer on the CPU (`-ngl 0` /
