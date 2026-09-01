@@ -270,7 +270,10 @@ pub fn model_need(meta: &GgufMeta, size_bytes: u64, ctx: u64) -> (f64, f64, f64)
     } else if meta.swa_pattern_read {
         (meta.swa_layers as f64).min(kv_layers as f64)
     } else {
-        kv_layers as f64
+        // A declared window without a pattern array: assume HALF the
+        // layers - optimism here made medgemma claim 131k and fail to
+        // load (fit-truth 09-01); pessimism only costs context.
+        (kv_layers as f64 / 2.0).floor()
     };
     let full_layers = kv_layers as f64 - swa_layers;
     let swa_ctx = (meta.sliding_window as f64).min(eff_ctx);
@@ -279,7 +282,11 @@ pub fn model_need(meta: &GgufMeta, size_bytes: u64, ctx: u64) -> (f64, f64, f64)
         * 2.0
         / GIB;
     let overhead_gb = 0.8;
-    (weights_gb, kv_gb, weights_gb + kv_gb + overhead_gb)
+    // The token-embedding table stays in system memory even under full
+    // offload - the card never pays for it (fit-truth 09-01: gemma E2B
+    // served from 1.94 GB while its file is 2.89 GB).
+    let on_card_weights_gb = (size_bytes.saturating_sub(meta.embd_bytes)) as f64 / GIB;
+    (weights_gb, kv_gb, on_card_weights_gb + kv_gb + overhead_gb)
 }
 
 /// Does this MoE model call for expert offload? Whenever its full footprint

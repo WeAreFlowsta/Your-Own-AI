@@ -68,6 +68,9 @@ pub struct GgufMeta {
     pub swa_pattern_read: bool,
     pub key_length_swa: u64,
     pub value_length_swa: u64,
+    /// Bytes of the token-embedding table - the engine keeps it in system
+    /// memory even under full offload, so it never costs the card.
+    pub embd_bytes: u64,
     /// Bytes of expert tensors per layer (index = block), from the tensor
     /// table (sizes = offset deltas, no type table needed). Empty for dense
     /// models, and for files whose tensor table could not be read - the
@@ -531,6 +534,7 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
         swa_pattern_read: false,
         key_length_swa: 0,
         value_length_swa: 0,
+        embd_bytes: 0,
         expert_bytes_per_layer: Vec::new(),
         non_expert_bytes: 0,
         split_no: 0,
@@ -675,6 +679,7 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
                 apply_expert_split(&mut m, &t, n_layers);
             }
             m.n_attn_layers = count_attention_layers(&t);
+            m.embd_bytes = t.iter().filter(|e| e.is_embd).map(|e| e.bytes).sum();
         }
     }
 
@@ -764,6 +769,7 @@ struct TensorBytes {
     /// The block this tensor belongs to when it is an attention K weight
     /// (the layer carries a KV cache); None otherwise.
     attn_block: Option<(usize, BlockMark)>,
+    is_embd: bool,
 }
 
 /// Attention layers are the ones with a K projection (`blk.N.attn_k.*`,
@@ -898,7 +904,7 @@ fn read_tensor_table<R: Read + Seek>(
     alignment: u64,
 ) -> std::io::Result<Vec<TensorBytes>> {
     // (offset, expert block or None, attention block or None)
-    let mut tensors: Vec<(u64, Option<usize>, Option<(usize, BlockMark)>)> =
+    let mut tensors: Vec<(u64, Option<usize>, Option<(usize, BlockMark)>, bool)> =
         Vec::with_capacity(tensor_count as usize);
     for _ in 0..tensor_count {
         let name = r.read_gstr()?;
@@ -911,19 +917,19 @@ fn read_tensor_table<R: Read + Seek>(
         }
         let _ty = r.read_u32()?;
         let offset = r.read_u64()?;
-        tensors.push((offset, expert_block_of(&name), attn_block_of(&name)));
+        tensors.push((offset, expert_block_of(&name), attn_block_of(&name), name == "token_embd.weight"));
     }
     // Data section starts at the header end rounded up to the alignment.
     let data_start = r.pos.div_ceil(alignment) * alignment;
     let data_len = r.len.saturating_sub(data_start);
     tensors.sort_by_key(|t| t.0);
     let mut out = Vec::with_capacity(tensors.len());
-    for (i, (offset, block, attn)) in tensors.iter().enumerate() {
+    for (i, (offset, block, attn, embd)) in tensors.iter().enumerate() {
         let end = tensors.get(i + 1).map(|t| t.0).unwrap_or(data_len);
         if end < *offset || *offset > data_len {
             return Err(damaged("tensor data runs past the end of the file (incomplete download)"));
         }
-        out.push(TensorBytes { bytes: end - offset, expert_block: *block, attn_block: *attn });
+        out.push(TensorBytes { bytes: end - offset, expert_block: *block, attn_block: *attn, is_embd: *embd });
     }
     Ok(out)
 }
