@@ -127,14 +127,19 @@ async fn ask_scenarios(
     use std::time::Duration;
     let client = reqwest::Client::new();
     let mut last_snippet = String::new();
+    let mut thought_first = false;
     for (i, (persona, question)) in scenarios.iter().enumerate() {
+        // 1024 tokens of room: some thinking distills ignore the
+        // no-thinking request and reason at length before the first
+        // visible word - the ceiling must be high enough to tell a slow
+        // thinker from a broken model.
         let mut body = serde_json::json!({
             "model": model,
             "messages": [
                 {"role": "system", "content": persona},
                 {"role": "user", "content": question}
             ],
-            "max_tokens": 96,
+            "max_tokens": 1024,
             "stream": false,
             "top_k": 40,
             "stop": crate::llm::chat_stop_strings_with(model, tool_marker),
@@ -164,6 +169,13 @@ async fn ask_scenarios(
             .as_str()
             .unwrap_or("")
             .to_string();
+        let reasoning_chars = v["choices"][0]["message"]["reasoning_content"]
+            .as_str()
+            .map(|r| r.chars().count())
+            .unwrap_or(0);
+        if reasoning_chars > 0 {
+            thought_first = true;
+        }
         let visible = content.replace("<think>", "").replace("</think>", "");
         if crate::llm::contains_channel_marker(&content) {
             return format!(
@@ -172,11 +184,22 @@ async fn ask_scenarios(
             );
         }
         if visible.trim().is_empty() {
-            return format!("FAIL scenario {i} empty reply");
+            return if reasoning_chars > 0 {
+                format!(
+                    "FAIL scenario {i} all reasoning, no words in 1024 tokens ({reasoning_chars} thinking chars - the no-thinking request was not honored)"
+                )
+            } else {
+                format!("FAIL scenario {i} empty reply")
+            };
         }
         last_snippet = visible.trim().chars().take(60).collect::<String>();
     }
-    format!("ok ({} scenarios): {:?}", scenarios.len(), last_snippet)
+    format!(
+        "ok ({} scenarios{}): {:?}",
+        scenarios.len(),
+        if thought_first { ", thought first despite the no-thinking ask" } else { "" },
+        last_snippet
+    )
 }
 
 /// One model through the chat-format check: load on the bench port with
