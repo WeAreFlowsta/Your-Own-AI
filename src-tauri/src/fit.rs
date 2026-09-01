@@ -483,8 +483,20 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
         let current = st.current_model.lock().await.clone();
         loading.or(current).filter(|c| !c.starts_with("online:"))
     };
+    // The measured truth beats the estimate here too: a split-loaded MoE
+    // occupies far less of the card than its full need (LFM: est ~5.7,
+    // measured ~3.1) - crediting the estimate back inflated every grade,
+    // every "runs at", and the Auto split label (fit-truth 09-01, round
+    // 4). The calibration file holds what the last healthy load actually
+    // took; use it when it exists.
     let reclaim_gb = incumbent
         .and_then(|name| {
+            if let Some(measured) = crate::llm::moe_calibration_read(app, &name)
+                .map(|c| c.actual_gb)
+                .filter(|&a| a > 0.1)
+            {
+                return Some(measured);
+            }
             let path = dir.join(&name);
             let meta = crate::gguf::read_meta(&path).ok()?;
             let size = std::fs::metadata(&path).ok()?.len();

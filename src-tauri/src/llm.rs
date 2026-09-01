@@ -1460,7 +1460,7 @@ fn moe_calibration_path(app: &AppHandle) -> Option<std::path::PathBuf> {
     app.path().app_data_dir().ok().map(|d| d.join("moe-calibration.json"))
 }
 
-fn moe_calibration_read(app: &AppHandle, model: &str) -> Option<MoeCalibration> {
+pub(crate) fn moe_calibration_read(app: &AppHandle, model: &str) -> Option<MoeCalibration> {
     let p = moe_calibration_path(app)?;
     let s = std::fs::read_to_string(p).ok()?;
     let m: std::collections::HashMap<String, MoeCalibration> = serde_json::from_str(&s).ok()?;
