@@ -154,6 +154,7 @@ pub(crate) fn get_models_dir(app_handle: &AppHandle) -> Result<PathBuf, String> 
             {
                 let p = PathBuf::from(&dir);
                 if std::fs::create_dir_all(&p).is_ok() {
+                    remember_models_dir(&p);
                     return Ok(p);
                 }
                 log::warn!("[models] chosen models folder {dir} is unavailable - using the default");
@@ -170,8 +171,18 @@ pub(crate) fn get_models_dir(app_handle: &AppHandle) -> Result<PathBuf, String> 
     // Create directory if it doesn't exist
     std::fs::create_dir_all(&models_dir)
         .map_err(|e| format!("Failed to create models directory: {}", e))?;
-    
+
+    remember_models_dir(&models_dir);
     Ok(models_dir)
+}
+
+/// Every resolution refreshes the memo the per-format stop strings read
+/// (the loaded model's template-declared tool marker needs the dir
+/// without an AppHandle in scope).
+fn remember_models_dir(dir: &std::path::Path) {
+    if let Ok(mut d) = CURRENT_MODELS_DIR.lock() {
+        *d = Some(dir.to_path_buf());
+    }
 }
 
 /// (free, total) bytes of the disk holding `path`: the deepest mount point
@@ -950,11 +961,6 @@ pub async fn find_vision_model(
     query_vec: Option<Vec<f32>>,
 ) -> Result<Option<VisionPick>, String> {
     let models_dir = get_models_dir(&app_handle)?;
-    // Remembered so the per-format stop strings can read the loaded
-    // model's template-declared tool marker without an AppHandle.
-    if let Ok(mut d) = CURRENT_MODELS_DIR.lock() {
-        *d = Some(models_dir.clone());
-    }
     // Every downloaded model with a paired projector is a candidate (skip any
     // already proven too large this session).
     let mut candidates: Vec<String> = Vec::new();
