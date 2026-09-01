@@ -127,19 +127,21 @@ async fn ask_scenarios(
     use std::time::Duration;
     let client = reqwest::Client::new();
     let mut last_snippet = String::new();
-    let mut thought_first = false;
+    let mut thought_chars = 0usize;
     for (i, (persona, question)) in scenarios.iter().enumerate() {
-        // 1024 tokens of room: some thinking distills ignore the
-        // no-thinking request and reason at length before the first
-        // visible word - the ceiling must be high enough to tell a slow
-        // thinker from a broken model.
+        // The app's own chat ceiling: some thinking distills ignore the
+        // no-thinking request and reason at length (variable, thousands
+        // of chars) before the first visible word - anything tighter than
+        // what the app allows flips verdicts on sampling luck. A model
+        // that produces no words in THIS much room has genuinely failed
+        // the user.
         let mut body = serde_json::json!({
             "model": model,
             "messages": [
                 {"role": "system", "content": persona},
                 {"role": "user", "content": question}
             ],
-            "max_tokens": 1024,
+            "max_tokens": 8192,
             "stream": false,
             "top_k": 40,
             "stop": crate::llm::chat_stop_strings_with(model, tool_marker),
@@ -173,9 +175,7 @@ async fn ask_scenarios(
             .as_str()
             .map(|r| r.chars().count())
             .unwrap_or(0);
-        if reasoning_chars > 0 {
-            thought_first = true;
-        }
+        thought_chars = thought_chars.max(reasoning_chars);
         let visible = content.replace("<think>", "").replace("</think>", "");
         if crate::llm::contains_channel_marker(&content) {
             return format!(
@@ -186,7 +186,7 @@ async fn ask_scenarios(
         if visible.trim().is_empty() {
             return if reasoning_chars > 0 {
                 format!(
-                    "FAIL scenario {i} all reasoning, no words in 1024 tokens ({reasoning_chars} thinking chars - the no-thinking request was not honored)"
+                    "FAIL scenario {i} all reasoning, no words at the app's own ceiling ({reasoning_chars} thinking chars - the no-thinking request was not honored)"
                 )
             } else {
                 format!("FAIL scenario {i} empty reply")
@@ -197,7 +197,11 @@ async fn ask_scenarios(
     format!(
         "ok ({} scenarios{}): {:?}",
         scenarios.len(),
-        if thought_first { ", thought first despite the no-thinking ask" } else { "" },
+        if thought_chars > 0 {
+            format!(", thought first ({thought_chars} chars) despite the no-thinking ask")
+        } else {
+            String::new()
+        },
         last_snippet
     )
 }
