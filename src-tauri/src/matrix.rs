@@ -271,6 +271,10 @@ fn gguf_files(dir: &Path) -> Vec<String> {
             rd.filter_map(|e| e.ok())
                 .filter_map(|e| e.file_name().to_str().map(String::from))
                 .filter(|n| n.ends_with(".gguf") && !n.contains("mmproj"))
+                // Speed-up drafts ride beside their model; never a chat
+                // model, and standalone they cannot load at all (the 4060 Ti
+                // report's only failures were one MTP draft benched alone).
+                .filter(|n| !crate::llm::is_draft_file(dir, n))
                 .collect()
         })
         .unwrap_or_default();

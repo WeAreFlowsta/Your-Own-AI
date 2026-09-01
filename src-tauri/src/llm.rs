@@ -3565,7 +3565,7 @@ pub(crate) fn model_draft_for(models_dir: &std::path::Path, model: &str) -> Opti
 
 /// True for files that are speed-up drafts, not chat models (the maker's
 /// naming, and anything a sidecar points at).
-fn is_draft_file(models_dir: &std::path::Path, filename: &str) -> bool {
+pub(crate) fn is_draft_file(models_dir: &std::path::Path, filename: &str) -> bool {
     let lower = filename.to_lowercase();
     if ["mtp-", "dspark-", "dflash-", "eagle3-", "draft-"].iter().any(|p| lower.starts_with(p)) {
         return true;
