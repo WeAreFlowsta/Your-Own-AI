@@ -1042,6 +1042,10 @@ async fn caption_one(model: &str, image_part: &Value) -> Result<String, String> 
         "max_tokens": 350,
         "temperature": 0.2,
         "stream": false,
+        // A caption, not a think-aloud: the same no-thinking control chat
+        // turns send (proven on the pinned engine - gemma E2B + projector
+        // answered a synthetic test image exactly, in under two seconds).
+        "reasoning_budget_tokens": 0,
     });
     let resp = reqwest::Client::new()
         .post(format!("http://localhost:{}/v1/chat/completions", crate::llm::CHAT_PORT))
