@@ -339,10 +339,12 @@ export default component$(() => {
         if (!raw.startsWith("yourownai://")) return;
         let path = "/";
         let link = "";
+        let id = "";
         try {
           const u = new URL(raw.replace(/^yourownai:\/\//, "https://app.local/"));
           path = u.pathname;
           link = u.searchParams.get("link") ?? "";
+          id = u.searchParams.get("id") ?? "";
         } catch {
           return;
         }
@@ -352,6 +354,15 @@ export default component$(() => {
             sessionStorage.setItem("skillsAddLink", link);
           } catch {
             /* the page still opens; the user pastes the link */
+          }
+        }
+        // A character or tool link names its add-on: the page scrolls to
+        // that card and rings it. Handed over the same way as skills.
+        if ((path.startsWith("/add-ons/characters") || path.startsWith("/add-ons/mcp")) && id) {
+          try {
+            sessionStorage.setItem("addOnFocusId", id);
+          } catch {
+            /* the page still opens; the card is a scroll away */
           }
         }
         await nav(path);

@@ -45,6 +45,26 @@ import {
 /** Programs a shared tool may start through (the directory's rule) - they verify what they fetch. */
 const SHARE_LAUNCHERS = ["uv", "uvx", "npx", "pipx", "docker", "python", "python3", "node", "deno", "bunx"];
 
+
+/** The add-on a yourownai:// link asked for (handed over by the layout's
+ *  deep-link handler): read once, then scroll its card into view and ring
+ *  it for a moment. Nothing happens when the id is not on this page. */
+function takeAddOnFocus(): string {
+  try {
+    const id = sessionStorage.getItem("addOnFocusId") ?? "";
+    if (id) sessionStorage.removeItem("addOnFocusId");
+    return id;
+  } catch {
+    return "";
+  }
+}
+function scrollToAddOn(id: string, clear: () => void) {
+  setTimeout(() => {
+    document.getElementById(`addon-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setTimeout(clear, 4000);
+  }, 80);
+}
+
 export default component$(() => {
   const nav = useNavigate();
   const headerWs = useHeaderWorkspace();
@@ -53,6 +73,8 @@ export default component$(() => {
   const currentModel = useSignal<string | null>(null);
   const showModelWidget = useSignal(false);
   const store = useStore({
+    /** Card named by an incoming yourownai:// link - ringed until it fades. */
+    focus: "" as string,
     servers: [] as McpServer[],
     presets: [] as McpPreset[],
     loading: true,
@@ -191,6 +213,11 @@ export default component$(() => {
   useVisibleTask$(async () => {
     await load();
     store.presets = await readyPresets();
+    const wanted = takeAddOnFocus();
+    if (wanted && store.presets.some((p) => p.id === wanted)) {
+      store.focus = wanted;
+      scrollToAddOn(wanted, () => { store.focus = ""; });
+    }
     const programs = new Set<string>();
     for (const p of store.presets) for (const n of p.needs) programs.add(n.program);
     for (const prog of programs) store.have[prog] = await whichProgram(prog);
@@ -493,7 +520,7 @@ export default component$(() => {
               const missing = p.needs.filter((n) => store.have[n.program] === null);
               const checking = p.needs.some((n) => store.have[n.program] === undefined);
               return (
-                <div key={p.id} class="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4 flex flex-col gap-3">
+                <div key={p.id} id={`addon-${p.id}`} class={`rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4 flex flex-col gap-3 transition-shadow ${store.focus === p.id ? "ring-2 ring-[var(--text-link)]" : ""}`}>
                   <div>
                     <h3 class="font-medium text-[var(--text-primary)]">{p.title}</h3>
                     <p class="mt-1 text-sm text-[var(--text-secondary)]">{p.blurb}</p>

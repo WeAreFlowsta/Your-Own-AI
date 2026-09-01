@@ -53,6 +53,26 @@ interface ShelfEntry {
   pack: AiPack | null;
 }
 
+
+/** The add-on a yourownai:// link asked for (handed over by the layout's
+ *  deep-link handler): read once, then scroll its card into view and ring
+ *  it for a moment. Nothing happens when the id is not on this page. */
+function takeAddOnFocus(): string {
+  try {
+    const id = sessionStorage.getItem("addOnFocusId") ?? "";
+    if (id) sessionStorage.removeItem("addOnFocusId");
+    return id;
+  } catch {
+    return "";
+  }
+}
+function scrollToAddOn(id: string, clear: () => void) {
+  setTimeout(() => {
+    document.getElementById(`addon-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setTimeout(clear, 4000);
+  }, 80);
+}
+
 export default component$(() => {
   const nav = useNavigate();
   const headerWs = useHeaderWorkspace();
@@ -62,6 +82,8 @@ export default component$(() => {
   const showModelWidget = useSignal(false);
 
   const store = useStore({
+    /** Card named by an incoming yourownai:// link - ringed until it fades. */
+    focus: "" as string,
     shelf: CHARACTERS.map((c) => ({ ...c, description: "", askBlurb: "", knowledgeCount: 0, verify: null, pack: null })) as ShelfEntry[],
     loading: true,
     offline: false,
@@ -122,6 +144,11 @@ export default component$(() => {
     );
     store.offline = !anyOk;
     store.loading = false;
+    const wanted = takeAddOnFocus();
+    if (wanted && store.shelf.some((c) => c.slug === wanted)) {
+      store.focus = wanted;
+      scrollToAddOn(wanted, () => { store.focus = ""; });
+    }
   }, { strategy: "document-ready" });
 
   const handleNewQuestion = $(() => {
@@ -250,7 +277,8 @@ export default component$(() => {
               return (
                 <div
                   key={c.slug}
-                  class="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4 flex flex-col gap-3"
+                  id={`addon-${c.slug}`}
+                  class={`rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4 flex flex-col gap-3 transition-shadow ${store.focus === c.slug ? "ring-2 ring-[var(--text-link)]" : ""}`}
                 >
                   <div class="flex items-center gap-3">
                     <div class="h-14 w-14 shrink-0 overflow-hidden rounded-full border border-[var(--border-subtle)] bg-[var(--bg-main)]">
