@@ -311,6 +311,13 @@ pub async fn leg_fit_truth(bin: &Path, dir: &Path, only: &[String], sink: Sink<'
         .filter(|n| only.is_empty() || only.iter().any(|o| n == o))
         .collect();
     sink(format!("{} models, total RAM {total_ram:.1} GB", files.len()));
+    if cfg!(windows) {
+        // WDDM virtualizes GPU memory per process: a probe from a second
+        // process cannot see the bench server's allocations, so the delta
+        // column reads near zero there. 4060 Ti runs proved it; loads and
+        // speeds are the evidence on Windows.
+        sink("note: Windows virtualizes GPU memory per process - the realGB column is unreliable here; load success and speeds are the proof".into());
+    }
     sink(format!(
         "{:<38} {:>5} {:>6} {:>6} {:>6} | {:>7} {:>6} {:>6} {:>7}  verdict",
         "model", "grade", "ctx", "estGB", "freeGB", "realGB", "load_s", "gen", "prompt"
