@@ -195,6 +195,8 @@ export interface SystemInfo {
   gpu_integrated?: boolean;
   total_memory_gb: number;
   used_memory_gb: number;
+  /** The grader's own available figure (vm_stat on macOS). */
+  available_memory_gb?: number;
   cpu_count: number;
   cpu_brand?: string;
   os_name: string;
@@ -498,7 +500,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     // runtime - which is why this button did nothing on every platform.
     const totalRAM = systemInfo?.total_memory_gb || 8;
     const freeRAM = systemInfo
-      ? Math.max(1, systemInfo.total_memory_gb - systemInfo.used_memory_gb)
+      ? Math.max(1, systemInfo.available_memory_gb ?? (systemInfo.total_memory_gb - systemInfo.used_memory_gb))
       : null;
     const lines = [
       `Your Own AI ${store.appVersion || 'unknown version'}`,
@@ -1119,7 +1121,9 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
   const totalVRAM = store.gpuUnusable
     ? null
     : systemInfo?.gpu_integrated ? null : (systemInfo?.total_vram_gb || null);
-  const freeRAM = systemInfo ? Math.max(1, systemInfo.total_memory_gb - systemInfo.used_memory_gb) : null;
+  const freeRAM = systemInfo
+    ? Math.max(1, systemInfo.available_memory_gb ?? (systemInfo.total_memory_gb - systemInfo.used_memory_gb))
+    : null;
   // A damaged file is not a download - its card offers to fetch it again.
   const downloadedFilenames = new Set(
     store.downloadedModels.filter((m) => !m.damaged).map((m) => m.name),

@@ -55,6 +55,10 @@ pub struct LocalModel {
 pub struct SystemInfo {
     pub total_memory_gb: f64,
     pub used_memory_gb: f64,
+    /// What the OS would hand a new allocation now - the figure the fit
+    /// grader uses (vm_stat on macOS; strict free pages sit near zero on
+    /// a settled Mac). Display reads this so it cannot disagree with a grade.
+    pub available_memory_gb: f64,
     pub cpu_count: usize,
     pub cpu_brand: String,
     pub os_name: String,
@@ -2923,6 +2927,7 @@ pub fn get_system_info() -> Result<SystemInfo, String> {
     let used_memory = sys.used_memory();
     let total_memory_gb = total_memory as f64 / (1024_f64.powi(3));
     let used_memory_gb = used_memory as f64 / (1024_f64.powi(3));
+    let available_memory_gb = available_memory_bytes() as f64 / (1024_f64.powi(3));
     
     // Get GPU info via Vulkan. Apple Silicon has NO Vulkan (get_gpu_info
     // returns nothing there), but its GPU shares unified memory - so report
@@ -2951,6 +2956,7 @@ pub fn get_system_info() -> Result<SystemInfo, String> {
     Ok(SystemInfo {
         total_memory_gb,
         used_memory_gb,
+        available_memory_gb,
         cpu_count: sys.cpus().len(),
         cpu_brand: sys
             .cpus()
