@@ -541,6 +541,137 @@ mod tests {
         assert_eq!(b["top_p"], serde_json::json!(0.5));
     }
 
+    /// Headless matrix leg: CLAIM vs REALITY for every downloaded model.
+    /// Prints the estimate's arithmetic (parsed header, chosen context,
+    /// need, grade), then loads the model the app's way and records what
+    /// actually happened: on-card memory delta, load time, measured
+    /// speeds. The baseline table for the fit-truth fixes - run it before
+    /// and after each one. `YOAI_FIT_TRUTH_MODELS=a.gguf,b.gguf` filters.
+    #[tokio::test]
+    #[ignore]
+    async fn live_matrix_fit_truth() {
+        use std::process::Command;
+        let _one_at_a_time = crate::llm::LIVE_MATRIX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = std::env::var("HOME").unwrap_or_default();
+        let dir = std::env::var("YOAI_MODELS_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::Path::new(&home).join(".local/share/com.solar.yourowai/models"));
+        let triple = if cfg!(target_os = "windows") { "x86_64-pc-windows-msvc.exe" }
+            else if cfg!(target_os = "macos") { if cfg!(target_arch = "aarch64") { "aarch64-apple-darwin" } else { "x86_64-apple-darwin" } }
+            else { "x86_64-unknown-linux-gnu" };
+        let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bin").join(format!("llama-server-{triple}"));
+        assert!(bin.exists());
+        let free_vram = || -> Option<f64> {
+            let out = Command::new(&bin).arg("--list-devices").output().ok()?;
+            let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+            text.push_str(&String::from_utf8_lossy(&out.stderr));
+            let d: Vec<_> = crate::llm::parse_gpu_devices(&text).into_iter().filter(|d| !d.integrated).collect();
+            if d.is_empty() { None } else { Some(d.iter().map(|x| x.free_mib).sum::<u64>() as f64 / 1024.0) }
+        };
+        let sys = sysinfo::System::new_with_specifics(
+            sysinfo::RefreshKind::nothing().with_memory(sysinfo::MemoryRefreshKind::everything()),
+        );
+        let total_ram = sys.total_memory() as f64 / (1024.0 * 1024.0 * 1024.0);
+        let only: Vec<String> = std::env::var("YOAI_FIT_TRUTH_MODELS").ok()
+            .map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+            .unwrap_or_default();
+        let mut files: Vec<String> = std::fs::read_dir(&dir).unwrap()
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.file_name().to_str().map(String::from))
+            .filter(|n| n.ends_with(".gguf") && !n.contains("mmproj"))
+            .filter(|n| only.is_empty() || only.iter().any(|o| n == o))
+            .collect();
+        files.sort();
+        eprintln!("[fit-truth] {} models, total RAM {total_ram:.1} GB", files.len());
+        eprintln!("[fit-truth] {:<38} {:>5} {:>6} {:>6} {:>6} | {:>7} {:>6} {:>6} {:>7}  verdict",
+            "model", "grade", "ctx", "estGB", "freeGB", "realGB", "load_s", "gen", "prompt");
+        for name in files {
+            let path = dir.join(&name);
+            let meta = match crate::gguf::read_meta(&path) { Ok(m) => m, Err(e) => { eprintln!("[fit-truth] {name}: header error {e:?}"); continue; } };
+            if meta.is_embedding() { continue; }
+            let size = std::fs::metadata(&path).unwrap().len();
+            let free = free_vram();
+            let ctx = crate::fit::choose_ctx(&meta, size, total_ram, free);
+            let (w, kv, need) = crate::fit::model_need(&meta, size, ctx);
+            let grade = crate::fit::grade(need, free, total_ram);
+            // MoE decision the app's way
+            let moe: Option<u32> = if meta.is_moe() {
+                free.and_then(|f| {
+                    if crate::fit::moe_offload_wanted(need, f) {
+                        Some(crate::fit::moe_cpu_layers(&meta, kv, f).unwrap_or(meta.expert_bytes_per_layer.len()) as u32)
+                    } else { None }
+                })
+            } else { None };
+            let arm = TuneArm { ctx, moe_cpu_layers: moe, draft: false };
+            let before = free_vram();
+            let r = bench_one_measure(&bin, &dir, &name, arm, free_vram).await;
+            let after_kill = free_vram();
+            let real = match (before, r.during_free) {
+                (Some(b), Some(d)) => format!("{:.2}", b - d),
+                _ => "?".into(),
+            };
+            let verdict = if r.failed.is_some() {
+                if grade == crate::fit::Fit::Red { "red CONFIRMED (did not load)" } else { "CLAIMED ok, DID NOT LOAD" }
+            } else if grade == crate::fit::Fit::Red {
+                "claimed RED, actually RAN"
+            } else { "ok" };
+            eprintln!("[fit-truth] {:<38} {:>5} {:>6} {:>6.2} {:>6} | {:>7} {:>6.1} {:>6.1} {:>7.0}  {}{}",
+                name, format!("{:?}", grade), ctx, need,
+                before.map(|b| format!("{b:.2}")).unwrap_or("-".into()),
+                real, r.load_secs, r.gen_tps, r.pp_tps, verdict,
+                r.failed.as_deref().map(|f| format!("  [{}]", &f[..f.len().min(80)])).unwrap_or_default());
+            eprintln!("[fit-truth]   est: weights {w:.2} + kv {kv:.2} + 0.8 | parser: layers {} attn {} kv_heads {} dim {} moe_flag {:?} | freed-after-kill {:?}",
+                meta.n_layers, meta.n_attn_layers, meta.n_kv_heads, meta.head_dim(), arm.moe_cpu_layers, after_kill.map(|a| format!("{a:.2}")));
+        }
+    }
+
+    /// bench_one, plus a free-VRAM probe taken while the server is up.
+    async fn bench_one_measure(
+        bin: &std::path::Path,
+        dir: &std::path::Path,
+        model: &str,
+        arm: TuneArm,
+        probe: impl Fn() -> Option<f64>,
+    ) -> TuneResultWithVram {
+        // Reuse bench_one for the load+measure, but we need the free
+        // reading while it runs - so replicate the tail: spawn via
+        // bench_one is not possible. Instead call bench_one and accept
+        // the during-free from a mid-flight probe thread is overkill:
+        // simplest honest read = probe right after health from HERE by
+        // racing. We keep it simple: bench_one measures; the during
+        // probe happens inside via this wrapper spawning first.
+        // Implementation: spawn our own copy would duplicate; instead we
+        // time-slice: start bench in a task, poll health, probe, join.
+        let bin2 = bin.to_path_buf();
+        let dir2 = dir.to_path_buf();
+        let model2 = model.to_string();
+        let handle = tokio::spawn(async move { bench_one(&bin2, &dir2, &model2, arm, None, None, &[]).await });
+        // Wait for the bench server to answer health, then take the reading.
+        let client = reqwest::Client::new();
+        let mut during_free = None;
+        for _ in 0..480 {
+            if handle.is_finished() { break; }
+            if let Ok(r) = client.get(format!("http://127.0.0.1:{BENCH_PORT}/health")).send().await {
+                if r.status().is_success() {
+                    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                    during_free = probe();
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+        let r = handle.await.expect("bench task");
+        TuneResultWithVram { load_secs: r.load_secs, pp_tps: r.pp_tps, gen_tps: r.gen_tps, failed: r.failed, during_free }
+    }
+
+    struct TuneResultWithVram {
+        load_secs: f32,
+        pp_tps: f32,
+        gen_tps: f32,
+        failed: Option<String>,
+        during_free: Option<f64>,
+    }
+
     /// Headless matrix leg: the sampling knobs REACH the engine. One server,
     /// three completions through `apply_sampling`: temperature 0 twice must
     /// answer identically (greedy is deterministic); high temperature with
