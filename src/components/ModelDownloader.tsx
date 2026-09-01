@@ -1943,7 +1943,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                           type="button"
                           onClick$={() => handleGetDraft$(catalogMatch.family.id, model.name)}
                           title="The maker ships a small file that lets this model answer faster: several drafted tokens checked per pass. Downloaded once, kept beside the model."
-                          class="mt-0.5 text-xs text-[var(--text-secondary)] underline underline-offset-2 bg-transparent border-none p-0 cursor-pointer hover:text-[var(--text-primary)]"
+                          class="mt-0.5 mr-4 text-xs text-[var(--text-secondary)] underline underline-offset-2 bg-transparent border-none p-0 cursor-pointer hover:text-[var(--text-primary)]"
                         >
                           Get its speed-up file ({catalogMatch.variant.draft.size} GB)
                         </button>
@@ -1962,7 +1962,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                             type="button"
                             onClick$={() => handleGetMlx$(a.hfRepo!, a.revision!, model.name)}
                             title="A version of this model built for Apple's MLX framework. Chats use it once installed; whether it is faster depends on your Mac. Projects and images keep the standard engine, and your current file stays."
-                            class="mt-0.5 text-xs text-[var(--text-secondary)] underline underline-offset-2 bg-transparent border-none p-0 cursor-pointer hover:text-[var(--text-primary)]"
+                            class="mt-0.5 mr-4 text-xs text-[var(--text-secondary)] underline underline-offset-2 bg-transparent border-none p-0 cursor-pointer hover:text-[var(--text-primary)]"
                           >
                             Get the MLX version ({a.sizeGb} GB)
                           </button>

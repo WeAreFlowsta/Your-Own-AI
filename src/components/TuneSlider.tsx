@@ -50,9 +50,11 @@ export default component$<TuneSliderProps>((props) => {
           </button>
         )}
       </div>
+      {/* Track and thumb painted explicitly: macOS WKWebView renders the
+          native range track invisibly faint on dark backgrounds. */}
       <input
         type="range" min={lo} max={hi} step={st} value={pos}
-        class={`mt-1 w-full accent-[var(--text-link)] ${props.value == null ? 'opacity-60' : ''}`}
+        class={`mt-1 w-full appearance-none h-1.5 rounded-full bg-[var(--border-subtle)] cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[var(--text-link)] [&::-moz-range-thumb]:w-3.5 [&::-moz-range-thumb]:h-3.5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-[var(--text-link)] [&::-moz-range-thumb]:border-none ${props.value == null ? 'opacity-60' : ''}`}
         onInput$={(_, el) => {
           const raw = Number(el.value);
           props.onChange$(ticks ? ticks[Math.max(0, Math.min(ticks.length - 1, raw))] : raw);

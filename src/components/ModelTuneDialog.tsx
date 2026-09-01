@@ -185,7 +185,7 @@ export default component$<ModelTuneDialogProps>((props) => {
                 </div>
                 <input
                   type="range" min={0} max={positions.length - 1} step={1} value={sliderPos.value}
-                  class="w-full accent-[var(--text-link)]"
+                  class="w-full appearance-none h-1.5 rounded-full bg-[var(--border-subtle)] cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[var(--text-link)] [&::-moz-range-thumb]:w-3.5 [&::-moz-range-thumb]:h-3.5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-[var(--text-link)] [&::-moz-range-thumb]:border-none"
                   onInput$={(_, el) => {
                     sliderPos.value = Number(el.value);
                     const p = positions[Number(el.value)];
