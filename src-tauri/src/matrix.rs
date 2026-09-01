@@ -687,7 +687,18 @@ pub async fn matrix_run(
     let sink_app = app.clone();
     let sink_report = report.clone();
     let sink_path = path.clone();
+    // Every line is scrubbed of the home directory before it is written:
+    // the report is made to be sent to other people, and an engine error
+    // echoing an absolute path must not carry the OS account name.
+    let home_prefix = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .unwrap_or_default();
     let sink = move |line: String| {
+        let line = if home_prefix.len() > 3 {
+            line.replace(&home_prefix, "~")
+        } else {
+            line
+        };
         log::info!("[matrix] {line}");
         let _ = sink_app.emit("matrix-progress", &line);
         let mut r = sink_report.lock().unwrap();
