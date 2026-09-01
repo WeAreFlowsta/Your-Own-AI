@@ -281,6 +281,33 @@ fn ensure_agent_permission_config(home: &std::path::Path) -> Result<(), String> 
     std::fs::write(&config_path, content).map_err(|e| format!("cannot write agent config: {}", e))
 }
 
+/// How much of one tool result the harness keeps inline, in bytes: an
+/// eighth of the serving window (four bytes a token), never below 6 KB
+/// (a useful page of output) and never above the harness's own 20 KB
+/// default. A 5k-token scene dump on a 16k window walled a session
+/// mid-task (the request overshot in ONE step, so compaction never got
+/// its turn); at 8 KB it becomes a page the model can ask more of.
+pub(crate) fn tool_result_cap_bytes(ctx_tokens: u64) -> usize {
+    let eighth_tokens = ctx_tokens / 8;
+    let bytes = eighth_tokens.saturating_mul(4);
+    bytes.clamp(6_000, 20_000) as usize
+}
+
+#[cfg(test)]
+mod tool_result_cap_tests {
+    use super::tool_result_cap_bytes;
+
+    #[test]
+    fn cap_scales_with_the_window_inside_the_bounds() {
+        assert_eq!(tool_result_cap_bytes(16_384), 8_192);
+        assert_eq!(tool_result_cap_bytes(24_576), 12_288);
+        assert_eq!(tool_result_cap_bytes(32_768), 16_384);
+        assert_eq!(tool_result_cap_bytes(131_072), 20_000);
+        assert_eq!(tool_result_cap_bytes(4_096), 6_000);
+        assert_eq!(tool_result_cap_bytes(1_000_000), 20_000);
+    }
+}
+
 async fn write_line(state: &AgentBridgeState, value: &Value) -> Result<(), String> {
     let mut guard = state.child.lock().await;
     let child = guard.as_mut().ok_or("agent is not running")?;
@@ -326,6 +353,9 @@ pub async fn start_build_agent(
     }
     // The model must exist in the agent's config catalog before the process
     // starts, or session/set_model has nothing to resolve.
+    // A single tool result's inline cap for THIS session (bytes), sized to
+    // the serving window - handed to the harness as its env tier.
+    let mut tool_result_cap: Option<usize> = None;
     if let Some(slug) = &model {
         let home = app_handle
             .path()
@@ -401,6 +431,12 @@ pub async fn start_build_agent(
         );
         ensure_agent_model_entry(&home, slug, agent_ctx, plan_ctx, device_workers, web_allowed)?;
         ensure_agent_permission_config(&home)?;
+        tool_result_cap = Some(tool_result_cap_bytes(agent_ctx));
+        log::info!(
+            "[agent] tool results capped at {} bytes inline for a {}-token window",
+            tool_result_cap.unwrap_or(0),
+            agent_ctx
+        );
     }
     let mode = permission_mode.as_deref().unwrap_or("ask").to_string();
     let auto_mode = mode == "auto";
@@ -414,11 +450,19 @@ pub async fn start_build_agent(
         }
     );
 
-    let (mut rx, child) = app_handle
+    let mut command = app_handle
         .shell()
         .command(&binary)
         .args(["agent", "stdio"])
-        .current_dir(std::path::PathBuf::from(&cwd))
+        .current_dir(std::path::PathBuf::from(&cwd));
+    if let Some(cap) = tool_result_cap {
+        // The harness's env tier for its MCP inline cap (above the user
+        // config file, below a repo's own requirements) - per session, so
+        // a 16k local window and a million-token online one each get a
+        // cap that fits.
+        command = command.env("GROK_MAX_MCP_OUTPUT_BYTES", cap.to_string());
+    }
+    let (mut rx, child) = command
         .spawn()
         .map_err(|e| format!("failed to start agent: {}", e))?;
 
