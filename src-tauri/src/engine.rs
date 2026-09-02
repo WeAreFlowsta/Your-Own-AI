@@ -578,7 +578,10 @@ mod tests {
 
     #[test]
     fn tag_version_strips_prefix() {
-        assert_eq!(tag_version(), "b10435");
+        // Derived from the pin, never a literal: a bump must not trip this.
+        assert_eq!(tag_version(), LLAMA_ENGINE_TAG.trim_start_matches("llama-"));
+        assert!(tag_version().starts_with('b'), "engine tags are llama.cpp build tags");
+        assert!(!tag_version().contains("llama-"));
     }
 
     #[test]
