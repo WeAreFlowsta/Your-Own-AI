@@ -112,6 +112,11 @@ const FRESH_REFERENCES: &[&str] = &[
     "what did the central bank decide at its last meeting",
     "will it rain tomorrow",
     "which country most recently joined",
+    "what is the weather forecast for this weekend",
+    "who won the match this weekend",
+    "what is the latest score in the game",
+    "is there a storm warning this week",
+    "who won the election",
 ];
 
 pub(crate) fn cosine(a: &[f32], b: &[f32]) -> f32 {
@@ -144,12 +149,37 @@ async fn fresh_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec<f32>>>
 /// "needs-current-info" reference phrases? `None` if embedding is unavailable
 /// (→ caller treats as not-fresh, i.e. stays offline). Catches paraphrases the
 /// keyword gate misses ("what's the newest phone", "is it raining").
+/// Contrastive freshness: the fresh score, minus how close the turn also
+/// sits to ordinary-question anchors. A greeting with "today" in it or a
+/// creative ask scores high on the fresh references alone; against the
+/// benign anchors it scores higher still, and the margin sends it home.
+const FRESH_MARGIN: f32 = 0.05;
+
 async fn semantic_fresh_score(
     app: &AppHandle,
     query: &str,
     provided_vec: Option<&[f32]>,
 ) -> Option<f32> {
+    let (fresh, benign) = fresh_scores(app, query, provided_vec).await?;
+    if fresh - benign < FRESH_MARGIN {
+        log::debug!("[router] freshness pass-through (fresh {fresh:.3}, benign {benign:.3})");
+        return Some(0.0);
+    }
+    Some(fresh)
+}
+
+/// Dev preview / calibration: both raw scores.
+pub async fn fresh_scores_preview(app: &AppHandle, query: &str) -> Option<(f32, f32)> {
+    fresh_scores(app, query, None).await
+}
+
+async fn fresh_scores(
+    app: &AppHandle,
+    query: &str,
+    provided_vec: Option<&[f32]>,
+) -> Option<(f32, f32)> {
     let refs = fresh_reference_vecs(app).await?;
+    let benign = benign_reference_vecs(app).await?;
     // The frontend embeds the turn's text ONCE (same bge query instruction)
     // and shares the vector here and with memory retrieval - reuse it rather
     // than paying a second embed-server round trip. Callers without one
@@ -165,7 +195,9 @@ async fn semantic_fresh_score(
                 .pop()?
         }
     };
-    Some(refs.iter().map(|r| cosine(&qvec, r)).fold(0.0f32, f32::max))
+    let fresh = refs.iter().map(|r| cosine(&qvec, r)).fold(0.0f32, f32::max);
+    let benign_score = benign.iter().map(|r| cosine(&qvec, r)).fold(0.0f32, f32::max);
+    Some((fresh, benign_score))
 }
 
 /// Reference phrasings of health questions - the semantic medical gate scores
@@ -219,6 +251,14 @@ const BENIGN_REFERENCES: &[&str] = &[
     "what is in this pdf",
     "summarize this document for me",
     "what is this file about",
+    // Freshness-gate anchors: a greeting with "today" in it, a creative or
+    // rewrite ask, an evergreen explanation - none of these want the web.
+    "hi, how are you doing today",
+    "write a short poem for me",
+    "rewrite this to sound friendlier",
+    "suggest a fun activity for a rainy day",
+    "explain how this works in simple terms",
+    "what should I pack for a trip",
 ];
 
 static MEDICAL_REFS: tokio::sync::OnceCell<Vec<Vec<f32>>> = tokio::sync::OnceCell::const_new();
@@ -1327,11 +1367,6 @@ pub async fn route(
     plan: bool,
 ) -> Result<RouteResult, String> {
     route_with(app, mode, query, share, task, difficulty, lean, picks, query_vec, agent, plan, None).await
-}
-
-/// Dev preview only: the freshness score for a query (calibration).
-pub async fn fresh_score_preview(app: &AppHandle, query: &str) -> Option<f32> {
-    semantic_fresh_score(app, query, None).await
 }
 
 /// `route_with` for the dev preview / matrix / battery: identical decision,
