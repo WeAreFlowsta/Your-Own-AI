@@ -478,6 +478,31 @@ export default component$<FlowstaAccountProps>((props) => {
                       ? ` · $${usage.value.overage_usd.toFixed(2)} overage so far`
                       : ""}
                   </p>
+                  {usage.value.overage_opt_in && (
+                    <p class="mt-1 text-xs text-[var(--text-muted)]">
+                      Past your allowance you pay the same rates. We charge your card whenever accrued overage reaches $100, and again at month end; if a charge fails, online models pause past your allowance until the invoice is paid.
+                    </p>
+                  )}
+                  {usage.value.overage_hold && (
+                    <p class="mt-1 text-xs text-amber-400">
+                      Your ${usage.value.overage_hold.amount_usd.toFixed(2)} overage invoice for {usage.value.overage_hold.month} hasn't been paid - online models pause past your allowance until it is.
+                      {usage.value.overage_hold.hosted_invoice_url && (
+                        <>
+                          {" "}
+                          <button
+                            type="button"
+                            class="text-[var(--text-link)] hover:underline"
+                            onClick$={async () => {
+                              const { openUrl } = await import("@tauri-apps/plugin-opener");
+                              await openUrl(usage.value!.overage_hold!.hosted_invoice_url!);
+                            }}
+                          >
+                            Pay the invoice
+                          </button>
+                        </>
+                      )}
+                    </p>
+                  )}
                 </div>
               </div>
               <div class="mt-3 flex items-center justify-between gap-3 border-t border-[var(--border-subtle)] pt-3">

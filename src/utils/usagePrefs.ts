@@ -17,6 +17,9 @@ export interface UsageSummary {
   overage_usd: number;
   overage_opt_in: boolean;
   requests: number;
+  /** An overage invoice the card could not pay - online models pause past
+   *  the allowance until it is paid. */
+  overage_hold?: { invoice: string; amount_usd: number; month: string; hosted_invoice_url?: string | null } | null;
 }
 
 /** Header ticker switch. Defaults to OFF (only an explicit "true" enables). */
@@ -46,5 +49,6 @@ export function formatUsage(u: UsageSummary): string {
   // named on its own - "$102 of $66" read as a hundred dollars of overage.
   const base = `$${u.cost_usd.toFixed(2)} of $${Math.round(u.allowance_usd)}`;
   const over = u.cost_usd - u.allowance_usd;
-  return over > 0.005 ? `${base} · $${over.toFixed(2)} over` : base;
+  const line = over > 0.005 ? `${base} · $${over.toFixed(2)} over` : base;
+  return u.overage_hold ? `${line} · invoice unpaid` : line;
 }

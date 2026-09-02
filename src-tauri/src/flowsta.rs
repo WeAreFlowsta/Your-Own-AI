@@ -405,6 +405,21 @@ pub struct UsageSummary {
     pub overage_usd: f64,
     pub overage_opt_in: bool,
     pub requests: u64,
+    /// An overage invoice the card could not pay: online models pause past
+    /// the allowance until it is paid. Absent on older proxies.
+    #[serde(default)]
+    pub overage_hold: Option<OverageHold>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct OverageHold {
+    pub invoice: String,
+    pub amount_usd: f64,
+    pub month: String,
+    #[serde(default)]
+    pub since: Option<String>,
+    #[serde(default)]
+    pub hosted_invoice_url: Option<String>,
 }
 
 #[tauri::command]
