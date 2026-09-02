@@ -399,6 +399,12 @@ async fn route_preview(
     // The dial: `online_share` (frontier|balanced|local) wins; the legacy
     // `eagerness` name still maps; absent → the store.
     let share = q.get("online_share").cloned().unwrap_or_else(|| g("eagerness", ""));
+    let prev = crate::router::PrevTurn {
+        side: over("prev_side"),
+        task: over("prev_task"),
+        model: over("prev_model"),
+        vec: None,
+    };
     match crate::router::route_dry(
         &app,
         &g("mode", "online-offline"),
@@ -411,6 +417,7 @@ async fn route_preview(
         g("agent", "0") == "1",
         g("plan", "0") == "1",
         q.get("turn_tokens").and_then(|t| t.parse::<u32>().ok()),
+        &prev,
     )
     .await
     {

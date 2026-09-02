@@ -26,6 +26,43 @@ pub struct RouteResult {
     pub think: Option<bool>,
 }
 
+/// The previous completed turn, for follow-up stickiness: which side
+/// answered, its routing task, the model, and the previous user turn's
+/// embedding (for topic-change decay). All optional; absent = no history.
+#[derive(Default, Clone)]
+pub struct PrevTurn {
+    pub side: Option<String>,
+    pub task: Option<String>,
+    pub model: Option<String>,
+    pub vec: Option<Vec<f32>>,
+}
+
+/// A short, anaphoric follow-up ("more on that", "why?", "and the second
+/// one?", "shorter please") that carries no signal of its own. Such a turn
+/// inherits the previous turn's side and task instead of being re-routed
+/// from scratch - a live-news thread stays on the search model, a coding
+/// thread stays on the coder. Pure; unit-tested.
+pub(crate) fn is_followup(query: &str) -> bool {
+    let q = query.trim().to_lowercase();
+    let words: Vec<&str> = q.split_whitespace().collect();
+    if words.is_empty() || words.len() > 9 {
+        return false;
+    }
+    const CUES: &[&str] = &[
+        "more", "why", "how so", "and ", "what about", "that", "it ", "it?", "this",
+        "shorter", "longer", "again", "expand", "elaborate", "explain that", "the second",
+        "the first", "the other", "those", "them", "same", "also", "go on", "continue",
+        "example", "simpler", "in detail", "sure", "yes", "ok", "please",
+    ];
+    let padded = format!(" {q} ");
+    CUES.iter().any(|c| padded.contains(&format!(" {}", c.trim_end())) || q.starts_with(c.trim()))
+}
+
+/// Topic-change decay: the follow-up must still sit near the previous user
+/// turn (cosine of the two query embeddings). Without a previous vector the
+/// wording alone decides.
+const FOLLOWUP_TOPIC_MIN: f32 = 0.45;
+
 /// The think verdict for a routing decision. Pure; unit-tested.
 fn think_for(difficulty: &str, capable: bool, agent: bool) -> Option<bool> {
     if agent || !capable {
@@ -1129,6 +1166,63 @@ async fn pick_online(task: &str, fresh: bool, pref: Option<&str>) -> Option<Stri
     select_online(&models, task, fresh, pref)
 }
 
+/// Follow-up inheritance (see is_followup). Returns the decision when the
+/// turn is a same-topic follow-up with usable history, else None so the
+/// normal ladder runs.
+async fn inherit_followup(
+    app: &AppHandle,
+    query: &str,
+    query_vec: Option<&[f32]>,
+    task: &str,
+    lean: &str,
+    turn_tokens: Option<u32>,
+    prev: &PrevTurn,
+    picks: &OnlinePicks,
+) -> Option<RouteResult> {
+    let prev_side = prev.side.as_deref()?;
+    if !is_followup(query) || looks_time_sensitive(query) {
+        return None;
+    }
+    if let (Some(pv), Some(qv)) = (prev.vec.as_deref(), query_vec) {
+        if !pv.is_empty() && !qv.is_empty() && cosine(qv, pv) < FOLLOWUP_TOPIC_MIN {
+            log::info!("[router] follow-up wording but the topic moved - routing afresh");
+            return None;
+        }
+    }
+    let prev_task = prev.task.as_deref().filter(|t| !t.is_empty()).unwrap_or(task);
+    match prev_side {
+        "online" => {
+            let models = crate::flowsta::list_online_models().await.ok()?;
+            let by_id = |id: &str| {
+                let want = id.strip_prefix("online:").unwrap_or(id);
+                models.iter().find(|m| m.id.strip_prefix("online:").unwrap_or(&m.id) == want).map(|m| m.id.clone())
+            };
+            // The same model when it is still there; else the slot for the
+            // previous task (a search model stays a search model).
+            let same = prev.model.as_deref().and_then(by_id);
+            let model = match same {
+                Some(m) => m,
+                None => {
+                    let was_search = prev.model.as_deref().is_some_and(|m| m.contains("search") || m.contains("sonar"));
+                    select_online(&models, prev_task, was_search, if was_search { picks.fresh.as_deref() } else { picks.everyday.as_deref() })?
+                }
+            };
+            Some(RouteResult { think: None, model, reason: "online — continuing the conversation".to_string() })
+        }
+        "device" => {
+            let pick = pick_offline_detail(app, prev_task, lean, false, turn_tokens).await.ok()?;
+            // The model that answered, when it still runs here; else the
+            // best for the previous task.
+            let model = match prev.model.as_deref() {
+                Some(m) if crate::fit::assess(app).await.iter().any(|f| f.name == m && f.fit.tier() > 0) => m.to_string(),
+                _ => pick.name,
+            };
+            Some(RouteResult { think: None, model, reason: "kept on your device — continuing the conversation".to_string() })
+        }
+        _ => None,
+    }
+}
+
 /// The Everyday slot's model. Order: the user's pick → the recommended
 /// default → the cheapest priced chat model that is not a search model →
 /// None (the device answers). Deliberately never the Hard slot: an absent
@@ -1417,7 +1511,7 @@ pub async fn route(
     agent: bool,
     plan: bool,
 ) -> Result<RouteResult, String> {
-    route_with(app, mode, query, share, task, difficulty, lean, picks, query_vec, agent, plan, None).await
+    route_with(app, mode, query, share, task, difficulty, lean, picks, query_vec, agent, plan, None, &PrevTurn::default()).await
 }
 
 /// `route_with` for the dev preview / matrix / battery: identical decision,
@@ -1434,8 +1528,9 @@ pub async fn route_dry(
     agent: bool,
     plan: bool,
     turn_tokens: Option<u32>,
+    prev: &PrevTurn,
 ) -> Result<RouteResult, String> {
-    route_inner(app, mode, query, share, task, difficulty, lean, picks, None, agent, plan, turn_tokens).await
+    route_inner(app, mode, query, share, task, difficulty, lean, picks, None, agent, plan, turn_tokens, prev).await
 }
 
 /// `route` with the turn's size (prompt + history + attachments, tokens),
@@ -1454,8 +1549,9 @@ pub async fn route_with(
     agent: bool,
     plan: bool,
     turn_tokens: Option<u32>,
+    prev: &PrevTurn,
 ) -> Result<RouteResult, String> {
-    let result = route_inner(app, mode, query, share, task, difficulty, lean, picks, query_vec, agent, plan, turn_tokens).await;
+    let result = route_inner(app, mode, query, share, task, difficulty, lean, picks, query_vec, agent, plan, turn_tokens, prev).await;
     if let Ok(r) = &result {
         remember_decision(app, mode, effective_share(app, share).as_str(), task, difficulty, &r.model, &r.reason, r.think);
     }
@@ -1488,8 +1584,9 @@ async fn route_inner(
     agent: bool,
     plan: bool,
     turn_tokens: Option<u32>,
+    prev: &PrevTurn,
 ) -> Result<RouteResult, String> {
-    let mut r = route_core(app, mode, query, share, task, difficulty, lean, picks, query_vec, agent, plan, turn_tokens).await?;
+    let mut r = route_core(app, mode, query, share, task, difficulty, lean, picks, query_vec, agent, plan, turn_tokens, prev).await?;
     // Reasoning budget rides with the pick: online models take an effort
     // dial (the proxy forwards it where supported); a local model only
     // when its template has a switch.
@@ -1517,6 +1614,7 @@ async fn route_core(
     agent: bool,
     plan: bool,
     turn_tokens: Option<u32>,
+    prev: &PrevTurn,
 ) -> Result<RouteResult, String> {
     let share_owned = effective_share(app, share);
     let share = share_owned.as_str();
@@ -1718,6 +1816,13 @@ async fn route_core(
                 }
             }
         }
+        // Follow-up: a short anaphoric turn on the same topic inherits the
+        // previous turn's side and task (the mode is the consent; the
+        // previous decision was made under the same dial). A turn with a
+        // live-web cue of its own is not a follow-up.
+        if let Some(r) = inherit_followup(app, query, query_vec, task, lean, turn_tokens, prev, &picks).await {
+            return Ok(r);
+        }
         // Fresh: Stage 0 keyword cues, Stage 1 bge-small similarity to
         // "needs-current-info" phrases. Local-first makes the dial mean
         // what it says: a keyword cue alone doesn't clear the bar - it must
@@ -1869,6 +1974,13 @@ async fn route_core(
         // No server connected (or nothing usable) — behave like offline-only.
     }
 
+    // Offline Only: a follow-up stays with the model that answered (a
+    // coding thread keeps the coder even when the hint reads "general").
+    if mode == "offline" && !medical {
+        if let Some(r) = inherit_followup(app, query, query_vec, task, lean, turn_tokens, prev, &picks).await {
+            return Ok(r);
+        }
+    }
     let model = pick_offline_for(app, task, lean, false, turn_tokens).await?;
     let reason = if medical {
         // The visible promise: this is the receipt line users see. Name the
@@ -1979,7 +2091,12 @@ pub async fn route_model(
     turn_tokens: Option<u32>,
     // The dial: frontier | balanced | local (legacy eagerness accepted).
     online_share: Option<String>,
+    prev_side: Option<String>,
+    prev_task: Option<String>,
+    prev_model: Option<String>,
+    prev_vec: Option<Vec<f32>>,
 ) -> Result<RouteResult, String> {
+    let prev = PrevTurn { side: prev_side, task: prev_task, model: prev_model, vec: prev_vec };
     let picks = OnlinePicks {
         fresh: online_fresh,
         everyday: online_everyday,
@@ -2003,6 +2120,7 @@ pub async fn route_model(
         agent.unwrap_or(false),
         plan.unwrap_or(false),
         turn_tokens,
+        &prev,
     )
     .await
 }
@@ -2092,6 +2210,17 @@ mod tests {
         assert!(!looks_medical("diagnose why my rust build fails"));
         assert!(!looks_medical("the API returns a 500 under load"));
         assert!(!looks_medical("write a poem about a rash decision"));
+    }
+
+    #[test]
+    fn followup_wording_is_short_and_anaphoric() {
+        assert!(is_followup("more on that"));
+        assert!(is_followup("why?"));
+        assert!(is_followup("and the second one?"));
+        assert!(is_followup("shorter please"));
+        assert!(is_followup("can you give an example"));
+        assert!(!is_followup("what is the capital of France"));
+        assert!(!is_followup("write a python function that parses a csv file and returns the rows"));
     }
 
     #[test]

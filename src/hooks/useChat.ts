@@ -274,6 +274,9 @@ export interface UseChatState {
     fileContext?: string;
     visionModel: string; // the vision model to switch to ("" if none / N/A)
   } | null;
+  /** The previous user turn's embedding (never recorded): follow-up
+   *  stickiness measures topic drift against it. */
+  lastUserVec?: number[] | null;
   /** The optimistic bubbles held while the first model downloads (the
    *  welcome wizard let the user in early); the chat route resends
    *  pendingTurn and drops these when the model lands. */
@@ -534,6 +537,13 @@ export function useChat(props: UseChatProps) {
         classifyPromise = classifyTurnMode(userInput, classifyModel, prevMode);
       }
 
+      // The previous user turn's embedding, captured BEFORE this turn's
+      // replaces it (follow-up stickiness measures topic drift against it).
+      const prevUserVec = state.lastUserVec ?? null;
+      void queryVecPromise.then((v) => {
+        if (v && v.length) state.lastUserVec = v;
+      });
+
       // One health verdict per turn, on the shared embedding - three callers
       // (the vision path, the online-health choice, the reading-room banner)
       // used to each pay their own round trip.
@@ -729,9 +739,26 @@ export function useChat(props: UseChatProps) {
           // it was kicked off at send, so this await is usually instant.
           const queryVec =
             mode === "online-offline" ? await queryVecPromise : undefined;
+          // The previous completed turn: which side answered, its task and
+          // model. A short same-topic follow-up inherits them (router.rs
+          // inherit_followup).
+          const prevTurn = [...state.messages]
+            .reverse()
+            .find((m) => m.role === "assistant" && !m.isLoading && m.servedBy && m.id !== assistantId);
+          const prevSide = prevTurn?.servedBy
+            ? prevTurn.servedBy.startsWith("online:")
+              ? "online"
+              : prevTurn.servedBy.startsWith("external:")
+                ? "server"
+                : "device"
+            : undefined;
           const r = await invoke<{ model: string; reason: string; think?: boolean | null }>("route_model", {
             mode,
             query: userInput,
+            prevSide,
+            prevTask: prevTurn?.routingTask,
+            prevModel: prevTurn?.servedBy,
+            prevVec: prevUserVec ?? undefined,
             task: signals.task,
             difficulty: signals.difficulty,
             onlineShare,
