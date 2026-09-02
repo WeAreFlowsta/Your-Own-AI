@@ -1773,23 +1773,39 @@ export default component$(() => {
                         <p class="text-sm font-medium text-yellow-800 dark:text-yellow-200 mb-3">
                           {online.code === "allowance_exceeded"
                             ? "You've reached your monthly allowance"
-                            : "There's a billing issue"}
+                            : "An overage invoice is waiting to be paid"}
                         </p>
                         <p class="text-sm text-yellow-700 dark:text-yellow-300 mb-4">
                           {online.message ||
                             "Manage your plan in the browser to keep going."}
                         </p>
-                        <LiquidMetalButton
-                          onClick$={async () => {
-                            const { invoke } = await import("@tauri-apps/api/core");
-                            const { openUrl } = await import("@tauri-apps/plugin-opener");
-                            const url = await invoke<string>("flowsta_link_url").catch(() => null);
-                            await openUrl(url ? url.split("?")[0] : "https://yourownai.net/dashboard/");
-                          }}
-                          class="px-4 py-2 text-sm"
-                        >
-                          Manage plan
-                        </LiquidMetalButton>
+                        <div class="flex flex-wrap gap-2">
+                          {/* The proxy names the unpaid invoice when there is one:
+                              paying it is the direct way back, the dashboard the general one. */}
+                          {typeof (online as { invoice_url?: unknown }).invoice_url === "string" && (
+                            <LiquidMetalButton
+                              onClick$={async () => {
+                                const { openUrl } = await import("@tauri-apps/plugin-opener");
+                                await openUrl((online as { invoice_url: string }).invoice_url);
+                              }}
+                              class="px-4 py-2 text-sm"
+                            >
+                              Pay the invoice
+                            </LiquidMetalButton>
+                          )}
+                          <LiquidMetalButton
+                            variant={typeof (online as { invoice_url?: unknown }).invoice_url === "string" ? "secondary" : undefined}
+                            onClick$={async () => {
+                              const { invoke } = await import("@tauri-apps/api/core");
+                              const { openUrl } = await import("@tauri-apps/plugin-opener");
+                              const url = await invoke<string>("flowsta_link_url").catch(() => null);
+                              await openUrl(url ? url.split("?")[0] : "https://yourownai.net/dashboard/");
+                            }}
+                            class="px-4 py-2 text-sm"
+                          >
+                            Manage plan
+                          </LiquidMetalButton>
+                        </div>
                       </div>
                     );
                   }

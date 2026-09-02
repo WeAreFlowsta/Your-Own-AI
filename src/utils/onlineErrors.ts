@@ -17,11 +17,14 @@ const ONLINE_ERROR_CODES = [
  *  as a bare word (these words don't occur in legitimate error prose). */
 export function extractOnlineError(
   raw: string,
-): { code: string; message?: string } | null {
+): { code: string; message?: string; invoice_url?: string } | null {
   for (const code of ONLINE_ERROR_CODES) {
     if (!raw.includes(code)) continue;
     const m = raw.match(/"message\\?"\s*:\s*\\?"([^"\\]+)/);
-    return { code, message: m?.[1] };
+    // An unpaid overage invoice travels with its hosted page: the card can
+    // offer to pay it directly.
+    const inv = raw.match(/"invoice_url\\?"\s*:\s*\\?"(https:[^"\\]+)/);
+    return { code, message: m?.[1], ...(inv?.[1] ? { invoice_url: inv[1] } : {}) };
   }
   return null;
 }
