@@ -76,15 +76,15 @@ export default component$(() => {
       {done.value ? (
         <p>
           Installed. Your AIs now remember what you tell them, pick the right model for each
-          question, and read the documents you add - all on this computer. Nothing else to do.
+          question, and read the documents you add - all privately, on this computer. Nothing else to do.
         </p>
       ) : (
         <>
           <p class="mb-2.5">
             An optional {UTILITY_MODEL.size} GB helper that works quietly in the background so your AIs
             remember the things you tell them, pick the right model for each question, and make sense of
-            documents you add. It runs on this computer only, even when you chat with online models, and
-            you can remove it anytime in Settings.
+            documents you add. It runs privately on this computer and nothing it reads leaves it, even
+            when you chat with online models, and you can remove it anytime in Settings.
           </p>
           {downloading.value ? (
             <div class="flex items-center gap-3">
