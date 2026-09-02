@@ -20,10 +20,10 @@
  * Task-aware routing signals for the Auto modes.
  */
 import { invoke } from "@tauri-apps/api/core";
-import { runUtilityTask } from "./utilityModel";
+import { runUtilityTask, isUtilityModelReady } from "./utilityModel";
 
 export type RoutingTask = "code" | "math" | "reasoning" | "general";
-export type RoutingDifficulty = "easy" | "hard";
+export type RoutingDifficulty = "easy" | "hard" | "unknown";
 export interface RoutingSignals {
   task: RoutingTask;
   difficulty: RoutingDifficulty;
@@ -32,23 +32,7 @@ export interface RoutingSignals {
 const GRAMMAR =
   'root ::= ("CODE" | "MATH" | "REASONING" | "GENERAL") " " ("EASY" | "HARD")';
 
-const CODE_KW = [
-  "code", "function", "bug", "debug", "error", "exception", "compile", "script",
-  "api", "regex", "algorithm", "refactor", "stack trace", "syntax", "variable",
-  "python", "javascript", "typescript", "rust", "java", "c++", "sql", "html",
-  "css", "git", "terminal", "shell", "npm", "docker", "class ", "def ", "import ",
-];
-const MATH_KW = [
-  "calculate", "equation", "integral", "derivative", "solve for", "math",
-  "probability", "matrix", "algebra", "geometry", "theorem", "factor", "prime",
-  "percentage", "compute ",
-];
-const REASONING_KW = [
-  "step by step", "step-by-step", "reason", "analyze", "analyse", "plan ",
-  "strategy", "logic", "prove", "deduce", "trade-off", "tradeoff", "compare ",
-  "pros and cons", "figure out", "work out", "puzzle", "design ", "architect",
-  "optimize", "optimise",
-];
+import { CODE_KW, MATH_KW, REASONING_KW } from "./routingKeywords";
 
 /** Coarse, free pre-gate: does the message look code/math/reasoning-ish at all? */
 function looksRoutable(message: string): boolean {
@@ -116,12 +100,21 @@ function getSpecialistTasks(): Promise<string[]> {
 export function invalidateRoutingSpecialistCache(): void {
   specialistCache = null;
 }
+if (typeof window !== "undefined") {
+  // modelManager announces downloads and removals; the gate re-evaluates.
+  window.addEventListener("localModelsChanged", invalidateRoutingSpecialistCache);
+}
 
 /**
- * Resolve the signals to hand `route_model`. Classifies at most once, and only
- * when it can change the outcome: a task specialist is installed, OR difficulty
- * is wanted (`wantDifficulty` = online+offline auto under freshness eagerness).
- * Otherwise returns the free base hint at EASY — zero model cost.
+ * Resolve the signals to hand `route_model`. Classifies at most once, ONLY
+ * on the helper model, and only when the verdict can change the outcome
+ * (a task specialist is installed, or difficulty is wanted).
+ *
+ * Without the helper model there is no call at all: the classifier used to
+ * fall back to a blocking grammar call on the chat server before every
+ * routed turn (a measured multi-second stall on a cold server). Then the
+ * task is the free keyword hint and difficulty is `unknown`; the router
+ * treats unknown as "not hard" and, in frontier-first, "go online".
  */
 export async function resolveRoutingSignals(
   message: string,
@@ -129,14 +122,17 @@ export async function resolveRoutingSignals(
   baseTask: RoutingTask,
   wantDifficulty: boolean,
 ): Promise<RoutingSignals> {
+  if (!(await isUtilityModelReady())) {
+    return { task: baseTask, difficulty: "unknown" };
+  }
   const specialists = await getSpecialistTasks();
   const wantTask = specialists.length > 0;
   if (!wantTask && !wantDifficulty) {
-    return { task: baseTask, difficulty: "easy" };
+    return { task: baseTask, difficulty: "unknown" };
   }
   const s = await classifyRoutingSignals(message, model);
   const task =
     wantTask && s?.task && specialists.includes(s.task) ? s.task : baseTask;
-  const difficulty = wantDifficulty && s?.difficulty ? s.difficulty : "easy";
+  const difficulty = wantDifficulty && s?.difficulty ? s.difficulty : "unknown";
   return { task, difficulty };
 }

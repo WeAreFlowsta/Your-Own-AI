@@ -607,6 +607,7 @@ pub fn run() {
             router::route_model,
             router::is_medical_query,
             router::routing_specialist_tasks,
+            router::routing_defaults,
             fit::assess_model_fit,
             fit::grade_catalog,
             reset::reset_to_defaults,

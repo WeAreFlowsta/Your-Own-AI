@@ -534,6 +534,28 @@ export function useChat(props: UseChatProps) {
         classifyPromise = classifyTurnMode(userInput, classifyModel, prevMode);
       }
 
+      // One health verdict per turn, on the shared embedding - three callers
+      // (the vision path, the online-health choice, the reading-room banner)
+      // used to each pay their own round trip.
+      let medicalPromise: Promise<boolean> | null = null;
+      const turnIsMedical = (): Promise<boolean> => {
+        if (!medicalPromise) {
+          medicalPromise = (async () => {
+            try {
+              const { invoke } = await import("@tauri-apps/api/core");
+              const qv = await queryVecPromise;
+              return await invoke<boolean>("is_medical_query", {
+                query: userInput,
+                queryVec: qv ?? undefined,
+              });
+            } catch {
+              return false;
+            }
+          })();
+        }
+        return medicalPromise;
+      };
+
       // On a fatal pre-generation error (no model / load failed), drop the
       // optimistic bubbles and surface the full-screen banner as before.
       const abortWith = (errMessage: string) => {
@@ -619,10 +641,7 @@ export function useChat(props: UseChatProps) {
             // local (the promise) - fall through to the download card rather
             // than offering a cloud model. Non-health images may go online in
             // online-offline mode (consent asked below).
-            const medicalImage = await invoke<boolean>("is_medical_query", {
-              query: userInput,
-              queryVec: qv ?? undefined,
-            }).catch(() => false);
+            const medicalImage = await turnIsMedical();
             const { lastKnownEntitled } = await import("../utils/entitlement");
             const canUseOnline = lastKnownEntitled() !== "no";
             if (!medicalImage && preferredModel === "auto:online-offline" && canUseOnline) {
@@ -741,12 +760,7 @@ export function useChat(props: UseChatProps) {
         const medPref = getMedicalModel();
         if (isOnlineMedicalChoice(medPref)) {
           try {
-            const { invoke } = await import("@tauri-apps/api/core");
-            const qv = await queryVecPromise;
-            const isMed = await invoke<boolean>("is_medical_query", {
-              query: userInput,
-              queryVec: qv ?? undefined,
-            });
+            const isMed = await turnIsMedical();
             if (isMed) {
               if (medicalOnlineAlways() && medPref) {
                 preferredModel = medPref;
@@ -1068,15 +1082,7 @@ export function useChat(props: UseChatProps) {
       } | null> | null = null;
 
       // Health turns stay on the device whatever the mode: the reading-room
-      // banner must never offer to send one online.
-      const turnIsMedical = async (): Promise<boolean> => {
-        try {
-          const { invoke } = await import("@tauri-apps/api/core");
-          return await invoke<boolean>("is_medical_query", { query: userInput, queryVec: undefined });
-        } catch {
-          return false;
-        }
-      };
+      // banner must never offer to send one online (turnIsMedical above).
 
       // Reading room: ask the app to make sure the running local model's
       // context holds a turn of `tokens`. "grew" = it reloaded with more

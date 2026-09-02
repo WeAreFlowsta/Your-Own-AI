@@ -319,6 +319,15 @@ pub fn online_caps_for(text: &str) -> Caps {
     if t.contains("coder") || t.contains("codestral") {
         return Caps { overall: 8, coding: 9, reasoning: 7, math: 7, vision: 0, medical: 3 };
     }
+    // Everyday tier: the fast, low-cost siblings of the flagships (Luna,
+    // Flash, -mini, lite). A notch under their flagship so an Everyday slot
+    // is a real rung below Hard. "-mini", not "mini": gemini.
+    if t.contains("luna") || t.contains("flash") || t.contains("-mini") || t.contains("-lite") || t.contains(" lite") {
+        return Caps { overall: 8, coding: 7, reasoning: 8, math: 7, vision: 8, medical: 3 };
+    }
+    if t.contains("kimi") || t.contains("moonshot") {
+        return Caps { overall: 8, coding: 8, reasoning: 8, math: 7, vision: 7, medical: 3 };
+    }
     // Reasoning / math distills (DeepSeek-R1, QwQ, …)
     if t.contains("deepseek") || t.contains("-r1") || t.contains("qwq") {
         return Caps { overall: 9, coding: 8, reasoning: 9, math: 9, vision: 0, medical: 3 };

@@ -290,7 +290,6 @@ fn looks_time_sensitive(query: &str) -> bool {
         // that pulls evergreen probability questions ("odds of getting struck
         // by lightning") online.
         "odds on", "betting odds", "favored to win",
-        "2025", "2026", "2027",
     ];
     CUES.iter().any(|c| q.contains(c))
 }
@@ -509,8 +508,23 @@ async fn pick_offline_for(app: &AppHandle, task: &str, lean: &str, agent_only: b
     if task == "medical" {
         if let Some(pref) = medical_preferred_model(app) {
             if let Some(chosen) = pool.iter().find(|f| f.name == pref) {
-                log::info!("[router] medical turn -> user's preferred model {}", chosen.name);
-                return Ok(chosen.name.clone());
+                // Honored when it runs well here. A pick that would crawl
+                // (partial offload) yields to a health specialist that fits
+                // fully - the preference is for the answer, not a slow one.
+                let faster_specialist = !chosen.fit.is_fast()
+                    && pool.iter().any(|f| {
+                        f.name != chosen.name
+                            && f.fit.is_fast()
+                            && crate::model_caps::caps_for(&f.name).medical >= 8
+                    });
+                if !faster_specialist {
+                    log::info!("[router] medical turn -> user's preferred model {}", chosen.name);
+                    return Ok(chosen.name.clone());
+                }
+                log::info!(
+                    "[router] medical pick {} would run slowly here - a health specialist that fits fully answers instead",
+                    chosen.name
+                );
             }
         }
     }
@@ -656,20 +670,31 @@ fn select_online(
             .find(|m| m.id.strip_prefix("online:").unwrap_or(&m.id) == want)
             .map(|m| m.id.clone())
     };
-    if let Some(hit) = pref.and_then(|p| by_id(p)) {
-        return Some(hit);
-    }
     let text = |m: &crate::flowsta::OnlineModel| {
         format!("{} {} {}", m.id, m.display_name, m.description).to_lowercase()
     };
+    let has_search_fee = |m: &crate::flowsta::OnlineModel| {
+        m.pricing.as_ref().and_then(|p| p.search_per_call_usd).is_some()
+    };
+    // The live-web slot needs a model that can actually search: a stored
+    // pick that cannot (a plain chat model) is not honored for fresh turns.
+    let search_capable = |id: &str| {
+        models.iter().find(|m| m.id == id).map_or(false, |m| {
+            let t = text(m);
+            t.contains("search") || t.contains("sonar") || t.contains("perplexity") || has_search_fee(m)
+        })
+    };
+    if let Some(hit) = pref.and_then(|p| by_id(p)) {
+        if !fresh || search_capable(&hit) {
+            return Some(hit);
+        }
+        log::info!("[router] live-web pick {hit} cannot search - using the recommended search model");
+    }
 
     if fresh {
         if let Some(hit) = by_id(DEFAULT_FRESH) {
             return Some(hit);
         }
-        let has_search_fee = |m: &crate::flowsta::OnlineModel| {
-            m.pricing.as_ref().and_then(|p| p.search_per_call_usd).is_some()
-        };
         return models
             .iter()
             .find(|m| {
@@ -1123,6 +1148,16 @@ async fn route_inner(
     plan: bool,
     turn_tokens: Option<u32>,
 ) -> Result<RouteResult, String> {
+    // The offline lean: an explicit value wins; absent (API and agent
+    // callers, which never see the webview's storage) → the user's
+    // Settings choice from the store → balanced.
+    let lean_from_store;
+    let lean = if lean.is_empty() {
+        lean_from_store = store_pref(app, "routingOfflineLean").unwrap_or_else(|| "balanced".to_string());
+        lean_from_store.as_str()
+    } else {
+        lean
+    };
     // Slot preferences: explicit params (the in-app chat path reads
     // localStorage) fall back to the Rust-readable settings store, so API
     // and agent callers see the user's choices too - Settings mirrors every
@@ -1439,11 +1474,29 @@ pub async fn routing_specialist_tasks(app: AppHandle) -> Result<Vec<String>, Str
             .max_by_key(|f| crate::model_caps::caps_for(&f.name).by_task(task))
             .unwrap();
         let tb = crate::model_caps::caps_for(&task_best.name).by_task(task);
-        if task_best.name != overall_best.name && tb >= ob.by_task(task) + SWITCH_MARGIN {
+        // Any edge on the task counts: the classifier's verdict can change
+        // the pick whenever the task-best is not the overall-best.
+        if task_best.name != overall_best.name && tb > ob.by_task(task) {
             out.push(task.to_string());
         }
     }
     Ok(out)
+}
+
+/// The router's recommended online model per slot - Settings names them
+/// from here, so the labels can never drift from the defaults again.
+#[tauri::command]
+pub fn routing_defaults() -> std::collections::HashMap<String, String> {
+    [
+        ("fresh", DEFAULT_FRESH),
+        ("hard_code", DEFAULT_HARD_CODE),
+        ("hard_general", DEFAULT_HARD_GENERAL),
+        ("agent", DEFAULT_AGENT),
+        ("plan", DEFAULT_PLAN),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect()
 }
 
 /// Resolve an Auto mode for the in-app chat. The frontend calls this when an
@@ -1492,8 +1545,8 @@ pub async fn route_model(
         &query,
         eagerness.as_deref().unwrap_or("balanced"),
         task.as_deref().unwrap_or("general"),
-        difficulty.as_deref().unwrap_or("easy"),
-        lean.as_deref().unwrap_or("balanced"),
+        difficulty.as_deref().unwrap_or("unknown"),
+        lean.as_deref().unwrap_or(""),
         &picks,
         query_vec.as_deref(),
         agent.unwrap_or(false),

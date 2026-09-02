@@ -148,6 +148,7 @@ export class ModelManager {
           // Only process completion for this specific download
           if (event.payload.filename === filename) {
             console.log('[ModelManager] Download complete:', event.payload);
+            window.dispatchEvent(new CustomEvent('localModelsChanged'));
             resolve();
           }
         }).then(unlisten => {
@@ -192,6 +193,7 @@ export class ModelManager {
       console.error('[ModelManager] Error deleting model:', error);
       throw error;
     }
+    window.dispatchEvent(new CustomEvent('localModelsChanged'));
   }
 
   /**

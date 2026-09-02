@@ -494,7 +494,8 @@ async fn chat_completions(
             .as_deref()
         {
             Some("hard") => "hard",
-            _ => "easy",
+            Some("easy") => "easy",
+            _ => "unknown",
         };
         let eagerness = match header_str(&headers, "x-your-own-ai-eagerness")
             .map(|s| s.trim().to_lowercase())
@@ -516,7 +517,9 @@ async fn chat_completions(
         {
             Some("speed") => "speed",
             Some("quality") => "quality",
-            _ => "balanced",
+            Some("balanced") => "balanced",
+            // Absent: the router falls back to the user's Settings choice.
+            _ => "",
         };
         let picks = crate::router::OnlinePicks::from_store(&app);
         // Agent sessions route deterministically to a tool-capable model

@@ -17,6 +17,7 @@
  */
 
 import { llamaServerApi } from './llamaServerApi';
+import { CODE_KW } from './routingKeywords';
 import type { ChatMessage, TurnMode } from '../types';
 
 const GRAMMAR = 'root ::= "REPORT" | "CODE" | "NEITHER"';
@@ -25,10 +26,6 @@ const REPORT_KW = [
   'report', 'write up', 'write-up', 'writeup', 'analysis', 'analyze', 'analyse',
   'deep dive', 'deep-dive', 'breakdown', 'rundown', 'overview', 'draft', 'write me',
   'put together', 'in-depth', 'in depth', 'dossier', 'white paper', 'comprehensive',
-];
-const CODE_KW = [
-  'code', 'function', 'script', 'program', 'implement', 'debug', 'refactor',
-  'snippet', 'algorithm', 'fix this', 'rewrite this', ' api ',
 ];
 
 /** Coarse, free pre-gate: does the message look report/code-ish at all? */

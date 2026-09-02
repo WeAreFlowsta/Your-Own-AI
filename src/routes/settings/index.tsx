@@ -345,6 +345,17 @@ export default component$(() => {
   const onlineHardCode = useSignal("");
   const onlineHardGeneral = useSignal("");
   const onlineModels = useSignal<{ id: string; display_name: string }[]>([]);
+  // The router's recommended id per slot (Rust DEFAULT_*), named through the
+  // online list - the labels can never drift from the defaults.
+  const routingDefaults = useSignal<Record<string, string>>({});
+  const recName = (slot: string): string => {
+    const id = routingDefaults.value[slot];
+    if (!id) return "recommended";
+    return (
+      onlineModels.value.find((m) => m.id === id || m.id === id.replace("online:", ""))?.display_name ??
+      id.replace("online:", "")
+    );
+  };
   // Tool-capable subset for the Agent slot (a tools-blind pick would mean
   // broken folder sessions - the picker only offers models that can drive).
   const onlineAgentModels = useSignal<{ id: string; display_name: string }[]>([]);
@@ -464,6 +475,7 @@ export default component$(() => {
           const models =
             await invoke<{ id: string; display_name: string }[]>("list_online_models");
           onlineModels.value = models.map(({ id, display_name }) => ({ id, display_name }));
+          routingDefaults.value = await invoke<Record<string, string>>("routing_defaults").catch(() => ({}));
           Promise.all(
             onlineModels.value.map(async (m) => {
               const { invoke } = await import("@tauri-apps/api/core");
@@ -613,6 +625,17 @@ export default component$(() => {
   const setLean = $((value: "speed" | "balanced" | "quality") => {
     routingLean.value = value;
     localStorage.setItem("routingOfflineLean", value);
+    // Mirror to the tauri store so the inference server and agent bridge
+    // (which never see this storage) follow the same choice.
+    import("@tauri-apps/plugin-store").then(async ({ Store }) => {
+      try {
+        const store = await Store.load("settings.json");
+        await store.set("routingOfflineLean", value);
+        await store.save();
+      } catch (e) {
+        console.warn("[Settings] lean mirror failed:", e);
+      }
+    });
   });
 
   // Factory reset — wipe local AIs/conversations/memory and restore defaults.
@@ -1353,7 +1376,7 @@ export default component$(() => {
                 <OnlineModelPicker
                   label="Needs current information"
                   hint="Searches the live web and cites sources"
-                  recommended="Grok 4.5 (Web)"
+                  recommended={recName("fresh")}
                   storageKey="routingOnlineFresh"
                   selected={onlineFresh}
                   models={onlineModels}
@@ -1361,7 +1384,7 @@ export default component$(() => {
                 <OnlineModelPicker
                   label="Hard coding, reasoning, or math"
                   hint="The toughest technical questions"
-                  recommended="GPT-5.6 Sol"
+                  recommended={recName("hard_code")}
                   storageKey="routingOnlineHardCode"
                   selected={onlineHardCode}
                   models={onlineModels}
@@ -1369,7 +1392,7 @@ export default component$(() => {
                 <OnlineModelPicker
                   label="Other hard questions"
                   hint="Genuinely difficult questions outside those areas"
-                  recommended="GPT-5.6 Terra"
+                  recommended={recName("hard_general")}
                   storageKey="routingOnlineHardGeneral"
                   selected={onlineHardGeneral}
                   models={onlineModels}
@@ -1389,7 +1412,7 @@ export default component$(() => {
                     <OnlineModelPicker
                       label="Agent work on projects"
                       hint="The online model that drives tools in project work - only capable ones are listed"
-                      recommended="GPT-5.6 Sol"
+                      recommended={recName("agent")}
                       storageKey="routingOnlineAgent"
                       selected={onlineAgent}
                       models={onlineAgentModels}
@@ -1397,7 +1420,7 @@ export default component$(() => {
                     <OnlineModelPicker
                       label="Planning and helper agents"
                       hint="The online model for the subagents that explore and plan - reasoning-lean, still tool-capable"
-                      recommended="GPT-5.6 Sol"
+                      recommended={recName("plan")}
                       selected={onlinePlanning}
                       storageKey="routingOnlinePlanning"
                       models={onlineAgentModels}

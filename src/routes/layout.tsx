@@ -58,6 +58,7 @@ export default component$(() => {
           "routingOnlineFresh",
           "routingProjectThrifty",
           "routingProjectDeviceSubagents",
+          "routingOfflineLean",
         ]) {
           const local = localStorage.getItem(key);
           if (local !== null && (await store.get(key)) == null) {
