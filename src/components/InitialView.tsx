@@ -1,5 +1,6 @@
 import { component$, type QRL, type Signal } from '@builder.io/qwik';
 import CudaOfferCallout from './CudaOfferCallout';
+import HelperModelOfferCallout from './HelperModelOfferCallout';
 import GpuFallbackCallout from './GpuFallbackCallout';
 import UpdateAvailableCallout from './UpdateAvailableCallout';
 import { ChatInputBar } from './ChatInputBar';
@@ -90,7 +91,9 @@ export default component$<InitialViewProps>((props) => {
         </div>
       )}
       <GpuFallbackCallout />
+      {/* One offer slot: NVIDIA engine first, then the helper model - rules in utils/homeOffers.ts */}
       <CudaOfferCallout />
+      <HelperModelOfferCallout />
       <UpdateAvailableCallout />
     </div>
   );

@@ -263,10 +263,10 @@ export const EMBEDDING_MODEL: CapabilityModel = {
  */
 export const UTILITY_MODEL: CapabilityModel = {
   id: 'ministral-3-utility',
-  name: 'On-device extraction & smart modes',
+  name: 'Helper model',
   role: 'utility',
   description:
-    'A small local model that learns your memory facts and spots when a question wants a report or code — kept fully on your device, even while chatting with online AIs.',
+    'A small helper that works in the background: it remembers the things you tell your AIs, helps pick the right model for each question, and makes sense of documents you add - all on this computer, even while you chat with online models.',
   filename: 'Ministral-3-3B-Instruct-2512-Q4_K_M.gguf',
   downloadUrl:
     'https://huggingface.co/unsloth/Ministral-3-3B-Instruct-2512-GGUF/resolve/7f116d3df13bc7d3820b2ff1d5c273133b5accaa/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf',

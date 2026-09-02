@@ -1,5 +1,6 @@
 import { component$, useSignal, useVisibleTask$, $ } from '@builder.io/qwik';
 import { invoke } from '@tauri-apps/api/core';
+import { cudaOffer } from '../utils/homeOffers';
 import { listen } from '@tauri-apps/api/event';
 import { Callout } from './Callout';
 import LiquidMetalButton from './LiquidMetalButton';
@@ -29,24 +30,10 @@ export default component$(() => {
 
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async ({ cleanup }) => {
-    try {
-      const [status, info, safe] = await Promise.all([
-        invoke<{ supported: boolean; gpu_supported: boolean; installed: boolean; stale_version_installed: boolean; tag: string }>('engine_status'),
-        invoke<{ gpu_name?: string | null }>('get_system_info'),
-        invoke<{ cuda_disabled?: boolean }>('gpu_safe_mode_status').catch(
-          () => ({ cuda_disabled: false }),
-        ),
-      ]);
-      const nvidia = (info.gpu_name ?? '').toLowerCase().includes('nvidia');
-      tag.value = status.tag;
-      isUpdate.value = status.stale_version_installed && !status.installed;
-      // gpu_supported: never pitch an engine the card's generation cannot
-      // execute (a GTX 960M install crashed every load until this gate).
-      eligible.value =
-        nvidia && status.supported && status.gpu_supported && !status.installed && !safe.cuda_disabled;
-    } catch {
-      /* stay hidden */
-    }
+    const offer = await cudaOffer();
+    tag.value = offer.tag;
+    isUpdate.value = offer.isUpdate;
+    eligible.value = offer.eligible;
     // A download started on an earlier visit is still running in the app
     // (it never depended on this card) - reattach instead of offering again.
     if (tag.value) {

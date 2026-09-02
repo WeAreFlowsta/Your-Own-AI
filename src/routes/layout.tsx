@@ -13,6 +13,7 @@ import { AiDataProvider } from "../contexts/AiDataContext";
 import { VisionDownloadProvider } from "../contexts/VisionDownloadContext";
 import { VisionDownloadIndicator } from "../components/VisionDownloadIndicator";
 import { FirstModelIndicator } from "../components/FirstModelIndicator";
+import { bumpLaunchCount } from "../utils/homeOffers";
 import { WorkspaceMemoryModal } from "../components/WorkspaceMemoryModal";
 import ConfirmModal from "../components/ConfirmModal";
 import { prefetchModels } from "../utils/modelCache";
@@ -42,6 +43,8 @@ export default component$(() => {
   // here on.
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(() => {
+    // Once per app start: the home offer slot keys off "not the first launch".
+    bumpLaunchCount();
     (async () => {
       try {
         const { Store } = await import("@tauri-apps/plugin-store");
