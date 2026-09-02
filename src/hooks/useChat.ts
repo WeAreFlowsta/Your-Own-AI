@@ -9,6 +9,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { firstModelInFlight } from "../utils/firstModel";
 import { skillsPromptBlock } from "../utils/skills";
 import { wireSampling } from "../utils/sampling";
 import { activeSkills, activeTools } from "../utils/carry";
@@ -273,6 +274,10 @@ export interface UseChatState {
     fileContext?: string;
     visionModel: string; // the vision model to switch to ("" if none / N/A)
   } | null;
+  /** The optimistic bubbles held while the first model downloads (the
+   *  welcome wizard let the user in early); the chat route resends
+   *  pendingTurn and drops these when the model lands. */
+  firstModelWait: { assistantId: string; userId: string } | null;
   /** Current Holochain conversation hash (null if not recording) */
   conversationHash: string | null;
   /** Opaque per-conversation key sent with online turns as the provider's
@@ -325,6 +330,7 @@ export function useChat(props: UseChatProps) {
     error: null,
     skipNextUserRecord: false,
     pendingTurn: null,
+    firstModelWait: null,
     conversationHash: null,
     cacheKey: newCacheKey(),
     messageSequence: 0,
@@ -537,6 +543,28 @@ export function useChat(props: UseChatProps) {
         state.isLoading = false;
         props.isModelLoading.value = false;
         state.error = errMessage;
+      };
+
+      // First model still downloading (the welcome wizard let them in early):
+      // keep the question instead of failing it. The bubble says the model is
+      // on its way; the chat route resends this turn when it lands.
+      const holdForFirstModel = (): boolean => {
+        const fm = firstModelInFlight();
+        if (!fm) return false;
+        const prev = state.firstModelWait;
+        state.messages = state.messages
+          .filter((m) => !prev || (m.id !== prev.assistantId && m.id !== prev.userId))
+          .map((m) =>
+            m.id === assistantId
+              ? { ...m, statusText: `${fm.label} is on its way - I'll answer the moment it lands.` }
+              : m
+          );
+        state.pendingTurn = { userInput, chatAction, images, fileContext, visionModel: "" };
+        state.firstModelWait = { assistantId, userId: userMessage.id };
+        state.isLoading = false;
+        props.isModelLoading.value = false;
+        state.error = null;
+        return true;
       };
 
       // Resolve the model for THIS question (auto:* → concrete) via the backend
@@ -820,6 +848,7 @@ export function useChat(props: UseChatProps) {
               `${selectedAi.label}'s model file couldn't be opened from disk. Downloading it again from the Offline Models page usually fixes this - if it keeps happening, the log file shows why.`
             );
           } else {
+            if (errorMessage.includes("Model file not found") && holdForFirstModel()) return;
             abortWith(
               errorMessage.includes("Model file not found")
                 ? "NO_MODELS_AVAILABLE"
@@ -831,6 +860,7 @@ export function useChat(props: UseChatProps) {
       }
 
       if (!currentModel && !preferredModel) {
+        if (holdForFirstModel()) return;
         abortWith("NO_MODELS_AVAILABLE");
         return;
       }

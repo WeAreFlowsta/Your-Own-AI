@@ -48,7 +48,12 @@ import { useVisionDownload } from "../../contexts/VisionDownloadContext";
 import ChatContainer from "../../components/ChatContainer";
 import CodePanel from "../../components/CodePanel";
 import AppHeader from "../../components/AppHeader";
-import WelcomeModal from "../../components/WelcomeModal";
+import {
+  firstModelInFlight,
+  firstModelWaitingPlaceholder,
+  FIRST_MODEL_CHANGED,
+  FIRST_MODEL_READY,
+} from "../../utils/firstModel";
 
 import type { SelectedAiModel, ChatAction, AttachedFile, AttachedImage, UserDefinedAI } from "../../types";
 import { activeTools } from "../../utils/carry";
@@ -56,7 +61,6 @@ import LiquidMetalButton from "../../components/LiquidMetalButton";
 import veeboThumb from "../../assets/veebo-thumb.jpg";
 
 /** Module-level flag — survives Qwik dev-mode re-mounts */
-let needsWelcomeModal = false;
 
 /** SystemInfo shape returned by Tauri's get_system_info command */
 interface SystemInfo {
@@ -74,10 +78,7 @@ export default component$(() => {
   const { theme } = useContext(ThemeContext);
 
   const aiDataState = useAiData();
-  const {
-    updateAllAisWithFirstModel,
-    updateCustomAi,
-  } = useAiDataActions();
+  const { updateCustomAi } = useAiDataActions();
 
   // --- Signals (replace useState) ---
   const currentModel = useSignal<string | null>(null);
@@ -93,7 +94,8 @@ export default component$(() => {
   const modelLoadTime = useSignal<number | null>(null);
   const modelTooBig = useSignal(false);
   const showModelWidget = useSignal(false);
-  const showWelcomeModal = useSignal(needsWelcomeModal);
+  // Message-field text while the first model (welcome wizard) downloads.
+  const firstModelPlaceholder = useSignal<string | null>(null);
   const systemInfo = useSignal<SystemInfo | null>(null);
   const attachedFiles = useSignal<AttachedFile[]>([]);
   const attachedImages = useSignal<AttachedImage[]>([]);
@@ -620,6 +622,71 @@ export default component$(() => {
     if (t) await sendMessage(t.userInput, t.chatAction, t.fileContext, t.images);
   });
 
+  // First model still downloading (the welcome wizard let the user in
+  // early): the message field carries the progress, a held question's
+  // bubble counts along, and when the model lands the question is sent
+  // for real - or, with nothing held, a one-line "ready" appears.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async ({ cleanup }) => {
+    const { listen } = await import("@tauri-apps/api/event");
+    const sync = () => {
+      const f = firstModelInFlight();
+      firstModelPlaceholder.value = f ? firstModelWaitingPlaceholder(f.label, null) : null;
+    };
+    sync();
+    window.addEventListener(FIRST_MODEL_CHANGED, sync);
+    const unProgress = await listen<{ filename: string; percent: number }>(
+      "model-download-progress",
+      (e) => {
+        const f = firstModelInFlight();
+        if (!f || e.payload.filename !== f.filename) return;
+        firstModelPlaceholder.value = firstModelWaitingPlaceholder(f.label, e.payload.percent);
+        const w = chatState.firstModelWait;
+        if (w) {
+          chatState.messages = chatState.messages.map((m) =>
+            m.id === w.assistantId
+              ? { ...m, statusText: `${f.label} is on its way - ${e.payload.percent}% - I'll answer the moment it lands.` }
+              : m
+          );
+        }
+      }
+    );
+    const onReady = async (ev: Event) => {
+      const d = (ev as CustomEvent).detail as { filename: string; label: string };
+      firstModelPlaceholder.value = null;
+      // The AIs now carry the model - refresh the selected AI's config so
+      // the resend (or the next question) routes to it.
+      const fresh = aiDataState.userDefinedAis.find((a) => a.id === selectedAi.value.id);
+      if (fresh) selectedAi.value = { ...selectedAi.value, aiConfig: fresh };
+      const w = chatState.firstModelWait;
+      const t = chatState.pendingTurn;
+      chatState.firstModelWait = null;
+      if (w && t) {
+        chatState.messages = chatState.messages.filter((m) => m.id !== w.assistantId && m.id !== w.userId);
+        chatState.pendingTurn = null;
+        await sendMessage(t.userInput, t.chatAction, t.fileContext, t.images);
+      } else {
+        chatState.messages = [
+          ...chatState.messages,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: `${d.label} is ready.`,
+            model: selectedAi.value.id,
+            aiLabel: selectedAi.value.label,
+            aiImageUrl: selectedAi.value.imageUrl || undefined,
+          },
+        ];
+      }
+    };
+    window.addEventListener(FIRST_MODEL_READY, onReady);
+    cleanup(() => {
+      unProgress();
+      window.removeEventListener(FIRST_MODEL_CHANGED, sync);
+      window.removeEventListener(FIRST_MODEL_READY, onReady);
+    });
+  });
+
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async ({ track }) => {
     const status = track(() => visionDownload.state.active?.status);
@@ -733,13 +800,12 @@ export default component$(() => {
       const models = await invoke<any[]>("list_local_models");
 
       if (!models || models.length === 0) {
-        console.log(
-          "[ChatPage] No models found, clearing currentModel and showing welcome modal"
-        );
+        console.log("[ChatPage] No models found, clearing currentModel");
         currentModel.value = null;
         localStorage.removeItem("currentModel");
-        needsWelcomeModal = true;
-        showWelcomeModal.value = true;
+        // First run → the welcome wizard. Unless its download is already
+        // running: then the user chose to come here early and may ask now.
+        if (!firstModelInFlight()) await nav("/welcome");
         return;
       }
 
@@ -1234,49 +1300,6 @@ export default component$(() => {
     import("@tauri-apps/plugin-opener").then((m) => m.openUrl(`${websiteUrl}/pricing`));
   });
 
-  const handleModelDownloaded = $(async (filename: string) => {
-    console.log("[ChatPage] First model downloaded:", filename);
-
-    try {
-      await updateAllAisWithFirstModel(filename);
-      console.log("[ChatPage] Auto-assigned model to all AIs");
-
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      // Update selectedAi to reflect the new mode (Auto - Offline Only; the
-      // just-downloaded model is what Auto resolves to right now).
-      const prev = selectedAi.value;
-      selectedAi.value = {
-        ...prev,
-        aiConfig: { ...prev.aiConfig, model: "auto:offline" },
-      };
-
-      currentModel.value = filename;
-      isModelLoading.value = true;
-      modelLoadTime.value = Date.now();
-
-      // Poll until model is ready
-      console.log("[ChatPage] Waiting for model to be fully ready...");
-      const maxAttempts = 60;
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        const isReady = await invoke<boolean>("is_llama_server_ready");
-        if (isReady) {
-          console.log("[ChatPage] Model is fully loaded and ready!");
-          break;
-        }
-        if (attempt >= maxAttempts) {
-          console.error("[ChatPage] Model took too long to load");
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-      }
-
-      isModelLoading.value = false;
-    } catch (error) {
-      console.error("[ChatPage] Error during model setup:", error);
-      isModelLoading.value = false;
-    }
-  });
 
   // --- Derived state ---
   const isDesktop = true;
@@ -1383,7 +1406,7 @@ export default component$(() => {
               handleSubmit$={handleSubmit}
               isLoading={chatState.isLoading}
               stopChat$={handleStop}
-              currentPlaceholder={`Ask ${selectedAi.value.label} ${
+              currentPlaceholder={firstModelPlaceholder.value ?? `Ask ${selectedAi.value.label} ${
                 selectedAi.value.aiConfig?.askBlurb &&
                 selectedAi.value.aiConfig.askBlurb.trim() !== ""
                   ? selectedAi.value.aiConfig.askBlurb
@@ -2166,18 +2189,6 @@ export default component$(() => {
         }}
       />
 
-      {/* Welcome Modal — first-run model recommendation and download */}
-      {showWelcomeModal.value && (
-        <WelcomeModal
-          isOpen={showWelcomeModal.value}
-          onClose$={() => {
-            needsWelcomeModal = false;
-            showWelcomeModal.value = false;
-          }}
-          systemInfo={systemInfo.value}
-          onModelDownloaded$={handleModelDownloaded}
-        />
-      )}
     </div>
   );
 });

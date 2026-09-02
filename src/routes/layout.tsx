@@ -12,6 +12,7 @@ import { ModeProvider } from "../contexts/ModeContext";
 import { AiDataProvider } from "../contexts/AiDataContext";
 import { VisionDownloadProvider } from "../contexts/VisionDownloadContext";
 import { VisionDownloadIndicator } from "../components/VisionDownloadIndicator";
+import { FirstModelIndicator } from "../components/FirstModelIndicator";
 import { WorkspaceMemoryModal } from "../components/WorkspaceMemoryModal";
 import ConfirmModal from "../components/ConfirmModal";
 import { prefetchModels } from "../utils/modelCache";
@@ -379,6 +380,7 @@ export default component$(() => {
         <VisionDownloadProvider>
           <Slot />
           <VisionDownloadIndicator />
+          <FirstModelIndicator />
           {/* Root-level so no route stacking context can bury it. */}
           <WorkspaceMemoryModal folderPath={projectMemoryFolder} />
           <ConfirmModal
