@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Routing invariant sweep - walks every mode x task x difficulty x
- * eagerness x lean x role combination against a RUNNING DEV BUILD's
+ * dial x lean x role combination against a RUNNING DEV BUILD's
  * /internal/route-preview and asserts the promises:
  *
  *   1. offline / my-hardware modes NEVER resolve to an online model.
