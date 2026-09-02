@@ -50,6 +50,14 @@ export default component$(() => {
         const { Store } = await import("@tauri-apps/plugin-store");
         const store = await Store.load("settings.json");
         let dirty = false;
+        // 0.7.0: the online dial replaces "eagerness" - privacy became
+        // Local-first, freshness Frontier-first, balanced Balanced. Once.
+        if (localStorage.getItem("routingOnlineShare") === null) {
+          const old = localStorage.getItem("smartRoutingEagerness");
+          const mapped =
+            old === "privacy" ? "local" : old === "freshness" ? "frontier" : old === "balanced" ? "balanced" : null;
+          if (mapped) localStorage.setItem("routingOnlineShare", mapped);
+        }
         for (const key of [
           "routingOnlineAgent",
           "routingOnlinePlanning",
@@ -59,6 +67,9 @@ export default component$(() => {
           "routingProjectThrifty",
           "routingProjectDeviceSubagents",
           "routingOfflineLean",
+          "routingOnlineShare",
+          "routingOnlineEveryday",
+          "routingOnlineHard",
         ]) {
           const local = localStorage.getItem(key);
           if (local !== null && (await store.get(key)) == null) {

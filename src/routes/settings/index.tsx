@@ -316,7 +316,9 @@ export default component$(() => {
   // "Automatic learning" = NOT paused (the toggle reads positively; the
   // stored flag is the pause, shared with the Your Memory page).
   const memoryLearning = useSignal(true);
-  const routingEagerness = useSignal<"privacy" | "balanced" | "freshness">("balanced");
+  // The one online dial ("How much goes online"); frontier-first by default.
+  const routingShare = useSignal<"frontier" | "balanced" | "local">("frontier");
+  const shareRecent = useSignal<{ online: number; total: number } | null>(null);
   const routingLean = useSignal<"speed" | "balanced" | "quality">("balanced");
   // Per-slot online model overrides ("" = the router's recommended default).
   const onlineAgent = useSignal("");
@@ -342,8 +344,8 @@ export default component$(() => {
     }[]
   >([]);
   const onlineFresh = useSignal("");
-  const onlineHardCode = useSignal("");
-  const onlineHardGeneral = useSignal("");
+  const onlineEveryday = useSignal("");
+  const onlineHard = useSignal("");
   const onlineModels = useSignal<{ id: string; display_name: string }[]>([]);
   // The router's recommended id per slot (Rust DEFAULT_*), named through the
   // online list - the labels can never drift from the defaults.
@@ -422,10 +424,14 @@ export default component$(() => {
     rememberScopeReply.value = getRememberScope("reply");
     memoryLearning.value = !isMemoryPaused();
     currentModel.value = localStorage.getItem("currentModel");
-    const savedEagerness = localStorage.getItem("smartRoutingEagerness");
-    if (savedEagerness === "privacy" || savedEagerness === "freshness") {
-      routingEagerness.value = savedEagerness;
+    const savedShare = localStorage.getItem("routingOnlineShare");
+    if (savedShare === "balanced" || savedShare === "local") {
+      routingShare.value = savedShare;
     }
+    import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke<{ online: number; total: number }>("routing_online_share_recent"))
+      .then((r) => (shareRecent.value = r))
+      .catch(() => {});
     const savedLean = localStorage.getItem("routingOfflineLean");
     if (savedLean === "speed" || savedLean === "quality") {
       routingLean.value = savedLean;
@@ -455,8 +461,8 @@ export default component$(() => {
         routingOverview.value = fits.map((f) => ({ ...f, caps: byName.get(f.name) }));
       })
       .catch(() => {});
-    onlineHardCode.value = localStorage.getItem("routingOnlineHardCode") || "";
-    onlineHardGeneral.value = localStorage.getItem("routingOnlineHardGeneral") || "";
+    onlineEveryday.value = localStorage.getItem("routingOnlineEveryday") || "";
+    onlineHard.value = localStorage.getItem("routingOnlineHard") || "";
 
     import("@tauri-apps/api/app")
       .then(({ getVersion }) => getVersion())
@@ -617,9 +623,20 @@ export default component$(() => {
     setHelpTipsEnabled(true);
   });
 
-  const setEagerness = $((value: "privacy" | "balanced" | "freshness") => {
-    routingEagerness.value = value;
-    localStorage.setItem("smartRoutingEagerness", value);
+  const setShare = $((value: "frontier" | "balanced" | "local") => {
+    routingShare.value = value;
+    localStorage.setItem("routingOnlineShare", value);
+    // Mirror to the tauri store: the inference server and agent bridge
+    // route under the same dial.
+    import("@tauri-apps/plugin-store").then(async ({ Store }) => {
+      try {
+        const store = await Store.load("settings.json");
+        await store.set("routingOnlineShare", value);
+        await store.save();
+      } catch (e) {
+        console.warn("[Settings] dial mirror failed:", e);
+      }
+    });
   });
 
   const setLean = $((value: "speed" | "balanced" | "quality") => {
@@ -1006,9 +1023,11 @@ export default component$(() => {
                   specific model are never affected.
                 </p>
                 <p class="text-sm text-[var(--text-primary)] mb-4">
-                  Auto picks the best model that runs well on this machine. You
-                  don't need to change anything here - the rest of this section is
-                  for when you want to.
+                  Auto picks the best model that runs well on this machine, and
+                  an "Online and Offline" AI answers with a frontier online model
+                  unless your device is as good for the question. You don't need
+                  to change anything here - the rest of this section is for when
+                  you want to.
                 </p>
 
                 {/* The rules live in the public guide, not in a settings
@@ -1170,9 +1189,9 @@ export default component$(() => {
                     working; billing is enforced per request). */}
                 {!onlineEntitled.value ? (
                   <p class="text-sm text-[var(--text-muted)]">
-                    Online routing — sending fresh-info or hard questions to
-                    online models — unlocks with a plan. Set it up on the
-                    Online Models page.
+                    Online routing - answering with frontier online models,
+                    and keeping a question on your device when it is as good -
+                    unlocks with a plan. Set it up on the Online Models page.
                   </p>
                 ) : (
                 <>
@@ -1180,11 +1199,10 @@ export default component$(() => {
                   Going online (Auto — Online and Offline)
                 </h3>
                 <p class="text-sm text-[var(--text-secondary)] mt-1 mb-4">
-                  Only for AIs set to "Auto — Online and Offline". A question goes
-                  online only when your device can't do it justice: it needs
-                  current information from the web, or it's genuinely hard.
-                  Everything else stays on your device. "Offline Only" AIs
-                  never go online.
+                  Only for AIs set to "Auto — Online and Offline". By default a
+                  question goes to a frontier online model, and stays on your
+                  device when a model here is as good for it. Health questions
+                  always stay home. "Offline Only" AIs never go online.
                 </p>
 
                 {/* Attachments: one control with one meaning - the standing
@@ -1208,34 +1226,35 @@ export default component$(() => {
                   </SettingToggle>
                 </div>
 
-                {/* Online eagerness — unchanged shipped knob. */}
+                {/* The one online dial. */}
                 <h4 class="text-base font-semibold text-[var(--text-primary)]">
-                  Going online for fresh information
+                  How much goes online
                 </h4>
                 <p class="text-sm text-[var(--text-secondary)] mt-1 mb-3">
-                  How eagerly a question that may need up-to-date information
-                  goes to an online model.
+                  {shareRecent.value && shareRecent.value.total >= 5
+                    ? `About ${Math.round((10 * shareRecent.value.online) / shareRecent.value.total)} in 10 of your recent questions went online.`
+                    : "Where an ordinary question is answered. Questions that need the live web always go online; health questions never do."}
                 </p>
                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-5">
                   {[
-                    { id: "privacy", label: "Privacy-first", hint: "Only clearly current questions go online" },
-                    { id: "balanced", label: "Balanced", hint: "Online when a question likely needs fresh info" },
-                    { id: "freshness", label: "Freshness-first", hint: "Lean online whenever it might help" },
+                    { id: "frontier", label: "Frontier-first", hint: "Online unless a model here is as good for the question" },
+                    { id: "balanced", label: "Balanced", hint: "Your device answers when it is nearly as good" },
+                    { id: "local", label: "Local-first", hint: "Online only for the live web; hard questions stay home" },
                   ].map((opt) => (
                     <button
                       key={opt.id}
-                      onClick$={() => setEagerness(opt.id as "privacy" | "balanced" | "freshness")}
+                      onClick$={() => setShare(opt.id as "frontier" | "balanced" | "local")}
                       class={`text-left rounded-xl p-3 border transition-colors ${
-                        routingEagerness.value === opt.id
+                        routingShare.value === opt.id
                           ? "bg-[var(--bg-button-primary)] text-[var(--text-button-primary)] border-[var(--border-subtle)]"
                           : "bg-[var(--bg-main)] text-[var(--text-primary)] border-[var(--border-subtle)] hover:opacity-90"
                       }`}
-                      aria-pressed={routingEagerness.value === opt.id}
+                      aria-pressed={routingShare.value === opt.id}
                     >
                       <div class="font-semibold text-sm">{opt.label}</div>
                       <div
                         class={`text-xs mt-1 ${
-                          routingEagerness.value === opt.id ? "" : "text-[var(--text-secondary)]"
+                          routingShare.value === opt.id ? "" : "text-[var(--text-secondary)]"
                         }`}
                       >
                         {opt.hint}
@@ -1363,38 +1382,37 @@ export default component$(() => {
                     choice). Recommended names must match the router's
                     DEFAULT_* ids in router.rs. */}
                 <h4 class="text-base font-semibold text-[var(--text-primary)] mt-5">
-                  Which online model answers
+                  Online models by job
                 </h4>
                 <p class="text-sm text-[var(--text-secondary)] mt-1 mb-1">
-                  When a question does go online, these are the online models
-                  that take it. Recommended picks are chosen for each job;
-                  change them if you'd rather use a different one. Your
-                  downloaded models aren't listed here - they're picked
-                  automatically, tuned under "Choosing a model on this
-                  device".
+                  When a question goes online, these are the models that take
+                  it. Recommended picks are chosen for each job; change them if
+                  you'd rather use a different one. Your downloaded models
+                  aren't listed here - they're picked automatically, tuned
+                  under "Choosing a model on this device".
                 </p>
+                <OnlineModelPicker
+                  label="Everyday questions"
+                  hint="Frontier quality at the lowest price - most questions"
+                  recommended={recName("everyday")}
+                  storageKey="routingOnlineEveryday"
+                  selected={onlineEveryday}
+                  models={onlineModels}
+                />
+                <OnlineModelPicker
+                  label="Hard questions"
+                  hint="Deep reasoning, tricky code, complex math"
+                  recommended={`${recName("hard_code")} for technical, ${recName("hard_general")} otherwise`}
+                  storageKey="routingOnlineHard"
+                  selected={onlineHard}
+                  models={onlineModels}
+                />
                 <OnlineModelPicker
                   label="Needs current information"
                   hint="Searches the live web and cites sources"
                   recommended={recName("fresh")}
                   storageKey="routingOnlineFresh"
                   selected={onlineFresh}
-                  models={onlineModels}
-                />
-                <OnlineModelPicker
-                  label="Hard coding, reasoning, or math"
-                  hint="The toughest technical questions"
-                  recommended={recName("hard_code")}
-                  storageKey="routingOnlineHardCode"
-                  selected={onlineHardCode}
-                  models={onlineModels}
-                />
-                <OnlineModelPicker
-                  label="Other hard questions"
-                  hint="Genuinely difficult questions outside those areas"
-                  recommended={recName("hard_general")}
-                  storageKey="routingOnlineHardGeneral"
-                  selected={onlineHardGeneral}
                   models={onlineModels}
                 />
                 {buildInstalled.value && (

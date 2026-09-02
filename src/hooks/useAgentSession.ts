@@ -926,7 +926,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         // model will actually SERVE agent turns, and write that model's
         // true context window into the agent's config.
         aiModel: props.selectedAi.value.aiConfig?.model ?? null,
-        eagerness: localStorage.getItem("smartRoutingEagerness") || "balanced",
+        eagerness: localStorage.getItem("routingOnlineShare") || "frontier",
         // Identity for the project-memory MCP server: notes the agent
         // saves deliberately are written to THIS AI's chain, labeled.
         agentKey: props.selectedAi.value.aiConfig?.agentPubKey ?? null,
@@ -1002,7 +1002,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         cwd: path,
         model: aiModelSlug(ai),
         aiModel: ai.aiConfig?.model ?? null,
-        eagerness: localStorage.getItem("smartRoutingEagerness") || "balanced",
+        eagerness: localStorage.getItem("routingOnlineShare") || "frontier",
         // No project-memory server for a tools session: notes belong to folders.
         agentKey: null,
         aiLabel: ai.label ?? null,

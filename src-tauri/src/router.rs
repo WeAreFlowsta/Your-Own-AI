@@ -29,16 +29,44 @@ pub(crate) const EMBED_MODEL: &str = "bge-small-en-v1.5-f16.gguf";
 /// enough that a real coder (coding 9) beats a general model (coding 6) on code.
 pub(crate) const SWITCH_MARGIN: u8 = 2;
 
-/// Freshness threshold (max cosine vs the reference phrases) per eagerness
-/// setting. Calibrated against bge-small on real queries: fresh queries cluster
-/// ≥0.57, evergreen ≤0.564. Balanced (0.58) keeps evergreen local while catching
-/// clearly-fresh paraphrases; privacy-first only escalates obvious cases;
-/// freshness-first leans online.
-fn threshold_for(eagerness: &str) -> f32 {
-    match eagerness {
-        "privacy" => 0.62,
-        "freshness" => 0.52,
-        _ => 0.58, // balanced (default)
+/// The one online dial ("How much goes online", Settings > Routing):
+/// `frontier` (default - ordinary questions go to the Everyday online
+/// model, the device answers only when it is as good) | `balanced` (the
+/// device answers when it is nearly as good) | `local` (online only for
+/// live-web needs, hard questions stay home). The pre-0.7.0 "eagerness"
+/// values map onto it so old callers and stored settings keep working.
+/// Returns "" for an unknown/absent value (the caller falls back to the
+/// store, then to frontier).
+pub(crate) fn normalize_share(s: &str) -> &'static str {
+    match s.trim().to_lowercase().as_str() {
+        "frontier" | "freshness" => "frontier",
+        "local" | "privacy" => "local",
+        "balanced" => "balanced",
+        _ => "",
+    }
+}
+
+/// Freshness threshold (max cosine vs the reference phrases) per dial
+/// position. Calibrated against bge-small on real queries: fresh queries
+/// cluster ≥0.57, evergreen ≤0.564. Balanced (0.58) keeps evergreen local
+/// while catching clearly-fresh paraphrases; local-first only escalates
+/// obvious cases; frontier leans online.
+fn threshold_for(share: &str) -> f32 {
+    match share {
+        "local" => 0.62,
+        "frontier" => 0.52,
+        _ => 0.58, // balanced
+    }
+}
+
+/// How far (task-score points) the device may trail the Everyday online
+/// model and still take an easy question. None = the dial never keeps a
+/// question home on capability (local-first decides by freshness alone).
+fn as_good_margin(share: &str) -> Option<u8> {
+    match share {
+        "frontier" => Some(0),
+        "balanced" => Some(1),
+        _ => None,
     }
 }
 
@@ -399,6 +427,20 @@ const REPLY_ROOM_TOKENS: u32 = 1024;
 /// if none can, the largest-context candidates stay so the user gets the
 /// best that exists rather than a refusal.
 async fn pick_offline_for(app: &AppHandle, task: &str, lean: &str, agent_only: bool, turn_tokens: Option<u32>) -> Result<String, String> {
+    pick_offline_detail(app, task, lean, agent_only, turn_tokens).await.map(|p| p.name)
+}
+
+/// The offline pick with what the "as good as online" rung needs to know
+/// about it: whether it runs at full speed here, and its score on THIS
+/// task. Computed on the model that will actually serve (after the
+/// keep-loaded rule), never on the ranked best.
+pub(crate) struct OfflinePick {
+    pub name: String,
+    pub fast: bool,
+    pub cap: u8,
+}
+
+async fn pick_offline_detail(app: &AppHandle, task: &str, lean: &str, agent_only: bool, turn_tokens: Option<u32>) -> Result<OfflinePick, String> {
     let mut all = crate::fit::assess(app).await;
     // Agent sessions: tool-driving is a hard filter, not a preference.
     if agent_only {
@@ -519,7 +561,7 @@ async fn pick_offline_for(app: &AppHandle, task: &str, lean: &str, agent_only: b
                     });
                 if !faster_specialist {
                     log::info!("[router] medical turn -> user's preferred model {}", chosen.name);
-                    return Ok(chosen.name.clone());
+                    return Ok(OfflinePick { name: chosen.name.clone(), fast: chosen.fit.is_fast(), cap: cap(&chosen.name) });
                 }
                 log::info!(
                     "[router] medical pick {} would run slowly here - a health specialist that fits fully answers instead",
@@ -556,11 +598,11 @@ async fn pick_offline_for(app: &AppHandle, task: &str, lean: &str, agent_only: b
                 .has_open_folder()
                 .await;
             if keep_loaded(cap(&cf.name), cap(&best.name), tier(cf), tier(best), folder_open, best.load_secs) {
-                return Ok(cur.clone());
+                return Ok(OfflinePick { name: cur.clone(), fast: cf.fit.is_fast(), cap: cap(&cf.name) });
             }
         }
     }
-    Ok(best.name.clone())
+    Ok(OfflinePick { name: best.name.clone(), fast: best.fit.is_fast(), cap: cap(&best.name) })
 }
 
 /// Should the loaded model stay loaded instead of switching to the
@@ -607,6 +649,11 @@ pub(crate) fn keep_loaded(
 #[derive(Default)]
 pub struct OnlinePicks {
     pub fresh: Option<String>,
+    /// The Everyday slot: ordinary turns in Online and Offline mode.
+    pub everyday: Option<String>,
+    /// The one Hard slot (Settings shows one picker). The two legacy
+    /// per-task keys below still apply when set and this is not.
+    pub hard: Option<String>,
     pub hard_code: Option<String>,
     pub hard_general: Option<String>,
     /// Agent (folder) turns' online model - the tool-driver slot.
@@ -623,6 +670,8 @@ impl OnlinePicks {
     pub fn from_store(app: &AppHandle) -> Self {
         Self {
             fresh: store_pref(app, "routingOnlineFresh"),
+            everyday: store_pref(app, "routingOnlineEveryday"),
+            hard: store_pref(app, "routingOnlineHard"),
             hard_code: store_pref(app, "routingOnlineHardCode"),
             hard_general: store_pref(app, "routingOnlineHardGeneral"),
             agent: store_pref(app, "routingOnlineAgent"),
@@ -636,6 +685,9 @@ impl OnlinePicks {
 /// registry, so routing never breaks. The Settings page names these same
 /// models as "Recommended" - keep the two in sync.
 pub(crate) const DEFAULT_FRESH: &str = "online:grok-4.6-search";
+/// The Everyday slot: frontier-class quality at the lowest price in the
+/// catalog - what an ordinary question gets in Online and Offline mode.
+pub(crate) const DEFAULT_EVERYDAY: &str = "online:gpt-5.6-luna";
 const DEFAULT_HARD_CODE: &str = "online:gpt-5.6-sol";
 const DEFAULT_HARD_GENERAL: &str = "online:gpt-5.6-terra";
 /// The agent slot: the strongest proven tool-driver. Sol runs tools
@@ -798,7 +850,7 @@ pub async fn agent_serving_context(
         Ok(name) => crate::fit::assess(app).await.iter().any(|f| f.name == name && agent_ready(f)),
         Err(_) => false,
     };
-    if (eagerness == "privacy" || store_pref(app, "routingProjectThrifty").as_deref() == Some("1"))
+    if (normalize_share(eagerness) == "local" || store_pref(app, "routingProjectThrifty").as_deref() == Some("1"))
         && offline_ok
     {
         return local;
@@ -941,6 +993,57 @@ async fn pick_online(task: &str, fresh: bool, pref: Option<&str>) -> Option<Stri
     select_online(&models, task, fresh, pref)
 }
 
+/// The Everyday slot's model. Order: the user's pick → the recommended
+/// default → the cheapest priced chat model that is not a search model →
+/// None (the device answers). Deliberately never the Hard slot: an absent
+/// Everyday default must not cost Hard-slot prices.
+fn select_online_everyday(
+    models: &[crate::flowsta::OnlineModel],
+    pref: Option<&str>,
+) -> Option<crate::flowsta::OnlineModel> {
+    let by_id = |id: &str| {
+        let want = id.strip_prefix("online:").unwrap_or(id);
+        models
+            .iter()
+            .find(|m| m.id.strip_prefix("online:").unwrap_or(&m.id) == want)
+            .cloned()
+    };
+    if let Some(hit) = pref.and_then(|p| by_id(p)) {
+        return Some(hit);
+    }
+    if let Some(hit) = by_id(DEFAULT_EVERYDAY) {
+        return Some(hit);
+    }
+    let is_search = |m: &crate::flowsta::OnlineModel| {
+        let t = format!("{} {} {}", m.id, m.display_name, m.description).to_lowercase();
+        t.contains("search")
+            || t.contains("sonar")
+            || t.contains("perplexity")
+            || m.pricing.as_ref().and_then(|p| p.search_per_call_usd).is_some()
+    };
+    let cost = |m: &crate::flowsta::OnlineModel| {
+        m.pricing.as_ref().map(|p| p.input_per_mtok + p.output_per_mtok)
+    };
+    models
+        .iter()
+        .filter(|m| !is_search(m) && cost(m).is_some())
+        .min_by(|a, b| {
+            cost(a)
+                .unwrap_or(f64::MAX)
+                .partial_cmp(&cost(b).unwrap_or(f64::MAX))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .cloned()
+}
+
+/// The Everyday model and its capability scores (for the as-good rung).
+async fn pick_online_everyday(pref: Option<&str>) -> Option<(String, crate::model_caps::Caps)> {
+    let models = crate::flowsta::list_online_models().await.ok()?;
+    let m = select_online_everyday(&models, pref)?;
+    let text = format!("{} {} {}", m.id, m.display_name, m.description);
+    Some((m.id.clone(), crate::model_caps::online_caps_for(&text)))
+}
+
 /// Should the connected external server take this query instead of the
 /// local pick? Pure decision (unit-tested): the external model wins only
 /// when its capability is RECOGNIZED and beats the local best by
@@ -998,29 +1101,97 @@ fn best_external(models: &[String], task: &str) -> Option<(String, u8)> {
 /// Settings transparency view. The DURABLE audit is per answer in the
 /// Holochain transcript (routing_reason/routing_task in provenance) - this
 /// is just a fast window onto recent activity.
-#[derive(serde::Serialize, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct RoutingDecision {
     pub at_ms: i64,
     pub model: String,
     pub reason: String,
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub share: String,
+    #[serde(default)]
+    pub task: String,
+    #[serde(default)]
+    pub difficulty: String,
+    /// "online" | "device" | "server"
+    #[serde(default)]
+    pub side: String,
+}
+
+/// On-disk ring of real routing decisions (last LOG_KEEP), the source for
+/// the Settings line "about N in 10 questions went online" and, later, for
+/// per-machine learning. Preview/matrix calls never write here.
+const LOG_KEEP: usize = 200;
+fn routing_log_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join("routing-log.json"))
+}
+fn read_routing_log(app: &AppHandle) -> Vec<RoutingDecision> {
+    routing_log_path(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+fn append_routing_log(app: &AppHandle, d: &RoutingDecision) {
+    let Some(path) = routing_log_path(app) else { return };
+    let mut log = read_routing_log(app);
+    log.insert(0, d.clone());
+    log.truncate(LOG_KEEP);
+    if let Ok(text) = serde_json::to_string(&log) {
+        let _ = std::fs::write(path, text);
+    }
+}
+
+/// The share of recent real Online-and-Offline decisions that went online.
+#[derive(serde::Serialize)]
+pub struct OnlineShareRecent {
+    pub online: u32,
+    pub total: u32,
+}
+
+#[tauri::command]
+pub fn routing_online_share_recent(app: AppHandle) -> OnlineShareRecent {
+    let mut online = 0u32;
+    let mut total = 0u32;
+    for d in read_routing_log(&app).iter().filter(|d| d.mode == "online-offline").take(50) {
+        total += 1;
+        if d.side == "online" {
+            online += 1;
+        }
+    }
+    OnlineShareRecent { online, total }
 }
 
 static RECENT_DECISIONS: std::sync::OnceLock<std::sync::Mutex<std::collections::VecDeque<RoutingDecision>>> =
     std::sync::OnceLock::new();
 
-fn remember_decision(model: &str, reason: &str) {
+fn remember_decision(app: &AppHandle, mode: &str, share: &str, task: &str, difficulty: &str, model: &str, reason: &str) {
+    let side = if model.starts_with("online:") {
+        "online"
+    } else if model.starts_with("external:") {
+        "server"
+    } else {
+        "device"
+    };
+    let d = RoutingDecision {
+        at_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|t| t.as_millis() as i64)
+            .unwrap_or(0),
+        model: model.to_string(),
+        reason: reason.to_string(),
+        mode: mode.to_string(),
+        share: share.to_string(),
+        task: task.to_string(),
+        difficulty: difficulty.to_string(),
+        side: side.to_string(),
+    };
     let ledger = RECENT_DECISIONS.get_or_init(|| std::sync::Mutex::new(std::collections::VecDeque::new()));
-    if let Ok(mut d) = ledger.lock() {
-        d.push_front(RoutingDecision {
-            at_ms: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|t| t.as_millis() as i64)
-                .unwrap_or(0),
-            model: model.to_string(),
-            reason: reason.to_string(),
-        });
-        d.truncate(20);
+    if let Ok(mut q) = ledger.lock() {
+        q.push_front(d.clone());
+        q.truncate(20);
     }
+    append_routing_log(app, &d);
 }
 
 #[tauri::command]
@@ -1098,7 +1269,7 @@ pub async fn route(
     app: &AppHandle,
     mode: &str,
     query: &str,
-    eagerness: &str,
+    share: &str,
     task: &str,
     difficulty: &str,
     lean: &str,
@@ -1107,7 +1278,25 @@ pub async fn route(
     agent: bool,
     plan: bool,
 ) -> Result<RouteResult, String> {
-    route_with(app, mode, query, eagerness, task, difficulty, lean, picks, query_vec, agent, plan, None).await
+    route_with(app, mode, query, share, task, difficulty, lean, picks, query_vec, agent, plan, None).await
+}
+
+/// `route_with` for the dev preview / matrix / battery: identical decision,
+/// nothing recorded (a sweep must not fill the decision log).
+pub async fn route_dry(
+    app: &AppHandle,
+    mode: &str,
+    query: &str,
+    share: &str,
+    task: &str,
+    difficulty: &str,
+    lean: &str,
+    picks: &OnlinePicks,
+    agent: bool,
+    plan: bool,
+    turn_tokens: Option<u32>,
+) -> Result<RouteResult, String> {
+    route_inner(app, mode, query, share, task, difficulty, lean, picks, None, agent, plan, turn_tokens).await
 }
 
 /// `route` with the turn's size (prompt + history + attachments, tokens),
@@ -1117,7 +1306,7 @@ pub async fn route_with(
     app: &AppHandle,
     mode: &str,
     query: &str,
-    eagerness: &str,
+    share: &str,
     task: &str,
     difficulty: &str,
     lean: &str,
@@ -1127,18 +1316,31 @@ pub async fn route_with(
     plan: bool,
     turn_tokens: Option<u32>,
 ) -> Result<RouteResult, String> {
-    let result = route_inner(app, mode, query, eagerness, task, difficulty, lean, picks, query_vec, agent, plan, turn_tokens).await;
+    let result = route_inner(app, mode, query, share, task, difficulty, lean, picks, query_vec, agent, plan, turn_tokens).await;
     if let Ok(r) = &result {
-        remember_decision(&r.model, &r.reason);
+        remember_decision(app, mode, effective_share(app, share).as_str(), task, difficulty, &r.model, &r.reason);
     }
     result
+}
+
+/// The dial position this call runs under: an explicit value (legacy
+/// eagerness names accepted) → the Settings choice from the store →
+/// frontier, the default.
+fn effective_share(app: &AppHandle, share: &str) -> String {
+    match normalize_share(share) {
+        "" => store_pref(app, "routingOnlineShare")
+            .map(|s| normalize_share(&s).to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "frontier".to_string()),
+        s => s.to_string(),
+    }
 }
 
 async fn route_inner(
     app: &AppHandle,
     mode: &str,
     query: &str,
-    eagerness: &str,
+    share: &str,
     task: &str,
     difficulty: &str,
     lean: &str,
@@ -1148,6 +1350,8 @@ async fn route_inner(
     plan: bool,
     turn_tokens: Option<u32>,
 ) -> Result<RouteResult, String> {
+    let share_owned = effective_share(app, share);
+    let share = share_owned.as_str();
     // The offline lean: an explicit value wins; absent (API and agent
     // callers, which never see the webview's storage) → the user's
     // Settings choice from the store → balanced.
@@ -1164,6 +1368,8 @@ async fn route_inner(
     // slot pick into settings.json.
     let picks = OnlinePicks {
         fresh: picks.fresh.clone().or_else(|| store_pref(app, "routingOnlineFresh")),
+        everyday: picks.everyday.clone().or_else(|| store_pref(app, "routingOnlineEveryday")),
+        hard: picks.hard.clone().or_else(|| store_pref(app, "routingOnlineHard")),
         hard_code: picks
             .hard_code
             .clone()
@@ -1233,7 +1439,7 @@ async fn route_inner(
                     "No installed model can drive agent work - download an agentic model (Ornith, Qwen 3.6, GLM, Nemotron 3.5, a coder) or use an online-capable AI".to_string()
                 });
         }
-        if eagerness == "privacy" {
+        if share == "local" {
             // Privacy never silently goes online - but a model that cannot
             // truly run here would only produce timeouts, so refuse plainly.
             if let Some(m) = offline.clone().filter(|_| offline_green) {
@@ -1311,6 +1517,17 @@ async fn route_inner(
     let task: &str = if medical { "medical" } else { task };
 
     if mode == "online-offline" && !medical {
+        let local_first = share == "local";
+        // A user the app knows cannot use online models is never routed
+        // there: the banner explains instead.
+        let known_not_entitled = store_pref(app, "onlineEntitled").as_deref() == Some("no");
+        let hard_pref = || {
+            picks.hard.as_deref().or(if matches!(task, "code" | "math" | "reasoning") {
+                picks.hard_code.as_deref()
+            } else {
+                picks.hard_general.as_deref()
+            })
+        };
         // Size first: a turn no model on this device can hold - even after
         // growing its context - goes to an online model that can. The mode
         // permits it; an attachment only reaches this mode with consent
@@ -1318,13 +1535,8 @@ async fn route_inner(
         // unasked.
         if let Some(need) = turn_tokens {
             let need = (need as u64).saturating_add(REPLY_ROOM_TOKENS as u64);
-            // A user the app knows cannot use online models never gets
-            // routed there for size - the banner explains instead.
-            let known_not_entitled = store_pref(app, "onlineEntitled").as_deref() == Some("no");
             if !known_not_entitled && !local_can_hold(app, need).await {
-                if let Some(model) =
-                    pick_online_holding(need, task, picks.hard_general.as_deref()).await
-                {
+                if let Some(model) = pick_online_holding(need, task, hard_pref()).await {
                     log::info!("[router] ~{need} tokens is more than any model here holds - online");
                     return Ok(RouteResult {
                         model,
@@ -1333,51 +1545,74 @@ async fn route_inner(
                 }
             }
         }
-        // Stage 0: cheap keyword cues. Stage 1 (only if Stage 0 is negative):
-        // bge-small semantic similarity to "needs-current-info" phrases. Stage 2:
-        // difficulty escalation — a HARD query goes to a stronger online model
-        // (inherent to this mode; auto:offline is the never-online choice).
-        // `is_fresh` = the query needs LIVE WEB (→ a search model), vs a
-        // difficulty escalation (→ the best online model for the task).
-        // Privacy-first makes the dial mean what it says: online ONLY for
-        // genuine live-web needs. Keyword cues alone don't clear the bar -
-        // they must also pass the (stricter) semantic threshold - and hard
-        // questions stay home: a privacy-leaning user prefers a weaker
-        // local answer over sending the question out. (Found by the
-        // routing matrix: both paths ignored the dial entirely.)
-        let privacy = eagerness == "privacy";
-        let (why, is_fresh) = if looks_time_sensitive(query)
-            && (!privacy
+        // Fresh: Stage 0 keyword cues, Stage 1 bge-small similarity to
+        // "needs-current-info" phrases. Local-first makes the dial mean
+        // what it says: keyword cues alone don't clear the bar - they must
+        // also pass the (stricter) semantic threshold.
+        let fresh_why = if looks_time_sensitive(query)
+            && (!local_first
                 || semantic_fresh_score(app, query, query_vec)
                     .await
-                    .is_some_and(|s| s >= threshold_for(eagerness)))
+                    .is_some_and(|s| s >= threshold_for(share)))
         {
-            (Some("looks like it needs current info"), true)
+            Some("looks like it needs current info")
         } else if semantic_fresh_score(app, query, query_vec)
             .await
-            .is_some_and(|s| s >= threshold_for(eagerness))
+            .is_some_and(|s| s >= threshold_for(share))
         {
-            (Some("seems to need up-to-date info"), true)
-        } else if difficulty == "hard" && !privacy {
-            (Some("a hard question — using a stronger model"), false)
+            Some("seems to need up-to-date info")
         } else {
-            (None, false)
+            None
         };
-        if let Some(why) = why {
-            let pref = if is_fresh {
-                picks.fresh.as_deref()
-            } else if matches!(task, "code" | "math" | "reasoning") {
-                picks.hard_code.as_deref()
-            } else {
-                picks.hard_general.as_deref()
-            };
-            if let Some(model) = pick_online(task, is_fresh, pref).await {
+        if let Some(why) = fresh_why {
+            if let Some(model) = pick_online(task, true, picks.fresh.as_deref()).await {
+                return Ok(RouteResult { model, reason: format!("online — {why}") });
+            }
+            // No online model available → fall through.
+        }
+        // Hard: a known-hard question goes to the Hard slot. Never in
+        // local-first (a weaker local answer beats sending it out), and
+        // never on an unknown verdict.
+        if difficulty == "hard" && !local_first && !known_not_entitled {
+            if let Some(model) = pick_online(task, false, hard_pref()).await {
                 return Ok(RouteResult {
                     model,
-                    reason: format!("online — {why}"),
+                    reason: "online — a hard question, using a stronger model".to_string(),
                 });
             }
-            // No online model available → fall through to offline.
+        }
+        // Frontier by default: an ordinary question goes to the Everyday
+        // online model, unless the device is as good for it - the model
+        // that will answer here runs at full speed, scores within the
+        // dial's margin of the Everyday model on this task, and the
+        // question is known easy. Unknown difficulty (no helper model)
+        // goes online: the safe direction for quality.
+        if !local_first && !known_not_entitled {
+            match pick_online_everyday(picks.everyday.as_deref()).await {
+                Some((everyday, ecaps)) => {
+                    let margin = as_good_margin(share).unwrap_or(0);
+                    let local = pick_offline_detail(app, task, lean, false, turn_tokens).await.ok();
+                    let as_good = local.as_ref().is_some_and(|l| {
+                        l.fast && difficulty == "easy" && l.cap.saturating_add(margin) >= ecaps.by_task(task)
+                    });
+                    if let Some(l) = local.filter(|_| as_good) {
+                        return Ok(RouteResult {
+                            model: l.name,
+                            reason: "kept on your device — as good for this question".to_string(),
+                        });
+                    }
+                    return Ok(RouteResult { model: everyday, reason: "online — everyday model".to_string() });
+                }
+                None => {
+                    // Catalog unreachable (offline, proxy down): the device
+                    // answers, and the receipt says why.
+                    let model = pick_offline_for(app, task, lean, false, turn_tokens).await?;
+                    return Ok(RouteResult {
+                        model,
+                        reason: "offline — online models unavailable right now".to_string(),
+                    });
+                }
+            }
         }
     }
     // "My hardware": the local pick may hand off to the user's connected
@@ -1489,6 +1724,7 @@ pub async fn routing_specialist_tasks(app: AppHandle) -> Result<Vec<String>, Str
 pub fn routing_defaults() -> std::collections::HashMap<String, String> {
     [
         ("fresh", DEFAULT_FRESH),
+        ("everyday", DEFAULT_EVERYDAY),
         ("hard_code", DEFAULT_HARD_CODE),
         ("hard_general", DEFAULT_HARD_GENERAL),
         ("agent", DEFAULT_AGENT),
@@ -1523,6 +1759,8 @@ pub async fn route_model(
     difficulty: Option<String>,
     lean: Option<String>,
     online_fresh: Option<String>,
+    online_everyday: Option<String>,
+    online_hard: Option<String>,
     online_hard_code: Option<String>,
     online_hard_general: Option<String>,
     online_agent: Option<String>,
@@ -1531,19 +1769,24 @@ pub async fn route_model(
     agent: Option<bool>,
     plan: Option<bool>,
     turn_tokens: Option<u32>,
+    // The dial: frontier | balanced | local (legacy eagerness accepted).
+    online_share: Option<String>,
 ) -> Result<RouteResult, String> {
     let picks = OnlinePicks {
         fresh: online_fresh,
+        everyday: online_everyday,
+        hard: online_hard,
         hard_code: online_hard_code,
         hard_general: online_hard_general,
         agent: online_agent,
         plan: online_planning,
     };
+    let share = online_share.or(eagerness).unwrap_or_default();
     route_with(
         &app,
         &mode,
         &query,
-        eagerness.as_deref().unwrap_or("balanced"),
+        &share,
         task.as_deref().unwrap_or("general"),
         difficulty.as_deref().unwrap_or("unknown"),
         lean.as_deref().unwrap_or(""),
@@ -1558,6 +1801,88 @@ pub async fn route_model(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    fn pm(id: &str, name: &str, desc: &str, input: f64, output: f64, search: Option<f64>) -> crate::flowsta::OnlineModel {
+        crate::flowsta::OnlineModel {
+            id: id.to_string(),
+            display_name: name.to_string(),
+            description: desc.to_string(),
+            context_window: 128_000,
+            vision: false,
+            category: "chat".to_string(),
+            categories: vec!["chat".to_string()],
+            released: None,
+            pricing: Some(crate::flowsta::OnlinePricing {
+                input_per_mtok: input,
+                output_per_mtok: output,
+                request_fee_usd: 0.0,
+                search_per_call_usd: search,
+                cached_input_per_mtok: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn dial_names_map_and_unknown_is_empty() {
+        assert_eq!(normalize_share("frontier"), "frontier");
+        assert_eq!(normalize_share("freshness"), "frontier");
+        assert_eq!(normalize_share("Local"), "local");
+        assert_eq!(normalize_share("privacy"), "local");
+        assert_eq!(normalize_share("balanced"), "balanced");
+        assert_eq!(normalize_share(""), "");
+        assert_eq!(normalize_share("whatever"), "");
+    }
+
+    #[test]
+    fn dial_thresholds_and_margins() {
+        assert!(threshold_for("local") > threshold_for("balanced"));
+        assert!(threshold_for("balanced") > threshold_for("frontier"));
+        assert_eq!(as_good_margin("frontier"), Some(0));
+        assert_eq!(as_good_margin("balanced"), Some(1));
+        assert_eq!(as_good_margin("local"), None);
+    }
+
+    #[test]
+    fn everyday_prefers_pick_then_default_then_cheapest_chat() {
+        let luna = pm("online:gpt-5.6-luna", "GPT-5.6 Luna", "fast, low-cost", 0.2, 1.2, None);
+        let terra = pm("online:gpt-5.6-terra", "GPT-5.6 Terra", "flagship", 2.0, 12.0, None);
+        let flash = pm("online:deepseek-v4-flash", "DeepSeek V4 Flash", "cheap", 0.44, 1.32, None);
+        let search = pm("online:sonar", "Perplexity Sonar", "live web", 0.1, 0.1, Some(0.005));
+        // The user's pick wins.
+        let all = vec![terra.clone(), luna.clone(), flash.clone(), search.clone()];
+        assert_eq!(select_online_everyday(&all, Some("gpt-5.6-terra")).map(|m| m.id), Some(terra.id.clone()));
+        // Then the recommended default.
+        assert_eq!(select_online_everyday(&all, None).map(|m| m.id), Some(luna.id.clone()));
+        // Default absent: the cheapest priced chat model, never a search model.
+        let no_luna = vec![terra.clone(), flash.clone(), search.clone()];
+        assert_eq!(select_online_everyday(&no_luna, None).map(|m| m.id), Some(flash.id.clone()));
+        // Only search models: nothing (the device answers).
+        assert!(select_online_everyday(&[search], None).is_none());
+    }
+
+    #[test]
+    fn fresh_pick_must_be_able_to_search() {
+        let luna = pm("online:gpt-5.6-luna", "GPT-5.6 Luna", "fast, low-cost", 0.2, 1.2, None);
+        let grok = pm("online:grok-4.6-search", "Grok 4.6 (Web)", "live web search", 2.0, 6.0, Some(0.005));
+        let all = vec![luna.clone(), grok.clone()];
+        // A chat-only pick is not honored for a fresh turn ...
+        assert_eq!(select_online(&all, "general", true, Some("gpt-5.6-luna")), Some(grok.id.clone()));
+        // ... but is for a hard turn.
+        assert_eq!(select_online(&all, "general", false, Some("gpt-5.6-luna")), Some(luna.id.clone()));
+    }
+
+    #[test]
+    fn everyday_tier_scores_under_the_flagship() {
+        let flagship = crate::model_caps::online_caps_for("online:gpt-5.6-terra gpt-5.6 terra flagship");
+        let luna = crate::model_caps::online_caps_for("online:gpt-5.6-luna gpt-5.6 luna fast low-cost");
+        let kimi = crate::model_caps::online_caps_for("online:kimi-k2.6 kimi k2.6 standout value");
+        assert!(luna.overall < flagship.overall);
+        assert_eq!(luna.overall, 8);
+        assert_eq!(kimi.overall, 8);
+        // "gemini" must not read as "-mini".
+        assert_eq!(crate::model_caps::online_caps_for("online:gemini-3 gemini").overall, 8);
+    }
     #[test]
     fn agent_rank_prefers_tool_tier_then_task() {
         // Ornith (9) beats a coder (8) even when the coder's task score is higher.

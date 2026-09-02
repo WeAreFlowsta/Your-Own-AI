@@ -690,14 +690,16 @@ export function useChat(props: UseChatProps) {
         if (mode !== requestedMode) {
           console.log("[Router] attachment without online consent - routing offline");
         }
-        // Eagerness (online FRESHNESS threshold) - Settings → Routing.
-        const eagerness =
-          localStorage.getItem("smartRoutingEagerness") || "balanced";
+        // The one online dial - Settings → Routing ("How much goes online").
+        // Absent = the router's default (frontier-first).
+        const onlineShare = localStorage.getItem("routingOnlineShare") || undefined;
         // Offline model-pick lean (speed / balanced / quality) - Settings → Routing.
         const lean = localStorage.getItem("routingOfflineLean") || "balanced";
         // Per-slot online model choices - Settings → Routing ("" / absent =
         // the router's recommended default for that slot).
         const onlineFresh = localStorage.getItem("routingOnlineFresh") || undefined;
+        const onlineEveryday = localStorage.getItem("routingOnlineEveryday") || undefined;
+        const onlineHard = localStorage.getItem("routingOnlineHard") || undefined;
         const onlineHardCode = localStorage.getItem("routingOnlineHardCode") || undefined;
         const onlineHardGeneral = localStorage.getItem("routingOnlineHardGeneral") || undefined;
         // Routing task: the report/code classifier's CODE signal is a free base
@@ -730,9 +732,11 @@ export function useChat(props: UseChatProps) {
             query: userInput,
             task: signals.task,
             difficulty: signals.difficulty,
-            eagerness,
+            onlineShare,
             lean,
             onlineFresh,
+            onlineEveryday,
+            onlineHard,
             onlineHardCode,
             onlineHardGeneral,
             queryVec: queryVec ?? undefined,
@@ -1986,12 +1990,15 @@ export function useChat(props: UseChatProps) {
           mode: target === "online" ? "online-offline" : "offline",
           query: userMessage.content,
           task,
-          // "hard" routes straight to the stronger-model slot; eagerness
-          // privacy keeps freshness from hijacking an explicit request.
+          // "hard" routes straight to the Hard slot (a genuinely fresh
+          // question may still take the live-web slot - also online, also
+          // what was asked for).
           difficulty: target === "online" ? "hard" : "easy",
-          eagerness: "privacy",
+          onlineShare: target === "online" ? "frontier" : "local",
           lean: localStorage.getItem("routingOfflineLean") || "balanced",
           onlineFresh: localStorage.getItem("routingOnlineFresh") || undefined,
+          onlineEveryday: localStorage.getItem("routingOnlineEveryday") || undefined,
+          onlineHard: localStorage.getItem("routingOnlineHard") || undefined,
           onlineHardCode: localStorage.getItem("routingOnlineHardCode") || undefined,
           onlineHardGeneral: localStorage.getItem("routingOnlineHardGeneral") || undefined,
           turnTokens: Math.ceil(

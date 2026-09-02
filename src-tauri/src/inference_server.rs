@@ -390,17 +390,24 @@ async fn route_preview(
         return err(StatusCode::NOT_FOUND, "not found", "not_found");
     }
     let g = |k: &str, d: &str| q.get(k).cloned().unwrap_or_else(|| d.to_string());
-    let picks = crate::router::OnlinePicks::from_store(&app);
-    match crate::router::route_with(
+    // Picks: the dev machine's store, with per-slot overrides for a sweep.
+    let mut picks = crate::router::OnlinePicks::from_store(&app);
+    let over = |k: &str| q.get(k).filter(|v| !v.is_empty()).cloned();
+    if let Some(v) = over("everyday") { picks.everyday = Some(v); }
+    if let Some(v) = over("hard") { picks.hard = Some(v); }
+    if let Some(v) = over("fresh") { picks.fresh = Some(v); }
+    // The dial: `online_share` (frontier|balanced|local) wins; the legacy
+    // `eagerness` name still maps; absent → the store.
+    let share = q.get("online_share").cloned().unwrap_or_else(|| g("eagerness", ""));
+    match crate::router::route_dry(
         &app,
         &g("mode", "online-offline"),
         &g("q", "hello"),
-        &g("eagerness", "balanced"),
+        &share,
         &g("task", "general"),
-        &g("difficulty", "easy"),
+        &g("difficulty", "unknown"),
         &g("lean", "balanced"),
         &picks,
-        None,
         g("agent", "0") == "1",
         g("plan", "0") == "1",
         q.get("turn_tokens").and_then(|t| t.parse::<u32>().ok()),
@@ -497,13 +504,18 @@ async fn chat_completions(
             Some("easy") => "easy",
             _ => "unknown",
         };
-        let eagerness = match header_str(&headers, "x-your-own-ai-eagerness")
+        // The dial: X-Your-Own-AI-Online-Share (frontier|balanced|local)
+        // wins; the legacy X-Your-Own-AI-Eagerness header still maps;
+        // absent → the router uses the Settings choice from the store.
+        let eagerness = match header_str(&headers, "x-your-own-ai-online-share")
+            .or_else(|| header_str(&headers, "x-your-own-ai-eagerness"))
             .map(|s| s.trim().to_lowercase())
             .as_deref()
         {
-            Some("privacy") => "privacy",
-            Some("freshness") => "freshness",
-            _ => "balanced",
+            Some("frontier") | Some("freshness") => "frontier",
+            Some("local") | Some("privacy") => "local",
+            Some("balanced") => "balanced",
+            _ => "",
         };
         // Offline-pick lean, mirroring the eagerness header. The in-app
         // Settings knobs live in the webview's storage and don't reach this
