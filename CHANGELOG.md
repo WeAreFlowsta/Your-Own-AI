@@ -5,6 +5,14 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 
 ## [0.7.0] - 2026-08-29
 
+### First run
+- A new welcome takes three steps: download the model picked for your
+  computer, meet your three AIs (Personal, or Work with an Assistant, a
+  Coder and an Analyst; name, picture and personality all editable), and
+  go. The download never blocks: ask a question while it runs and the
+  answer arrives the moment the model lands, with the progress shown in
+  the message field and a note on every page.
+
 ### Models
 - Nemotron 3.5 Lightning loads again. The maker replaced its download after
   our catalog pinned it, with a copy no current engine can read; the catalog
