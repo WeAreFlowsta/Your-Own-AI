@@ -42,5 +42,9 @@ export async function fetchUsage(): Promise<UsageSummary | null> {
 
 /** "$4.31 of $20" - the one formatting used everywhere. */
 export function formatUsage(u: UsageSummary): string {
-  return `$${u.cost_usd.toFixed(2)} of $${Math.round(u.allowance_usd)}`;
+  // Spend against the allowance; past it, the part that bills as overage is
+  // named on its own - "$102 of $66" read as a hundred dollars of overage.
+  const base = `$${u.cost_usd.toFixed(2)} of $${Math.round(u.allowance_usd)}`;
+  const over = u.cost_usd - u.allowance_usd;
+  return over > 0.005 ? `${base} · $${over.toFixed(2)} over` : base;
 }
