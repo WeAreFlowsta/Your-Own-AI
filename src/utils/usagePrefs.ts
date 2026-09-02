@@ -14,6 +14,8 @@ export interface UsageSummary {
   tier: string;
   cost_usd: number;
   allowance_usd: number;
+  /** The plan's monthly price - the allowance's origin. 0 on older proxies. */
+  plan_usd?: number;
   overage_usd: number;
   overage_opt_in: boolean;
   requests: number;
@@ -43,12 +45,24 @@ export async function fetchUsage(): Promise<UsageSummary | null> {
   }
 }
 
-/** "$4.31 of $20" - the one formatting used everywhere. */
+/** The one usage line every surface shows: used · included · over.
+ *  "$102.13 used · $66 included · $36.13 over" - the last part only past
+ *  the allowance ("$102 of $66" once read as a hundred dollars of overage). */
 export function formatUsage(u: UsageSummary): string {
-  // Spend against the allowance; past it, the part that bills as overage is
-  // named on its own - "$102 of $66" read as a hundred dollars of overage.
-  const base = `$${u.cost_usd.toFixed(2)} of $${Math.round(u.allowance_usd)}`;
+  const base = `$${u.cost_usd.toFixed(2)} used · $${Math.round(u.allowance_usd)} included`;
   const over = u.cost_usd - u.allowance_usd;
   const line = over > 0.005 ? `${base} · $${over.toFixed(2)} over` : base;
   return u.overage_hold ? `${line} · invoice unpaid` : line;
+}
+
+/** Where the included amount comes from, stated once beside it:
+ *  "$66 included each month (your $60 plan plus 10%)". */
+export function includedLine(u: UsageSummary): string {
+  const inc = Math.round(u.allowance_usd);
+  const plan = u.plan_usd ?? 0;
+  if (plan <= 0) return `$${inc} included each month`;
+  const bonus = Math.round(((u.allowance_usd - plan) / plan) * 100);
+  return bonus > 0
+    ? `$${inc} included each month (your $${Math.round(plan)} plan plus ${bonus}%)`
+    : `$${inc} included each month (your $${Math.round(plan)} plan)`;
 }

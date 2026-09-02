@@ -402,6 +402,9 @@ pub struct UsageSummary {
     pub tier: String,
     pub cost_usd: f64,
     pub allowance_usd: f64,
+    /// The plan's monthly price - the allowance's origin. 0 on older proxies.
+    #[serde(default)]
+    pub plan_usd: f64,
     pub overage_usd: f64,
     pub overage_opt_in: bool,
     pub requests: u64,
@@ -444,6 +447,7 @@ pub async fn flowsta_usage(app: tauri::AppHandle) -> Result<Option<UsageSummary>
         tier: v["tier"].as_str().unwrap_or("free").to_string(),
         cost_usd: v["cost_usd"].as_f64().unwrap_or(0.0),
         allowance_usd: v["allowance_usd"].as_f64().unwrap_or(0.0),
+        plan_usd: v["plan_usd"].as_f64().unwrap_or(0.0),
         overage_usd: v["overage_usd"].as_f64().unwrap_or(0.0),
         overage_opt_in: v["overage_opt_in"].as_bool().unwrap_or(false),
         requests: v["requests"].as_u64().unwrap_or(0),

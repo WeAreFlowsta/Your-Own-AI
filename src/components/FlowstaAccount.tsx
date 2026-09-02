@@ -9,6 +9,7 @@ import ConfirmModal from "./ConfirmModal";
 import { useAiDataActions } from "../contexts/AiDataContext";
 import {
   fetchUsage,
+  includedLine,
   formatUsage,
   setUsageTickerEnabled,
   usageTickerEnabled,
@@ -470,10 +471,10 @@ export default component$<FlowstaAccountProps>((props) => {
               <div class="flex items-center justify-between gap-3">
                 <div>
                   <p class="text-sm text-[var(--text-primary)]">
-                    {formatUsage(usage.value)} used this month
+                    {formatUsage(usage.value)}
                   </p>
                   <p class="mt-0.5 text-xs text-[var(--text-muted)]">
-                    {usage.value.requests} requests · allowance resets on the 1st
+                    {includedLine(usage.value)} · resets on the 1st · {usage.value.requests} requests
                     {usage.value.overage_opt_in && usage.value.overage_usd > 0
                       ? ` · $${usage.value.overage_usd.toFixed(2)} overage so far`
                       : ""}
