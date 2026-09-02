@@ -54,7 +54,7 @@ pub(crate) fn normalize_share(s: &str) -> &'static str {
 fn threshold_for(share: &str) -> f32 {
     match share {
         "local" => 0.62,
-        "frontier" => 0.52,
+        "frontier" => 0.55,
         _ => 0.58, // balanced
     }
 }
@@ -133,6 +133,37 @@ pub(crate) fn cosine(a: &[f32], b: &[f32]) -> f32 {
 /// Reference embeddings, computed once on first use (needs the embedding server).
 static FRESH_REFS: tokio::sync::OnceCell<Vec<Vec<f32>>> = tokio::sync::OnceCell::const_new();
 
+/// Ordinary-question anchors for the freshness gate (its own list - the
+/// health gate's anchors include news-shaped phrasings that would sit next
+/// to genuine live-web questions). A turn is fresh only when it is closer
+/// to the fresh references than to these by FRESH_MARGIN.
+const FRESH_BENIGN_REFERENCES: &[&str] = &[
+    "hi, how are you doing today",
+    "write a short poem for me",
+    "rewrite this to sound friendlier",
+    "suggest a fun activity for a rainy day",
+    "explain how this works in simple terms",
+    "what should I pack for a trip",
+    "tell me a joke",
+    "help me write an email to my boss",
+    "what is a good recipe for dinner",
+    "what is the capital of this country",
+    "how many ounces are in a cup",
+];
+static FRESH_BENIGN_REFS: tokio::sync::OnceCell<Vec<Vec<f32>>> = tokio::sync::OnceCell::const_new();
+
+async fn fresh_benign_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec<f32>>> {
+    FRESH_BENIGN_REFS
+        .get_or_try_init(|| async {
+            let state = app.state::<crate::llm::LLMState>();
+            let texts = FRESH_BENIGN_REFERENCES.iter().map(|s| s.to_string()).collect();
+            crate::llm::embed_texts(app.clone(), state, texts, EMBED_MODEL.to_string()).await
+        })
+        .await
+        .map_err(|e| log::warn!("[router] freshness anchors could not be embedded: {e}"))
+        .ok()
+}
+
 async fn fresh_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec<f32>>> {
     FRESH_REFS
         .get_or_try_init(|| async {
@@ -179,7 +210,7 @@ async fn fresh_scores(
     provided_vec: Option<&[f32]>,
 ) -> Option<(f32, f32)> {
     let refs = fresh_reference_vecs(app).await?;
-    let benign = benign_reference_vecs(app).await?;
+    let benign = fresh_benign_reference_vecs(app).await?;
     // The frontend embeds the turn's text ONCE (same bge query instruction)
     // and shares the vector here and with memory retrieval - reuse it rather
     // than paying a second embed-server round trip. Callers without one
@@ -251,14 +282,6 @@ const BENIGN_REFERENCES: &[&str] = &[
     "what is in this pdf",
     "summarize this document for me",
     "what is this file about",
-    // Freshness-gate anchors: a greeting with "today" in it, a creative or
-    // rewrite ask, an evergreen explanation - none of these want the web.
-    "hi, how are you doing today",
-    "write a short poem for me",
-    "rewrite this to sound friendlier",
-    "suggest a fun activity for a rainy day",
-    "explain how this works in simple terms",
-    "what should I pack for a trip",
 ];
 
 static MEDICAL_REFS: tokio::sync::OnceCell<Vec<Vec<f32>>> = tokio::sync::OnceCell::const_new();
@@ -1639,12 +1662,20 @@ async fn route_inner(
         // also read as fresh at the balanced threshold (an evergreen question
         // with the word "latest" in it stays home); a cue-less question
         // needs the strict one.
-        let fresh_why = if looks_time_sensitive(query)
-            && (!local_first
-                || semantic_fresh_score(app, query, query_vec)
-                    .await
-                    .is_some_and(|s| s >= threshold_for("balanced")))
-        {
+        // A keyword cue is confirmed against the anchors: the turn must sit at
+        // least as close to the fresh references as to an ordinary question
+        // (a greeting with "today" in it fails this), and under Local-first
+        // it must also read as fresh at the balanced threshold. With no
+        // embeddings, a cue alone still counts except under Local-first.
+        let cue_confirmed = if looks_time_sensitive(query) {
+            match fresh_scores(app, query, query_vec).await {
+                Some((f, b)) => f >= b && (!local_first || f >= threshold_for("balanced")),
+                None => !local_first,
+            }
+        } else {
+            false
+        };
+        let fresh_why = if cue_confirmed {
             Some("looks like it needs current info")
         } else if semantic_fresh_score(app, query, query_vec)
             .await
