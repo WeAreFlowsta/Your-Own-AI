@@ -66,20 +66,25 @@ pub fn resolve_sidecar_bin(name: &str) -> PathBuf {
         // checks `is_file()` on the result (tune, matrix) needs a real
         // path, so try all of those before the bare-name PATH fallback.
         let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let prefix = format!("{}-", name);
+        // THIS machine's triple only: bin/ carries every platform's build
+        // (a Windows .exe picked first killed the embed server with "Exec
+        // format error" - and the chat server hid it behind the CUDA
+        // engine).
+        let triple = {
+            let arch = std::env::consts::ARCH;
+            match std::env::consts::OS {
+                "linux" => format!("{arch}-unknown-linux-gnu"),
+                "macos" => format!("{arch}-apple-darwin"),
+                "windows" => format!("{arch}-pc-windows-msvc"),
+                os => format!("{arch}-{os}"),
+            }
+        };
+        let ext = if cfg!(target_os = "windows") { ".exe" } else { "" };
         for folder in ["bin", "binaries"] {
             let dir = manifest.join(folder);
-            let exact = dir.join(name);
-            if exact.is_file() {
-                return exact;
-            }
-            if let Ok(entries) = std::fs::read_dir(&dir) {
-                for entry in entries.flatten() {
-                    if let Some(s) = entry.file_name().to_str() {
-                        if s.starts_with(&prefix) && entry.path().is_file() {
-                            return entry.path();
-                        }
-                    }
+            for candidate in [dir.join(format!("{name}-{triple}{ext}")), dir.join(format!("{name}{ext}"))] {
+                if candidate.is_file() {
+                    return candidate;
                 }
             }
         }
