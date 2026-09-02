@@ -153,7 +153,7 @@ jobs:
 
           # PINNED llama.cpp engine version. Bump deliberately: run
           # build-llama-binaries.yml at a new tag, then update this one line.
-          RELEASE_TAG="llama-b10435"
+          RELEASE_TAG="llama-b10621"
 
           # The app bakes this tag (engine.rs LLAMA_ENGINE_TAG) to download
           # optional engine builds from the same release - fail fast if the

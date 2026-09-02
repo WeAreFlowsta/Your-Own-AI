@@ -19,7 +19,7 @@ use tauri::{AppHandle, Manager};
 /// installer build fails when they disagree. Optional engine downloads
 /// use the same tag, so the bundled engine and any downloaded backend
 /// stay version-locked.
-pub const LLAMA_ENGINE_TAG: &str = "llama-b10435";
+pub const LLAMA_ENGINE_TAG: &str = "llama-b10621";
 
 /// Repo whose `llama-<tag>` releases hold the bundled binaries AND the
 /// optional engine zips (built by build-llama-binaries.yml).

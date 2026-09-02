@@ -24,7 +24,13 @@ fi
 
 # Auto-detect latest llama-server release
 echo "🔍 Finding latest llama-server release..."
-RELEASE_TAG=$(curl -s ${AUTH_HEADER:+-H "$AUTH_HEADER"} "https://api.github.com/repos/${REPO}/releases" | grep '"tag_name"' | grep 'llama-' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+# The engine release the app is PINNED to (engine.rs), never "the newest
+# llama- release": the two must agree, and app releases outnumber engine
+# releases on the first page of the listing anyway.
+RELEASE_TAG=$(sed -n 's/.*LLAMA_ENGINE_TAG: &str = "\([^"]*\)".*/\1/p' src-tauri/src/engine.rs)
+if [ -z "$RELEASE_TAG" ]; then
+  RELEASE_TAG=$(curl -s ${AUTH_HEADER:+-H "$AUTH_HEADER"} "https://api.github.com/repos/${REPO}/releases?per_page=100" | grep '"tag_name"' | grep 'llama-' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+fi
 
 if [ -z "$RELEASE_TAG" ]; then
   echo "❌ Error: Could not find llama-server release"

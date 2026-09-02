@@ -18,7 +18,7 @@ on:
       release_tag:
         description: 'Release to replace the assets on (e.g. llama-b9637)'
         required: true
-        default: 'llama-b10355'
+        default: 'llama-b10621'
 
 permissions:
   contents: write
