@@ -595,9 +595,13 @@ mod tests {
     #[test]
     fn download_url_is_release_asset_shaped() {
         if let Some(url) = cuda_download_url() {
-            assert!(url.starts_with(
-                "https://github.com/WeAreFlowsta/Your-Own-AI/releases/download/llama-b10435/llama-server-cuda-b10435-"
-            ));
+            // Shape only, derived from the pin - a bump must not trip this.
+            let expected = format!(
+                "https://github.com/WeAreFlowsta/Your-Own-AI/releases/download/{}/llama-server-cuda-{}-",
+                LLAMA_ENGINE_TAG,
+                tag_version()
+            );
+            assert!(url.starts_with(&expected), "{url} should start with {expected}");
             assert!(url.ends_with(".zip"));
         }
     }
