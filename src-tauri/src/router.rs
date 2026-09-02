@@ -1735,6 +1735,14 @@ async fn route_inner(
                     let as_good = local.as_ref().is_some_and(|l| {
                         l.fast && difficulty == "easy" && local_wins(share, l.cap, ecaps.by_task(task))
                     });
+                    if let Some(l) = &local {
+                        log::info!(
+                            "[router] as-good check ({share}, {task}, {difficulty}): {} fast={} cap={} vs {} cap={} -> {}",
+                            l.name, l.fast, l.cap, everyday, ecaps.by_task(task), if as_good { "device" } else { "online" }
+                        );
+                    } else {
+                        log::info!("[router] as-good check: no local model runs here -> online");
+                    }
                     if let Some(l) = local.filter(|_| as_good) {
                         return Ok(RouteResult {
                             model: l.name,
