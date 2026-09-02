@@ -136,6 +136,7 @@ async fn fresh_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec<f32>>>
             crate::llm::embed_texts(app.clone(), state, texts, EMBED_MODEL.to_string()).await
         })
         .await
+        .map_err(|e| log::warn!("[router] freshness references could not be embedded: {e}"))
         .ok()
 }
 
@@ -263,6 +264,15 @@ fn looks_medical(query: &str) -> bool {
         "ultrasound", "biopsy", "medication", "prescription", "blood pressure",
         "cholesterol", "glucose", "hba1c", "mammogram", "colonoscopy",
         "pathology", "radiolog", "my doctor", "blood work", "vaccine",
+        // Clinical terms with no software meaning (the battery's health
+        // bucket found these slipping past the keyword stage).
+        "bloodwork", "lab report", "white blood cell", "hemoglobin", "haemoglobin",
+        "liver panel", "thyroid", "vitamin d", "side effects", "dosage",
+        "acetaminophen", "paracetamol", "ibuprofen", "antibiotic", "metformin",
+        "diagnosed with", "prediabetes", "diabetes", "migraine", "neurologist",
+        "cardiologist", "bone density", "t-score", "urinary tract", "see a doctor",
+        "vaccination", "chest tightness", "chest pain", "persistent cough",
+        "low-grade fever", "symptoms of a", " ecg", " ekg", "antihistamine",
     ];
     CUES.iter().any(|c| q.contains(c))
 }
@@ -285,14 +295,29 @@ pub(crate) async fn is_medical_turn_with_margin(
     query_vec: Option<&[f32]>,
     min_margin: f32,
 ) -> bool {
+    medical_check(app, query, query_vec, min_margin).await.0
+}
+
+/// The health gate with its own honesty flag: `(medical, semantic_ran)`.
+/// `semantic_ran == false` means only the keyword stage could run (no
+/// embedding model, or the embed server would not start) - the router must
+/// then not send an unchecked question online.
+pub(crate) async fn medical_check(
+    app: &AppHandle,
+    query: &str,
+    query_vec: Option<&[f32]>,
+    min_margin: f32,
+) -> (bool, bool) {
     if looks_medical(query) {
-        return true;
+        return (true, true);
     }
     let Some(refs) = medical_reference_vecs(app).await else {
-        return false;
+        log::warn!("[router] health check: medical references unavailable (embedding down?)");
+        return (false, false);
     };
     let Some(benign) = benign_reference_vecs(app).await else {
-        return false;
+        log::warn!("[router] health check: benign references unavailable (embedding down?)");
+        return (false, false);
     };
     let qvec: Vec<f32> = match query_vec {
         Some(v) if !v.is_empty() => v.to_vec(),
@@ -301,7 +326,11 @@ pub(crate) async fn is_medical_turn_with_margin(
             let qtext = format!("{QUERY_INSTRUCTION}{query}");
             match crate::llm::embed_texts(app.clone(), state, vec![qtext], EMBED_MODEL.to_string()).await {
                 Ok(mut v) if !v.is_empty() => v.remove(0),
-                _ => return false,
+                Err(e) => {
+                    log::warn!("[router] health check: the turn could not be embedded: {e}");
+                    return (false, false);
+                }
+                _ => return (false, false),
             }
         }
     };
@@ -314,12 +343,12 @@ pub(crate) async fn is_medical_turn_with_margin(
             "[router] medical semantic gate hit (med {med_score:.3}, benign {benign_score:.3}, margin {:.3})",
             med_score - benign_score
         );
-        return true;
+        return (true, true);
     }
     log::debug!(
         "[router] medical gate pass-through (med {med_score:.3}, benign {benign_score:.3})"
     );
-    false
+    (false, true)
 }
 
 /// Stage-0 freshness gate: does the query look like it needs up-to-date info?
@@ -1537,7 +1566,7 @@ async fn route_inner(
     // consent - and "Try this answer online" on the receipt remains an
     // explicit user action. Auto - My hardware may still use the user's OWN
     // server: it's their hardware.
-    let medical = is_medical_turn(app, query, query_vec).await;
+    let (medical, health_check_ran) = medical_check(app, query, query_vec, MEDICAL_MARGIN).await;
     let task: &str = if medical { "medical" } else { task };
 
     if mode == "online-offline" && !medical {
@@ -1595,6 +1624,18 @@ async fn route_inner(
                 return Ok(RouteResult { model, reason: format!("online — {why}") });
             }
             // No online model available → fall through.
+        }
+        // The promise before the default: a question the health gate could
+        // not fully check (no embedding model, embed server down) is not
+        // sent out on capability grounds - the device answers and the
+        // receipt says why. Live-web keyword cues still go out (as before).
+        if !local_first && !known_not_entitled && !health_check_ran {
+            let model = pick_offline_for(app, task, lean, false, turn_tokens).await?;
+            log::warn!("[router] health check could not run - keeping the turn on the device");
+            return Ok(RouteResult {
+                model,
+                reason: "kept on your device — the health check could not run (memory component)".to_string(),
+            });
         }
         // Hard: a known-hard question goes to the Hard slot. Never in
         // local-first (a weaker local answer beats sending it out), and
@@ -1898,6 +1939,17 @@ mod tests {
         assert_eq!(select_online(&all, "general", true, Some("gpt-5.6-luna")), Some(grok.id.clone()));
         // ... but is for a hard turn.
         assert_eq!(select_online(&all, "general", false, Some("gpt-5.6-luna")), Some(luna.id.clone()));
+    }
+
+    #[test]
+    fn health_keyword_stage_catches_clinical_terms_not_software() {
+        assert!(looks_medical("what does elevated ALT on a liver panel mean"));
+        assert!(looks_medical("my thyroid came back high, is that bad"));
+        assert!(looks_medical("what are the common side effects of metformin"));
+        assert!(looks_medical("I was diagnosed with prediabetes, what diet changes help"));
+        assert!(!looks_medical("diagnose why my rust build fails"));
+        assert!(!looks_medical("the API returns a 500 under load"));
+        assert!(!looks_medical("write a poem about a rash decision"));
     }
 
     #[test]
