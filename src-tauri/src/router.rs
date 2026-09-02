@@ -19,6 +19,23 @@ pub struct RouteResult {
     pub model: String,
     /// Short human-readable reason (for logs).
     pub reason: String,
+    /// Reasoning budget as a routing output: Some(true) = think (a hard
+    /// question on a model whose reasoning can be switched), Some(false) =
+    /// answer directly (known easy), None = no verdict (unknown difficulty,
+    /// a model with no switch, an agent turn) - the caller keeps its own rule.
+    pub think: Option<bool>,
+}
+
+/// The think verdict for a routing decision. Pure; unit-tested.
+fn think_for(difficulty: &str, capable: bool, agent: bool) -> Option<bool> {
+    if agent || !capable {
+        return None;
+    }
+    match difficulty {
+        "hard" => Some(true),
+        "easy" => Some(false),
+        _ => None,
+    }
 }
 
 pub(crate) const QUERY_INSTRUCTION: &str = "Represent this sentence for searching relevant passages: ";
@@ -1236,6 +1253,8 @@ pub struct RoutingDecision {
     /// "online" | "device" | "server"
     #[serde(default)]
     pub side: String,
+    #[serde(default)]
+    pub think: Option<bool>,
 }
 
 /// On-disk ring of real routing decisions (last LOG_KEEP), the source for
@@ -1284,7 +1303,7 @@ pub fn routing_online_share_recent(app: AppHandle) -> OnlineShareRecent {
 static RECENT_DECISIONS: std::sync::OnceLock<std::sync::Mutex<std::collections::VecDeque<RoutingDecision>>> =
     std::sync::OnceLock::new();
 
-fn remember_decision(app: &AppHandle, mode: &str, share: &str, task: &str, difficulty: &str, model: &str, reason: &str) {
+fn remember_decision(app: &AppHandle, mode: &str, share: &str, task: &str, difficulty: &str, model: &str, reason: &str, think: Option<bool>) {
     let side = if model.starts_with("online:") {
         "online"
     } else if model.starts_with("external:") {
@@ -1304,6 +1323,7 @@ fn remember_decision(app: &AppHandle, mode: &str, share: &str, task: &str, diffi
         task: task.to_string(),
         difficulty: difficulty.to_string(),
         side: side.to_string(),
+        think,
     };
     let ledger = RECENT_DECISIONS.get_or_init(|| std::sync::Mutex::new(std::collections::VecDeque::new()));
     if let Ok(mut q) = ledger.lock() {
@@ -1437,7 +1457,7 @@ pub async fn route_with(
 ) -> Result<RouteResult, String> {
     let result = route_inner(app, mode, query, share, task, difficulty, lean, picks, query_vec, agent, plan, turn_tokens).await;
     if let Ok(r) = &result {
-        remember_decision(app, mode, effective_share(app, share).as_str(), task, difficulty, &r.model, &r.reason);
+        remember_decision(app, mode, effective_share(app, share).as_str(), task, difficulty, &r.model, &r.reason, r.think);
     }
     result
 }
@@ -1456,6 +1476,35 @@ fn effective_share(app: &AppHandle, share: &str) -> String {
 }
 
 async fn route_inner(
+    app: &AppHandle,
+    mode: &str,
+    query: &str,
+    share: &str,
+    task: &str,
+    difficulty: &str,
+    lean: &str,
+    picks: &OnlinePicks,
+    query_vec: Option<&[f32]>,
+    agent: bool,
+    plan: bool,
+    turn_tokens: Option<u32>,
+) -> Result<RouteResult, String> {
+    let mut r = route_core(app, mode, query, share, task, difficulty, lean, picks, query_vec, agent, plan, turn_tokens).await?;
+    // Reasoning budget rides with the pick: online models take an effort
+    // dial (the proxy forwards it where supported); a local model only
+    // when its template has a switch.
+    let capable = if r.model.starts_with("online:") {
+        true
+    } else if r.model.starts_with("external:") {
+        false
+    } else {
+        crate::llm::model_thinks_on_request(&r.model)
+    };
+    r.think = think_for(difficulty, capable, agent || plan);
+    Ok(r)
+}
+
+async fn route_core(
     app: &AppHandle,
     mode: &str,
     query: &str,
@@ -1551,6 +1600,7 @@ async fn route_inner(
         if mode != "online-offline" {
             return offline
                 .map(|m| RouteResult {
+                    think: None,
                     model: m,
                     reason: "agent work on your device".to_string(),
                 })
@@ -1563,6 +1613,7 @@ async fn route_inner(
             // truly run here would only produce timeouts, so refuse plainly.
             if let Some(m) = offline.clone().filter(|_| offline_green) {
                 return Ok(RouteResult {
+                    think: None,
                     model: m,
                     reason: "agent work kept on your device (privacy-first)".to_string(),
                 });
@@ -1579,6 +1630,7 @@ async fn route_inner(
         if store_pref(app, "routingProjectThrifty").as_deref() == Some("1") {
             if let Some(m) = offline.clone().filter(|_| offline_green) {
                 return Ok(RouteResult {
+                    think: None,
                     model: m,
                     reason: "project work on your device (your cost-saver setting)".to_string(),
                 });
@@ -1613,11 +1665,12 @@ async fn route_inner(
                 } else {
                     "agent work on a stronger online model".to_string()
                 };
-                return Ok(RouteResult { model: id, reason });
+                return Ok(RouteResult { think: None, model: id, reason });
             }
         }
         return offline
             .map(|m| RouteResult {
+                think: None,
                 model: m,
                 reason: "agent work on your device (no online tool-driver available)".to_string(),
             })
@@ -1658,6 +1711,7 @@ async fn route_inner(
                 if let Some(model) = pick_online_holding(need, task, hard_pref()).await {
                     log::info!("[router] ~{need} tokens is more than any model here holds - online");
                     return Ok(RouteResult {
+                        think: None,
                         model,
                         reason: "online — too long for any model on this device".to_string(),
                     });
@@ -1695,7 +1749,7 @@ async fn route_inner(
         };
         if let Some(why) = fresh_why {
             if let Some(model) = pick_online(task, true, picks.fresh.as_deref()).await {
-                return Ok(RouteResult { model, reason: format!("online — {why}") });
+                return Ok(RouteResult { think: None, model, reason: format!("online — {why}") });
             }
             // No online model available → fall through.
         }
@@ -1707,6 +1761,7 @@ async fn route_inner(
             let model = pick_offline_for(app, task, lean, false, turn_tokens).await?;
             log::warn!("[router] health check could not run - keeping the turn on the device");
             return Ok(RouteResult {
+                think: None,
                 model,
                 reason: "kept on your device — the health check could not run (memory component)".to_string(),
             });
@@ -1717,6 +1772,7 @@ async fn route_inner(
         if difficulty == "hard" && !local_first && !known_not_entitled {
             if let Some(model) = pick_online(task, false, hard_pref()).await {
                 return Ok(RouteResult {
+                    think: None,
                     model,
                     reason: "online — a hard question, using a stronger model".to_string(),
                 });
@@ -1745,17 +1801,19 @@ async fn route_inner(
                     }
                     if let Some(l) = local.filter(|_| as_good) {
                         return Ok(RouteResult {
+                            think: None,
                             model: l.name,
                             reason: "kept on your device — as good for this question".to_string(),
                         });
                     }
-                    return Ok(RouteResult { model: everyday, reason: "online — everyday model".to_string() });
+                    return Ok(RouteResult { think: None, model: everyday, reason: "online — everyday model".to_string() });
                 }
                 None => {
                     // Catalog unreachable (offline, proxy down): the device
                     // answers, and the receipt says why.
                     let model = pick_offline_for(app, task, lean, false, turn_tokens).await?;
                     return Ok(RouteResult {
+                        think: None,
                         model,
                         reason: "offline — online models unavailable right now".to_string(),
                     });
@@ -1797,6 +1855,7 @@ async fn route_inner(
                         "your server — no local model fits"
                     };
                     return Ok(RouteResult {
+                        think: None,
                         model: format!("external:{}", ext_id),
                         reason: why.to_string(),
                     });
@@ -1804,7 +1863,7 @@ async fn route_inner(
                 log::warn!("[Router] external engine unreachable — using the local pick");
             }
             if let Some(local) = local {
-                return Ok(RouteResult { model: local, reason: "offline".to_string() });
+                return Ok(RouteResult { think: None, model: local, reason: "offline".to_string() });
             }
         }
         // No server connected (or nothing usable) — behave like offline-only.
@@ -1825,6 +1884,7 @@ async fn route_inner(
         "offline"
     };
     Ok(RouteResult {
+        think: None,
         model,
         reason: reason.to_string(),
     })
@@ -2032,6 +2092,15 @@ mod tests {
         assert!(!looks_medical("diagnose why my rust build fails"));
         assert!(!looks_medical("the API returns a 500 under load"));
         assert!(!looks_medical("write a poem about a rash decision"));
+    }
+
+    #[test]
+    fn think_verdict_follows_difficulty_and_capability() {
+        assert_eq!(think_for("hard", true, false), Some(true));
+        assert_eq!(think_for("easy", true, false), Some(false));
+        assert_eq!(think_for("unknown", true, false), None);
+        assert_eq!(think_for("hard", false, false), None);
+        assert_eq!(think_for("hard", true, true), None);
     }
 
     #[test]

@@ -607,6 +607,8 @@ export function useChat(props: UseChatProps) {
       // Routing receipt (shown on the Model button + recorded). Declared here
       // because the vision path below may set them before the routing block.
       let routedReason: string | undefined;
+      // Reasoning budget as a routing output (see router.rs think_for).
+      let routedThink: boolean | undefined;
       let routedTask: string | undefined;
       // Auto modes may transparently switch an image turn to a vision model; a
       // pinned model is left as-is (we ask before switching - see vision block).
@@ -727,7 +729,7 @@ export function useChat(props: UseChatProps) {
           // it was kicked off at send, so this await is usually instant.
           const queryVec =
             mode === "online-offline" ? await queryVecPromise : undefined;
-          const r = await invoke<{ model: string; reason: string }>("route_model", {
+          const r = await invoke<{ model: string; reason: string; think?: boolean | null }>("route_model", {
             mode,
             query: userInput,
             task: signals.task,
@@ -748,6 +750,7 @@ export function useChat(props: UseChatProps) {
           preferredModel = r.model;
           routedReason = r.reason;
           routedTask = signals.task;
+          routedThink = r.think ?? undefined;
         } catch (e) {
           console.warn("[Router] resolve failed:", e);
           // Leaves the auto: sentinel → surfaces as NO_MODELS_AVAILABLE below.
@@ -1226,7 +1229,10 @@ export function useChat(props: UseChatProps) {
         // → Thoughts button + transcript + live box). Dispositions are purely length.
         // "Always report" is served by an AI's defaultMode = report. Spontaneous
         // <think> on any mode is still parsed by extractThinkingFromContent.
-        const captureThinking = turnMode === "report";
+        // Chat mode takes the router's verdict: a known-hard question thinks
+        // on a model whose reasoning can be switched. Report and code keep
+        // their own rule.
+        const captureThinking = turnMode === "report" || (turnMode === "chat" && routedThink === true);
 
         // Reasoning effort: frontier reasoning models think for seconds at
         // their DEFAULT effort before the first token - even on small talk.
@@ -1237,9 +1243,11 @@ export function useChat(props: UseChatProps) {
         // support it.
         const classifierJudged = !actionMode && smartMode;
         const reasoningEffort =
-          turnMode === "chat" && classifierJudged && !needsVision
-            ? ("low" as const)
-            : undefined;
+          turnMode === "chat" && routedThink === true
+            ? ("high" as const)
+            : turnMode === "chat" && (routedThink === false || (classifierJudged && !needsVision))
+              ? ("low" as const)
+              : undefined;
 
         // Reading room, BEFORE sending: the turn counted by the running
         // model's own tokenizer, against its context. Only local models have

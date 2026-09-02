@@ -710,6 +710,21 @@ static CURRENT_MODELS_DIR: std::sync::Mutex<Option<std::path::PathBuf>> = std::s
 
 /// Template-declared reasoning_strength kwarg (Muse-style), from the
 /// loaded model's own header - never from its name.
+/// Can this local model's reasoning be switched per request? A template
+/// with `enable_thinking` or `reasoning_strength`, or a harmony (gpt-oss)
+/// model that takes `reasoning_effort`. Read from the file, never the name.
+pub(crate) fn model_thinks_on_request(model_name: &str) -> bool {
+    if is_harmony_model(model_name) {
+        return true;
+    }
+    (|| {
+        let dir = CURRENT_MODELS_DIR.lock().ok()?.clone()?;
+        let m = crate::gguf::read_meta(&dir.join(model_name)).ok()?;
+        Some(m.template_enable_thinking || m.template_reasoning_strength)
+    })()
+    .unwrap_or(false)
+}
+
 fn current_meta_flag_reasoning_strength(model_name: &str) -> bool {
     (|| {
         let dir = CURRENT_MODELS_DIR.lock().ok()?.clone()?;

@@ -424,6 +424,7 @@ async fn route_preview(
             Json(json!({
                 "model": r.model,
                 "reason": r.reason,
+                "think": r.think,
                 "fresh_score": scores.map(|s| s.0),
                 "benign_score": scores.map(|s| s.1),
             }))

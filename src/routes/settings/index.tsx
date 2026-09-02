@@ -327,7 +327,7 @@ export default component$(() => {
   const projectDeviceSubagents = useSignal(true);
   const projectThrifty = useSignal(false);
   const routingExplainerOpen = useSignal(false);
-  const routingDecisions = useSignal<{ at_ms: number; model: string; reason: string }[]>([]);
+  const routingDecisions = useSignal<{ at_ms: number; model: string; reason: string; think?: boolean | null }[]>([]);
   /** Installed models as routing sees them (fit grade, split, measured
    *  speed, load time, runtime context, agent-ready) + registry caps. */
   const routingOverview = useSignal<
@@ -1132,6 +1132,7 @@ export default component$(() => {
                                 </span>
                                 {" - "}
                                 {d.reason}
+                                {d.think === true ? " · thinking on" : d.think === false ? " · direct answer" : ""}
                               </div>
                             ))}
                           </div>
