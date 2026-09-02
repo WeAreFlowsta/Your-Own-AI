@@ -282,6 +282,14 @@ const BENIGN_REFERENCES: &[&str] = &[
     "what is in this pdf",
     "summarize this document for me",
     "what is this file about",
+    // Math and code anchors: "the integral of x squared" sat next to
+    // "explain this x-ray" with nothing math-shaped on this side (battery
+    // math bucket, 2/10 flagged as health).
+    "what is the integral of this function",
+    "compute the limit of this expression as x approaches zero",
+    "solve this equation for x step by step",
+    "what is the derivative of x squared",
+    "write a function in python that parses a file",
 ];
 
 static MEDICAL_REFS: tokio::sync::OnceCell<Vec<Vec<f32>>> = tokio::sync::OnceCell::const_new();
