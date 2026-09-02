@@ -447,6 +447,7 @@ pub async fn flowsta_usage(app: tauri::AppHandle) -> Result<Option<UsageSummary>
         overage_usd: v["overage_usd"].as_f64().unwrap_or(0.0),
         overage_opt_in: v["overage_opt_in"].as_bool().unwrap_or(false),
         requests: v["requests"].as_u64().unwrap_or(0),
+        overage_hold: serde_json::from_value::<Option<OverageHold>>(v["overage_hold"].clone()).unwrap_or(None),
     }))
 }
 
