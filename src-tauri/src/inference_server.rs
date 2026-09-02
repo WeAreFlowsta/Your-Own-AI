@@ -414,7 +414,15 @@ async fn route_preview(
     )
     .await
     {
-        Ok(r) => Json(json!({ "model": r.model, "reason": r.reason })).into_response(),
+        Ok(r) => {
+            // `score=1`: also report the freshness score (calibration runs).
+            let score = if g("score", "0") == "1" {
+                crate::router::fresh_score_preview(&app, &g("q", "hello")).await
+            } else {
+                None
+            };
+            Json(json!({ "model": r.model, "reason": r.reason, "fresh_score": score })).into_response()
+        }
         Err(e) => Json(json!({ "error": e })).into_response(),
     }
 }

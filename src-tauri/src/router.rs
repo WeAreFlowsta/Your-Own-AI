@@ -59,14 +59,16 @@ fn threshold_for(share: &str) -> f32 {
     }
 }
 
-/// How far (task-score points) the device may trail the Everyday online
-/// model and still take an easy question. None = the dial never keeps a
-/// question home on capability (local-first decides by freshness alone).
-fn as_good_margin(share: &str) -> Option<u8> {
+/// Does the device take an easy question instead of the Everyday online
+/// model? Frontier-first: only when the model that would answer here is
+/// genuinely BETTER on this task (Eric's rule: replace online where offline
+/// is genuinely better). Balanced: when it is as good. Local-first never
+/// decides on capability (freshness alone sends a question out).
+fn local_wins(share: &str, local_cap: u8, everyday_cap: u8) -> bool {
     match share {
-        "frontier" => Some(0),
-        "balanced" => Some(1),
-        _ => None,
+        "frontier" => local_cap > everyday_cap,
+        "balanced" => local_cap >= everyday_cap,
+        _ => false,
     }
 }
 
@@ -93,6 +95,23 @@ const FRESH_REFERENCES: &[&str] = &[
     // over an "odds"-worded ref, which pulled evergreen betting-education
     // questions over the line. Measured 2026-07-17.)
     "who is favored to win this weekends game",
+    // Paraphrase-shaped (no cue words) - the battery's fresh_paraphrase
+    // bucket scored below every threshold before these were added.
+    "which phone did they announce most recently",
+    "is the bridge still closed for repairs",
+    "which team is top of the league table",
+    "how much does petrol cost at the moment",
+    "has the new line opened yet",
+    "what is the newest model available",
+    "are flights running normally today",
+    "who is the prime minister right now",
+    "what is the price of bitcoin",
+    "has the new movie come out yet",
+    "is the park open again after the flooding",
+    "which browser just shipped a major release",
+    "what did the central bank decide at its last meeting",
+    "will it rain tomorrow",
+    "which country most recently joined",
 ];
 
 pub(crate) fn cosine(a: &[f32], b: &[f32]) -> f32 {
@@ -1281,6 +1300,11 @@ pub async fn route(
     route_with(app, mode, query, share, task, difficulty, lean, picks, query_vec, agent, plan, None).await
 }
 
+/// Dev preview only: the freshness score for a query (calibration).
+pub async fn fresh_score_preview(app: &AppHandle, query: &str) -> Option<f32> {
+    semantic_fresh_score(app, query, None).await
+}
+
 /// `route_with` for the dev preview / matrix / battery: identical decision,
 /// nothing recorded (a sweep must not fill the decision log).
 pub async fn route_dry(
@@ -1547,13 +1571,15 @@ async fn route_inner(
         }
         // Fresh: Stage 0 keyword cues, Stage 1 bge-small similarity to
         // "needs-current-info" phrases. Local-first makes the dial mean
-        // what it says: keyword cues alone don't clear the bar - they must
-        // also pass the (stricter) semantic threshold.
+        // what it says: a keyword cue alone doesn't clear the bar - it must
+        // also read as fresh at the balanced threshold (an evergreen question
+        // with the word "latest" in it stays home); a cue-less question
+        // needs the strict one.
         let fresh_why = if looks_time_sensitive(query)
             && (!local_first
                 || semantic_fresh_score(app, query, query_vec)
                     .await
-                    .is_some_and(|s| s >= threshold_for(share)))
+                    .is_some_and(|s| s >= threshold_for("balanced")))
         {
             Some("looks like it needs current info")
         } else if semantic_fresh_score(app, query, query_vec)
@@ -1590,10 +1616,9 @@ async fn route_inner(
         if !local_first && !known_not_entitled {
             match pick_online_everyday(picks.everyday.as_deref()).await {
                 Some((everyday, ecaps)) => {
-                    let margin = as_good_margin(share).unwrap_or(0);
                     let local = pick_offline_detail(app, task, lean, false, turn_tokens).await.ok();
                     let as_good = local.as_ref().is_some_and(|l| {
-                        l.fast && difficulty == "easy" && l.cap.saturating_add(margin) >= ecaps.by_task(task)
+                        l.fast && difficulty == "easy" && local_wins(share, l.cap, ecaps.by_task(task))
                     });
                     if let Some(l) = local.filter(|_| as_good) {
                         return Ok(RouteResult {
@@ -1838,9 +1863,12 @@ mod tests {
     fn dial_thresholds_and_margins() {
         assert!(threshold_for("local") > threshold_for("balanced"));
         assert!(threshold_for("balanced") > threshold_for("frontier"));
-        assert_eq!(as_good_margin("frontier"), Some(0));
-        assert_eq!(as_good_margin("balanced"), Some(1));
-        assert_eq!(as_good_margin("local"), None);
+        // Frontier: the device must be genuinely better; balanced: as good.
+        assert!(local_wins("frontier", 9, 8));
+        assert!(!local_wins("frontier", 8, 8));
+        assert!(local_wins("balanced", 8, 8));
+        assert!(!local_wins("balanced", 7, 8));
+        assert!(!local_wins("local", 9, 8));
     }
 
     #[test]

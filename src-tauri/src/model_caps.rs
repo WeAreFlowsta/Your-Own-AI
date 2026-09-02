@@ -323,7 +323,7 @@ pub fn online_caps_for(text: &str) -> Caps {
     // Flash, -mini, lite). A notch under their flagship so an Everyday slot
     // is a real rung below Hard. "-mini", not "mini": gemini.
     if t.contains("luna") || t.contains("flash") || t.contains("-mini") || t.contains("-lite") || t.contains(" lite") {
-        return Caps { overall: 8, coding: 7, reasoning: 8, math: 7, vision: 8, medical: 3 };
+        return Caps { overall: 8, coding: 8, reasoning: 8, math: 8, vision: 8, medical: 3 };
     }
     if t.contains("kimi") || t.contains("moonshot") {
         return Caps { overall: 8, coding: 8, reasoning: 8, math: 7, vision: 7, medical: 3 };
