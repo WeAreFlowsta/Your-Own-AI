@@ -13,12 +13,15 @@
  * so it happens whether or not this page is still open.
  */
 
-import { component$, useSignal, useStore, useVisibleTask$, $ } from "@builder.io/qwik";
+import { component$, useSignal, useStore, useVisibleTask$, useContext, $ } from "@builder.io/qwik";
 import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { LuHardDriveDownload, LuCheck, LuAlertTriangle, LuPencil, LuArrowRight } from "@qwikest/icons/lucide";
 import LiquidMetalButton from "../../components/LiquidMetalButton";
+import { ThemeContext } from "../layout";
+import logoLight from "../../assets/logo-light.svg";
+import logo from "../../assets/logo.svg";
 import type { SystemInfo } from "../../components/ModelDownloader";
 import { useAiData, useAiDataActions } from "../../contexts/AiDataContext";
 import { bundledArchetypes } from "../../data/bundled-archetypes";
@@ -67,6 +70,7 @@ const STEPS = ["Your first model", "Meet your AIs", "Ready"];
 
 export default component$(() => {
   const nav = useNavigate();
+  const { theme } = useContext(ThemeContext);
   const aiData = useAiData();
   const { editUserAi, refreshThumbnail } = useAiDataActions();
 
@@ -269,7 +273,7 @@ export default component$(() => {
 
       {/* Top bar: wordmark + step rail + download pill */}
       <header class="relative z-10 flex items-center justify-between gap-4 px-6 md:px-10 py-5">
-        <div class="font-varela text-lg font-bold tracking-tight">Your Own AI</div>
+        <img src={theme.value === "dark" ? logoLight : logo} alt="Your Own AI" width={160} height={40} class="h-8 w-auto" />
         <ol class="hidden sm:flex items-center gap-3 text-xs">
           {STEPS.map((label, i) => {
             const n = (i + 1) as 1 | 2 | 3;
@@ -280,7 +284,7 @@ export default component$(() => {
                 <span
                   class={`inline-flex items-center justify-center w-5 h-5 rounded-full border text-[10px] font-semibold ${
                     done
-                      ? "bg-[var(--bg-button-primary)] border-transparent text-white"
+                      ? "bg-[var(--bg-button-primary)] border-transparent text-[var(--text-button-primary)]"
                       : current
                         ? "border-[var(--text-primary)] text-[var(--text-primary)]"
                         : "border-[var(--border-subtle)] text-[var(--text-muted)]"
@@ -362,14 +366,7 @@ export default component$(() => {
                 </div>
               )}
 
-              <div class="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-4">
-                <button
-                  type="button"
-                  class="text-sm text-[var(--text-muted)] hover:text-[var(--text-secondary)] text-left"
-                  onClick$={() => nav("/setup")}
-                >
-                  Choose a different model instead
-                </button>
+              <div class="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-end gap-4">
                 <LiquidMetalButton
                   onClick$={downloadAndContinue$}
                   disabled={!!recommended.pending}
@@ -393,7 +390,8 @@ export default component$(() => {
               <h1 class="font-varela text-3xl md:text-5xl font-bold leading-tight mb-3">Meet your AIs.</h1>
               <p class="text-base md:text-lg text-[var(--text-secondary)] mb-6 max-w-2xl">
                 You start with three. Pick the kind that fits you, then change any name, picture or
-                personality right here. All three share the model that is downloading now.
+                personality right here - the names are yours to type over. All three share the model
+                that is downloading now.
               </p>
 
               <div class="inline-flex rounded-full border border-[var(--border-subtle)] bg-[var(--bg-card)] p-1 mb-6">
@@ -405,7 +403,7 @@ export default component$(() => {
                     onClick$={() => applyPreset$(k)}
                     class={`px-4 py-1.5 rounded-full text-sm font-medium transition ${
                       preset.value === k
-                        ? "bg-[var(--bg-button-primary)] text-white"
+                        ? "bg-[var(--bg-button-primary)] text-[var(--text-button-primary)]"
                         : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
                     }`}
                   >
@@ -428,6 +426,7 @@ export default component$(() => {
                         class="relative group rounded-xl overflow-hidden aspect-square w-full"
                         title="Change picture"
                         onClick$={() => {
+                          galleryTab.value = preset.value === "work" ? "colors" : "faces";
                           thumbPickerFor.value = id;
                         }}
                       >
@@ -436,17 +435,23 @@ export default component$(() => {
                           <LuPencil class="w-3 h-3" /> Picture
                         </span>
                       </button>
-                      <input
-                        type="text"
-                        value={names[id] ?? ai.name}
-                        maxLength={40}
-                        aria-label="AI name"
-                        class="w-full rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2 text-base font-semibold text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--bg-button-primary)]"
-                        onInput$={(_, el) => {
-                          names[id] = el.value;
-                        }}
-                        onChange$={() => commitName$(id)}
-                      />
+                      <label class="block">
+                        <span class="flex items-center justify-between text-[11px] uppercase tracking-widest text-[var(--text-muted)] mb-1">
+                          <span>Name</span>
+                          <span class="inline-flex items-center gap-1 normal-case tracking-normal text-[var(--text-link)]"><LuPencil class="w-3 h-3" /> Change</span>
+                        </span>
+                        <input
+                          type="text"
+                          value={names[id] ?? ai.name}
+                          maxLength={40}
+                          placeholder="Give this AI a name"
+                          class="w-full rounded-lg border border-dashed border-[var(--text-muted)] bg-[var(--bg-main)] px-3 py-2 text-base font-semibold text-[var(--text-primary)] focus:outline-none focus:border-solid focus:ring-2 focus:ring-[var(--bg-button-primary)]"
+                          onInput$={(_, el) => {
+                            names[id] = el.value;
+                          }}
+                          onChange$={() => commitName$(id)}
+                        />
+                      </label>
                       <p class="text-xs text-[var(--text-secondary)] leading-relaxed min-h-[2.5rem]">{ai.description}</p>
                       <button
                         type="button"
@@ -583,7 +588,7 @@ export default component$(() => {
                     onClick$={() => {
                       galleryTab.value = t;
                     }}
-                    class={`px-3 py-1 rounded-full ${galleryTab.value === t ? "bg-[var(--bg-button-primary)] text-white" : "text-[var(--text-secondary)]"}`}
+                    class={`px-3 py-1 rounded-full ${galleryTab.value === t ? "bg-[var(--bg-button-primary)] text-[var(--text-button-primary)]" : "text-[var(--text-secondary)]"}`}
                   >
                     {t === "faces" ? "Faces" : "Colors"}
                   </button>

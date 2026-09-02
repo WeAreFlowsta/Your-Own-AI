@@ -62,6 +62,14 @@ pub fn resolve_sidecar_bin(name: &str) -> PathBuf {
         // src-tauri/binaries/ (e.g. yourowai-holochain-x86_64-unknown-linux-gnu),
         // matching what CI bundles. Same pattern as ProofPoll.
         let binaries = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("binaries");
+        // An exact-name file (what download-llama-binaries.sh writes for
+        // llama-server) counts too - the tune and matrix paths check
+        // `is_file()` on the result, so a bare-name fallback fails them
+        // while the loader quietly succeeds through PATH.
+        let exact = binaries.join(name);
+        if exact.is_file() {
+            return exact;
+        }
         let prefix = format!("{}-", name);
         if let Ok(entries) = std::fs::read_dir(&binaries) {
             for entry in entries.flatten() {
