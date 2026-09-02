@@ -204,3 +204,39 @@ export function firstModelWaitingPlaceholder(label: string, percent: number | nu
     ? `Waiting for your first model - ${label} is downloading..`
     : `Waiting for your first model - ${label} ${percent}%..`;
 }
+
+/** sessionStorage key: the question held while the first model downloads.
+ *  The chat page's state dies on navigation (Settings for the CUDA offer,
+ *  the models page); the held question must not die with it. Images are
+ *  not carried (a first-run question with an image is rare, and the bubble
+ *  would be the size of the image). */
+export const FIRST_MODEL_HELD_KEY = 'firstModelHeldTurn';
+
+export interface HeldTurn {
+  userInput: string;
+  chatAction: string | null;
+  fileContext?: string;
+  aiId: string;
+  aiLabel: string;
+  aiImageUrl?: string;
+}
+
+export function heldTurn(): HeldTurn | null {
+  try {
+    const raw = sessionStorage.getItem(FIRST_MODEL_HELD_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw);
+    if (v && typeof v.userInput === 'string' && typeof v.aiId === 'string') return v;
+  } catch {
+    /* unreadable = nothing held */
+  }
+  return null;
+}
+
+export function setHeldTurn(t: HeldTurn): void {
+  try { sessionStorage.setItem(FIRST_MODEL_HELD_KEY, JSON.stringify(t)); } catch { /* storage off */ }
+}
+
+export function clearHeldTurn(): void {
+  try { sessionStorage.removeItem(FIRST_MODEL_HELD_KEY); } catch { /* nothing to clear */ }
+}

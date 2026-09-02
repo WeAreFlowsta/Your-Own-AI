@@ -9,7 +9,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import { firstModelInFlight } from "../utils/firstModel";
+import { firstModelInFlight, setHeldTurn } from "../utils/firstModel";
 import { skillsPromptBlock } from "../utils/skills";
 import { wireSampling } from "../utils/sampling";
 import { activeSkills, activeTools } from "../utils/carry";
@@ -561,6 +561,16 @@ export function useChat(props: UseChatProps) {
           );
         state.pendingTurn = { userInput, chatAction, images, fileContext, visionModel: "" };
         state.firstModelWait = { assistantId, userId: userMessage.id };
+        // Survives a page change: the chat route re-creates the bubble on
+        // return and sends the question when the model lands.
+        setHeldTurn({
+          userInput,
+          chatAction,
+          fileContext: fileContext ?? undefined,
+          aiId: selectedAi.id,
+          aiLabel: selectedAi.label,
+          aiImageUrl: selectedAi.imageUrl || undefined,
+        });
         state.isLoading = false;
         props.isModelLoading.value = false;
         state.error = null;

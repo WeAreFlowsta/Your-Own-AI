@@ -47,6 +47,22 @@ export default component$(() => {
     } catch {
       /* stay hidden */
     }
+    // A download started on an earlier visit is still running in the app
+    // (it never depended on this card) - reattach instead of offering again.
+    if (tag.value) {
+      try {
+        const st = await invoke<{ downloading: boolean; downloaded_bytes: number; total_bytes: number }>(
+          'download_status',
+          { filename: zipNameFor(tag.value) },
+        );
+        if (st.downloading) {
+          downloading.value = true;
+          percent.value = st.total_bytes > 0 ? Math.floor((st.downloaded_bytes / st.total_bytes) * 100) : 0;
+        }
+      } catch {
+        /* no status = nothing running */
+      }
+    }
     const unp = await listen<{ filename: string; percent: number }>(
       'model-download-progress',
       (e) => {
@@ -56,7 +72,19 @@ export default component$(() => {
         }
       },
     );
-    cleanup(() => unp());
+    const unDone = await listen('engine-installed', () => {
+      downloading.value = false;
+      done.value = true;
+    });
+    const unFail = await listen<string>('engine-install-failed', (e) => {
+      downloading.value = false;
+      error.value = e.payload;
+    });
+    cleanup(() => {
+      unp();
+      unDone();
+      unFail();
+    });
   });
 
   const doDownload = $(async () => {

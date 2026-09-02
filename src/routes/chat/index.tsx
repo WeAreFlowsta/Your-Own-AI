@@ -51,11 +51,13 @@ import AppHeader from "../../components/AppHeader";
 import {
   firstModelInFlight,
   firstModelWaitingPlaceholder,
+  heldTurn,
+  clearHeldTurn,
   FIRST_MODEL_CHANGED,
   FIRST_MODEL_READY,
 } from "../../utils/firstModel";
 
-import type { SelectedAiModel, ChatAction, AttachedFile, AttachedImage, UserDefinedAI } from "../../types";
+import type { SelectedAiModel, ChatAction, AttachedFile, AttachedImage, UserDefinedAI, Message } from "../../types";
 import { activeTools } from "../../utils/carry";
 import LiquidMetalButton from "../../components/LiquidMetalButton";
 import veeboThumb from "../../assets/veebo-thumb.jpg";
@@ -96,6 +98,9 @@ export default component$(() => {
   const showModelWidget = useSignal(false);
   // Message-field text while the first model (welcome wizard) downloads.
   const firstModelPlaceholder = useSignal<string | null>(null);
+  // A question held during the first download whose model landed while
+  // this page was away - sent as soon as the AI list is real.
+  const sendHeldWhenReady = useSignal(false);
   const systemInfo = useSignal<SystemInfo | null>(null);
   const attachedFiles = useSignal<AttachedFile[]>([]);
   const attachedImages = useSignal<AttachedImage[]>([]);
@@ -660,11 +665,16 @@ export default component$(() => {
       if (fresh) selectedAi.value = { ...selectedAi.value, aiConfig: fresh };
       const w = chatState.firstModelWait;
       const t = chatState.pendingTurn;
+      const held = heldTurn();
       chatState.firstModelWait = null;
+      chatState.pendingTurn = null;
+      if (w) chatState.messages = chatState.messages.filter((m) => m.id !== w.assistantId && m.id !== w.userId);
       if (w && t) {
-        chatState.messages = chatState.messages.filter((m) => m.id !== w.assistantId && m.id !== w.userId);
-        chatState.pendingTurn = null;
+        clearHeldTurn();
         await sendMessage(t.userInput, t.chatAction, t.fileContext, t.images);
+      } else if (held) {
+        clearHeldTurn();
+        await sendMessage(held.userInput, held.chatAction as ChatAction, held.fileContext, []);
       } else {
         chatState.messages = [
           ...chatState.messages,
@@ -685,6 +695,20 @@ export default component$(() => {
       window.removeEventListener(FIRST_MODEL_CHANGED, sync);
       window.removeEventListener(FIRST_MODEL_READY, onReady);
     });
+  });
+
+  // The first model landed while this page was away (the root notice
+  // finished it): send the held question once the AI list is real.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async ({ track }) => {
+    const go = track(() => sendHeldWhenReady.value);
+    const aiId = track(() => selectedAi.value.id);
+    if (!go || aiId === "__placeholder__") return;
+    const held = heldTurn();
+    sendHeldWhenReady.value = false;
+    if (!held) return;
+    clearHeldTurn();
+    await sendMessage(held.userInput, held.chatAction as ChatAction, held.fileContext, []);
   });
 
   // eslint-disable-next-line qwik/no-use-visible-task
@@ -806,8 +830,34 @@ export default component$(() => {
         // First run → the welcome wizard. Unless its download is already
         // running: then the user chose to come here early and may ask now.
         if (!firstModelInFlight()) await nav("/welcome");
+        // Back on the chat mid-download with a question held: the page's
+        // state died with the navigation, so put the bubbles back.
+        const held = heldTurn();
+        if (held && !chatState.firstModelWait) {
+          const f = firstModelInFlight();
+          const userId = crypto.randomUUID();
+          const assistantId = crypto.randomUUID();
+          const pair: Message[] = [
+            { id: userId, role: "user", content: held.userInput, model: "user" },
+            {
+              id: assistantId,
+              role: "assistant",
+              content: "",
+              model: held.aiId,
+              isLoading: true,
+              aiLabel: held.aiLabel,
+              aiImageUrl: held.aiImageUrl,
+              statusText: `${f?.label ?? "Your first model"} is on its way - I'll answer the moment it lands.`,
+            },
+          ];
+          chatState.messages = [...chatState.messages, ...pair];
+          chatState.firstModelWait = { assistantId, userId };
+          chatState.pendingTurn = { userInput: held.userInput, chatAction: held.chatAction as ChatAction, images: [], fileContext: held.fileContext, visionModel: "" };
+        }
         return;
       }
+
+      if (heldTurn() && !firstModelInFlight()) sendHeldWhenReady.value = true;
 
       // Preload the model of the AI you'll actually land on (the last-used AI), so
       // the load happens while you settle in rather than after your first query.

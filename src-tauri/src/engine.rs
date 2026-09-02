@@ -12,7 +12,7 @@
 
 use serde::Serialize;
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 /// The llama.cpp release tag this app is built against. MUST match
 /// `RELEASE_TAG` in `.github/workflows/build-release.yml` - the
@@ -236,7 +236,14 @@ pub async fn download_cuda_engine(
     if let Ok(models) = crate::llm::get_models_dir(&app) {
         let _ = std::fs::remove_file(models.join(&zip_name));
     }
+    // The page that started this may be gone (the download outlives the
+    // webview route); the outcome goes out as an event so any page can
+    // reflect it - the offer card and Settings both listen.
+    if let Err(e) = &result {
+        let _ = app.emit("engine-install-failed", e.clone());
+    }
     result?;
+    let _ = app.emit("engine-installed", LLAMA_ENGINE_TAG);
     // Older versions are superseded the moment the new one is in place.
     remove_stale_cuda_versions(&app);
     log::info!("[Engine] CUDA engine installed ({})", LLAMA_ENGINE_TAG);

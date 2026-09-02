@@ -58,25 +58,36 @@ use std::sync::Arc;
 /// falling back to PATH if absent.
 pub fn resolve_sidecar_bin(name: &str) -> PathBuf {
     if cfg!(debug_assertions) {
-        // Dev mode: prefer the target-suffixed official binary in
-        // src-tauri/binaries/ (e.g. yourowai-holochain-x86_64-unknown-linux-gnu),
-        // matching what CI bundles. Same pattern as ProofPoll.
-        let binaries = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("binaries");
-        // An exact-name file (what download-llama-binaries.sh writes for
-        // llama-server) counts too - the tune and matrix paths check
-        // `is_file()` on the result, so a bare-name fallback fails them
-        // while the loader quietly succeeds through PATH.
-        let exact = binaries.join(name);
-        if exact.is_file() {
-            return exact;
-        }
+        // Dev mode: the sidecars live in two folders under src-tauri -
+        // `bin/` (llama-server, per tauri.conf externalBin) and `binaries/`
+        // (the Holochain pair) - as target-suffixed files, e.g.
+        // llama-server-x86_64-unknown-linux-gnu. Tauri also copies each
+        // to the plain name beside the debug executable. Every caller that
+        // checks `is_file()` on the result (tune, matrix) needs a real
+        // path, so try all of those before the bare-name PATH fallback.
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let prefix = format!("{}-", name);
-        if let Ok(entries) = std::fs::read_dir(&binaries) {
-            for entry in entries.flatten() {
-                if let Some(s) = entry.file_name().to_str() {
-                    if s.starts_with(&prefix) {
-                        return entry.path();
+        for folder in ["bin", "binaries"] {
+            let dir = manifest.join(folder);
+            let exact = dir.join(name);
+            if exact.is_file() {
+                return exact;
+            }
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    if let Some(s) = entry.file_name().to_str() {
+                        if s.starts_with(&prefix) && entry.path().is_file() {
+                            return entry.path();
+                        }
                     }
+                }
+            }
+        }
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                let beside = dir.join(name);
+                if beside.is_file() {
+                    return beside;
                 }
             }
         }
