@@ -89,6 +89,8 @@ export interface AgentSessionState {
   waitingOn: string;
   /** Why routing picked the serving model (from the agent-route event). */
   routeReason: string;
+  /** Generation tok/s of the latest model call, from the engine's own timings. */
+  lastCallTps: number;
   /** Every file path the agent touched this session (viewer feed). */
   touchedFiles: string[];
   /** Set when a turn died on an overloaded upstream model: the explicit
@@ -391,6 +393,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
     retryStatus: "",
     waitingOn: "",
     routeReason: "",
+    /** Generation tok/s of the latest model call, from the engine's own timings. */
+    lastCallTps: 0,
     touchedFiles: [],
     overloadOffer: null,
     permissionMode: "ask",
@@ -1377,22 +1381,30 @@ export function useAgentSession(props: UseAgentSessionProps) {
             (aiModel.startsWith("auto:") &&
               !!modelKey &&
               !modelKey.toLowerCase().endsWith(".gguf"));
-          const folder = state.folderPath?.split("/").filter(Boolean).pop();
+          // The folder's own name, on either path separator; a tools session
+          // runs in a hidden workspace whose path (and account name) is not
+          // for the screen - it is named for what it is.
+          const rawFolder = state.folderPath ?? "";
+          const hiddenToolsWorkspace = /[\\/]tool-sessions[\\/]/.test(rawFolder);
+          const folder = hiddenToolsWorkspace
+            ? null
+            : rawFolder.split(/[\\/]/).filter(Boolean).pop();
+          const where = hiddenToolsWorkspace ? "Tools session" : `Agent session in ${folder ?? "your project"}`;
           mutateTurn((m) => ({
             ...m,
             tokens: {
               prompt_tokens: usage.inputTokens,
               completion_tokens: usage.outputTokens,
               total_tokens: usage.totalTokens,
+              // The engine's own measure of the last call (agent-call-timing).
+              ...(state.lastCallTps > 0 ? { tokens_per_second: state.lastCallTps } : {}),
             },
             servedBy: modelKey
               ? servedOnline
                 ? `online:${modelKey}`
                 : modelKey
               : m.servedBy,
-            routingReason: state.routeReason
-              ? `Agent session in ${folder ?? "your project"} - ${state.routeReason}`
-              : `Agent session in ${folder ?? "your project"}`,
+            routingReason: state.routeReason ? `${where} - ${state.routeReason}` : where,
             agentStats: {
               durationMs: usage.apiDurationMs,
               modelCalls: usage.modelCalls,
@@ -1554,6 +1566,10 @@ export function useAgentSession(props: UseAgentSessionProps) {
 
     // Which model the local server just routed an agent call to - the
     // pearl names online waits after it ("Waiting on gpt-5.6-sol..").
+    const unTiming = await listen<any>("agent-call-timing", (e) => {
+      const tps = Number(e.payload?.tokens_per_second);
+      state.lastCallTps = Number.isFinite(tps) && tps > 0 ? tps : 0;
+    });
     const unRoute = await listen<any>("agent-route", (e) => {
       const model = typeof e.payload?.model === "string" ? e.payload.model : "";
       state.waitingOn = e.payload?.online ? model.replace(/^online:/, "") : "";
@@ -2067,6 +2083,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       unDecided();
       unHint();
       unRoute();
+      unTiming();
       unTurn();
       unLog();
       unExit();

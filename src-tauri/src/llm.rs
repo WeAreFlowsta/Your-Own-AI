@@ -1317,8 +1317,8 @@ fn merge_user_content(a: serde_json::Value, b: serde_json::Value) -> serde_json:
 pub fn available_memory_bytes() -> u64 {
     #[cfg(target_os = "macos")]
     {
-        if let Some(b) = macos_available_from_vm_stat() {
-            return b;
+        if let Some((avail, _wired)) = macos_vm_stat() {
+            return avail;
         }
     }
     let mut sys = sysinfo::System::new();
@@ -1326,8 +1326,34 @@ pub fn available_memory_bytes() -> u64 {
     sys.available_memory()
 }
 
+/// The memory a model may be graded and gated against. Everywhere but
+/// macOS that is what the OS would hand out now. On Apple unified memory
+/// "available now" is the wrong ceiling: weights are memory-mapped and the
+/// kernel evicts cache and compresses other apps to page them in - an 8 GB
+/// Air reporting 2.0 GB available loaded five 2-4 GB models and ran them
+/// at 22-40 tok/s (matrix, 2026-09-02) while the app graded every one red
+/// and refused a load. The honest figure there is what is NOT wired down,
+/// within Apple's own working-set budget (~65% of RAM at 8 GB, 75% above).
+pub fn grading_memory_bytes() -> u64 {
+    #[cfg(target_os = "macos")]
+    {
+        let mut sys = sysinfo::System::new();
+        sys.refresh_memory();
+        let total = sys.total_memory();
+        if total > 0 {
+            let budget = if (total as f64) <= 8.5 * 1024f64.powi(3) { 0.65 } else { 0.75 };
+            let cap = (total as f64 * budget) as u64;
+            let unwired = macos_vm_stat()
+                .map(|(_, wired)| total.saturating_sub(wired))
+                .unwrap_or(cap);
+            return unwired.min(cap);
+        }
+    }
+    available_memory_bytes()
+}
+
 #[cfg(target_os = "macos")]
-fn macos_available_from_vm_stat() -> Option<u64> {
+fn macos_vm_stat() -> Option<(u64, u64)> {
     let out = std::process::Command::new("vm_stat").output().ok()?;
     if !out.status.success() {
         return None;
@@ -1338,9 +1364,12 @@ fn macos_available_from_vm_stat() -> Option<u64> {
 /// `vm_stat` text -> available bytes (free + inactive + speculative +
 /// purgeable pages, times the page size it states). None if unparseable.
 #[allow(dead_code)]
-fn parse_vm_stat(text: &str) -> Option<u64> {
+/// `vm_stat` text -> (available bytes, wired bytes). Available = free +
+/// inactive + speculative + purgeable pages; wired = "Pages wired down".
+fn parse_vm_stat(text: &str) -> Option<(u64, u64)> {
     let mut page: u64 = 4096;
     let mut pages: u64 = 0;
+    let mut wired: u64 = 0;
     let mut seen = 0;
     for line in text.lines() {
         let l = line.trim();
@@ -1358,8 +1387,13 @@ fn parse_vm_stat(text: &str) -> Option<u64> {
                 }
             }
         }
+        if let Some(v) = l.strip_prefix("Pages wired down:") {
+            if let Ok(n) = v.trim().trim_end_matches('.').parse::<u64>() {
+                wired = n;
+            }
+        }
     }
-    (seen > 0).then(|| pages * page)
+    (seen > 0).then(|| (pages * page, wired * page))
 }
 
 /// Bytes of the regular files directly inside `dir` (an MLX artifact).
@@ -3769,12 +3803,15 @@ pub async fn load_model(
             .filter(|&b| b > 0)
             .unwrap_or_else(|| std::fs::metadata(&model_path).map(|m| m.len()).unwrap_or(0));
         let needed = 2u64 * 1024 * 1024 * 1024 + model_bytes / 10;
-        let mut avail = available_memory_bytes();
+        // The same figure the grader uses (on macOS: unwired memory within
+        // Apple's working-set budget - "available now" refused loads that
+        // the matrix proved run fine on an 8 GB Air).
+        let mut avail = grading_memory_bytes();
         if avail > 0 && avail < needed {
             // The previous server may still be releasing its memory, or the
             // OS may reclaim in a moment - one short re-sample before refusing.
             tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-            avail = available_memory_bytes();
+            avail = grading_memory_bytes();
         }
         if avail > 0 && avail < needed {
             let msg = format!(
@@ -4782,8 +4819,9 @@ mod load_failure_classification_tests {
     #[test]
     fn vm_stat_available_counts_free_inactive_speculative_purgeable() {
         let text = "Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free:                              111844.\nPages active:                            200000.\nPages inactive:                          150000.\nPages speculative:                        20000.\nPages throttled:                              0.\nPages wired down:                        100000.\nPages purgeable:                          30000.\n";
-        let b = super::parse_vm_stat(text).unwrap();
-        assert_eq!(b, (111_844 + 150_000 + 20_000 + 30_000) * 16384);
+        let (avail, wired) = super::parse_vm_stat(text).unwrap();
+        assert_eq!(avail, (111_844 + 150_000 + 20_000 + 30_000) * 16384);
+        assert_eq!(wired, 100_000 * 16384);
         assert!(super::parse_vm_stat("nothing here").is_none());
     }
 

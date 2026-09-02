@@ -923,6 +923,12 @@ async fn chat_completions(
     // Branch on the RESPONSE shape, not the request flag — the online proxy
     // always streams SSE even when the caller asked for stream:false.
     if content_type.contains("event-stream") {
+        // The engine's own timing of this call rides the final chunk; an agent
+        // turn's rail shows it as tok/s like a direct chat does (agent turns
+        // used to show only "Ns of model time", most of it prompt reading).
+        let timing_app = app.clone();
+        let timing_model = ai.model.clone();
+        let timing_agent = agent_mode;
         // Tee: forward each SSE chunk to the caller while accumulating the body,
         // then record the exchange once the stream completes.
         let body_stream = async_stream::stream! {
@@ -955,6 +961,15 @@ async fn chat_completions(
                 let s = String::from_utf8_lossy(&pending);
                 if let Some(out) = process_event(&s, &mut stripper) {
                     yield Ok(out.into_bytes());
+                }
+            }
+            if timing_agent {
+                if let Some((gen_tps, prompt_tps)) = parse_sse_timings(&raw) {
+                    use tauri::Emitter as _;
+                    let _ = timing_app.emit(
+                        "agent-call-timing",
+                        json!({ "model": timing_model, "tokens_per_second": gen_tps, "prompt_per_second": prompt_tps }),
+                    );
                 }
             }
             // Record from the RAW body (with <think>) — spawn_record splits the
@@ -1377,6 +1392,29 @@ fn parse_json_content(bytes: &[u8]) -> String {
 }
 
 /// Assistant text from an accumulated SSE stream (concatenate delta.content).
+/// The engine's timing report from the last SSE chunk that carries one:
+/// (generation tok/s, prompt tok/s). None when no chunk reported timings
+/// (an online provider, or a stream that died early).
+fn parse_sse_timings(bytes: &[u8]) -> Option<(f64, f64)> {
+    let text = String::from_utf8_lossy(bytes);
+    let mut found = None;
+    for line in text.lines() {
+        let Some(data) = line.strip_prefix("data:") else { continue };
+        let data = data.trim();
+        if data == "[DONE]" || data.is_empty() || !data.contains("timings") {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<Value>(data) {
+            let gen = v.get("timings").and_then(|t| t.get("predicted_per_second")).and_then(Value::as_f64);
+            let prompt = v.get("timings").and_then(|t| t.get("prompt_per_second")).and_then(Value::as_f64);
+            if let Some(g) = gen.filter(|g| g.is_finite() && *g > 0.0) {
+                found = Some(((g * 10.0).round() / 10.0, prompt.map(|p| p.round()).unwrap_or(0.0)));
+            }
+        }
+    }
+    found
+}
+
 fn parse_sse_content(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes);
     let mut out = String::new();

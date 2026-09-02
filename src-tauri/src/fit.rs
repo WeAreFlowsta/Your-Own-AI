@@ -467,7 +467,7 @@ impl MachineFigures {
         sys.refresh_memory();
         Self {
             total_ram_gb: sys.total_memory() as f64 / GIB,
-            avail_ram_gb: crate::llm::available_memory_bytes() as f64 / GIB,
+            avail_ram_gb: crate::llm::grading_memory_bytes() as f64 / GIB,
             free_vram_gb,
         }
     }
