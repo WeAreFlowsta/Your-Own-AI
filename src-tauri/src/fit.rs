@@ -545,7 +545,16 @@ pub async fn figures_slot_free(app: &AppHandle, dir: &std::path::Path) -> Machin
         let loading = st.loading_model.lock().await.clone();
         let current = st.current_model.lock().await.clone();
         let paired = st.current_mmproj.lock().await.is_some();
-        (loading.or(current).filter(|c| !c.starts_with("online:")), paired)
+        // Nothing to hand back when no server holds the card (the matrix
+        // stops it before grading; a phantom reclaim of a 21 GB MoE's full
+        // need graded an 18 GB model Green on a 7 GB card - Windows beta.18).
+        let running = *st.is_server_running.lock().await;
+        let incumbent = if running || loading.is_some() {
+            loading.or(current).filter(|c| !c.starts_with("online:"))
+        } else {
+            None
+        };
+        (incumbent, paired)
     };
     // The measured truth beats the estimate here too: a split-loaded MoE
     // occupies far less of the card than its full need (LFM: est ~5.7,
@@ -567,7 +576,18 @@ pub async fn figures_slot_free(app: &AppHandle, dir: &std::path::Path) -> Machin
             // The incumbent runs at ITS context - a fine-tune pin included -
             // so the footprint handed back is the one it actually holds.
             let ctx = pinned_or_chosen_ctx(app, &name, &meta, size, total_ram_gb, free_vram_gb);
-            let (_, _, mut need) = model_need(&meta, size, ctx);
+            let (_, kv, full_need) = model_need(&meta, size, ctx);
+            // A split MoE holds only attention + the on-card experts; crediting
+            // its FULL need back inflated every other grade. Without a
+            // calibration record, hand back the on-card share of the split
+            // the loader would have chosen.
+            let mut need = match free_vram_gb {
+                Some(vram) if meta.is_moe() && moe_offload_wanted(full_need, vram) => {
+                    let n = moe_cpu_layers(&meta, kv, vram).unwrap_or(meta.expert_bytes_per_layer.len());
+                    moe_need_gb(&meta, n, kv).min(full_need)
+                }
+                _ => full_need,
+            };
             // The projector is on the card only when the server paired it.
             if vision_paired {
                 if let Some(proj) = crate::llm::find_projector_for(&dir, &name) {
@@ -701,7 +721,29 @@ pub fn tuned_split_fit(
 }
 
 /// Assess every downloaded model. Reuses free-VRAM (cached) + system RAM.
+/// Assess every downloaded model - memoized for a few seconds. A burst of
+/// routing decisions (the matrix leg: 1,350 in a row; a chat turn that
+/// consults it twice) reads the disk once instead of per call: on Windows
+/// the per-call file opens (tune records, stats, calibration, the folder
+/// scan for projectors) cost 0.7 s a decision (beta.18 matrix).
 pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
+    static MEMO: std::sync::Mutex<Option<(std::time::Instant, Vec<ModelFit>)>> = std::sync::Mutex::new(None);
+    const TTL: std::time::Duration = std::time::Duration::from_secs(3);
+    if let Ok(g) = MEMO.lock() {
+        if let Some((at, list)) = g.as_ref() {
+            if at.elapsed() < TTL {
+                return list.clone();
+            }
+        }
+    }
+    let list = assess_uncached(app).await;
+    if let Ok(mut g) = MEMO.lock() {
+        *g = Some((std::time::Instant::now(), list.clone()));
+    }
+    list
+}
+
+async fn assess_uncached(app: &AppHandle) -> Vec<ModelFit> {
     let models = crate::llm::list_local_models(app.clone()).await.unwrap_or_default();
     let dir = match models_dir(app) {
         Some(d) => d,
@@ -714,6 +756,7 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
     let free_vram_gb = figures.free_vram_gb;
 
     let stats = crate::model_stats::read_all(app);
+    let projectors = crate::llm::projector_map(&dir);
     let mut out = Vec::new();
     for m in models {
         let path = dir.join(&m.name);
@@ -733,7 +776,7 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
         // text grade leaves it out; `vision_fit` below says whether an image
         // turn can pair it. (Counting it always graded 6 GB vision-capable
         // models "too large" on 8 GB cards that run them at full speed.)
-        let proj_gb = crate::llm::find_projector_for(&dir, &m.name)
+        let proj_gb = crate::llm::find_projector_in(&projectors, &m.name)
             .and_then(|p| std::fs::metadata(p).ok())
             .map(|md| md.len() as f64 / GIB)
             .unwrap_or(0.0);

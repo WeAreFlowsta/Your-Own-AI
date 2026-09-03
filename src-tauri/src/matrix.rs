@@ -306,13 +306,15 @@ async fn ask_think(model: &str, on: bool, strength: bool, marker: Option<&'stati
         "model": model,
         "messages": [
             {"role": "system", "content": "You are a careful assistant."},
-            {"role": "user", "content": "Is 91 a prime number? Answer in one sentence."}
+            {"role": "user", "content": "Is 391 a prime number? Think it through step by step before you answer, then give the answer in one sentence."}
         ],
         "max_tokens": 2048,
         "stream": false,
+        // Greedy: the verdict must not turn on sampling luck (gemma-4-E4B
+        // answered without thinking once at default temperature).
+        "temperature": 0,
         "stop": crate::llm::chat_stop_strings_with(model, marker),
     });
-    crate::llm::apply_sampling(&mut body, None, false);
     if on {
         let mut kw = serde_json::Map::new();
         kw.insert("enable_thinking".into(), serde_json::json!(true));
@@ -884,8 +886,8 @@ pub async fn leg_routing(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<Str
         for dial in ["frontier", "balanced", "local"] {
             for q in &queries {
                 if cancelled() {
-                    sink("cancelled".into());
-                    return failures;
+                    capped = true;
+                    break 'sweep;
                 }
                 let id = q["id"].as_str().unwrap_or("?");
                 let bucket = q["bucket"].as_str().unwrap_or("?");
@@ -971,8 +973,12 @@ pub async fn leg_routing(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<Str
         sink(format!("{:<15} {:<17} {:<9} {:<9} {:>3}/{:<3} {:>5}", mode, bucket, dial, "", online, n, fails));
     }
     if capped {
-        sink(format!("STOPPED after 25 min at {decided} decisions - the table above is partial (a slow or stalled embed server? see the app log)"));
-        failures.push(format!("routing: stopped after 25 min at {decided} decisions"));
+        if cancelled() {
+            sink(format!("cancelled at {decided} decisions - the table above is partial"));
+        } else {
+            sink(format!("STOPPED after 25 min at {decided} decisions - the table above is partial (a slow or stalled embed server? see the app log)"));
+            failures.push(format!("routing: stopped after 25 min at {decided} decisions"));
+        }
     }
     sink(format!("think verdicts: {think_ok} as expected, {think_bad} not ({decided} decisions in {:.0} s)", started.elapsed().as_secs_f64()));
     if think_bad > think_ok {

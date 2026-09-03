@@ -935,6 +935,45 @@ pub(crate) fn find_projector_for(
     models_dir: &std::path::Path,
     model_filename: &str,
 ) -> Option<PathBuf> {
+    find_projector_in(&projector_map(models_dir), model_filename)
+}
+
+/// Every projector in the folder as (pairing key, path) - one directory
+/// scan, so a pass over all models (assess, the vision picker) does not
+/// rescan the folder per model (Windows Defender charges every scan).
+pub(crate) fn projector_map(models_dir: &std::path::Path) -> Vec<(String, PathBuf)> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(models_dir) else { return out };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("gguf") {
+            continue;
+        }
+        let Some(name_lc) = path.file_name().and_then(|s| s.to_str()).map(|s| s.to_lowercase()) else { continue };
+        if !name_lc.contains("mmproj") {
+            continue;
+        }
+        if let Some(key) = name_lc.split("-mmproj").next() {
+            if !key.is_empty() {
+                out.push((key.to_string(), path));
+            }
+        }
+    }
+    out
+}
+
+/// The projector paired with `model_filename` from a prebuilt map (see
+/// find_projector_for for the pairing rule).
+pub(crate) fn find_projector_in(map: &[(String, PathBuf)], model_filename: &str) -> Option<PathBuf> {
+    let model_lc = model_filename.to_lowercase();
+    map.iter().find(|(key, _)| model_lc.starts_with(key.as_str())).map(|(_, p)| p.clone())
+}
+
+#[allow(dead_code)]
+fn find_projector_for_scan(
+    models_dir: &std::path::Path,
+    model_filename: &str,
+) -> Option<PathBuf> {
     let model_lc = model_filename.to_lowercase();
     for entry in std::fs::read_dir(models_dir).ok()?.flatten() {
         let path = entry.path();
