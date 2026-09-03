@@ -62,6 +62,12 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   update. The built-in defaults remain the fallback.
 - All calls to the app's own background servers share one connection,
   removing a per-call cost that made routing slow on Windows.
+- A tools session says what it costs: the reply's model line names how
+  many tools the AI carries and that their definitions ride every turn.
+  An ordinary question asked with tools available is answered directly
+  instead of being treated like a project task.
+- On Macs without a graphics card, a model within a hair of the "full
+  speed" line now reads full speed, matching how it actually runs.
 
 ### First run
 - A new welcome takes three steps: download the model picked for your
