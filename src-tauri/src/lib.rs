@@ -614,6 +614,8 @@ pub fn run() {
             router::routing_specialist_tasks,
             router::routing_defaults,
             router::routing_online_share_recent,
+            router::routing_feedback,
+            router::routing_feedback_reset,
             fit::assess_model_fit,
             fit::grade_catalog,
             reset::reset_to_defaults,

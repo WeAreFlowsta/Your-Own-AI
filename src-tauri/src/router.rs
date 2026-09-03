@@ -654,11 +654,14 @@ async fn pick_offline_detail(app: &AppHandle, task: &str, lean: &str, agent_only
     // Agent sessions rank on tool-driving capability first (the task score
     // breaks ties) and always in the balanced order - a weak driver wastes
     // a whole session, so the speed lean only decides between equals.
+    // Learned family shifts (bounded, this machine's verdicts) ride the task
+    // score; the health task never learns.
+    let adj = if task == "medical" { Adjustments::default() } else { learned_adjustments(app) };
     let cap = |name: &str| {
         if agent_only {
             agent_rank_cap(crate::model_caps::agent_caps(name), crate::model_caps::caps_for(name).by_task(task))
         } else {
-            crate::model_caps::caps_for(name).by_task(task)
+            shifted(crate::model_caps::caps_for(name).by_task(task), adj.family(name))
         }
     };
     let lean = if agent_only { "balanced" } else { lean };
@@ -1349,6 +1352,9 @@ pub struct RoutingDecision {
     pub side: String,
     #[serde(default)]
     pub think: Option<bool>,
+    /// Learned adjustments were in effect for this decision.
+    #[serde(default)]
+    pub adjusted: bool,
 }
 
 /// On-disk ring of real routing decisions (last LOG_KEEP), the source for
@@ -1372,6 +1378,155 @@ fn append_routing_log(app: &AppHandle, d: &RoutingDecision) {
     if let Ok(text) = serde_json::to_string(&log) {
         let _ = std::fs::write(path, text);
     }
+}
+
+// ── The evidence loop ────────────────────────────────────────────────────
+// What the user does with an answer is the only ground truth the router
+// gets: "Redo on your device" says the online answer was not worth it,
+// "Try this answer online" says the device answer was not good enough,
+// regenerate says the answer missed. These land in a local file and move
+// two numbers per machine, slowly and within bounds: the as-good margin
+// (±1 after 20 verdicts) and a model family's task score (−1 after 10 bad
+// verdicts that are a third of its answers). Never across the health gate,
+// never a side decision in Offline Only (it may reorder the offline pick).
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct RoutingVerdict {
+    pub at_ms: i64,
+    /// "redo_device" | "try_online" | "regenerate"
+    pub verdict: String,
+    pub task: String,
+    /// "online" | "device"
+    pub side: String,
+    pub model: String,
+    pub family: String,
+}
+
+const FEEDBACK_KEEP: usize = 1000;
+fn routing_feedback_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join("routing-feedback.json"))
+}
+fn read_routing_feedback(app: &AppHandle) -> Vec<RoutingVerdict> {
+    routing_feedback_path(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+/// A stable family key for a model id: online ids as they are (sans
+/// prefix); local files by their first two name tokens ("qwen3.5-4b").
+pub(crate) fn family_key(model: &str) -> String {
+    let m = model.to_lowercase();
+    if let Some(id) = m.strip_prefix("online:").or_else(|| m.strip_prefix("external:")) {
+        return id.to_string();
+    }
+    let stem = m.trim_end_matches(".gguf");
+    stem.split('-').take(2).collect::<Vec<_>>().join("-")
+}
+
+/// Record what the user did with an answer.
+#[tauri::command]
+pub fn routing_feedback(app: AppHandle, verdict: String, task: String, side: String, model: String) -> Result<(), String> {
+    if !matches!(verdict.as_str(), "redo_device" | "try_online" | "regenerate") {
+        return Err("unknown verdict".into());
+    }
+    let path = routing_feedback_path(&app).ok_or("no app data dir")?;
+    let mut list = read_routing_feedback(&app);
+    list.insert(
+        0,
+        RoutingVerdict {
+            at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|t| t.as_millis() as i64)
+                .unwrap_or(0),
+            verdict,
+            task,
+            side,
+            family: family_key(&model),
+            model,
+        },
+    );
+    list.truncate(FEEDBACK_KEEP);
+    let text = serde_json::to_string(&list).map_err(|e| e.to_string())?;
+    std::fs::write(path, text).map_err(|e| e.to_string())
+}
+
+/// Forget what routing has learned on this machine.
+#[tauri::command]
+pub fn routing_feedback_reset(app: AppHandle) -> Result<(), String> {
+    if let Some(p) = routing_feedback_path(&app) {
+        let _ = std::fs::remove_file(p);
+    }
+    Ok(())
+}
+
+/// The as-good margin shift from redo-vs-try counts. Pure; unit-tested.
+pub(crate) fn margin_shift(redo_device: u32, try_online: u32) -> i8 {
+    let n = redo_device + try_online;
+    if n < 20 {
+        return 0;
+    }
+    let quarter = n / 4;
+    if redo_device >= try_online + quarter {
+        1
+    } else if try_online >= redo_device + quarter {
+        -1
+    } else {
+        0
+    }
+}
+
+/// A family's task-score shift from bad verdicts on its device answers.
+pub(crate) fn family_shift(bad: u32, answers: u32) -> i8 {
+    if bad >= 10 && bad * 10 >= answers * 3 {
+        -1
+    } else {
+        0
+    }
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct Adjustments {
+    pub margin: i8,
+    pub families: std::collections::HashMap<String, i8>,
+}
+impl Adjustments {
+    pub fn any(&self) -> bool {
+        self.margin != 0 || self.families.values().any(|v| *v != 0)
+    }
+    pub fn family(&self, model: &str) -> i8 {
+        self.families.get(&family_key(model)).copied().unwrap_or(0)
+    }
+}
+
+/// What this machine's verdicts say, bounded (see the section comment).
+pub(crate) fn learned_adjustments(app: &AppHandle) -> Adjustments {
+    let verdicts = read_routing_feedback(app);
+    if verdicts.is_empty() {
+        return Adjustments::default();
+    }
+    let redo = verdicts.iter().filter(|v| v.verdict == "redo_device").count() as u32;
+    let try_online = verdicts.iter().filter(|v| v.verdict == "try_online").count() as u32;
+    let mut families = std::collections::HashMap::new();
+    let log = read_routing_log(app);
+    let mut fams: std::collections::HashSet<String> = verdicts.iter().map(|v| v.family.clone()).collect();
+    fams.retain(|f| !f.is_empty());
+    for f in fams {
+        let bad = verdicts
+            .iter()
+            .filter(|v| v.family == f && v.side == "device" && matches!(v.verdict.as_str(), "try_online" | "regenerate"))
+            .count() as u32;
+        let answers = log.iter().filter(|d| d.side == "device" && family_key(&d.model) == f).count() as u32;
+        let shift = family_shift(bad, answers.max(bad));
+        if shift != 0 {
+            families.insert(f, shift);
+        }
+    }
+    Adjustments { margin: margin_shift(redo, try_online), families }
+}
+
+fn shifted(cap: u8, shift: i8) -> u8 {
+    (cap as i16 + shift as i16).clamp(0, 10) as u8
 }
 
 /// The share of recent real Online-and-Offline decisions that went online.
@@ -1398,6 +1553,7 @@ static RECENT_DECISIONS: std::sync::OnceLock<std::sync::Mutex<std::collections::
     std::sync::OnceLock::new();
 
 fn remember_decision(app: &AppHandle, mode: &str, share: &str, task: &str, difficulty: &str, model: &str, reason: &str, think: Option<bool>) {
+    let adjusted = learned_adjustments(app).any();
     let side = if model.starts_with("online:") {
         "online"
     } else if model.starts_with("external:") {
@@ -1418,6 +1574,7 @@ fn remember_decision(app: &AppHandle, mode: &str, share: &str, task: &str, diffi
         difficulty: difficulty.to_string(),
         side: side.to_string(),
         think,
+        adjusted,
     };
     let ledger = RECENT_DECISIONS.get_or_init(|| std::sync::Mutex::new(std::collections::VecDeque::new()));
     if let Ok(mut q) = ledger.lock() {
@@ -1893,8 +2050,9 @@ async fn route_core(
             match pick_online_everyday(picks.everyday.as_deref()).await {
                 Some((everyday, ecaps)) => {
                     let local = pick_offline_detail(app, task, lean, false, turn_tokens).await.ok();
+                    let adj = learned_adjustments(app);
                     let as_good = local.as_ref().is_some_and(|l| {
-                        l.fast && difficulty == "easy" && local_wins(share, l.cap, ecaps.by_task(task))
+                        l.fast && difficulty == "easy" && local_wins(share, shifted(l.cap, adj.margin), ecaps.by_task(task))
                     });
                     if let Some(l) = &local {
                         log::info!(
@@ -2221,6 +2379,21 @@ mod tests {
         assert!(is_followup("can you give an example"));
         assert!(!is_followup("what is the capital of France"));
         assert!(!is_followup("write a python function that parses a csv file and returns the rows"));
+    }
+
+    #[test]
+    fn learning_is_slow_and_bounded() {
+        assert_eq!(margin_shift(5, 3), 0, "under 20 verdicts nothing moves");
+        assert_eq!(margin_shift(18, 4), 1, "device redos dominate -> local deserves a point");
+        assert_eq!(margin_shift(4, 18), -1, "try-online dominates -> local loses a point");
+        assert_eq!(margin_shift(11, 10), 0, "a near tie moves nothing");
+        assert_eq!(family_shift(9, 20), 0);
+        assert_eq!(family_shift(10, 20), -1);
+        assert_eq!(family_shift(10, 100), 0, "a tenth of the answers is not a pattern");
+        assert_eq!(family_key("Qwen3.5-4B-Opus-Distilled-Q4_K_M.gguf"), "qwen3.5-4b");
+        assert_eq!(family_key("online:gpt-5.6-luna"), "gpt-5.6-luna");
+        assert_eq!(shifted(8, -1), 7);
+        assert_eq!(shifted(0, -1), 0);
     }
 
     #[test]

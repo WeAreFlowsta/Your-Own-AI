@@ -327,7 +327,8 @@ export default component$(() => {
   const projectDeviceSubagents = useSignal(true);
   const projectThrifty = useSignal(false);
   const routingExplainerOpen = useSignal(false);
-  const routingDecisions = useSignal<{ at_ms: number; model: string; reason: string; think?: boolean | null }[]>([]);
+  const routingDecisions = useSignal<{ at_ms: number; model: string; reason: string; think?: boolean | null; adjusted?: boolean }[]>([]);
+  const feedbackReset = useSignal(false);
   /** Installed models as routing sees them (fit grade, split, measured
    *  speed, load time, runtime context, agent-ready) + registry caps. */
   const routingOverview = useSignal<
@@ -1025,9 +1026,29 @@ export default component$(() => {
                 <p class="text-sm text-[var(--text-primary)] mb-4">
                   Auto picks the best model that runs well on this machine, and
                   an "Online and Offline" AI answers with a frontier online model
-                  unless your device is as good for the question. You don't need
-                  to change anything here - the rest of this section is for when
-                  you want to.
+                  unless your device is as good for the question. Over time it
+                  learns from what you do with answers - Redo on your device, Try
+                  this answer online, regenerate - and nudges its choices by at
+                  most a point, never for health questions. You don't need to
+                  change anything here - the rest of this section is for when you
+                  want to.
+                </p>
+                <p class="text-xs text-[var(--text-muted)] -mt-2 mb-4">
+                  {feedbackReset.value ? (
+                    "What routing had learned on this computer has been reset."
+                  ) : (
+                    <button
+                      type="button"
+                      onClick$={async () => {
+                        const { invoke } = await import("@tauri-apps/api/core");
+                        await invoke("routing_feedback_reset").catch(() => {});
+                        feedbackReset.value = true;
+                      }}
+                      class="underline underline-offset-2 bg-transparent border-none p-0 cursor-pointer text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                    >
+                      Reset what routing has learned on this computer
+                    </button>
+                  )}
                 </p>
 
                 {/* The rules live in the public guide, not in a settings
@@ -1133,6 +1154,7 @@ export default component$(() => {
                                 {" - "}
                                 {d.reason}
                                 {d.think === true ? " · thinking on" : d.think === false ? " · direct answer" : ""}
+                                {d.adjusted ? " · adjusted from your feedback" : ""}
                               </div>
                             ))}
                           </div>

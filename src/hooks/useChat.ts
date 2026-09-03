@@ -2049,6 +2049,25 @@ export function useChat(props: UseChatProps) {
       }
     }
 
+    // Evidence for the router: what the user did with the answer that was
+    // served (captured before the slice discards it). Redo on device, Try
+    // online, or a plain regenerate.
+    {
+      const answered = state.messages[messageIndex];
+      if (answered?.servedBy && !answered.agentTurn) {
+        const verdict = target === "device" ? "redo_device" : target === "online" ? "try_online" : "regenerate";
+        import("@tauri-apps/api/core")
+          .then(({ invoke }) =>
+            invoke("routing_feedback", {
+              verdict,
+              task: answered.routingTask || "general",
+              side: answered.servedBy!.startsWith("online:") ? "online" : "device",
+              model: answered.servedBy,
+            }),
+          )
+          .catch(() => {});
+      }
+    }
     state.messages = state.messages.slice(0, messageIndex);
     await sendMessage(userMessage.content, null, undefined, userMessage.images || [], override);
   });
