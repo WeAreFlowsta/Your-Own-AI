@@ -432,7 +432,10 @@ pub fn grade(need_gb: f64, free_vram_gb: Option<f64>, free_ram_gb: f64) -> Fit {
             }
         }
         None => {
-            if need_gb <= 0.7 * free_ram_gb {
+            // A rounding margin on the line: the Air's Phi-4 Mini sat at
+            // 3.65 against a 3.64 budget and graded "runs slower" while
+            // running at 28 tok/s (beta.12 field report).
+            if need_gb <= 0.7 * free_ram_gb + 0.1 {
                 Fit::Green
             } else if need_gb <= free_ram_gb {
                 Fit::Yellow
@@ -898,6 +901,13 @@ pub async fn assess_model_fit(app: AppHandle) -> Result<Vec<ModelFit>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cpu_grade_has_a_rounding_margin_on_the_green_line() {
+        // 0.7 * 5.2 = 3.64: a 3.65 GB need is green, a 3.8 is not.
+        assert_eq!(grade(3.65, None, 5.2), Fit::Green);
+        assert_eq!(grade(3.8, None, 5.2), Fit::Yellow);
+    }
 
     #[test]
     fn vision_grade_adds_the_projector_for_dense_models_only() {

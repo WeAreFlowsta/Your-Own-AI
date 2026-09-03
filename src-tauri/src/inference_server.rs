@@ -877,6 +877,22 @@ async fn chat_completions(
         // bounded supplementary system message AFTER the caller's own system
         // prompt (so theirs stays authoritative), unless opted out.
         let mut msgs = incoming.clone();
+        // A tools session is an ordinary chat with a few tools available,
+        // not a project: the trimmed baseline keeps the model from
+        // exploring the scratch workspace or planning like a coding agent
+        // for a plain question ("why is the sky blue" read the projects
+        // directory when Blender was carried - beta.11 field report). The
+        // caller's own system prompt stays first and authoritative.
+        if app.state::<crate::agent_bridge::AgentBridgeState>().is_tools_session().await {
+            let note = json!({
+                "role": "system",
+                "content": "This is an ordinary conversation in which a few tools happen to be available. Answer questions directly, in your own voice, as you would without tools. Do not explore, list or read the workspace, and do not plan or narrate steps, unless a tool is genuinely needed for what was asked.",
+            });
+            let pos = usize::from(
+                msgs.first().and_then(|m| m.get("role")).and_then(Value::as_str) == Some("system"),
+            );
+            msgs.insert(pos, note);
+        }
         if agent_memory {
             // Agent sessions call per STEP; the user-memory block barely
             // changes within one, but rebuilding it costs a CPU embedding

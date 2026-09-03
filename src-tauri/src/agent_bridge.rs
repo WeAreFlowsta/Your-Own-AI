@@ -56,6 +56,16 @@ impl AgentBridgeState {
         self.folder.lock().await.is_some()
     }
 
+    /// Is the open session a TOOLS session (a chat that carries tools, run
+    /// in the hidden scratch workspace) rather than a project folder?
+    pub async fn is_tools_session(&self) -> bool {
+        self.folder
+            .lock()
+            .await
+            .as_deref()
+            .map_or(false, |f| f.contains("tool-sessions"))
+    }
+
     pub fn new() -> Self {
         Self {
             child: Mutex::new(None),

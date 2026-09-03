@@ -1389,7 +1389,14 @@ export function useAgentSession(props: UseAgentSessionProps) {
           const folder = hiddenToolsWorkspace
             ? null
             : rawFolder.split(/[\\/]/).filter(Boolean).pop();
-          const where = hiddenToolsWorkspace ? "Tools session" : `Agent session in ${folder ?? "your project"}`;
+          // The cost line: a tools session carries every tool's definition
+          // on every turn (about 10k tokens) - say so where the tokens show.
+          const toolCount = state.sessionTools ? state.sessionTools.split(",").filter(Boolean).length : 0;
+          const where = hiddenToolsWorkspace
+            ? toolCount > 0
+              ? `Tools session · ${toolCount} tool${toolCount === 1 ? "" : "s"} carried - their definitions ride every turn (about 10k tokens)`
+              : "Tools session"
+            : `Agent session in ${folder ?? "your project"}`;
           mutateTurn((m) => ({
             ...m,
             tokens: {
