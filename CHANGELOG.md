@@ -546,6 +546,7 @@ have, and choose between them by what actually runs well on it.
 - The attachment meter counts with the running model's own tokenizer and shows its real context, with the room the app can make for a longer turn - chips go amber when a reload will hold them and red only when nothing on this machine can.
 
 ### The app fails politely
+- A model left mid-load by a crash, a force quit, or a power cut no longer reads "too big" on the next launch. The automatic reload is skipped once and the first message loads it; a normal quit clears the marker; and the red chip in the header names the real reason (too big, not loaded, can't be read, engine crashed) instead of one word for everything.
 - The first-run recommendation now sizes to your whole machine, not just
   the graphics card: a model that fits the card but not the system's
   memory is no longer offered. A big card in a machine with little memory
@@ -611,6 +612,7 @@ have, and choose between them by what actually runs well on it.
   Offline replies already carry the hash of the exact model file.
 
 ### Other
+- The truth matrix in Help & diagnostics is available in every build, not only betas, and its description now covers what it checks: model loads and answers, the helper and memory components, routing decisions on your own models (decided only, nothing sent, no credits), and the thinking switch. The records cell census stays in beta builds.
 - Loading a model now shows its proper catalog name ("Qwen 3.6 35B-A3B
   (MoE)", not a cleaned-up file name), and when a load takes more than a
   few seconds, short lines explain what the wait is - the model moving
@@ -1009,7 +1011,6 @@ and nothing it does makes you wait.
   history survives an app restart.
 
 ### Fixed
-- A model left mid-load by a crash, a force quit, or a power cut no longer reads "too big" on the next launch. The automatic reload is skipped once and the first message loads it; a normal quit clears the marker; and the red chip in the header names the real reason (too big, not loaded, can't be read, engine crashed) instead of one word for everything.
 - **Editing your selected AI now applies immediately.** Before, an
   open chat kept the AI's previous settings until you switched away -
   including its online/offline mode, which could route a message
