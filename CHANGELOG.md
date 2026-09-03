@@ -32,6 +32,14 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - The beta diagnostics matrix now also proves the small background
   servers answer, runs the routing battery on your own models (decide
   only, no credits), and checks that the thinking switch is honoured.
+- A question with a clear live-web cue ("today", "latest", "weather")
+  reaches the search model on every dial even when the memory model is
+  not installed; with it installed the cue is still checked first.
+- The matrix's fit column now shows the app's own grade, so a model that
+  runs split between the graphics card and RAM reads as such, and the
+  routing section reports progress and stops itself after fifteen
+  minutes. Starting a background server for a model that is not installed
+  fails at once instead of probing ports.
 
 ### First run
 - A new welcome takes three steps: download the model picked for your
