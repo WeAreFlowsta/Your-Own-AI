@@ -253,6 +253,15 @@ const FRESH_BENIGN_REFERENCES: &[&str] = &[
     "what is a good recipe for dinner",
     "what is the capital of this country",
     "how many ounces are in a cup",
+    // Evergreen science sits next to the weather anchors in embedding
+    // space ("why is the sky blue" went to the live-web model - dev box,
+    // 2026-09-04). These pull timeless explanations back to the device.
+    "why is the sky blue",
+    "how do rainbows form",
+    "why is the ocean salty",
+    "what causes thunder and lightning",
+    "how do clouds form",
+    "why do we have seasons",
 ];
 static FRESH_BENIGN_REFS: tokio::sync::OnceCell<Vec<Vec<f32>>> = tokio::sync::OnceCell::const_new();
 
