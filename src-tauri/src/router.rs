@@ -249,7 +249,7 @@ async fn fresh_benign_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec
     FRESH_BENIGN_REFS
         .get_or_try_init(|| async {
             let texts = FRESH_BENIGN_REFERENCES.iter().map(|s| s.to_string()).collect();
-            embed_guarded(app, texts, EMBED_MODEL.to_string()).await
+            embed_guarded(app, texts).await
         })
         .await
         .map_err(|e| log::warn!("[router] freshness anchors could not be embedded: {e}"))
@@ -260,7 +260,7 @@ async fn fresh_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec<f32>>>
     FRESH_REFS
         .get_or_try_init(|| async {
             let texts = FRESH_REFERENCES.iter().map(|s| s.to_string()).collect();
-            embed_guarded(app, texts, EMBED_MODEL.to_string()).await
+            embed_guarded(app, texts).await
         })
         .await
         .map_err(|e| log::warn!("[router] freshness references could not be embedded: {e}"))
@@ -310,7 +310,7 @@ async fn fresh_scores(
         Some(v) if !v.is_empty() => v.to_vec(),
         _ => {
             let qtext = format!("{QUERY_INSTRUCTION}{query}");
-            embed_guarded(app, vec![qtext], EMBED_MODEL.to_string())
+            embed_guarded(app, vec![qtext])
                 .await
                 .ok()?
                 .pop()?
@@ -389,7 +389,7 @@ async fn medical_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec<f32>
     MEDICAL_REFS
         .get_or_try_init(|| async {
             let texts = MEDICAL_REFERENCES.iter().map(|s| s.to_string()).collect();
-            embed_guarded(app, texts, EMBED_MODEL.to_string()).await
+            embed_guarded(app, texts).await
         })
         .await
         .ok()
@@ -399,7 +399,7 @@ async fn benign_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec<f32>>
     BENIGN_REFS
         .get_or_try_init(|| async {
             let texts = BENIGN_REFERENCES.iter().map(|s| s.to_string()).collect();
-            embed_guarded(app, texts, EMBED_MODEL.to_string()).await
+            embed_guarded(app, texts).await
         })
         .await
         .ok()
@@ -482,7 +482,7 @@ pub(crate) async fn medical_check(
         Some(v) if !v.is_empty() => v.to_vec(),
         _ => {
             let qtext = format!("{QUERY_INSTRUCTION}{query}");
-            match embed_guarded(app, vec![qtext], EMBED_MODEL.to_string()).await {
+            match embed_guarded(app, vec![qtext]).await {
                 Ok(mut v) if !v.is_empty() => v.remove(0),
                 Err(e) => {
                     log::warn!("[router] health check: the turn could not be embedded: {e}");
