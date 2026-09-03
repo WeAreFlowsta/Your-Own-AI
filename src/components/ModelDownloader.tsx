@@ -265,6 +265,8 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
         measured_tps?: number | null;
         measured_tps_mlx?: number | null;
         load_secs?: number | null;
+        vision_gb?: number;
+        vision_fit?: 'green' | 'split' | 'yellow' | 'red' | null;
       }
     >,
     appVersion: '',
@@ -398,6 +400,8 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
           measured_tps?: number | null;
         measured_tps_mlx?: number | null;
           load_secs?: number | null;
+          vision_gb?: number;
+          vision_fit?: 'green' | 'split' | 'yellow' | 'red' | null;
         }[]
       >('assess_model_fit');
       store.modelFits = Object.fromEntries(fits.map((f) => [f.name, f]));
@@ -1893,7 +1897,11 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                     green: {
                       label: 'Full speed',
                       cls: 'bg-emerald-500/10 border-emerald-500/25 text-emerald-400',
-                      tip: 'Fits entirely in your graphics card’s memory.',
+                      tip:
+                        'Fits entirely in your graphics card’s memory.' +
+                        (fitInfo.vision_fit === 'red'
+                          ? ` Its vision add-on (about ${(fitInfo.vision_gb ?? 1).toFixed(1)} GB) does not fit alongside right now - image questions will say so.`
+                          : ''),
                     },
                     yellow: {
                       label: 'Runs slower',

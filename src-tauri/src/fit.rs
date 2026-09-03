@@ -89,6 +89,21 @@ pub struct ModelFit {
     pub measured_tps_mlx: Option<f64>,
     /// How long the last load took here (seconds), when known.
     pub load_secs: Option<f64>,
+    /// Size of this model's vision projector on disk (GB); 0 = none.
+    pub vision_gb: f64,
+    /// The grade WITH the projector paired (image turns); None = no projector.
+    pub vision_fit: Option<Fit>,
+}
+
+/// The grade for an image turn: the text grade plus the projector's
+/// footprint. An offloaded MoE keeps its grade (the projector rides on the
+/// card beside attention); a dense model is re-graded with the extra.
+pub fn vision_grade(text_fit: Fit, need_gb: f64, proj_gb: f64, free_vram_gb: Option<f64>, free_ram_gb: f64) -> Fit {
+    match text_fit {
+        Fit::Split => Fit::Split,
+        Fit::Yellow if free_vram_gb.is_some() => Fit::Yellow,
+        _ => grade(need_gb + proj_gb, free_vram_gb, free_ram_gb),
+    }
 }
 
 /// The context sizes the server can start at (largest first). The top
@@ -525,11 +540,12 @@ pub async fn figures_slot_free(app: &AppHandle, dir: &std::path::Path) -> Machin
     // can exceed the incumbent's true VRAM share when it is partially
     // offloaded - erring green is safe (the loader and the session
     // too-big memo still guard reality); erring yellow is this bug.
-    let incumbent = {
+    let (incumbent, vision_paired) = {
         let st = tauri::Manager::state::<crate::llm::LLMState>(app);
         let loading = st.loading_model.lock().await.clone();
         let current = st.current_model.lock().await.clone();
-        loading.or(current).filter(|c| !c.starts_with("online:"))
+        let paired = st.current_mmproj.lock().await.is_some();
+        (loading.or(current).filter(|c| !c.starts_with("online:")), paired)
     };
     // The measured truth beats the estimate here too: a split-loaded MoE
     // occupies far less of the card than its full need (LFM: est ~5.7,
@@ -552,9 +568,12 @@ pub async fn figures_slot_free(app: &AppHandle, dir: &std::path::Path) -> Machin
             // so the footprint handed back is the one it actually holds.
             let ctx = pinned_or_chosen_ctx(app, &name, &meta, size, total_ram_gb, free_vram_gb);
             let (_, _, mut need) = model_need(&meta, size, ctx);
-            if let Some(proj) = crate::llm::find_projector_for(&dir, &name) {
-                if let Ok(pm) = std::fs::metadata(&proj) {
-                    need += pm.len() as f64 / GIB;
+            // The projector is on the card only when the server paired it.
+            if vision_paired {
+                if let Some(proj) = crate::llm::find_projector_for(&dir, &name) {
+                    if let Ok(pm) = std::fs::metadata(&proj) {
+                        need += pm.len() as f64 / GIB;
+                    }
                 }
             }
             Some(need)
@@ -709,14 +728,15 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
         // A fine-tune pin replaces the sizing here too, so the grade, the
         // router and the "runs at" line all tell the same story.
         let ctx = pinned_or_chosen_ctx(app, &m.name, &meta, m.size_bytes, total_ram_gb, free_vram_gb);
-        let (weights_gb, kv_gb, mut need_gb) = model_need(&meta, m.size_bytes, ctx);
-        // A model with a downloaded projector (mmproj) auto-loads it for vision, so
-        // its ~1 GB lives in VRAM whenever this model runs - count it toward fit.
-        if let Some(proj) = crate::llm::find_projector_for(&dir, &m.name) {
-            if let Ok(md) = std::fs::metadata(&proj) {
-                need_gb += md.len() as f64 / GIB;
-            }
-        }
+        let (weights_gb, kv_gb, need_gb) = model_need(&meta, m.size_bytes, ctx);
+        // The projector (mmproj) is paired only for image turns now, so the
+        // text grade leaves it out; `vision_fit` below says whether an image
+        // turn can pair it. (Counting it always graded 6 GB vision-capable
+        // models "too large" on 8 GB cards that run them at full speed.)
+        let proj_gb = crate::llm::find_projector_for(&dir, &m.name)
+            .and_then(|p| std::fs::metadata(p).ok())
+            .map(|md| md.len() as f64 / GIB)
+            .unwrap_or(0.0);
         let params_b = if meta.effective_bpw() > 0.0 {
             (m.size_bytes as f64 * 8.0 / meta.effective_bpw()) / 1e9
         } else {
@@ -814,6 +834,8 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
             measured_tps,
             measured_tps_mlx,
             load_secs,
+            vision_gb: proj_gb,
+            vision_fit: if proj_gb > 0.0 { Some(vision_grade(fit, need_gb, proj_gb, free_vram_gb, free_ram_gb)) } else { None },
         });
     }
     out
@@ -828,6 +850,17 @@ pub async fn assess_model_fit(app: AppHandle) -> Result<Vec<ModelFit>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vision_grade_adds_the_projector_for_dense_models_only() {
+        // 6.0 GB text need on a 6.9 GB card: text green, with a 1 GB projector red.
+        assert_eq!(grade(6.0, Some(6.9), 20.0), Fit::Green);
+        assert_eq!(vision_grade(Fit::Green, 6.0, 1.0, Some(6.9), 20.0), Fit::Red);
+        // Plenty of room: still green with the eyes.
+        assert_eq!(vision_grade(Fit::Green, 3.0, 1.0, Some(6.9), 20.0), Fit::Green);
+        // A split MoE keeps its grade.
+        assert_eq!(vision_grade(Fit::Split, 18.0, 1.0, Some(6.9), 24.0), Fit::Split);
+    }
 
     #[test]
     fn reclaim_returns_incumbent_footprint_to_the_right_budget() {

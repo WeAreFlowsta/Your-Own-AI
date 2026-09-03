@@ -1016,8 +1016,12 @@ pub async fn find_vision_model(
     // projector the weight-only fit grade doesn't see, so GREEN (full-GPU)
     // is preferred over YELLOW (partial offload) to leave that headroom.
     let fits = crate::fit::assess(&app_handle).await;
+    // The grade WITH the projector: the text grade no longer counts it.
     let tier = |name: &str| -> u8 {
-        fits.iter().find(|f| f.name == name).map(|f| f.fit.tier()).unwrap_or(0)
+        fits.iter()
+            .find(|f| f.name == name)
+            .map(|f| f.vision_fit.unwrap_or(f.fit).tier())
+            .unwrap_or(0)
     };
     let runnable: Vec<String> = candidates.iter().filter(|n| tier(n) > 0).cloned().collect();
     let candidates: Vec<String> = if runnable.is_empty() { candidates } else { runnable };
@@ -1941,7 +1945,6 @@ pub async fn start_llama_server(
     *state.current_mmproj.lock().await = None;
     let model_specified = model_filename.is_some();
     let loading_name = model_filename.clone(); // remembered for the too-large cache
-    let _ = with_vision; // pairing no longer depends on the turn (see below)
     if let Some(filename) = model_filename {
         let model_path = models_dir.join(&filename);
         if model_path.exists() {
@@ -1960,12 +1963,13 @@ pub async fn start_llama_server(
             }
             log::info!("[LLM] Starting server with model: {}", filename);
 
-            // Pair the multimodal projector whenever this model HAS one, so a
-            // vision-capable model loads with its eyes ONCE and never needs a
-            // mid-conversation reload to answer an image. The vision compute buffer is
-            // small and idle on text turns; a model too tight to hold it just reports
-            // "too large" like any other over-budget load.
-            if let Some(projector) = find_projector_for(&models_dir, &filename) {
+            // Pair the multimodal projector only when this load is FOR vision
+            // (an image turn: ensure_vision / the vision reload). Text loads
+            // go without it: the projector's ~1 GB tipped 6 GB models over on
+            // 8 GB cards (Windows beta.17 matrix: gemma-4-E4B graded "too
+            // large", ran at 67 tok/s), and the first image in a conversation
+            // pays one reload instead. Eric's call, 2026-09-03.
+            if let Some(projector) = find_projector_for(&models_dir, &filename).filter(|_| with_vision) {
                 let pname = projector
                     .file_name()
                     .and_then(|s| s.to_str())
