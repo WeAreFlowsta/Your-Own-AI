@@ -181,17 +181,28 @@ export default component$<AppHeaderProps>(
 
     // eslint-disable-next-line qwik/no-use-visible-task
     useVisibleTask$(({ cleanup }) => {
-      let timer: ReturnType<typeof setInterval> | null = null;
-      const poll = () => fetchUsage().then((u) => (usageTicker.value = u));
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      // On by default now, so pace the poll by what it finds: a plan is
+      // read every 90 s; nothing (signed out costs no request at all - the
+      // backend returns before any call; free tier costs one) is re-read
+      // every 30 min, and again on the next toggle or sign-in.
+      const schedule = (ms: number) => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(poll, ms);
+      };
+      const poll = () =>
+        fetchUsage().then((u) => {
+          usageTicker.value = u;
+          if (usageTickerOn.value) schedule(u ? 90_000 : 30 * 60_000);
+        });
       const apply = () => {
         usageTickerOn.value = usageTickerEnabled();
         if (timer) {
-          clearInterval(timer);
+          clearTimeout(timer);
           timer = null;
         }
         if (usageTickerOn.value) {
           poll();
-          timer = setInterval(poll, 90_000);
         } else {
           usageTicker.value = null;
         }
@@ -200,7 +211,7 @@ export default component$<AppHeaderProps>(
       window.addEventListener("usagePrefsChanged", apply);
       cleanup(() => {
         window.removeEventListener("usagePrefsChanged", apply);
-        if (timer) clearInterval(timer);
+        if (timer) clearTimeout(timer);
       });
     });
     // Install-on-demand: the projects surface shows for EVERYONE; the
