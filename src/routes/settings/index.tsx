@@ -773,7 +773,7 @@ export default component$(() => {
       tidyBusy.value = false;
     }
   });
-  // Truth matrix (beta builds): every downloaded model, claim vs reality,
+  // Truth matrix (every build): every downloaded model, claim vs reality,
   // on THIS machine - fit grades, chat format, sampling, tune arms. One
   // report file out; progress streams line by line.
   const matrixBusy = useSignal(false);
@@ -1760,16 +1760,25 @@ export default component$(() => {
                 {censusError.value && (
                   <p class="mt-3 text-xs text-red-400">{censusError.value}</p>
                 )}
+                </>
+                )}
                 <p class="mt-5 text-sm text-[var(--text-secondary)] mb-3">
                   <span class="font-semibold text-[var(--text-primary)]">
                     Truth matrix
                   </span>{" "}
-                  - loads every downloaded model on this computer and checks
-                  the app's claims against what really happens: does each
-                  model load at the promised size, answer in plain words, and
-                  respect the generation settings. Unloads your current model
-                  first and takes roughly 10-20 minutes; writes a report file
-                  you can send back.
+                  - checks the app's claims about this computer against what
+                  really happens. It loads every downloaded model and checks
+                  that each one loads at the promised size, answers in plain
+                  words, and respects the generation settings; then it checks
+                  the pieces around them - the helper and memory components,
+                  the routing decisions for your own models, and whether a
+                  model's thinking switch is honored. Routing is decided
+                  only, never sent: nothing goes online and no credits are
+                  used. It asks fixed test questions, never anything from
+                  your conversations. Unloads your current model first and
+                  takes roughly 10-20 minutes, longer with many models;
+                  writes a report file you can send back, with your home
+                  folder name removed.
                 </p>
                 <div class="flex flex-wrap items-center gap-3">
                   <LiquidMetalButton
@@ -1812,8 +1821,6 @@ export default component$(() => {
                 )}
                 {matrixError.value && (
                   <p class="mt-3 text-xs text-red-400">{matrixError.value}</p>
-                )}
-                </>
                 )}
               </section>
 
