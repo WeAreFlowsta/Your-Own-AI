@@ -333,12 +333,12 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   "Make it mine" creates the AI here, the same way Import AI does, and it
   lives in Your AIs from then on; the listing stays for the next one.
 - Add-ons has its own place in the menu, with four kinds: Skills, Tools and
-  Characters for your AIs, and Components for this computer.## [0.6.0] - 2026-08-25
+  Characters for your AIs, and Components for this computer.
+
+## [0.6.0] - 2026-08-25
 
 Your AIs know you better, run bigger models on the machine you already
 have, and choose between them by what actually runs well on it.
-
-## [0.6.0] - 2026-08-25
 
 ### Highlights
 
