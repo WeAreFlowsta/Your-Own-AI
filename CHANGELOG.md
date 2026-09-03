@@ -40,6 +40,15 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   routing section reports progress and stops itself after fifteen
   minutes. Starting a background server for a model that is not installed
   fails at once instead of probing ports.
+- A model's vision add-on is loaded only when you send an image, so a
+  vision-capable model that fits your graphics card for text no longer
+  reads "Too large" because of its eyes; the first image in a
+  conversation loads them, and the model card says when they would not
+  fit alongside.
+- Routing decisions embed your question once instead of three times, a
+  visible speed-up on Windows; the matrix's routing section allows
+  twenty-five minutes and accepts a device answer that the registry
+  scores above the everyday online model.
 
 ### First run
 - A new welcome takes three steps: download the model picked for your
