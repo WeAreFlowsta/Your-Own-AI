@@ -863,7 +863,13 @@ pub async fn leg_routing(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<Str
     let mut listed_fails = 0usize;
     let mut think_ok = 0u32;
     let mut think_bad = 0u32;
-    for mode in ["offline", "online-offline"] {
+    let mut decided = 0u32;
+    let started = std::time::Instant::now();
+    // Progress every 100 decisions, and a ceiling: a machine where every
+    // embed stalls must still hand back a (partial) table.
+    const ROUTING_LEG_CAP: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+    let mut capped = false;
+    'sweep: for mode in ["offline", "online-offline"] {
         for dial in ["frontier", "balanced", "local"] {
             for q in &queries {
                 if cancelled() {
@@ -892,6 +898,14 @@ pub async fn leg_routing(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<Str
                 } else {
                     (first, expected.to_string())
                 };
+                decided += 1;
+                if decided % 100 == 0 {
+                    sink(format!("  ... {decided} decisions, {:.0} s", started.elapsed().as_secs_f64()));
+                }
+                if started.elapsed() > ROUTING_LEG_CAP {
+                    capped = true;
+                    break 'sweep;
+                }
                 let entry = tally.entry((mode.into(), bucket.into(), dial.into())).or_insert((0, 0, 0));
                 entry.1 += 1;
                 let (side, model, reason, think) = match &result {
@@ -939,7 +953,11 @@ pub async fn leg_routing(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<Str
     for ((mode, bucket, dial), (online, n, fails)) in &tally {
         sink(format!("{:<15} {:<17} {:<9} {:<9} {:>3}/{:<3} {:>5}", mode, bucket, dial, "", online, n, fails));
     }
-    sink(format!("think verdicts: {think_ok} as expected, {think_bad} not"));
+    if capped {
+        sink(format!("STOPPED after 15 min at {decided} decisions - the table above is partial (an embed server that never answers? see the app log)"));
+        failures.push(format!("routing: stopped after 15 min at {decided} decisions"));
+    }
+    sink(format!("think verdicts: {think_ok} as expected, {think_bad} not ({decided} decisions in {:.0} s)", started.elapsed().as_secs_f64()));
     if think_bad > think_ok {
         failures.push(format!("routing: think verdicts off ({think_bad} of {})", think_ok + think_bad));
     }

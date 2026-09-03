@@ -78,6 +78,45 @@ fn think_for(difficulty: &str, capable: bool, agent: bool) -> Option<bool> {
 pub(crate) const QUERY_INSTRUCTION: &str = "Represent this sentence for searching relevant passages: ";
 pub(crate) const EMBED_MODEL: &str = "bge-small-en-v1.5-f16.gguf";
 
+/// Every embed the router makes goes through here. A wedged embed server
+/// (up but never healthy) used to cost each call a 30 s wait inside
+/// ensure_embedding_server - on every routed turn, and thousands of times
+/// in the matrix's routing leg (the Windows beta.16 "stuck" report). Now:
+/// a 15 s ceiling per call, and after a failure or timeout embedding is
+/// treated as unavailable for a minute (the gates fall back to keywords
+/// and the fail-safe, exactly as with no embedding model) before it is
+/// tried again.
+static EMBED_BROKEN_UNTIL: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+const EMBED_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+const EMBED_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+
+async fn embed_guarded(app: &AppHandle, texts: Vec<String>) -> Result<Vec<Vec<f32>>, String> {
+    if let Ok(g) = EMBED_BROKEN_UNTIL.lock() {
+        if let Some(until) = *g {
+            if std::time::Instant::now() < until {
+                return Err("embedding paused after a failure (retrying in under a minute)".into());
+            }
+        }
+    }
+    let state = app.state::<crate::llm::LLMState>();
+    let result = match tokio::time::timeout(
+        EMBED_CALL_TIMEOUT,
+        crate::llm::embed_texts(app.clone(), state, texts, EMBED_MODEL.to_string()),
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => Err(format!("embedding took longer than {} s", EMBED_CALL_TIMEOUT.as_secs())),
+    };
+    if let Err(e) = &result {
+        log::warn!("[router] embedding unavailable: {e} - keyword gates only for the next minute");
+        if let Ok(mut g) = EMBED_BROKEN_UNTIL.lock() {
+            *g = Some(std::time::Instant::now() + EMBED_RETRY_AFTER);
+        }
+    }
+    result
+}
+
 /// How much better (on the 0–9 task scale) a candidate must be than the loaded
 /// model to justify a reload. Generous so near-equal models don't thrash; small
 /// enough that a real coder (coding 9) beats a general model (coding 6) on code.
@@ -209,9 +248,8 @@ static FRESH_BENIGN_REFS: tokio::sync::OnceCell<Vec<Vec<f32>>> = tokio::sync::On
 async fn fresh_benign_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec<f32>>> {
     FRESH_BENIGN_REFS
         .get_or_try_init(|| async {
-            let state = app.state::<crate::llm::LLMState>();
             let texts = FRESH_BENIGN_REFERENCES.iter().map(|s| s.to_string()).collect();
-            crate::llm::embed_texts(app.clone(), state, texts, EMBED_MODEL.to_string()).await
+            embed_guarded(app, texts, EMBED_MODEL.to_string()).await
         })
         .await
         .map_err(|e| log::warn!("[router] freshness anchors could not be embedded: {e}"))
@@ -221,9 +259,8 @@ async fn fresh_benign_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec
 async fn fresh_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec<f32>>> {
     FRESH_REFS
         .get_or_try_init(|| async {
-            let state = app.state::<crate::llm::LLMState>();
             let texts = FRESH_REFERENCES.iter().map(|s| s.to_string()).collect();
-            crate::llm::embed_texts(app.clone(), state, texts, EMBED_MODEL.to_string()).await
+            embed_guarded(app, texts, EMBED_MODEL.to_string()).await
         })
         .await
         .map_err(|e| log::warn!("[router] freshness references could not be embedded: {e}"))
@@ -272,9 +309,8 @@ async fn fresh_scores(
     let qvec: Vec<f32> = match provided_vec {
         Some(v) if !v.is_empty() => v.to_vec(),
         _ => {
-            let state = app.state::<crate::llm::LLMState>();
             let qtext = format!("{QUERY_INSTRUCTION}{query}");
-            crate::llm::embed_texts(app.clone(), state, vec![qtext], EMBED_MODEL.to_string())
+            embed_guarded(app, vec![qtext], EMBED_MODEL.to_string())
                 .await
                 .ok()?
                 .pop()?
@@ -352,9 +388,8 @@ static BENIGN_REFS: tokio::sync::OnceCell<Vec<Vec<f32>>> = tokio::sync::OnceCell
 async fn medical_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec<f32>>> {
     MEDICAL_REFS
         .get_or_try_init(|| async {
-            let state = app.state::<crate::llm::LLMState>();
             let texts = MEDICAL_REFERENCES.iter().map(|s| s.to_string()).collect();
-            crate::llm::embed_texts(app.clone(), state, texts, EMBED_MODEL.to_string()).await
+            embed_guarded(app, texts, EMBED_MODEL.to_string()).await
         })
         .await
         .ok()
@@ -363,9 +398,8 @@ async fn medical_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec<f32>
 async fn benign_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec<f32>>> {
     BENIGN_REFS
         .get_or_try_init(|| async {
-            let state = app.state::<crate::llm::LLMState>();
             let texts = BENIGN_REFERENCES.iter().map(|s| s.to_string()).collect();
-            crate::llm::embed_texts(app.clone(), state, texts, EMBED_MODEL.to_string()).await
+            embed_guarded(app, texts, EMBED_MODEL.to_string()).await
         })
         .await
         .ok()
@@ -447,9 +481,8 @@ pub(crate) async fn medical_check(
     let qvec: Vec<f32> = match query_vec {
         Some(v) if !v.is_empty() => v.to_vec(),
         _ => {
-            let state = app.state::<crate::llm::LLMState>();
             let qtext = format!("{QUERY_INSTRUCTION}{query}");
-            match crate::llm::embed_texts(app.clone(), state, vec![qtext], EMBED_MODEL.to_string()).await {
+            match embed_guarded(app, vec![qtext], EMBED_MODEL.to_string()).await {
                 Ok(mut v) if !v.is_empty() => v.remove(0),
                 Err(e) => {
                     log::warn!("[router] health check: the turn could not be embedded: {e}");
