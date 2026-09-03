@@ -547,6 +547,7 @@ have, and choose between them by what actually runs well on it.
 
 ### The app fails politely
 - A model left mid-load by a crash, a force quit, or a power cut no longer reads "too big" on the next launch. The automatic reload is skipped once and the first message loads it; a normal quit clears the marker; and the red chip in the header names the real reason (too big, not loaded, can't be read, engine crashed) instead of one word for everything.
+- The model chip in the header and the send path now trust only what the engine reports as loaded, never a remembered value: a chip is green only when that model is really serving, orange while it loads, and a message loads the model when the engine has none. A load that fails for an unknown reason says so, instead of guessing "too large".
 - The first-run recommendation now sizes to your whole machine, not just
   the graphics card: a model that fits the card but not the system's
   memory is no longer offered. A big card in a machine with little memory

@@ -737,10 +737,12 @@ export default component$(() => {
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async ({ cleanup }) => {
     // --- Restore localStorage settings ---
+    // The remembered pick is a CANDIDATE for the ensure below, never the
+    // header's truth: painting it green here put a loaded-looking chip over
+    // a server with no model (field 09-03). The chip is set from the backend
+    // (already loaded, or a load that resolved).
     const savedModel = localStorage.getItem("currentModel");
-    if (savedModel) {
-      currentModel.value = savedModel;
-    }
+    void savedModel;
     const savedWidget = localStorage.getItem("showModelWidget");
     showModelWidget.value = savedWidget === "true";
 
@@ -884,8 +886,7 @@ export default component$(() => {
       // Verify via Rust state that the model is actually loaded, not just that the server is healthy
       // (the server can be "ready" in router mode with 0 models loaded)
       const rustModel = await invoke<string | null>("get_current_model");
-      const alreadyReady = currentModel.value === targetModel
-        && rustModel === targetModel
+      const alreadyReady = rustModel === targetModel
         && await invoke<boolean>("is_llama_server_ready");
 
       if (alreadyReady) {
@@ -900,6 +901,9 @@ export default component$(() => {
         console.log("[ChatPage] Loading model:", targetModel);
         isModelLoading.value = true;
         modelLoadTime.value = Date.now();
+        // Orange pulse with the name while it loads; cleared or turned red
+        // below if the load does not resolve.
+        currentModel.value = targetModel;
         try {
           await loadModelBounded({ filename: targetModel, withVision: false, reason: "page-ensure" });
         } catch (e) {
@@ -912,6 +916,7 @@ export default component$(() => {
             // big" here made the send skip the load (preferred == current)
             // and fail against a server with no model (field 09-03).
             console.log("[ChatPage] Preload skipped after an unclean stop:", targetModel);
+            currentModel.value = null;
             isModelLoading.value = false;
             return;
           }

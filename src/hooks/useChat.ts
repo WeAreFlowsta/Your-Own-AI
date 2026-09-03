@@ -827,7 +827,21 @@ export function useChat(props: UseChatProps) {
       // models on the user's own server - nothing to load locally either way).
       const isOnlineModel = !!preferredModel?.startsWith("online:");
       const isExternalModel = !!preferredModel?.startsWith("external:");
-      if (!isOnlineModel && !isExternalModel && preferredModel && preferredModel !== currentModel) {
+      // Ask the backend what is really loaded - the header's value is a
+      // belief that can be stale (a refused automatic reload, a server
+      // that died). Field 09-03: trusting it skipped the load and the turn
+      // streamed against a server with no model.
+      let loadedNow: string | null = currentModel;
+      if (!isOnlineModel && !isExternalModel && preferredModel) {
+        try {
+          const rustModel = await invoke<string | null>("get_current_model");
+          const ready = rustModel === preferredModel && (await invoke<boolean>("is_llama_server_ready"));
+          loadedNow = ready ? rustModel : null;
+        } catch {
+          loadedNow = null;
+        }
+      }
+      if (!isOnlineModel && !isExternalModel && preferredModel && preferredModel !== loadedNow) {
         console.log(
           "[useChat] Switching model:",
           currentModel,
@@ -1932,7 +1946,7 @@ export function useChat(props: UseChatProps) {
             } catch { /* no tuning store */ }
             state.error = tunedHere
               ? `This model couldn't be loaded - its Fine-tune settings ask for more memory than this machine has. On the Offline Models page, open Fine-tune on it and set the rows back to Auto, then try again.`
-              : `This model couldn't be loaded - it's likely too large for your computer's memory. Try a smaller model from the Offline Models page (look for the "Full speed" badge).`;
+              : `This model couldn't be loaded. Pick it again from the model menu to retry; if it fails again, the diagnostic report in Settings › Help & diagnostics says why.`;
             state.messages = state.messages.filter(
               (m) => m.id !== assistantId
             );
