@@ -55,6 +55,13 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   runs or right after a model is unloaded. Fit assessments are reused for
   a few seconds and scan the models folder once, a large speed-up for
   routing on Windows.
+- The router follows the online catalog: a model the catalog marks as the
+  default for Everyday, Hard, Live web, Agent or Planning takes that slot,
+  and a model's capability and tool scores come from the catalog when it
+  declares them, so new online models and providers arrive without an app
+  update. The built-in defaults remain the fallback.
+- All calls to the app's own background servers share one connection,
+  removing a per-call cost that made routing slow on Windows.
 
 ### First run
 - A new welcome takes three steps: download the model picked for your
