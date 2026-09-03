@@ -49,6 +49,12 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   visible speed-up on Windows; the matrix's routing section allows
   twenty-five minutes and accepts a device answer that the registry
   scores above the everyday online model.
+- Fit grades no longer credit a model that is not actually loaded, and a
+  model running split between the graphics card and RAM only hands back
+  the part that was on the card, so grades stay honest while the matrix
+  runs or right after a model is unloaded. Fit assessments are reused for
+  a few seconds and scan the models folder once, a large speed-up for
+  routing on Windows.
 
 ### First run
 - A new welcome takes three steps: download the model picked for your
