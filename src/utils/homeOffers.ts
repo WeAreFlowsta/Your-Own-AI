@@ -13,7 +13,7 @@
  */
 import { invoke } from '@tauri-apps/api/core';
 import { modelManager } from './modelManager';
-import { UTILITY_MODEL } from '../data/recommended-models';
+import { UTILITY_MODEL, EMBEDDING_MODEL } from '../data/recommended-models';
 
 const LAUNCH_COUNT_KEY = 'yoaiLaunchCount';
 
@@ -61,15 +61,31 @@ export async function cudaOffer(): Promise<CudaOffer> {
   }
 }
 
-/** Is the helper-model offer due? Second launch onward, nothing else in
- *  the slot, not installed. Dismissal is the Callout's own (help tip id). */
+/** The helper offer installs two small components together: the helper
+ *  model (extraction, routing verdicts, document distilling) and the
+ *  embedding model (memory recall, the freshness gate and the semantic
+ *  half of the health gate - without it Frontier-first routing stays home
+ *  by design). Never part of the first-run download (Eric, 2026-09-03). */
+export async function helperFilesMissing(): Promise<{ filename: string; downloadUrl: string; size: number }[]> {
+  const out: { filename: string; downloadUrl: string; size: number }[] = [];
+  for (const m of [UTILITY_MODEL, EMBEDDING_MODEL]) {
+    try {
+      if (!(await modelManager.isModelDownloaded(m.filename))) {
+        out.push({ filename: m.filename, downloadUrl: m.downloadUrl, size: m.size });
+      }
+    } catch {
+      /* unreadable = treat as installed; never offer blind */
+    }
+  }
+  return out;
+}
+
+/** Is the helper offer due? Second launch onward, nothing else in the
+ *  slot, at least one of its two files missing. Dismissal is the Callout's
+ *  own (help tip id). */
 export async function helperOfferEligible(): Promise<boolean> {
   if (launchCount() < 2) return false;
-  try {
-    if (await modelManager.isModelDownloaded(UTILITY_MODEL.filename)) return false;
-  } catch {
-    return false;
-  }
+  if ((await helperFilesMissing()).length === 0) return false;
   const cuda = await cudaOffer();
   return !cuda.eligible;
 }
