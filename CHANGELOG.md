@@ -3,7 +3,19 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
-## [0.7.0] - 2026-08-29
+## [0.7.0] - 2026-09-04
+
+### Highlights
+
+- **Your AIs decide where a question goes, and you set the leaning.** An "Online and Offline" AI answers with a frontier online model by default and keeps a question on your device when a model here is better for it. One dial - Frontier-first, Balanced, Local-first - sets how much goes online, the online models are set by job (Everyday, Hard, Live web, Agent, Planning), health questions never leave, and new online models and providers arrive without an app update. See *Routing*.
+- **A welcome that gets you talking in three steps.** One model picked for your computer, your first three AIs (a Personal or Work set, names and pictures yours to change), and a download that never blocks: ask while it runs and the answer arrives when the model lands. See *First run*.
+- **Add-ons: characters, skills, tools and components, shared by their makers.** A complete AI character in one signed pack, know-how in the open Agent Skills standard, programs your AIs can work in, and the components this computer can get - all in one place in the app, each signed by its maker and reviewed before it is listed. Sharing your own is one button, signed with your Flowsta identity, with a status line that says where it stands. See *Add-ons*.
+- **Tools and skills in chat.** Give an AI tools and skills from the chip beside the model chip, switch them on or off per AI, and set the same approvals as in projects; a tools turn speaks plainly and folds its steps underneath. See *Tools*.
+- **Fine-tune, measured on your own machine.** Per-model context, expert split and speed-up file; Tune on this computer measures a handful of setups on your hardware and a Speed-Room slider picks between real numbers; per-AI creativity, word variety and repetition settings. See *Fine-tune*.
+- **The truth matrix, in every build.** Settings › Help & diagnostics loads every downloaded model and checks the app's claims against what really happens: sizes, plain answers, generation settings, the helper and memory components, routing decisions on your own models, the thinking switch, and whether badges hold still while a model is loaded. See *Other*.
+- **The Flowsta Vault, explained where it matters.** What it is (your identity on your own computer), what it does here (backups with one-click recovery, signed exports, online models the most private way there is), what it takes (free, about two minutes, 24 recovery words). See *Flowsta Vault*.
+- **Billing you can predict.** A monthly allowance, the same rates past it, the card charged when accrued overage reaches $100 and at month end, and online models pause past your allowance until an invoice is paid. Your usage line sits in the header once you have a plan. See *Flowsta Vault*, *Other*.
+- **Honest about what is loaded and what fits.** The header chip and the send path read the engine, never a remembered value; fit badges hold still during a tune; a model left mid-load by a crash no longer reads "too big" on the next launch; a file the engine cannot read is named as such. See *The app fails politely*, *Models*.
 
 ### Routing
 - An "Online and Offline" AI now answers with a frontier online model by
@@ -68,6 +80,7 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   instead of being treated like a project task.
 - On Macs without a graphics card, a model within a hair of the "full
   speed" line now reads full speed, matching how it actually runs.
+- Timeless science questions ("why is the sky blue", "how do rainbows form") no longer read as needing the live web: the freshness check has evergreen anchors on the benign side, and the routing battery holds them to the Everyday model.
 
 ### First run
 - A new welcome takes three steps: download the model picked for your
@@ -324,6 +337,8 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 
 Your AIs know you better, run bigger models on the machine you already
 have, and choose between them by what actually runs well on it.
+
+## [0.6.0] - 2026-08-25
 
 ### Highlights
 
