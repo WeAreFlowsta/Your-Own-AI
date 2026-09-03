@@ -1818,6 +1818,24 @@ async fn route_core(
 ) -> Result<RouteResult, String> {
     let share_owned = effective_share(app, share);
     let share = share_owned.as_str();
+    // One embedding per decision. The chat path hands its vector in; API
+    // callers and the preview/battery did not, and the three gates (health,
+    // cue, semantic freshness) each embedded the query again - three round
+    // trips per decision, 0.86 s each on Windows loopback (beta.17 matrix
+    // hit the leg's time cap at 1,043 decisions).
+    let embedded_here: Option<Vec<f32>> = match query_vec {
+        Some(v) if !v.is_empty() => None,
+        _ if mode == "online-offline" || mode == "my-hardware" || !agent => {
+            let qtext = format!("{QUERY_INSTRUCTION}{query}");
+            embed_guarded(app, vec![qtext]).await.ok().and_then(|mut v| v.pop())
+        }
+        _ => None,
+    };
+    let query_vec: Option<&[f32]> = match (query_vec, embedded_here.as_deref()) {
+        (Some(v), _) if !v.is_empty() => Some(v),
+        (_, Some(v)) => Some(v),
+        _ => None,
+    };
     // The offline lean: an explicit value wins; absent (API and agent
     // callers, which never see the webview's storage) → the user's
     // Settings choice from the store → balanced.

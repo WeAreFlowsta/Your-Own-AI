@@ -878,7 +878,7 @@ pub async fn leg_routing(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<Str
     let started = std::time::Instant::now();
     // Progress every 100 decisions, and a ceiling: a machine where every
     // embed stalls must still hand back a (partial) table.
-    const ROUTING_LEG_CAP: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+    const ROUTING_LEG_CAP: std::time::Duration = std::time::Duration::from_secs(25 * 60);
     let mut capped = false;
     'sweep: for mode in ["offline", "online-offline"] {
         for dial in ["frontier", "balanced", "local"] {
@@ -940,7 +940,13 @@ pub async fn leg_routing(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<Str
                 } else if expected_side != side {
                     // A device answer that says why (health check could not run,
                     // catalog unavailable) is the router being honest, not wrong.
-                    if side == "device" && (reason.contains("could not run") || reason.contains("unavailable")) { None } else { Some(format!("expected {expected_side}, got {side}")) }
+                    // "As good for this question" is the strictly-better rule:
+                    // it fires only when the registry scores the model that
+                    // answers here above the Everyday model on that task (a
+                    // coding specialist on the 4060 Ti box kept code home under
+                    // Frontier-first - correct by Eric's rule). The dev battery
+                    // stays strict; the field leg accepts it.
+                    if side == "device" && (reason.contains("could not run") || reason.contains("unavailable") || reason.contains("as good for this question")) { None } else { Some(format!("expected {expected_side}, got {side}")) }
                 } else if bucket == "long_turn" && side == "online" && !reason.contains("too long") {
                     Some("went online without the 'too long' reason".into())
                 } else {
@@ -965,8 +971,8 @@ pub async fn leg_routing(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<Str
         sink(format!("{:<15} {:<17} {:<9} {:<9} {:>3}/{:<3} {:>5}", mode, bucket, dial, "", online, n, fails));
     }
     if capped {
-        sink(format!("STOPPED after 15 min at {decided} decisions - the table above is partial (an embed server that never answers? see the app log)"));
-        failures.push(format!("routing: stopped after 15 min at {decided} decisions"));
+        sink(format!("STOPPED after 25 min at {decided} decisions - the table above is partial (a slow or stalled embed server? see the app log)"));
+        failures.push(format!("routing: stopped after 25 min at {decided} decisions"));
     }
     sink(format!("think verdicts: {think_ok} as expected, {think_bad} not ({decided} decisions in {:.0} s)", started.elapsed().as_secs_f64()));
     if think_bad > think_ok {
