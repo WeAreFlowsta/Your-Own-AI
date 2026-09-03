@@ -5,6 +5,28 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 
 ## [0.7.0] - 2026-08-29
 
+### Routing
+- An "Online and Offline" AI now answers with a frontier online model by
+  default and keeps a question on your device when a model here is as good
+  for it. Questions that need the live web go to the search model, known
+  hard ones to a stronger model, and health questions never leave.
+- One dial replaces the old freshness setting: Frontier-first, Balanced,
+  Local-first. Your earlier choice carries over. Settings shows about how
+  many of your recent questions went online.
+- A new Everyday slot names the online model that takes ordinary questions
+  (GPT-5.6 Luna by default); one Hard picker covers code, math, reasoning
+  and everything else; the recommended names now come from the router.
+- A hard question thinks before it answers on a model that can; an easy one
+  answers directly. A short follow-up stays with the thread's model.
+- The router learns from what you do with answers - Redo on your device,
+  Try this answer online, regenerate - by at most a point, never for health
+  questions, with a reset in Settings.
+- Keyword-free questions about current events ("is the bridge still
+  closed", "what is the newest model") now reach the search model; a
+  greeting with "today" in it no longer does.
+- The optional helper model does the routing classification; without it
+  the app no longer runs a check on the chat model before every question.
+
 ### First run
 - A new welcome takes three steps: download the model picked for your
   computer, meet your three AIs (Personal, or Work with an Assistant, a
