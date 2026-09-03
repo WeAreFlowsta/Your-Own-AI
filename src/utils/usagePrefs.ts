@@ -1,9 +1,12 @@
 /**
  * Online-usage display preferences + the shared fetch.
  *
- * The header ticker is OFF by default - the interface stays clean unless
- * the user opts in from Settings -> Your Flowsta Account. `usagePrefsChanged`
- * fires on toggle so the header reacts without a reload.
+ * The header ticker is ON by default once a plan exists (the fetch returns
+ * nothing for the free tier or signed out, so free users never see it) -
+ * the person paying watches their spend from the first online turn. The
+ * switch in Settings -> Your Flowsta Account turns it off. `usagePrefsChanged`
+ * fires on toggle so the header reacts without a reload. (Eric, 09-03:
+ * on by default once a plan exists.)
  */
 import { invoke } from '@tauri-apps/api/core';
 
@@ -24,9 +27,9 @@ export interface UsageSummary {
   overage_hold?: { invoice: string; amount_usd: number; month: string; hosted_invoice_url?: string | null } | null;
 }
 
-/** Header ticker switch. Defaults to OFF (only an explicit "true" enables). */
+/** Header ticker switch. Defaults to ON (only an explicit "false" disables). */
 export function usageTickerEnabled(): boolean {
-  return localStorage.getItem(TICKER_KEY) === 'true';
+  return localStorage.getItem(TICKER_KEY) !== 'false';
 }
 
 export function setUsageTickerEnabled(enabled: boolean): void {

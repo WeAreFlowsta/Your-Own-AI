@@ -615,6 +615,7 @@ have, and choose between them by what actually runs well on it.
   Offline replies already carry the hash of the exact model file.
 
 ### Other
+- The online usage line in the header ("$0.68 used · $20 included") is on by default once a plan exists, so the person paying sees their spend from the first online turn; the switch in Settings › Your Flowsta Account turns it off. Free and signed-out users never see it.
 - The truth matrix checks grade drift: it loads the largest full-speed model through the app's own path and grades every model again; a badge that changes while a model is loaded is reported as a failure.
 - The truth matrix in Help & diagnostics is available in every build, not only betas, and its description now covers what it checks: model loads and answers, the helper and memory components, routing decisions on your own models (decided only, nothing sent, no credits), and the thinking switch. The records cell census stays in beta builds.
 - Loading a model now shows its proper catalog name ("Qwen 3.6 35B-A3B
