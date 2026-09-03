@@ -374,6 +374,7 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a === "--baseline") opts.baseline = true;
     else if (a === "--dry") opts.dry = true;
+    else if (a === "--dump-json") opts.dumpJson = true;
     else if (a === "--only") opts.only = (argv[++i] || "").split(",").filter(Boolean);
     else if (a === "--mode") opts.mode = argv[++i];
     else if (a === "--json") opts.json = argv[++i];
@@ -578,6 +579,19 @@ async function main() {
   if (opts.only) queries = queries.filter((q) => opts.only.includes(q.bucket));
   if (!queries.length) { console.error("no queries selected"); process.exit(2); }
 
+  if (opts.dumpJson) {
+    // One query table for two harnesses: this script (dev, over HTTP) and the
+    // in-app beta matrix's routing leg (Rust, include_str). Regenerate with
+    //   node tools/route-battery.mjs --dump-json > src-tauri/route-battery.json
+    const table = queries.map((q) => ({
+      id: q.id, bucket: q.bucket, q: q.q, follow: q.follow ?? null, firstBucket: q.firstBucket ?? null,
+      task: taskFor(q.firstBucket ?? q.bucket), difficulty: difficultyFor(q.firstBucket ?? q.bucket, q.hard),
+      think: q.expect.think,
+      expect: Object.fromEntries(MODES.map((m) => [m, Object.fromEntries(DIALS.map((d) => [d, expectSide(q.bucket, m, d)]))])),
+    }));
+    console.log(JSON.stringify({ generated_by: "tools/route-battery.mjs --dump-json", queries: table }, null, 0));
+    return 0;
+  }
   if (opts.dry) { printPlan(queries, modes); return 0; }
 
   const started = Date.now();

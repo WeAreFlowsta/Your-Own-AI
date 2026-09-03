@@ -1715,6 +1715,16 @@ pub async fn route_with(
     result
 }
 
+/// The dial as Settings has it (for reports).
+pub fn current_share(app: &AppHandle) -> String {
+    effective_share(app, "")
+}
+
+/// The mirrored entitlement says this user cannot use online models.
+pub fn known_not_entitled(app: &AppHandle) -> bool {
+    store_pref(app, "onlineEntitled").as_deref() == Some("no")
+}
+
 /// The dial position this call runs under: an explicit value (legacy
 /// eagerness names accepted) → the Settings choice from the store →
 /// frontier, the default.

@@ -270,10 +270,79 @@ pub async fn bench_chat_format(
         Ok(g) => g,
         Err(e) => return format!("FAIL load: {e}"),
     };
-    let marker = meta.and_then(|m| m.tool_call_marker);
-    let verdict = ask_scenarios(model, scenarios, marker).await;
+    let marker = meta.as_ref().and_then(|m| m.tool_call_marker);
+    let mut verdict = ask_scenarios(model, scenarios, marker).await;
+    // The think switch (routing's P2 output) is honored: on a template with
+    // a switch, thinking on must produce reasoning and thinking off must
+    // not. Same server, two short asks.
+    if let Some(m) = meta.as_ref().filter(|m| m.template_enable_thinking || m.template_reasoning_strength) {
+        if !verdict.starts_with("FAIL") {
+            let strength = m.template_reasoning_strength;
+            let on = ask_think(model, true, strength, marker).await;
+            let off = ask_think(model, false, strength, marker).await;
+            verdict.push_str(&match (on, off) {
+                (Ok((on_r, _)), Ok((off_r, off_v))) if on_r > 0 && off_r == 0 && off_v > 0 => {
+                    format!(" | think switch ok (on {on_r} chars, off 0)")
+                }
+                (Ok((on_r, _)), Ok((off_r, off_v))) => {
+                    format!(" | FAIL think switch: on {on_r} reasoning chars, off {off_r} reasoning chars / {off_v} visible")
+                }
+                (Err(e), _) | (_, Err(e)) => format!(" | FAIL think switch: {e}"),
+            });
+        }
+    } else {
+        verdict.push_str(" | no think switch in the template");
+    }
     drop(guard);
     verdict
+}
+
+/// One ask with thinking on (enable_thinking / reasoning_strength high) or
+/// off (the app's chat-turn controls). Returns (reasoning chars, visible chars).
+async fn ask_think(model: &str, on: bool, strength: bool, marker: Option<&'static str>) -> Result<(usize, usize), String> {
+    use std::time::Duration;
+    let client = reqwest::Client::new();
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "You are a careful assistant."},
+            {"role": "user", "content": "Is 91 a prime number? Answer in one sentence."}
+        ],
+        "max_tokens": 2048,
+        "stream": false,
+        "stop": crate::llm::chat_stop_strings_with(model, marker),
+    });
+    crate::llm::apply_sampling(&mut body, None, false);
+    if on {
+        let mut kw = serde_json::Map::new();
+        kw.insert("enable_thinking".into(), serde_json::json!(true));
+        if strength {
+            kw.insert("reasoning_strength".into(), serde_json::json!("high"));
+        }
+        body["chat_template_kwargs"] = serde_json::Value::Object(kw);
+    } else {
+        let (budget, effort) = crate::llm::chat_turn_reasoning_controls(model);
+        if let Some(b) = budget {
+            body["reasoning_budget_tokens"] = serde_json::json!(b);
+        }
+        if let Some(e) = effort {
+            body["reasoning_effort"] = serde_json::json!(e);
+        }
+    }
+    let v: serde_json::Value = client
+        .post(format!("http://127.0.0.1:{BENCH_PORT}/v1/chat/completions"))
+        .json(&body)
+        .timeout(Duration::from_secs(300))
+        .send()
+        .await
+        .map_err(|e| format!("request: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("json: {e}"))?;
+    let content = crate::llm::translate_gemma_thought_markers(v["choices"][0]["message"]["content"].as_str().unwrap_or(""));
+    let (visible, inline_thought) = split_think_blocks(&content);
+    let reasoning = v["choices"][0]["message"]["reasoning_content"].as_str().map(|r| r.chars().count()).unwrap_or(0) + inline_thought;
+    Ok((reasoning, visible.trim().chars().count()))
 }
 
 fn gguf_files(dir: &Path) -> Vec<String> {
@@ -684,6 +753,200 @@ pub async fn leg_mlx(app: &AppHandle, bin_dir_hint: &Path, sink: Sink<'_>) -> Ve
 /// The engine binary the app would actually chat with: the downloaded CUDA
 /// build when active, else the bundled server (in dev, the repo's shipped
 /// binary - the same file the test legs run).
+/// The helper (utility) model file - the Settings > Components download.
+/// Mirrors UTILITY_MODEL.filename in src/data/recommended-models.ts.
+const HELPER_FILE: &str = "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf";
+
+/// The small CPU servers start and answer: the embedding server (memory
+/// recall, freshness, the semantic health gate) and, when installed, the
+/// helper model with the routing classifier's own grammar. These die
+/// silently in the field (the chat server hides them behind a working
+/// engine), so the matrix proves them on every machine.
+pub async fn leg_components(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<String> {
+    let mut failures = Vec::new();
+    let st = app.state::<crate::llm::LLMState>();
+    if dir.join(crate::router::EMBED_MODEL).exists() {
+        let texts = vec!["hello world".to_string(), "a second phrase".to_string(), "and a third".to_string()];
+        match crate::llm::embed_texts(app.clone(), st.clone(), texts, crate::router::EMBED_MODEL.to_string()).await {
+            Ok(v) if v.len() == 3 && v.iter().all(|x| !x.is_empty()) => {
+                sink(format!("embedding server: ok (3 vectors, dim {})", v[0].len()));
+            }
+            Ok(v) => {
+                sink(format!("embedding server: FAIL - {} vectors back for 3 inputs", v.len()));
+                failures.push("components: embedding server returned the wrong count".into());
+            }
+            Err(e) => {
+                sink(format!("embedding server: FAIL - {e}"));
+                failures.push(format!("components: embedding server - {e}"));
+            }
+        }
+    } else {
+        sink("embedding model: not installed (memory recall, freshness and the semantic health check are off; Frontier-first stays on the device by design)".into());
+    }
+    if dir.join(HELPER_FILE).exists() {
+        const BASE: &str = "Classify the user's message for model routing. Output exactly TWO words: the TASK then the DIFFICULTY.\nTASK = CODE | MATH | REASONING | GENERAL.\nDIFFICULTY = HARD if it needs a powerful model (complex, multi-step, deep, expert-level); EASY otherwise.";
+        const GRAMMAR: &str = "root ::= (\"CODE\" | \"MATH\" | \"REASONING\" | \"GENERAL\") \" \" (\"EASY\" | \"HARD\")";
+        let probes = [
+            ("prove that there are infinitely many primes", "HARD"),
+            ("what is the capital of France", "EASY"),
+            ("write a python function that parses a csv file", "CODE"),
+        ];
+        let mut lines = Vec::new();
+        for (q, want) in probes {
+            if cancelled() {
+                break;
+            }
+            match crate::llm::utility_chat(app.clone(), st.clone(), HELPER_FILE.to_string(), BASE.to_string(), q.to_string(), Some(GRAMMAR.to_string()), 12).await {
+                Ok(out) => {
+                    let verdict = out.trim().to_uppercase();
+                    let parsed = verdict.split_whitespace().count() == 2;
+                    let hit = verdict.contains(want);
+                    lines.push(format!("{q:?} -> {verdict}{}", if hit { "" } else { " (expected it to say " } .to_string() + if hit { "" } else { want } + if hit { "" } else { ")" }));
+                    if !parsed {
+                        failures.push(format!("components: helper verdict unparseable: {verdict:?}"));
+                    }
+                }
+                Err(e) => {
+                    sink(format!("helper model: FAIL - {e}"));
+                    failures.push(format!("components: helper model - {e}"));
+                    break;
+                }
+            }
+        }
+        if !lines.is_empty() {
+            sink(format!("helper model: answers ({})", lines.join("; ")));
+        }
+    } else {
+        sink("helper model: not installed (routing difficulty stays unknown; memory extraction rides the chat model)".into());
+    }
+    failures
+}
+
+/// Routing, decide-only, on this machine's models: the battery's query
+/// table (src-tauri/route-battery.json, generated from tools/route-battery.mjs)
+/// through `route_dry` for every mode and dial. Never loads a model, never
+/// generates, never spends credits: the online catalog list is a free
+/// call and the query embeds run locally. Asserts the promises and prints
+/// the per-bucket online shares.
+pub async fn leg_routing(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<String> {
+    let mut failures = Vec::new();
+    let table: serde_json::Value = match serde_json::from_str(include_str!("../route-battery.json")) {
+        Ok(v) => v,
+        Err(e) => {
+            sink(format!("FAIL: battery table unreadable: {e}"));
+            return vec![format!("routing: battery table unreadable: {e}")];
+        }
+    };
+    let queries = table["queries"].as_array().cloned().unwrap_or_default();
+    // Environment: what the numbers below can and cannot exercise.
+    let share = crate::router::current_share(app);
+    let not_entitled = crate::router::known_not_entitled(app);
+    let catalog = crate::flowsta::list_online_models().await.ok();
+    let everyday_listed = catalog.as_ref().is_some_and(|m| {
+        m.iter().any(|x| x.id.strip_prefix("online:").unwrap_or(&x.id) == crate::router::DEFAULT_EVERYDAY.strip_prefix("online:").unwrap_or(crate::router::DEFAULT_EVERYDAY))
+    });
+    let embeddings = dir.join(crate::router::EMBED_MODEL).exists();
+    let helper = dir.join(HELPER_FILE).exists();
+    sink(format!(
+        "dial: {share} | online catalog: {} | everyday default listed: {} | entitled: {} | embedding model: {} | helper model: {}",
+        catalog.as_ref().map(|m| format!("{} models", m.len())).unwrap_or_else(|| "unreachable (online rungs not exercised)".into()),
+        if everyday_listed { "yes" } else { "no" },
+        if not_entitled { "no" } else { "yes or unknown" },
+        if embeddings { "yes" } else { "no (semantic gates off - ordinary questions stay on the device)" },
+        if helper { "yes" } else { "no (difficulty unknown)" },
+    ));
+    let online_possible = catalog.is_some() && !not_entitled;
+    let picks = crate::router::OnlinePicks::from_store(app);
+    let side_of = |model: &str| if model.starts_with("online:") { "online" } else if model.starts_with("external:") { "server" } else { "device" };
+    // tallies: (mode, bucket, dial) -> (online, n, fails)
+    let mut tally: std::collections::BTreeMap<(String, String, String), (u32, u32, u32)> = std::collections::BTreeMap::new();
+    let mut listed_fails = 0usize;
+    let mut think_ok = 0u32;
+    let mut think_bad = 0u32;
+    for mode in ["offline", "online-offline"] {
+        for dial in ["frontier", "balanced", "local"] {
+            for q in &queries {
+                if cancelled() {
+                    sink("cancelled".into());
+                    return failures;
+                }
+                let id = q["id"].as_str().unwrap_or("?");
+                let bucket = q["bucket"].as_str().unwrap_or("?");
+                let text = q["q"].as_str().unwrap_or("");
+                let task = q["task"].as_str().unwrap_or("general");
+                let difficulty = q["difficulty"].as_str().unwrap_or("easy");
+                let expected = q["expect"][mode][dial].as_str().unwrap_or("either");
+                let turn_tokens = if bucket == "long_turn" { Some(200_000u32) } else { None };
+                let first = crate::router::route_dry(app, mode, text, dial, task, difficulty, "balanced", &picks, false, false, turn_tokens, &crate::router::PrevTurn::default()).await;
+                // Follow-up pairs: the second turn must inherit the first's side.
+                let (result, expected_side): (Result<crate::router::RouteResult, String>, String) = if let Some(follow) = q["follow"].as_str() {
+                    match &first {
+                        Ok(r1) => {
+                            let prev = crate::router::PrevTurn { side: Some(side_of(&r1.model).to_string()), task: Some(task.to_string()), model: Some(r1.model.clone()), vec: None };
+                            let r2 = crate::router::route_dry(app, mode, follow, dial, "general", "easy", "balanced", &picks, false, false, None, &prev).await;
+                            let want = if q["firstBucket"].as_str() == Some("health") { "device".to_string() } else { side_of(&r1.model).to_string() };
+                            (r2, want)
+                        }
+                        Err(e) => (Err(e.clone()), "either".into()),
+                    }
+                } else {
+                    (first, expected.to_string())
+                };
+                let entry = tally.entry((mode.into(), bucket.into(), dial.into())).or_insert((0, 0, 0));
+                entry.1 += 1;
+                let (side, model, reason, think) = match &result {
+                    Ok(r) => (side_of(&r.model), r.model.clone(), r.reason.clone(), r.think),
+                    Err(e) => ("refused", String::new(), e.clone(), None),
+                };
+                if side == "online" {
+                    entry.0 += 1;
+                }
+                // Judge: the offline promise, the health promise, the dial.
+                let fail: Option<String> = if side == "refused" {
+                    if mode == "offline" || bucket == "health" { None } else { Some("refused (no model)".into()) }
+                } else if mode == "offline" && (side == "online" || reason.to_lowercase().contains("online")) {
+                    Some("OFFLINE PROMISE BROKEN".into())
+                } else if expected_side == "either" {
+                    None
+                } else if expected_side == "online" && !online_possible {
+                    None // cannot be exercised here; the environment line says so
+                } else if expected_side != side {
+                    // A device answer that says why (health check could not run,
+                    // catalog unavailable) is the router being honest, not wrong.
+                    if side == "device" && (reason.contains("could not run") || reason.contains("unavailable")) { None } else { Some(format!("expected {expected_side}, got {side}")) }
+                } else if bucket == "long_turn" && side == "online" && !reason.contains("too long") {
+                    Some("went online without the 'too long' reason".into())
+                } else {
+                    None
+                };
+                if let Some(f) = fail {
+                    entry.2 += 1;
+                    if listed_fails < 25 {
+                        sink(format!("  FAIL {id} | {mode} | {dial} | {f} | {model} | {reason}"));
+                    }
+                    listed_fails += 1;
+                    failures.push(format!("routing: {id} {mode}/{dial}: {f}"));
+                }
+                if let (Some(want), Some(got)) = (q["think"].as_bool(), think) {
+                    if want == got { think_ok += 1 } else { think_bad += 1 }
+                }
+            }
+        }
+    }
+    sink(format!("{:<15} {:<17} {:<9} {:<9} {:>7} {:>5}", "mode", "bucket", "dial", "", "online", "fails"));
+    for ((mode, bucket, dial), (online, n, fails)) in &tally {
+        sink(format!("{:<15} {:<17} {:<9} {:<9} {:>3}/{:<3} {:>5}", mode, bucket, dial, "", online, n, fails));
+    }
+    sink(format!("think verdicts: {think_ok} as expected, {think_bad} not"));
+    if think_bad > think_ok {
+        failures.push(format!("routing: think verdicts off ({think_bad} of {})", think_ok + think_bad));
+    }
+    if listed_fails > 25 {
+        sink(format!("  ... {} more failures not listed", listed_fails - 25));
+    }
+    failures
+}
+
 fn engine_binary(app: &AppHandle) -> Result<(PathBuf, &'static str), String> {
     if let crate::engine::Backend::Cuda = crate::engine::active_backend(app) {
         if let Some(bin) = crate::engine::cuda_engine_binary(app) {
@@ -728,7 +991,11 @@ pub async fn matrix_run(
     app: AppHandle,
     state: tauri::State<'_, crate::llm::LLMState>,
     stamp: String,
+    legs: Option<Vec<String>>,
 ) -> Result<String, String> {
+    // A subset of legs (dev trigger / a targeted rerun); None = all.
+    let legs: Vec<String> = legs.unwrap_or_default();
+    let want = |name: &str| legs.is_empty() || legs.iter().any(|l| l == name);
     if MATRIX_RUNNING.swap(true, Ordering::SeqCst) {
         return Err("The matrix is already running".into());
     }
@@ -850,12 +1117,20 @@ pub async fn matrix_run(
 
     let mut failures: Vec<String> = Vec::new();
 
-    sink("== Fit truth (claim vs real load) ==".into());
-    failures.extend(leg_fit_truth(&bin, &dir, &[], sink).await);
-    sink(String::new());
+    if want("components") {
+        sink("== Components (the small servers answer) ==".into());
+        failures.extend(leg_components(&app, &dir, sink).await);
+        sink(String::new());
+    }
 
-    if !cancelled() {
-        sink("== Chat format (words, no channel markers) ==".into());
+    if want("fit") {
+        sink("== Fit truth (claim vs real load) ==".into());
+        failures.extend(leg_fit_truth(&bin, &dir, &[], sink).await);
+        sink(String::new());
+    }
+
+    if !cancelled() && want("chat") {
+        sink("== Chat format (words, no channel markers; think switch) ==".into());
         failures.extend(leg_chat_format(&bin, &dir, sink).await);
         sink(String::new());
     }
@@ -870,7 +1145,7 @@ pub async fn matrix_run(
         })
         .min_by_key(|n| std::fs::metadata(dir.join(n.as_str())).map(|m| m.len()).unwrap_or(u64::MAX))
         .cloned();
-    if !cancelled() {
+    if !cancelled() && want("sampling") {
         if let Some(model) = &smallest {
             sink(format!("== Sampling truth ({model}) =="));
             match leg_sampling(&bin, &dir, model, sink).await {
@@ -883,7 +1158,7 @@ pub async fn matrix_run(
             sink(String::new());
         }
     }
-    if !cancelled() {
+    if !cancelled() && want("tune") {
         let tune_model = ggufs
             .iter()
             .filter(|n| {
@@ -905,9 +1180,15 @@ pub async fn matrix_run(
         }
     }
 
-    if !cancelled() {
+    if !cancelled() && want("mlx") {
         sink("== MLX ==".into());
         failures.extend(leg_mlx(&app, &dir, sink).await);
+        sink(String::new());
+    }
+
+    if !cancelled() && want("routing") {
+        sink("== Routing (decide-only, no credits; the battery on this machine's models) ==".into());
+        failures.extend(leg_routing(&app, &dir, sink).await);
         sink(String::new());
     }
 

@@ -216,6 +216,7 @@ pub fn spawn(app: AppHandle, pre_bound: Option<std::net::TcpListener>) {
             .route("/v1/responses", post(responses_web_search))
             .route("/mcp", post(mcp_post).get(mcp_get))
             .route("/internal/route-preview", get(route_preview))
+        .route("/internal/matrix-run", get(matrix_run_dev))
             .layer(axum::middleware::from_fn_with_state(app.clone(), lan_guard))
             .with_state(app);
 
@@ -437,6 +438,25 @@ async fn route_preview(
             }))
             .into_response()
         }
+        Err(e) => Json(json!({ "error": e })).into_response(),
+    }
+}
+
+/// Dev builds only: run the truth matrix (or a subset of legs) without the
+/// Settings button, so the legs can be driven from a script. Returns the
+/// report path when done.
+async fn matrix_run_dev(
+    State(app): State<AppHandle>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if !cfg!(debug_assertions) {
+        return err(StatusCode::NOT_FOUND, "not found", "not_found");
+    }
+    let legs = q.get("legs").map(|l| l.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect::<Vec<_>>());
+    let stamp = q.get("stamp").cloned().unwrap_or_else(|| "dev".into());
+    let state = app.state::<crate::llm::LLMState>();
+    match crate::matrix::matrix_run(app.clone(), state, stamp, legs).await {
+        Ok(path) => Json(json!({ "report": path })).into_response(),
         Err(e) => Json(json!({ "error": e })).into_response(),
     }
 }
