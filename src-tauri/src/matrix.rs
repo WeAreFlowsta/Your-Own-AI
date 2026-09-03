@@ -215,6 +215,11 @@ async fn ask_scenarios(
 /// Split `<think>…</think>` blocks out of a reply: (the words that remain,
 /// the thinking's length). An unterminated block counts as thinking to
 /// the end - the same reading the app's stream parser gives it.
+/// `split_think_blocks` for callers outside this module (the dev smoke).
+pub(crate) fn split_think_blocks_pub(text: &str) -> (String, usize) {
+    split_think_blocks(text)
+}
+
 fn split_think_blocks(text: &str) -> (String, usize) {
     let mut out = String::new();
     let mut thought = 0usize;

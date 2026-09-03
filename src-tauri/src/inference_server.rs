@@ -217,6 +217,7 @@ pub fn spawn(app: AppHandle, pre_bound: Option<std::net::TcpListener>) {
             .route("/mcp", post(mcp_post).get(mcp_get))
             .route("/internal/route-preview", get(route_preview))
         .route("/internal/matrix-run", get(matrix_run_dev))
+        .route("/internal/online-smoke", get(online_smoke_dev))
             .layer(axum::middleware::from_fn_with_state(app.clone(), lan_guard))
             .with_state(app);
 
@@ -459,6 +460,83 @@ async fn matrix_run_dev(
         Ok(path) => Json(json!({ "report": path })).into_response(),
         Err(e) => Json(json!({ "error": e })).into_response(),
     }
+}
+
+/// Dev builds only: one short prompt to a named ONLINE model through the
+/// signed-in session (the same proxy call the chat makes), summarized -
+/// status, time, content and reasoning sizes, the opening words. Drives a
+/// provider smoke test headless (staging proxy via YOAI_PROXY_URL). The
+/// request deliberately carries temperature and reasoning_effort so a
+/// provider that rejects them shows up as a 400 here, not in the field.
+async fn online_smoke_dev(
+    State(app): State<AppHandle>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if !cfg!(debug_assertions) {
+        return err(StatusCode::NOT_FOUND, "not found", "not_found");
+    }
+    let model = q.get("model").cloned().unwrap_or_default();
+    let prompt = q
+        .get("prompt")
+        .cloned()
+        .unwrap_or_else(|| "In one short sentence: what is the capital of Australia?".to_string());
+    let token = match crate::flowsta::get_access_token(&app).await {
+        Ok(t) => t,
+        Err(e) => return Json(json!({ "error": format!("not signed in: {e}") })).into_response(),
+    };
+    let body = json!({
+        "model": model,
+        "messages": [{ "role": "user", "content": prompt }],
+        "stream": true,
+        "max_tokens": 160,
+        "temperature": 0.7,
+        "reasoning_effort": "low",
+    });
+    let started = std::time::Instant::now();
+    let resp = match crate::flowsta::http()
+        .post(format!("{}/v1/chat/completions", crate::flowsta::proxy_url()))
+        .bearer_auth(token)
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(120))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return Json(json!({ "model": model, "error": format!("request: {e}") })).into_response(),
+    };
+    let status = resp.status().as_u16();
+    let text = resp.text().await.unwrap_or_default();
+    let mut content = String::new();
+    let mut reasoning = 0usize;
+    let mut usage = serde_json::Value::Null;
+    for line in text.lines() {
+        let Some(data) = line.strip_prefix("data: ") else { continue };
+        if data.trim() == "[DONE]" {
+            break;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(data) else { continue };
+        if let Some(c) = v["choices"][0]["delta"]["content"].as_str() {
+            content.push_str(c);
+        }
+        if let Some(r) = v["choices"][0]["delta"]["reasoning_content"].as_str() {
+            reasoning += r.chars().count();
+        }
+        if !v["usage"].is_null() {
+            usage = v["usage"].clone();
+        }
+    }
+    let (visible, inline_thought) = crate::matrix::split_think_blocks_pub(&content);
+    Json(json!({
+        "model": model,
+        "status": status,
+        "ms": started.elapsed().as_millis(),
+        "content_chars": visible.chars().count(),
+        "reasoning_chars": reasoning + inline_thought,
+        "first": visible.trim().chars().take(90).collect::<String>(),
+        "usage": usage,
+        "error": if status >= 400 { Some(text.chars().take(300).collect::<String>()) } else { None },
+    }))
+    .into_response()
 }
 
 /// `POST /v1/chat/completions` — resolve the AI, ensure its model is loaded,
