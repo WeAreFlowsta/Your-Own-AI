@@ -908,6 +908,7 @@ pub fn run() {
                 // Clean exit → clear the GPU crash sentinel so this run isn't
                 // counted as a hard crash by safe mode.
                 gpu_safety::mark_clean_exit(app_handle);
+                llm::clear_load_sentinel(app_handle);
                 println!("[Exit] Stopping llama-server...");
                 agent_bridge::kill_on_exit(app_handle);
                 let llm_state = app_handle.state::<LLMState>();

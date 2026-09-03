@@ -302,6 +302,8 @@ export interface UseChatProps {
   isModelLoading: Signal<boolean>;
   modelLoadTime: Signal<number | null>;
   modelTooBig: Signal<boolean>;
+  /// The red chip's label when modelTooBig is set - names the real reason.
+  modelIssue: Signal<string>;
 }
 
 /** A turn's size in tokens - history, this message and any attached text -
@@ -853,6 +855,7 @@ export function useChat(props: UseChatProps) {
           await loadModelBounded({ filename: preferredModel, withVision: needsVision, reason: "chat-switch" });
           props.currentModel.value = preferredModel;
           props.modelTooBig.value = false;
+          props.modelIssue.value = "";
         } catch (error) {
           const errorMessage =
             error instanceof Error ? error.message : String(error);
@@ -861,12 +864,14 @@ export function useChat(props: UseChatProps) {
             // surfaces - it reaches here only if that retry also failed.
             props.currentModel.value = preferredModel;
             props.modelTooBig.value = true;
+            props.modelIssue.value = "not loaded";
             abortWith(
               `Your graphics card can't run AI models right now (the app will use your processor instead). The retry didn't complete - restarting the app usually finishes the switch.`
             );
           } else if (errorMessage.includes("MODEL_LOAD_CRASHED")) {
             props.currentModel.value = preferredModel;
             props.modelTooBig.value = true;
+            props.modelIssue.value = "engine crashed";
             abortWith(
               `The AI engine crashed while loading ${selectedAi.label}'s model. This looks like a problem on our side, not your hardware - restarting the app may help, and the log file helps us fix it.`
             );
@@ -874,6 +879,7 @@ export function useChat(props: UseChatProps) {
             // The engine could not read the file itself - not a size problem.
             props.currentModel.value = preferredModel;
             props.modelTooBig.value = true;
+            props.modelIssue.value = "can't be read";
             abortWith(
               `${selectedAi.label}'s model file can't be read by this engine. On the Offline Models page, delete it and download it again - the catalog may point at a corrected copy. If it happens again, the model needs a newer engine than this release ships.`
             );
@@ -881,6 +887,7 @@ export function useChat(props: UseChatProps) {
             // Show it red in the header (name visible, not loaded) and tell the user.
             props.currentModel.value = preferredModel;
             props.modelTooBig.value = true;
+            props.modelIssue.value = "too big";
             // A fine-tune override (context pin, everything-on-the-card) is
             // the likely cause when one exists - say so, not "pick smaller".
             let tuned = false;
@@ -896,12 +903,14 @@ export function useChat(props: UseChatProps) {
           } else if (errorMessage.includes("MODEL_LOAD_TIMEOUT")) {
             props.currentModel.value = preferredModel;
             props.modelTooBig.value = true;
+            props.modelIssue.value = "not loaded";
             abortWith(
               `${selectedAi.label}'s model took too long to load on this hardware, so the attempt was stopped. It won't be retried this session - a smaller model will load quickly (look for the "Full speed" badge on the Offline Models page).`
             );
           } else if (errorMessage.includes("MODEL_FILE_UNREADABLE")) {
             props.currentModel.value = preferredModel;
             props.modelTooBig.value = true;
+            props.modelIssue.value = "can't be read";
             abortWith(
               `${selectedAi.label}'s model file couldn't be opened from disk. Downloading it again from the Offline Models page usually fixes this - if it keeps happening, the log file shows why.`
             );
@@ -1913,6 +1922,7 @@ export function useChat(props: UseChatProps) {
             // same red state as the too-large branch.
             props.currentModel.value = preferredModel;
             props.modelTooBig.value = true;
+            props.modelIssue.value = "not loaded";
             // Same honesty as the too-large branch: a fine-tune override is
             // the likely cause when the model carries one.
             let tunedHere = false;

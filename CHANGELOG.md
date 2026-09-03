@@ -1009,6 +1009,7 @@ and nothing it does makes you wait.
   history survives an app restart.
 
 ### Fixed
+- A model left mid-load by a crash, a force quit, or a power cut no longer reads "too big" on the next launch. The automatic reload is skipped once and the first message loads it; a normal quit clears the marker; and the red chip in the header names the real reason (too big, not loaded, can't be read, engine crashed) instead of one word for everything.
 - **Editing your selected AI now applies immediately.** Before, an
   open chat kept the AI's previous settings until you switched away -
   including its online/offline mode, which could route a message

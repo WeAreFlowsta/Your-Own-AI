@@ -95,6 +95,7 @@ export default component$(() => {
   const isModelLoading = useSignal(false);
   const modelLoadTime = useSignal<number | null>(null);
   const modelTooBig = useSignal(false);
+  const modelIssue = useSignal("");
   const showModelWidget = useSignal(false);
   // Message-field text while the first model (welcome wizard) downloads.
   const firstModelPlaceholder = useSignal<string | null>(null);
@@ -156,6 +157,7 @@ export default component$(() => {
     isModelLoading,
     modelLoadTime,
     modelTooBig,
+    modelIssue,
   });
 
   // Folder (Build agent) session - while a folder is open, every prompt goes
@@ -890,6 +892,7 @@ export default component$(() => {
         console.log("[ChatPage] Model already loaded and ready:", targetModel);
         currentModel.value = targetModel;
         modelTooBig.value = false;
+        modelIssue.value = "";
         // Loaded elsewhere (the wizard's post-download load): warm its
         // instructions here so the first question is not the first read.
         void import("../../utils/warmPrompt").then((m) => m.warmSystemPrompt(selectedAi.value, targetModel));
@@ -901,12 +904,28 @@ export default component$(() => {
           await loadModelBounded({ filename: targetModel, withVision: false, reason: "page-ensure" });
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
+          if (msg.includes("MODEL_LOAD_CRASHED_LAST_RUN")) {
+            // The last run stopped while this model was loading, so the
+            // backend skips the AUTOMATIC reload once. Nothing is wrong with
+            // the model: leave the header without one and let the first send
+            // load it explicitly (that path is not gated). Calling it "too
+            // big" here made the send skip the load (preferred == current)
+            // and fail against a server with no model (field 09-03).
+            console.log("[ChatPage] Preload skipped after an unclean stop:", targetModel);
+            isModelLoading.value = false;
+            return;
+          }
           if (msg.includes("MODEL_TOO_LARGE") || msg.includes("MODEL_LOAD_CRASHED") || msg.includes("MODEL_FILE_UNREADABLE") || msg.includes("MODEL_FILE_REJECTED")) {
-            // Won't fit this GPU — show it red in the header rather than a stuck
-            // spinner. Nothing's loading, so skip the readiness poll.
-            console.log("[ChatPage] Preload model too large for GPU:", targetModel);
+            // Show it red in the header rather than a stuck spinner, and say
+            // why. Nothing's loading, so skip the readiness poll.
+            console.log("[ChatPage] Preload refused:", targetModel, msg);
             currentModel.value = targetModel;
             modelTooBig.value = true;
+            modelIssue.value = msg.includes("MODEL_TOO_LARGE")
+              ? "too big"
+              : msg.includes("MODEL_LOAD_CRASHED")
+                ? "engine crashed"
+                : "can't be read";
             isModelLoading.value = false;
             return;
           }
@@ -922,6 +941,7 @@ export default component$(() => {
           throw e;
         }
         modelTooBig.value = false;
+        modelIssue.value = "";
         currentModel.value = targetModel;
 
         console.log("[ChatPage] Waiting for model to be fully ready...");
@@ -1417,6 +1437,7 @@ export default component$(() => {
           currentModel={currentModel.value}
           isModelLoading={isModelLoading.value}
           modelTooBig={modelTooBig.value}
+          modelIssue={modelIssue.value}
           showModelWidget={showModelWidget.value && currentModel.value !== null}
           folderPath={agentState.mode === "tools" ? null : agentState.folderPath}
           folderStatus={

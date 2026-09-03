@@ -76,6 +76,8 @@ interface AppHeaderProps {
   currentModel: string | null;
   isModelLoading?: boolean;
   modelTooBig?: boolean;
+  /// Why the chip is red when it is: "too big" | "not loaded" | "can't be read" | "engine crashed".
+  modelIssue?: string;
   showModelWidget?: boolean;
   /** The app-wide workspace folder - null = none open. */
   folderPath?: string | null;
@@ -129,6 +131,7 @@ export default component$<AppHeaderProps>(
     currentModel,
     isModelLoading = false,
     modelTooBig = false,
+    modelIssue = "",
     showModelWidget = false,
     folderPath = null,
     folderStatus,
@@ -307,7 +310,7 @@ export default component$<AppHeaderProps>(
                 />
                 {currentModel.replace(".gguf", "").replace(/-/g, " ")}
                 {modelTooBig && (
-                  <span class="text-red-500 font-medium">· too big</span>
+                  <span class="text-red-500 font-medium">· {modelIssue || "too big"}</span>
                 )}
               </span>
             )}

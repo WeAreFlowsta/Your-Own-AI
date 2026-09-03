@@ -3792,6 +3792,15 @@ fn load_sentinel_path(app_handle: &AppHandle) -> Option<std::path::PathBuf> {
     Some(app_handle.path().app_data_dir().ok()?.join("model-load.pending"))
 }
 
+/// A deliberate quit is not a crash: drop the load marker so the next
+/// launch auto-loads as usual. Closing the window mid-load used to leave it
+/// behind, and the next launch then refused the model.
+pub fn clear_load_sentinel(app_handle: &AppHandle) {
+    if let Some(p) = load_sentinel_path(app_handle) {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
 #[tauri::command]
 pub async fn load_model(
     app_handle: AppHandle,
@@ -3878,9 +3887,13 @@ pub async fn load_model(
             if let Ok(prev) = std::fs::read_to_string(p) {
                 if prev.trim() == filename {
                     log::warn!(
-                        "[LLM] '{}' was mid-load when the app last stopped - not reloading automatically",
+                        "[LLM] '{}' was mid-load when the app last stopped - skipping the automatic reload this once (the next launch tries again; picking it loads it now)",
                         filename
                     );
+                    // One-shot: the guard exists to break a crash LOOP, not
+                    // to refuse forever. Field 09-03: a killed run left the
+                    // marker and every later launch refused a model that fits.
+                    let _ = std::fs::remove_file(p);
                     return Err("MODEL_LOAD_CRASHED_LAST_RUN".to_string());
                 }
             }
