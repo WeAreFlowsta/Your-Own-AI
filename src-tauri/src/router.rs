@@ -90,7 +90,18 @@ static EMBED_BROKEN_UNTIL: std::sync::Mutex<Option<std::time::Instant>> = std::s
 const EMBED_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 const EMBED_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// Milliseconds spent embedding through embed_guarded (the matrix's routing
+/// leg reports it per 100 decisions).
+pub(crate) static EMBED_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 async fn embed_guarded(app: &AppHandle, texts: Vec<String>) -> Result<Vec<Vec<f32>>, String> {
+    let t0 = std::time::Instant::now();
+    let r = embed_guarded_inner(app, texts).await;
+    EMBED_MS.fetch_add(t0.elapsed().as_millis() as u64, std::sync::atomic::Ordering::Relaxed);
+    r
+}
+
+async fn embed_guarded_inner(app: &AppHandle, texts: Vec<String>) -> Result<Vec<Vec<f32>>, String> {
     if let Ok(g) = EMBED_BROKEN_UNTIL.lock() {
         if let Some(until) = *g {
             if std::time::Instant::now() < until {

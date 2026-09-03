@@ -726,6 +726,9 @@ pub fn tuned_split_fit(
 /// consults it twice) reads the disk once instead of per call: on Windows
 /// the per-call file opens (tune records, stats, calibration, the folder
 /// scan for projectors) cost 0.7 s a decision (beta.18 matrix).
+/// Milliseconds spent in uncached assessments (matrix routing leg report).
+pub(crate) static ASSESS_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
     static MEMO: std::sync::Mutex<Option<(std::time::Instant, Vec<ModelFit>)>> = std::sync::Mutex::new(None);
     const TTL: std::time::Duration = std::time::Duration::from_secs(3);
@@ -736,7 +739,9 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
             }
         }
     }
+    let t0 = std::time::Instant::now();
     let list = assess_uncached(app).await;
+    ASSESS_MS.fetch_add(t0.elapsed().as_millis() as u64, std::sync::atomic::Ordering::Relaxed);
     if let Ok(mut g) = MEMO.lock() {
         *g = Some((std::time::Instant::now(), list.clone()));
     }

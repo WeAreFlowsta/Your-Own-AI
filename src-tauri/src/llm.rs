@@ -418,9 +418,31 @@ pub async fn is_llama_server_running() -> Result<bool, String> {
  * Check if llama-server is ready (model fully loaded)
  * This checks the /health endpoint, not just the port
  */
+/// One HTTP client for every call to the app's own local servers (chat,
+/// embedding, utility, bench). Built once: a client per call meant a fresh
+/// connector, TLS stack and system-proxy lookup on every health check and
+/// every embed - cheap on Linux and macOS, hundreds of milliseconds on
+/// Windows (the beta.19 routing leg: 0.66 s per decision, all of it here).
+/// No proxy for loopback, keep-alive so the connection is reused.
+pub(crate) fn local_http() -> reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .no_proxy()
+                .connect_timeout(std::time::Duration::from_secs(5))
+                .pool_idle_timeout(std::time::Duration::from_secs(300))
+                .pool_max_idle_per_host(4)
+                .tcp_keepalive(std::time::Duration::from_secs(60))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new())
+        })
+        .clone()
+}
+
 #[tauri::command]
 pub async fn is_llama_server_ready() -> Result<bool, String> {
-    let client = reqwest::Client::new();
+    let client = local_http();
     match client.get(format!("http://localhost:{}/health", CHAT_PORT)).send().await {
         Ok(resp) if resp.status().is_success() => Ok(true),
         _ => Ok(false)
@@ -1324,7 +1346,7 @@ pub async fn count_tokens_text(text: &str) -> u64 {
     if CURRENT_CTX_SIZE.load(std::sync::atomic::Ordering::Relaxed) == 0 {
         return fallback;
     }
-    let client = reqwest::Client::new();
+    let client = local_http();
     let res = client
         .post(format!("http://localhost:{}/tokenize", CHAT_PORT))
         .timeout(std::time::Duration::from_secs(8))
@@ -1616,7 +1638,7 @@ fn has_word_oom(lower: &str) -> bool {
 }
 
 async fn chat_server_health_ok() -> bool {
-    let client = reqwest::Client::new();
+    let client = local_http();
     matches!(
         client.get(format!("http://127.0.0.1:{}/health", CHAT_PORT)).send().await,
         Ok(r) if r.status().is_success()
@@ -2478,7 +2500,7 @@ fn free_port(port: &str) {
 }
 
 async fn embed_server_ready() -> bool {
-    let client = reqwest::Client::new();
+    let client = local_http();
     matches!(
         client.get(format!("http://localhost:{}/health", EMBED_PORT)).send().await,
         Ok(r) if r.status().is_success()
@@ -2657,7 +2679,7 @@ pub async fn embed_texts(
         })
         .collect();
 
-    let client = reqwest::Client::new();
+    let client = local_http();
     let resp = client
         .post(format!("http://localhost:{}/v1/embeddings", EMBED_PORT))
         .json(&serde_json::json!({ "model": model, "input": texts }))
@@ -2687,7 +2709,7 @@ pub async fn embed_texts(
 const UTIL_PORT: &str = "8092";
 
 async fn util_server_ready() -> bool {
-    let client = reqwest::Client::new();
+    let client = local_http();
     matches!(
         client.get(format!("http://localhost:{}/health", UTIL_PORT)).send().await,
         Ok(r) if r.status().is_success()
@@ -2846,7 +2868,7 @@ pub async fn warm_chat_prompt(state: State<'_, LLMState>, system: String) -> Res
         "cache_prompt": true
     });
     let started = std::time::Instant::now();
-    let resp = reqwest::Client::new()
+    let resp = local_http()
         .post(format!("http://localhost:{}/v1/chat/completions", CHAT_PORT))
         .timeout(std::time::Duration::from_secs(120))
         .json(&body)
@@ -2893,7 +2915,7 @@ pub async fn utility_chat(
         body["grammar"] = serde_json::Value::String(g);
     }
 
-    let client = reqwest::Client::new();
+    let client = local_http();
     let resp = client
         .post(format!("http://localhost:{}/v1/chat/completions", UTIL_PORT))
         .json(&body)
@@ -4276,7 +4298,7 @@ pub async fn stream_chat_completion(
             name
         } else {
             // Query the running server for its model name
-            let client_tmp = reqwest::Client::new();
+            let client_tmp = local_http();
             match client_tmp.get(format!("http://localhost:{}/v1/models", CHAT_PORT)).send().await {
                 Ok(resp) if resp.status().is_success() => {
                     if let Ok(body) = resp.json::<serde_json::Value>().await {
@@ -5184,7 +5206,7 @@ mod live_matrix {
             }
         });
 
-        let client = reqwest::Client::new();
+        let client = local_http();
         let t0 = Instant::now();
         let deadline = t0 + Duration::from_secs(240);
         loop {

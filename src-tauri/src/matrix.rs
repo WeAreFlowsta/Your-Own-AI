@@ -92,7 +92,7 @@ async fn spawn_bench_server(
         .spawn()
         .map_err(|e| format!("could not start: {e}"))?;
     let mut guard = KillOnDrop(child);
-    let client = reqwest::Client::new();
+    let client = crate::llm::local_http();
     let deadline = Instant::now() + Duration::from_secs(240);
     loop {
         if cancelled() {
@@ -125,7 +125,7 @@ async fn ask_scenarios(
     tool_marker: Option<&'static str>,
 ) -> String {
     use std::time::Duration;
-    let client = reqwest::Client::new();
+    let client = crate::llm::local_http();
     let mut last_snippet = String::new();
     let mut thought_chars = 0usize;
     for (i, (persona, question)) in scenarios.iter().enumerate() {
@@ -301,7 +301,7 @@ pub async fn bench_chat_format(
 /// off (the app's chat-turn controls). Returns (reasoning chars, visible chars).
 async fn ask_think(model: &str, on: bool, strength: bool, marker: Option<&'static str>) -> Result<(usize, usize), String> {
     use std::time::Duration;
-    let client = reqwest::Client::new();
+    let client = crate::llm::local_http();
     let mut body = serde_json::json!({
         "model": model,
         "messages": [
@@ -609,7 +609,7 @@ pub async fn leg_sampling(bin: &Path, dir: &Path, model: &str, sink: Sink<'_>) -
         }
     }
     let guard = spawn_bench_server(bin, dir, args).await.map_err(|e| format!("load: {e}"))?;
-    let client = reqwest::Client::new();
+    let client = crate::llm::local_http();
     let ask = |sampling: Option<crate::llm::SamplingParams>, seed: Option<u64>| {
         let client = client.clone();
         let model = model.to_string();
@@ -878,6 +878,8 @@ pub async fn leg_routing(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<Str
     let mut think_bad = 0u32;
     let mut decided = 0u32;
     let started = std::time::Instant::now();
+    crate::router::EMBED_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+    crate::fit::ASSESS_MS.store(0, std::sync::atomic::Ordering::Relaxed);
     // Progress every 100 decisions, and a ceiling: a machine where every
     // embed stalls must still hand back a (partial) table.
     const ROUTING_LEG_CAP: std::time::Duration = std::time::Duration::from_secs(25 * 60);
@@ -913,7 +915,16 @@ pub async fn leg_routing(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<Str
                 };
                 decided += 1;
                 if decided % 100 == 0 {
-                    sink(format!("  ... {decided} decisions, {:.0} s", started.elapsed().as_secs_f64()));
+                    let (embed_ms, fit_ms) = (
+                        crate::router::EMBED_MS.load(std::sync::atomic::Ordering::Relaxed),
+                        crate::fit::ASSESS_MS.load(std::sync::atomic::Ordering::Relaxed),
+                    );
+                    sink(format!(
+                        "  ... {decided} decisions, {:.0} s (embedding {:.0} s, fit {:.0} s)",
+                        started.elapsed().as_secs_f64(),
+                        embed_ms as f64 / 1000.0,
+                        fit_ms as f64 / 1000.0
+                    ));
                 }
                 if started.elapsed() > ROUTING_LEG_CAP {
                     capped = true;
