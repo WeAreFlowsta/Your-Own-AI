@@ -26,6 +26,12 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   greeting with "today" in it no longer does.
 - The optional helper model does the routing classification; without it
   the app no longer runs a check on the chat model before every question.
+- The home page offers the helper from the second launch (after any
+  NVIDIA engine offer); it installs the helper model and the small memory
+  model together, privately, and never as part of the first download.
+- The beta diagnostics matrix now also proves the small background
+  servers answer, runs the routing battery on your own models (decide
+  only, no credits), and checks that the thinking switch is honoured.
 
 ### First run
 - A new welcome takes three steps: download the model picked for your
