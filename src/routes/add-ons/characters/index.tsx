@@ -1,3 +1,4 @@
+import { loadedModelNow } from "../../../utils/loadedModel";
 /**
  * Add-ons > Characters - complete AIs, ready to become yours: a personality,
  * a voice, a portrait and a starting memory, each a signed AI pack from
@@ -94,7 +95,7 @@ export default component$(() => {
 
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async () => {
-    currentModel.value = localStorage.getItem("currentModel");
+    loadedModelNow().then((m) => { currentModel.value = m; });
     showModelWidget.value = localStorage.getItem("showModelWidget") === "true";
     // The directory lists every reviewed character, including ones people
     // shared; when it answers, the shelf is its list. Otherwise the eight.

@@ -1,3 +1,4 @@
+import { loadedModelNow } from "../../utils/loadedModel";
 /**
  * Setup Page - Offline Models Setup
  *
@@ -41,7 +42,7 @@ export default component$(() => {
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(() => {
     // Init from localStorage
-    currentModel.value = localStorage.getItem("currentModel");
+    loadedModelNow().then((m) => { currentModel.value = m; });
     const savedWidget = localStorage.getItem("showModelWidget");
     showModelWidget.value = savedWidget === "true";
 

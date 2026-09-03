@@ -1,3 +1,4 @@
+import { loadedModelNow } from "../../utils/loadedModel";
 /**
  * Your AIs Page - Unified AI management
  *
@@ -243,7 +244,7 @@ export default component$(() => {
       }
     };
 
-    currentModel.value = localStorage.getItem("currentModel");
+    loadedModelNow().then((m) => { currentModel.value = m; });
     const savedWidget = localStorage.getItem("showModelWidget");
     showModelWidget.value = savedWidget === "true";
 

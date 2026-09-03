@@ -1,3 +1,4 @@
+import { loadedModelNow } from "../../../utils/loadedModel";
 /**
  * Add-ons > Skills - what your AIs know how to do.
  *
@@ -156,7 +157,7 @@ export default component$(() => {
 
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async () => {
-    currentModel.value = localStorage.getItem("currentModel");
+    loadedModelNow().then((m) => { currentModel.value = m; });
     showModelWidget.value = localStorage.getItem("showModelWidget") === "true";
     // Arriving through a yourownai:// link ("Add to Your Own AI"): the Add
     // sheet opens with the link filled in. Handed over in sessionStorage.

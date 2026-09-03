@@ -1,3 +1,4 @@
+import { loadedModelNow } from "../../utils/loadedModel";
 /**
  * Add-ons - the optional things you add to your AIs. Projects (the Build
  * add-on), Skills, and the kinds that follow. Each kind lives here and is
@@ -20,7 +21,7 @@ export default component$(() => {
 
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async () => {
-    currentModel.value = localStorage.getItem("currentModel");
+    loadedModelNow().then((m) => { currentModel.value = m; });
     showModelWidget.value = localStorage.getItem("showModelWidget") === "true";
     skillCount.value = (await listSkills()).length;
   });

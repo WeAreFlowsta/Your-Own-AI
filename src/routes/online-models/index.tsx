@@ -1,3 +1,4 @@
+import { loadedModelNow } from "../../utils/loadedModel";
 /**
  * Online Models Page
  *
@@ -19,11 +20,11 @@ export default component$(() => {
 
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(() => {
-    currentModel.value = localStorage.getItem("currentModel");
+    loadedModelNow().then((m) => { currentModel.value = m; });
     showModelWidget.value = localStorage.getItem("showModelWidget") === "true";
 
     const sync = () => {
-      currentModel.value = localStorage.getItem("currentModel");
+      loadedModelNow().then((m) => { currentModel.value = m; });
       showModelWidget.value = localStorage.getItem("showModelWidget") === "true";
     };
     window.addEventListener("storage", sync);

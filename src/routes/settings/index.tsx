@@ -1,3 +1,4 @@
+import { loadedModelNow } from "../../utils/loadedModel";
 import {
   component$,
   useSignal,
@@ -424,7 +425,7 @@ export default component$(() => {
     rememberScopeSelection.value = getRememberScope("selection");
     rememberScopeReply.value = getRememberScope("reply");
     memoryLearning.value = !isMemoryPaused();
-    currentModel.value = localStorage.getItem("currentModel");
+    loadedModelNow().then((m) => { currentModel.value = m; });
     const savedShare = localStorage.getItem("routingOnlineShare");
     if (savedShare === "balanced" || savedShare === "local") {
       routingShare.value = savedShare;
@@ -504,7 +505,7 @@ export default component$(() => {
     window.addEventListener("entitlementChanged", onEntitlement);
 
     const handleStorageChange = () => {
-      currentModel.value = localStorage.getItem("currentModel");
+      loadedModelNow().then((m) => { currentModel.value = m; });
     };
 
     window.addEventListener("storage", handleStorageChange);
