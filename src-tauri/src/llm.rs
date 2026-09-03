@@ -2465,6 +2465,15 @@ async fn ensure_embedding_server(
     state: &State<'_, LLMState>,
     model_filename: &str,
 ) -> Result<(), String> {
+    // The file first, before any stop/port work: a missing model must fail
+    // in microseconds, not after spawning netstat and waiting on the port
+    // (the Windows beta.16 matrix made thousands of such attempts).
+    {
+        let models_dir = get_models_dir(app_handle)?;
+        if !models_dir.join(model_filename).exists() {
+            return Err(format!("Embedding model not downloaded: {}", model_filename));
+        }
+    }
     // Serialize startup: overlapping embed calls (e.g. recall + indexing) must
     // not both try to start the server - that's what collided on the port.
     let _startup = state.embed_startup.lock().await;
@@ -2666,6 +2675,15 @@ async fn ensure_utility_server(
     state: &State<'_, LLMState>,
     model_filename: &str,
 ) -> Result<(), String> {
+    // The file first, before any stop/port work: a missing model must fail
+    // in microseconds, not after spawning netstat and waiting on the port
+    // (the Windows beta.16 matrix made thousands of such attempts).
+    {
+        let models_dir = get_models_dir(app_handle)?;
+        if !models_dir.join(model_filename).exists() {
+            return Err(format!("Utility model not downloaded: {}", model_filename));
+        }
+    }
     let _startup = state.util_startup.lock().await;
 
     {

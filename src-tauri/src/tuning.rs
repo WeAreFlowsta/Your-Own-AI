@@ -590,7 +590,7 @@ mod tests {
             .map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
             .unwrap_or_default();
         let sink = |l: String| eprintln!("[fit-truth] {l}");
-        let failures = crate::matrix::leg_fit_truth(&bin, &dir, &only, &sink).await;
+        let failures = crate::matrix::leg_fit_truth(None, &bin, &dir, &only, &sink).await;
         assert!(failures.is_empty(), "grades lied green:\n{}", failures.join("\n"));
     }
 

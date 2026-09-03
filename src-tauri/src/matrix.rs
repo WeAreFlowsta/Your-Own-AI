@@ -407,8 +407,16 @@ fn moe_decision(meta: &crate::gguf::GgufMeta, size: u64, ctx: u64, free: Option<
 /// delta, load time, measured speeds. Returns the lines where the grade
 /// LIED GREEN (claimed ok, did not load); a conservative red that runs is
 /// reported but not a failure.
-pub async fn leg_fit_truth(bin: &Path, dir: &Path, only: &[String], sink: Sink<'_>) -> Vec<String> {
+pub async fn leg_fit_truth(app: Option<&AppHandle>, bin: &Path, dir: &Path, only: &[String], sink: Sink<'_>) -> Vec<String> {
     let free_vram = || free_vram_gb(bin);
+    // The grade column is the APP's grade (assess: MoE split, tune pins,
+    // measured evidence) - the plain dense grade printed "claimed RED,
+    // actually RAN" for every split MoE and read as a regression. The
+    // headless harness (no app) keeps the plain grade.
+    let app_grades: std::collections::HashMap<String, crate::fit::Fit> = match app {
+        Some(app) => crate::fit::assess(app).await.into_iter().map(|f| (f.name, f.fit)).collect(),
+        None => Default::default(),
+    };
     // The same figures assess() grades with - the badge and the matrix
     // must read one machine (the Air's MedGemma said "Too large" in the
     // app and Green in the matrix until they did).
@@ -458,7 +466,10 @@ pub async fn leg_fit_truth(bin: &Path, dir: &Path, only: &[String], sink: Sink<'
         let free = free_vram();
         let ctx = crate::fit::choose_ctx(&meta, size, total_ram, free);
         let (w, kv, need) = crate::fit::model_need(&meta, size, ctx);
-        let grade = crate::fit::grade(need, free, avail_ram);
+        let grade = app_grades
+            .get(&name)
+            .copied()
+            .unwrap_or_else(|| crate::fit::grade(need, free, avail_ram));
         let arm = TuneArm { ctx, moe_cpu_layers: moe_decision(&meta, size, ctx, free), draft: false };
         let before = free_vram();
         let r = bench_one(bin, dir, &name, arm, None, None, &[], Some(&free_vram)).await;
@@ -1145,7 +1156,7 @@ pub async fn matrix_run(
 
     if want("fit") {
         sink("== Fit truth (claim vs real load) ==".into());
-        failures.extend(leg_fit_truth(&bin, &dir, &[], sink).await);
+        failures.extend(leg_fit_truth(Some(&app), &bin, &dir, &[], sink).await);
         sink(String::new());
     }
 
