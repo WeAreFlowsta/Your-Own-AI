@@ -2000,11 +2000,14 @@ async fn route_core(
         // least as close to the fresh references as to an ordinary question
         // (a greeting with "today" in it fails this), and under Local-first
         // it must also read as fresh at the balanced threshold. With no
-        // embeddings, a cue alone still counts except under Local-first.
+        // embeddings the cue alone counts on every dial: the cue IS the
+        // explicit live-web ask, and a Local-first user without the memory
+        // model would otherwise never reach the live web at all (the Air
+        // matrix, 2026-09-03).
         let cue_confirmed = if looks_time_sensitive(query) {
             match fresh_scores(app, query, query_vec).await {
                 Some((f, b)) => f >= b && (!local_first || f >= threshold_for("balanced")),
-                None => !local_first,
+                None => true,
             }
         } else {
             false

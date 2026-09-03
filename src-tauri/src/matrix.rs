@@ -910,6 +910,8 @@ pub async fn leg_routing(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<Str
                     None
                 } else if expected_side == "online" && !online_possible {
                     None // cannot be exercised here; the environment line says so
+                } else if expected_side == "online" && !embeddings && bucket != "fresh_keyword" && bucket != "long_turn" {
+                    None // the semantic gates are off on this machine; the environment line says so
                 } else if expected_side != side {
                     // A device answer that says why (health check could not run,
                     // catalog unavailable) is the router being honest, not wrong.
