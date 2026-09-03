@@ -889,6 +889,16 @@ impl OnlinePicks {
     }
 }
 
+/// The catalog's own default for a slot: the first listed model whose
+/// routing block names the slot. None when the catalog is silent (older
+/// catalog) - the baked defaults below are the floor.
+fn catalog_slot_default(models: &[crate::flowsta::OnlineModel], slot: &str) -> Option<String> {
+    models
+        .iter()
+        .find(|m| m.routing.as_ref().is_some_and(|r| r.slots.iter().any(|s| s == slot)))
+        .map(|m| m.id.clone())
+}
+
 /// Recommended defaults per routing slot. Ids match the proxy catalog; if one
 /// is missing (the catalog moved on) selection falls back to the capability
 /// registry, so routing never breaks. The Settings page names these same
@@ -942,7 +952,11 @@ fn select_online(
     let search_capable = |id: &str| {
         models.iter().find(|m| m.id == id).map_or(false, |m| {
             let t = text(m);
-            t.contains("search") || t.contains("sonar") || t.contains("perplexity") || has_search_fee(m)
+            m.routing.as_ref().and_then(|r| r.tier.as_deref()) == Some("search")
+                || t.contains("search")
+                || t.contains("sonar")
+                || t.contains("perplexity")
+                || has_search_fee(m)
         })
     };
     if let Some(hit) = pref.and_then(|p| by_id(p)) {
@@ -953,6 +967,10 @@ fn select_online(
     }
 
     if fresh {
+        if let Some(hit) = catalog_slot_default(models, "fresh").filter(|id| search_capable(id)) {
+            log::debug!("[router] live-web slot from the catalog: {hit}");
+            return Some(hit);
+        }
         if let Some(hit) = by_id(DEFAULT_FRESH) {
             return Some(hit);
         }
@@ -972,17 +990,19 @@ fn select_online(
             .map(|m| m.id.clone());
     }
 
-    let slot_default = if matches!(task, "code" | "math" | "reasoning") {
-        DEFAULT_HARD_CODE
-    } else {
-        DEFAULT_HARD_GENERAL
-    };
+    let technical = matches!(task, "code" | "math" | "reasoning");
+    let catalog_slot = if technical { "hard_code" } else { "hard_general" };
+    if let Some(hit) = catalog_slot_default(models, catalog_slot).or_else(|| catalog_slot_default(models, "hard")) {
+        log::debug!("[router] {catalog_slot} slot from the catalog: {hit}");
+        return Some(hit);
+    }
+    let slot_default = if technical { DEFAULT_HARD_CODE } else { DEFAULT_HARD_GENERAL };
     if let Some(hit) = by_id(slot_default) {
         return Some(hit);
     }
     models
         .iter()
-        .max_by_key(|m| crate::model_caps::online_caps_for(&text(m)).by_task(task))
+        .max_by_key(|m| crate::model_caps::online_caps_of(m).by_task(task))
         .map(|m| m.id.clone())
 }
 
@@ -992,6 +1012,17 @@ fn select_online(
 fn select_online_agent(
     models: &[crate::flowsta::OnlineModel],
     pref: Option<&str>,
+) -> Option<String> {
+    select_online_agent_slot(models, pref, "agent")
+}
+
+/// The tool-driver for a slot ("agent" | "plan"): the user's pick → the
+/// catalog's default for the slot (a plan falls back to the catalog's
+/// agent) → the baked default → the best tool-capable model listed.
+fn select_online_agent_slot(
+    models: &[crate::flowsta::OnlineModel],
+    pref: Option<&str>,
+    slot: &str,
 ) -> Option<String> {
     let by_id = |id: &str| {
         let want = id.strip_prefix("online:").unwrap_or(id);
@@ -1003,16 +1034,19 @@ fn select_online_agent(
     if let Some(hit) = pref.and_then(|p| by_id(p)) {
         return Some(hit);
     }
-    if let Some(hit) = by_id(DEFAULT_AGENT) {
+    if let Some(hit) = catalog_slot_default(models, slot)
+        .or_else(|| if slot == "plan" { catalog_slot_default(models, "agent") } else { None })
+    {
+        log::debug!("[router] {slot} slot from the catalog: {hit}");
         return Some(hit);
     }
-    let text = |m: &crate::flowsta::OnlineModel| {
-        format!("{} {} {}", m.id, m.display_name, m.description).to_lowercase()
-    };
+    if let Some(hit) = by_id(if slot == "plan" { DEFAULT_PLAN } else { DEFAULT_AGENT }) {
+        return Some(hit);
+    }
     models
         .iter()
-        .filter(|m| crate::model_caps::online_agent_caps(&text(m)) >= 6)
-        .max_by_key(|m| crate::model_caps::online_agent_caps(&text(m)))
+        .filter(|m| crate::model_caps::online_agent_caps_of(m) >= 6)
+        .max_by_key(|m| crate::model_caps::online_agent_caps_of(m))
         .map(|m| m.id.clone())
 }
 
@@ -1066,7 +1100,7 @@ pub async fn agent_serving_context(
     }
     if let Ok(models) = crate::flowsta::list_online_models().await {
         let pref = if plan {
-            store_pref(app, "routingOnlinePlanning").or_else(|| Some(DEFAULT_PLAN.to_string()))
+            store_pref(app, "routingOnlinePlanning")
         } else {
             agent_online_override()
                 .or_else(|| store_pref(app, "routingOnlineAgent"))
@@ -1075,7 +1109,7 @@ pub async fn agent_serving_context(
                         .filter(|id| crate::model_caps::online_agent_caps(id) >= 6)
                 })
         };
-        if let Some(id) = select_online_agent(&models, pref.as_deref()) {
+        if let Some(id) = select_online_agent_slot(&models, pref.as_deref(), if plan { "plan" } else { "agent" }) {
             if let Some(c) = catalog_ctx(&models, &id) {
                 return c;
             }
@@ -1277,12 +1311,17 @@ fn select_online_everyday(
     if let Some(hit) = pref.and_then(|p| by_id(p)) {
         return Some(hit);
     }
+    if let Some(hit) = catalog_slot_default(models, "everyday").and_then(|id| by_id(&id)) {
+        log::debug!("[router] everyday slot from the catalog: {}", hit.id);
+        return Some(hit);
+    }
     if let Some(hit) = by_id(DEFAULT_EVERYDAY) {
         return Some(hit);
     }
     let is_search = |m: &crate::flowsta::OnlineModel| {
         let t = format!("{} {} {}", m.id, m.display_name, m.description).to_lowercase();
-        t.contains("search")
+        m.routing.as_ref().and_then(|r| r.tier.as_deref()) == Some("search")
+            || t.contains("search")
             || t.contains("sonar")
             || t.contains("perplexity")
             || m.pricing.as_ref().and_then(|p| p.search_per_call_usd).is_some()
@@ -1306,8 +1345,7 @@ fn select_online_everyday(
 async fn pick_online_everyday(pref: Option<&str>) -> Option<(String, crate::model_caps::Caps)> {
     let models = crate::flowsta::list_online_models().await.ok()?;
     let m = select_online_everyday(&models, pref)?;
-    let text = format!("{} {} {}", m.id, m.display_name, m.description);
-    Some((m.id.clone(), crate::model_caps::online_caps_for(&text)))
+    Some((m.id.clone(), crate::model_caps::online_caps_of(&m)))
 }
 
 /// Should the connected external server take this query instead of the
@@ -1886,10 +1924,7 @@ async fn route_core(
         let agent_pref = if plan {
             // Planning subagents: the Planning slot, else the Agent slot's
             // chain - a planner is still a tool-driver, just reasoning-lean.
-            picks
-                .plan
-                .clone()
-                .or_else(|| Some(DEFAULT_PLAN.to_string()))
+            picks.plan.clone()
         } else {
             // An accepted overload offer holds for the whole workspace
             // session - the user's explicit pick outranks the slots.
@@ -1962,7 +1997,7 @@ async fn route_core(
             t1.elapsed().as_millis()
         );
         if let Ok(models) = models_res {
-            if let Some(id) = select_online_agent(&models, agent_pref.as_deref()) {
+            if let Some(id) = select_online_agent_slot(&models, agent_pref.as_deref(), if plan { "plan" } else { "agent" }) {
                 // The ledger and on-chain provenance must say WHY this model:
                 // an accepted overload offer is the user's call, not routing's.
                 let reason = if !plan && agent_online_override().as_deref() == Some(id.as_str()) {
@@ -2263,7 +2298,8 @@ pub async fn routing_specialist_tasks(app: AppHandle) -> Result<Vec<String>, Str
 /// The router's recommended online model per slot - Settings names them
 /// from here, so the labels can never drift from the defaults again.
 #[tauri::command]
-pub fn routing_defaults() -> std::collections::HashMap<String, String> {
+pub async fn routing_defaults() -> std::collections::HashMap<String, String> {
+    let catalog = crate::flowsta::list_online_models().await.unwrap_or_default();
     [
         ("fresh", DEFAULT_FRESH),
         ("everyday", DEFAULT_EVERYDAY),
@@ -2273,7 +2309,14 @@ pub fn routing_defaults() -> std::collections::HashMap<String, String> {
         ("plan", DEFAULT_PLAN),
     ]
     .into_iter()
-    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .map(|(k, baked)| {
+        // The catalog's word first (a slot promoted without a release), the
+        // baked default as the floor - the same order the selectors use.
+        let from_catalog = catalog_slot_default(&catalog, k)
+            .or_else(|| if k == "plan" { catalog_slot_default(&catalog, "agent") } else { None })
+            .or_else(|| if k == "hard_code" || k == "hard_general" { catalog_slot_default(&catalog, "hard") } else { None });
+        (k.to_string(), from_catalog.unwrap_or_else(|| baked.to_string()))
+    })
     .collect()
 }
 
@@ -2361,6 +2404,7 @@ mod tests {
             category: "chat".to_string(),
             categories: vec!["chat".to_string()],
             released: None,
+            routing: None,
             pricing: Some(crate::flowsta::OnlinePricing {
                 input_per_mtok: input,
                 output_per_mtok: output,
@@ -2470,6 +2514,36 @@ mod tests {
     }
 
     #[test]
+    fn catalog_slot_defaults_beat_the_baked_ones() {
+        let mut astra = pm("online:gpt-6-astra", "GPT-6 Astra", "OpenAI's newest flagship", 4.0, 20.0, None);
+        astra.routing = Some(crate::flowsta::OnlineRouting {
+            slots: vec!["hard_code".into(), "hard_general".into(), "agent".into(), "everyday".into()],
+            caps: Some([10, 10, 10, 10, 9, 3]),
+            tools: Some(9),
+            tier: Some("flagship".into()),
+        });
+        let luna = pm("online:gpt-5.6-luna", "GPT-5.6 Luna", "fast, low-cost", 0.2, 1.2, None);
+        let sol = pm("online:gpt-5.6-sol", "GPT-5.6 Sol", "flagship", 5.0, 30.0, None);
+        let all = vec![luna.clone(), sol.clone(), astra.clone()];
+        // Hard, agent and everyday slots follow the catalog; a plan falls back to the catalog's agent.
+        assert_eq!(select_online(&all, "code", false, None), Some(astra.id.clone()));
+        assert_eq!(select_online(&all, "general", false, None), Some(astra.id.clone()));
+        assert_eq!(select_online_agent_slot(&all, None, "agent"), Some(astra.id.clone()));
+        assert_eq!(select_online_agent_slot(&all, None, "plan"), Some(astra.id.clone()));
+        assert_eq!(select_online_everyday(&all, None).map(|m| m.id), Some(astra.id.clone()));
+        // The user's pick still wins.
+        assert_eq!(select_online(&all, "code", false, Some("gpt-5.6-sol")), Some(sol.id.clone()));
+        // Catalog caps beat the name-based registry.
+        assert_eq!(crate::model_caps::online_caps_of(&astra).overall, 10);
+        assert_eq!(crate::model_caps::online_caps_of(&luna).overall, 8);
+        assert_eq!(crate::model_caps::online_agent_caps_of(&astra), 9);
+        // Without a routing block the baked defaults stand.
+        let plain = vec![luna.clone(), sol.clone()];
+        assert_eq!(select_online(&plain, "code", false, None), Some(sol.id.clone()));
+        assert_eq!(select_online_everyday(&plain, None).map(|m| m.id), Some(luna.id.clone()));
+    }
+
+    #[test]
     fn everyday_tier_scores_under_the_flagship() {
         let flagship = crate::model_caps::online_caps_for("online:gpt-5.6-terra gpt-5.6 terra flagship");
         let luna = crate::model_caps::online_caps_for("online:gpt-5.6-luna gpt-5.6 luna fast low-cost");
@@ -2506,6 +2580,7 @@ mod tests {
             category: "chat".to_string(),
             categories: vec!["chat".to_string()],
             released: None,
+            routing: None,
             pricing: Some(crate::flowsta::OnlinePricing {
                 input_per_mtok: 1.0,
                 output_per_mtok: 1.0,

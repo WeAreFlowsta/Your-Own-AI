@@ -525,6 +525,22 @@ pub struct OnlinePricing {
     pub cached_input_per_mtok: Option<f64>,
 }
 
+/// The catalog's routing block for a model (optional; absent on older
+/// catalogs). Lets the catalog promote a model into a routing slot or
+/// declare its capability scores without an app release.
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct OnlineRouting {
+    /// Slots this model is the recommended default for: everyday | hard |
+    /// hard_code | hard_general | fresh | agent | plan.
+    pub slots: Vec<String>,
+    /// Capability scores (0-10): overall, coding, reasoning, math, vision, medical.
+    pub caps: Option<[u8; 6]>,
+    /// Tool-driving capability through the proxy (0-9).
+    pub tools: Option<u8>,
+    /// everyday | flagship | search
+    pub tier: Option<String>,
+}
+
 #[derive(Serialize, Clone)]
 pub struct OnlineModel {
     pub id: String,
@@ -540,6 +556,8 @@ pub struct OnlineModel {
     /// ISO ship date from the catalog - the online page's "Newest" sort key.
     pub released: Option<String>,
     pub pricing: Option<OnlinePricing>,
+    /// Catalog routing block (see OnlineRouting); None on older catalogs.
+    pub routing: Option<OnlineRouting>,
 }
 // ⚠️ This struct is the bridge for /v1/models: a field the frontend reads
 // but isn't parsed here silently vanishes - the frontend types are optional,
@@ -604,6 +622,19 @@ async fn fetch_online_models() -> Result<Vec<OnlineModel>, String> {
                             vec![m["category"].as_str().unwrap_or("chat").to_string()]
                         }),
                     released: m["released"].as_str().map(str::to_string),
+                    routing: m["routing"].as_object().map(|r| {
+                        let u8_of = |k: &str| r.get("caps").and_then(|c| c.get(k)).and_then(|x| x.as_u64()).map(|x| x.min(10) as u8);
+                        let caps = match (u8_of("overall"), u8_of("coding"), u8_of("reasoning"), u8_of("math")) {
+                            (Some(o), Some(c), Some(re), Some(ma)) => Some([o, c, re, ma, u8_of("vision").unwrap_or(0), u8_of("medical").unwrap_or(3)]),
+                            _ => None,
+                        };
+                        OnlineRouting {
+                            slots: r.get("slots").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default(),
+                            caps,
+                            tools: r.get("tools").and_then(|x| x.as_u64()).map(|x| x.min(9) as u8),
+                            tier: r.get("tier").and_then(|x| x.as_str()).map(str::to_string),
+                        }
+                    }),
                     pricing: m["pricing"].as_object().map(|p| OnlinePricing {
                         input_per_mtok: p.get("input_per_mtok").and_then(|x| x.as_f64()).unwrap_or(0.0),
                         output_per_mtok: p.get("output_per_mtok").and_then(|x| x.as_f64()).unwrap_or(0.0),

@@ -313,6 +313,25 @@ pub fn is_specialist(model_name: &str) -> bool {
 /// (same discipline as the offline registry). NOT a freshness signal: search
 /// capability is handled separately by the router (a Sonar etc. can be a weak
 /// reasoner but the right pick for a live-web query).
+/// Capability scores for a catalog model: the catalog's own block when it
+/// carries one, else the name-based registry below. A new model or a new
+/// provider gets routed right the day the catalog says so.
+pub fn online_caps_of(m: &crate::flowsta::OnlineModel) -> Caps {
+    if let Some([overall, coding, reasoning, math, vision, medical]) = m.routing.as_ref().and_then(|r| r.caps) {
+        return Caps { overall, coding, reasoning, math, vision, medical };
+    }
+    online_caps_for(&format!("{} {} {}", m.id, m.display_name, m.description))
+}
+
+/// Tool-driving capability for a catalog model: the catalog's `tools`
+/// when declared, else the name-based table.
+pub fn online_agent_caps_of(m: &crate::flowsta::OnlineModel) -> u8 {
+    if let Some(t) = m.routing.as_ref().and_then(|r| r.tools) {
+        return t;
+    }
+    online_agent_caps(&format!("{} {} {}", m.id, m.display_name, m.description))
+}
+
 pub fn online_caps_for(text: &str) -> Caps {
     let t = text.to_lowercase();
     // Coding specialists
