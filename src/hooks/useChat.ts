@@ -849,6 +849,10 @@ export function useChat(props: UseChatProps) {
           preferredModel
         );
         props.isModelLoading.value = true;
+        // The chip names the model being loaded, with the loading pulse -
+        // not the one that was there (field 09-03: "Ministral" in orange
+        // while the bubble said "Loading LFM2.5").
+        props.currentModel.value = preferredModel;
         // This load belongs to THIS turn - say so on the bubble (the action
         // bar is turn-scoped; without a statusText it shows nothing).
         {
