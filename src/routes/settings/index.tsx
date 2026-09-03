@@ -1026,7 +1026,7 @@ export default component$(() => {
                 <p class="text-sm text-[var(--text-primary)] mb-4">
                   Auto picks the best model that runs well on this machine, and
                   an "Online and Offline" AI answers with a frontier online model
-                  unless your device is as good for the question. Over time it
+                  unless your device is better for the question. Over time it
                   learns from what you do with answers - Redo on your device, Try
                   this answer online, regenerate - and nudges its choices by at
                   most a point, never for health questions. You don't need to
@@ -1222,9 +1222,9 @@ export default component$(() => {
                   Going online (Auto — Online and Offline)
                 </h3>
                 <p class="text-sm text-[var(--text-secondary)] mt-1 mb-4">
-                  Only for AIs set to "Auto — Online and Offline". By default a
+                  Only for AIs set to "Auto - Online and Offline". By default a
                   question goes to a frontier online model, and stays on your
-                  device when a model here is as good for it. Health questions
+                  device when a model here is better for it. Health questions
                   always stay home. "Offline Only" AIs never go online.
                 </p>
 
@@ -1260,7 +1260,7 @@ export default component$(() => {
                 </p>
                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-5">
                   {[
-                    { id: "frontier", label: "Frontier-first", hint: "Online unless a model here is as good for the question" },
+                    { id: "frontier", label: "Frontier-first", hint: "Online unless a model here is better for the question" },
                     { id: "balanced", label: "Balanced", hint: "Your device answers when it is nearly as good" },
                     { id: "local", label: "Local-first", hint: "Online only for the live web; hard questions stay home" },
                   ].map((opt) => (
