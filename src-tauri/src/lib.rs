@@ -8,7 +8,7 @@ mod conversation_import;  // bring-your-history: parse + archive exported chats
 mod diagnostics;          // one-click diagnostic report (Settings > Help & diagnostics)
 mod llm;                  // llama-server module
 mod tuning;               // per-model fine-tune overrides (FINE_TUNE_PANEL layer 2)
-mod matrix;               // in-app truth matrix (Help & diagnostics, beta builds)
+mod matrix;               // in-app truth matrix (Help & diagnostics, every build)
 mod engine;               // optional inference engines (pinned tag; CUDA backend later)
 mod ocr;                  // OCR for scanned PDFs (pdfium render + ocrs)
 mod lair;
