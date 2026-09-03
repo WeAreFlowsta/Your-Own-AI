@@ -559,6 +559,13 @@ pub async fn figures_slot_free(app: &AppHandle, dir: &std::path::Path) -> Machin
         };
         (incumbent, paired)
     };
+    // A bench server the app itself started (tune arm, matrix leg) holds
+    // the card just like the chat model does - hand its footprint back the
+    // same way, at the context it runs. Otherwise every grade taken during
+    // a tune reads an empty card that is full.
+    let maintenance = if incumbent.is_none() { crate::tuning::maintenance_load() } else { None };
+    let ctx_override: Option<u64> = maintenance.as_ref().map(|(_, c)| *c);
+    let incumbent = incumbent.or(maintenance.map(|(n, _)| n));
     // The measured truth beats the estimate here too: a split-loaded MoE
     // occupies far less of the card than its full need (LFM: est ~5.7,
     // measured ~3.1) - crediting the estimate back inflated every grade,
@@ -578,7 +585,10 @@ pub async fn figures_slot_free(app: &AppHandle, dir: &std::path::Path) -> Machin
             let size = model_bytes_on_disk(&path, &meta);
             // The incumbent runs at ITS context - a fine-tune pin included -
             // so the footprint handed back is the one it actually holds.
-            let ctx = pinned_or_chosen_ctx(app, &name, &meta, size, total_ram_gb, free_vram_gb);
+            let ctx = match ctx_override {
+                Some(c) => c as _,
+                None => pinned_or_chosen_ctx(app, &name, &meta, size, total_ram_gb, free_vram_gb),
+            };
             let (_, kv, full_need) = model_need(&meta, size, ctx);
             // A split MoE holds only attention + the on-card experts; crediting
             // its FULL need back inflated every other grade. Without a
@@ -732,10 +742,21 @@ pub fn tuned_split_fit(
 /// Milliseconds spent in uncached assessments (matrix routing leg report).
 pub(crate) static ASSESS_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+static ASSESS_MEMO: std::sync::Mutex<Option<(std::time::Instant, Vec<ModelFit>)>> = std::sync::Mutex::new(None);
+
+/// `assess` with the memo bypassed - for checks that compare the grade
+/// before and after a load a few seconds apart.
+pub async fn assess_fresh(app: &AppHandle) -> Vec<ModelFit> {
+    if let Ok(mut g) = ASSESS_MEMO.lock() {
+        *g = None;
+    }
+    assess(app).await
+}
+
 pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
-    static MEMO: std::sync::Mutex<Option<(std::time::Instant, Vec<ModelFit>)>> = std::sync::Mutex::new(None);
+    let memo = &ASSESS_MEMO;
     const TTL: std::time::Duration = std::time::Duration::from_secs(3);
-    if let Ok(g) = MEMO.lock() {
+    if let Ok(g) = memo.lock() {
         if let Some((at, list)) = g.as_ref() {
             if at.elapsed() < TTL {
                 return list.clone();
@@ -745,7 +766,7 @@ pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
     let t0 = std::time::Instant::now();
     let list = assess_uncached(app).await;
     ASSESS_MS.fetch_add(t0.elapsed().as_millis() as u64, std::sync::atomic::Ordering::Relaxed);
-    if let Ok(mut g) = MEMO.lock() {
+    if let Ok(mut g) = memo.lock() {
         *g = Some((std::time::Instant::now(), list.clone()));
     }
     list

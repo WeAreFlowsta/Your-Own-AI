@@ -225,6 +225,23 @@ pub fn arms_for(
 
 static TUNE_CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// The model a bench server (tune arm, matrix leg) holds on the card right
+/// now, with its context - so the grader can hand that footprint back the
+/// way it does for the chat model. Without it, every grade taken during a
+/// tune read an empty card that was full (dev box 09-03: "Too large" on
+/// models running at full speed).
+static MAINTENANCE_LOAD: std::sync::Mutex<Option<(String, u64)>> = std::sync::Mutex::new(None);
+
+pub(crate) fn maintenance_load() -> Option<(String, u64)> {
+    MAINTENANCE_LOAD.lock().ok().and_then(|g| g.clone())
+}
+
+fn set_maintenance_load(v: Option<(String, u64)>) {
+    if let Ok(mut g) = MAINTENANCE_LOAD.lock() {
+        *g = v;
+    }
+}
+
 /// The matrix runner shares the bench's cancel switch (bench_one is the
 /// only place that can abort a load in flight).
 pub(crate) fn tune_cancel_flag_set(v: bool) {
@@ -308,11 +325,13 @@ pub async fn bench_one(
             return result;
         }
     };
+    set_maintenance_load(Some((model.to_string(), arm.ctx)));
     struct KillOnDrop<'a>(&'a mut std::process::Child);
     impl Drop for KillOnDrop<'_> {
         fn drop(&mut self) {
             let _ = self.0.kill();
             let _ = self.0.wait();
+            set_maintenance_load(None);
         }
     }
     let stderr = child.stderr.take();
@@ -434,12 +453,15 @@ pub async fn tune_run(
         return Err(format!("engine binary missing at {}", bin.display()));
     }
     let gpu_args = crate::llm::select_gpu_device_args(&app).await;
+    // The arms are chosen for the card EMPTY: stop the chat server first,
+    // then read free VRAM. Reading it first decided the arm count on a
+    // full card (dev box 09-03: "Qwen 2B: 2 arms, free VRAM 0.03").
+    crate::llm::stop_chat_server_for_maintenance(&state).await;
     let free_vram_gb = crate::llm::available_vram_mib(&app).await.map(|m| m as f64 / 1024.0);
     let draft_file = crate::llm::model_draft_for(&models_dir, &model).map(|d| (d.draft_type, d.draft));
     let arms = arms_for(&meta, size, total_ram_gb, free_vram_gb, draft_file.is_some());
     let total = arms.len();
     log::info!("[tune] {model}: {total} arms, free VRAM {free_vram_gb:?}");
-    crate::llm::stop_chat_server_for_maintenance(&state).await;
     let mut results = Vec::new();
     for (i, arm) in arms.into_iter().enumerate() {
         if TUNE_CANCEL.load(std::sync::atomic::Ordering::SeqCst) {

@@ -1188,6 +1188,51 @@ pub async fn matrix_run(
         sink(String::new());
     }
 
+    // Grades must not move with what the app has loaded: the badge a user
+    // reads while a model is running has to be the badge for an empty
+    // card (the grader hands the loaded model's footprint back). Load the
+    // largest Green model through the app's own path and grade everything
+    // again. (Dev box 09-03: "Too large" on models running at full speed,
+    // while a bench server held the card.)
+    if !cancelled() && want("fit") {
+        sink("== Grade drift (grades with a model loaded vs the card empty) ==".into());
+        let baseline = crate::fit::assess_fresh(&app).await;
+        let pick = baseline
+            .iter()
+            .filter(|f| f.fit == crate::fit::Fit::Green)
+            .max_by_key(|f| std::fs::metadata(dir.join(&f.name)).map(|m| m.len()).unwrap_or(0))
+            .map(|f| f.name.clone());
+        match pick {
+            None => sink("no Green model to load - skipped".into()),
+            Some(name) => {
+                match crate::llm::start_llama_server(app.clone(), state.clone(), Some(name.clone()), false).await {
+                    Err(e) => sink(format!("{name}: could not load for the check ({e}) - skipped")),
+                    Ok(()) => {
+                        // Let the driver settle before reading free memory.
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        let loaded = crate::fit::assess_fresh(&app).await;
+                        let mut drift = 0;
+                        for b in &baseline {
+                            if let Some(l) = loaded.iter().find(|l| l.name == b.name) {
+                                if l.fit != b.fit {
+                                    drift += 1;
+                                    sink(format!("  {}: {:?} with the card empty, {:?} while {} is loaded", b.name, b.fit, l.fit, name));
+                                }
+                            }
+                        }
+                        if drift == 0 {
+                            sink(format!("  {} models graded the same with {} loaded - OK", baseline.len(), name));
+                        } else {
+                            failures.push(format!("grade drift: {drift} grade(s) changed while {name} was loaded"));
+                        }
+                        crate::llm::stop_chat_server_for_maintenance(&state).await;
+                    }
+                }
+            }
+        }
+        sink(String::new());
+    }
+
     if !cancelled() && want("chat") {
         sink("== Chat format (words, no channel markers; think switch) ==".into());
         failures.extend(leg_chat_format(&bin, &dir, sink).await);
