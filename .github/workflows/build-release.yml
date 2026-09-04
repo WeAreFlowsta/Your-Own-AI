@@ -49,6 +49,9 @@ jobs:
           if [ ! -s /tmp/release-body.md ] && [[ "$VERSION" == *-* ]]; then
             extract "${VERSION%%-*}" > /tmp/release-body.md
           fi
+          # GitHub renders release bodies like comments (a newline is a
+          # line break), so the file's 76-column wrapping is undone here.
+          node scripts/unwrap-release-notes.mjs /tmp/release-body.md
 
       - name: Create GitHub Release
         id: create-release
