@@ -871,6 +871,18 @@ async fn chat_completions(
             .as_deref(),
         Some("off" | "false" | "0" | "no")
     );
+    // The app's own project and tools sessions run through the Build helper,
+    // which calls back here in agent mode with the `local` key the app wrote
+    // into its config. The app records each such session as ONE conversation
+    // (useAgentSession: startConversation + recordMessage), so recording every
+    // model call here too listed one "conversation" per step, titled with the
+    // last user message and badged API (Eric's records page, 2026-09-04: dozens
+    // of identical entries seconds apart). External callers keep their record.
+    let own_harness = agent_mode
+        && header_str(&headers, "authorization")
+            .map(|a| a.trim().eq_ignore_ascii_case("bearer local"))
+            .unwrap_or(false);
+    let record_exchange = record_exchange && !own_harness;
 
     let messages = if agent_mode {
         // Caller owns the system prompt (no persona). Memory is injected as a

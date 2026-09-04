@@ -5,6 +5,13 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 
 ## [0.7.1] - unreleased
 
+### Your records
+- A project or tools session is recorded once, as the conversation you see.
+  Before, every model call the session made on its way was also recorded
+  as its own conversation, titled with your last message and badged API,
+  so one session could leave dozens of near-identical entries in an AI's
+  records. Requests from other apps through the API are recorded as before.
+
 ### Add-ons
 - A skill added from Add-ons now shows "Update available" when its listing
   moves to a newer version, and one click reinstalls it from the listing.
