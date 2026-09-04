@@ -26,4 +26,20 @@ for (const line of lines) {
     out.push(line);
   }
 }
-writeFileSync(file, out.join("\n"));
+// A block that opens with "### Highlights" keeps the highlights in view and
+// folds everything after them: a stable's full entry is hundreds of lines,
+// and a release page that is all of it at once is harder to read than a
+// short list with the detail one click away (Eric, 0.7.0 release page).
+const text = out.join("\n");
+const hl = text.indexOf("### Highlights");
+let result = text;
+if (hl >= 0) {
+  const afterHl = text.indexOf("\n### ", hl + 5);
+  if (afterHl > 0) {
+    const head = text.slice(0, afterHl).replace(/\s+$/, "");
+    const rest = text.slice(afterHl).replace(/^\s+/, "");
+    const sections = (rest.match(/^### /gm) || []).length;
+    result = `${head}\n\n<details>\n<summary><strong>Everything in this release</strong> (${sections} sections)</summary>\n\n${rest.replace(/\s+$/, "")}\n\n</details>`;
+  }
+}
+writeFileSync(file, result);
