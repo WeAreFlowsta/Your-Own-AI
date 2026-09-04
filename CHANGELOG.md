@@ -54,7 +54,7 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   every downloaded model and checks the app's claims against what really
   happens: sizes, plain answers, generation settings, the helper and memory
   components, routing decisions on your own models, the thinking switch, and
-  whether badges hold still while a model is loaded. See *Other*.
+  whether badges hold still while a model is loaded. See *Help & diagnostics*.
 - **The Flowsta Vault, explained where it matters.** What it is (your
   identity on your own computer), what it does here (backups with one-click
   recovery, signed exports, online models the most private way there is),
@@ -394,6 +394,18 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - Add-ons has its own place in the menu, with four kinds: Skills, Tools and
   Characters for your AIs, and Components for this computer.
 
+### Honest about what is loaded and what fits
+- Fit badges no longer move with what the app has loaded: a tune run or the truth matrix holds the graphics card with its own test server, and the grader now hands that footprint back the same way it does for the running chat model. Before, every grade taken during a tune read an empty card that was full, and models running at full speed were badged "Too large".
+- A model left mid-load by a crash, a force quit, or a power cut no longer reads "too big" on the next launch. The automatic reload is skipped once and the first message loads it; a normal quit clears the marker; and the red chip in the header names the real reason (too big, not loaded, can't be read, engine crashed) instead of one word for everything.
+- The model chip in the header and the send path now trust only what the engine reports as loaded, never a remembered value: a chip is green only when that model is really serving, orange while it loads, and a message loads the model when the engine has none. A load that fails for an unknown reason says so, instead of guessing "too large".
+
+### Help & diagnostics
+- The truth matrix in Help & diagnostics is available in every build, not only betas, and its description now covers what it checks: model loads and answers, the helper and memory components, routing decisions on your own models (decided only, nothing sent, no credits), and the thinking switch. The records cell census stays in beta builds.
+- The truth matrix checks grade drift: it loads the largest full-speed model through the app's own path and grades every model again; a badge that changes while a model is loaded is reported as a failure.
+
+### Billing
+- The online usage line in the header ("$0.68 used · $20 included") is on by default once a plan exists, so the person paying sees their spend from the first online turn; the switch in Settings › Your Flowsta Account turns it off. Free and signed-out users never see it.
+
 ## [0.6.0] - 2026-08-25
 
 Your AIs know you better, run bigger models on the machine you already
@@ -621,9 +633,6 @@ have, and choose between them by what actually runs well on it.
 - The attachment meter counts with the running model's own tokenizer and shows its real context, with the room the app can make for a longer turn - chips go amber when a reload will hold them and red only when nothing on this machine can.
 
 ### The app fails politely
-- Fit badges no longer move with what the app has loaded: a tune run or the truth matrix holds the graphics card with its own test server, and the grader now hands that footprint back the same way it does for the running chat model. Before, every grade taken during a tune read an empty card that was full, and models running at full speed were badged "Too large".
-- A model left mid-load by a crash, a force quit, or a power cut no longer reads "too big" on the next launch. The automatic reload is skipped once and the first message loads it; a normal quit clears the marker; and the red chip in the header names the real reason (too big, not loaded, can't be read, engine crashed) instead of one word for everything.
-- The model chip in the header and the send path now trust only what the engine reports as loaded, never a remembered value: a chip is green only when that model is really serving, orange while it loads, and a message loads the model when the engine has none. A load that fails for an unknown reason says so, instead of guessing "too large".
 - The first-run recommendation now sizes to your whole machine, not just
   the graphics card: a model that fits the card but not the system's
   memory is no longer offered. A big card in a machine with little memory
@@ -689,9 +698,6 @@ have, and choose between them by what actually runs well on it.
   Offline replies already carry the hash of the exact model file.
 
 ### Other
-- The online usage line in the header ("$0.68 used · $20 included") is on by default once a plan exists, so the person paying sees their spend from the first online turn; the switch in Settings › Your Flowsta Account turns it off. Free and signed-out users never see it.
-- The truth matrix checks grade drift: it loads the largest full-speed model through the app's own path and grades every model again; a badge that changes while a model is loaded is reported as a failure.
-- The truth matrix in Help & diagnostics is available in every build, not only betas, and its description now covers what it checks: model loads and answers, the helper and memory components, routing decisions on your own models (decided only, nothing sent, no credits), and the thinking switch. The records cell census stays in beta builds.
 - Loading a model now shows its proper catalog name ("Qwen 3.6 35B-A3B
   (MoE)", not a cleaned-up file name), and when a load takes more than a
   few seconds, short lines explain what the wait is - the model moving
