@@ -5,6 +5,13 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 
 ## [0.7.1] - unreleased
 
+### Add-ons
+- A skill added from Add-ons now shows "Update available" when its listing
+  moves to a newer version, and one click reinstalls it from the listing.
+  Before, only skills added from a branch link were checked, and a listing
+  pinned to a newer commit never reached people who already had it.
+- A listing claimed by its maker reads "Signed by @username" on its card.
+
 ### First run
 - When the first model finishes downloading while you are on the home page
   with no question waiting, the app stays where you are: the card at the

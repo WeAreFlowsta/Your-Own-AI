@@ -25,6 +25,12 @@ export interface RecommendedSkill {
   link: string;
   /** SKILL.md size in characters at review time (about a quarter of that in tokens). */
   sizeChars: number;
+  /** The listing's pinned commit (directory entries) - an installed copy on
+   *  an older commit has an update waiting. */
+  commit?: string;
+  /** The maker's Flowsta username when the listing is claimed: the card
+   *  reads "Signed by @username" instead of the name as listed. */
+  signedBy?: string | null;
 }
 
 export const RECOMMENDED_SKILLS: RecommendedSkill[] = [

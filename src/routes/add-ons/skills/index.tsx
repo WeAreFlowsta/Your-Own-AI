@@ -70,8 +70,11 @@ export default component$(() => {
     // SKILL.md text per skill, once fetched; which card shows it
     preview: {} as Record<string, string>,
     previewOpen: "" as string,
-    // name -> newer commit on the source branch (link installs only)
+    // name -> newer commit: on the source branch for link installs, or the
+    // directory listing's new pin for skills added from Add-ons
     updates: {} as Record<string, string>,
+    // name -> the listing's current link, for updates that reinstall from it
+    updateLinks: {} as Record<string, string>,
     updating: "" as string,
     // which card has its "Used by" picker open
     usedByOpen: "" as string,
@@ -137,7 +140,14 @@ export default component$(() => {
     store.error = "";
     store.updating = name;
     try {
-      await invoke<string>("skills_update", { name });
+      const link = store.updateLinks[name];
+      // From Add-ons: reinstall from the listing's new link (same name,
+      // replaced in place). From a branch link: re-resolve the branch.
+      if (link) await invoke<string>("skills_add_link", { url: link });
+      else await invoke<string>("skills_update", { name });
+      const next = { ...store.updates };
+      delete next[name];
+      store.updates = next;
       await load();
     } catch (e) {
       store.error = typeof e === "string" ? e : "Couldn't update that skill.";
@@ -185,7 +195,25 @@ export default component$(() => {
           license: d.license,
           link: d.source.kind === "github" ? d.source.url! : d.file_url!,
           sizeChars: d.size_chars ?? 0,
+          commit: d.source.kind === "github" ? d.source.commit : undefined,
+          signedBy: d.claimed && d.maker.handle ? d.maker.handle : null,
         }));
+        // A skill added from Add-ons is pinned to the listing's commit, so
+        // GitHub can never report a newer one for it - the directory can:
+        // when its pin moved on, the installed copy has an update waiting,
+        // reinstalled from the listing's new link.
+        const updates = { ...store.updates };
+        const links: Record<string, string> = {};
+        for (const r of store.recommended) {
+          const s = store.skills.find((x) => x.name === r.name);
+          if (!s || !r.commit || s.source?.kind !== "link" || !s.source.sha) continue;
+          if (s.source.sha !== r.commit) {
+            updates[s.name] = r.commit;
+            links[s.name] = r.link;
+          }
+        }
+        store.updates = updates;
+        store.updateLinks = links;
       }
     }
   });
@@ -587,7 +615,7 @@ export default component$(() => {
                               <p class="text-sm font-medium text-[var(--text-primary)]">{r.title}</p>
                               <p class="text-xs text-[var(--text-secondary)]">{r.blurb}</p>
                               <p class="text-xs text-[var(--text-muted)]">
-                                {r.maker} · {r.license}{r.sizeChars ? ` · ~${Math.round(r.sizeChars / 4 / 100) * 100} tokens` : ""}
+                                {r.signedBy ? `Signed by @${r.signedBy}` : r.maker} · {r.license}{r.sizeChars ? ` · ~${Math.round(r.sizeChars / 4 / 100) * 100} tokens` : ""}
                               </p>
                             </div>
                             {installed ? (
