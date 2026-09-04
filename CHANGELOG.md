@@ -3,6 +3,15 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.7.1] - unreleased
+
+### First run
+- When the first model finishes downloading while you are on the home page
+  with no question waiting, the app stays where you are: the card at the
+  bottom says the model is ready and that your AIs can answer now, and no
+  "is ready" message is written into a chat. A question asked while the
+  download ran still opens the chat and answers the moment the model lands.
+
 ## [0.7.0] - 2026-09-04
 
 ### Highlights

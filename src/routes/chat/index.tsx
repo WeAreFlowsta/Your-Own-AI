@@ -677,19 +677,12 @@ export default component$(() => {
       } else if (held) {
         clearHeldTurn();
         await sendMessage(held.userInput, held.chatAction as ChatAction, held.fileContext, []);
-      } else {
-        chatState.messages = [
-          ...chatState.messages,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: `${d.label} is ready.`,
-            model: selectedAi.value.id,
-            aiLabel: selectedAi.value.label,
-            aiImageUrl: selectedAi.value.imageUrl || undefined,
-          },
-        ];
       }
+      // No held question: nothing to do here. The ready card at the bottom
+      // of every page says so; appending "X is ready." as a message turned
+      // the empty home page into an open chat and moved the user off it
+      // (Eric, fresh install 2026-09-04).
+      void d;
     };
     window.addEventListener(FIRST_MODEL_READY, onReady);
     cleanup(() => {

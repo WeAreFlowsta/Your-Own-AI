@@ -15,7 +15,7 @@ import { component$, useSignal, useVisibleTask$ } from "@builder.io/qwik";
 import { useLocation } from "@builder.io/qwik-city";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useAiData, useAiDataActions } from "../contexts/AiDataContext";
+import { useAiDataActions } from "../contexts/AiDataContext";
 import { modelFamilies } from "../data/recommended-models";
 import { modelManager, type DownloadProgress } from "../utils/modelManager";
 import {
@@ -37,7 +37,6 @@ function downloadUrlFor(filename: string): string | null {
 
 export const FirstModelIndicator = component$(() => {
   const loc = useLocation();
-  const aiData = useAiData();
   const { updateAllAisWithFirstModel } = useAiDataActions();
   const inFlight = useSignal<FirstModelInFlight | null>(null);
   const percent = useSignal<number | null>(null);
@@ -117,15 +116,13 @@ export const FirstModelIndicator = component$(() => {
   if (loc.url.pathname.startsWith("/welcome")) return null;
   if (!inFlight.value && !readyLabel.value) return null;
 
-  const firstAi = aiData.userDefinedAis.find((a) => a.status === "active")?.name ?? "Your AI";
-
   return (
     <div class="fixed bottom-4 right-4 z-[60] w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-lg p-3">
       {readyLabel.value ? (
         <div class="flex items-start justify-between gap-2">
           <div>
             <p class="text-sm font-medium text-[var(--text-primary)]">{readyLabel.value} is ready</p>
-            <p class="text-xs text-[var(--text-muted)] mt-0.5">{firstAi} can answer now.</p>
+            <p class="text-xs text-[var(--text-muted)] mt-0.5">Your AIs can answer now.</p>
           </div>
           <button
             type="button"
