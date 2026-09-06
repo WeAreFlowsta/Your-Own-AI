@@ -20,12 +20,79 @@ pub struct ModelTuning {
     /// Leave the registered speed-up draft out of the next loads.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub draft_off: Option<bool>,
+    /// KV cache precision: "f16" (standard) or "q8_0" (compact, half the
+    /// context memory). None = Auto: compact only where this machine's
+    /// tune profile measured it clean (see `kv_choice`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kv_cache: Option<KvCache>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq)]
+pub enum KvCache {
+    #[serde(rename = "f16")]
+    F16,
+    #[serde(rename = "q8_0")]
+    Q8_0,
 }
 
 impl ModelTuning {
     pub fn is_empty(&self) -> bool {
-        self.context.is_none() && self.moe_cpu_layers.is_none() && self.draft_off.is_none()
+        self.context.is_none() && self.moe_cpu_layers.is_none() && self.draft_off.is_none() && self.kv_cache.is_none()
     }
+}
+
+/// What the loader does about the KV cache for one model.
+#[derive(Clone, Debug, PartialEq)]
+pub struct KvChoice {
+    pub q8: bool,
+    pub reason: &'static str,
+}
+
+/// Compact (q8_0) KV cache is worth half the context memory - a bigger
+/// reading room, or a model that now fits the card whole - and costs
+/// nothing at batch 1 where the engine has the path. It is never assumed:
+/// Auto picks it only when this machine's tune profile holds a compact arm
+/// that loaded and generated within 5% of the standard arm at the same
+/// settings. The person's explicit setting always wins.
+pub fn kv_choice(app: &AppHandle, model: &str) -> KvChoice {
+    match get(app, model).kv_cache {
+        Some(KvCache::Q8_0) => return KvChoice { q8: true, reason: "your fine-tune setting" },
+        Some(KvCache::F16) => return KvChoice { q8: false, reason: "your fine-tune setting" },
+        None => {}
+    }
+    let profile = profiles_load(app).remove(model);
+    kv_choice_from_profile(profile.as_ref())
+}
+
+pub fn kv_choice_from_profile(profile: Option<&TuneProfile>) -> KvChoice {
+    let Some(p) = profile else { return KvChoice { q8: false, reason: "not measured on this computer yet" } };
+    let compact: Vec<&TuneResult> = p.results.iter().filter(|r| r.kv_q8 && r.failed.is_none() && r.gen_tps > 0.0).collect();
+    if compact.is_empty() {
+        return KvChoice { q8: false, reason: "the compact cache did not measure clean here" };
+    }
+    for c in compact {
+        let twin = p.results.iter().find(|r| {
+            !r.kv_q8 && r.failed.is_none() && r.ctx == c.ctx && r.moe_cpu_layers == c.moe_cpu_layers && r.draft == c.draft
+        });
+        match twin {
+            Some(t) if c.gen_tps >= 0.95 * t.gen_tps => return KvChoice { q8: true, reason: "measured within 5% of the standard cache here" },
+            Some(_) => return KvChoice { q8: false, reason: "the compact cache measured slower here" },
+            None => {}
+        }
+    }
+    KvChoice { q8: false, reason: "no standard arm to compare the compact cache against" }
+}
+
+/// How much of the f16 KV estimate this model's cache really takes.
+pub fn kv_scale_for(app: &AppHandle, model: &str) -> f64 {
+    if kv_choice(app, model).q8 { 0.5 } else { 1.0 }
+}
+
+/// The engine flags for a compact cache. Quantized V needs flash
+/// attention on; the bench arm proves the pair loads here before Auto
+/// ever sends them.
+pub fn kv_q8_args() -> [&'static str; 6] {
+    ["-ctk", "q8_0", "-ctv", "q8_0", "-fa", "on"]
 }
 
 fn path(app: &AppHandle) -> Option<PathBuf> {
@@ -125,6 +192,9 @@ pub struct TuneArm {
     /// that many expert layers' weights in main memory.
     pub moe_cpu_layers: Option<u32>,
     pub draft: bool,
+    /// Compact (q8_0) KV cache with flash attention on.
+    #[serde(default)]
+    pub kv_q8: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -132,6 +202,8 @@ pub struct TuneResult {
     pub ctx: u64,
     pub moe_cpu_layers: Option<u32>,
     pub draft: bool,
+    #[serde(default)]
+    pub kv_q8: bool,
     pub load_secs: f32,
     pub pp_tps: f32,
     pub gen_tps: f32,
@@ -206,20 +278,23 @@ pub fn arms_for(
     };
     let mut arms: Vec<TuneArm> = Vec::new();
     for &r in &rungs {
-        arms.push(TuneArm { ctx: r, moe_cpu_layers: auto_n(r), draft: has_draft });
+        arms.push(TuneArm { ctx: r, moe_cpu_layers: auto_n(r), draft: has_draft, kv_q8: false });
     }
     let auto_rung = LADDER[i];
     if has_draft {
-        arms.push(TuneArm { ctx: auto_rung, moe_cpu_layers: auto_n(auto_rung), draft: false });
+        arms.push(TuneArm { ctx: auto_rung, moe_cpu_layers: auto_n(auto_rung), draft: false, kv_q8: false });
     }
     if let Some(n) = auto_n(auto_rung) {
         if n > 0 {
             let step = ((meta.expert_bytes_per_layer.len() as u32) / 8).max(2);
-            arms.push(TuneArm { ctx: auto_rung, moe_cpu_layers: Some(n.saturating_sub(step)), draft: has_draft });
+            arms.push(TuneArm { ctx: auto_rung, moe_cpu_layers: Some(n.saturating_sub(step)), draft: has_draft, kv_q8: false });
         }
     }
+    // The compact-cache arm: the automatic rung with everything else the
+    // same, so Auto has a like-for-like twin to judge it against.
+    arms.push(TuneArm { ctx: auto_rung, moe_cpu_layers: auto_n(auto_rung), draft: has_draft, kv_q8: true });
     let mut seen = std::collections::HashSet::new();
-    arms.retain(|a| seen.insert((a.ctx, a.moe_cpu_layers, a.draft)));
+    arms.retain(|a| seen.insert((a.ctx, a.moe_cpu_layers, a.draft, a.kv_q8)));
     arms
 }
 
@@ -272,6 +347,7 @@ pub async fn bench_one(
         ctx: arm.ctx,
         moe_cpu_layers: arm.moe_cpu_layers,
         draft: arm.draft,
+        kv_q8: arm.kv_q8,
         load_secs: 0.0,
         pp_tps: 0.0,
         gen_tps: 0.0,
@@ -304,6 +380,9 @@ pub async fn bench_one(
             args.push("--spec-draft-model".into());
             args.push(df.clone());
         }
+    }
+    if arm.kv_q8 {
+        args.extend(kv_q8_args().iter().map(|s| s.to_string()));
     }
     let mut cmd = Command::new(bin);
     cmd.args(&args)
@@ -468,10 +547,11 @@ pub async fn tune_run(
             break;
         }
         let desc = format!(
-            "{} context{}{}",
+            "{} context{}{}{}",
             arm.ctx,
             match arm.moe_cpu_layers { Some(0) => " - all on the card".into(), Some(n) => format!(" - {n} expert layers in RAM"), None => String::new() },
-            if draft_file.is_some() { if arm.draft { " - speed-up on" } else { " - speed-up off" } } else { "" }
+            if draft_file.is_some() { if arm.draft { " - speed-up on" } else { " - speed-up off" } } else { "" },
+            if arm.kv_q8 { " - compact cache" } else { "" }
         );
         let _ = app.emit("tune-run", serde_json::json!({ "model": model, "done": i, "total": total, "current": desc }));
         let r = bench_one(&bin, &models_dir, &model, arm, draft_file.clone(), engine_threads(&app), &gpu_args, None).await;
@@ -498,6 +578,35 @@ pub async fn tune_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn r(ctx: u64, kv_q8: bool, gen: f32, failed: Option<&str>) -> TuneResult {
+        TuneResult { ctx, moe_cpu_layers: None, draft: false, kv_q8, load_secs: 1.0, pp_tps: 50.0, gen_tps: gen, failed: failed.map(String::from), during_free: None }
+    }
+
+    #[test]
+    fn kv_auto_is_standard_until_measured_clean() {
+        assert!(!kv_choice_from_profile(None).q8);
+        let p = TuneProfile { measured_at: 0, results: vec![r(8192, false, 20.0, None)] };
+        assert!(!kv_choice_from_profile(Some(&p)).q8, "no compact arm");
+        let p = TuneProfile { measured_at: 0, results: vec![r(8192, false, 20.0, None), r(8192, true, 0.0, Some("did not load"))] };
+        assert!(!kv_choice_from_profile(Some(&p)).q8, "compact arm failed");
+        let p = TuneProfile { measured_at: 0, results: vec![r(8192, false, 20.0, None), r(8192, true, 17.0, None)] };
+        assert!(!kv_choice_from_profile(Some(&p)).q8, "compact arm 15% slower");
+        let p = TuneProfile { measured_at: 0, results: vec![r(8192, false, 20.0, None), r(8192, true, 19.5, None)] };
+        assert!(kv_choice_from_profile(Some(&p)).q8, "within 5%");
+        let p = TuneProfile { measured_at: 0, results: vec![r(4096, false, 20.0, None), r(8192, true, 19.5, None)] };
+        assert!(!kv_choice_from_profile(Some(&p)).q8, "no like-for-like twin");
+    }
+
+    #[test]
+    fn arms_include_one_compact_cache_twin() {
+        let meta = crate::gguf::GgufMeta::default();
+        let arms = arms_for(&meta, 3 * 1024 * 1024 * 1024, 16.0, Some(4.0), false);
+        let compact: Vec<_> = arms.iter().filter(|a| a.kv_q8).collect();
+        assert_eq!(compact.len(), 1);
+        let c = compact[0];
+        assert!(arms.iter().any(|a| !a.kv_q8 && a.ctx == c.ctx && a.moe_cpu_layers == c.moe_cpu_layers && a.draft == c.draft), "the twin exists");
+    }
 
     /// Headless matrix leg for the tune bench: two arms on the shipped
     /// binary and the matrix model, real timings. Same runner as the MoE

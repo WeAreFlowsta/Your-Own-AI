@@ -6,6 +6,7 @@ interface TuneResult {
   ctx: number;
   moe_cpu_layers?: number | null;
   draft: boolean;
+  kv_q8?: boolean;
   load_secs: number;
   pp_tps: number;
   gen_tps: number;
@@ -40,6 +41,8 @@ export default component$<ModelTuneDialogProps>((props) => {
   const ctx = useSignal<number | null>(null);
   const moeN = useSignal<number | null>(null);
   const draftOff = useSignal(false);
+  /** KV cache precision: 'auto' | 'f16' (standard) | 'q8_0' (compact). */
+  const kv = useSignal<'auto' | 'f16' | 'q8_0'>('auto');
   const note = useSignal('');
   const busy = useSignal(false);
   const results = useSignal<TuneResult[]>([]);
@@ -49,13 +52,14 @@ export default component$<ModelTuneDialogProps>((props) => {
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async () => {
     try {
-      const t = await invoke<{ context?: number; moe_cpu_layers?: number; draft_off?: boolean }>(
+      const t = await invoke<{ context?: number; moe_cpu_layers?: number; draft_off?: boolean; kv_cache?: string }>(
         'tuning_get',
         { model: props.model },
       );
       ctx.value = t.context ?? null;
       moeN.value = t.moe_cpu_layers ?? null;
       draftOff.value = !!t.draft_off;
+      kv.value = t.kv_cache === 'q8_0' ? 'q8_0' : t.kv_cache === 'f16' ? 'f16' : 'auto';
     } catch {
       /* fresh dialog */
     }
@@ -131,12 +135,35 @@ export default component$<ModelTuneDialogProps>((props) => {
               Leave the speed-up file out (measure the difference yourself)
             </label>
           )}
+          <div>
+            <p class="text-xs text-[var(--text-secondary)]">Context memory (KV cache)</p>
+            <div class="mt-1 flex gap-1">
+              {(['auto', 'f16', 'q8_0'] as const).map((opt) => (
+                <button
+                  key={opt}
+                  type="button"
+                  onClick$={() => { kv.value = opt; note.value = ''; }}
+                  class={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
+                    kv.value === opt
+                      ? 'border-[var(--text-link)] text-[var(--text-primary)]'
+                      : 'border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
+                  }`}
+                >
+                  {opt === 'auto' ? 'Auto' : opt === 'f16' ? 'Standard' : 'Compact'}
+                </button>
+              ))}
+            </div>
+            <p class="mt-1 text-[11px] text-[var(--text-muted)]">
+              Compact halves the memory the context takes, so more fits on the card. Auto uses it only
+              once Tune on this computer has measured it clean for this model here.
+            </p>
+          </div>
           {note.value && <p class="text-xs text-[var(--text-secondary)]">{note.value}</p>}
         </div>
         <div class="mt-4 border-t border-[var(--border-subtle)] pt-3">
           <p class="text-xs text-[var(--text-muted)]">
             Tune on this computer measures a handful of setups on your own hardware - context sizes,
-            the expert split, the speed-up file. It takes a few minutes, loads the model repeatedly,
+            the expert split, the speed-up file, the compact cache. It takes a few minutes, loads the model repeatedly,
             and chats pause while it runs. Every number below was measured here, not promised.
           </p>
           {tuning.value ? (
@@ -193,6 +220,7 @@ export default component$<ModelTuneDialogProps>((props) => {
                     ctx.value = p.ctx;
                     if (p.moe_cpu_layers != null) moeN.value = p.moe_cpu_layers;
                     draftOff.value = !p.draft && props.hasDraft;
+                    kv.value = p.kv_q8 ? 'q8_0' : 'auto';
                     note.value = 'Pick filled in above - Save to keep it.';
                   }}
                 />
@@ -200,6 +228,7 @@ export default component$<ModelTuneDialogProps>((props) => {
                   {pos.ctx} context · ~{Math.round(pos.gen_tps)} tok/s (reads at ~{Math.round(pos.pp_tps)})
                   {pos.moe_cpu_layers != null ? pos.moe_cpu_layers === 0 ? ' · all on the card' : ` · ${pos.moe_cpu_layers} expert layers in RAM` : ''}
                   {props.hasDraft ? (pos.draft ? ' · speed-up on' : ' · speed-up off') : ''}
+                  {pos.kv_q8 ? ' · compact cache' : ''}
                 </p>
               </div>
             );
@@ -219,6 +248,7 @@ export default component$<ModelTuneDialogProps>((props) => {
                 if (ctx.value != null && ctx.value > 0) tuning.context = Math.round(ctx.value);
                 if (moeN.value != null && moeN.value >= 0) tuning.moe_cpu_layers = Math.round(moeN.value);
                 if (draftOff.value) tuning.draft_off = true;
+                if (kv.value !== 'auto') tuning.kv_cache = kv.value;
                 await invoke('tuning_set', { model: props.model, tuning });
                 const reloaded = await invoke<boolean>('tuning_apply_now', { model: props.model });
                 note.value = reloaded

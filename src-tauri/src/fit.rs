@@ -252,6 +252,12 @@ pub fn choose_ctx(
 /// Memory a model needs: quantized weights (the GGUF file size) + KV-cache at
 /// `ctx` (f16) + a fixed compute-buffer overhead.
 pub fn model_need(meta: &GgufMeta, size_bytes: u64, ctx: u64) -> (f64, f64, f64) {
+    model_need_scaled(meta, size_bytes, ctx, 1.0)
+}
+
+/// `model_need` with the KV cache at a fraction of its f16 size (0.5 for
+/// the compact q8_0 cache - tuning::kv_scale_for).
+pub fn model_need_scaled(meta: &GgufMeta, size_bytes: u64, ctx: u64, kv_scale: f64) -> (f64, f64, f64) {
     let weights_gb = size_bytes as f64 / GIB;
     let eff_ctx = if meta.context_length > 0 {
         ctx.min(meta.context_length)
@@ -302,7 +308,8 @@ pub fn model_need(meta: &GgufMeta, size_bytes: u64, ctx: u64) -> (f64, f64, f64)
     let kv_gb = heads_avg
         * (full_layers * (kd + vd) * eff_ctx + swa_layers * (kd_swa + vd_swa) * swa_ctx)
         * 2.0
-        / GIB;
+        / GIB
+        * kv_scale;
     let overhead_gb = 0.8;
     // The token-embedding table stays in system memory even under full
     // offload - the card never pays for it (fit-truth 09-01: gemma E2B
@@ -589,7 +596,7 @@ pub async fn figures_slot_free(app: &AppHandle, dir: &std::path::Path) -> Machin
                 Some(c) => c as _,
                 None => pinned_or_chosen_ctx(app, &name, &meta, size, total_ram_gb, free_vram_gb),
             };
-            let (_, kv, full_need) = model_need(&meta, size, ctx);
+            let (_, kv, full_need) = model_need_scaled(&meta, size, ctx, crate::tuning::kv_scale_for(app, &name));
             // A split MoE holds only attention + the on-card experts; crediting
             // its FULL need back inflated every other grade. Without a
             // calibration record, hand back the on-card share of the split
@@ -800,7 +807,7 @@ async fn assess_uncached(app: &AppHandle) -> Vec<ModelFit> {
         // A fine-tune pin replaces the sizing here too, so the grade, the
         // router and the "runs at" line all tell the same story.
         let ctx = pinned_or_chosen_ctx(app, &m.name, &meta, m.size_bytes, total_ram_gb, free_vram_gb);
-        let (weights_gb, kv_gb, need_gb) = model_need(&meta, m.size_bytes, ctx);
+        let (weights_gb, kv_gb, need_gb) = model_need_scaled(&meta, m.size_bytes, ctx, crate::tuning::kv_scale_for(app, &m.name));
         // The projector (mmproj) is paired only for image turns now, so the
         // text grade leaves it out; `vision_fit` below says whether an image
         // turn can pair it. (Counting it always graded 6 GB vision-capable

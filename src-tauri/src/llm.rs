@@ -2040,6 +2040,16 @@ pub async fn start_llama_server(
             if header.as_ref().is_some_and(|(m, _)| m.surfaces_special_tokens()) {
                 args.push("--special".to_string());
             }
+            // Compact KV cache (q8_0 + flash attention): half the context
+            // memory. Auto sends it only where this machine's tune profile
+            // measured it clean; the person's setting always wins.
+            let kv = crate::tuning::kv_choice(&app_handle, &filename);
+            if kv.q8 {
+                args.extend(crate::tuning::kv_q8_args().iter().map(|s| s.to_string()));
+                log::info!("[LLM] KV cache q8_0 with flash attention - {}", kv.reason);
+            } else {
+                log::debug!("[LLM] KV cache f16 - {}", kv.reason);
+            }
             log::info!("[LLM] Starting server with model: {}", filename);
 
             // Pair the multimodal projector only when this load is FOR vision
@@ -2115,7 +2125,8 @@ pub async fn start_llama_server(
         if meta.is_moe() && !args_force_cpu(&args) {
             if let Some(free_mib) = available_vram_mib(&app_handle).await {
                 let free_gb = free_mib as f64 / 1024.0;
-                let (_, _, need_gb) = crate::fit::model_need(meta, *size_bytes, ctx_size);
+                let kv_scale = loading_name.as_ref().map(|f| crate::tuning::kv_scale_for(&app_handle, f)).unwrap_or(1.0);
+                let (_, _, need_gb) = crate::fit::model_need_scaled(meta, *size_bytes, ctx_size, kv_scale);
                 let tuned_moe = loading_name
                     .as_ref()
                     .and_then(|f| crate::tuning::get(&app_handle, f).moe_cpu_layers);
@@ -2129,7 +2140,7 @@ pub async fn start_llama_server(
                         log::info!("[LLM] MoE offload: all experts on the card - your fine-tune setting");
                     } else {
                         let n = (tn as usize).min(n_layers.max(1));
-                        let (_, kv_gb, _) = crate::fit::model_need(meta, *size_bytes, ctx_size);
+                        let (_, kv_gb, _) = crate::fit::model_need_scaled(meta, *size_bytes, ctx_size, kv_scale);
                         log::info!(
                             "[LLM] MoE offload: experts of {n} of {n_layers} layers on CPU (--n-cpu-moe {n}) - your fine-tune setting"
                         );

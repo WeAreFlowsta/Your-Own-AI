@@ -477,7 +477,7 @@ pub async fn leg_fit_truth(app: Option<&AppHandle>, bin: &Path, dir: &Path, only
             .get(&name)
             .copied()
             .unwrap_or_else(|| crate::fit::grade(need, free, avail_ram));
-        let arm = TuneArm { ctx, moe_cpu_layers: moe_decision(&meta, size, ctx, free), draft: false };
+        let arm = TuneArm { ctx, moe_cpu_layers: moe_decision(&meta, size, ctx, free), draft: false, kv_q8: false };
         let before = free_vram();
         let r = bench_one(bin, dir, &name, arm, None, None, &[], Some(&free_vram)).await;
         let after_kill = free_vram();
@@ -578,7 +578,7 @@ pub async fn leg_chat_format(bin: &Path, dir: &Path, sink: Sink<'_>) -> Vec<Stri
             Err(_) => continue,
         };
         let free = free_vram_gb(bin);
-        let arm = TuneArm { ctx: 4096, moe_cpu_layers: moe_decision(&meta, size, 4096, free), draft: false };
+        let arm = TuneArm { ctx: 4096, moe_cpu_layers: moe_decision(&meta, size, 4096, free), draft: false, kv_q8: false };
         let r = bench_chat_format(bin, dir, &name, arm, &CHAT_SCENARIOS).await;
         sink(format!("{:<38} {}", name, r));
         if r.starts_with("FAIL") {

@@ -56,6 +56,13 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   over it, the oldest cards are left out first and nothing else.
 
 ### Engine
+- Compact context memory. Fine-tune gains a KV cache setting: Standard,
+  Compact, or Auto. Compact stores the context at half the memory, so a
+  bigger reading room fits, or a model that spilled off the card now fits
+  whole. Tune on this computer measures the compact cache beside the
+  standard one, and Auto uses it only where that measurement came back
+  clean and within a few percent of the standard speed on your machine.
+  The fit grades and the offload split count the cache at its real size.
 - llama.cpp v0.4.0 (build b10809) powers every offline model. Upstream's
   September work rides in: faster attention and expert kernels on NVIDIA
   cards (RTX 50-series most, Ada some), better speculative decoding,
