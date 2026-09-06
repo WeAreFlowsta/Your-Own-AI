@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod conversation_cache;   // last-known-good conversation lists (encrypted)
+mod corpus;               // the person's document library (SQLite, row-encrypted; per-AI grants)
 mod model_hash;
 mod model_stats;         // per-machine measured tok/s + load time, shared by router + UI           // sha256 per model artifact (provenance for records)
 mod conversation_import;  // bring-your-history: parse + archive exported chats
@@ -218,7 +219,7 @@ const DOCUMENT_EXTENSIONS: &[&str] = &[
 const MAX_TEXT_CHARS: usize = 256 * 1024;
 
 /// Extract text from a DOCX file (ZIP archive with word/document.xml)
-fn extract_docx_text(path: &std::path::Path) -> Result<String, String> {
+pub(crate) fn extract_docx_text(path: &std::path::Path) -> Result<String, String> {
     let file = fs::File::open(path)
         .map_err(|e| format!("Failed to open DOCX: {}", e))?;
     let mut archive = zip::ZipArchive::new(file)
@@ -266,7 +267,7 @@ fn extract_docx_text(path: &std::path::Path) -> Result<String, String> {
 }
 
 /// Extract text from an ODT file (ZIP archive with content.xml)
-fn extract_odt_text(path: &std::path::Path) -> Result<String, String> {
+pub(crate) fn extract_odt_text(path: &std::path::Path) -> Result<String, String> {
     let file = fs::File::open(path)
         .map_err(|e| format!("Failed to open ODT: {}", e))?;
     let mut archive = zip::ZipArchive::new(file)
@@ -309,7 +310,7 @@ fn extract_odt_text(path: &std::path::Path) -> Result<String, String> {
 }
 
 /// Extract text from a PDF file
-fn extract_pdf_text(path: &std::path::Path) -> Result<String, String> {
+pub(crate) fn extract_pdf_text(path: &std::path::Path) -> Result<String, String> {
     let text = pdf_extract::extract_text(path)
         .map_err(|e| format!("Failed to extract text from PDF: {}", e))?;
 
@@ -321,7 +322,7 @@ fn extract_pdf_text(path: &std::path::Path) -> Result<String, String> {
 }
 
 /// Extract text from an Excel/ODS spreadsheet
-fn extract_spreadsheet_text(path: &std::path::Path) -> Result<String, String> {
+pub(crate) fn extract_spreadsheet_text(path: &std::path::Path) -> Result<String, String> {
     use calamine::{Reader, open_workbook_auto};
 
     let mut workbook = open_workbook_auto(path)
@@ -702,6 +703,16 @@ pub fn run() {
             memory::get_memory_facts,
             memory::save_memory_facts,
             transcript_memory::get_transcript_embeddings,
+            corpus::corpus_import,
+            corpus::corpus_cancel,
+            corpus::corpus_import_prepared,
+            corpus::corpus_documents,
+            corpus::corpus_grant,
+            corpus::corpus_delete,
+            corpus::corpus_set_mine,
+            corpus::corpus_set_summary,
+            corpus::corpus_recall,
+            corpus::corpus_document_text,
             transcript_memory::save_transcript_embeddings,
             gpu_safety::gpu_safe_mode_status,
             gpu_safety::gpu_retry,
