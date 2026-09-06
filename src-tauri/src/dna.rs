@@ -37,6 +37,9 @@ const COORDINATOR_WASM_FILENAME: &str = "transcript_coordinator.wasm";
 const COORDINATOR_MARKER_FILENAME: &str = "coordinator-version";
 
 /// The role name inside the hApp bundle (must match happ.yaml).
+/// The longest one zome call may take: the backup's whole-cell read.
+pub const BACKUP_READ_TIMEOUT_SECS: u64 = 600;
+
 pub const ROLE_NAME: &str = "transcript";
 
 /// Versioned app-id prefix. Bump alongside DNA versions so future
@@ -382,8 +385,14 @@ pub async fn connect_app_websocket(
         .map_err(|e| format!("Failed to issue app auth token: {}", e))?;
 
     // Connect app websocket.
-    let app_ws = holochain_client::AppWebsocket::connect(
+    // A request may take longer than the client's 60 s default: the backup
+    // reads a whole cell in one zome call. Ordinary calls are still bounded
+    // to 60 s by HolochainManager::call_zome.
+    let mut ws_config = holochain_client::WebsocketConfig::CLIENT_DEFAULT;
+    ws_config.default_request_timeout = std::time::Duration::from_secs(BACKUP_READ_TIMEOUT_SECS);
+    let app_ws = holochain_client::AppWebsocket::connect_with_config(
         format!("localhost:{}", app_port),
+        std::sync::Arc::new(ws_config),
         token.token,
         signer_arc,
         Some("your-own-ai".to_string()),

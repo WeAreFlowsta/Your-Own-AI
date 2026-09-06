@@ -298,7 +298,7 @@ async fn count_local_conversations(app: &tauri::AppHandle) -> Result<u64, String
     for key in keys {
         let payload = ExternIO::encode(()).map_err(|e| e.to_string())?;
         match manager
-            .call_zome(&key, "transcript", "get_all_conversations", payload)
+            .call_zome_with_timeout(&key, "transcript", "get_all_conversations", payload, std::time::Duration::from_secs(crate::dna::BACKUP_READ_TIMEOUT_SECS))
             .await
         {
             Ok(result) => {
@@ -842,7 +842,32 @@ fn backup_record(
 
 /// Walk every agent's conversations + entries, decrypting as we go.
 /// Records that fail to decrypt (wrong key) are skipped, not fatal.
-async fn collect_conversations(app: &tauri::AppHandle) -> Result<Vec<ConvBundle>, String> {
+/// Manifest entries an unreadable cell keeps from the previous backup, so
+/// its conversations stay listed (their objects are still in the Vault).
+const LAST_INDEX_FILE: &str = "backup-last-index.json";
+
+fn last_index_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join(LAST_INDEX_FILE))
+}
+
+fn load_last_index(app: &tauri::AppHandle) -> Vec<serde_json::Value> {
+    last_index_path(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_last_index(app: &tauri::AppHandle, index: &[serde_json::Value]) {
+    if let (Some(p), Ok(json)) = (last_index_path(app), serde_json::to_string(index)) {
+        let _ = std::fs::write(p, json);
+    }
+}
+
+/// Every conversation of every connected agent, plus the previous manifest
+/// entries of any agent whose cell could not be read this time (a cell
+/// past what one read returns in time). One unreadable cell used to fail
+/// the whole backup, for weeks, silently except for a log line.
+async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle>, Vec<serde_json::Value>), String> {
     use holochain_types::prelude::Record;
 
     let hc = app
@@ -858,12 +883,23 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<Vec<ConvBundle>
     };
 
     let mut bundles = Vec::new();
+    let mut unreadable: Vec<String> = Vec::new();
     for (agent_key, installed_app_id) in agents {
         let payload = ExternIO::encode(()).map_err(|e| e.to_string())?;
-        let result = manager
-            .call_zome(&agent_key, "transcript", "get_all_conversations", payload)
+        let result = match manager
+            .call_zome_with_timeout(&agent_key, "transcript", "get_all_conversations", payload, std::time::Duration::from_secs(crate::dna::BACKUP_READ_TIMEOUT_SECS))
             .await
-            .map_err(|e| format!("get_all_conversations({}): {}", agent_key, e))?;
+        {
+            Ok(r) => r,
+            Err(e) => {
+                log::warn!(
+                    "[escrow] get_all_conversations({}) failed - keeping this AI's conversations from the previous backup: {}",
+                    agent_key, e
+                );
+                unreadable.push(installed_app_id.clone());
+                continue;
+            }
+        };
         let conv_records: Vec<Record> = ExternIO::decode(&result).map_err(|e| e.to_string())?;
 
         for conv in &conv_records {
@@ -912,7 +948,20 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<Vec<ConvBundle>
             });
         }
     }
-    Ok(bundles)
+    let mut carried: Vec<serde_json::Value> = Vec::new();
+    if !unreadable.is_empty() {
+        let previous = load_last_index(app);
+        carried = previous
+            .into_iter()
+            .filter(|e| e["role_name"].as_str().map(|r| unreadable.contains(&r.to_string())).unwrap_or(false))
+            .collect();
+        log::warn!(
+            "[escrow] {} AI(s) could not be read; {} conversation(s) carried from the previous backup",
+            unreadable.len(),
+            carried.len()
+        );
+    }
+    Ok((bundles, carried))
 }
 
 /// Pure assembly: newest-first inclusion under the size budget, grouped
@@ -1245,6 +1294,7 @@ async fn write_incremental_backup(
     recovery: &RecoveryMaterial,
     ai_configs: Option<serde_json::Value>,
     convs: Vec<ConvBundle>,
+    carried: Vec<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
     let mut sync = load_sync_state(app);
     let mut counts: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
@@ -1298,6 +1348,10 @@ async fn write_incremental_backup(
         }));
     }
 
+    // Conversations of a cell that could not be read this time stay listed
+    // from the previous manifest: their objects are still in the Vault.
+    let carried_n = carried.len();
+    index.extend(carried);
     let mut manifest = serde_json::json!({
         "version": 2,
         "_readme": "Your Own AI backup manifest. Conversations are stored as \
@@ -1353,6 +1407,10 @@ async fn write_incremental_backup(
     // manifest, but Your Data would show two conflicting snapshots).
     delete_backup_label(port, DATA_LABEL).await;
     save_sync_state(app, &sync);
+    save_last_index(app, &index);
+    if carried_n > 0 {
+        log::warn!("[escrow] {} conversation(s) listed from the previous backup (their cell did not answer)", carried_n);
+    }
 
     log::info!(
         "[escrow] incremental backup: {} conversations ({} records), {} object(s) uploaded, {} unchanged",
@@ -1582,7 +1640,7 @@ async fn write_full_backup_inner(app: &tauri::AppHandle) -> Result<serde_json::V
         }
     };
 
-    let convs = collect_conversations(app).await?;
+    let (convs, carried) = collect_conversations(app).await?;
     let local_records: u64 = convs.iter().map(|c| c.records.len() as u64).sum();
 
     match slot_gate(&probes, local_records).await {
@@ -1614,7 +1672,7 @@ async fn write_full_backup_inner(app: &tauri::AppHandle) -> Result<serde_json::V
     // EVERYTHING is backed up - no budget, nothing left out; only changed
     // conversations re-upload. Older Vaults get the legacy single snapshot.
     if let Some(limits) = fetch_backup_limits(port).await {
-        return write_incremental_backup(app, port, &limits, &recovery, ai_configs, convs).await;
+        return write_incremental_backup(app, port, &limits, &recovery, ai_configs, convs, carried).await;
     }
 
     let conversations = convs.len();

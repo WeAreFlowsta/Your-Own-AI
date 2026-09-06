@@ -728,6 +728,22 @@ impl HolochainManager {
         fn_name: &str,
         payload: holochain_types::prelude::ExternIO,
     ) -> Result<holochain_types::prelude::ExternIO, String> {
+        self.call_zome_with_timeout(agent_key, zome_name, fn_name, payload, std::time::Duration::from_secs(60)).await
+    }
+
+    /// `call_zome` with a caller-chosen wait. The backup reads a whole
+    /// cell in one call, and a thousand-conversation cell takes longer
+    /// than the sixty seconds a chat turn may wait (the 32-days-old-backup
+    /// finding, 2026-09-06). The app websocket's own request timeout is
+    /// set to match in dna.rs.
+    pub async fn call_zome_with_timeout(
+        &self,
+        agent_key: &str,
+        zome_name: &str,
+        fn_name: &str,
+        payload: holochain_types::prelude::ExternIO,
+        timeout: std::time::Duration,
+    ) -> Result<holochain_types::prelude::ExternIO, String> {
         // Extract the app_client reference — but we can't hold the lock across await.
         // AppWebsocket is behind Arc internally, so we need to get a reference.
         // The trick: lock, get a reference to the agent, unlock, then call.
@@ -776,9 +792,9 @@ impl HolochainManager {
                 FunctionName::from(fn_name),
                 payload.clone(),
             );
-            match tokio::time::timeout(std::time::Duration::from_secs(60), call).await {
+            match tokio::time::timeout(timeout, call).await {
                 Err(_) => {
-                    last_err = "no answer from the conductor within 60s".to_string();
+                    last_err = format!("no answer from the conductor within {}s", timeout.as_secs());
                     break;
                 }
                 Ok(Ok(result)) => return Ok(result),

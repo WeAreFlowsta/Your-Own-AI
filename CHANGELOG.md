@@ -142,6 +142,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   runs if no backup has succeeded in the last twenty-four hours. Before,
   a person who chatted with the Vault closed could go weeks without a
   backup and nothing tried again.
+- A backup no longer fails because one AI has more conversations than a
+  single read returns in a minute. The backup's read of a cell may take
+  up to ten minutes, and an AI whose cell still does not answer keeps its
+  conversations listed from the previous backup while every other AI
+  backs up. Before, one large AI silently stopped all backups.
 - Settings, Backups gains a Back up now button that says what it did.
 - The conversations list no longer knocks on tidied lineage cells. Every
   refresh used to call each disabled generation of an AI and log a line
