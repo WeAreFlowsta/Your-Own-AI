@@ -42,7 +42,9 @@ export const KnowledgeDocumentRow = component$<{
           Mine
         </button>
         <span class="text-[10px] text-[var(--text-muted)] shrink-0">
-          {formatSize(doc.sizeBytes)} · {doc.chunkCount} {doc.chunkCount === 1 ? 'piece' : 'pieces'}
+          {doc.chunkCount === 0
+            ? 'waiting for its file'
+            : `${formatSize(doc.sizeBytes)} · ${doc.chunkCount} ${doc.chunkCount === 1 ? 'piece' : 'pieces'}`}
         </span>
         <button
           type="button"

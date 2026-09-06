@@ -557,6 +557,11 @@ pub(crate) const DATA_LABEL: &str = "latest";
 /// LEGACY monolith mode only (Vaults without /backup/limits): stay under
 /// the old 50 MB per-backup cap with headroom for JSON overhead.
 const BACKUP_BUDGET_BYTES: usize = 45 * 1024 * 1024;
+/// The document library's records ride in the manifest (incremental mode)
+/// or the snapshot; a record with its card is ~600 bytes, so this holds
+/// several thousand documents. Over it, cards go first (oldest documents
+/// first), never a name, a flag or a grant.
+const CORPUS_RECORDS_BUDGET_BYTES: usize = 4 * 1024 * 1024;
 
 /// Incremental mode: the manifest object - conversation index + keys +
 /// AI configs + everything small. Conversation records live in their own
@@ -1191,7 +1196,11 @@ fn attach_extras(
         // from the person's own files, and a library must never be the
         // reason a backup fails (planning/KNOWLEDGE_CORPUS.md).
         match crate::corpus::records_for_backup(app, &key) {
-            Ok(records) if !records.documents.is_empty() => {
+            Ok(mut records) if !records.documents.is_empty() => {
+                let trimmed = fit_corpus_records(&mut records, CORPUS_RECORDS_BUDGET_BYTES);
+                if trimmed > 0 {
+                    log::warn!("[escrow] corpus records over budget: {} cards left out of the backup", trimmed);
+                }
                 payload["corpus"] = serde_json::json!({
                     "_readme": "Your document library: which documents your AIs \
                                 were given, their summaries and flags, and which \
@@ -1204,6 +1213,27 @@ fn attach_extras(
             Err(e) => log::warn!("[escrow] corpus records skipped: {e}"),
         }
     }
+}
+
+/// Keep the library's records under `budget` serialized bytes by dropping
+/// cards from the oldest documents first. Returns how many cards went.
+fn fit_corpus_records(records: &mut crate::corpus::CorpusRecords, budget: usize) -> usize {
+    let size = |r: &crate::corpus::CorpusRecords| serde_json::to_vec(r).map(|v| v.len()).unwrap_or(0);
+    if size(records) <= budget {
+        return 0;
+    }
+    let mut order: Vec<usize> = (0..records.documents.len()).collect();
+    order.sort_by_key(|&i| records.documents[i].added_at);
+    let mut dropped = 0;
+    for i in order {
+        if records.documents[i].meta.summary.take().is_some() {
+            dropped += 1;
+            if size(records) <= budget {
+                break;
+            }
+        }
+    }
+    dropped
 }
 
 /// Incremental mode: one gzipped object per conversation + a manifest.
@@ -1843,6 +1873,7 @@ mod tests {
     #[test]
     fn full_payload_truncates_oldest_first() {
         let m = material();
+        // (see fit_corpus_records_drops_cards_oldest_first below)
         // Three conversations of ~equal size; budget fits roughly two.
         let convs = vec![
             bundle("app", 100, 1, 400), // oldest - should be dropped
@@ -2072,5 +2103,36 @@ mod tests {
         assert!(may_overwrite(0, None));
         assert!(may_overwrite(0, Some(0)));
         assert!(!may_overwrite(0, Some(1)));
+    }
+}
+
+#[cfg(test)]
+mod corpus_budget_tests {
+    use super::fit_corpus_records;
+    use crate::corpus::{CorpusRecords, DocMeta, DocRecord};
+
+    fn doc(i: i64, card: &str) -> DocRecord {
+        DocRecord {
+            doc_id: format!("d{i}"),
+            added_at: i,
+            byte_size: 10,
+            chunk_count: 1,
+            meta: DocMeta { filename: format!("f{i}.txt"), summary: Some(card.to_string()), ..Default::default() },
+            ai_ids: vec!["ai".into()],
+        }
+    }
+
+    #[test]
+    fn fit_corpus_records_drops_cards_oldest_first() {
+        let card = "x".repeat(200);
+        let mut r = CorpusRecords { version: 1, documents: (1..=5).map(|i| doc(i, &card)).collect() };
+        let full = serde_json::to_vec(&r).unwrap().len();
+        assert_eq!(fit_corpus_records(&mut r, full), 0);
+        let dropped = fit_corpus_records(&mut r, full - 300);
+        assert_eq!(dropped, 2, "two cards of 200 bytes cover a 300-byte overshoot");
+        assert!(r.documents[0].meta.summary.is_none() && r.documents[1].meta.summary.is_none());
+        assert!(r.documents[4].meta.summary.is_some());
+        assert_eq!(r.documents.len(), 5, "no document record is ever dropped");
+        assert!(serde_json::to_vec(&r).unwrap().len() <= full - 300);
     }
 }

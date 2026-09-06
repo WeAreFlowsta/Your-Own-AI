@@ -54,6 +54,19 @@ export function corpusImport(paths: string[], aiId: string, names: string[] = []
   return invoke<ImportReport>('corpus_import', { paths, aiId, names });
 }
 
+export interface RereadReport {
+  restored: number;
+  unmatched: number;
+  remaining: number;
+  failed: { file: string; reason: string }[];
+  cancelled: boolean;
+}
+
+/** Read restored records' files again from the folders given (LibraryRereadNotice). */
+export function corpusReread(paths: string[]): Promise<RereadReport> {
+  return invoke<RereadReport>('corpus_reread', { paths });
+}
+
 export function corpusCancel(): Promise<void> {
   return invoke('corpus_cancel');
 }

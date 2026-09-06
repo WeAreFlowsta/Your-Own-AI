@@ -3,6 +3,7 @@ import { LuBookOpen, LuLoader2, LuPlus, LuUpload } from '@qwikest/icons/lucide';
 import LiquidMetalButton from './LiquidMetalButton';
 import { MemoryComponentOffer } from './MemoryComponentOffer';
 import { KnowledgeDocumentRow } from './KnowledgeDocumentRow';
+import { LibraryRereadNotice } from './LibraryRereadNotice';
 import { useFileDrop } from '../hooks/useFileDrop';
 import { useCorpusProgress, progressText } from '../hooks/useCorpusProgress';
 import { listKnowledgeDocuments, removeKnowledgeDocument } from '../utils/transcriptMemory';
@@ -162,6 +163,16 @@ export const KnowledgeSection = component$<KnowledgeSectionProps>((props) => {
         <p class="text-xs text-red-600 dark:text-red-400 mt-2">{props.store.knowledgeError}</p>
       )}
 
+      {docs.length > 0 && (
+        <div class="mt-3">
+          <LibraryRereadNotice
+            docs={docs}
+            onDone$={async () => {
+              props.store.knowledgeDocs = await listKnowledgeDocuments(props.aiId);
+            }}
+          />
+        </div>
+      )}
       {docs.length > 0 && (
         <ul class="mt-3 space-y-1.5">
           {docs.map((doc) => (

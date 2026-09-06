@@ -2,6 +2,7 @@ import { component$, $, useSignal, useVisibleTask$ } from '@builder.io/qwik';
 import { readThroughWarmup } from '../utils/recordsWarmup';
 import { LuFileText, LuPlus, LuLoader2, LuUpload } from '@qwikest/icons/lucide';
 import { KnowledgeDocumentRow } from './KnowledgeDocumentRow';
+import { LibraryRereadNotice } from './LibraryRereadNotice';
 import { useCorpusProgress, progressText } from '../hooks/useCorpusProgress';
 import LiquidMetalButton from './LiquidMetalButton';
 import {
@@ -175,11 +176,19 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
           on them whenever they're relevant.
         </p>
       ) : (
+        <>
+        <LibraryRereadNotice
+          docs={docs.value}
+          onDone$={async () => {
+            docs.value = await listKnowledgeDocuments(props.aiId);
+          }}
+        />
         <ul class="space-y-1.5">
           {docs.value.map((doc) => (
             <KnowledgeDocumentRow key={doc.docId} doc={doc} onToggleMine$={toggleMine} onRemove$={removeDoc} />
           ))}
         </ul>
+        </>
       )}
     </div>
   );

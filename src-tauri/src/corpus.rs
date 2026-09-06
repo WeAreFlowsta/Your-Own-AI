@@ -882,6 +882,146 @@ pub async fn corpus_import(
     Ok(report)
 }
 
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct RereadReport {
+    /// Documents that got their text back.
+    pub restored: usize,
+    /// Files in the folder that matched no waiting record.
+    pub unmatched: usize,
+    /// Records still waiting for their file after this pass.
+    pub remaining: usize,
+    pub failed: Vec<ImportFailure>,
+    pub cancelled: bool,
+}
+
+/// After a restore the records are back (name, card, flags, grants) with no
+/// passages: the backup never carries them. The person points at the folder
+/// their files live in; each file that matches a waiting record by name
+/// (same size preferred) is read and embedded into that record, keeping
+/// its id, its card, its Mine flag and every AI's grant.
+#[tauri::command]
+pub async fn corpus_reread(
+    app: AppHandle,
+    hc_state: State<'_, Arc<HolochainState>>,
+    llm_state: State<'_, crate::llm::LLMState>,
+    paths: Vec<String>,
+) -> Result<RereadReport, String> {
+    CANCEL.store(false, Ordering::SeqCst);
+    let key = data_key(&hc_state)?;
+    let mut conn = open(&app)?;
+    // Waiting records: (doc_id, byte_size, meta)
+    let mut waiting: Vec<(String, i64, DocMeta)> = {
+        let mut stmt = conn
+            .prepare("SELECT doc_id, byte_size, meta_enc FROM documents WHERE chunk_count = 0")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, Vec<u8>>(2)?)))
+            .map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, size, blob) = row.map_err(|e| e.to_string())?;
+            let meta: DocMeta = serde_json::from_slice(&dec(&key, &blob)?).map_err(|e| e.to_string())?;
+            out.push((id, size, meta));
+        }
+        out
+    };
+    let mut report = RereadReport::default();
+    if waiting.is_empty() {
+        return Ok(report);
+    }
+    let files = walk(&paths);
+    let total = files.len();
+    let embed_model = EMBEDDING_MODEL_FILE.to_string();
+    for (n, path) in files.iter().enumerate() {
+        if CANCEL.load(Ordering::SeqCst) {
+            report.cancelled = true;
+            break;
+        }
+        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("document").to_string();
+        let size = std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(-1);
+        let lower = name.to_lowercase();
+        let by_name: Vec<usize> = waiting
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, _, m))| m.filename.to_lowercase() == lower)
+            .map(|(i, _)| i)
+            .collect();
+        let pick = by_name
+            .iter()
+            .copied()
+            .find(|&i| waiting[i].1 == size)
+            .or_else(|| if by_name.len() == 1 { Some(by_name[0]) } else { None });
+        let Some(i) = pick else {
+            report.unmatched += 1;
+            continue;
+        };
+        emit_progress(&app, &Progress { phase: "reading", file: name.clone(), done: n, total, added: report.restored, failed: report.failed.len() });
+        let text = match extract_text(path) {
+            Ok(t) => t,
+            Err(e) => {
+                report.failed.push(ImportFailure { file: name, reason: e });
+                continue;
+            }
+        };
+        let passages = chunk_text(&text, PASSAGE_CHARS);
+        if passages.is_empty() {
+            report.failed.push(ImportFailure { file: name, reason: "no readable text".into() });
+            continue;
+        }
+        emit_progress(&app, &Progress { phase: "embedding", file: name.clone(), done: n, total, added: report.restored, failed: report.failed.len() });
+        let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(passages.len());
+        let mut failed = None;
+        for batch in passages.chunks(EMBED_BATCH) {
+            if CANCEL.load(Ordering::SeqCst) {
+                break;
+            }
+            match crate::llm::embed_texts(app.clone(), llm_state.clone(), batch.to_vec(), embed_model.clone()).await {
+                Ok(v) => vectors.extend(v),
+                Err(e) => {
+                    failed = Some(e);
+                    break;
+                }
+            }
+        }
+        if let Some(e) = failed {
+            report.failed.push(ImportFailure { file: name, reason: format!("embedding: {e}") });
+            continue;
+        }
+        if vectors.len() != passages.len() {
+            report.cancelled = true;
+            break;
+        }
+        let (doc_id, _, mut meta) = waiting.remove(i);
+        let path_str = path.to_string_lossy().to_string();
+        meta.path = Some(path_str.clone());
+        let meta_json = serde_json::to_vec(&meta).map_err(|e| e.to_string())?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM passages WHERE doc_id = ?1", params![doc_id]).map_err(|e| e.to_string())?;
+        for (idx, (text, vec)) in passages.iter().zip(vectors.iter()).enumerate() {
+            tx.execute(
+                "INSERT INTO passages (doc_id, idx, text_enc, vec_enc) VALUES (?1, ?2, ?3, ?4)",
+                params![doc_id, idx as i64, enc(&key, text.as_bytes())?, enc(&key, &vec_to_bytes(vec))?],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        tx.execute(
+            "UPDATE documents SET chunk_count = ?2, byte_size = ?3, path_hash = ?4, meta_enc = ?5 WHERE doc_id = ?1",
+            params![doc_id, passages.len() as i64, size.max(0), path_hash(&path_str), enc(&key, &meta_json)?],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        report.restored += 1;
+    }
+    report.remaining = waiting.len();
+    cache_invalidate();
+    emit_progress(&app, &Progress { phase: "done", file: String::new(), done: total, total, added: report.restored, failed: report.failed.len() });
+    log::info!(
+        "[corpus] re-read: {} restored, {} unmatched, {} failed, {} still waiting, cancelled={}",
+        report.restored, report.unmatched, report.failed.len(), report.remaining, report.cancelled
+    );
+    Ok(report)
+}
+
 #[tauri::command]
 pub fn corpus_cancel() {
     CANCEL.store(true, Ordering::SeqCst);

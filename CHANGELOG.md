@@ -46,9 +46,14 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   author field (DOCX, ODT, PDF, EPUB) against your Flowsta name, username
   and the name you have told an AI, and stays yours to flip.
 - EPUB books can be added to the library, read in chapter order.
-- The Vault backup carries your library's records, summaries and tags, not
-  the passages: those are read again from your files after a restore, so a
-  large library can never be the reason a backup fails.
+- The Vault backup carries your library's records, cards and tags, not
+  the passages, so a large library can never be the reason a backup fails.
+  After a restore, the Knowledge tab and the memory page say which
+  documents came back without their text and offer "Re-read from folder":
+  point at where the files live and each one is read again into the same
+  record, keeping its card, its Mine tag and every AI's access. Records
+  are capped in the backup at a size that holds thousands of documents;
+  over it, the oldest cards are left out first and nothing else.
 
 ### Your AIs
 - An AI's description keeps itself current. It is now a small template
