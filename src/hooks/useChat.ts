@@ -1323,14 +1323,15 @@ export function useChat(props: UseChatProps) {
         let docContext = "";
         {
           const qvec = await queryVecPromise;
-          let passages = 8;
+          // Online: no measured limit (the block caps itself). Local: the
+          // room left in the window after the prompt and the history.
+          let room = Number.POSITIVE_INFINITY;
           if (!isOnlineModel && !isExternalModel) {
             const base = await turnTokensFor(state.messages, userInput, fileContext, images.length, systemPrompt);
             await growContextFor(base);
-            const room = roomCtx > 0 ? roomCtx - base : 0;
-            passages = Math.max(0, Math.min(8, Math.floor(room / 300)));
+            room = roomCtx > 0 ? Math.max(0, roomCtx - base) : 0;
           }
-          docContext = await loadDocumentContext(selectedAi.id, qvec, passages);
+          docContext = await loadDocumentContext(selectedAi.id, qvec, room);
           if (docContext) {
             const last = chatHistory[chatHistory.length - 1];
             const wire = (text: string) => `${docContext}\n\n[User question]\n${text}`;

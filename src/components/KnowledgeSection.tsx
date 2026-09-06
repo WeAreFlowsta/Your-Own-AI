@@ -1,5 +1,5 @@
 import { component$, $, useSignal, useVisibleTask$, type QRL } from '@builder.io/qwik';
-import { LuBookOpen, LuLoader2, LuPlus } from '@qwikest/icons/lucide';
+import { LuBookOpen, LuLoader2, LuPlus, LuUpload } from '@qwikest/icons/lucide';
 import LiquidMetalButton from './LiquidMetalButton';
 import { MemoryComponentOffer } from './MemoryComponentOffer';
 import { KnowledgeDocumentRow } from './KnowledgeDocumentRow';
@@ -121,29 +121,37 @@ export const KnowledgeSection = component$<KnowledgeSectionProps>((props) => {
 
       <MemoryComponentOffer onReady$={onReady} />
 
+      {/* The drop zone is the surface, not a footnote: icon, one line that
+          says drop, the file types, and the picker button inside it. */}
       <div
-        class={`rounded-lg border border-dashed px-3 py-3 flex flex-wrap items-center gap-3 transition-colors ${
+        class={`rounded-lg border-2 border-dashed px-4 py-5 flex flex-col items-center text-center gap-1.5 transition-colors ${
           hovering.value
             ? 'border-[var(--bg-button-primary)] bg-[var(--bg-dropdown-hover)]'
-            : 'border-[var(--border-subtle)]'
+            : 'border-[var(--border-subtle)] bg-[var(--bg-main)]'
         }`}
       >
-        <LiquidMetalButton
-          onClick$={addDocuments}
-          disabled={props.store.knowledgeBusy || !ready.value}
-          class="flex items-center gap-2 px-3 py-1.5 text-xs"
-        >
-          {props.store.knowledgeBusy ? <LuLoader2 class="w-4 h-4 animate-spin" /> : <LuPlus class="w-4 h-4" />}
-          {props.store.knowledgeBusy ? 'Adding...' : 'Add documents'}
-        </LiquidMetalButton>
-        <span class="text-xs text-[var(--text-muted)]">
-          {hovering.value ? 'Drop to add' : 'or drop files or folders here'}
-        </span>
-        {props.store.knowledgeBusy && (
-          <button type="button" class="text-xs text-[var(--text-link)] hover:underline ml-auto" onClick$={cancel}>
-            Stop
-          </button>
-        )}
+        <LuUpload class={`w-5 h-5 ${hovering.value ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`} />
+        <p class="text-sm text-[var(--text-secondary)]">
+          {hovering.value ? 'Drop to add' : 'Drop files or folders here'}
+        </p>
+        <p class="text-[11px] text-[var(--text-muted)]">
+          PDF, Word, EPUB, text, spreadsheets and code. A folder is read through.
+        </p>
+        <div class="flex items-center gap-3 mt-1.5">
+          <LiquidMetalButton
+            onClick$={addDocuments}
+            disabled={props.store.knowledgeBusy || !ready.value}
+            class="flex items-center gap-2 px-3 py-1.5 text-xs"
+          >
+            {props.store.knowledgeBusy ? <LuLoader2 class="w-4 h-4 animate-spin" /> : <LuPlus class="w-4 h-4" />}
+            {props.store.knowledgeBusy ? 'Adding...' : 'Choose files'}
+          </LiquidMetalButton>
+          {props.store.knowledgeBusy && (
+            <button type="button" class="text-xs text-[var(--text-link)] hover:underline" onClick$={cancel}>
+              Stop
+            </button>
+          )}
+        </div>
       </div>
 
       {props.store.knowledgeBusy && progress.value && (

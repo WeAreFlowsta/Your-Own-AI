@@ -502,32 +502,69 @@ export function removePendingTurn(id: string): void {
 }
 
 /**
- * Passages from the person's library this AI may draw on, for one question.
- * Returned as a block the send path puts in the user turn, next to the
- * question (where a small model reads it best), never in the system prompt.
- * `maxPassages` is sized by the caller from the model's window; 0 = none.
+ * What the send path puts in the user turn, next to the question (where a
+ * small model reads it best), never in the system prompt:
+ *  1. a card for every document this AI has been granted, so a question
+ *     about the collection ("common threads in my documents") sees all of
+ *     them by name, and
+ *  2. the passages that match this question.
+ * `roomTokens` is the room the caller measured in the model's window
+ * (Infinity online): cards take up to a third of it, at the richest level
+ * that fits (full card, first sentence, name only); passages get the rest
+ * at ~300 tokens each, up to `maxPassages`.
  */
 export async function loadDocumentContext(
   aiId: string,
   queryVec: number[] | null,
-  maxPassages: number,
+  roomTokens: number,
+  maxPassages = 8,
 ): Promise<string> {
-  if (!aiId || !queryVec || maxPassages <= 0) return "";
+  if (!aiId || roomTokens <= 0) return "";
   try {
-    const { corpusRecall } = await import("./corpus");
-    const hits = await corpusRecall(aiId, queryVec, maxPassages);
-    if (hits.length === 0) return "";
-    const byDoc = new Map<string, { name: string; mine: boolean; texts: string[] }>();
-    for (const h of hits) {
-      const d = byDoc.get(h.doc_id) ?? { name: h.filename, mine: h.mine, texts: [] };
-      d.texts.push(h.text);
-      byDoc.set(h.doc_id, d);
+    const { corpusRecall, corpusDocuments } = await import("./corpus");
+    const docs = (await corpusDocuments(aiId)).slice(0, 40);
+    if (docs.length === 0) return "";
+    const tokens = (t: string) => Math.ceil(t.length / 4);
+    const label = (d: (typeof docs)[number]) =>
+      `"${d.meta.title || d.meta.filename}"${d.meta.mine ? " (written by you)" : ""}`;
+    const firstSentence = (t: string) => {
+      const m = t.match(/^[^.!?]*[.!?]/);
+      return m ? m[0] : t.slice(0, 160);
+    };
+    const levels = [
+      docs.map((d) => `- ${label(d)}${d.meta.summary ? `: ${d.meta.summary}` : ""}`),
+      docs.map((d) => `- ${label(d)}${d.meta.summary ? `: ${firstSentence(d.meta.summary)}` : ""}`),
+      docs.map((d) => `- ${label(d)}`),
+    ];
+    const cardBudget = Number.isFinite(roomTokens) ? Math.floor(roomTokens / 3) : Number.POSITIVE_INFINITY;
+    let cards = levels[levels.length - 1].join("\n");
+    for (const lines of levels) {
+      const text = lines.join("\n");
+      if (tokens(text) <= cardBudget) {
+        cards = text;
+        break;
+      }
     }
-    let block = "[From your documents]\n";
-    for (const d of byDoc.values()) {
-      block += `Document "${d.name}"${d.mine ? " (written by you)" : ""}:\n` + d.texts.map((t) => `- ${t}`).join("\n") + "\n";
+    let block = `[From your documents]\nThis AI has ${docs.length === 1 ? "one document" : `${docs.length} documents`} from your library:\n${cards}\n`;
+
+    const room = Number.isFinite(roomTokens) ? roomTokens - tokens(cards) : Number.POSITIVE_INFINITY;
+    const passages = Number.isFinite(room) ? Math.max(0, Math.min(maxPassages, Math.floor(room / 300))) : maxPassages;
+    if (queryVec && passages > 0) {
+      const hits = await corpusRecall(aiId, queryVec, passages);
+      if (hits.length > 0) {
+        const byDoc = new Map<string, { name: string; texts: string[] }>();
+        for (const h of hits) {
+          const d = byDoc.get(h.doc_id) ?? { name: h.filename, texts: [] };
+          d.texts.push(h.text);
+          byDoc.set(h.doc_id, d);
+        }
+        block += "\nPassages that match this question:\n";
+        for (const d of byDoc.values()) {
+          block += `Document "${d.name}":\n` + d.texts.map((t) => `- ${t}`).join("\n") + "\n";
+        }
+      }
     }
-    block += "\nUse these passages when they answer the question, and say which document they came from.";
+    block += "\nUse these when they answer the question, and say which document they came from.";
     return block;
   } catch (e) {
     console.warn("[Memory] document context skipped:", e);

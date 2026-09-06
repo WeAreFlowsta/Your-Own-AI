@@ -27,6 +27,16 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   model or the local model you have loaded, never online: what it is, what
   it covers, who it is for. Long documents are read in sampled parts. The
   card shows under the document on the Knowledge tab and the memory page.
+- Every answer sees the whole collection. The document block an AI is
+  given with a question now opens with a card for each document it has,
+  by name, then the passages that match the question, so "what do my
+  documents have in common" is answered across all of them, not from the
+  two a passage search happened to reach. On a local model the block is
+  cut to the room the window really has; the passages ride next to the
+  question rather than in the system prompt, where a small model reads
+  them best.
+- The Knowledge tab and the memory page show a real drop zone: "Drop files
+  or folders here", the file types, and a Choose files button inside it.
 - "What your library says about you": two or three sentences on the memory
   page, written on your device from the cards, your own writing first and
   then what you keep. Your AIs are given it the way they are given the

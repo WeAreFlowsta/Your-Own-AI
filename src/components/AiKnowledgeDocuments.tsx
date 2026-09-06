@@ -1,6 +1,6 @@
 import { component$, $, useSignal, useVisibleTask$ } from '@builder.io/qwik';
 import { readThroughWarmup } from '../utils/recordsWarmup';
-import { LuFileText, LuPlus, LuLoader2 } from '@qwikest/icons/lucide';
+import { LuFileText, LuPlus, LuLoader2, LuUpload } from '@qwikest/icons/lucide';
 import { KnowledgeDocumentRow } from './KnowledgeDocumentRow';
 import { useCorpusProgress, progressText } from '../hooks/useCorpusProgress';
 import LiquidMetalButton from './LiquidMetalButton';
@@ -144,9 +144,19 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
 
       <MemoryComponentOffer onReady$={onReady} />
 
-      {hovering.value && (
-        <p class="text-xs text-[var(--text-secondary)] mb-2">Drop to add</p>
-      )}
+      <div
+        class={`mb-3 rounded-lg border-2 border-dashed px-4 py-3 flex items-center justify-center gap-2 transition-colors ${
+          hovering.value
+            ? 'border-[var(--bg-button-primary)] bg-[var(--bg-dropdown-hover)]'
+            : 'border-[var(--border-subtle)] bg-[var(--bg-main)]'
+        }`}
+      >
+        <LuUpload class={`w-4 h-4 ${hovering.value ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`} />
+        <p class="text-sm text-[var(--text-secondary)]">
+          {hovering.value ? 'Drop to add' : 'Drop files or folders here'}
+          <span class="text-[var(--text-muted)]"> - PDF, Word, EPUB, text, spreadsheets and code</span>
+        </p>
+      </div>
 
       {busy.value && progress.value && (
         <p class="text-xs text-[var(--text-muted)] mb-2 truncate">{progressText(progress.value)}</p>
@@ -161,8 +171,8 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
         </p>
       ) : docs.value.length === 0 ? (
         <p class="text-sm text-[var(--text-muted)]">
-          No documents yet. Add files here (or in the Knowledge tab when editing{' '}
-          {name}) and it will draw on them whenever they're relevant.
+          No documents yet. Drop files above or choose them, and {name} will draw
+          on them whenever they're relevant.
         </p>
       ) : (
         <ul class="space-y-1.5">
