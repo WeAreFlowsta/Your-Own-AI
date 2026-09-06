@@ -1720,8 +1720,13 @@ pub fn backup_when_vault_unlocks(app: &tauri::AppHandle) {
 pub fn start_daily_backup_check(app: &tauri::AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        // First pass three minutes after launch (records warmed, the Vault
+        // probed), then every six hours. Opening the app with the Vault
+        // unlocked used to back nothing up until the next chat.
+        let mut wait = std::time::Duration::from_secs(180);
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(6 * 3600)).await;
+            tokio::time::sleep(wait).await;
+            wait = std::time::Duration::from_secs(6 * 3600);
             let fresh = last_backup_outcome()
                 .map(|o| {
                     o.get("status").and_then(|s| s.as_str()) == Some("ok")

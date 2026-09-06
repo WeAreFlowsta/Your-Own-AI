@@ -88,6 +88,8 @@ export default component$<FlowstaAccountProps>((props) => {
   // must be visible here, never log-only (this section says backups are
   // automatic, so silence reads as success).
   const lastBackup = useSignal<{ status: string; reason?: string } | null>(null);
+  const backingUp = useSignal(false);
+  const backupNote = useSignal("");
   const escrowBusy = useSignal(false);
   // Which confirmation dialog is open, if any.
   const confirmAction = useSignal<"restore" | "keep_local" | "restore_data" | null>(null);
@@ -674,6 +676,32 @@ export default component$<FlowstaAccountProps>((props) => {
             ✓ Recovery key and conversations back up to your Vault
             automatically.
           </p>
+        )}
+        {signedIn() && section === "backups" && escrow.value?.state === "synced" && !escrow.value.backups_held && (
+          <div class="mt-2 flex items-center gap-3">
+            <button
+              type="button"
+              disabled={backingUp.value}
+              class="text-xs text-[var(--text-link)] hover:underline disabled:opacity-60"
+              onClick$={async () => {
+                backingUp.value = true;
+                backupNote.value = "";
+                try {
+                  const r = await invoke<{ records?: number; skipped?: string }>("vault_backup_now");
+                  backupNote.value = r?.skipped
+                    ? "Held: " + r.skipped
+                    : "Backed up" + (r?.records != null ? ` (${r.records} records)` : "") + ".";
+                } catch (e) {
+                  backupNote.value = `Backup did not complete (${String(e)}).`;
+                } finally {
+                  backingUp.value = false;
+                }
+              }}
+            >
+              {backingUp.value ? "Backing up..." : "Back up now"}
+            </button>
+            {backupNote.value && <span class="text-xs text-[var(--text-muted)]">{backupNote.value}</span>}
+          </div>
         )}
         {signedIn() && escrow.value?.backups_held && (
           <p class="mt-2 text-xs text-amber-300">
