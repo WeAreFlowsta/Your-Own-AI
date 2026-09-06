@@ -136,6 +136,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   turn.
 
 ### Your records
+- A backup that finds your Vault locked now waits for the unlock and
+  runs then, instead of being dropped. The app also checks once a day
+  while it runs and backs up if no backup has succeeded in the last
+  twenty-four hours. Before, a person who chatted with the Vault closed
+  could go weeks without a backup and nothing tried again.
 - The conversations list no longer knocks on tidied lineage cells. Every
   refresh used to call each disabled generation of an AI and log a line
   for the failure; only connected generations are read now.

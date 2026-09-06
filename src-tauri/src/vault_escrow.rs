@@ -1526,6 +1526,7 @@ pub async fn write_full_backup(app: &tauri::AppHandle) -> Result<serde_json::Val
                         "status": "ok",
                         "records": v.get("records"),
                         "at": iso_now(),
+                        "at_secs": unix_now_secs(),
                     }),
                 );
             }
@@ -1669,9 +1670,79 @@ pub fn schedule_full_backup(app: &tauri::AppHandle) {
             Err(e) if e == "unlinked" || e == "vault_unavailable" => {
                 log::debug!("[escrow] full backup skipped: {}", e);
             }
+            Err(e) if e == "vault_locked" => {
+                log::info!("[escrow] full backup waits for the Vault to unlock");
+                backup_when_vault_unlocks(&app);
+            }
             Err(e) => log::warn!("[escrow] full backup failed: {}", e),
         }
     });
+}
+
+/// A backup that found the Vault locked runs the moment it unlocks: poll
+/// the Vault every two minutes for up to a day, single-flight. Before this
+/// a write with the Vault locked was simply dropped, and a person who
+/// chats with the Vault closed could go weeks without a backup (Eric's
+/// Windows box, 2026-09-06: last backup 32 days old).
+pub fn backup_when_vault_unlocks(app: &tauri::AppHandle) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static WAITING: AtomicBool = AtomicBool::new(false);
+    if WAITING.swap(true, Ordering::SeqCst) {
+        return; // one watcher is enough; it backs up everything pending
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut waited = 0u32;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+            waited += 1;
+            let vault = flowsta::find_vault().await;
+            if vault.port.is_some() && vault.unlocked {
+                match write_full_backup(&app).await {
+                    Ok(_) => log::info!("[escrow] backup written after the Vault unlocked ({} min wait)", waited * 2),
+                    Err(e) if e == "vault_locked" => continue,
+                    Err(e) => log::warn!("[escrow] backup after unlock failed: {}", e),
+                }
+                break;
+            }
+            if waited >= 720 {
+                log::info!("[escrow] the Vault stayed locked for a day - the next write or launch tries again");
+                break;
+            }
+        }
+        WAITING.store(false, Ordering::SeqCst);
+    });
+}
+
+/// Daily safety net while the app runs: if no backup has succeeded in the
+/// last 24 hours, try one (the debounce only fires on writes, and a launch
+/// with the Vault locked used to be the end of it).
+pub fn start_daily_backup_check(app: &tauri::AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(6 * 3600)).await;
+            let fresh = last_backup_outcome()
+                .map(|o| {
+                    o.get("status").and_then(|s| s.as_str()) == Some("ok")
+                        && o.get("at_secs").and_then(|a| a.as_u64()).map(|a| unix_now_secs().saturating_sub(a) < 24 * 3600).unwrap_or(false)
+                })
+                .unwrap_or(false);
+            if fresh {
+                continue;
+            }
+            match write_full_backup(&app).await {
+                Ok(_) => log::info!("[escrow] daily check: backup written"),
+                Err(e) if e == "unlinked" || e == "vault_unavailable" => {}
+                Err(e) if e == "vault_locked" => backup_when_vault_unlocks(&app),
+                Err(e) => log::warn!("[escrow] daily check: backup failed: {}", e),
+            }
+        }
+    });
+}
+
+fn unix_now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 /// Manual full backup for the UI ("Back up now") and for testing.

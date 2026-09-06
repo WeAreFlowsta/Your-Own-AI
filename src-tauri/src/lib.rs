@@ -833,8 +833,15 @@ pub fn run() {
                 // With the link settled, reconcile the transcript-key escrow
                 // too (write-if-absent only; conflicts wait for the user in
                 // Settings). Covers signed-in users who never open Settings.
-                let status = vault_escrow::vault_escrow_sync(link_app_handle).await;
+                let status = vault_escrow::vault_escrow_sync(link_app_handle.clone()).await;
                 log::info!("[escrow] launch sync: {}", status.state);
+                // A Vault that is locked at launch is the common case for
+                // someone who opens the app first: back up when it unlocks,
+                // and once a day regardless of writes.
+                if status.state == "vault_locked" {
+                    vault_escrow::backup_when_vault_unlocks(&link_app_handle);
+                }
+                vault_escrow::start_daily_backup_check(&link_app_handle);
             });
 
             // Register Holochain state synchronously (manager filled when conductor starts)
