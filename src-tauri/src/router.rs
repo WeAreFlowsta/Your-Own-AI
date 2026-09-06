@@ -533,6 +533,23 @@ pub(crate) async fn medical_check(
 /// Cheap, high-precision keyword/temporal cues — deliberately conservative
 /// (privacy-first: bias toward staying offline). The bge-small *semantic* gate
 /// (Stage 1) catches paraphrases this misses.
+/// Small talk with a time word in it ("hi, how are you doing today") is not
+/// a live-web ask. With embeddings the fresh anchors settle this; without
+/// them the keyword cue alone decides, so this shape is excluded by hand.
+/// Short, opens with a greeting, and carries no question about the world.
+pub(crate) fn looks_small_talk(query: &str) -> bool {
+    let q = query.trim().to_lowercase();
+    let words: Vec<&str> = q.split_whitespace().collect();
+    if words.is_empty() || words.len() > 10 {
+        return false;
+    }
+    let cleaned = q.trim_start_matches(|c: char| !c.is_alphanumeric());
+    let greeting = ["hi", "hello", "hey", "hiya", "yo", "good morning", "good afternoon", "good evening", "morning", "evening", "how are you", "how's it going", "how is it going", "what's up", "whats up", "howdy"];
+    let opens = greeting.iter().any(|g| cleaned.starts_with(g));
+    let asks_world = ["news", "weather", "price", "score", "stock", "happen", "date", "time is", "what day", "who won", "election", "market", "headline"];
+    opens && !asks_world.iter().any(|w| q.contains(w))
+}
+
 fn looks_time_sensitive(query: &str) -> bool {
     let q = query.to_lowercase();
     const CUES: &[&str] = &[
@@ -2113,7 +2130,10 @@ async fn route_core(
         let cue_confirmed = if looks_time_sensitive(query) {
             match fresh_scores(app, query, query_vec).await {
                 Some((f, b)) => f >= b && (!local_first || f >= threshold_for("balanced")),
-                None => true,
+                // No embeddings: the cue counts (the 09-03 decision), except
+                // for a greeting that merely contains a time word (the Air
+                // matrix, 2026-09-06: "hi, how are you doing today").
+                None => !looks_small_talk(query),
             }
         } else {
             false
@@ -2412,6 +2432,16 @@ pub async fn route_model(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn small_talk_with_a_time_word_is_not_a_live_web_ask() {
+        assert!(super::looks_small_talk("hi, how are you doing today"));
+        assert!(super::looks_small_talk("Good morning! how's it going today?"));
+        assert!(!super::looks_small_talk("hi, what's the weather today"));
+        assert!(!super::looks_small_talk("what happened in the news today"));
+        assert!(!super::looks_small_talk("today I want to plan a trip to Lisbon with three friends who like hiking and food"));
+        assert!(super::looks_time_sensitive("hi, how are you doing today"), "the cue still fires; the small-talk check is what excludes it");
+    }
+
     use super::*;
 
     fn pm(id: &str, name: &str, desc: &str, input: f64, output: f64, search: Option<f64>) -> crate::flowsta::OnlineModel {

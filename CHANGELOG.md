@@ -70,6 +70,12 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   Qwen 3.8 Flash Next. Every file in the catalog was checked to load on
   the new engine before the pin moved.
 
+### Routing
+- A greeting with a time word in it ("hi, how are you doing today") stays
+  on your device on a computer without the memory model. The word alone
+  used to read as a live-web ask there; a real ask ("what's the weather
+  today") still goes online.
+
 ### Security
 - The three model servers on this computer (chat, memory, helper) take a
   key on every request that only the app holds, made fresh each launch.
