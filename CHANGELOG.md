@@ -55,6 +55,21 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   are capped in the backup at a size that holds thousands of documents;
   over it, the oldest cards are left out first and nothing else.
 
+### Security
+- The three model servers on this computer (chat, memory, helper) take a
+  key on every request that only the app holds, made fresh each launch.
+  A web page open in a browser on the same machine cannot reach them.
+- The CUDA engine download comes only from the app's pinned release and is
+  checked against its published checksum before it is installed.
+- Documents and skills read from archives (Word, OpenDocument, EPUB, skill
+  zips) are read within fixed bounds, and a folder dropped on the library
+  is walked without following links.
+- The app's window holds no shell permissions; everything that runs a
+  program runs from the app's own code with the command shown first.
+- "What your library says about you" is kept in the encrypted memory store
+  with the facts, not in the window's local storage.
+- Dependencies: h2 0.4.19; build tooling refreshed.
+
 ### Your AIs
 - An AI's description keeps itself current. It is now a small template
   filled from the AI's live settings wherever it is shown: {name},
