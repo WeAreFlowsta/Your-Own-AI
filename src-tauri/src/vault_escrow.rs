@@ -1038,7 +1038,10 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
                             "labels": prev.labels,
                         }));
                     } else {
-                        log::warn!("[escrow] a conversation's entries could not be read and it has no previous backup - it waits for the next pass: {}", e);
+                        log::warn!(
+                            "[escrow] conversation {}… (started {}) - entries could not be read and it has no previous backup; it waits for the next pass: {}",
+                            &conv_hash_hex[..conv_hash_hex.len().min(16)], started_at, e
+                        );
                     }
                     continue;
                 }
@@ -1513,6 +1516,9 @@ async fn write_incremental_backup(
     // Conversations of a cell that could not be read this time stay listed
     // from the previous manifest: their objects are still in the Vault.
     let carried_n = carried.len();
+    for c in &carried {
+        total_records += c["records"].as_u64().unwrap_or(0);
+    }
     index.extend(carried);
     let mut manifest = serde_json::json!({
         "version": 2,
@@ -1571,7 +1577,7 @@ async fn write_incremental_backup(
     save_sync_state(app, &sync);
     save_last_index(app, &index);
     if carried_n > 0 {
-        log::warn!("[escrow] {} conversation(s) listed from the previous backup (their cell did not answer)", carried_n);
+        log::info!("[escrow] {} conversation(s) listed from the previous backup without a read (unchanged, or their cell did not answer)", carried_n);
     }
 
     log::info!(
