@@ -15,7 +15,7 @@ const DOC_EXTENSIONS = [
  * failed (empty = all good). Failures are usually the embedding model still
  * downloading, or an unreadable/scanned file.
  */
-export async function pickAndIngestDocuments(aiId: string): Promise<{ failures: string[]; added: number; already: number; cancelled: boolean } | null> {
+export async function pickAndIngestDocuments(aiId: string): Promise<IngestOutcome | null> {
   const { open } = await import('@tauri-apps/plugin-dialog');
   const selected = await open({
     multiple: true,
@@ -36,7 +36,9 @@ export function isDocumentPath(path: string): boolean {
  * The reading, cutting and embedding happen in Rust (src-tauri/src/corpus.rs)
  * one document at a time; progress arrives on `corpus-progress`.
  */
-export async function ingestDocumentPaths(aiId: string, paths: string[]): Promise<{ failures: string[]; added: number; already: number; cancelled: boolean }> {
+export type IngestOutcome = { failures: string[]; added: number; already: number; reread: number; cancelled: boolean };
+
+export async function ingestDocumentPaths(aiId: string, paths: string[]): Promise<IngestOutcome> {
   const { corpusImport } = await import('./corpus');
   const { userNames } = await import('./userNames');
   const report = await corpusImport(paths, aiId, await userNames());
@@ -44,6 +46,7 @@ export async function ingestDocumentPaths(aiId: string, paths: string[]): Promis
     failures: report.failed.map((f) => `${f.file} (${f.reason})`),
     added: report.added.length,
     already: report.already,
+    reread: report.reread ?? 0,
     cancelled: report.cancelled,
   };
 }

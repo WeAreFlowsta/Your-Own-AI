@@ -8,7 +8,7 @@ import { useFileDrop } from '../hooks/useFileDrop';
 import { useCorpusProgress, progressText } from '../hooks/useCorpusProgress';
 import { listKnowledgeDocuments, removeKnowledgeDocument } from '../utils/transcriptMemory';
 import { isEmbeddingModelReady } from '../utils/embeddings';
-import { pickAndIngestDocuments, ingestDocumentPaths, ingestFailureMessage } from '../utils/knowledgeIngest';
+import { pickAndIngestDocuments, ingestDocumentPaths, ingestFailureMessage, type IngestOutcome } from '../utils/knowledgeIngest';
 
 /** Store slice this section reads/writes (a subset of AiFormModal's store). */
 interface KnowledgeStore {
@@ -22,7 +22,7 @@ interface KnowledgeSectionProps {
   store: KnowledgeStore;
 }
 
-type Outcome = { failures: string[]; added: number; already: number; cancelled: boolean } | null;
+type Outcome = IngestOutcome | null;
 
 /**
  * "Knowledge" tab of the edit-AI dialog: the documents this AI may draw on,
@@ -54,6 +54,7 @@ export const KnowledgeSection = component$<KnowledgeSectionProps>((props) => {
     props.store.knowledgeDocs = await listKnowledgeDocuments(props.aiId);
     const parts: string[] = [];
     if (picked.added) parts.push(`Added ${picked.added} ${picked.added === 1 ? 'document' : 'documents'}`);
+    if (picked.reread) parts.push(`Read ${picked.reread} again`);
     if (picked.already) parts.push(`${picked.already} already here`);
     if (picked.cancelled) parts.push('stopped early');
     notice.value = parts.join(' · ');

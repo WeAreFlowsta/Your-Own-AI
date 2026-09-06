@@ -28,6 +28,8 @@ export interface ImportReport {
   added: DocRecord[];
   failed: { file: string; reason: string }[];
   already: number;
+  /** Files read back into records that came from a backup without their text. */
+  reread: number;
   cancelled: boolean;
 }
 

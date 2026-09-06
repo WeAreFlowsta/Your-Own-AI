@@ -86,6 +86,10 @@ pub struct ImportReport {
     pub failed: Vec<ImportFailure>,
     /// Files skipped because the same path was already in the library.
     pub already: usize,
+    /// Files that matched a record restored without its text (name, and
+    /// size when it agrees) and were read back into that record.
+    #[serde(default)]
+    pub reread: usize,
     pub cancelled: bool,
 }
 
@@ -818,6 +822,11 @@ pub async fn corpus_import(
     let total = files.len();
     let mut report = ImportReport::default();
     let mut conn = open(&app)?;
+    // Records restored from a backup without their text: a dropped file
+    // that matches one goes back into that record (its card, Mine flag and
+    // grants kept) instead of becoming a second document. The files can
+    // come from anywhere - this is the re-read path for dropped files.
+    let mut waiting = waiting_records(&conn, &key)?;
     let embed_model = EMBEDDING_MODEL_FILE.to_string();
     for (n, path) in files.iter().enumerate() {
         if CANCEL.load(Ordering::SeqCst) {
@@ -834,6 +843,8 @@ pub async fn corpus_import(
             report.already += 1;
             continue;
         }
+        let size = std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(-1);
+        let waiting_match = match_waiting(&waiting, &name, size);
         let text = match extract_text(path) {
             Ok(t) => t,
             Err(e) => {
@@ -869,7 +880,15 @@ pub async fn corpus_import(
             report.cancelled = true;
             break;
         }
-        let byte_size = std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(text.len() as i64);
+        if let Some(i) = waiting_match {
+            let (doc_id, _, meta) = waiting.remove(i);
+            store_reread(&mut conn, &key, &doc_id, meta, &path_str, size.max(0), &passages, &vectors)?;
+            conn.execute("INSERT OR IGNORE INTO grants (doc_id, ai_id) VALUES (?1, ?2)", params![doc_id, ai_id])
+                .map_err(|e| e.to_string())?;
+            report.reread += 1;
+            continue;
+        }
+        let byte_size = if size >= 0 { size } else { text.len() as i64 };
         let info = doc_info(path);
         let mine = info.author.as_deref().map(|a| looks_mine(a, &names)).unwrap_or(false);
         let meta = DocMeta { filename: name.clone(), path: Some(path_str), author: info.author, title: info.title, mine, ..Default::default() };
@@ -881,9 +900,10 @@ pub async fn corpus_import(
     cache_invalidate();
     emit_progress(&app, &Progress { phase: "done", file: String::new(), done: total, total, added: report.added.len(), failed: report.failed.len() });
     log::info!(
-        "[corpus] import for AI {}: {} added, {} failed, {} already, cancelled={}",
+        "[corpus] import for AI {}: {} added, {} read again, {} failed, {} already, cancelled={}",
         &ai_id[..8.min(ai_id.len())],
         report.added.len(),
+        report.reread,
         report.failed.len(),
         report.already,
         report.cancelled

@@ -10,7 +10,7 @@ import {
   removeKnowledgeDocument,
   type KnowledgeDocument,
 } from '../utils/transcriptMemory';
-import { pickAndIngestDocuments, ingestDocumentPaths, ingestFailureMessage } from '../utils/knowledgeIngest';
+import { pickAndIngestDocuments, ingestDocumentPaths, ingestFailureMessage, type IngestOutcome } from '../utils/knowledgeIngest';
 import { isEmbeddingModelReady } from '../utils/embeddings';
 import { MemoryComponentOffer } from './MemoryComponentOffer';
 import { useFileDrop } from '../hooks/useFileDrop';
@@ -57,7 +57,7 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
     }));
   });
 
-  const finish = $(async (picked: { failures: string[]; added: number; already: number; cancelled: boolean } | null) => {
+  const finish = $(async (picked: IngestOutcome | null) => {
     if (!picked) return; // cancelled the picker
     docs.value = await listKnowledgeDocuments(props.aiId);
     if (picked.failures.length > 0) error.value = ingestFailureMessage(picked.failures);
@@ -78,7 +78,7 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
       error.value = 'Add the memory component above first.';
       return;
     }
-    let picked: { failures: string[]; added: number; already: number; cancelled: boolean } | null = null;
+    let picked: IngestOutcome | null = null;
     busy.value = true;
     try {
       picked = await pickAndIngestDocuments(props.aiId);
@@ -97,7 +97,7 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
       return;
     }
     busy.value = true;
-    let picked: { failures: string[]; added: number; already: number; cancelled: boolean } | null = null;
+    let picked: IngestOutcome | null = null;
     try {
       picked = await ingestDocumentPaths(props.aiId, paths);
     } catch (e) {
