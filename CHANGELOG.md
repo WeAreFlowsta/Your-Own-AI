@@ -6,6 +6,16 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 ## [0.7.1] - unreleased
 
 ### Your AIs
+- An AI's description keeps itself current. It is now a small template
+  filled from the AI's live settings wherever it is shown: {name},
+  {personality} ("a playful explorer"), {models} (the model setting in
+  words, "the best model for each question, online or on this computer"),
+  and optional sentences for a report or code default and for carried tools
+  and skills. The default reads "Veebo is a playful explorer. Answers come
+  from models on this computer." Edit the words around the braces and your
+  edit stays; Reset to default is one click; a description written from
+  scratch is shown as written. The old generated sentence, which went stale
+  the moment a personality changed, becomes the live template.
 - The Knowledge tab of the edit-AI dialog offers the memory component in
   place when it is missing, in one line about what it does, with the
   download right there. Before, adding a document failed with a note about

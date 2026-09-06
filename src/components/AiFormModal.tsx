@@ -1,3 +1,4 @@
+import { DEFAULT_DESCRIPTION_TEMPLATE, DESCRIPTION_PLACEHOLDERS, isLegacyDefaultDescription, renderAiDescription } from '../utils/aiDescription';
 import {
   component$,
   useStore,
@@ -176,14 +177,10 @@ const AiFormModal = component$<AiFormModalProps>(
     };
 
     // Generate default description
-    const generateDefaultDescription = (aiName: string, archetypeId: string): string => {
-      if (!aiName.trim() || !archetypeId) return '';
-      const templates = getArchetypeTemplates();
-      const archetype = templates.find((a) => a.id === archetypeId);
-      const archetypeName = archetype ? archetype.name.toLowerCase() : 'archetype';
-      const article = /^[aeiou]/.test(archetypeName) ? 'an' : 'a';
-      return `${aiName} is my custom AI with the personality of ${article} ${archetypeName}.`;
-    };
+    // The description is a template filled from the live settings wherever
+    // it is shown (utils/aiDescription.ts) - the default needs no name or
+    // personality baked in, so it never goes stale.
+    const generateDefaultDescription = (_aiName: string, _archetypeId: string): string => DEFAULT_DESCRIPTION_TEMPLATE;
 
     // Fetch local models
     // eslint-disable-next-line qwik/no-use-visible-task
@@ -353,7 +350,7 @@ const AiFormModal = component$<AiFormModalProps>(
     const openShare = $(async () => {
       shareErr.value = '';
       shareDone.value = null;
-      shareDescription.value = editingAi?.description || '';
+      shareDescription.value = editingAi ? renderAiDescription(editingAi, { onlineNames: Object.fromEntries(store.onlineModels.map((m) => [m.id, m.display_name])) }) : '';
       shareTitle.value = '';
       shareLicenseOpen.value = false;
       const maker = await currentMaker();
@@ -442,7 +439,9 @@ const AiFormModal = component$<AiFormModalProps>(
             editingAi.name,
             editingAi.baseArchetypeId
           );
-          const currentDescription = editingAi.description || defaultDescription;
+          // An old generated sentence counts as "not customized": it becomes
+          // the live template, so it stops going stale.
+          const currentDescription = isLegacyDefaultDescription(editingAi.description) ? defaultDescription : editingAi.description || defaultDescription;
           store.description = currentDescription;
           store.isDescriptionCustomized = currentDescription !== defaultDescription;
 
@@ -1331,6 +1330,36 @@ const AiFormModal = component$<AiFormModalProps>(
                     rows={3}
                   />
                 </LiquidMetalBorder>
+                <p class="mt-1.5 text-xs text-[var(--text-muted)]">
+                  <span class="text-[var(--text-secondary)]">Shows as:</span>{' '}
+                  {renderAiDescription(
+                    { name: store.name, description: store.description, baseArchetypeId: store.baseArchetypeId, model: store.model, defaultMode: store.defaultMode, skills: store.skills, mcp: store.mcp },
+                    { onlineNames: Object.fromEntries(store.onlineModels.map((m) => [m.id, m.display_name])) },
+                  )}
+                </p>
+                <p class="mt-1 text-[11px] text-[var(--text-muted)]">
+                  Words in braces fill themselves in and stay current:{' '}
+                  {DESCRIPTION_PLACEHOLDERS.map((ph, i) => (
+                    <span key={ph.token}>
+                      <code class="font-mono">{ph.token}</code> {ph.means}{i < DESCRIPTION_PLACEHOLDERS.length - 1 ? ' · ' : '.'}
+                    </span>
+                  ))}
+                  {store.isDescriptionCustomized && (
+                    <>
+                      {' '}
+                      <button
+                        type="button"
+                        class="text-[var(--text-link)] hover:underline"
+                        onClick$={() => {
+                          store.description = DEFAULT_DESCRIPTION_TEMPLATE;
+                          store.isDescriptionCustomized = false;
+                        }}
+                      >
+                        Reset to default
+                      </button>
+                    </>
+                  )}
+                </p>
               </div>
             )}
 

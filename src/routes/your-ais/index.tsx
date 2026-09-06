@@ -1,4 +1,6 @@
 import { loadedModelNow } from "../../utils/loadedModel";
+import { renderAiDescription } from "../../utils/aiDescription";
+import { getCachedModels } from "../../utils/modelCache";
 /**
  * Your AIs Page - Unified AI management
  *
@@ -214,6 +216,13 @@ export default component$(() => {
 
   // Model widget state
   const currentModel = useSignal<string | null>(null);
+  // Online model names for the description's "{models}" phrase ("GPT-6 Astra, online").
+  const onlineNames = useSignal<Record<string, string>>({});
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(() => {
+    const online = getCachedModels().online;
+    if (online) onlineNames.value = Object.fromEntries(online.map((m) => [`online:${m.id}`, m.display_name]));
+  });
   const showModelWidget = useSignal(false);
 
   // Check if any default AIs are missing (for restore button)
@@ -539,7 +548,7 @@ export default component$(() => {
                       </div>
                     </div>
                     <p class="text-sm text-[var(--text-secondary)] line-clamp-3 overflow-hidden">
-                      {ai.description || "No description"}
+                      {renderAiDescription(ai, { onlineNames: onlineNames.value })}
                     </p>
                   </div>
                   <div class="px-5 py-3 mt-auto">
