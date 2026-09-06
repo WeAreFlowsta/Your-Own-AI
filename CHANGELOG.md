@@ -55,6 +55,14 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   are capped in the backup at a size that holds thousands of documents;
   over it, the oldest cards are left out first and nothing else.
 
+### Engine
+- llama.cpp v0.4.0 (build b10809) powers every offline model. Upstream's
+  September work rides in: faster attention and expert kernels on NVIDIA
+  cards (RTX 50-series most, Ada some), better speculative decoding,
+  faster prompt reading, on-demand tensor reading, and first support for
+  Qwen 3.8 Flash Next. Every file in the catalog was checked to load on
+  the new engine before the pin moved.
+
 ### Security
 - The three model servers on this computer (chat, memory, helper) take a
   key on every request that only the app holds, made fresh each launch.

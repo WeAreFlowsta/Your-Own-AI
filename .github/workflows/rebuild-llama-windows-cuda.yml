@@ -13,11 +13,11 @@ on:
       llama_cpp_version:
         description: 'llama.cpp git tag (must match the release, e.g. b9637)'
         required: true
-        default: 'b10355'
+        default: 'b10809'
       release_tag:
         description: 'Release to replace the asset on (e.g. llama-b9637)'
         required: true
-        default: 'llama-b10621'
+        default: 'llama-b10809'
 
 permissions:
   contents: write
