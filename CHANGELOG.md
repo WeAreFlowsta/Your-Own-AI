@@ -120,6 +120,14 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   turn.
 
 ### Your records
+- The conversations list no longer knocks on tidied lineage cells. Every
+  refresh used to call each disabled generation of an AI and log a line
+  for the failure; only connected generations are read now.
+- A large AI's conversations list stops paying a long records read on
+  every visit. The list kept on this device is written through for every
+  conversation you record, continue or delete, so while it is fresh the
+  memory page shows it without re-reading a thousand-conversation cell.
+  Imports and restores mark it for a live read.
 - A project or tools session is recorded once, as the conversation you see.
   Before, every model call the session made on its way was also recorded
   as its own conversation, titled with your last message and badged API,
