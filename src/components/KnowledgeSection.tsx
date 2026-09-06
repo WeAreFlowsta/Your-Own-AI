@@ -1,10 +1,14 @@
-import { component$, $, useVisibleTask$, type QRL } from '@builder.io/qwik';
+import { component$, $, useSignal, useVisibleTask$, type QRL } from '@builder.io/qwik';
 import { LuBookOpen, LuFileText, LuTrash2, LuLoader2, LuPlus } from '@qwikest/icons/lucide';
+import LiquidMetalButton from './LiquidMetalButton';
+import { MemoryComponentOffer } from './MemoryComponentOffer';
+import { useFileDrop } from '../hooks/useFileDrop';
 import {
   listKnowledgeDocuments,
   removeKnowledgeDocument,
 } from '../utils/transcriptMemory';
-import { pickAndIngestDocuments, ingestFailureMessage } from '../utils/knowledgeIngest';
+import { isEmbeddingModelReady } from '../utils/embeddings';
+import { pickAndIngestDocuments, ingestDocumentPaths, ingestFailureMessage } from '../utils/knowledgeIngest';
 
 /** Store slice this section reads/writes (a subset of AiFormModal's store). */
 interface KnowledgeStore {
@@ -15,6 +19,7 @@ interface KnowledgeStore {
 
 interface KnowledgeSectionProps {
   aiId: string;
+  aiName?: string;
   store: KnowledgeStore;
 }
 
@@ -29,15 +34,33 @@ function formatSize(bytes: number): string {
  * as retrievable knowledge (chunked + embedded, same store as authored lore).
  * The AI pulls the relevant pieces into any conversation - no context blown,
  * and the source file can be deleted or moved afterward.
+ *
+ * Needs the memory component (the embedding model): offered in place when it
+ * is missing. Files come from the picker or from a drop on the window.
  */
 export const KnowledgeSection = component$<KnowledgeSectionProps>((props) => {
+  const ready = useSignal(true);
+
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async () => {
+    ready.value = await isEmbeddingModelReady();
     props.store.knowledgeDocs = await listKnowledgeDocuments(props.aiId);
+  });
+
+  const finish = $(async (picked: { failures: string[] } | null) => {
+    if (!picked) return; // cancelled
+    props.store.knowledgeDocs = await listKnowledgeDocuments(props.aiId);
+    if (picked.failures.length > 0) {
+      props.store.knowledgeError = ingestFailureMessage(picked.failures);
+    }
   });
 
   const addDocuments: QRL<() => void> = $(async () => {
     props.store.knowledgeError = '';
+    if (!ready.value) {
+      props.store.knowledgeError = 'Add the memory component above first.';
+      return;
+    }
     let picked: { failures: string[] } | null = null;
     props.store.knowledgeBusy = true;
     try {
@@ -47,11 +70,31 @@ export const KnowledgeSection = component$<KnowledgeSectionProps>((props) => {
     } finally {
       props.store.knowledgeBusy = false;
     }
-    if (!picked) return; // cancelled
-    props.store.knowledgeDocs = await listKnowledgeDocuments(props.aiId);
-    if (picked.failures.length > 0) {
-      props.store.knowledgeError = ingestFailureMessage(picked.failures);
+    await finish(picked);
+  });
+
+  const onDrop = $(async (paths: string[]) => {
+    props.store.knowledgeError = '';
+    if (!ready.value) {
+      props.store.knowledgeError = 'Add the memory component above first.';
+      return;
     }
+    props.store.knowledgeBusy = true;
+    let picked: { failures: string[] } | null = null;
+    try {
+      picked = await ingestDocumentPaths(props.aiId, paths);
+    } catch (err) {
+      console.error('[Knowledge] drop failed:', err);
+    } finally {
+      props.store.knowledgeBusy = false;
+    }
+    await finish(picked);
+  });
+  const hovering = useFileDrop('knowledge', onDrop);
+
+  const onReady = $(() => {
+    ready.value = true;
+    props.store.knowledgeError = '';
   });
 
   const removeDoc = $(async (docId: string) => {
@@ -73,19 +116,31 @@ export const KnowledgeSection = component$<KnowledgeSectionProps>((props) => {
         about them anytime, and the original files can be moved or deleted after.
       </p>
 
-      <button
-        type="button"
-        onClick$={addDocuments}
-        disabled={props.store.knowledgeBusy}
-        class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm border border-[var(--border-subtle)] bg-[var(--bg-input)] text-[var(--text-primary)] hover:bg-[var(--bg-dropdown-hover)] transition-colors disabled:opacity-60"
+      <MemoryComponentOffer aiName={props.aiName} onReady$={onReady} />
+
+      <div
+        class={`rounded-lg border border-dashed px-3 py-3 flex flex-wrap items-center gap-3 transition-colors ${
+          hovering.value
+            ? 'border-[var(--bg-button-primary)] bg-[var(--bg-dropdown-hover)]'
+            : 'border-[var(--border-subtle)]'
+        }`}
       >
-        {props.store.knowledgeBusy ? (
-          <LuLoader2 class="w-4 h-4 animate-spin" />
-        ) : (
-          <LuPlus class="w-4 h-4" />
-        )}
-        {props.store.knowledgeBusy ? 'Reading documents...' : 'Add documents'}
-      </button>
+        <LiquidMetalButton
+          onClick$={addDocuments}
+          disabled={props.store.knowledgeBusy || !ready.value}
+          class="flex items-center gap-2 px-3 py-1.5 text-xs"
+        >
+          {props.store.knowledgeBusy ? (
+            <LuLoader2 class="w-4 h-4 animate-spin" />
+          ) : (
+            <LuPlus class="w-4 h-4" />
+          )}
+          {props.store.knowledgeBusy ? 'Reading documents...' : 'Add documents'}
+        </LiquidMetalButton>
+        <span class="text-xs text-[var(--text-muted)]">
+          {hovering.value ? 'Drop to add' : 'or drop files here'}
+        </span>
+      </div>
 
       {props.store.knowledgeError && (
         <p class="text-xs text-red-600 dark:text-red-400 mt-2">{props.store.knowledgeError}</p>

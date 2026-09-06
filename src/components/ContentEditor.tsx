@@ -1,4 +1,5 @@
 import { component$, useSignal, useVisibleTask$, $, type QRL, type Signal } from '@builder.io/qwik';
+import { fileDropsClaimed } from '../utils/fileDrops';
 
 import type { ChatAction, AttachedFile, AttachedImage } from '../types';
 import LiquidMetalButton from './LiquidMetalButton';
@@ -99,6 +100,9 @@ export const ContentEditor = component$<ContentEditorProps>((props) => {
     let unlisten: (() => void) | null = null;
     import('@tauri-apps/api/webviewWindow').then(({ getCurrentWebviewWindow }) => {
       getCurrentWebviewWindow().onDragDropEvent((event) => {
+        // A dialog section (the Knowledge tab) may have claimed the drops -
+        // then this file was never meant for the chat input.
+        if (fileDropsClaimed()) return;
         if (event.payload.type === 'drop' && event.payload.paths.length > 0) {
           props.onAttachFiles$(event.payload.paths);
         }

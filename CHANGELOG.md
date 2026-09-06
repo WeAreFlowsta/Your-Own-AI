@@ -5,6 +5,20 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 
 ## [0.7.1] - unreleased
 
+### Your AIs
+- The Knowledge tab of the edit-AI dialog offers the memory component in
+  place when it is missing, in one line about what it does, with the
+  download right there. Before, adding a document failed with a note about
+  a "knowledge model" and a Settings page. Knowledge needs the component
+  because a document is split into pieces and each piece is remembered by
+  meaning, so the AI can pull the right one into a later conversation; a
+  chat attachment needs none of that.
+- Documents can be dropped onto the Knowledge tab and onto the memory
+  page's Documents section, and only that section receives the drop (the
+  chat input behind a dialog no longer picks the file up too).
+- The tab's buttons use the app's own styling, and a file that cannot be
+  read says why in plain words.
+
 ### Your records
 - A project or tools session is recorded once, as the conversation you see.
   Before, every model call the session made on its way was also recorded

@@ -7,7 +7,10 @@ import {
   removeKnowledgeDocument,
   type KnowledgeDocument,
 } from '../utils/transcriptMemory';
-import { pickAndIngestDocuments, ingestFailureMessage } from '../utils/knowledgeIngest';
+import { pickAndIngestDocuments, ingestDocumentPaths, ingestFailureMessage } from '../utils/knowledgeIngest';
+import { isEmbeddingModelReady } from '../utils/embeddings';
+import { MemoryComponentOffer } from './MemoryComponentOffer';
+import { useFileDrop } from '../hooks/useFileDrop';
 
 interface AiKnowledgeDocumentsProps {
   aiId: string;
@@ -29,6 +32,11 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
   const docs = useSignal<KnowledgeDocument[]>([]);
   const busy = useSignal(false);
   const error = useSignal('');
+  const ready = useSignal(true);
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async () => {
+    ready.value = await isEmbeddingModelReady();
+  });
 
   // eslint-disable-next-line qwik/no-use-visible-task
   const warming = useSignal(false);
@@ -46,8 +54,18 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
     );
   });
 
+  const finish = $(async (picked: { failures: string[] } | null) => {
+    if (!picked) return; // cancelled
+    docs.value = await listKnowledgeDocuments(props.aiId);
+    if (picked.failures.length > 0) error.value = ingestFailureMessage(picked.failures);
+  });
+
   const addDocuments = $(async () => {
     error.value = '';
+    if (!ready.value) {
+      error.value = 'Add the memory component above first.';
+      return;
+    }
     let picked: { failures: string[] } | null = null;
     busy.value = true;
     try {
@@ -57,9 +75,30 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
     } finally {
       busy.value = false;
     }
-    if (!picked) return; // cancelled
-    docs.value = await listKnowledgeDocuments(props.aiId);
-    if (picked.failures.length > 0) error.value = ingestFailureMessage(picked.failures);
+    await finish(picked);
+  });
+
+  const onDrop = $(async (paths: string[]) => {
+    error.value = '';
+    if (!ready.value) {
+      error.value = 'Add the memory component above first.';
+      return;
+    }
+    busy.value = true;
+    let picked: { failures: string[] } | null = null;
+    try {
+      picked = await ingestDocumentPaths(props.aiId, paths);
+    } catch (e) {
+      console.error('[Knowledge] drop failed:', e);
+    } finally {
+      busy.value = false;
+    }
+    await finish(picked);
+  });
+  const hovering = useFileDrop('knowledge-page', onDrop);
+  const onReady = $(() => {
+    ready.value = true;
+    error.value = '';
   });
 
   const removeDoc = $(async (docId: string) => {
@@ -80,7 +119,7 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
         </p>
         <LiquidMetalButton
           onClick$={addDocuments}
-          disabled={busy.value}
+          disabled={busy.value || !ready.value}
           class="flex items-center gap-1.5 px-3 py-1.5 text-xs"
         >
           {busy.value ? (
@@ -91,6 +130,12 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
           {busy.value ? 'Reading...' : 'Add documents'}
         </LiquidMetalButton>
       </div>
+
+      <MemoryComponentOffer aiName={name} onReady$={onReady} />
+
+      {hovering.value && (
+        <p class="text-xs text-[var(--text-secondary)] mb-2">Drop to add to {name}'s knowledge</p>
+      )}
 
       {error.value && (
         <p class="text-xs text-red-600 dark:text-red-400 mb-2">{error.value}</p>
