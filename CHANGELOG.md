@@ -165,6 +165,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   previous backup kept listed, so one slow AI never stretches a backup
   into hours. The log names each AI as it is read, with the count and
   the seconds it took.
+- Restoring from the Vault no longer fails on an AI with a large number of
+  conversations. The check for conversations already on this device uses
+  the list the app keeps, and reads a cell live only when that list is
+  stale, with the same generous wait as a backup.
 - Settings, Backups gains a Back up now button that says what it did.
 - The check that stops an empty device from overwriting a full Vault
   counts conversations listed without a read, so a backup where nothing

@@ -425,6 +425,7 @@ async fn fetch_data_backup(port: u16) -> Result<serde_json::Value, String> {
 /// the set of local conversation started_at values, and a per-agent
 /// conversation count (drives the replace-a-fresh-default rule).
 async fn local_conversation_index(
+    app: &tauri::AppHandle,
     manager: &HolochainManager,
     key: &[u8; 32],
 ) -> Result<(HashSet<i64>, HashMap<String, u64>), String> {
@@ -435,9 +436,30 @@ async fn local_conversation_index(
     let mut started = HashSet::new();
     let mut counts = HashMap::new();
     for agent in agent_keys {
+        // The write-through list cache holds every conversation's start
+        // the app recorded; a fresh one answers without a live read of the
+        // cell (a thousand-conversation cell exceeds a minute - the drill
+        // on the dev laptop, 09-07). A stale or missing cache reads live,
+        // with the backup's long timeout.
+        if crate::conversation_cache::fresh_within(app, &agent, 30 * 24 * 3600) {
+            let cached = crate::conversation_cache::read_cache(app, &agent).unwrap_or_default();
+            if !cached.is_empty() {
+                counts.insert(agent.clone(), cached.len() as u64);
+                for c in &cached {
+                    started.insert(c.started_at);
+                }
+                continue;
+            }
+        }
         let payload = ExternIO::encode(()).map_err(|e| e.to_string())?;
         let result = manager
-            .call_zome(&agent, "transcript", "get_all_conversations", payload)
+            .call_zome_with_timeout(
+                &agent,
+                "transcript",
+                "get_all_conversations",
+                payload,
+                std::time::Duration::from_secs(crate::dna::BACKUP_READ_TIMEOUT_SECS),
+            )
             .await
             .map_err(|e| format!("get_all_conversations({}): {}", agent, e))?;
         let records: Vec<holochain_types::prelude::Record> =
@@ -728,7 +750,7 @@ pub async fn vault_restore_conversations(
     let manager = hc.get()?;
     let key = manager.data_key()?;
 
-    let (existing_started, conv_counts) = local_conversation_index(manager, &key).await?;
+    let (existing_started, conv_counts) = local_conversation_index(&app, manager, &key).await?;
 
     // 1. Merge the backup's AI configs into the local store.
     let store = app.store(AI_STORE).map_err(|e| e.to_string())?;
