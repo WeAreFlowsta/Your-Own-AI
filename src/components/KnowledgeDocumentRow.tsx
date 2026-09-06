@@ -25,8 +25,9 @@ export const KnowledgeDocumentRow = component$<{
     <li class="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-2 group">
       <div class="flex items-center gap-2.5">
         <LuFileText class="w-4 h-4 text-[var(--text-muted)] shrink-0" />
-        <span class="text-sm text-[var(--text-primary)] truncate flex-1" title={doc.filename}>
+        <span class="text-sm text-[var(--text-primary)] truncate flex-1" title={doc.title ? `${doc.title} (${doc.filename})` : doc.filename}>
           {doc.filename}
+          {doc.author && <span class="text-[var(--text-muted)]"> · by {doc.author}</span>}
         </span>
         <button
           type="button"

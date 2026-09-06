@@ -2,7 +2,7 @@
 /** File types the document extractor handles (mirrors read_file_for_context). */
 const DOC_EXTENSIONS = [
   'txt','md','csv','json','xml','yaml','yml','toml','log','ini','cfg','conf',
-  'pdf','docx','doc','xlsx','xls','ods','odt','rtf','html','htm','sql',
+  'pdf','docx','doc','xlsx','xls','ods','odt','rtf','html','htm','sql','epub',
   'py','js','ts','tsx','jsx','rs','go','java','c','cpp','h','cs','rb','php',
 ];
 
@@ -38,7 +38,8 @@ export function isDocumentPath(path: string): boolean {
  */
 export async function ingestDocumentPaths(aiId: string, paths: string[]): Promise<{ failures: string[]; added: number; already: number; cancelled: boolean }> {
   const { corpusImport } = await import('./corpus');
-  const report = await corpusImport(paths, aiId);
+  const { userNames } = await import('./userNames');
+  const report = await corpusImport(paths, aiId, await userNames());
   return {
     failures: report.failed.map((f) => `${f.file} (${f.reason})`),
     added: report.added.length,

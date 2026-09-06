@@ -50,8 +50,8 @@ export interface RecallHit {
 }
 
 /** Files and folders in; progress on `corpus-progress`; cancel with corpusCancel(). */
-export function corpusImport(paths: string[], aiId: string): Promise<ImportReport> {
-  return invoke<ImportReport>('corpus_import', { paths, aiId });
+export function corpusImport(paths: string[], aiId: string, names: string[] = []): Promise<ImportReport> {
+  return invoke<ImportReport>('corpus_import', { paths, aiId, names });
 }
 
 export function corpusCancel(): Promise<void> {
@@ -73,6 +73,11 @@ export function corpusGrant(docId: string, aiId: string, on: boolean): Promise<v
 
 export function corpusDelete(docId: string): Promise<void> {
   return invoke('corpus_delete', { docId });
+}
+
+/** A card written on the device (src/utils/documentSummaries.ts). */
+export function corpusSetSummary(docId: string, summary: string | null): Promise<DocMeta> {
+  return invoke<DocMeta>('corpus_set_summary', { docId, summary });
 }
 
 export function corpusSetMine(docId: string, mine: boolean): Promise<DocMeta> {

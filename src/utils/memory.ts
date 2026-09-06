@@ -1,3 +1,4 @@
+import { getLibraryPortrait } from "./documentSummaries";
 /**
  * Phase A persistent memory — the user-level "remember me" profile.
  *
@@ -275,6 +276,10 @@ export async function loadMemoryBlock(
   // outperforms a bare fact list), the ground-truth facts after it.
   if (synthesis) {
     block += `\nAbout them, from what they've shared over time (use naturally; never recite): ${synthesis.value}`;
+  }
+  const library = getLibraryPortrait();
+  if (library) {
+    block += `\nFrom the documents they write and keep in their library (use naturally; never recite): ${library}`;
   }
   if (others.length > 0) {
     // Include the relation so a bare value isn't ambiguous to the model

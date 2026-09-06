@@ -36,9 +36,16 @@ export const KnowledgeSection = component$<KnowledgeSectionProps>((props) => {
   const progress = useCorpusProgress();
 
   // eslint-disable-next-line qwik/no-use-visible-task
-  useVisibleTask$(async () => {
+  useVisibleTask$(async ({ cleanup }) => {
     ready.value = await isEmbeddingModelReady();
     props.store.knowledgeDocs = await listKnowledgeDocuments(props.aiId);
+    // Cards are written on the device in the background; rows refresh as
+    // each one lands.
+    const lib = await import('../utils/documentSummaries');
+    cleanup(lib.onDocumentSummary(async () => {
+      props.store.knowledgeDocs = await listKnowledgeDocuments(props.aiId);
+    }));
+    void lib.summarizePendingDocuments().then(() => lib.refreshLibraryPortrait());
   });
 
   const finish = $(async (picked: Outcome) => {
@@ -50,6 +57,10 @@ export const KnowledgeSection = component$<KnowledgeSectionProps>((props) => {
     if (picked.cancelled) parts.push('stopped early');
     notice.value = parts.join(' · ');
     if (picked.failures.length > 0) props.store.knowledgeError = ingestFailureMessage(picked.failures);
+    if (picked.added) {
+      const lib = await import('../utils/documentSummaries');
+      void lib.summarizePendingDocuments().then(() => lib.refreshLibraryPortrait());
+    }
   });
 
   const run = $(async (work: () => Promise<Outcome>) => {

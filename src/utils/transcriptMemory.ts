@@ -48,6 +48,9 @@ export interface KnowledgeDocument {
   mine: boolean;
   /** Written on the device by the helper model, when it has been. */
   summary?: string;
+  /** From the file's own metadata, when it carries any. */
+  author?: string;
+  title?: string;
 }
 
 /** Cap EPISODIC entries per AI (drop oldest) so the per-AI blob can't grow
@@ -489,6 +492,8 @@ export async function listKnowledgeDocuments(aiId: string): Promise<KnowledgeDoc
     addedAt: d.added_at * 1000,
     mine: d.meta.mine,
     summary: d.meta.summary,
+    author: d.meta.author,
+    title: d.meta.title,
   }));
 }
 

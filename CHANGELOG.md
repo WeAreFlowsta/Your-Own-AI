@@ -23,8 +23,19 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - The reading-room check counts the whole prompt, memory and documents
   included, before a local model answers. Before, a long memory block could
   push the persona off the front of a small window unnoticed.
-- Each document carries a "Mine" tag for your own writing, off unless you
-  set it, on the Knowledge tab and the memory page.
+- Every document gets a short card, written on your device by the helper
+  model or the local model you have loaded, never online: what it is, what
+  it covers, who it is for. Long documents are read in sampled parts. The
+  card shows under the document on the Knowledge tab and the memory page.
+- "What your library says about you": two or three sentences on the memory
+  page, written on your device from the cards, your own writing first and
+  then what you keep. Your AIs are given it the way they are given the
+  facts and notes about you.
+- Each document carries a "Mine" tag for your own writing, on the
+  Knowledge tab and the memory page. It is guessed from the file's own
+  author field (DOCX, ODT, PDF, EPUB) against your Flowsta name, username
+  and the name you have told an AI, and stays yours to flip.
+- EPUB books can be added to the library, read in chapter order.
 - The Vault backup carries your library's records, summaries and tags, not
   the passages: those are read again from your files after a restore, so a
   large library can never be the reason a backup fails.

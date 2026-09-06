@@ -984,6 +984,10 @@ export default component$(() => {
       // session (hash-gated no-op when nothing changed).
       setTimeout(() => {
         import("../../utils/memoryConsolidation").then((m) => void m.maybeConsolidateMemory());
+        // Library cards for documents that have none yet, then the portrait.
+        import("../../utils/documentSummaries").then(
+          (m) => void m.summarizePendingDocuments().then(() => m.refreshLibraryPortrait()),
+        );
       }, 90_000);
     } catch (error) {
       console.error("[ChatPage] Failed during initialization:", error);

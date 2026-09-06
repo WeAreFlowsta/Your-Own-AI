@@ -10,6 +10,7 @@
  */
 import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
 import { readThroughWarmup } from "../utils/recordsWarmup";
+import { getLibraryPortrait, refreshLibraryPortrait, summarizePendingDocuments } from "../utils/documentSummaries";
 import { Link } from "@builder.io/qwik-city";
 import {
   LuUser,
@@ -102,6 +103,9 @@ export default component$<ProfileMemoryProps>(
     /** The consolidated portrait the AIs are given (read-only; refreshes
      *  itself in the background whenever the facts change). */
     const synthesis = useSignal("");
+    /** What the person's library says about them (read-only; written on
+     *  the device from the document cards, rewritten when they change). */
+    const library = useSignal("");
     const addPredicate = useSignal("likes");
     const addValue = useSignal("");
     const relOpen = useSignal(false);
@@ -120,6 +124,12 @@ export default component$<ProfileMemoryProps>(
       let alive = true;
       cleanup(() => (alive = false));
       memoryPaused.value = isMemoryPaused();
+      library.value = getLibraryPortrait();
+      void summarizePendingDocuments()
+        .then(() => refreshLibraryPortrait())
+        .then((t) => {
+          if (alive) library.value = t;
+        });
       // Facts read through the conductor - hold the line through its
       // startup rather than declare "nothing learned yet" falsely.
       facts.value = await readThroughWarmup(
@@ -207,6 +217,21 @@ export default component$<ProfileMemoryProps>(
             <p class="mt-1.5 text-[11px] text-[var(--text-muted)]">
               Written on your device from the facts and notes below - it
               rewrites itself as they change.
+            </p>
+          </div>
+        )}
+        {library.value && (
+          <div class="mb-5 p-4 rounded-xl bg-[var(--bg-main)] border border-[var(--border-subtle)]">
+            <p class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-1.5">
+              What your library says about you
+            </p>
+            <p class="text-sm text-[var(--text-secondary)] leading-relaxed">
+              {library.value}
+            </p>
+            <p class="mt-1.5 text-[11px] text-[var(--text-muted)]">
+              Written on your device from the documents you added - your own
+              writing (tagged Mine) first, then what you keep. It rewrites
+              itself as your library changes.
             </p>
           </div>
         )}

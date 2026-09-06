@@ -49,12 +49,21 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
       (w) => (warming.value = w),
       () => alive,
     );
+    // Cards land in the background (the memory page starts the run).
+    const lib = await import('../utils/documentSummaries');
+    cleanup(lib.onDocumentSummary(async () => {
+      if (alive) docs.value = await listKnowledgeDocuments(props.aiId);
+    }));
   });
 
   const finish = $(async (picked: { failures: string[]; added: number; already: number; cancelled: boolean } | null) => {
     if (!picked) return; // cancelled the picker
     docs.value = await listKnowledgeDocuments(props.aiId);
     if (picked.failures.length > 0) error.value = ingestFailureMessage(picked.failures);
+    if (picked.added) {
+      const lib = await import('../utils/documentSummaries');
+      void lib.summarizePendingDocuments().then(() => lib.refreshLibraryPortrait());
+    }
   });
   const toggleMine = $(async (docId: string, mine: boolean) => {
     const { corpusSetMine } = await import('../utils/corpus');

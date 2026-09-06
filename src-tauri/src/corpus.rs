@@ -32,7 +32,7 @@ const SKIP_DIRS: &[&str] = &["node_modules", ".git", "target", "dist", "build", 
 /// What the reader handles (mirrors the attachment reader in lib.rs).
 pub const DOC_EXTENSIONS: &[&str] = &[
     "txt", "md", "markdown", "csv", "json", "xml", "yaml", "yml", "toml", "log", "ini", "cfg", "conf",
-    "pdf", "docx", "doc", "xlsx", "xls", "ods", "odt", "rtf", "html", "htm", "sql",
+    "pdf", "docx", "doc", "xlsx", "xls", "ods", "odt", "rtf", "html", "htm", "sql", "epub",
     "py", "js", "ts", "tsx", "jsx", "rs", "go", "java", "c", "cpp", "h", "cs", "rb", "php",
 ];
 /// Recall: the same floor as conversational memory. No relative margin here -
@@ -97,6 +97,251 @@ pub struct RecallHit {
     pub text: String,
     pub score: f32,
     pub mine: bool,
+}
+
+// ---------------------------------------------------------------- epub + metadata
+
+fn zip_entry_string<R: std::io::Read + std::io::Seek>(archive: &mut zip::ZipArchive<R>, name: &str) -> Option<String> {
+    let mut f = archive.by_name(name).ok()?;
+    let mut buf = Vec::new();
+    std::io::Read::read_to_end(&mut f, &mut buf).ok()?;
+    Some(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// The text of the first `<tag>` (any namespace prefix), entities decoded.
+/// Small documents' metadata only - never the body.
+pub fn xml_tag_text(xml: &str, tag: &str) -> Option<String> {
+    let lower = xml.to_ascii_lowercase();
+    let needle = tag.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(pos) = lower[from..].find('<') {
+        let start = from + pos + 1;
+        let end = lower[start..].find('>')? + start;
+        let head = &lower[start..end];
+        let local = head.split(|c: char| c.is_whitespace()).next().unwrap_or("");
+        let local = local.rsplit(':').next().unwrap_or(local);
+        if local == needle && !head.ends_with('/') {
+            let close = lower[end + 1..].find("</")? + end + 1;
+            let inner = xml[end + 1..close].trim();
+            let text = inner
+                .replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .replace("&apos;", "'");
+            return if text.is_empty() { None } else { Some(text) };
+        }
+        from = end + 1;
+    }
+    None
+}
+
+/// An EPUB is a zip of XHTML files in the order the OPF spine gives.
+pub(crate) fn extract_epub_text(path: &Path) -> Result<String, String> {
+    let file = std::fs::File::open(path).map_err(|e| format!("Failed to open EPUB: {e}"))?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("Failed to read EPUB archive: {e}"))?;
+    let mut order: Vec<String> = Vec::new();
+    if let Some(opf_path) = epub_opf_path(&mut archive) {
+        if let Some(opf) = zip_entry_string(&mut archive, &opf_path) {
+            let dir = match opf_path.rfind('/') {
+                Some(i) => opf_path[..=i].to_string(),
+                None => String::new(),
+            };
+            let hrefs = epub_manifest(&opf);
+            for id in epub_spine(&opf) {
+                if let Some(h) = hrefs.get(&id) {
+                    order.push(format!("{dir}{h}"));
+                }
+            }
+        }
+    }
+    if order.is_empty() {
+        // No usable spine: every page in archive order.
+        let mut names: Vec<String> = (0..archive.len())
+            .filter_map(|i| archive.by_index(i).ok().map(|f| f.name().to_string()))
+            .filter(|n| {
+                let l = n.to_ascii_lowercase();
+                l.ends_with(".xhtml") || l.ends_with(".html") || l.ends_with(".htm")
+            })
+            .collect();
+        names.sort();
+        order = names;
+    }
+    let mut text = String::new();
+    for name in order {
+        if let Some(page) = zip_entry_string(&mut archive, &name) {
+            let body = strip_tags(&page);
+            let body = body.split_whitespace().collect::<Vec<_>>().join(" ");
+            if !body.trim().is_empty() {
+                text.push_str(body.trim());
+                text.push_str("\n\n");
+            }
+        }
+    }
+    let trimmed = text.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("No text content found in EPUB".to_string());
+    }
+    Ok(trimmed)
+}
+
+fn epub_opf_path<R: std::io::Read + std::io::Seek>(archive: &mut zip::ZipArchive<R>) -> Option<String> {
+    let container = zip_entry_string(archive, "META-INF/container.xml")?;
+    let lower = container.to_ascii_lowercase();
+    let i = lower.find("full-path=")? + "full-path=".len();
+    let quote = container[i..].chars().next()?;
+    let rest = &container[i + 1..];
+    let end = rest.find(quote)?;
+    Some(rest[..end].to_string())
+}
+
+/// manifest id -> href
+fn epub_manifest(opf: &str) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for item in opf.split("<item ").skip(1) {
+        let tag = item.split('>').next().unwrap_or("");
+        if let (Some(id), Some(href)) = (attr(tag, "id"), attr(tag, "href")) {
+            out.insert(id, href);
+        }
+    }
+    out
+}
+
+fn epub_spine(opf: &str) -> Vec<String> {
+    opf.split("<itemref ")
+        .skip(1)
+        .filter_map(|it| attr(it.split('>').next().unwrap_or(""), "idref"))
+        .collect()
+}
+
+fn attr(tag: &str, name: &str) -> Option<String> {
+    let lower = tag.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(pos) = lower[from..].find(name) {
+        let at = from + pos;
+        let before_ok = at == 0 || !lower.as_bytes()[at - 1].is_ascii_alphanumeric();
+        let after = &lower[at + name.len()..];
+        if before_ok && after.trim_start().starts_with('=') {
+            let eq = after.find('=')? + at + name.len() + 1;
+            let rest = tag[eq..].trim_start();
+            let quote = rest.chars().next()?;
+            if quote != '"' && quote != '\'' {
+                return None;
+            }
+            let inner = &rest[1..];
+            let end = inner.find(quote)?;
+            return Some(inner[..end].to_string());
+        }
+        from = at + name.len();
+    }
+    None
+}
+
+/// Author and title from a file's own metadata, when it carries any.
+#[derive(Default, Debug, PartialEq)]
+pub struct DocInfo {
+    pub author: Option<String>,
+    pub title: Option<String>,
+}
+
+pub(crate) fn doc_info(path: &Path) -> DocInfo {
+    let ext = ext_of(path);
+    let clean = |s: Option<String>| s.map(|t| t.trim().to_string()).filter(|t| !t.is_empty() && t.len() <= 200);
+    match ext.as_str() {
+        "docx" | "odt" | "epub" => {
+            let Ok(file) = std::fs::File::open(path) else { return DocInfo::default() };
+            let Ok(mut archive) = zip::ZipArchive::new(file) else { return DocInfo::default() };
+            let xml = match ext.as_str() {
+                "docx" => zip_entry_string(&mut archive, "docProps/core.xml"),
+                "odt" => zip_entry_string(&mut archive, "meta.xml"),
+                _ => epub_opf_path(&mut archive).and_then(|p| zip_entry_string(&mut archive, &p)),
+            };
+            let Some(xml) = xml else { return DocInfo::default() };
+            let author = xml_tag_text(&xml, "creator").or_else(|| xml_tag_text(&xml, "initial-creator"));
+            DocInfo { author: clean(author), title: clean(xml_tag_text(&xml, "title")) }
+        }
+        "pdf" => {
+            // The Info dictionary's literal strings, read from the raw file:
+            // enough for a guess, and no parser to feed hostile input to.
+            let Ok(raw) = std::fs::read(path) else { return DocInfo::default() };
+            DocInfo { author: clean(pdf_info_string(&raw, b"/Author")), title: clean(pdf_info_string(&raw, b"/Title")) }
+        }
+        _ => DocInfo::default(),
+    }
+}
+
+fn pdf_info_string(raw: &[u8], key: &[u8]) -> Option<String> {
+    let mut from = 0;
+    while let Some(pos) = raw[from..].windows(key.len()).position(|w| w == key) {
+        let mut i = from + pos + key.len();
+        while i < raw.len() && raw[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i < raw.len() && raw[i] == b'(' {
+            let mut out = Vec::new();
+            let mut depth = 1;
+            let mut j = i + 1;
+            while j < raw.len() && depth > 0 {
+                match raw[j] {
+                    b'\\' if j + 1 < raw.len() => {
+                        out.push(raw[j + 1]);
+                        j += 2;
+                        continue;
+                    }
+                    b'(' => depth += 1,
+                    b')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                out.push(raw[j]);
+                j += 1;
+            }
+            // UTF-16 with a byte-order mark, else treat as Latin-1/UTF-8.
+            let text = if out.starts_with(&[0xFE, 0xFF]) {
+                let units: Vec<u16> = out[2..].chunks(2).filter(|c| c.len() == 2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
+                String::from_utf16_lossy(&units)
+            } else {
+                String::from_utf8_lossy(&out).into_owned()
+            };
+            if !text.trim().is_empty() {
+                return Some(text);
+            }
+        }
+        from = i.max(from + pos + 1);
+    }
+    None
+}
+
+fn norm_name(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Does the author field look like this person? Equal after normalising, or
+/// one of the person's names appears in it as whole words (a first name in
+/// "Eric Smith"; never "ann" inside "Hannah").
+pub fn looks_mine(author: &str, names: &[String]) -> bool {
+    let a = norm_name(author);
+    if a.is_empty() {
+        return false;
+    }
+    let a_words: Vec<&str> = a.split(' ').collect();
+    names.iter().map(|n| norm_name(n)).filter(|n| n.len() >= 3).any(|n| {
+        if n == a {
+            return true;
+        }
+        let n_words: Vec<&str> = n.split(' ').collect();
+        a_words.windows(n_words.len()).any(|w| w == n_words.as_slice())
+    })
 }
 
 // ---------------------------------------------------------------- storage
@@ -429,6 +674,7 @@ pub(crate) fn extract_text(path: &Path) -> Result<String, String> {
         "docx" | "doc" => crate::extract_docx_text(path),
         "odt" => crate::extract_odt_text(path),
         "pdf" => crate::extract_pdf_text(path),
+        "epub" => extract_epub_text(path),
         "xlsx" | "xls" | "ods" => crate::extract_spreadsheet_text(path),
         "html" | "htm" => {
             let raw = std::fs::read(path).map_err(|e| e.to_string())?;
@@ -552,8 +798,12 @@ pub async fn corpus_import(
     llm_state: State<'_, crate::llm::LLMState>,
     paths: Vec<String>,
     ai_id: String,
+    // The person's names (display name, username, what they told an AI)
+    // for the Mine guess; the tag stays flippable on the row.
+    names: Option<Vec<String>>,
 ) -> Result<ImportReport, String> {
     CANCEL.store(false, Ordering::SeqCst);
+    let names = names.unwrap_or_default();
     let key = data_key(&hc_state)?;
     let files = walk(&paths);
     let total = files.len();
@@ -611,7 +861,9 @@ pub async fn corpus_import(
             break;
         }
         let byte_size = std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(text.len() as i64);
-        let meta = DocMeta { filename: name.clone(), path: Some(path_str), ..Default::default() };
+        let info = doc_info(path);
+        let mine = info.author.as_deref().map(|a| looks_mine(a, &names)).unwrap_or(false);
+        let meta = DocMeta { filename: name.clone(), path: Some(path_str), author: info.author, title: info.title, mine, ..Default::default() };
         match insert_document(&mut conn, &key, &meta, byte_size, &passages, &vectors, &ai_id) {
             Ok(rec) => report.added.push(rec),
             Err(e) => report.failed.push(ImportFailure { file: name, reason: e }),
@@ -962,6 +1214,66 @@ pub(crate) fn restore_records(app: &AppHandle, key: &[u8; 32], records: &CorpusR
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn xml_tag_text_reads_prefixed_tags() {
+        let xml = r#"<?xml version="1.0"?><cp:coreProperties xmlns:dc="x"><dc:title>A &amp; B</dc:title><dc:creator>Eric Smith</dc:creator><dc:description/></cp:coreProperties>"#;
+        assert_eq!(super::xml_tag_text(xml, "creator").as_deref(), Some("Eric Smith"));
+        assert_eq!(super::xml_tag_text(xml, "title").as_deref(), Some("A & B"));
+        assert_eq!(super::xml_tag_text(xml, "description"), None);
+        assert_eq!(super::xml_tag_text(xml, "subject"), None);
+    }
+
+    #[test]
+    fn looks_mine_matches_whole_words_only() {
+        let names = vec!["Eric".to_string(), "ericflowsta".to_string(), "ab".to_string()];
+        assert!(super::looks_mine("Eric Smith", &names));
+        assert!(super::looks_mine("eric", &names));
+        assert!(super::looks_mine("E. Smith, ericflowsta", &names));
+        assert!(!super::looks_mine("Frederic Jones", &names));
+        assert!(!super::looks_mine("Hannah", &["ann".to_string()]));
+        assert!(!super::looks_mine("Abner", &names));
+        assert!(!super::looks_mine("", &names));
+    }
+
+    #[test]
+    fn pdf_info_strings_decode() {
+        let raw = b"%PDF-1.4\n1 0 obj << /Title (My \\(quoted\\) Book) /Author (Eric Smith) >> endobj";
+        assert_eq!(super::pdf_info_string(raw, b"/Author").as_deref(), Some("Eric Smith"));
+        assert_eq!(super::pdf_info_string(raw, b"/Title").as_deref(), Some("My (quoted) Book"));
+        let utf16 = b"/Author (\xFE\xFF\x00E\x00r\x00i\x00c)";
+        assert_eq!(super::pdf_info_string(utf16, b"/Author").as_deref(), Some("Eric"));
+        assert_eq!(super::pdf_info_string(b"/Author <41>", b"/Author"), None);
+    }
+
+    #[test]
+    fn epub_reads_spine_order_and_metadata() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("yoai-epub-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("book.epub");
+        {
+            let f = std::fs::File::create(&path).unwrap();
+            let mut zip = zip::ZipWriter::new(f);
+            let opts = zip::write::SimpleFileOptions::default();
+            let mut put = |name: &str, body: &str| {
+                zip.start_file(name, opts).unwrap();
+                zip.write_all(body.as_bytes()).unwrap();
+            };
+            put("META-INF/container.xml", r#"<container><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#);
+            put("OEBPS/content.opf", r#"<package xmlns:dc="http://purl.org/dc/elements/1.1/"><metadata><dc:title>Tides</dc:title><dc:creator opf:role="aut">Eric Smith</dc:creator></metadata><manifest><item id="two" href="ch2.xhtml" media-type="application/xhtml+xml"/><item id="one" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="one"/><itemref idref="two"/></spine></package>"#);
+            put("OEBPS/ch2.xhtml", "<html><body><p>Second chapter.</p></body></html>");
+            put("OEBPS/ch1.xhtml", "<html><head><style>p{}</style></head><body><h1>First</h1><p>chapter one.</p></body></html>");
+            zip.finish().unwrap();
+        }
+        let text = super::extract_epub_text(&path).unwrap();
+        assert!(text.starts_with("First chapter one."), "{text}");
+        assert!(text.contains("Second chapter."));
+        let info = super::doc_info(&path);
+        assert_eq!(info.author.as_deref(), Some("Eric Smith"));
+        assert_eq!(info.title.as_deref(), Some("Tides"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     use super::*;
 
     #[test]
