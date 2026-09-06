@@ -648,15 +648,28 @@ mod tests {
         eprintln!("[matrix] tune bench free VRAM: {free_vram_gb:?}");
         let arms = arms_for(&meta, size, 31.0, free_vram_gb, false);
         assert!(!arms.is_empty());
-        for arm in arms.into_iter().take(2) {
+        // The compact-cache arm and its standard twin: every matrix run
+        // measures the pair, so the Auto rule's evidence is never stale.
+        let compact = arms.iter().copied().find(|a| a.kv_q8).expect("a compact arm");
+        let twin = arms
+            .iter()
+            .copied()
+            .find(|a| !a.kv_q8 && a.ctx == compact.ctx && a.moe_cpu_layers == compact.moe_cpu_layers && a.draft == compact.draft)
+            .expect("its standard twin");
+        let mut results = Vec::new();
+        for arm in [twin, compact] {
             let r = bench_one(&bin, &dir, &model, arm, None, None, &[], None).await;
+            results.push(r.clone());
             eprintln!(
-                "[matrix] tune arm ctx {} moe {:?} draft {}: load {:.1} s, prompt {:.0} tok/s, gen {:.1} tok/s, failed {:?}",
+                "[matrix] tune arm ctx {} moe {:?} draft {} compact {}: load {:.1} s, prompt {:.0} tok/s, gen {:.1} tok/s, failed {:?}",
                 r.ctx, r.moe_cpu_layers, r.draft, r.load_secs, r.pp_tps, r.gen_tps, r.failed
             );
             assert!(r.failed.is_none(), "arm failed: {:?}", r.failed);
             assert!(r.gen_tps > 0.0, "no generation timing");
         }
+        let profile = TuneProfile { measured_at: 0, results };
+        let choice = kv_choice_from_profile(Some(&profile));
+        eprintln!("[matrix] compact cache verdict on this box: q8={} - {}", choice.q8, choice.reason);
     }
 
     fn moe_meta() -> crate::gguf::GgufMeta {
