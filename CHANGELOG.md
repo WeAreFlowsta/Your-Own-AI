@@ -17,9 +17,12 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - Books are read whole. The attachment reader's 256 KB cut, right for a
   chat prompt, no longer applies to a document added to the library.
 - Answers draw on more of a document: up to eight passages per question
-  instead of three, chosen by meaning across all of an AI's documents and
-  named by document, and a passage no longer loses its place for scoring a
-  little below the best one.
+  with an online model and five with a local one, instead of three, chosen
+  by meaning across all of an AI's documents and named by document, and a
+  passage no longer loses its place for scoring a little below the best one.
+- The reading-room check counts the whole prompt, memory and documents
+  included, before a local model answers. Before, a long memory block could
+  push the persona off the front of a small window unnoticed.
 - Each document carries a "Mine" tag for your own writing, off unless you
   set it, on the Knowledge tab and the memory page.
 - The Vault backup carries your library's records, summaries and tags, not

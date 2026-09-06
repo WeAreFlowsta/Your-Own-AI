@@ -315,9 +315,13 @@ async function turnTokensFor(
   userInput: string,
   fileContext: string | null | undefined,
   imageCount: number,
+  /** The system prompt when it is known - the memory and document blocks
+   *  ride in it, and a 13k-character prompt in a 4K window trimmed the
+   *  persona off the front (dev, 2026-09-06). */
+  systemPrompt?: string,
 ): Promise<number> {
   const text =
-    history.map((m) => m.content ?? "").join("\n") + "\n" + userInput + "\n" + (fileContext ?? "");
+    (systemPrompt ?? "") + "\n" + history.map((m) => m.content ?? "").join("\n") + "\n" + userInput + "\n" + (fileContext ?? "");
   let counted: number;
   try {
     const { invoke } = await import("@tauri-apps/api/core");
@@ -504,10 +508,15 @@ export function useChat(props: UseChatProps) {
       // latency hides behind classification/routing/model-load instead of
       // adding to them. Wasted work on the rare aborted turn (vision card,
       // consent) is fine: it's read-only.
+      const aiModelSetting = selectedAi.aiConfig?.model || "";
       const memoryBlockPromise = loadMemoryBlock(userInput, {
         aiId: selectedAi.id,
         conversationHash: state.conversationHash,
         queryVec: queryVecPromise,
+        // Eight passages ride easily in an online window; a local model
+        // gets five until its context is known here (the reading-room check
+        // grows the window for what is sent).
+        docPassages: aiModelSetting.startsWith("online:") || aiModelSetting.startsWith("external:") ? 8 : 5,
       }).catch(() => "");
 
       // Phase D: NOW that the bubble + action bar are on screen, classify the turn  - 
@@ -1308,7 +1317,7 @@ export function useChat(props: UseChatProps) {
         // a context the app owns. The server's count corrects any miss on a
         // 400 below (a model that loaded after this count, say).
         if (!isOnlineModel && !isExternalModel) {
-          const estTokens = await turnTokensFor(state.messages, userInput, fileContext, images.length);
+          const estTokens = await turnTokensFor(state.messages, userInput, fileContext, images.length, systemPrompt);
           if ((await growContextFor(estTokens)) === "refused") return;
         }
 

@@ -823,7 +823,21 @@ pub fn corpus_recall(
         .filter(|(s, _)| *s >= RECALL_THRESHOLD)
         .collect();
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    let above = scored.len();
     scored.truncate(max_passages);
+    // Counts and scores only - never a filename or a passage in the log.
+    let docs: std::collections::HashSet<&str> = scored.iter().map(|(_, c)| c.doc_id.as_str()).collect();
+    log::info!(
+        "[corpus] recall for AI {}: {} passage(s) from {} document(s) (of {} above {:.2}; top {:.2}; {} granted, {} in cache)",
+        &ai_id[..8.min(ai_id.len())],
+        scored.len(),
+        docs.len(),
+        above,
+        RECALL_THRESHOLD,
+        scored.first().map(|s| s.0).unwrap_or(0.0),
+        allowed.len(),
+        cache.len()
+    );
     let mut out = Vec::with_capacity(scored.len());
     for (score, c) in scored {
         let text_blob: Vec<u8> = conn

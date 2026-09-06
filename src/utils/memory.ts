@@ -246,6 +246,9 @@ export async function loadMemoryBlock(
     /** A shared embedding of `query` (the send path embeds the turn once and
      *  hands it to both the router and this retrieval). Absent = embed here. */
     queryVec?: Promise<number[] | null> | number[] | null;
+    /** Document passages to pull from the library: 8 for an online model,
+     *  fewer for a small local window (the reading-room check counts them). */
+    docPassages?: number;
   },
 ): Promise<string> {
   const all = (await getFacts()).filter(
@@ -331,7 +334,7 @@ export async function loadMemoryBlock(
             // (a document's fourth-best passage is still worth reading).
             try {
               const { corpusRecall } = await import("./corpus");
-              const hits = await corpusRecall(opts!.aiId!, qvec, 8);
+              const hits = await corpusRecall(opts!.aiId!, qvec, opts?.docPassages ?? 5);
               if (hits.length > 0) {
                 const byDoc = new Map<string, { name: string; mine: boolean; texts: string[] }>();
                 for (const h of hits) {
