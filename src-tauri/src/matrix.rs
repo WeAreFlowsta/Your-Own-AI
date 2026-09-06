@@ -1108,7 +1108,10 @@ pub async fn matrix_run(
         r.push_str(&line);
         r.push('\n');
         // Rewritten per line: the report survives a crash mid-run.
-        let _ = std::fs::write(&sink_path, r.as_bytes());
+        // A UTF-8 byte-order mark: Windows viewers otherwise guess the
+        // code page and a model's curly apostrophe reads as "â" (both
+        // pasted Windows reports, 09-04 and 09-06). Our own readers skip it.
+        let _ = std::fs::write(&sink_path, format!("\u{feff}{r}").as_bytes());
     };
     let sink: Sink<'_> = &sink;
 
