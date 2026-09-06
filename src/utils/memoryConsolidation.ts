@@ -56,7 +56,16 @@ async function pickSynthesisModel(
   } catch {
     /* unknown loaded state - the utility path is always safe */
   }
-  return { model: fallbackModel, preferLoaded: false };
+  // The portrait is written on this device or not at all. The caller's
+  // fallback is the model that took the turn, which for an online AI is an
+  // online model - fine for extracting a fact from a turn that already went
+  // online, never for rewriting the whole profile. Without the helper model
+  // and without a local model, the rewrite waits (audit 2026-09-05).
+  const local =
+    fallbackModel && !fallbackModel.startsWith("online:") && !fallbackModel.startsWith("external:")
+      ? fallbackModel
+      : undefined;
+  return { model: local, preferLoaded: false };
 }
 
 export const SYNTHESIS_KIND = "synthesis";

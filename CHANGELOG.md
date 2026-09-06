@@ -33,6 +33,12 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - The tab's buttons use the app's own styling, and a file that cannot be
   read says why in plain words.
 
+### Memory
+- "How your AIs see you" is written on your device only: by the helper
+  model, or by a local model already loaded. With neither available the
+  rewrite waits for one, rather than using the online model that took the
+  turn.
+
 ### Your records
 - A project or tools session is recorded once, as the conversation you see.
   Before, every model call the session made on its way was also recorded
