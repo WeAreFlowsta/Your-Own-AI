@@ -292,6 +292,7 @@ export default component$(() => {
   const showModelWidget = useSignal(false);
   const showChatModelChip = useSignal(true);
   const showChatCarryChip = useSignal(true);
+  const showContinueLast = useSignal(true);
   const showHelpTips = useSignal(true);
   const allowAttachmentsOnline = useSignal(false);
   // Agent: the permission default for new projects - ask unless set.
@@ -382,6 +383,8 @@ export default component$(() => {
       localStorage.getItem("showChatModelChip") !== "false";
     showChatCarryChip.value =
       localStorage.getItem("showChatCarryChip") !== "false";
+    showContinueLast.value =
+      localStorage.getItem("showContinueLast") !== "false";
     showHelpTips.value = helpTipsEnabled();
     allowAttachmentsOnline.value =
       localStorage.getItem("allowAttachmentsOnline") === "true";
@@ -551,6 +554,16 @@ export default component$(() => {
     window.dispatchEvent(
       new CustomEvent("settingsChanged", {
         detail: { showChatCarryChip: showChatCarryChip.value },
+      })
+    );
+  });
+
+  const toggleContinueLast = $(() => {
+    showContinueLast.value = !showContinueLast.value;
+    localStorage.setItem("showContinueLast", showContinueLast.value.toString());
+    window.dispatchEvent(
+      new CustomEvent("settingsChanged", {
+        detail: { showContinueLast: showContinueLast.value },
       })
     );
   });
@@ -1630,6 +1643,15 @@ export default component$(() => {
                     carries, each tool and skill on or off, and approvals for
                     tools. Turn off for a cleaner chat; tools and skills stay
                     on and can be changed from the AI's form.
+                  </SettingToggle>
+                  <SettingToggle
+                    title="Continue link on the home page"
+                    checked={showContinueLast}
+                    onToggle$={toggleContinueLast}
+                  >
+                    The "Continue: ..." link under the ask box that reopens
+                    your last conversation. Turn off for a cleaner home page;
+                    the conversations drawer still has every conversation.
                   </SettingToggle>
                   <SettingToggle
                     title="Show help tips"

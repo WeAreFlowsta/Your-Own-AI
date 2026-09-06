@@ -884,7 +884,15 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
 
     let mut bundles = Vec::new();
     let mut unreadable: Vec<String> = Vec::new();
+    // A conversation whose entries cannot be read this time stays listed
+    // from the previous backup (its object is still in the Vault) instead
+    // of failing everything (dev box 09-06: the big cell's list answered in
+    // ten minutes, then one entries read past 60 s ended a 20-minute pass).
+    let sync = load_sync_state(app);
+    let mut carried: Vec<serde_json::Value> = Vec::new();
+    let mut conv_unreadable = 0usize;
     for (agent_key, installed_app_id) in agents {
+        let started = std::time::Instant::now();
         let payload = ExternIO::encode(()).map_err(|e| e.to_string())?;
         let result = match manager
             .call_zome_with_timeout(&agent_key, "transcript", "get_all_conversations", payload, std::time::Duration::from_secs(crate::dna::BACKUP_READ_TIMEOUT_SECS))
@@ -912,10 +920,28 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
 
             let payload =
                 ExternIO::encode(conv_hash).map_err(|e| e.to_string())?;
-            let result = manager
-                .call_zome(&agent_key, "transcript", "get_conversation_entries", payload)
+            let result = match manager
+                .call_zome_with_timeout(&agent_key, "transcript", "get_conversation_entries", payload, std::time::Duration::from_secs(180))
                 .await
-                .map_err(|e| format!("get_conversation_entries: {}", e))?;
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    conv_unreadable += 1;
+                    let label = format!("conv-{}", &conv_hash_hex[..conv_hash_hex.len().min(24)]);
+                    if let Some(prev) = sync.get(&label) {
+                        carried.push(serde_json::json!({
+                            "label": label,
+                            "role_name": installed_app_id,
+                            "started_at": started_at,
+                            "records": prev.records,
+                            "labels": prev.labels,
+                        }));
+                    } else {
+                        log::warn!("[escrow] a conversation's entries could not be read and it has no previous backup - it waits for the next pass: {}", e);
+                    }
+                    continue;
+                }
+            };
             let entry_records: Vec<Record> =
                 ExternIO::decode(&result).map_err(|e| e.to_string())?;
             for er in &entry_records {
@@ -947,19 +973,28 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
                 size,
             });
         }
+        log::info!(
+            "[escrow] read {} conversation(s) of {} in {} s",
+            conv_records.len(),
+            installed_app_id,
+            started.elapsed().as_secs()
+        );
     }
-    let mut carried: Vec<serde_json::Value> = Vec::new();
     if !unreadable.is_empty() {
         let previous = load_last_index(app);
-        carried = previous
+        let from_cells: Vec<serde_json::Value> = previous
             .into_iter()
             .filter(|e| e["role_name"].as_str().map(|r| unreadable.contains(&r.to_string())).unwrap_or(false))
             .collect();
         log::warn!(
             "[escrow] {} AI(s) could not be read; {} conversation(s) carried from the previous backup",
             unreadable.len(),
-            carried.len()
+            from_cells.len()
         );
+        carried.extend(from_cells);
+    }
+    if conv_unreadable > 0 {
+        log::warn!("[escrow] {} conversation(s) had unreadable entries this pass", conv_unreadable);
     }
     Ok((bundles, carried))
 }

@@ -86,6 +86,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   used to read as a live-web ask there; a real ask ("what's the weather
   today") still goes online.
 
+### Appearance
+- Settings, Appearance gains a switch for the "Continue: ..." link under
+  the ask box on the home page. On by default; off for a cleaner home
+  page, with every conversation still in the drawer.
+
 ### Security
 - The three model servers on this computer (chat, memory, helper) take a
   key on every request that only the app holds, made fresh each launch.

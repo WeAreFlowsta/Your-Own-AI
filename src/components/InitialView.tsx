@@ -1,4 +1,4 @@
-import { component$, type QRL, type Signal } from '@builder.io/qwik';
+import { component$, useSignal, useVisibleTask$, type QRL, type Signal } from '@builder.io/qwik';
 import CudaOfferCallout from './CudaOfferCallout';
 import HelperModelOfferCallout from './HelperModelOfferCallout';
 import GpuFallbackCallout from './GpuFallbackCallout';
@@ -41,6 +41,20 @@ interface InitialViewProps {
 }
 
 export default component$<InitialViewProps>((props) => {
+  // Appearance: the Continue link under the ask box (Settings > Appearance).
+  const showContinueLast = useSignal(true);
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ cleanup }) => {
+    try {
+      showContinueLast.value = localStorage.getItem('showContinueLast') !== 'false';
+    } catch { /* no storage */ }
+    const onSettings = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail && 'showContinueLast' in detail) showContinueLast.value = !!detail.showContinueLast;
+    };
+    window.addEventListener('settingsChanged', onSettings);
+    cleanup(() => window.removeEventListener('settingsChanged', onSettings));
+  });
   return (
     <div class="w-full max-w-4xl mx-auto">
       <ChatInputBar
@@ -67,7 +81,7 @@ export default component$<InitialViewProps>((props) => {
         onToolsAction$={props.onToolsAction$}
         theme={props.theme}
       />
-      {props.lastConversationTitle && props.onContinueLast$ && (
+      {showContinueLast.value && props.lastConversationTitle && props.onContinueLast$ && (
         <div class="mt-3 text-center">
           <button
             onClick$={props.onContinueLast$}
