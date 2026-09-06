@@ -579,6 +579,100 @@ struct BackupLimits {
     max_object_bytes: usize,
 }
 
+/// How many objects the Vault holds for this app right now (None when the
+/// list cannot be read).
+async fn vault_object_count(port: u16) -> Option<usize> {
+    let resp = http()
+        .get(format!("http://127.0.0.1:{}/backup/list", port))
+        .header("Origin", VAULT_ORIGIN)
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let v: serde_json::Value = resp.json().await.ok()?;
+    v["apps"]
+        .as_array()?
+        .iter()
+        .find(|a| a["client_id"].as_str() == Some(YOAI_HOLOCHAIN_CLIENT_ID))
+        .and_then(|a| a["backup_count"].as_u64())
+        .map(|n| n as usize)
+}
+
+/// Does the Vault hold this object? A 404 is a definite no; any other
+/// failure is "unknown" (None) and must not be treated as missing.
+async fn vault_has_object(port: u16, label: &str) -> Option<bool> {
+    let resp = http()
+        .post(format!("http://127.0.0.1:{}/backup/retrieve", port))
+        .header("Origin", VAULT_ORIGIN)
+        .json(&serde_json::json!({ "client_id": YOAI_HOLOCHAIN_CLIENT_ID, "label": label }))
+        .send()
+        .await
+        .ok()?;
+    match resp.status() {
+        reqwest::StatusCode::NOT_FOUND => Some(false),
+        s if s.is_success() => Some(true),
+        _ => None,
+    }
+}
+
+/// The sync state is this device's belief about what the Vault holds; the
+/// Vault is the truth. When the Vault holds fewer objects than the belief
+/// (a Vault reset or restore, a lost object), every believed label is
+/// checked and the conversations whose objects are gone are forgotten
+/// from the sync state, so the next pass reads and uploads them again.
+/// (Dev laptop 09-07: 622 conversations "unchanged since 5 August" whose
+/// objects the Vault no longer had - listed in every manifest, present
+/// in none of the backups, found only by a restore.)
+async fn reconcile_sync_state(app: &tauri::AppHandle, port: u16) {
+    let mut sync = load_sync_state(app);
+    if sync.is_empty() {
+        return;
+    }
+    let believed: usize = sync.values().map(|e| e.labels.len()).sum();
+    let Some(held) = vault_object_count(port).await else { return };
+    // The manifest is one object beside the conversation objects.
+    if held >= believed {
+        return;
+    }
+    log::warn!(
+        "[escrow] the Vault holds {} object(s) but this device believed {} - checking every one",
+        held, believed
+    );
+    let mut forgotten = 0usize;
+    let mut unknown = 0usize;
+    let labels: Vec<(String, Vec<String>)> = sync.iter().map(|(k, e)| (k.clone(), e.labels.clone())).collect();
+    for (key, parts) in labels {
+        let mut missing = false;
+        for part in &parts {
+            match vault_has_object(port, part).await {
+                Some(false) => {
+                    missing = true;
+                    break;
+                }
+                Some(true) => {}
+                None => {
+                    unknown += 1;
+                    break;
+                }
+            }
+        }
+        if missing {
+            sync.remove(&key);
+            forgotten += 1;
+        }
+    }
+    if forgotten > 0 {
+        save_sync_state(app, &sync);
+        log::warn!(
+            "[escrow] {} conversation(s) the Vault no longer holds will be read and uploaded again{}",
+            forgotten,
+            if unknown > 0 { format!(" ({unknown} could not be checked)") } else { String::new() }
+        );
+    }
+}
+
 async fn fetch_backup_limits(port: u16) -> Option<BackupLimits> {
     let resp = http()
         .get(format!("http://127.0.0.1:{}/backup/limits", port))
@@ -638,6 +732,13 @@ fn load_sync_state(app: &tauri::AppHandle) -> std::collections::HashMap<String, 
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
+}
+
+/// Start times of every conversation this device has uploaded, by the sync
+/// state's own record - a second local index for the restore's "already
+/// here" check beside the list cache.
+pub(crate) fn sync_state_started_ats(app: &tauri::AppHandle) -> std::collections::HashSet<i64> {
+    load_sync_state(app).values().filter_map(|e| e.started_at).collect()
 }
 
 fn save_sync_state(app: &tauri::AppHandle, state: &std::collections::HashMap<String, SyncEntry>) {
@@ -1848,6 +1949,9 @@ async fn write_full_backup_inner(app: &tauri::AppHandle) -> Result<serde_json::V
         }
     };
 
+    // Belief vs truth before deciding what is unchanged: a conversation the
+    // Vault no longer holds must be read and uploaded, not listed.
+    reconcile_sync_state(app, port).await;
     let (convs, carried) = collect_conversations(app).await?;
     // Conversations listed without a read are local conversations too: the
     // empty-device gate below must see them, or a pass that skipped every

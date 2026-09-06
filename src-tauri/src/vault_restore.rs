@@ -768,7 +768,17 @@ pub async fn vault_restore_conversations(
     };
     let key = manager.data_key()?;
 
-    let (existing_started, conv_counts) = local_conversation_index(&app, manager, &key).await?;
+    let (mut existing_started, conv_counts) = local_conversation_index(&app, manager, &key).await?;
+    // Two more local indexes beside the list cache: what this device has
+    // uploaded (the backup sync state) and what it deleted on purpose. A
+    // conversation deleted here after the backup was written must stay
+    // deleted, not come back as a fresh copy.
+    existing_started.extend(vault_escrow::sync_state_started_ats(&app));
+    let deleted = crate::conversation_cache::deleted_ledger(&app);
+    let deleted_hashes: HashSet<String> = deleted.iter().map(|d| d.hash.clone()).collect();
+    let deleted_started: HashSet<i64> = deleted.iter().filter(|d| d.started_at != 0).map(|d| d.started_at).collect();
+    let was_deleted = |g: &ConvGroup| deleted_hashes.contains(&g.old_hash) || deleted_started.contains(&g.started_at);
+    let mut conversations_deleted_here = 0u64;
 
     // 1. Merge the backup's AI configs into the local store.
     let store = app.store(AI_STORE).map_err(|e| e.to_string())?;
@@ -841,6 +851,10 @@ pub async fn vault_restore_conversations(
         orphan_entries += cell.orphan_entries as u64;
         let Some(agent_key) = assigned.get(&i) else { continue };
         for group in &cell.groups {
+            if was_deleted(group) {
+                conversations_deleted_here += 1;
+                continue;
+            }
             if existing_started.contains(&group.started_at) {
                 conversations_skipped += 1;
                 continue;
@@ -871,6 +885,10 @@ pub async fn vault_restore_conversations(
         }
         let agent_key = manager.provision_agent(&cell.role_suffix).await?;
         for group in &cell.groups {
+            if was_deleted(group) {
+                conversations_deleted_here += 1;
+                continue;
+            }
             if existing_started.contains(&group.started_at) {
                 conversations_skipped += 1;
                 continue;
@@ -886,9 +904,9 @@ pub async fn vault_restore_conversations(
     }
 
     log::info!(
-        "[restore] {} conversation(s) restored ({} records), {} preserved transcript-only ({} records), {} already present, {} AI(s) added, {} default(s) replaced",
+        "[restore] {} conversation(s) restored ({} records), {} preserved transcript-only ({} records), {} already present, {} deleted on this device (left deleted), {} AI(s) added, {} default(s) replaced",
         conversations_restored, records_restored, conversations_preserved, records_preserved,
-        conversations_skipped, ais_added, ais_replaced
+        conversations_skipped, conversations_deleted_here, ais_added, ais_replaced
     );
 
     // Your Memory profile facts + AI thumbnails + per-AI authored knowledge -
@@ -929,6 +947,7 @@ pub async fn vault_restore_conversations(
         "conversations_preserved": conversations_preserved,
         "records_preserved": records_preserved,
         "conversations_skipped": conversations_skipped,
+        "conversations_deleted_here": conversations_deleted_here,
         "orphan_entries": orphan_entries,
         "missing_objects": missing_objects,
         "missing_records": missing_records,

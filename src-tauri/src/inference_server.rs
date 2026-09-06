@@ -218,6 +218,7 @@ pub fn spawn(app: AppHandle, pre_bound: Option<std::net::TcpListener>) {
             .route("/internal/route-preview", get(route_preview))
         .route("/internal/matrix-run", get(matrix_run_dev))
         .route("/internal/online-smoke", get(online_smoke_dev))
+        .route("/internal/replayed-conversations", get(replayed_conversations_dev))
             .layer(axum::middleware::from_fn_with_state(app.clone(), lan_guard))
             .with_state(app);
 
@@ -460,6 +461,112 @@ async fn matrix_run_dev(
         Ok(path) => Json(json!({ "report": path })).into_response(),
         Err(e) => Json(json!({ "error": e })).into_response(),
     }
+}
+
+/// Dev builds only: conversations whose chain record was written at or
+/// after `since` (unix seconds) although they started more than a day
+/// before it - the shape of a restore that replayed conversations this
+/// device had deleted. `apply=1` deletes them (the same path as the trash
+/// button: tombstoned on the chain, dropped from the list cache, noted in
+/// the deleted ledger, backup refreshed). Without it, a dry run: the list
+/// and nothing else.
+async fn replayed_conversations_dev(
+    State(app): State<AppHandle>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if !cfg!(debug_assertions) {
+        return err(StatusCode::NOT_FOUND, "not found", "not_found");
+    }
+    let Some(since) = q.get("since").and_then(|s| s.parse::<i64>().ok()) else {
+        return Json(json!({ "error": "since=<unix seconds> is required" })).into_response();
+    };
+    let apply = q.get("apply").map(|a| a == "1").unwrap_or(false);
+    let since_micros = since * 1_000_000;
+    let started_before = since_micros - 86_400 * 1_000_000;
+    let hc = app.state::<std::sync::Arc<crate::commands_holochain::HolochainState>>();
+    let manager = match hc.get() {
+        Ok(m) => m,
+        Err(e) => return Json(json!({ "error": e })).into_response(),
+    };
+    let key = match manager.data_key() {
+        Ok(k) => k,
+        Err(e) => return Json(json!({ "error": e })).into_response(),
+    };
+    let agent_keys: Vec<String> = manager.agents.lock().await.keys().cloned().collect();
+    let mut found = Vec::new();
+    let mut deleted = 0u32;
+    let mut failed = Vec::new();
+    for agent in agent_keys {
+        let payload = match holochain_types::prelude::ExternIO::encode(()) {
+            Ok(p) => p,
+            Err(e) => return Json(json!({ "error": e.to_string() })).into_response(),
+        };
+        let result = match manager
+            .call_zome_with_timeout(
+                &agent,
+                "transcript",
+                "get_all_conversations",
+                payload,
+                std::time::Duration::from_secs(crate::dna::BACKUP_READ_TIMEOUT_SECS),
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                failed.push(json!({ "agent": agent, "error": e }));
+                continue;
+            }
+        };
+        let records: Vec<holochain_types::prelude::Record> = match holochain_types::prelude::ExternIO::decode(&result) {
+            Ok(r) => r,
+            Err(e) => {
+                failed.push(json!({ "agent": agent, "error": e.to_string() }));
+                continue;
+            }
+        };
+        for rec in &records {
+            let recorded_at = rec.action().timestamp().as_micros();
+            let Some((plain, _)) = crate::vault_escrow::open_record(&key, rec) else { continue };
+            let started_at = plain["started_at"].as_i64().unwrap_or(0);
+            if recorded_at < since_micros || started_at == 0 || started_at >= started_before {
+                continue;
+            }
+            let hash = hex::encode(rec.action_address().get_raw_39());
+            let title = plain["title"].as_str().unwrap_or("").to_string();
+            let mut item = json!({
+                "agent": agent,
+                "hash": hash,
+                "title": title,
+                "started_at": started_at,
+                "recorded_at": recorded_at,
+            });
+            if apply {
+                let payload = match holochain_types::prelude::ExternIO::encode(rec.action_address().clone()) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        item["error"] = json!(e.to_string());
+                        found.push(item);
+                        continue;
+                    }
+                };
+                match manager.call_zome(&agent, "transcript", "delete_conversation", payload).await {
+                    Ok(r) => {
+                        let n: u32 = holochain_types::prelude::ExternIO::decode(&r).unwrap_or(0);
+                        crate::conversation_cache::record_deleted(&app, &agent, &hash);
+                        crate::conversation_cache::remove_from_cache(&app, &agent, &hash);
+                        item["tombstoned"] = json!(n);
+                        deleted += 1;
+                    }
+                    Err(e) => item["error"] = json!(e),
+                }
+            }
+            found.push(item);
+        }
+    }
+    if apply && deleted > 0 {
+        crate::vault_escrow::schedule_full_backup(&app);
+    }
+    Json(json!({ "since": since, "apply": apply, "count": found.len(), "deleted": deleted, "conversations": found, "failed": failed })).into_response()
 }
 
 /// Dev builds only: one short prompt to a named ONLINE model through the

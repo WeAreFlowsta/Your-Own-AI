@@ -155,6 +155,56 @@ pub(crate) fn remove_from_cache(app: &tauri::AppHandle, agent_key: &str, hash: &
     }
 }
 
+const DELETED_LEDGER_FILE: &str = "deleted-conversations.json";
+
+/// A conversation this device deleted, kept so a restore does not bring
+/// it back from a backup written before the delete (43 short chats came
+/// back onto the dev laptop on 09-06 from a 5-August backup). `started_at`
+/// is the cross-device key (a replayed conversation gets a new hash);
+/// `hash` covers a backup this same device wrote.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub(crate) struct DeletedConversation {
+    pub hash: String,
+    pub started_at: i64,
+    pub deleted_at: i64,
+}
+
+fn ledger_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join(DELETED_LEDGER_FILE))
+}
+
+pub(crate) fn deleted_ledger(app: &tauri::AppHandle) -> Vec<DeletedConversation> {
+    ledger_path(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Note a deletion. The start time comes from the cached list when the
+/// conversation is there; a conversation the cache never saw is noted by
+/// hash alone.
+pub(crate) fn record_deleted(app: &tauri::AppHandle, agent_key: &str, hash: &str) {
+    let started_at = read_cache(app, agent_key)
+        .ok()
+        .and_then(|l| l.iter().find(|c| c.hash == hash).map(|c| c.started_at))
+        .unwrap_or(0);
+    let mut ledger = deleted_ledger(app);
+    ledger.retain(|d| d.hash != hash);
+    ledger.push(DeletedConversation {
+        hash: hash.to_string(),
+        started_at,
+        deleted_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_micros() as i64)
+            .unwrap_or(0),
+    });
+    if let (Some(p), Ok(json)) = (ledger_path(app), serde_json::to_string(&ledger)) {
+        if let Err(e) = std::fs::write(&p, json) {
+            log::warn!("[conv-cache] could not note the deletion: {}", e);
+        }
+    }
+}
+
 /// Write-through for a conversation that just started: the cache stays
 /// fresh even while full reads are failing on a loaded machine.
 pub(crate) fn append_to_cache(app: &tauri::AppHandle, agent_key: &str, info: ConversationInfo) {

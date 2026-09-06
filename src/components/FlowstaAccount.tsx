@@ -53,6 +53,7 @@ interface RestoreStats {
   conversations_preserved: number;
   records_preserved: number;
   conversations_skipped: number;
+  conversations_deleted_here?: number;
   orphan_entries: number;
   missing_objects: number;
   missing_records: number;
@@ -189,13 +190,18 @@ export default component$<FlowstaAccountProps>((props) => {
             : "No conversations found in your Vault backup."
         );
       }
+      if (stats.conversations_deleted_here) {
+        parts.push(
+          `${stats.conversations_deleted_here} conversation${stats.conversations_deleted_here === 1 ? "" : "s"} you deleted on this device stayed deleted.`
+        );
+      }
       restoreDataResult.value = parts.join(" ");
       // Partial-recovery honesty: anything the backup promised but could
       // not deliver is a warning, never silence.
       const warnings: string[] = [];
       if (stats.missing_objects > 0) {
         warnings.push(
-          `${stats.missing_objects} conversation object${stats.missing_objects === 1 ? " was" : "s were"} missing or corrupted in the Vault (about ${stats.missing_records} record${stats.missing_records === 1 ? "" : "s"}) and could not be recovered. Everything else was restored.`
+          `${stats.missing_objects} conversation object${stats.missing_objects === 1 ? " was" : "s were"} missing or corrupted in the Vault (about ${stats.missing_records} record${stats.missing_records === 1 ? "" : "s"}) and could not be recovered. Everything else was restored. The next backup from the device that has them uploads them again.`
         );
       }
       if (stats.orphan_entries > 0) {
@@ -677,32 +683,6 @@ export default component$<FlowstaAccountProps>((props) => {
             automatically.
           </p>
         )}
-        {signedIn() && section === "backups" && escrow.value?.state === "synced" && !escrow.value.backups_held && (
-          <div class="mt-2 flex items-center gap-3">
-            <LiquidMetalButton
-              variant="secondary"
-              class="px-3 py-1.5 text-xs"
-              disabled={backingUp.value}
-              onClick$={async () => {
-                backingUp.value = true;
-                backupNote.value = "";
-                try {
-                  const r = await invoke<{ records?: number; skipped?: string }>("vault_backup_now");
-                  backupNote.value = r?.skipped
-                    ? "Held: " + r.skipped
-                    : "Backed up" + (r?.records != null ? ` (${r.records} records)` : "") + ".";
-                } catch (e) {
-                  backupNote.value = `Backup did not complete (${String(e)}).`;
-                } finally {
-                  backingUp.value = false;
-                }
-              }}
-            >
-              {backingUp.value ? "Backing up..." : "Back up now"}
-            </LiquidMetalButton>
-            {backupNote.value && <span class="text-xs text-[var(--text-muted)]">{backupNote.value}</span>}
-          </div>
-        )}
         {signedIn() && escrow.value?.backups_held && (
           <p class="mt-2 text-xs text-amber-300">
             Automatic backups are paused: your Vault backup may hold
@@ -756,6 +736,30 @@ export default component$<FlowstaAccountProps>((props) => {
         )}
         {signedIn() && (
           <div class="mt-3">
+            <div class="flex flex-wrap items-center gap-3">
+            {section === "backups" && escrow.value?.state === "synced" && !escrow.value.backups_held && (
+            <LiquidMetalButton
+              variant="secondary"
+              class="px-3 py-1.5 text-xs"
+              disabled={backingUp.value}
+              onClick$={async () => {
+                backingUp.value = true;
+                backupNote.value = "";
+                try {
+                  const r = await invoke<{ records?: number; skipped?: string }>("vault_backup_now");
+                  backupNote.value = r?.skipped
+                    ? "Held: " + r.skipped
+                    : "Backed up" + (r?.records != null ? ` (${r.records} records)` : "") + ".";
+                } catch (e) {
+                  backupNote.value = `Backup did not complete (${String(e)}).`;
+                } finally {
+                  backingUp.value = false;
+                }
+              }}
+            >
+              {backingUp.value ? "Backing up..." : "Back up now"}
+            </LiquidMetalButton>
+            )}
             <LiquidMetalButton
               variant="secondary"
               class="px-3 py-1.5 text-xs"
@@ -766,6 +770,8 @@ export default component$<FlowstaAccountProps>((props) => {
                 ? "Restoring conversations..."
                 : "Restore conversations from Vault"}
             </LiquidMetalButton>
+            </div>
+            {backupNote.value && <p class="mt-2 text-xs text-[var(--text-muted)]">{backupNote.value}</p>}
             <p class="mt-2 text-xs text-[var(--text-muted)]">
               New device, or something missing? This brings the conversations
               (and AIs) in your Vault backup onto this device. Nothing here is
