@@ -21,12 +21,12 @@ import { richModelName } from './modelNameFormatter';
 export const DEFAULT_DESCRIPTION_TEMPLATE =
   '{name} is an AI with a {personality} personality. Answers come from {models}. {mode.sentence} {tools.sentence}';
 
-export const DESCRIPTION_PLACEHOLDERS: { token: string; means: string }[] = [
-  { token: '{name}', means: 'the name' },
-  { token: '{personality}', means: 'the personality, as "quirky" or "caregiver"' },
-  { token: '{models}', means: 'the model setting, in words' },
-  { token: '{mode.sentence}', means: 'a sentence when replies are always a report or code' },
-  { token: '{tools.sentence}', means: 'a sentence when tools or skills are carried' },
+export const DESCRIPTION_PLACEHOLDERS: { token: string; label: string; means: string }[] = [
+  { token: '{name}', label: 'Name', means: 'the name' },
+  { token: '{personality}', label: 'Personality', means: 'the personality, as "quirky" or "caregiver"' },
+  { token: '{models}', label: 'Models', means: 'the model setting, in words' },
+  { token: '{mode.sentence}', label: 'Mode', means: 'a sentence when replies are always a report or code' },
+  { token: '{tools.sentence}', label: 'Tools', means: 'a sentence when tools or skills are carried' },
 ];
 
 /** The fields the template reads; every AI record and the edit dialog's store have them. */

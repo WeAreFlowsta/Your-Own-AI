@@ -88,6 +88,7 @@ const AiFormModal = component$<AiFormModalProps>(
       baseArchetypeId: '',
       description: '',
       isDescriptionCustomized: false,
+      descriptionCaret: -1,
       lengthDisposition: 'conversational' as LengthDisposition,
       defaultMode: 'chat' as TurnMode,
       systemPrompt: '',
@@ -1316,13 +1317,45 @@ const AiFormModal = component$<AiFormModalProps>(
                 >
                   Description
                 </label>
+                <div class="flex flex-wrap items-center gap-1.5 mb-1.5">
+                  <span class="text-[11px] text-[var(--text-muted)]">Insert:</span>
+                  {DESCRIPTION_PLACEHOLDERS.map((ph) => (
+                    <button
+                      key={ph.token}
+                      type="button"
+                      title={ph.means}
+                      disabled={store.isSubmitting}
+                      class="px-2 py-0.5 rounded-full text-[11px] border border-[var(--border-subtle)] bg-[var(--bg-input)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)] transition-colors"
+                      onClick$={() => {
+                        // Insert at the caret (or the end), keep the caret after it.
+                        const at = store.descriptionCaret >= 0 ? store.descriptionCaret : store.description.length;
+                        const before = store.description.slice(0, at);
+                        const after = store.description.slice(at);
+                        const pad = before && !/\s$/.test(before) ? ' ' : '';
+                        store.description = `${before}${pad}${ph.token}${after}`;
+                        store.descriptionCaret = before.length + pad.length + ph.token.length;
+                        store.isDescriptionCustomized = true;
+                      }}
+                    >
+                      {ph.label}
+                    </button>
+                  ))}
+                </div>
                 <LiquidMetalBorder borderRadius="1rem">
                   <textarea
                     id="aiDescription"
                     value={store.description}
                     onInput$={(e) => {
-                      store.description = (e.target as HTMLTextAreaElement).value;
+                      const el = e.target as HTMLTextAreaElement;
+                      store.description = el.value;
+                      store.descriptionCaret = el.selectionStart ?? -1;
                       store.isDescriptionCustomized = true;
+                    }}
+                    onClick$={(e) => {
+                      store.descriptionCaret = (e.target as HTMLTextAreaElement).selectionStart ?? -1;
+                    }}
+                    onKeyUp$={(e) => {
+                      store.descriptionCaret = (e.target as HTMLTextAreaElement).selectionStart ?? -1;
                     }}
                     disabled={store.isSubmitting}
                     class="w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-2xl px-4 py-2.5 placeholder-[var(--text-muted)] transition-colors disabled:opacity-70 gradient-border-target border-none"

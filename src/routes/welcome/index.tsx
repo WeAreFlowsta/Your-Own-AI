@@ -1,3 +1,4 @@
+import { renderAiDescription } from '../../utils/aiDescription';
 /**
  * Welcome wizard - the first-run experience.
  *
@@ -452,7 +453,7 @@ export default component$(() => {
                           onChange$={() => commitName$(id)}
                         />
                       </label>
-                      <p class="text-xs text-[var(--text-secondary)] leading-relaxed min-h-[2.5rem]">{ai.description}</p>
+                      <p class="text-xs text-[var(--text-secondary)] leading-relaxed min-h-[2.5rem]">{renderAiDescription(ai)}</p>
                       <button
                         type="button"
                         class="mt-auto flex items-center justify-between rounded-lg border border-[var(--border-subtle)] px-3 py-2 text-xs hover:border-[var(--text-muted)]"
@@ -643,7 +644,7 @@ export default component$(() => {
                       <span class="font-semibold text-sm">{a.name}</span>
                       {current && <LuCheck class="w-4 h-4 text-green-500" />}
                     </div>
-                    <p class="mt-1 text-xs text-[var(--text-secondary)] leading-relaxed">{a.description}</p>
+                    <p class="mt-1 text-xs text-[var(--text-secondary)] leading-relaxed">{renderAiDescription({ name: a.name, description: a.description, baseArchetypeId: a.id })}</p>
                   </button>
                 );
               })}

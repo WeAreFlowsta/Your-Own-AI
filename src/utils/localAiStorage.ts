@@ -94,9 +94,9 @@ export async function seedDefaultAisIfNeeded(): Promise<void> {
 
     // Default AI display names and descriptions (archetypes provide the system prompts)
     const defaultAiNames: Record<string, { name: string; description: string }> = {
-      veebo: { name: 'Veebo', description: 'A witty, truth-seeking AI robot.' },
-      teresa: { name: 'Teresa', description: 'A nurturing, empathetic, and empowering AI.' },
-      reeves: { name: 'Reeves', description: 'A helpful, insightful AI with a neutral personality.' },
+      veebo: { name: 'Veebo', description: '{name} is an AI with a {personality} personality - witty and truth-seeking. Answers come from {models}. {mode.sentence} {tools.sentence}' },
+      teresa: { name: 'Teresa', description: '{name} is an AI with a {personality} personality - nurturing, empathetic and empowering. Answers come from {models}. {mode.sentence} {tools.sentence}' },
+      reeves: { name: 'Reeves', description: '{name} is an AI with a {personality} personality - helpful and insightful. Answers come from {models}. {mode.sentence} {tools.sentence}' },
     };
 
     const defaults = getDefaultPersonalities();
@@ -185,9 +185,9 @@ export async function reseedMissingDefaults(): Promise<UserDefinedAI[]> {
   const existingAis = await store.get<UserDefinedAI[]>(CUSTOM_AIS_KEY) || [];
 
   const defaultAiNames: Record<string, { name: string; description: string }> = {
-    veebo: { name: 'Veebo', description: 'A witty, truth-seeking AI robot.' },
-    teresa: { name: 'Teresa', description: 'A nurturing, empathetic, and empowering AI.' },
-    reeves: { name: 'Reeves', description: 'A helpful, insightful AI with a neutral personality.' },
+    veebo: { name: 'Veebo', description: '{name} is an AI with a {personality} personality - witty and truth-seeking. Answers come from {models}. {mode.sentence} {tools.sentence}' },
+    teresa: { name: 'Teresa', description: '{name} is an AI with a {personality} personality - nurturing, empathetic and empowering. Answers come from {models}. {mode.sentence} {tools.sentence}' },
+    reeves: { name: 'Reeves', description: '{name} is an AI with a {personality} personality - helpful and insightful. Answers come from {models}. {mode.sentence} {tools.sentence}' },
   };
 
   const defaults = getDefaultPersonalities();

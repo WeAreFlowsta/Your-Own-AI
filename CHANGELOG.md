@@ -16,6 +16,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   edit stays; Reset to default is one click; a description written from
   scratch is shown as written. The old generated sentence, which went stale
   the moment a personality changed, becomes the live template.
+  Small Insert buttons above the box drop a placeholder at the cursor, and
+  the six starting AIs from the welcome carry the template with their own
+  line of character ("Veebo is an AI with a quirky personality - playful,
+  curious and a little unpredictable...").
 - The Knowledge tab of the edit-AI dialog offers the memory component in
   place when it is missing, in one line about what it does, with the
   download right there. Before, adding a document failed with a note about
