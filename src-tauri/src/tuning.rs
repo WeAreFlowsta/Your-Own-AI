@@ -662,7 +662,7 @@ mod tests {
             results.push(r.clone());
             eprintln!(
                 "[matrix] tune arm ctx {} moe {:?} draft {} compact {}: load {:.1} s, prompt {:.0} tok/s, gen {:.1} tok/s, failed {:?}",
-                r.ctx, r.moe_cpu_layers, r.draft, r.load_secs, r.pp_tps, r.gen_tps, r.failed
+                r.ctx, r.moe_cpu_layers, r.draft, r.kv_q8, r.load_secs, r.pp_tps, r.gen_tps, r.failed
             );
             assert!(r.failed.is_none(), "arm failed: {:?}", r.failed);
             assert!(r.gen_tps > 0.0, "no generation timing");
