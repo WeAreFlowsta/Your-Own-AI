@@ -8,11 +8,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 ### Your AIs
 - An AI's description keeps itself current. It is now a small template
   filled from the AI's live settings wherever it is shown: {name},
-  {personality} ("a playful explorer"), {models} (the model setting in
+  {personality} ("quirky", "caregiver"), {models} (the model setting in
   words, "the best model for each question, online or on this computer"),
   and optional sentences for a report or code default and for carried tools
-  and skills. The default reads "Veebo is a playful explorer. Answers come
-  from models on this computer." Edit the words around the braces and your
+  and skills. The default reads "Veebo is an AI with a quirky personality.
+  Answers come from models on this computer." Edit the words around the braces and your
   edit stays; Reset to default is one click; a description written from
   scratch is shown as written. The old generated sentence, which went stale
   the moment a personality changed, becomes the live template.

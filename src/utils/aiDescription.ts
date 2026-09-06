@@ -6,8 +6,8 @@
  *
  * Placeholders, all optional, in any order and any sentence:
  *   {name}            Veebo
- *   {personality}     a playful explorer  (with its article; "an AI with a
- *                     personality of its own" when no archetype)
+ *   {personality}     quirky | caregiver | ... (the personality's name,
+ *                     lowercase; "custom" when written from scratch)
  *   {models}          a phrase for the model setting, see describeModels()
  *   {mode}            chat | report | code
  *   {mode.sentence}   "Every reply is a structured report." or nothing
@@ -19,11 +19,11 @@ import { getArchetypeById } from '../data/bundled-archetypes';
 import { richModelName } from './modelNameFormatter';
 
 export const DEFAULT_DESCRIPTION_TEMPLATE =
-  '{name} is {personality}. Answers come from {models}. {mode.sentence} {tools.sentence}';
+  '{name} is an AI with a {personality} personality. Answers come from {models}. {mode.sentence} {tools.sentence}';
 
 export const DESCRIPTION_PLACEHOLDERS: { token: string; means: string }[] = [
   { token: '{name}', means: 'the name' },
-  { token: '{personality}', means: 'the personality, as "a playful explorer"' },
+  { token: '{personality}', means: 'the personality, as "quirky" or "caregiver"' },
   { token: '{models}', means: 'the model setting, in words' },
   { token: '{mode.sentence}', means: 'a sentence when replies are always a report or code' },
   { token: '{tools.sentence}', means: 'a sentence when tools or skills are carried' },
@@ -43,10 +43,6 @@ export interface DescribableAi {
 export interface DescribeOptions {
   /** id -> display name, for "GPT-6 Astra, online" instead of the id. */
   onlineNames?: Record<string, string>;
-}
-
-function article(phrase: string): string {
-  return /^[aeiou]/i.test(phrase) ? 'an' : 'a';
 }
 
 function humanizeId(id: string): string {
@@ -73,9 +69,7 @@ export function describeModels(model: string | undefined, opts?: DescribeOptions
 
 export function describePersonality(archetypeId: string | undefined): string {
   const a = archetypeId ? getArchetypeById(archetypeId) : undefined;
-  if (!a?.name) return 'an AI with a personality of its own';
-  const n = a.name.toLowerCase();
-  return `${article(n)} ${n}`;
+  return a?.name ? a.name.toLowerCase() : 'custom';
 }
 
 function modeSentence(mode: string | undefined): string {
@@ -122,5 +116,10 @@ export function renderAiDescription(ai: DescribableAi, opts?: DescribeOptions): 
   const out = descriptionTemplateFor(ai).replace(/\{([a-z]+(?:\.[a-z]+)?)\}/g, (whole, key: string) =>
     key in values ? values[key] : whole,
   );
-  return out.replace(/[ \t]+/g, ' ').replace(/ +([.,;:!?])/g, '$1').replace(/\s+\n/g, '\n').trim();
+  return out
+    .replace(/\ba ([aeiou])/gi, (m, v: string) => `${m[0]}n ${v}`)
+    .replace(/[ \t]+/g, ' ')
+    .replace(/ +([.,;:!?])/g, '$1')
+    .replace(/\s+\n/g, '\n')
+    .trim();
 }
