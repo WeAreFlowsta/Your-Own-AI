@@ -891,6 +891,74 @@ pub async fn corpus_import(
     Ok(report)
 }
 
+/// Records restored without their text: (doc_id, byte_size, meta).
+fn waiting_records(conn: &Connection, key: &[u8; 32]) -> Result<Vec<(String, i64, DocMeta)>, String> {
+    let mut stmt = conn
+        .prepare("SELECT doc_id, byte_size, meta_enc FROM documents WHERE chunk_count = 0")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, Vec<u8>>(2)?)))
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (id, size, blob) = row.map_err(|e| e.to_string())?;
+        let meta: DocMeta = serde_json::from_slice(&dec(key, &blob)?).map_err(|e| e.to_string())?;
+        out.push((id, size, meta));
+    }
+    Ok(out)
+}
+
+/// Which waiting record a file on disk belongs to: same name (case-
+/// insensitive) and the same size wins; a same-name record with a
+/// different size is taken only when it is the only candidate.
+pub fn match_waiting(waiting: &[(String, i64, DocMeta)], name: &str, size: i64) -> Option<usize> {
+    let lower = name.to_lowercase();
+    let by_name: Vec<usize> = waiting
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, _, m))| m.filename.to_lowercase() == lower)
+        .map(|(i, _)| i)
+        .collect();
+    by_name
+        .iter()
+        .copied()
+        .find(|&i| waiting[i].1 == size)
+        .or_else(|| if by_name.len() == 1 { Some(by_name[0]) } else { None })
+}
+
+/// Put a re-read document's passages and vectors under its EXISTING record:
+/// the id, the card, the Mine flag and every grant stay; the path and the
+/// piece count are set.
+#[allow(clippy::too_many_arguments)]
+fn store_reread(
+    conn: &mut Connection,
+    key: &[u8; 32],
+    doc_id: &str,
+    mut meta: DocMeta,
+    path_str: &str,
+    size: i64,
+    passages: &[String],
+    vectors: &[Vec<f32>],
+) -> Result<(), String> {
+    meta.path = Some(path_str.to_string());
+    let meta_json = serde_json::to_vec(&meta).map_err(|e| e.to_string())?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM passages WHERE doc_id = ?1", params![doc_id]).map_err(|e| e.to_string())?;
+    for (idx, (text, vec)) in passages.iter().zip(vectors.iter()).enumerate() {
+        tx.execute(
+            "INSERT INTO passages (doc_id, idx, text_enc, vec_enc) VALUES (?1, ?2, ?3, ?4)",
+            params![doc_id, idx as i64, enc(key, text.as_bytes())?, enc(key, &vec_to_bytes(vec))?],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    tx.execute(
+        "UPDATE documents SET chunk_count = ?2, byte_size = ?3, path_hash = ?4, meta_enc = ?5 WHERE doc_id = ?1",
+        params![doc_id, passages.len() as i64, size, path_hash(path_str), enc(key, &meta_json)?],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
+}
+
 #[derive(Serialize, Clone, Debug, Default)]
 pub struct RereadReport {
     /// Documents that got their text back.
@@ -918,22 +986,7 @@ pub async fn corpus_reread(
     CANCEL.store(false, Ordering::SeqCst);
     let key = data_key(&hc_state)?;
     let mut conn = open(&app)?;
-    // Waiting records: (doc_id, byte_size, meta)
-    let mut waiting: Vec<(String, i64, DocMeta)> = {
-        let mut stmt = conn
-            .prepare("SELECT doc_id, byte_size, meta_enc FROM documents WHERE chunk_count = 0")
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, Vec<u8>>(2)?)))
-            .map_err(|e| e.to_string())?;
-        let mut out = Vec::new();
-        for row in rows {
-            let (id, size, blob) = row.map_err(|e| e.to_string())?;
-            let meta: DocMeta = serde_json::from_slice(&dec(&key, &blob)?).map_err(|e| e.to_string())?;
-            out.push((id, size, meta));
-        }
-        out
-    };
+    let mut waiting = waiting_records(&conn, &key)?;
     let mut report = RereadReport::default();
     if waiting.is_empty() {
         return Ok(report);
@@ -948,19 +1001,7 @@ pub async fn corpus_reread(
         }
         let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("document").to_string();
         let size = std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(-1);
-        let lower = name.to_lowercase();
-        let by_name: Vec<usize> = waiting
-            .iter()
-            .enumerate()
-            .filter(|(_, (_, _, m))| m.filename.to_lowercase() == lower)
-            .map(|(i, _)| i)
-            .collect();
-        let pick = by_name
-            .iter()
-            .copied()
-            .find(|&i| waiting[i].1 == size)
-            .or_else(|| if by_name.len() == 1 { Some(by_name[0]) } else { None });
-        let Some(i) = pick else {
+        let Some(i) = match_waiting(&waiting, &name, size) else {
             report.unmatched += 1;
             continue;
         };
@@ -1000,25 +1041,9 @@ pub async fn corpus_reread(
             report.cancelled = true;
             break;
         }
-        let (doc_id, _, mut meta) = waiting.remove(i);
+        let (doc_id, _, meta) = waiting.remove(i);
         let path_str = path.to_string_lossy().to_string();
-        meta.path = Some(path_str.clone());
-        let meta_json = serde_json::to_vec(&meta).map_err(|e| e.to_string())?;
-        let tx = conn.transaction().map_err(|e| e.to_string())?;
-        tx.execute("DELETE FROM passages WHERE doc_id = ?1", params![doc_id]).map_err(|e| e.to_string())?;
-        for (idx, (text, vec)) in passages.iter().zip(vectors.iter()).enumerate() {
-            tx.execute(
-                "INSERT INTO passages (doc_id, idx, text_enc, vec_enc) VALUES (?1, ?2, ?3, ?4)",
-                params![doc_id, idx as i64, enc(&key, text.as_bytes())?, enc(&key, &vec_to_bytes(vec))?],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        tx.execute(
-            "UPDATE documents SET chunk_count = ?2, byte_size = ?3, path_hash = ?4, meta_enc = ?5 WHERE doc_id = ?1",
-            params![doc_id, passages.len() as i64, size.max(0), path_hash(&path_str), enc(&key, &meta_json)?],
-        )
-        .map_err(|e| e.to_string())?;
-        tx.commit().map_err(|e| e.to_string())?;
+        store_reread(&mut conn, &key, &doc_id, meta, &path_str, size.max(0), &passages, &vectors)?;
         report.restored += 1;
     }
     report.remaining = waiting.len();
@@ -1321,8 +1346,11 @@ pub struct CorpusRecords {
 }
 
 pub(crate) fn records_for_backup(app: &AppHandle, key: &[u8; 32]) -> Result<CorpusRecords, String> {
-    let conn = open(app)?;
-    let mut documents = read_records(&conn, key, None)?;
+    records_from(&open(app)?, key)
+}
+
+fn records_from(conn: &Connection, key: &[u8; 32]) -> Result<CorpusRecords, String> {
+    let mut documents = read_records(conn, key, None)?;
     for d in documents.iter_mut() {
         d.meta.path = None; // a path names a machine; the record should not
     }
@@ -1333,7 +1361,10 @@ pub(crate) fn records_for_backup(app: &AppHandle, key: &[u8; 32]) -> Result<Corp
 /// with their summary, flags and grants and no passages ("Re-read from
 /// folder" brings those back). Existing documents keep what they have.
 pub(crate) fn restore_records(app: &AppHandle, key: &[u8; 32], records: &CorpusRecords) -> Result<usize, String> {
-    let mut conn = open(app)?;
+    restore_records_into(&mut open(app)?, key, records)
+}
+
+fn restore_records_into(conn: &mut Connection, key: &[u8; 32], records: &CorpusRecords) -> Result<usize, String> {
     let mut restored = 0usize;
     for d in &records.documents {
         let exists: Option<String> = conn
@@ -1468,6 +1499,118 @@ mod tests {
         assert_eq!(bytes_to_vec(&vec_to_bytes(&v)), v);
         assert!((cosine(&v, &v) - 1.0).abs() < 1e-6);
         assert_eq!(cosine(&v, &[1.0, 2.0]), 0.0);
+    }
+
+    #[test]
+    /// The restore drill without the Vault transport: a library on machine
+    /// A is exported as records only, restored into an empty store on
+    /// machine B, and re-read from the person's files with a fake embedder.
+    /// The exact code the app runs, minus the escrow payload that carries
+    /// the JSON (proven daily by the facts and thumbnails it already holds).
+    #[test]
+    fn restore_drill_records_only_then_reread_from_folder() {
+        let key = [3u8; 32];
+        let dir = std::env::temp_dir().join(format!("yoai-drill-{}", new_doc_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Distinct sentences: the overlap join removes a repeated tail by
+        // content, so a text of identical sentences would not round-trip.
+        let text_a: String = (1..=60).map(|i| format!("Sentence {i} of the harbour story, where Nell counts the moorings again. ")).collect();
+        let text_b: String = (1..=40).map(|i| format!("Note {i} for the talk about private AI on a machine you own. ")).collect();
+        std::fs::write(dir.join("tides.txt"), &text_a).unwrap();
+        std::fs::write(dir.join("notes.md"), &text_b).unwrap();
+        let size_a = std::fs::metadata(dir.join("tides.txt")).unwrap().len() as i64;
+        let size_b = std::fs::metadata(dir.join("notes.md")).unwrap().len() as i64;
+        let fake_embed = |passages: &[String]| -> Vec<Vec<f32>> {
+            passages.iter().enumerate().map(|(i, _)| vec![1.0 / (i as f32 + 1.0), 0.5, 0.25]).collect()
+        };
+
+        // Machine A: two documents, one card, one Mine flag, two grants.
+        let path_a = std::env::temp_dir().join(format!("corpus-{}.sqlite", new_doc_id()));
+        let mut a = open_at(&path_a).unwrap();
+        let pa = chunk_text(&text_a, PASSAGE_CHARS);
+        let pb = chunk_text(&text_b, PASSAGE_CHARS);
+        let meta_a = DocMeta { filename: "tides.txt".into(), path: Some(dir.join("tides.txt").to_string_lossy().into()), author: Some("Mara Ellison".into()), summary: Some("A harbour novel.".into()), ..Default::default() };
+        let meta_b = DocMeta { filename: "notes.md".into(), path: Some(dir.join("notes.md").to_string_lossy().into()), mine: true, ..Default::default() };
+        let rec_a = insert_document(&mut a, &key, &meta_a, size_a, &pa, &fake_embed(&pa), "ai-1").unwrap();
+        let rec_b = insert_document(&mut a, &key, &meta_b, size_b, &pb, &fake_embed(&pb), "ai-1").unwrap();
+        a.execute("INSERT OR IGNORE INTO grants (doc_id, ai_id) VALUES (?1, ?2)", params![rec_b.doc_id, "ai-2"]).unwrap();
+
+        // The backup carries records only: no path, no passages.
+        let backup = records_from(&a, &key).unwrap();
+        assert_eq!(backup.documents.len(), 2);
+        assert!(backup.documents.iter().all(|d| d.meta.path.is_none()));
+        let json = serde_json::to_vec(&backup).unwrap();
+        let backup: CorpusRecords = serde_json::from_slice(&json).unwrap();
+
+        // Machine B: empty store, records restored, everything waits for its file.
+        let path_b = std::env::temp_dir().join(format!("corpus-{}.sqlite", new_doc_id()));
+        let mut b = open_at(&path_b).unwrap();
+        assert_eq!(restore_records_into(&mut b, &key, &backup).unwrap(), 2);
+        assert_eq!(restore_records_into(&mut b, &key, &backup).unwrap(), 0, "a second restore adds nothing");
+        let mut waiting = waiting_records(&b, &key).unwrap();
+        assert_eq!(waiting.len(), 2);
+        let restored = read_records(&b, &key, None).unwrap();
+        assert!(restored.iter().all(|d| d.chunk_count == 0));
+        let rb = restored.iter().find(|d| d.doc_id == rec_b.doc_id).unwrap();
+        assert!(rb.meta.mine && rb.ai_ids.contains(&"ai-2".to_string()) && rb.ai_ids.contains(&"ai-1".to_string()));
+        let ra = restored.iter().find(|d| d.doc_id == rec_a.doc_id).unwrap();
+        assert_eq!(ra.meta.summary.as_deref(), Some("A harbour novel."));
+        assert_eq!(ra.meta.author.as_deref(), Some("Mara Ellison"));
+
+        // Re-read from the folder: walk, match, extract, chunk, embed, store.
+        std::fs::write(dir.join("stranger.txt"), "not in the library").unwrap();
+        let files = walk(&[dir.to_string_lossy().to_string()]);
+        let mut restored_n = 0;
+        let mut unmatched = 0;
+        for f in &files {
+            let name = f.file_name().unwrap().to_string_lossy().to_string();
+            let size = std::fs::metadata(f).unwrap().len() as i64;
+            let Some(i) = match_waiting(&waiting, &name, size) else { unmatched += 1; continue };
+            let text = extract_text(f).unwrap();
+            let passages = chunk_text(&text, PASSAGE_CHARS);
+            let vectors = fake_embed(&passages);
+            let (doc_id, _, meta) = waiting.remove(i);
+            store_reread(&mut b, &key, &doc_id, meta, &f.to_string_lossy(), size, &passages, &vectors).unwrap();
+            restored_n += 1;
+        }
+        assert_eq!((restored_n, unmatched, waiting.len()), (2, 1, 0));
+
+        // Same ids, same cards and flags and grants, text back in full.
+        let after = read_records(&b, &key, None).unwrap();
+        let ra2 = after.iter().find(|d| d.doc_id == rec_a.doc_id).unwrap();
+        assert_eq!(ra2.chunk_count as usize, pa.len());
+        assert_eq!(ra2.meta.summary.as_deref(), Some("A harbour novel."));
+        assert!(ra2.meta.path.as_deref().unwrap().ends_with("tides.txt"));
+        let rb2 = after.iter().find(|d| d.doc_id == rec_b.doc_id).unwrap();
+        assert!(rb2.meta.mine && rb2.ai_ids.len() == 2 && rb2.chunk_count as usize == pb.len());
+        assert_eq!(already_have(&b, &dir.join("notes.md").to_string_lossy()).unwrap().as_deref(), Some(rec_b.doc_id.as_str()));
+        // The joined text is the document again (overlap removed by join_passages).
+        let mut stmt = b.prepare("SELECT text_enc FROM passages WHERE doc_id = ?1 ORDER BY idx").unwrap();
+        let texts: Vec<String> = stmt
+            .query_map(params![rec_a.doc_id], |r| r.get::<_, Vec<u8>>(0))
+            .unwrap()
+            .map(|r| String::from_utf8_lossy(&dec(&key, &r.unwrap()).unwrap()).into_owned())
+            .collect();
+        // The join puts a paragraph break between passages; the words and
+        // their order are what must survive.
+        let norm = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(norm(&join_passages(&texts)), norm(&text_a));
+        // Recall sees the re-read passages.
+        cache_invalidate();
+        let cache = cache_load(&b, &key).unwrap();
+        assert_eq!(cache.len(), pa.len() + pb.len());
+        // Matching rules: same name + different size loses to the exact-size twin.
+        let twins = vec![
+            ("x".to_string(), 10, DocMeta { filename: "Same.txt".into(), ..Default::default() }),
+            ("y".to_string(), 20, DocMeta { filename: "same.txt".into(), ..Default::default() }),
+        ];
+        assert_eq!(match_waiting(&twins, "SAME.TXT", 20), Some(1));
+        assert_eq!(match_waiting(&twins, "same.txt", 99), None, "two candidates, no size match: ambiguous");
+        assert_eq!(match_waiting(&twins[..1], "same.txt", 99), Some(0), "one candidate: taken");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_file(&path_a);
+        let _ = std::fs::remove_file(&path_b);
+        cache_invalidate();
     }
 
     #[test]
