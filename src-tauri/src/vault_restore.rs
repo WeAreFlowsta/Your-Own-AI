@@ -747,7 +747,25 @@ pub async fn vault_restore_conversations(
     let hc = app
         .try_state::<Arc<HolochainState>>()
         .ok_or("holochain state missing")?;
-    let manager = hc.get()?;
+    // Just after launch the conductor is still coming up: wait for it
+    // rather than fail a restore the person asked for (up to two minutes,
+    // like the records pages do).
+    let manager = {
+        let mut waited = 0u32;
+        loop {
+            if let Ok(m) = hc.get() {
+                break m;
+            }
+            if waited >= 120 {
+                return Err("Your records are still starting - try again in a moment.".to_string());
+            }
+            if waited == 0 {
+                log::info!("[restore] waiting for the conductor before restoring");
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            waited += 2;
+        }
+    };
     let key = manager.data_key()?;
 
     let (existing_started, conv_counts) = local_conversation_index(&app, manager, &key).await?;

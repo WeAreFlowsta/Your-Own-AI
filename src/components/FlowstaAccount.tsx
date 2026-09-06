@@ -756,15 +756,16 @@ export default component$<FlowstaAccountProps>((props) => {
         )}
         {signedIn() && (
           <div class="mt-3">
-            <button
-              class="rounded-full border border-[var(--border-subtle)] px-5 py-2 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)] disabled:cursor-not-allowed disabled:opacity-50"
+            <LiquidMetalButton
+              variant="secondary"
+              class="px-3 py-1.5 text-xs"
               disabled={restoreDataBusy.value}
               onClick$={() => (confirmAction.value = "restore_data")}
             >
               {restoreDataBusy.value
-                ? "Restoring conversations…"
+                ? "Restoring conversations..."
                 : "Restore conversations from Vault"}
-            </button>
+            </LiquidMetalButton>
             <p class="mt-2 text-xs text-[var(--text-muted)]">
               New device, or something missing? This brings the conversations
               (and AIs) in your Vault backup onto this device. Nothing here is
