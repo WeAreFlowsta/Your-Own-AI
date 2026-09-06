@@ -936,11 +936,14 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
         // every entry of every conversation is what made a backup of this
         // library an hour's work (dev box 09-06); after the first full pass
         // only what changed is read.
+        // A conversation never continued since the list cache began has no
+        // activity stamp; its start is then its last activity (every turn
+        // the app records touches the stamp).
         let activity: std::collections::HashMap<String, i64> =
             crate::conversation_cache::read_cache(app, &agent_key)
                 .unwrap_or_default()
                 .into_iter()
-                .filter_map(|c| c.last_active_at.map(|t| (c.hash, t)))
+                .map(|c| (c.hash, c.last_active_at.unwrap_or(c.started_at)))
                 .collect();
         let mut unchanged_skipped = 0usize;
         let mut read_here = 0usize;
