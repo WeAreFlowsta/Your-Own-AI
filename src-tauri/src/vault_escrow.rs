@@ -620,6 +620,13 @@ struct SyncEntry {
     records: usize,
     size: usize,
     labels: Vec<String>,
+    /// Last-activity stamp at the time of the backup (see ConvBundle).
+    #[serde(default)]
+    active_at: Option<i64>,
+    /// The conversation's start, kept so an unchanged conversation can be
+    /// listed without reading it.
+    #[serde(default)]
+    started_at: Option<i64>,
 }
 
 fn sync_state_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
@@ -801,6 +808,10 @@ struct ConvBundle {
     /// Conversation record first, then its entries in chain order.
     records: Vec<serde_json::Value>,
     size: usize,
+    /// The local list cache's last-activity stamp when this was read (the
+    /// app writes it through on every turn). Stored with the sync entry;
+    /// a conversation whose stamp has not moved is not read again.
+    active_at: Option<i64>,
 }
 
 /// Decrypt one on-chain record; returns (plain JSON, raw entry bytes).
@@ -910,8 +921,49 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
         };
         let conv_records: Vec<Record> = ExternIO::decode(&result).map_err(|e| e.to_string())?;
 
+        // Changed-only reads: the local list cache is written through on
+        // every turn the app records, so a conversation whose activity stamp
+        // matches the one stored at its last backup has nothing new. It is
+        // listed from the sync state and its entries are not read. Reading
+        // every entry of every conversation is what made a backup of this
+        // library an hour's work (dev box 09-06); after the first full pass
+        // only what changed is read.
+        let activity: std::collections::HashMap<String, i64> =
+            crate::conversation_cache::read_cache(app, &agent_key)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|c| c.last_active_at.map(|t| (c.hash, t)))
+                .collect();
+        let mut unchanged_skipped = 0usize;
+        let mut read_here = 0usize;
         let mut stalled_in_a_row = 0u32;
-        for conv in &conv_records {
+        for (conv_i, conv) in conv_records.iter().enumerate() {
+            if conv_i > 0 && conv_i % 100 == 0 {
+                log::info!(
+                    "[escrow] {}: {}/{} conversations, {} read, {} unchanged",
+                    installed_app_id, conv_i, conv_records.len(), read_here, unchanged_skipped
+                );
+            }
+            {
+                let hex = hex::encode(conv.action_address().get_raw_39());
+                let label = format!("conv-{}", &hex[..hex.len().min(24)]);
+                if let (Some(prev), Some(&stamp)) = (sync.get(&label), activity.get(&hex)) {
+                    if prev.active_at == Some(stamp) {
+                        if let Some(started) = prev.started_at {
+                            carried.push(serde_json::json!({
+                                "label": label,
+                                "role_name": installed_app_id,
+                                "started_at": started,
+                                "records": prev.records,
+                                "labels": prev.labels,
+                            }));
+                            unchanged_skipped += 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+            read_here += 1;
             if stalled_in_a_row >= 3 {
                 // Three consecutive three-minute stalls: this cell is not
                 // answering at a rate a pass can finish. The rest of its
@@ -1000,7 +1052,11 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
                 started_at,
                 records,
                 size,
+                active_at: activity.get(&conv_hash_hex).copied(),
             });
+        }
+        if unchanged_skipped > 0 {
+            log::info!("[escrow] {}: {} unchanged conversation(s) listed without a read", installed_app_id, unchanged_skipped);
         }
         log::info!(
             "[escrow] read {} conversation(s) of {} in {} s",
@@ -1384,7 +1440,14 @@ async fn write_incremental_backup(
             .unwrap_or(false)
         {
             unchanged += 1;
-            prev.map(|p| p.labels.clone()).unwrap_or_default()
+            let labels = prev.map(|p| p.labels.clone()).unwrap_or_default();
+            // Same content as last time: stamp the activity so the next
+            // pass can skip the read itself.
+            if let Some(e) = sync.get_mut(&label) {
+                e.active_at = c.active_at;
+                e.started_at = Some(c.started_at);
+            }
+            labels
         } else {
             let parts = build_conv_parts(c, &label, limits.max_object_bytes)?;
             for (part_label, bytes) in &parts {
@@ -1398,6 +1461,8 @@ async fn write_incremental_backup(
                     records: c.records.len(),
                     size: c.size,
                     labels: labels.clone(),
+                    active_at: c.active_at,
+                    started_at: Some(c.started_at),
                 },
             );
             labels
@@ -1916,6 +1981,7 @@ mod tests {
             .map(|r| serde_json::to_vec(r).unwrap().len())
             .sum();
         ConvBundle {
+            active_at: None,
             installed_app_id: "ai-1".into(),
             started_at: 1000,
             records,
@@ -2059,6 +2125,7 @@ mod tests {
             .map(|r| serde_json::to_vec(r).unwrap().len())
             .sum();
         ConvBundle {
+            active_at: None,
             installed_app_id: app_id.to_string(),
             started_at,
             records,

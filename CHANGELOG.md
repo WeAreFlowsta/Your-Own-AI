@@ -152,6 +152,13 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   up to ten minutes, and an AI whose cell still does not answer keeps its
   conversations listed from the previous backup while every other AI
   backs up. Before, one large AI silently stopped all backups.
+- A backup reads only what changed. The app already notes when each
+  conversation was last continued; the backup now keeps that stamp with
+  each conversation it has stored, and a conversation whose stamp has not
+  moved is listed without being read again. The first backup after this
+  update reads everything once; after that a backup of a large library
+  takes minutes rather than an hour. The log reports progress inside a
+  large AI every hundred conversations.
 - One backup runs at a time: a trigger that arrives while a pass is
   running yields to it. An AI whose conversations stop answering three
   times in a row is set aside for that pass, with what it had in the
