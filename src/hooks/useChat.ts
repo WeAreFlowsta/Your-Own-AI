@@ -24,7 +24,7 @@ import {
 import { extractAndStoreFacts, looksLikeUserFact } from "../utils/memoryExtraction";
 import { isUtilityModelReady } from "../utils/utilityModel";
 import { groundDocument, type GroundedSource } from "../utils/grounding";
-import { loadMemoryBlock } from "../utils/memory";
+import { loadMemoryBlock, loadDocumentContext } from "../utils/memory";
 import { indexTurn } from "../utils/transcriptMemory";
 import { llamaServerApi } from "../utils/llamaServerApi";
 import {
@@ -513,11 +513,8 @@ export function useChat(props: UseChatProps) {
         aiId: selectedAi.id,
         conversationHash: state.conversationHash,
         queryVec: queryVecPromise,
-        // Eight passages ride easily in an online window; a local model
-        // gets five until its context is known here (the reading-room check
-        // grows the window for what is sent).
-        docPassages: aiModelSetting.startsWith("online:") || aiModelSetting.startsWith("external:") ? 8 : 5,
       }).catch(() => "");
+      void aiModelSetting;
 
       // Phase D: NOW that the bubble + action bar are on screen, classify the turn  - 
       // the classify call no longer makes Enter feel laggy (it's absorbed into the
@@ -1159,12 +1156,14 @@ export function useChat(props: UseChatProps) {
       // room; "ok" = it already held it (or the check could not run);
       // "refused" = nothing this machine can afford holds it - the turn is
       // parked and a plain-words banner explains (state.error).
+      let roomCtx = 0; // the local model's window after the last reading-room check
       const growContextFor = async (tokens: number): Promise<"grew" | "ok" | "refused"> => {
         try {
           const { invoke } = await import("@tauri-apps/api/core");
           const r = await invoke<{ ctx: number; grew: boolean }>("ensure_context", {
             minTokens: tokens,
           });
+          roomCtx = r.ctx;
           if (r.grew) console.log(`[LLM] reading room: context grown to ${r.ctx} for a ~${tokens}-token turn`);
           return r.grew ? "grew" : "ok";
         } catch (e) {
@@ -1316,9 +1315,41 @@ export function useChat(props: UseChatProps) {
         // model's own tokenizer, against its context. Only local models have
         // a context the app owns. The server's count corrects any miss on a
         // 400 below (a model that loaded after this count, say).
+        // Documents from the library: sized to the room the model really
+        // has. Online: eight passages. Local: whatever fits beside the prompt,
+        // the history and the reply, so a small pinned window is never
+        // overrun (dev 2026-09-06: a 4K pin with five passages trimmed the
+        // persona off the front).
+        let docContext = "";
+        {
+          const qvec = await queryVecPromise;
+          let passages = 8;
+          if (!isOnlineModel && !isExternalModel) {
+            const base = await turnTokensFor(state.messages, userInput, fileContext, images.length, systemPrompt);
+            await growContextFor(base);
+            const room = roomCtx > 0 ? roomCtx - base : 0;
+            passages = Math.max(0, Math.min(8, Math.floor(room / 300)));
+          }
+          docContext = await loadDocumentContext(selectedAi.id, qvec, passages);
+          if (docContext) {
+            const last = chatHistory[chatHistory.length - 1];
+            const wire = (text: string) => `${docContext}\n\n[User question]\n${text}`;
+            if (typeof last.content === "string") last.content = wire(last.content);
+            else {
+              const t = last.content.find((p) => p.type === "text");
+              if (t && "text" in t) t.text = wire(t.text);
+            }
+          }
+        }
         if (!isOnlineModel && !isExternalModel) {
-          const estTokens = await turnTokensFor(state.messages, userInput, fileContext, images.length, systemPrompt);
+          const estTokens = await turnTokensFor(state.messages, userInput, fileContext, images.length, systemPrompt + "\n" + docContext);
           if ((await growContextFor(estTokens)) === "refused") return;
+          if (roomCtx > 0 && estTokens > roomCtx) {
+            // A fine-tune pin held the window below this turn: say so on the
+            // bubble rather than let the engine trim the prompt silently.
+            const note = `This model is pinned at ${roomCtx.toLocaleString()} tokens in Fine-tune and this turn needs about ${estTokens.toLocaleString()} - the reply may miss parts. Set the context back to Auto on the Offline Models page for full answers.`;
+            state.messages = state.messages.map((m) => (m.id === assistantId ? { ...m, statusText: note } : m));
+          }
         }
 
         // Write the user's side now (see recordCtx above). Not awaited: the

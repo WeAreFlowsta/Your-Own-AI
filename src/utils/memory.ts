@@ -329,27 +329,8 @@ export async function loadMemoryBlock(
               const lines = authored.map((t) => `- ${t}`).join("\n");
               block += `\nKnowledge this AI has been given (use if relevant):\n${lines}`;
             }
-            // Documents from the person's library this AI may draw on: up
-            // to eight passages, grouped by document, no relative margin
-            // (a document's fourth-best passage is still worth reading).
-            try {
-              const { corpusRecall } = await import("./corpus");
-              const hits = await corpusRecall(opts!.aiId!, qvec, opts?.docPassages ?? 5);
-              if (hits.length > 0) {
-                const byDoc = new Map<string, { name: string; mine: boolean; texts: string[] }>();
-                for (const h of hits) {
-                  const d = byDoc.get(h.doc_id) ?? { name: h.filename, mine: h.mine, texts: [] };
-                  d.texts.push(h.text);
-                  byDoc.set(h.doc_id, d);
-                }
-                block += `\nFrom documents this person gave this AI (use if relevant; cite the document by name):`;
-                for (const d of byDoc.values()) {
-                  block += `\nDocument "${d.name}"${d.mine ? " (written by this person)" : ""}:\n` + d.texts.map((t) => `- ${t}`).join("\n");
-                }
-              }
-            } catch (e) {
-              console.warn("[Memory] corpus recall skipped:", e);
-            }
+            // Documents from the library ride next to the question on the
+            // wire instead (loadDocumentContext) - sized to the model's window.
             if (episodic.length > 0) {
               const lines = episodic.map((t) => `- ${t}`).join("\n");
               block += `\nFrom earlier conversations with this person (use naturally if relevant):\n${lines}`;
@@ -513,4 +494,38 @@ export function addPendingTurn(turn: { userText: string; aiId: string }): string
 
 export function removePendingTurn(id: string): void {
   writePendingTurns(getPendingTurns().filter((t) => t.id !== id));
+}
+
+/**
+ * Passages from the person's library this AI may draw on, for one question.
+ * Returned as a block the send path puts in the user turn, next to the
+ * question (where a small model reads it best), never in the system prompt.
+ * `maxPassages` is sized by the caller from the model's window; 0 = none.
+ */
+export async function loadDocumentContext(
+  aiId: string,
+  queryVec: number[] | null,
+  maxPassages: number,
+): Promise<string> {
+  if (!aiId || !queryVec || maxPassages <= 0) return "";
+  try {
+    const { corpusRecall } = await import("./corpus");
+    const hits = await corpusRecall(aiId, queryVec, maxPassages);
+    if (hits.length === 0) return "";
+    const byDoc = new Map<string, { name: string; mine: boolean; texts: string[] }>();
+    for (const h of hits) {
+      const d = byDoc.get(h.doc_id) ?? { name: h.filename, mine: h.mine, texts: [] };
+      d.texts.push(h.text);
+      byDoc.set(h.doc_id, d);
+    }
+    let block = "[From your documents]\n";
+    for (const d of byDoc.values()) {
+      block += `Document "${d.name}"${d.mine ? " (written by you)" : ""}:\n` + d.texts.map((t) => `- ${t}`).join("\n") + "\n";
+    }
+    block += "\nUse these passages when they answer the question, and say which document they came from.";
+    return block;
+  } catch (e) {
+    console.warn("[Memory] document context skipped:", e);
+    return "";
+  }
 }
