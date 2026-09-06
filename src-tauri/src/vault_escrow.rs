@@ -900,6 +900,14 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
     // of failing everything (dev box 09-06: the big cell's list answered in
     // ten minutes, then one entries read past 60 s ended a 20-minute pass).
     let sync = load_sync_state(app);
+    // When the sync state was last written (micros): an entry with no
+    // activity stamp yet (written before stamps existed) still covers a
+    // conversation whose last activity predates that write.
+    let sync_written_at: Option<i64> = sync_state_path(app)
+        .and_then(|p| std::fs::metadata(p).ok())
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_micros() as i64);
     let mut carried: Vec<serde_json::Value> = Vec::new();
     let mut conv_unreadable = 0usize;
     for (agent_key, installed_app_id) in agents {
@@ -948,14 +956,23 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
                 let hex = hex::encode(conv.action_address().get_raw_39());
                 let label = format!("conv-{}", &hex[..hex.len().min(24)]);
                 if let (Some(prev), Some(&stamp)) = (sync.get(&label), activity.get(&hex)) {
-                    if prev.active_at == Some(stamp) {
-                        if let Some(started) = prev.started_at {
+                    let covered = prev.active_at == Some(stamp)
+                        || (prev.active_at.is_none() && sync_written_at.map(|w| stamp < w).unwrap_or(false));
+                    if covered {
+                        // started_at from the stored entry, else from the
+                        // list record itself (entries written before the
+                        // field existed).
+                        let started = prev
+                            .started_at
+                            .or_else(|| open_record(&key, conv).and_then(|(p, _)| p["started_at"].as_i64()));
+                        if let Some(started) = started {
                             carried.push(serde_json::json!({
                                 "label": label,
                                 "role_name": installed_app_id,
                                 "started_at": started,
                                 "records": prev.records,
                                 "labels": prev.labels,
+                                "active_at": stamp,
                             }));
                             unchanged_skipped += 1;
                             continue;
@@ -1477,6 +1494,19 @@ async fn write_incremental_backup(
         }));
     }
 
+    // Conversations listed without a read keep their entries, now stamped
+    // with the activity the skip was based on, so the next pass skips them
+    // by stamp alone.
+    for c in &carried {
+        if let (Some(label), Some(stamp)) = (c["label"].as_str(), c["active_at"].as_i64()) {
+            if let Some(e) = sync.get_mut(label) {
+                e.active_at = Some(stamp);
+                if e.started_at.is_none() {
+                    e.started_at = c["started_at"].as_i64();
+                }
+            }
+        }
+    }
     // Conversations of a cell that could not be read this time stay listed
     // from the previous manifest: their objects are still in the Vault.
     let carried_n = carried.len();
