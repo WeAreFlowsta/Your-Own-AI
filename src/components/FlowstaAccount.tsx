@@ -679,10 +679,10 @@ export default component$<FlowstaAccountProps>((props) => {
         )}
         {signedIn() && section === "backups" && escrow.value?.state === "synced" && !escrow.value.backups_held && (
           <div class="mt-2 flex items-center gap-3">
-            <button
-              type="button"
+            <LiquidMetalButton
+              variant="secondary"
+              class="px-3 py-1.5 text-xs"
               disabled={backingUp.value}
-              class="text-xs text-[var(--text-link)] hover:underline disabled:opacity-60"
               onClick$={async () => {
                 backingUp.value = true;
                 backupNote.value = "";
@@ -699,7 +699,7 @@ export default component$<FlowstaAccountProps>((props) => {
               }}
             >
               {backingUp.value ? "Backing up..." : "Back up now"}
-            </button>
+            </LiquidMetalButton>
             {backupNote.value && <span class="text-xs text-[var(--text-muted)]">{backupNote.value}</span>}
           </div>
         )}

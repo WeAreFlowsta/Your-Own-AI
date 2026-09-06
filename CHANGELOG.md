@@ -166,6 +166,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   into hours. The log names each AI as it is read, with the count and
   the seconds it took.
 - Settings, Backups gains a Back up now button that says what it did.
+- The check that stops an empty device from overwriting a full Vault
+  counts conversations listed without a read, so a backup where nothing
+  changed is not mistaken for an empty device. A conversation stored
+  before activity stamps existed is trusted as unchanged only once a
+  full read has happened on this computer.
 - The conversations list no longer knocks on tidied lineage cells. Every
   refresh used to call each disabled generation of an AI and log a line
   for the failure; only connected generations are read now.

@@ -868,6 +868,24 @@ fn load_last_index(app: &tauri::AppHandle) -> Vec<serde_json::Value> {
         .unwrap_or_default()
 }
 
+/// When a pass last left every conversation covered (read in full or
+/// listed from a stamped entry), in micros. Written only by such a pass.
+const FULL_READ_FILE: &str = "backup-full-read-at";
+
+fn load_full_read_at(app: &tauri::AppHandle) -> Option<i64> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .and_then(|d| std::fs::read_to_string(d.join(FULL_READ_FILE)).ok())
+        .and_then(|s| s.trim().parse::<i64>().ok())
+}
+
+fn save_full_read_at(app: &tauri::AppHandle, at_micros: i64) {
+    if let Ok(d) = app.path().app_data_dir() {
+        let _ = std::fs::write(d.join(FULL_READ_FILE), at_micros.to_string());
+    }
+}
+
 fn save_last_index(app: &tauri::AppHandle, index: &[serde_json::Value]) {
     if let (Some(p), Ok(json)) = (last_index_path(app), serde_json::to_string(index)) {
         let _ = std::fs::write(p, json);
@@ -900,14 +918,13 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
     // of failing everything (dev box 09-06: the big cell's list answered in
     // ten minutes, then one entries read past 60 s ended a 20-minute pass).
     let sync = load_sync_state(app);
-    // When the sync state was last written (micros): an entry with no
-    // activity stamp yet (written before stamps existed) still covers a
-    // conversation whose last activity predates that write.
-    let sync_written_at: Option<i64> = sync_state_path(app)
-        .and_then(|p| std::fs::metadata(p).ok())
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_micros() as i64);
+    // An entry with no activity stamp (written before stamps existed) covers
+    // a conversation only if a FULL read has happened since the conversation
+    // was last active: the marker below is written at the end of a pass
+    // that left nothing unread. A month-old sync state with no such pass
+    // behind it proves nothing (Eric's Windows box, 09-06: entries from
+    // 08-05, conversations continued since, no full read).
+    let full_read_at: Option<i64> = load_full_read_at(app);
     let mut carried: Vec<serde_json::Value> = Vec::new();
     let mut conv_unreadable = 0usize;
     for (agent_key, installed_app_id) in agents {
@@ -960,7 +977,7 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
                 let label = format!("conv-{}", &hex[..hex.len().min(24)]);
                 if let (Some(prev), Some(&stamp)) = (sync.get(&label), activity.get(&hex)) {
                     let covered = prev.active_at == Some(stamp)
-                        || (prev.active_at.is_none() && sync_written_at.map(|w| stamp < w).unwrap_or(false));
+                        || (prev.active_at.is_none() && full_read_at.map(|t| stamp < t).unwrap_or(false));
                     if covered {
                         // started_at from the stored entry, else from the
                         // list record itself (entries written before the
@@ -1103,6 +1120,10 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
     }
     if conv_unreadable > 0 {
         log::warn!("[escrow] {} conversation(s) had unreadable entries this pass", conv_unreadable);
+    }
+    if conv_unreadable == 0 && unreadable.is_empty() {
+        // Everything is covered as of now: unstamped entries may lean on it.
+        save_full_read_at(app, unix_now_secs() as i64 * 1_000_000);
     }
     Ok((bundles, carried))
 }
@@ -1828,7 +1849,12 @@ async fn write_full_backup_inner(app: &tauri::AppHandle) -> Result<serde_json::V
     };
 
     let (convs, carried) = collect_conversations(app).await?;
-    let local_records: u64 = convs.iter().map(|c| c.records.len() as u64).sum();
+    // Conversations listed without a read are local conversations too: the
+    // empty-device gate below must see them, or a pass that skipped every
+    // unchanged conversation reads as an empty device and refuses to write
+    // (Eric's Windows box, 09-06 21:57).
+    let local_records: u64 = convs.iter().map(|c| c.records.len() as u64).sum::<u64>()
+        + carried.iter().map(|c| c["records"].as_u64().unwrap_or(0)).sum::<u64>();
 
     match slot_gate(&probes, local_records).await {
         None => {}
@@ -1982,6 +2008,9 @@ pub fn start_daily_backup_check(app: &tauri::AppHandle) {
                 continue;
             }
             match write_full_backup(&app).await {
+                Ok(v) if v.get("skipped").is_some() => {
+                    log::warn!("[escrow] daily check: backup held ({})", v["skipped"].as_str().unwrap_or("?"))
+                }
                 Ok(_) => log::info!("[escrow] daily check: backup written"),
                 Err(e) if e == "unlinked" || e == "vault_unavailable" || e == "backup_in_progress" => {}
                 Err(e) if e == "vault_locked" => backup_when_vault_unlocks(&app),
