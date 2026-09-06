@@ -3,7 +3,7 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
-## [0.7.1] - unreleased
+## [0.7.1] - 2026-09-06
 
 ### Your library
 - Documents you give your AIs now live in one library of your own, with
