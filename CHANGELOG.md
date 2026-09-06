@@ -5,6 +5,27 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 
 ## [0.7.1] - unreleased
 
+### Your library
+- Documents you give your AIs now live in one library of your own, with
+  each AI granted the ones it may draw on. Adding a document on an AI's
+  Knowledge tab means adding it to your library and giving that AI access;
+  a document given to two AIs is stored and remembered once. The library is
+  built for size: a whole folder of files, ten years of articles, books,
+  read one document at a time with progress and a Stop button, stored in a
+  form that a chat turn never has to load whole. Your existing documents
+  move into it on their own the first time the app runs.
+- Books are read whole. The attachment reader's 256 KB cut, right for a
+  chat prompt, no longer applies to a document added to the library.
+- Answers draw on more of a document: up to eight passages per question
+  instead of three, chosen by meaning across all of an AI's documents and
+  named by document, and a passage no longer loses its place for scoring a
+  little below the best one.
+- Each document carries a "Mine" tag for your own writing, off unless you
+  set it, on the Knowledge tab and the memory page.
+- The Vault backup carries your library's records, summaries and tags, not
+  the passages: those are read again from your files after a restore, so a
+  large library can never be the reason a backup fails.
+
 ### Your AIs
 - An AI's description keeps itself current. It is now a small template
   filled from the AI's live settings wherever it is shown: {name},

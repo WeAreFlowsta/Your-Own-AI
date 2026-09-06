@@ -617,6 +617,33 @@ fn merge_knowledge(
 /// Restore each AI's authored knowledge (its Remembers tab) from the backup
 /// into the transcript-embedding store, remapping backed-up AI ids to their
 /// post-restore local ids. Existing entries win; only missing texts are added.
+/// The document library's records come back with their grants mapped to the
+/// local AI ids; passages are re-read from the person's files afterwards.
+fn restore_corpus(
+    app: &tauri::AppHandle,
+    key: &[u8; 32],
+    merged: &[serde_json::Value],
+    backup: &serde_json::Value,
+) -> usize {
+    let Ok(mut records) = serde_json::from_value::<crate::corpus::CorpusRecords>(backup["corpus"]["data"].clone()) else {
+        return 0;
+    };
+    for d in records.documents.iter_mut() {
+        d.ai_ids = d
+            .ai_ids
+            .iter()
+            .filter_map(|backup_id| resolve_local_ai_id(merged, backup_id))
+            .collect();
+    }
+    match crate::corpus::restore_records(app, key, &records) {
+        Ok(n) => n,
+        Err(e) => {
+            log::warn!("[restore] corpus records failed: {e}");
+            0
+        }
+    }
+}
+
 fn restore_ai_knowledge(
     app: &tauri::AppHandle,
     key: &[u8; 32],
@@ -826,6 +853,10 @@ pub async fn vault_restore_conversations(
     let memory_facts_restored = restore_memory_facts(&app, &key, &backup);
     let thumbnails_restored = restore_thumbnails(&app, &merged, &backup);
     let knowledge_restored = restore_ai_knowledge(&app, &key, &merged, &backup);
+    let corpus_restored = restore_corpus(&app, &key, &merged, &backup);
+    if corpus_restored > 0 {
+        log::info!("[restore] corpus: {} document record(s) restored (text re-read from your files)", corpus_restored);
+    }
 
     // The episodic recall index was wiped with the old key material, and the
     // restored knowledge above carries no vectors yet - leave a marker so the

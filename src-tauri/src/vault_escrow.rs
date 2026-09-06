@@ -1186,6 +1186,23 @@ fn attach_extras(
                 "data": knowledge,
             });
         }
+        // The document library: records, summaries, flags and grants only.
+        // Passages and vectors stay on the device - they are re-derivable
+        // from the person's own files, and a library must never be the
+        // reason a backup fails (planning/KNOWLEDGE_CORPUS.md).
+        match crate::corpus::records_for_backup(app, &key) {
+            Ok(records) if !records.documents.is_empty() => {
+                payload["corpus"] = serde_json::json!({
+                    "_readme": "Your document library: which documents your AIs \
+                                were given, their summaries and flags, and which \
+                                AI may draw on each. The text itself is read \
+                                again from your files after a restore.",
+                    "data": records,
+                });
+            }
+            Ok(_) => {}
+            Err(e) => log::warn!("[escrow] corpus records skipped: {e}"),
+        }
     }
 }
 

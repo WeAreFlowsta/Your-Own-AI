@@ -44,6 +44,10 @@ export interface KnowledgeDocument {
   sizeBytes: number;
   chunkCount: number;
   addedAt: number;
+  /** Written by the person (guessed from metadata, flippable). */
+  mine: boolean;
+  /** Written on the device by the helper model, when it has been. */
+  summary?: string;
 }
 
 /** Cap EPISODIC entries per AI (drop oldest) so the per-AI blob can't grow
@@ -474,31 +478,32 @@ export async function addDocumentKnowledge(
 
 /** The documents this AI has been given, grouped from their chunks. */
 export async function listKnowledgeDocuments(aiId: string): Promise<KnowledgeDocument[]> {
-  const all = await getEmb(aiId);
-  const byDoc = new Map<string, KnowledgeDocument>();
-  for (const e of all) {
-    if (e.kind !== "authored" || !e.source) continue;
-    const existing = byDoc.get(e.source.doc_id);
-    if (existing) {
-      existing.chunkCount += 1;
-    } else {
-      byDoc.set(e.source.doc_id, {
-        docId: e.source.doc_id,
-        filename: e.source.filename,
-        sizeBytes: e.source.size_bytes,
-        chunkCount: 1,
-        addedAt: e.created_at,
-      });
-    }
-  }
-  return [...byDoc.values()].sort((a, b) => b.addedAt - a.addedAt);
+  // The library (src/utils/corpus.ts): documents this AI has been granted.
+  const { corpusDocuments } = await import("./corpus");
+  const docs = await corpusDocuments(aiId);
+  return docs.map((d) => ({
+    docId: d.doc_id,
+    filename: d.meta.filename,
+    sizeBytes: d.byte_size,
+    chunkCount: d.chunk_count,
+    addedAt: d.added_at * 1000,
+    mine: d.meta.mine,
+    summary: d.meta.summary,
+  }));
 }
 
-/** Remove one ingested document (all its chunks) from this AI's knowledge. */
+/** Take one document away from this AI (the last AI to let go removes it from the library). */
 export async function removeKnowledgeDocument(aiId: string, docId: string): Promise<void> {
-  const all = await getEmb(aiId);
-  const kept = all.filter((e) => e.source?.doc_id !== docId);
-  await saveEmb(aiId, kept);
+  const { corpusGrant } = await import("./corpus");
+  await corpusGrant(docId, aiId, false);
+}
+
+/** Raw access to this AI's embedding blob - for the one-time library migration only. */
+export async function getTranscriptEmbeddings(aiId: string): Promise<TranscriptEmbedding[]> {
+  return getEmb(aiId);
+}
+export async function saveTranscriptEmbeddings(aiId: string, items: TranscriptEmbedding[]): Promise<void> {
+  return saveEmb(aiId, items);
 }
 
 // ── Post-restore re-embed walker ─────────────────────────────────────

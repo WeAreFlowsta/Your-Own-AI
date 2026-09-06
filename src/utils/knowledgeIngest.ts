@@ -1,4 +1,3 @@
-import { addDocumentKnowledge } from './transcriptMemory';
 
 /** File types the document extractor handles (mirrors read_file_for_context). */
 const DOC_EXTENSIONS = [
@@ -16,7 +15,7 @@ const DOC_EXTENSIONS = [
  * failed (empty = all good). Failures are usually the embedding model still
  * downloading, or an unreadable/scanned file.
  */
-export async function pickAndIngestDocuments(aiId: string): Promise<{ failures: string[] } | null> {
+export async function pickAndIngestDocuments(aiId: string): Promise<{ failures: string[]; added: number; already: number; cancelled: boolean } | null> {
   const { open } = await import('@tauri-apps/plugin-dialog');
   const selected = await open({
     multiple: true,
@@ -33,35 +32,23 @@ export function isDocumentPath(path: string): boolean {
 }
 
 /**
- * Ingest files by path - from the picker or from a drop on the window.
- * Files the reader does not handle are reported, not attempted.
+ * Add files and folders (walked) to the library and grant them to this AI.
+ * The reading, cutting and embedding happen in Rust (src-tauri/src/corpus.rs)
+ * one document at a time; progress arrives on `corpus-progress`.
  */
-export async function ingestDocumentPaths(aiId: string, paths: string[]): Promise<{ failures: string[] }> {
-  const { invoke } = await import('@tauri-apps/api/core');
-  const failures: string[] = [];
-  for (const filePath of paths) {
-    const name = filePath.split(/[/\\]/).pop() || filePath;
-    if (!isDocumentPath(filePath)) {
-      failures.push(name);
-      continue;
-    }
-    try {
-      const doc = await invoke<{ filename: string; size_bytes: number; content: string }>(
-        'read_file_for_context',
-        { filePath },
-      );
-      const result = await addDocumentKnowledge(aiId, doc.filename, doc.size_bytes, doc.content);
-      if (!result) failures.push(doc.filename);
-    } catch (e) {
-      console.warn('[Knowledge] failed to ingest', filePath, e);
-      failures.push(name);
-    }
-  }
-  return { failures };
+export async function ingestDocumentPaths(aiId: string, paths: string[]): Promise<{ failures: string[]; added: number; already: number; cancelled: boolean }> {
+  const { corpusImport } = await import('./corpus');
+  const report = await corpusImport(paths, aiId);
+  return {
+    failures: report.failed.map((f) => `${f.file} (${f.reason})`),
+    added: report.added.length,
+    already: report.already,
+    cancelled: report.cancelled,
+  };
 }
 
 /** What a failure means, said plainly. The memory component is offered in
- *  place (MemoryComponentOffer), so this covers the file itself. */
+ *  place (MemoryComponentOffer), so this covers the files themselves. */
 export function ingestFailureMessage(failures: string[]): string {
-  return `Couldn't read ${failures.join(', ')} - a scanned PDF, an empty file, or a type the reader doesn't know.`;
+  return `Couldn't read ${failures.join(', ')}.`;
 }

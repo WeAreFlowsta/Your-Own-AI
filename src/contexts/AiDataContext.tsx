@@ -277,6 +277,11 @@ export const AiDataProvider = component$(() => {
     import("../utils/transcriptMemory")
       .then(({ rebuildMemoryIndexIfPending }) => rebuildMemoryIndexIfPending())
       .catch((e) => console.warn("[AiDataContext] Memory re-embed check failed:", e));
+    // Document knowledge moved into the person's library (0.7.1): one pass
+    // per launch until every AI's document chunks have crossed over.
+    import("../utils/corpus")
+      .then(({ migrateLegacyDocuments }) => migrateLegacyDocuments(state.userDefinedAis.map((a) => a.id)))
+      .catch((e) => console.warn("[AiDataContext] library migration skipped:", e));
 
     setLoadingText("Loading thumbnails...");
     // Load thumbnails for custom AIs (before marking initialized so

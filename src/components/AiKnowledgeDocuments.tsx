@@ -1,6 +1,8 @@
 import { component$, $, useSignal, useVisibleTask$ } from '@builder.io/qwik';
 import { readThroughWarmup } from '../utils/recordsWarmup';
-import { LuFileText, LuTrash2, LuPlus, LuLoader2 } from '@qwikest/icons/lucide';
+import { LuFileText, LuPlus, LuLoader2 } from '@qwikest/icons/lucide';
+import { KnowledgeDocumentRow } from './KnowledgeDocumentRow';
+import { useCorpusProgress, progressText } from '../hooks/useCorpusProgress';
 import LiquidMetalButton from './LiquidMetalButton';
 import {
   listKnowledgeDocuments,
@@ -17,12 +19,6 @@ interface AiKnowledgeDocumentsProps {
   aiName: string;
 }
 
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 /**
  * Documents given to this AI, on the memory page's Knows tab. Same data as
  * the edit-AI dialog's Knowledge tab (both read the one store), and documents
@@ -33,6 +29,7 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
   const busy = useSignal(false);
   const error = useSignal('');
   const ready = useSignal(true);
+  const progress = useCorpusProgress();
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async () => {
     ready.value = await isEmbeddingModelReady();
@@ -54,10 +51,15 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
     );
   });
 
-  const finish = $(async (picked: { failures: string[] } | null) => {
-    if (!picked) return; // cancelled
+  const finish = $(async (picked: { failures: string[]; added: number; already: number; cancelled: boolean } | null) => {
+    if (!picked) return; // cancelled the picker
     docs.value = await listKnowledgeDocuments(props.aiId);
     if (picked.failures.length > 0) error.value = ingestFailureMessage(picked.failures);
+  });
+  const toggleMine = $(async (docId: string, mine: boolean) => {
+    const { corpusSetMine } = await import('../utils/corpus');
+    await corpusSetMine(docId, mine);
+    docs.value = await listKnowledgeDocuments(props.aiId);
   });
 
   const addDocuments = $(async () => {
@@ -66,7 +68,7 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
       error.value = 'Add the memory component above first.';
       return;
     }
-    let picked: { failures: string[] } | null = null;
+    let picked: { failures: string[]; added: number; already: number; cancelled: boolean } | null = null;
     busy.value = true;
     try {
       picked = await pickAndIngestDocuments(props.aiId);
@@ -85,7 +87,7 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
       return;
     }
     busy.value = true;
-    let picked: { failures: string[] } | null = null;
+    let picked: { failures: string[]; added: number; already: number; cancelled: boolean } | null = null;
     try {
       picked = await ingestDocumentPaths(props.aiId, paths);
     } catch (e) {
@@ -137,6 +139,9 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
         <p class="text-xs text-[var(--text-secondary)] mb-2">Drop to add</p>
       )}
 
+      {busy.value && progress.value && (
+        <p class="text-xs text-[var(--text-muted)] mb-2 truncate">{progressText(progress.value)}</p>
+      )}
       {error.value && (
         <p class="text-xs text-red-600 dark:text-red-400 mb-2">{error.value}</p>
       )}
@@ -153,26 +158,7 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
       ) : (
         <ul class="space-y-1.5">
           {docs.value.map((doc) => (
-            <li
-              key={doc.docId}
-              class="flex items-center gap-2.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-2 group"
-            >
-              <LuFileText class="w-4 h-4 text-[var(--text-muted)] shrink-0" />
-              <span class="text-sm text-[var(--text-primary)] truncate flex-1" title={doc.filename}>
-                {doc.filename}
-              </span>
-              <span class="text-[10px] text-[var(--text-muted)] shrink-0">
-                {formatSize(doc.sizeBytes)} · {doc.chunkCount} {doc.chunkCount === 1 ? 'piece' : 'pieces'}
-              </span>
-              <button
-                type="button"
-                onClick$={() => removeDoc(doc.docId)}
-                title="Remove this document"
-                class="text-[var(--text-muted)] hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 shrink-0"
-              >
-                <LuTrash2 class="w-3.5 h-3.5" />
-              </button>
-            </li>
+            <KnowledgeDocumentRow key={doc.docId} doc={doc} onToggleMine$={toggleMine} onRemove$={removeDoc} />
           ))}
         </ul>
       )}
