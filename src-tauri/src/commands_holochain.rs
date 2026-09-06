@@ -844,7 +844,7 @@ async fn project_memory_read_records_inner(
     let mut best = String::new();
     let mut found: Vec<(String, String)> = Vec::new();
     for key in agent_keys {
-        let Ok(conversations) = get_conversations(app.clone(), key.clone(), app.state()).await else {
+        let Ok(conversations) = get_conversations(app.clone(), key.clone(), app.state(), None).await else {
             continue;
         };
         for c in conversations {
@@ -917,7 +917,7 @@ pub async fn project_memory_append_note(
     let content = lines.join("\n");
 
     // Reuse the writer's memory conversation for this folder, else start one.
-    let conversations = get_conversations(app.clone(), writer_key.to_string(), app.state()).await?;
+    let conversations = get_conversations(app.clone(), writer_key.to_string(), app.state(), None).await?;
     let existing = conversations.into_iter().find(|c| {
         c.source.as_deref() == Some(WORKSPACE_MEMORY_SOURCE) && c.title.as_deref() == Some(folder)
     });
@@ -1053,8 +1053,23 @@ pub async fn get_conversations(
     app: tauri::AppHandle,
     agent_key: String,
     hc_state: State<'_, Arc<HolochainState>>,
+    // A caller that already showed the cached list asks for a live read
+    // only when the cache is older than this: the cache is write-through,
+    // so a fresh one IS the list, and a thousand-conversation cell no
+    // longer pays a sixty-second read per page open (Eric's delete
+    // session, 09-04: three zome timeouts).
+    max_age_secs: Option<u64>,
 ) -> Result<Vec<ConversationInfo>, String> {
     let manager = hc_state.get()?;
+    if let Some(secs) = max_age_secs {
+        if crate::conversation_cache::fresh_within(&app, &agent_key, secs) {
+            let cached = crate::conversation_cache::read_cache(&app, &agent_key).unwrap_or_default();
+            if !cached.is_empty() {
+                log::debug!("get_conversations: cache fresh within {secs} s - served without a live read");
+                return Ok(cached);
+            }
+        }
+    }
 
     // Merge conversations across the AI's whole agent lineage — earlier
     // generations hold conversations recorded before the AI was re-keyed
@@ -1073,6 +1088,14 @@ pub async fn get_conversations(
     // to be written back as the last-known-good one.
     let mut unanswered: Vec<String> = Vec::new();
     for key in &lineage {
+        // A tidied (disabled) generation is indexed for lineage but never
+        // connected: reading it can only fail. Skip it quietly instead of
+        // paying a zome call and a warning per refresh for every one of
+        // them (138 lines a refresh on the dev box, 09-04).
+        if !manager.is_provisioned(key).await {
+            log::debug!("get_conversations: lineage agent {} is not connected (tidied) - skipped", key);
+            continue;
+        }
         let payload = ExternIO::encode(())
             .map_err(|e| format!("Failed to encode: {}", e))?;
 

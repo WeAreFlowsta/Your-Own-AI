@@ -61,6 +61,30 @@ pub(crate) fn read_cache(
     read_at(app, &path_for(app, agent_key)?)
 }
 
+/// Was this AI's cached list written within `secs`? The cache is
+/// write-through for everything the app itself does (record, continue,
+/// delete), so a fresh file is the list - a live read of a big chain adds
+/// nothing but a sixty-second stall. Imports and restores, which write the
+/// chain from outside that path, call `mark_stale` so the next read is live.
+pub(crate) fn fresh_within(app: &tauri::AppHandle, agent_key: &str, secs: u64) -> bool {
+    let Ok(path) = path_for(app, agent_key) else { return false };
+    let Ok(meta) = std::fs::metadata(&path) else { return false };
+    let Ok(modified) = meta.modified() else { return false };
+    std::time::SystemTime::now()
+        .duration_since(modified)
+        .map(|age| age.as_secs() <= secs)
+        .unwrap_or(false)
+}
+
+/// The next list read must be live: the chain changed outside the
+/// write-through path (an import, a restore).
+pub(crate) fn mark_stale(app: &tauri::AppHandle, agent_key: &str) {
+    let Ok(path) = path_for(app, agent_key) else { return };
+    if let Ok(f) = std::fs::File::options().write(true).open(&path) {
+        let _ = f.set_modified(std::time::UNIX_EPOCH);
+    }
+}
+
 fn read_at(app: &tauri::AppHandle, path: &PathBuf) -> Result<Vec<ConversationInfo>, String> {
     if !path.exists() {
         return Ok(Vec::new());

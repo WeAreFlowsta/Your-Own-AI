@@ -168,7 +168,10 @@ export default component$(() => {
     // yet", not "none").
     for (let attempt = 0; ; attempt++) {
       try {
-        const result = await getConversations(key);
+        // With a cached list on screen, a live read is only worth its
+        // cost when the cache has aged: it is write-through for every
+        // record, continue and delete the app makes.
+        const result = await getConversations(key, cached.length > 0 ? 600 : undefined);
         if (result.length > 0) noteRecordsSeen();
         // A live result never blanks a shown cached list - an AI whose
         // live read failed keeps its last-known-good rows.

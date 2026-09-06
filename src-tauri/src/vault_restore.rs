@@ -809,6 +809,9 @@ pub async fn vault_restore_conversations(
             conversations_restored += 1;
             records_restored += n;
         }
+        // Replayed outside the write-through path: the next list read for
+        // this AI must be live.
+        crate::conversation_cache::mark_stale(&app, agent_key);
     }
 
     // 5. Cells with no matching AI - e.g. an AI deleted while its

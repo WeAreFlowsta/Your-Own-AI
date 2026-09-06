@@ -2072,6 +2072,9 @@ pub async fn import_archive_adopt(
 
     // One backup refresh for the whole adoption, not one per write.
     crate::vault_escrow::schedule_full_backup(&app);
+    // The chain grew outside the write-through path: the next list read
+    // must be live.
+    crate::conversation_cache::mark_stale(&app, &ai_id);
     log::info!(
         "[import] adopted {} conversation(s) from {} into {}",
         written,
