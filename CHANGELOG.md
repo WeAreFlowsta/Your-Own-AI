@@ -56,6 +56,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   over it, the oldest cards are left out first and nothing else.
 
 ### Engine
+- Switching models on a machine where a large model holds most of main
+  memory works again. The free-memory check before a load now counts what
+  the running server releases on the switch, so a 20 GB model resident in
+  RAM no longer refuses the 2 GB model chosen after it.
 - Compact context memory. Fine-tune gains a KV cache setting: Standard,
   Compact, or Auto. Compact stores the context at half the memory, so a
   bigger reading room fits, or a model that spilled off the card now fits

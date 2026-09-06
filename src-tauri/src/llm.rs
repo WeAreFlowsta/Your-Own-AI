@@ -2470,6 +2470,24 @@ pub async fn start_llama_server(
 /**
  * Stop llama-server
  */
+/// Resident memory of the chat server about to be stopped by a switch
+/// (its working set: weights paged in, expert layers held in RAM, KV
+/// cache), or 0 when no server runs. Read from the OS by pid.
+pub(crate) async fn outgoing_server_resident_bytes(state: &LLMState) -> u64 {
+    let pid = match state.server_process.lock().await.as_ref() {
+        Some(child) => child.pid(),
+        None => return 0,
+    };
+    let pid = sysinfo::Pid::from_u32(pid);
+    let mut sys = sysinfo::System::new();
+    sys.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::Some(&[pid]),
+        true,
+        sysinfo::ProcessRefreshKind::nothing().with_memory(),
+    );
+    sys.process(pid).map(|p| p.memory()).unwrap_or(0)
+}
+
 #[tauri::command]
 pub async fn stop_llama_server(
     state: State<'_, LLMState>,
@@ -3958,12 +3976,23 @@ pub async fn load_model(
         // The same figure the grader uses (on macOS: unwired memory within
         // Apple's working-set budget - "available now" refused loads that
         // the matrix proved run fine on an 8 GB Air).
-        let mut avail = grading_memory_bytes();
+        // A switch releases the outgoing server's memory before the new
+        // file stages: credit it, or a 20 GB MoE resident in main memory
+        // refuses every 2 GB model that follows it (4060 Ti, 09-06: "2.1 GB
+        // available, about 2.5 GB needed" with Qwen3.6-35B still serving).
+        let releasing = outgoing_server_resident_bytes(&state).await;
+        let mut avail = grading_memory_bytes().saturating_add(releasing);
+        if releasing > 0 {
+            log::info!(
+                "[LLM] memory gate counts the {:.1} GB the running server releases on this switch",
+                releasing as f64 / 1024f64.powi(3)
+            );
+        }
         if avail > 0 && avail < needed {
             // The previous server may still be releasing its memory, or the
             // OS may reclaim in a moment - one short re-sample before refusing.
             tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-            avail = grading_memory_bytes();
+            avail = grading_memory_bytes().saturating_add(releasing);
         }
         if avail > 0 && avail < needed {
             let msg = format!(
