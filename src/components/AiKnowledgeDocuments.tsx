@@ -131,10 +131,10 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
         </LiquidMetalButton>
       </div>
 
-      <MemoryComponentOffer aiName={name} onReady$={onReady} />
+      <MemoryComponentOffer onReady$={onReady} />
 
       {hovering.value && (
-        <p class="text-xs text-[var(--text-secondary)] mb-2">Drop to add to {name}'s knowledge</p>
+        <p class="text-xs text-[var(--text-secondary)] mb-2">Drop to add</p>
       )}
 
       {error.value && (

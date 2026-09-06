@@ -15,7 +15,7 @@ import { modelManager } from '../utils/modelManager';
  * disk. Field 09-05: the tab used to fail with "the knowledge model may
  * still be downloading" and point at a Settings page.
  */
-export const MemoryComponentOffer = component$<{ aiName?: string; onReady$?: QRL<() => void> }>((props) => {
+export const MemoryComponentOffer = component$<{ onReady$?: QRL<() => void> }>((props) => {
   const missing = useSignal(false);
   const downloading = useSignal(false);
   const percent = useSignal(0);
@@ -44,15 +44,14 @@ export const MemoryComponentOffer = component$<{ aiName?: string; onReady$?: QRL
   });
 
   if (!missing.value) return null;
-  const who = props.aiName || 'this AI';
   const mb = Math.round(EMBEDDING_MODEL.size * 1000);
   return (
     <div class="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] p-3 mb-3">
       <p class="text-sm text-[var(--text-primary)]">Knowledge needs the memory component.</p>
       <p class="text-xs text-[var(--text-muted)] mt-1">
-        A small file ({mb} MB) that runs on your device. It lets {who} find the right
-        part of a document when you ask, instead of reading everything every time.
-        Nothing leaves your machine.
+        A small file ({mb} MB) that runs on your device. It lets Your AIs find the
+        right part of a document when you ask, instead of reading everything every
+        time. One download serves all of them. Nothing leaves your machine.
       </p>
       {downloading.value ? (
         <div class="mt-2">

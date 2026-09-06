@@ -1371,7 +1371,7 @@ const AiFormModal = component$<AiFormModalProps>(
 
             </>)}
             {(!editingAi || store.activeSection === 'knowledge') && editingAi && (
-              <KnowledgeSection aiId={editingAi.id} aiName={store.name} store={store} />
+              <KnowledgeSection aiId={editingAi.id} store={store} />
             )}
             {editingAi && store.activeSection === 'tools' && (
               <div class="space-y-3">

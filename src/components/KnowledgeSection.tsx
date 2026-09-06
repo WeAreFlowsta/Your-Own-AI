@@ -19,7 +19,6 @@ interface KnowledgeStore {
 
 interface KnowledgeSectionProps {
   aiId: string;
-  aiName?: string;
   store: KnowledgeStore;
 }
 
@@ -116,7 +115,7 @@ export const KnowledgeSection = component$<KnowledgeSectionProps>((props) => {
         about them anytime, and the original files can be moved or deleted after.
       </p>
 
-      <MemoryComponentOffer aiName={props.aiName} onReady$={onReady} />
+      <MemoryComponentOffer onReady$={onReady} />
 
       <div
         class={`rounded-lg border border-dashed px-3 py-3 flex flex-wrap items-center gap-3 transition-colors ${
