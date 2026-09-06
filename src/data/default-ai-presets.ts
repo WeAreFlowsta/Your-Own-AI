@@ -22,14 +22,14 @@ export interface DefaultAiSlot {
 
 export const DEFAULT_AI_PRESETS: Record<DefaultAiPreset, DefaultAiSlot[]> = {
   personal: [
-    { name: 'Veebo', description: 'Playful, curious and a little unpredictable. Good company for ideas and everyday questions.', archetypeId: 'veebo', thumbnail: '/bundled/veebo.jpg' },
-    { name: 'Teresa', description: 'Warm and supportive. Talk through feelings, plans and the things on your mind.', archetypeId: 'teresa', thumbnail: '/bundled/teresa.jpg' },
-    { name: 'Reeves', description: 'Straight answers with no personality in the way. Facts, explanations, quick help.', archetypeId: 'reeves', thumbnail: '/bundled/reeves.jpg' },
+    { name: 'Veebo', description: '{name} is an AI with a {personality} personality - playful, curious and a little unpredictable. Good company for ideas and everyday questions. Answers come from {models}. {mode.sentence} {tools.sentence}', archetypeId: 'veebo', thumbnail: '/bundled/veebo.jpg' },
+    { name: 'Teresa', description: '{name} is an AI with a {personality} personality - warm and supportive. Talk through feelings, plans and the things on your mind. Answers come from {models}. {mode.sentence} {tools.sentence}', archetypeId: 'teresa', thumbnail: '/bundled/teresa.jpg' },
+    { name: 'Reeves', description: '{name} is an AI with a {personality} personality - straight answers with nothing in the way. Facts, explanations, quick help. Answers come from {models}. {mode.sentence} {tools.sentence}', archetypeId: 'reeves', thumbnail: '/bundled/reeves.jpg' },
   ],
   work: [
-    { name: 'Assistant', description: 'Writing, planning, email drafts and everyday questions at work.', archetypeId: 'reeves', thumbnail: '/bundled/gradient-ocean.jpg' },
-    { name: 'Coder', description: 'Code, debugging and technical explanations in any language.', archetypeId: 'reeves', thumbnail: '/bundled/gradient-midnight.jpg' },
-    { name: 'Analyst', description: 'Data, summaries and clear-eyed analysis of documents and numbers.', archetypeId: 'reeves', thumbnail: '/bundled/gradient-meadow.jpg' },
+    { name: 'Assistant', description: '{name} is an AI with a {personality} personality - writing, planning, email drafts and everyday questions at work. Answers come from {models}. {mode.sentence} {tools.sentence}', archetypeId: 'reeves', thumbnail: '/bundled/gradient-ocean.jpg' },
+    { name: 'Coder', description: '{name} is an AI with a {personality} personality - code, debugging and technical explanations in any language. Answers come from {models}. {mode.sentence} {tools.sentence}', archetypeId: 'reeves', thumbnail: '/bundled/gradient-midnight.jpg' },
+    { name: 'Analyst', description: '{name} is an AI with a {personality} personality - data, summaries and clear-eyed analysis of documents and numbers. Answers come from {models}. {mode.sentence} {tools.sentence}', archetypeId: 'reeves', thumbnail: '/bundled/gradient-meadow.jpg' },
   ],
 };
 
