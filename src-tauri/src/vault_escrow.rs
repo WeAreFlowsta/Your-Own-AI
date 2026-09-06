@@ -910,7 +910,29 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
         };
         let conv_records: Vec<Record> = ExternIO::decode(&result).map_err(|e| e.to_string())?;
 
+        let mut stalled_in_a_row = 0u32;
         for conv in &conv_records {
+            if stalled_in_a_row >= 3 {
+                // Three consecutive three-minute stalls: this cell is not
+                // answering at a rate a pass can finish. The rest of its
+                // conversations keep their previous entries (carried) or
+                // wait for the next pass; the other AIs still back up.
+                let hex = hex::encode(conv.action_address().get_raw_39());
+                let label = format!("conv-{}", &hex[..hex.len().min(24)]);
+                if let Some(prev) = sync.get(&label) {
+                    if let Some((p, _)) = open_record(&key, conv) {
+                        carried.push(serde_json::json!({
+                            "label": label,
+                            "role_name": installed_app_id,
+                            "started_at": p["started_at"].as_i64().unwrap_or(0),
+                            "records": prev.records,
+                            "labels": prev.labels,
+                        }));
+                    }
+                }
+                conv_unreadable += 1;
+                continue;
+            }
             let Some((conv_plain, conv_raw)) = open_record(&key, conv) else { continue };
             let started_at = conv_plain["started_at"].as_i64().unwrap_or(0);
             let conv_hash = conv.action_address().clone();
@@ -924,9 +946,16 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
                 .call_zome_with_timeout(&agent_key, "transcript", "get_conversation_entries", payload, std::time::Duration::from_secs(180))
                 .await
             {
-                Ok(r) => r,
+                Ok(r) => {
+                    stalled_in_a_row = 0;
+                    r
+                }
                 Err(e) => {
                     conv_unreadable += 1;
+                    stalled_in_a_row += 1;
+                    if stalled_in_a_row == 3 {
+                        log::warn!("[escrow] {} stalled three times in a row - the rest of its conversations wait for the next pass", installed_app_id);
+                    }
                     let label = format!("conv-{}", &conv_hash_hex[..conv_hash_hex.len().min(24)]);
                     if let Some(prev) = sync.get(&label) {
                         carried.push(serde_json::json!({
@@ -1604,6 +1633,25 @@ pub fn last_backup_outcome() -> Option<serde_json::Value> {
 }
 
 pub async fn write_full_backup(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
+    // One backup at a time: the debounce, the launch pass, the daily check
+    // and the button can all fire within a minute of launch, and two
+    // passes reading a thousand-conversation cell at once doubled the
+    // conductor's load and raced on the sync state (dev box 09-06 10:12
+    // and 10:14). A second caller simply yields; the running pass carries
+    // every pending write.
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static RUNNING: AtomicBool = AtomicBool::new(false);
+    if RUNNING.swap(true, Ordering::SeqCst) {
+        log::debug!("[escrow] backup already in progress - this trigger yields to it");
+        return Err("backup_in_progress".to_string());
+    }
+    struct Done;
+    impl Drop for Done {
+        fn drop(&mut self) {
+            RUNNING.store(false, Ordering::SeqCst);
+        }
+    }
+    let _done = Done;
     let result = write_full_backup_inner(app).await;
     match &result {
         Ok(v) => {
@@ -1624,9 +1672,9 @@ pub async fn write_full_backup(app: &tauri::AppHandle) -> Result<serde_json::Val
                 );
             }
         }
-        // Not-linked / Vault-away are idle states, not refusals - clear any
-        // stale notice rather than alarming about a Vault that's just closed.
-        Err(e) if e == "unlinked" || e == "vault_unavailable" => {}
+        // Not-linked / Vault-away / already-running are idle states, not
+        // refusals - no notice for those.
+        Err(e) if e == "unlinked" || e == "vault_unavailable" || e == "backup_in_progress" => {}
         Err(e) => {
             record_backup_outcome(
                 app,
@@ -1760,7 +1808,7 @@ pub fn schedule_full_backup(app: &tauri::AppHandle) {
         }
         match write_full_backup(&app).await {
             Ok(_) => {}
-            Err(e) if e == "unlinked" || e == "vault_unavailable" => {
+            Err(e) if e == "unlinked" || e == "vault_unavailable" || e == "backup_in_progress" => {
                 log::debug!("[escrow] full backup skipped: {}", e);
             }
             Err(e) if e == "vault_locked" => {
@@ -1831,7 +1879,7 @@ pub fn start_daily_backup_check(app: &tauri::AppHandle) {
             }
             match write_full_backup(&app).await {
                 Ok(_) => log::info!("[escrow] daily check: backup written"),
-                Err(e) if e == "unlinked" || e == "vault_unavailable" => {}
+                Err(e) if e == "unlinked" || e == "vault_unavailable" || e == "backup_in_progress" => {}
                 Err(e) if e == "vault_locked" => backup_when_vault_unlocks(&app),
                 Err(e) => log::warn!("[escrow] daily check: backup failed: {}", e),
             }

@@ -152,6 +152,12 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   up to ten minutes, and an AI whose cell still does not answer keeps its
   conversations listed from the previous backup while every other AI
   backs up. Before, one large AI silently stopped all backups.
+- One backup runs at a time: a trigger that arrives while a pass is
+  running yields to it. An AI whose conversations stop answering three
+  times in a row is set aside for that pass, with what it had in the
+  previous backup kept listed, so one slow AI never stretches a backup
+  into hours. The log names each AI as it is read, with the count and
+  the seconds it took.
 - Settings, Backups gains a Back up now button that says what it did.
 - The conversations list no longer knocks on tidied lineage cells. Every
   refresh used to call each disabled generation of an AI and log a line
