@@ -2172,13 +2172,21 @@ pub async fn start_llama_server(
                     } else {
                         crate::fit::moe_cpu_layers_with(meta, kv_gb, free_gb, correction)
                     };
+                    // The tune bench may have proven a smaller split faster
+                    // on this card at this context; it wins over the
+                    // estimate, never over a forced all-CPU session.
+                    let measured = if forced_all { None } else {
+                        pick.and_then(|n| crate::tuning::measured_moe_split_for(&app_handle, &model_key, ctx_size, n))
+                    };
+                    let pick = measured.or(pick);
                     match pick {
                         Some(n) if n < n_layers => {
                             let predicted = crate::fit::moe_need_gb(meta, n, kv_gb);
                             log::info!(
-                                "[LLM] MoE offload: experts of {n} of {n_layers} layers on CPU (--n-cpu-moe {n}) - {:.1} GB on the card, {:.1} GB free{}",
+                                "[LLM] MoE offload: experts of {n} of {n_layers} layers on CPU (--n-cpu-moe {n}) - {:.1} GB on the card, {:.1} GB free{}{}",
                                 predicted, free_gb,
-                                if correction != 0.0 { format!(" (learned correction {correction:+.1} GB)") } else { String::new() }
+                                if correction != 0.0 { format!(" (learned correction {correction:+.1} GB)") } else { String::new() },
+                                if measured.is_some() { " (the split Tune on this computer measured faster)" } else { "" }
                             );
                             args.push("--n-cpu-moe".to_string());
                             args.push(n.to_string());

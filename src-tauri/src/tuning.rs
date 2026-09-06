@@ -83,6 +83,29 @@ pub fn kv_choice_from_profile(profile: Option<&TuneProfile>) -> KvChoice {
     KvChoice { q8: false, reason: "no standard arm to compare the compact cache against" }
 }
 
+/// The expert split the bench proved faster on this machine, if any: at
+/// this context, an arm with FEWER expert layers in main memory than the
+/// picker's that loaded and generated at least 5% faster. The picker
+/// estimates from the file's tensor table; the bench measured the card.
+/// (4060 Ti, 09-06: gpt-oss 20B at 16K, 13 layers instead of 16, 39.8 vs
+/// 34.5 tok/s.) Only ever fewer layers, never more than the picker allows.
+pub fn measured_moe_split(profile: Option<&TuneProfile>, ctx: u64, picker_n: usize) -> Option<usize> {
+    let p = profile?;
+    let at_ctx: Vec<&TuneResult> = p.results.iter().filter(|r| r.ctx == ctx && r.failed.is_none() && r.gen_tps > 0.0).collect();
+    let picker = at_ctx.iter().find(|r| r.moe_cpu_layers.map(|n| n as usize) == Some(picker_n))?;
+    at_ctx
+        .iter()
+        .filter(|r| r.moe_cpu_layers.map(|n| (n as usize) < picker_n).unwrap_or(false))
+        .filter(|r| r.gen_tps >= 1.05 * picker.gen_tps)
+        .max_by(|a, b| a.gen_tps.partial_cmp(&b.gen_tps).unwrap_or(std::cmp::Ordering::Equal))
+        .and_then(|r| r.moe_cpu_layers.map(|n| n as usize))
+}
+
+pub fn measured_moe_split_for(app: &AppHandle, model: &str, ctx: u64, picker_n: usize) -> Option<usize> {
+    let profile = profiles_load(app).remove(model);
+    measured_moe_split(profile.as_ref(), ctx, picker_n)
+}
+
 /// How much of the f16 KV estimate this model's cache really takes.
 pub fn kv_scale_for(app: &AppHandle, model: &str) -> f64 {
     if kv_choice(app, model).q8 { 0.5 } else { 1.0 }
@@ -596,6 +619,21 @@ mod tests {
         assert!(kv_choice_from_profile(Some(&p)).q8, "within 5%");
         let p = TuneProfile { measured_at: 0, results: vec![r(4096, false, 20.0, None), r(8192, true, 19.5, None)] };
         assert!(!kv_choice_from_profile(Some(&p)).q8, "no like-for-like twin");
+    }
+
+    #[test]
+    fn measured_split_takes_a_faster_smaller_split_only() {
+        let arm = |ctx: u64, n: u32, gen: f32| TuneResult { ctx, moe_cpu_layers: Some(n), draft: false, kv_q8: false, load_secs: 3.0, pp_tps: 300.0, gen_tps: gen, failed: None, during_free: None };
+        let p = TuneProfile { measured_at: 0, results: vec![arm(16384, 16, 34.5), arm(16384, 13, 39.8), arm(8192, 15, 36.5)] };
+        assert_eq!(measured_moe_split(Some(&p), 16384, 16), Some(13));
+        assert_eq!(measured_moe_split(Some(&p), 16384, 13), None, "nothing smaller measured");
+        assert_eq!(measured_moe_split(Some(&p), 32768, 17), None, "no arm at that context");
+        let p2 = TuneProfile { measured_at: 0, results: vec![arm(16384, 35, 33.4), arm(16384, 30, 22.7)] };
+        assert_eq!(measured_moe_split(Some(&p2), 16384, 35), None, "the smaller split was slower");
+        let mut failed = arm(16384, 13, 45.0); failed.failed = Some("oom".into());
+        let p3 = TuneProfile { measured_at: 0, results: vec![arm(16384, 16, 34.5), failed] };
+        assert_eq!(measured_moe_split(Some(&p3), 16384, 16), None, "a failed arm never counts");
+        assert_eq!(measured_moe_split(None, 16384, 16), None);
     }
 
     #[test]

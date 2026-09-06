@@ -94,7 +94,7 @@ export default component$<ModelTuneDialogProps>((props) => {
 
   return (
     <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div class="w-full max-w-md rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-header-footer)] p-6 shadow-2xl">
+      <div class="w-full max-w-md max-h-[calc(100vh-2rem)] overflow-y-auto rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-header-footer)] p-6 shadow-2xl">
         <h3 class="text-base font-semibold text-[var(--text-primary)]">Fine-tune {props.model.replace(/\.gguf$/, '')}</h3>
         <p class="mt-2 text-xs text-[var(--text-muted)]">
           For this computer only. Automatic unless you move a slider - Auto puts a row back. A change
@@ -195,6 +195,42 @@ export default component$<ModelTuneDialogProps>((props) => {
               {results.value.length ? 'Measure again' : 'Tune on this computer'}
             </button>
           )}
+          {(() => {
+            // What the measurements decided for Auto, said plainly: the
+            // compact cache against its standard twin, and a smaller
+            // expert split that ran faster than the picker's.
+            const ok = results.value.filter((r) => !r.failed && r.gen_tps > 0);
+            const lines: string[] = [];
+            const compact = ok.find((r) => r.kv_q8);
+            if (compact) {
+              const twin = ok.find((r) => !r.kv_q8 && r.ctx === compact.ctx && r.moe_cpu_layers === compact.moe_cpu_layers && r.draft === compact.draft);
+              if (twin) {
+                const pct = Math.round(((compact.gen_tps - twin.gen_tps) / twin.gen_tps) * 100);
+                lines.push(
+                  compact.gen_tps >= 0.95 * twin.gen_tps
+                    ? `Compact cache measured at ${compact.ctx}: ~${Math.round(compact.gen_tps)} tok/s, ${pct === 0 ? 'the same as' : pct > 0 ? `${pct}% faster than` : `${-pct}% slower than`} standard - Auto uses it.`
+                    : `Compact cache measured at ${compact.ctx}: ${-pct}% slower than standard here - Auto keeps standard.`,
+                );
+              }
+            } else if (results.value.some((r) => r.kv_q8 && r.failed)) {
+              lines.push('The compact cache did not load here - Auto keeps standard.');
+            }
+            if (props.isMoe && props.autoMoeN != null && props.autoCtx) {
+              const atCtx = ok.filter((r) => r.ctx === props.autoCtx);
+              const picker = atCtx.find((r) => r.moe_cpu_layers === props.autoMoeN);
+              if (picker) {
+                const faster = atCtx
+                  .filter((r) => r.moe_cpu_layers != null && r.moe_cpu_layers < (props.autoMoeN as number) && r.gen_tps >= 1.05 * picker.gen_tps)
+                  .sort((a, b) => b.gen_tps - a.gen_tps)[0];
+                if (faster) lines.push(`${faster.moe_cpu_layers} expert layers in RAM measured ~${Math.round(faster.gen_tps)} tok/s against ~${Math.round(picker.gen_tps)} for the automatic ${props.autoMoeN} - Auto uses the faster split.`);
+              }
+            }
+            return lines.length ? (
+              <ul class="mt-2 space-y-1">
+                {lines.map((l) => <li key={l} class="text-xs text-[var(--text-secondary)]">{l}</li>)}
+              </ul>
+            ) : null;
+          })()}
           {(() => {
             const ok = results.value.filter((r) => !r.failed);
             const byCtx = new Map<number, TuneResult>();

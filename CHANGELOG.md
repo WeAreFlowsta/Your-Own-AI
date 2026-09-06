@@ -63,6 +63,12 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   standard one, and Auto uses it only where that measurement came back
   clean and within a few percent of the standard speed on your machine.
   The fit grades and the offload split count the cache at its real size.
+- Tune on this computer now teaches the automatic expert split. When the
+  bench finds that fewer expert layers in main memory ran at least five
+  percent faster than the automatic pick at that context, Auto uses the
+  measured split at the next load. The Fine-tune dialog says what the
+  measurements decided, for the cache and for the split, and scrolls on
+  a short window.
 - llama.cpp v0.4.0 (build b10809) powers every offline model. Upstream's
   September work rides in: faster attention and expert kernels on NVIDIA
   cards (RTX 50-series most, Ada some), better speculative decoding,
