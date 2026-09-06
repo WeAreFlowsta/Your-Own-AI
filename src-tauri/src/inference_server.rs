@@ -1062,7 +1062,7 @@ async fn chat_completions(
             .send()
             .await
     } else {
-        client.post(llama_upstream()).json(&body).send().await
+        client.post(llama_upstream()).bearer_auth(crate::llm::local_api_key()).json(&body).send().await
     };
     let upstream = match send {
         Ok(r) => r,
@@ -1226,7 +1226,7 @@ async fn caption_one(model: &str, image_part: &Value) -> Result<String, String> 
         "reasoning_budget_tokens": 0,
     });
     let resp = reqwest::Client::new()
-        .post(format!("http://localhost:{}/v1/chat/completions", crate::llm::CHAT_PORT))
+        .post(format!("http://localhost:{}/v1/chat/completions", crate::llm::CHAT_PORT)).bearer_auth(crate::llm::local_api_key())
         .json(&body)
         .timeout(std::time::Duration::from_secs(180))
         .send()

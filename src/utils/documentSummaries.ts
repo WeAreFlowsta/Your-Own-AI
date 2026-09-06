@@ -159,25 +159,67 @@ function hash(s: string): string {
   return (h >>> 0).toString(36);
 }
 
-/** The cached portrait, for the memory block and the memory page. */
-export function getLibraryPortrait(): string {
+/** The stored portrait: one fact of kind "library" in the encrypted
+ *  memory store (backed up with the facts; never in the webview's
+ *  plain-text local storage). */
+export const LIBRARY_KIND = "library";
+
+export async function getLibraryPortrait(): Promise<string> {
   try {
-    const raw = localStorage.getItem(PORTRAIT_KEY);
-    if (!raw) return "";
-    const v = JSON.parse(raw) as { text?: string };
-    return typeof v.text === "string" ? v.text : "";
+    const { getFacts } = await import("./memory");
+    const f = (await getFacts()).find((x) => x.entry_kind === LIBRARY_KIND && x.valid_to == null);
+    return f?.value ?? "";
   } catch {
     return "";
   }
+}
+
+async function storeLibraryPortrait(fp: string, text: string | null): Promise<void> {
+  const { getFacts, saveFacts } = await import("./memory");
+  const all = await getFacts();
+  const now = Date.now() * 1000;
+  const existing = all.find((x) => x.entry_kind === LIBRARY_KIND);
+  if (text === null) {
+    if (!existing) return;
+    await saveFacts(all.filter((x) => x !== existing));
+    return;
+  }
+  if (existing) {
+    existing.value = text;
+    existing.group_id = fp;
+    existing.updated_at = now;
+  } else {
+    all.push({
+      id: `library-${Date.now()}`,
+      subject: "user",
+      predicate: "library_synthesis",
+      value: text,
+      confidence: 1,
+      valid_from: now,
+      owner_scope: "personal",
+      key_scope: "personal",
+      entry_kind: LIBRARY_KIND,
+      provenance: "system",
+      group_id: fp,
+      created_at: now,
+      updated_at: now,
+    });
+  }
+  await saveFacts(all);
 }
 
 /** Rewrite the portrait when the cards or tags changed. Returns the
  *  current text (possibly unchanged). */
 export async function refreshLibraryPortrait(): Promise<string> {
   try {
+    try {
+      localStorage.removeItem(PORTRAIT_KEY); // an earlier build cached it here
+    } catch {
+      /* no storage */
+    }
     const docs = (await corpusDocuments()).filter((d) => d.meta.summary);
     if (docs.length === 0) {
-      localStorage.removeItem(PORTRAIT_KEY);
+      await storeLibraryPortrait("", null);
       return "";
     }
     const fp = hash(
@@ -186,14 +228,10 @@ export async function refreshLibraryPortrait(): Promise<string> {
         .sort()
         .join("|"),
     );
-    try {
-      const raw = localStorage.getItem(PORTRAIT_KEY);
-      if (raw) {
-        const v = JSON.parse(raw) as { fp?: string; text?: string };
-        if (v.fp === fp && v.text) return v.text;
-      }
-    } catch {
-      /* rewrite */
+    {
+      const { getFacts } = await import("./memory");
+      const cur = (await getFacts()).find((x) => x.entry_kind === LIBRARY_KIND);
+      if (cur && cur.group_id === fp && cur.value) return cur.value;
     }
     const writer = await localWriter();
     if (!writer) return getLibraryPortrait();
@@ -213,7 +251,7 @@ export async function refreshLibraryPortrait(): Promise<string> {
       await runUtilityTask(PORTRAIT_SYSTEM, user, undefined, 160, writer.model, 120_000, writer.preferLoaded),
     );
     if (!text) return getLibraryPortrait();
-    localStorage.setItem(PORTRAIT_KEY, JSON.stringify({ fp, text, at: Date.now() }));
+    await storeLibraryPortrait(fp, text);
     console.log("[Library] portrait rewritten on this device");
     return text;
   } catch (e) {

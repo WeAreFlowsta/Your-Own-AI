@@ -25,6 +25,30 @@ pub const LLAMA_ENGINE_TAG: &str = "llama-b10621";
 /// optional engine zips (built by build-llama-binaries.yml).
 const ENGINE_RELEASE_REPO: &str = "WeAreFlowsta/Your-Own-AI";
 
+/// sha256 of each CUDA engine zip on the pinned release, by target triple
+/// (GitHub's asset digests: `gh api repos/<repo>/releases/tags/<tag>
+/// --jq '.assets[] | .name + " " + .digest'`). A downloaded zip that does
+/// not match is deleted, never installed: the engine is an executable, and
+/// the release page is the only thing standing between a download and a
+/// swapped binary otherwise. Update WITH every LLAMA_ENGINE_TAG bump.
+const CUDA_ZIP_SHA256: &[(&str, &str)] = &[
+    ("x86_64-unknown-linux-gnu", "477667b17720f0800f9660fddd81bcdad61f480b886274be44018ee2faf5d579"),
+    ("x86_64-pc-windows-msvc", "5d23a9e560b5a912171ca899390eb4ac65c9216698fcdb6aaf937e9e5f8dc96f"),
+];
+
+fn cuda_zip_expected_sha256() -> Option<&'static str> {
+    let triple = cuda_triple()?;
+    CUDA_ZIP_SHA256.iter().find(|(t, _)| *t == triple).map(|(_, h)| *h)
+}
+
+fn sha256_file(path: &std::path::Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let mut f = std::fs::File::open(path).map_err(|e| format!("cannot read the engine zip: {e}"))?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut f, &mut hasher).map_err(|e| format!("cannot hash the engine zip: {e}"))?;
+    Ok(hex::encode(hasher.finalize()))
+}
+
 /// Which backend powers the chat server.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -223,15 +247,22 @@ pub async fn engine_status(
 pub async fn download_cuda_engine(
     app: AppHandle,
     state: tauri::State<'_, crate::llm::LLMState>,
-    url: Option<String>,
 ) -> Result<(), String> {
-    let url = match url {
-        Some(u) => u,
-        None => cuda_download_url().ok_or("unsupported_platform")?,
-    };
+    // The URL is derived from the pin, never taken from the caller: an
+    // engine is an executable, and the only source is the pinned release.
+    let url = cuda_download_url().ok_or("unsupported_platform")?;
+    let expected = cuda_zip_expected_sha256().ok_or("unsupported_platform")?;
     let zip_name = format!("llama-server-cuda-{}.zip", tag_version());
     crate::llm::download_model(app.clone(), url, zip_name.clone()).await?;
-    let result = install_cuda_zip(&app, &zip_name);
+    let zip_path = crate::llm::get_models_dir(&app)?.join(&zip_name);
+    let result = match sha256_file(&zip_path) {
+        Ok(actual) if actual == expected => install_cuda_zip(&app, &zip_name),
+        Ok(actual) => {
+            log::warn!("[Engine] CUDA zip checksum mismatch: expected {expected}, got {actual} - not installed");
+            Err("The engine download did not match its published checksum, so it was not installed. Try again later.".to_string())
+        }
+        Err(e) => Err(e),
+    };
     // The zip is an installer artifact, not a model - clean it up either way.
     if let Ok(models) = crate::llm::get_models_dir(&app) {
         let _ = std::fs::remove_file(models.join(&zip_name));
@@ -597,6 +628,15 @@ mod tests {
         assert_eq!(normalize_base_url("http://host:8000/v1"), "http://host:8000");
         assert_eq!(normalize_base_url("https://my.box/llm/"), "https://my.box/llm");
         assert_eq!(normalize_base_url("  http://host:11434  "), "http://host:11434");
+    }
+
+    #[test]
+    fn cuda_zip_checksums_cover_every_cuda_platform() {
+        for triple in ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"] {
+            let h = CUDA_ZIP_SHA256.iter().find(|(t, _)| *t == triple).map(|(_, h)| *h).expect(triple);
+            assert_eq!(h.len(), 64, "{triple}: not a sha256 hex");
+            assert!(h.chars().all(|c| c.is_ascii_hexdigit()), "{triple}: not hex");
+        }
     }
 
     #[test]

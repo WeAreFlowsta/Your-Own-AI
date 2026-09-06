@@ -114,8 +114,9 @@ export default component$<ProfileMemoryProps>(
     const activeFacts$ = $(async () => {
       const loaded = (await getFacts()).filter((f) => f.valid_to == null);
       synthesis.value = loaded.find((f) => f.entry_kind === "synthesis")?.value ?? "";
+      library.value = loaded.find((f) => f.entry_kind === "library")?.value ?? "";
       facts.value = loaded
-        .filter((f) => f.entry_kind !== "synthesis")
+        .filter((f) => f.entry_kind !== "synthesis" && f.entry_kind !== "library")
         .sort((a, b) => b.confidence - a.confidence);
     });
 
@@ -124,7 +125,7 @@ export default component$<ProfileMemoryProps>(
       let alive = true;
       cleanup(() => (alive = false));
       memoryPaused.value = isMemoryPaused();
-      library.value = getLibraryPortrait();
+      library.value = await getLibraryPortrait();
       void summarizePendingDocuments()
         .then(() => refreshLibraryPortrait())
         .then((t) => {
@@ -135,7 +136,7 @@ export default component$<ProfileMemoryProps>(
       facts.value = await readThroughWarmup(
         async () =>
           (await getFacts())
-            .filter((f) => f.valid_to == null)
+            .filter((f) => f.valid_to == null && f.entry_kind !== "synthesis" && f.entry_kind !== "library")
             .sort((a, b) => b.confidence - a.confidence),
         (w) => (factsWarming.value = w),
         () => alive,

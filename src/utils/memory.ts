@@ -1,4 +1,3 @@
-import { getLibraryPortrait } from "./documentSummaries";
 /**
  * Phase A persistent memory — the user-level "remember me" profile.
  *
@@ -259,7 +258,7 @@ export async function loadMemoryBlock(
   // Always-injected = facts only. Notes are free-text and retrieved on
   // relevance (below); the synthesis paragraph injects separately.
   const factItems = all
-    .filter((f) => f.entry_kind !== "note" && f.entry_kind !== "synthesis")
+    .filter((f) => f.entry_kind !== "note" && f.entry_kind !== "synthesis" && f.entry_kind !== "library")
     .sort((a, b) => b.confidence - a.confidence || b.updated_at - a.updated_at)
     .slice(0, 25);
   const synthesis = all.find((f) => f.entry_kind === "synthesis");
@@ -277,9 +276,9 @@ export async function loadMemoryBlock(
   if (synthesis) {
     block += `\nAbout them, from what they've shared over time (use naturally; never recite): ${synthesis.value}`;
   }
-  const library = getLibraryPortrait();
+  const library = all.find((f) => f.entry_kind === "library");
   if (library) {
-    block += `\nFrom the documents they write and keep in their library (use naturally; never recite): ${library}`;
+    block += `\nFrom the documents they write and keep in their library (use naturally; never recite): ${library.value}`;
   }
   if (others.length > 0) {
     // Include the relation so a bare value isn't ambiguous to the model

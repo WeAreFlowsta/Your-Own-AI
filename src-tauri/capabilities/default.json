@@ -44,8 +44,6 @@
         }
       ]
     },
-    "shell:allow-execute",
-    "shell:allow-spawn",
     "store:default",
     "store:allow-get",
     "store:allow-set",

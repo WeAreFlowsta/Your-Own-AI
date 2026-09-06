@@ -424,6 +424,22 @@ pub async fn is_llama_server_running() -> Result<bool, String> {
 /// every embed - cheap on Linux and macOS, hundreds of milliseconds on
 /// Windows (the beta.19 routing leg: 0.66 s per decision, all of it here).
 /// No proxy for loopback, keep-alive so the connection is reused.
+/// A per-process key the three local llama-servers require on every
+/// request (`--api-key`). llama-server answers any origin by design, so
+/// without a key any web page open in a browser on this machine could
+/// drive the loaded model. `/health` stays public upstream; everything
+/// else needs this. Only Rust talks to these ports - the webview never
+/// does - so the key never leaves this process.
+pub(crate) fn local_api_key() -> &'static str {
+    static KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    KEY.get_or_init(|| {
+        use rand::RngCore;
+        let mut bytes = [0u8; 24];
+        rand::thread_rng().fill_bytes(&mut bytes);
+        hex::encode(bytes)
+    })
+}
+
 pub(crate) fn local_http() -> reqwest::Client {
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
     CLIENT
@@ -443,7 +459,7 @@ pub(crate) fn local_http() -> reqwest::Client {
 #[tauri::command]
 pub async fn is_llama_server_ready() -> Result<bool, String> {
     let client = local_http();
-    match client.get(format!("http://localhost:{}/health", CHAT_PORT)).send().await {
+    match client.get(format!("http://localhost:{}/health", CHAT_PORT)).bearer_auth(local_api_key()).send().await {
         Ok(resp) if resp.status().is_success() => Ok(true),
         _ => Ok(false)
     }
@@ -1348,7 +1364,7 @@ pub async fn count_tokens_text(text: &str) -> u64 {
     }
     let client = local_http();
     let res = client
-        .post(format!("http://localhost:{}/tokenize", CHAT_PORT))
+        .post(format!("http://localhost:{}/tokenize", CHAT_PORT)).bearer_auth(local_api_key())
         .timeout(std::time::Duration::from_secs(8))
         .json(&serde_json::json!({ "content": text, "add_special": false, "with_pieces": false }))
         .send()
@@ -1640,7 +1656,7 @@ fn has_word_oom(lower: &str) -> bool {
 async fn chat_server_health_ok() -> bool {
     let client = local_http();
     matches!(
-        client.get(format!("http://127.0.0.1:{}/health", CHAT_PORT)).send().await,
+        client.get(format!("http://127.0.0.1:{}/health", CHAT_PORT)).bearer_auth(local_api_key()).send().await,
         Ok(r) if r.status().is_success()
     )
 }
@@ -1980,6 +1996,8 @@ pub async fn start_llama_server(
         CHAT_PORT.to_string(),
         "--host".to_string(),
         "127.0.0.1".to_string(),
+        "--api-key".to_string(),
+        local_api_key().to_string(),
         "--no-webui".to_string(),
         "--reasoning".to_string(),
         "off".to_string(),
@@ -2502,7 +2520,7 @@ fn free_port(port: &str) {
 async fn embed_server_ready() -> bool {
     let client = local_http();
     matches!(
-        client.get(format!("http://localhost:{}/health", EMBED_PORT)).send().await,
+        client.get(format!("http://localhost:{}/health", EMBED_PORT)).bearer_auth(local_api_key()).send().await,
         Ok(r) if r.status().is_success()
     )
 }
@@ -2601,6 +2619,8 @@ async fn ensure_embedding_server(
         EMBED_PORT.to_string(),
         "--host".to_string(),
         "127.0.0.1".to_string(),
+        "--api-key".to_string(),
+        local_api_key().to_string(),
         "--ctx-size".to_string(),
         "512".to_string(),
         "--no-webui".to_string(),
@@ -2681,7 +2701,7 @@ pub async fn embed_texts(
 
     let client = local_http();
     let resp = client
-        .post(format!("http://localhost:{}/v1/embeddings", EMBED_PORT))
+        .post(format!("http://localhost:{}/v1/embeddings", EMBED_PORT)).bearer_auth(local_api_key())
         .json(&serde_json::json!({ "model": model, "input": texts }))
         .send()
         .await
@@ -2711,7 +2731,7 @@ const UTIL_PORT: &str = "8092";
 async fn util_server_ready() -> bool {
     let client = local_http();
     matches!(
-        client.get(format!("http://localhost:{}/health", UTIL_PORT)).send().await,
+        client.get(format!("http://localhost:{}/health", UTIL_PORT)).bearer_auth(local_api_key()).send().await,
         Ok(r) if r.status().is_success()
     )
 }
@@ -2797,6 +2817,8 @@ async fn ensure_utility_server(
         UTIL_PORT.to_string(),
         "--host".to_string(),
         "127.0.0.1".to_string(),
+        "--api-key".to_string(),
+        local_api_key().to_string(),
         "--ctx-size".to_string(),
         "4096".to_string(),
         "--reasoning".to_string(),
@@ -2869,7 +2891,7 @@ pub async fn warm_chat_prompt(state: State<'_, LLMState>, system: String) -> Res
     });
     let started = std::time::Instant::now();
     let resp = local_http()
-        .post(format!("http://localhost:{}/v1/chat/completions", CHAT_PORT))
+        .post(format!("http://localhost:{}/v1/chat/completions", CHAT_PORT)).bearer_auth(local_api_key())
         .timeout(std::time::Duration::from_secs(120))
         .json(&body)
         .send()
@@ -2917,7 +2939,7 @@ pub async fn utility_chat(
 
     let client = local_http();
     let resp = client
-        .post(format!("http://localhost:{}/v1/chat/completions", UTIL_PORT))
+        .post(format!("http://localhost:{}/v1/chat/completions", UTIL_PORT)).bearer_auth(local_api_key())
         .json(&body)
         .send()
         .await
@@ -4312,7 +4334,7 @@ pub async fn stream_chat_completion(
         } else {
             // Query the running server for its model name
             let client_tmp = local_http();
-            match client_tmp.get(format!("http://localhost:{}/v1/models", CHAT_PORT)).send().await {
+            match client_tmp.get(format!("http://localhost:{}/v1/models", CHAT_PORT)).bearer_auth(local_api_key()).send().await {
                 Ok(resp) if resp.status().is_success() => {
                     if let Ok(body) = resp.json::<serde_json::Value>().await {
                         body["data"][0]["id"].as_str()
@@ -4459,7 +4481,7 @@ pub async fn stream_chat_completion(
     
     println!("[LLM] Waiting for model to be fully loaded...");
     for attempt in 1..=max_health_checks {
-        match client.get(format!("http://localhost:{}/health", CHAT_PORT)).send().await {
+        match client.get(format!("http://localhost:{}/health", CHAT_PORT)).bearer_auth(local_api_key()).send().await {
             Ok(health_resp) if health_resp.status().is_success() => {
                 println!("[LLM] Model is fully loaded and ready!");
                 break;
@@ -4508,7 +4530,7 @@ pub async fn stream_chat_completion(
             .map_err(|e| format!("Failed to reach your external engine: {}", e))?
     } else {
         client
-            .post(format!("http://localhost:{}/v1/chat/completions", CHAT_PORT))
+            .post(format!("http://localhost:{}/v1/chat/completions", CHAT_PORT)).bearer_auth(local_api_key())
             .header("Content-Type", "application/json")
             .json(&request_body)
             .send()

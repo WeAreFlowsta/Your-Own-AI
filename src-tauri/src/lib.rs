@@ -217,6 +217,8 @@ const DOCUMENT_EXTENSIONS: &[&str] = &[
 
 /// Max extracted text we'll keep (~256 KB of text). Larger content gets truncated.
 const MAX_TEXT_CHARS: usize = 256 * 1024;
+/// The most one entry of a user-supplied archive (DOCX, ODT) is inflated.
+const MAX_ARCHIVE_ENTRY_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Extract text from a DOCX file (ZIP archive with word/document.xml)
 pub(crate) fn extract_docx_text(path: &std::path::Path) -> Result<String, String> {
@@ -227,9 +229,10 @@ pub(crate) fn extract_docx_text(path: &std::path::Path) -> Result<String, String
 
     let mut xml_content = String::new();
     {
-        let mut doc_xml = archive.by_name("word/document.xml")
+        let doc_xml = archive.by_name("word/document.xml")
             .map_err(|_| "Not a valid DOCX file (missing word/document.xml)".to_string())?;
-        std::io::Read::read_to_string(&mut doc_xml, &mut xml_content)
+        // Bounded: a crafted archive cannot inflate past this.
+        std::io::Read::read_to_string(&mut std::io::Read::take(doc_xml, MAX_ARCHIVE_ENTRY_BYTES), &mut xml_content)
             .map_err(|e| format!("Failed to read document.xml: {}", e))?;
     }
 
@@ -275,9 +278,9 @@ pub(crate) fn extract_odt_text(path: &std::path::Path) -> Result<String, String>
 
     let mut xml_content = String::new();
     {
-        let mut content_xml = archive.by_name("content.xml")
+        let content_xml = archive.by_name("content.xml")
             .map_err(|_| "Not a valid ODT file (missing content.xml)".to_string())?;
-        std::io::Read::read_to_string(&mut content_xml, &mut xml_content)
+        std::io::Read::read_to_string(&mut std::io::Read::take(content_xml, MAX_ARCHIVE_ENTRY_BYTES), &mut xml_content)
             .map_err(|e| format!("Failed to read content.xml: {}", e))?;
     }
 

@@ -341,22 +341,33 @@ pub async fn skills_add_folder(app: AppHandle, path: String) -> Result<String, S
     install_from(&app, &root, source)
 }
 
+/// A skill is text and a few assets; an archive that inflates past this is
+/// not a skill (zip bomb guard).
+const MAX_SKILL_EXTRACT_BYTES: u64 = 256 * 1024 * 1024;
+
 fn extract_zip(bytes: Vec<u8>, into: &Path) -> Result<(), String> {
     let cursor = std::io::Cursor::new(bytes);
     let mut zip = zip::ZipArchive::new(cursor).map_err(|e| format!("not a zip file: {e}"))?;
+    let mut total: u64 = 0;
     for i in 0..zip.len() {
-        let mut entry = zip.by_index(i).map_err(|e| e.to_string())?;
+        let entry = zip.by_index(i).map_err(|e| e.to_string())?;
+        total = total.saturating_add(entry.size());
+        if total > MAX_SKILL_EXTRACT_BYTES {
+            return Err("this archive is far larger than a skill can be".into());
+        }
+        let mut entry = std::io::Read::take(entry, MAX_SKILL_EXTRACT_BYTES);
+        let entry = &mut entry;
         // enclosed_name refuses `..` and absolute paths (zip-slip).
-        let Some(rel) = entry.enclosed_name().map(|p| p.to_path_buf()) else { continue };
+        let Some(rel) = entry.get_ref().enclosed_name().map(|p| p.to_path_buf()) else { continue };
         let out = into.join(rel);
-        if entry.is_dir() {
+        if entry.get_ref().is_dir() {
             std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
         } else {
             if let Some(parent) = out.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
             let mut f = std::fs::File::create(&out).map_err(|e| e.to_string())?;
-            std::io::copy(&mut entry, &mut f).map_err(|e| e.to_string())?;
+            std::io::copy(entry, &mut f).map_err(|e| e.to_string())?;
         }
     }
     Ok(())

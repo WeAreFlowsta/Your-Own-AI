@@ -101,10 +101,14 @@ pub struct RecallHit {
 
 // ---------------------------------------------------------------- epub + metadata
 
+/// The most one archive entry is ever read (a zip bomb inside a "document"
+/// stops here instead of at the machine's memory).
+const MAX_ZIP_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
+
 fn zip_entry_string<R: std::io::Read + std::io::Seek>(archive: &mut zip::ZipArchive<R>, name: &str) -> Option<String> {
-    let mut f = archive.by_name(name).ok()?;
+    let f = archive.by_name(name).ok()?;
     let mut buf = Vec::new();
-    std::io::Read::read_to_end(&mut f, &mut buf).ok()?;
+    std::io::Read::read_to_end(&mut std::io::Read::take(f, MAX_ZIP_ENTRY_BYTES), &mut buf).ok()?;
     Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
@@ -643,6 +647,11 @@ pub fn walk(paths: &[String]) -> Vec<PathBuf> {
         for p in entries {
             let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if name.starts_with('.') {
+                continue;
+            }
+            // A symlink is never followed: a link to the home directory
+            // inside a dropped folder must not import the home directory.
+            if std::fs::symlink_metadata(&p).map(|m| m.file_type().is_symlink()).unwrap_or(true) {
                 continue;
             }
             if p.is_dir() {
