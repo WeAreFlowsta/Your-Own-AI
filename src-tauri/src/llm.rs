@@ -1236,7 +1236,7 @@ pub async fn ensure_context(
     if crate::tuning::get(&app_handle, &filename).context.is_some() {
         // The person pinned this model's context - reading room never
         // overrides a pin. The caller's shortfall handling says so.
-        log::info!("[LLM] reading room: '{}' context is pinned by its fine-tune setting - not growing", filename);
+        log::debug!("[LLM] reading room: '{}' context is pinned by its fine-tune setting - not growing", filename);
         return Ok(unchanged(Some(filename)));
     }
     let (meta, size, total_ram_gb, free_vram_gb) = fit_inputs(&app_handle, &filename, have).await?;
