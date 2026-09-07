@@ -60,6 +60,7 @@ interface RestoreStats {
   memory_facts_restored: boolean;
   thumbnails_restored: number;
   knowledge_restored: number;
+  documents_restored?: number;
 }
 
 const VAULT_DOWNLOAD_URL = "https://flowsta.com/vault/?from=app&app=your-own-ai";
@@ -176,6 +177,11 @@ export default component$<FlowstaAccountProps>((props) => {
       if (stats.knowledge_restored > 0) {
         parts.push(
           `${stats.knowledge_restored} authored knowledge entr${stats.knowledge_restored === 1 ? "y" : "ies"} restored.`
+        );
+      }
+      if (stats.documents_restored) {
+        parts.push(
+          `${stats.documents_restored} library document${stats.documents_restored === 1 ? "" : "s"} restored; the files are being read from where they were, and the Knowledge tab asks for any that moved.`
         );
       }
       if (stats.conversations_preserved > 0) {

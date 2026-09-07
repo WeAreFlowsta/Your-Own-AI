@@ -64,7 +64,12 @@ export interface RereadReport {
   cancelled: boolean;
 }
 
-/** Read restored records' files again from the folders given (LibraryRereadNotice). */
+/** Look for every waiting record's file where it was last seen and read the ones that are there. */
+export function corpusRelink(): Promise<RereadReport> {
+  return invoke<RereadReport>('corpus_relink');
+}
+
+/** Read restored records' files again from the files or folders given (LibraryRereadNotice). */
 export function corpusReread(paths: string[]): Promise<RereadReport> {
   return invoke<RereadReport>('corpus_reread', { paths });
 }

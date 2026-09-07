@@ -709,6 +709,7 @@ pub fn run() {
             corpus::corpus_import,
             corpus::corpus_cancel,
             corpus::corpus_reread,
+            corpus::corpus_relink,
             corpus::corpus_import_prepared,
             corpus::corpus_documents,
             corpus::corpus_grant,

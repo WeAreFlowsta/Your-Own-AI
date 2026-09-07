@@ -731,6 +731,8 @@ fn strip_tags(html: &str) -> String {
 // ---------------------------------------------------------------- import
 
 static CANCEL: AtomicBool = AtomicBool::new(false);
+/// One relink pass at a time (the restore starts one, the notice may too).
+static RELINK_RUNNING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Serialize, Clone)]
 struct Progress {
@@ -991,13 +993,129 @@ pub struct RereadReport {
     pub cancelled: bool,
 }
 
+/// The same path under this machine's home folder: `/home/old/Documents/a.pdf`,
+/// `/Users/old/Documents/a.pdf` or `C:\Users\old\Documents\a.pdf` become
+/// `<home>/Documents/a.pdf`. None when the path is not under a home folder.
+pub(crate) fn translate_home(old: &str, home: &Path) -> Option<PathBuf> {
+    let norm = old.replace('\\', "/");
+    let rest = if let Some(r) = norm.strip_prefix("/home/").or_else(|| norm.strip_prefix("/Users/")) {
+        r.split_once('/').map(|(_, rest)| rest)?
+    } else if norm.len() > 3 && norm.as_bytes()[1] == b':' && norm[2..].to_lowercase().starts_with("/users/") {
+        norm[9..].split_once('/').map(|(_, rest)| rest)?
+    } else {
+        return None;
+    };
+    if rest.is_empty() {
+        return None;
+    }
+    let mut p = home.to_path_buf();
+    for part in rest.split('/').filter(|s| !s.is_empty()) {
+        p.push(part);
+    }
+    Some(p)
+}
+
+/// Where each waiting record's file is now, if anywhere: its last known
+/// path, then that path under this machine's home folder. A candidate must
+/// carry the record's file name; a size match wins over a name-only match.
+pub(crate) fn relink_candidates(waiting: &[(String, i64, DocMeta)], home: Option<&Path>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for (_, size, meta) in waiting {
+        let Some(old) = meta.path.as_deref() else { continue };
+        let mut options: Vec<PathBuf> = vec![PathBuf::from(old)];
+        if let Some(h) = home {
+            if let Some(t) = translate_home(old, h) {
+                if t != options[0] {
+                    options.push(t);
+                }
+            }
+        }
+        let mut best: Option<(bool, PathBuf)> = None;
+        for p in options {
+            if !p.is_file() {
+                continue;
+            }
+            let same_name = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.eq_ignore_ascii_case(&meta.filename))
+                .unwrap_or(false);
+            if !same_name {
+                continue;
+            }
+            let same_size = std::fs::metadata(&p).map(|m| m.len() as i64 == *size).unwrap_or(false);
+            if same_size {
+                best = Some((true, p));
+                break;
+            }
+            if best.is_none() {
+                best = Some((false, p));
+            }
+        }
+        if let Some((_, p)) = best {
+            let s = p.to_string_lossy().to_string();
+            if !out.contains(&s) {
+                out.push(s);
+            }
+        }
+    }
+    out
+}
+
+/// Look for every waiting record's file where it was last seen and read
+/// the ones that are there, with no one asked - like a video editor that
+/// relinks media on open and asks only for what moved. The restore starts
+/// this once its records are in; the library notice tries it again when
+/// it shows, so a file put back later is picked up on the next visit.
+#[tauri::command]
+pub async fn corpus_relink(
+    app: AppHandle,
+    hc_state: State<'_, Arc<HolochainState>>,
+    llm_state: State<'_, crate::llm::LLMState>,
+) -> Result<RereadReport, String> {
+    if RELINK_RUNNING.swap(true, Ordering::SeqCst) {
+        return Ok(RereadReport::default());
+    }
+    let result = relink_inner(app, hc_state, llm_state).await;
+    RELINK_RUNNING.store(false, Ordering::SeqCst);
+    result
+}
+
+async fn relink_inner(
+    app: AppHandle,
+    hc_state: State<'_, Arc<HolochainState>>,
+    llm_state: State<'_, crate::llm::LLMState>,
+) -> Result<RereadReport, String> {
+    let key = data_key(&hc_state)?;
+    let waiting = waiting_records(&open(&app)?, &key)?;
+    if waiting.is_empty() {
+        return Ok(RereadReport::default());
+    }
+    let home = app.path().home_dir().ok();
+    let found = relink_candidates(&waiting, home.as_deref());
+    log::info!("[corpus] relink: {} of {} waiting document(s) found where they were", found.len(), waiting.len());
+    if found.is_empty() {
+        return Ok(RereadReport { remaining: waiting.len(), ..Default::default() });
+    }
+    reread_paths(app, hc_state, llm_state, found).await
+}
+
 /// After a restore the records are back (name, card, flags, grants) with no
-/// passages: the backup never carries them. The person points at the folder
-/// their files live in; each file that matches a waiting record by name
-/// (same size preferred) is read and embedded into that record, keeping
-/// its id, its card, its Mine flag and every AI's grant.
+/// passages: the backup never carries them. The person points at the files
+/// or the folder they live in; each file that matches a waiting record by
+/// name (same size preferred) is read and embedded into that record,
+/// keeping its id, its card, its Mine flag and every AI's grant.
 #[tauri::command]
 pub async fn corpus_reread(
+    app: AppHandle,
+    hc_state: State<'_, Arc<HolochainState>>,
+    llm_state: State<'_, crate::llm::LLMState>,
+    paths: Vec<String>,
+) -> Result<RereadReport, String> {
+    reread_paths(app, hc_state, llm_state, paths).await
+}
+
+async fn reread_paths(
     app: AppHandle,
     hc_state: State<'_, Arc<HolochainState>>,
     llm_state: State<'_, crate::llm::LLMState>,
@@ -1370,10 +1488,10 @@ pub(crate) fn records_for_backup(app: &AppHandle, key: &[u8; 32]) -> Result<Corp
 }
 
 fn records_from(conn: &Connection, key: &[u8; 32]) -> Result<CorpusRecords, String> {
-    let mut documents = read_records(conn, key, None)?;
-    for d in documents.iter_mut() {
-        d.meta.path = None; // a path names a machine; the record should not
-    }
+    // The path rides along: after a restore the file is looked for where
+    // it was last seen (and under this machine's home folder when the old
+    // one differs) before anyone is asked to point at it.
+    let documents = read_records(conn, key, None)?;
     Ok(CorpusRecords { version: 1, documents })
 }
 
@@ -1411,6 +1529,45 @@ fn restore_records_into(conn: &mut Connection, key: &[u8; 32], records: &CorpusR
 }
 
 // ---------------------------------------------------------------- tests
+
+#[cfg(test)]
+mod relink_tests {
+    use super::*;
+
+    #[test]
+    fn home_paths_translate_across_machines() {
+        let home = Path::new("/home/new");
+        assert_eq!(translate_home("/home/old/Documents/a.pdf", home), Some(PathBuf::from("/home/new/Documents/a.pdf")));
+        assert_eq!(translate_home("/Users/old/Documents/a.pdf", home), Some(PathBuf::from("/home/new/Documents/a.pdf")));
+        assert_eq!(translate_home("C:\\Users\\old\\Documents\\a.pdf", home), Some(PathBuf::from("/home/new/Documents/a.pdf")));
+        assert_eq!(translate_home("/srv/share/a.pdf", home), None);
+        assert_eq!(translate_home("/home/old", home), None);
+    }
+
+    #[test]
+    fn candidates_prefer_the_old_place_then_home_and_size() {
+        let dir = std::env::temp_dir().join(format!("relink-{}", new_doc_id()));
+        let old_home = dir.join("old-home");
+        let new_home = dir.join("new-home");
+        std::fs::create_dir_all(old_home.join("Documents")).unwrap();
+        std::fs::create_dir_all(new_home.join("Documents")).unwrap();
+        // "a.txt" only under the new home; "b.txt" still where it was; "c.txt" gone.
+        std::fs::write(new_home.join("Documents/a.txt"), b"hello").unwrap();
+        std::fs::write(old_home.join("Documents/b.txt"), b"hello world").unwrap();
+        // The old paths are recorded as if the old home were /home/old.
+        let w = vec![
+            ("1".to_string(), 5, DocMeta { filename: "a.txt".into(), path: Some("/home/old/Documents/a.txt".into()), ..Default::default() }),
+            ("2".to_string(), 11, DocMeta { filename: "b.txt".into(), path: Some(old_home.join("Documents/b.txt").to_string_lossy().into()), ..Default::default() }),
+            ("3".to_string(), 3, DocMeta { filename: "c.txt".into(), path: Some("/home/old/Documents/c.txt".into()), ..Default::default() }),
+            ("4".to_string(), 3, DocMeta { filename: "d.txt".into(), path: None, ..Default::default() }),
+        ];
+        let found = relink_candidates(&w, Some(&new_home));
+        assert_eq!(found.len(), 2);
+        assert!(found[0].ends_with("new-home/Documents/a.txt"));
+        assert!(found[1].ends_with("old-home/Documents/b.txt"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1555,10 +1712,10 @@ mod tests {
         let rec_b = insert_document(&mut a, &key, &meta_b, size_b, &pb, &fake_embed(&pb), "ai-1").unwrap();
         a.execute("INSERT OR IGNORE INTO grants (doc_id, ai_id) VALUES (?1, ?2)", params![rec_b.doc_id, "ai-2"]).unwrap();
 
-        // The backup carries records only: no path, no passages.
+        // The backup carries records only: the path (for relinking), no passages.
         let backup = records_from(&a, &key).unwrap();
         assert_eq!(backup.documents.len(), 2);
-        assert!(backup.documents.iter().all(|d| d.meta.path.is_none()));
+        assert!(backup.documents.iter().all(|d| d.meta.path.is_some()));
         let json = serde_json::to_vec(&backup).unwrap();
         let backup: CorpusRecords = serde_json::from_slice(&json).unwrap();
 

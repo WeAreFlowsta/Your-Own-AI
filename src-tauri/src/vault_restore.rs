@@ -916,7 +916,19 @@ pub async fn vault_restore_conversations(
     let knowledge_restored = restore_ai_knowledge(&app, &key, &merged, &backup);
     let corpus_restored = restore_corpus(&app, &key, &merged, &backup);
     if corpus_restored > 0 {
-        log::info!("[restore] corpus: {} document record(s) restored (text re-read from your files)", corpus_restored);
+        log::info!("[restore] corpus: {} document record(s) restored - looking for the files where they were", corpus_restored);
+        // Relink in the background: a large library embeds for minutes and
+        // the summary should not wait. Progress rides `corpus-progress`.
+        let app2 = app.clone();
+        tauri::async_runtime::spawn(async move {
+            match crate::corpus::corpus_relink(app2.clone(), app2.state(), app2.state()).await {
+                Ok(r) => log::info!(
+                    "[restore] relink: {} document(s) read from where they were, {} still waiting, {} failed",
+                    r.restored, r.remaining, r.failed.len()
+                ),
+                Err(e) => log::warn!("[restore] relink failed: {e}"),
+            }
+        });
     }
 
     // The episodic recall index was wiped with the old key material, and the
@@ -954,6 +966,7 @@ pub async fn vault_restore_conversations(
         "memory_facts_restored": memory_facts_restored,
         "thumbnails_restored": thumbnails_restored,
         "knowledge_restored": knowledge_restored,
+        "documents_restored": corpus_restored,
     }))
 }
 

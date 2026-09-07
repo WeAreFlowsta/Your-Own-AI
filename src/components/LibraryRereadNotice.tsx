@@ -1,4 +1,4 @@
-import { component$, useSignal, $, type QRL } from '@builder.io/qwik';
+import { component$, useSignal, useVisibleTask$, $, type QRL } from '@builder.io/qwik';
 import { LuFileText, LuFolderOpen, LuLoader2 } from '@qwikest/icons/lucide';
 import type { KnowledgeDocument } from '../utils/transcriptMemory';
 
@@ -17,6 +17,28 @@ export const LibraryRereadNotice = component$<{
   const busy = useSignal(false);
   const result = useSignal('');
   const waiting = props.docs.filter((d) => d.chunkCount === 0).length;
+
+  // First, look where the files were last seen (and under this machine's
+  // home folder) and read the ones that are there, with no one asked. The
+  // restore already tried once; this catches files put back since.
+  useVisibleTask$(async ({ track }) => {
+    track(() => props.docs.length);
+    if (waiting === 0 || busy.value) return;
+    busy.value = true;
+    try {
+      const { corpusRelink } = await import('../utils/corpus');
+      const r = await corpusRelink();
+      if (r.restored) {
+        result.value = `Read ${r.restored} ${r.restored === 1 ? 'document' : 'documents'} from where ${r.restored === 1 ? 'it was' : 'they were'}`;
+        await props.onDone$();
+      }
+    } catch (e) {
+      console.error('[Library] relink failed:', e);
+    } finally {
+      busy.value = false;
+    }
+  });
+
   if (waiting === 0 && !result.value) return null;
 
   const reread = $(async (folder?: boolean) => {
@@ -51,10 +73,15 @@ export const LibraryRereadNotice = component$<{
     <div class="mb-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2 text-xs">
       {waiting > 0 && (
         <p class="text-[var(--text-secondary)]">
-          {waiting === 1 ? 'One document' : `${waiting} documents`} came back from your backup without{' '}
-          {waiting === 1 ? 'its' : 'their'} text. Drop the {waiting === 1 ? 'file' : 'files'} above again, from
-          wherever {waiting === 1 ? 'it lives' : 'they live'}, or choose {waiting === 1 ? 'it' : 'them'} here, and{' '}
-          {waiting === 1 ? 'it' : 'they'} will be read back into the same {waiting === 1 ? 'record' : 'records'}.
+          {busy.value
+            ? `Looking for ${waiting === 1 ? 'one document' : `${waiting} documents`} where ${waiting === 1 ? 'it was' : 'they were'} last seen...`
+            : <>
+                {waiting === 1 ? 'One document' : `${waiting} documents`} came back from your backup without{' '}
+                {waiting === 1 ? 'its' : 'their'} text and {waiting === 1 ? "isn't" : "aren't"} where {waiting === 1 ? 'it was' : 'they were'} last seen.
+                Drop the {waiting === 1 ? 'file' : 'files'} above again, from wherever {waiting === 1 ? 'it lives' : 'they live'}, or
+                choose {waiting === 1 ? 'it' : 'them'} here, and {waiting === 1 ? 'it' : 'they'} will be read back into the same{' '}
+                {waiting === 1 ? 'record' : 'records'}.
+              </>}
         </p>
       )}
       {result.value && <p class="text-[var(--text-muted)] mt-1">{result.value}</p>}
