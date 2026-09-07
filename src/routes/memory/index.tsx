@@ -74,6 +74,27 @@ const MemorySubtitle = component$<{
   );
 });
 
+type SourceFilter = "all" | "app" | "api" | "imported";
+
+/** The conversations the list shows: title contains the search text (the
+ *  person's rename counts), and the source matches the filter. Bulk actions
+ *  work on this set, so "select all" never reaches past what is on screen. */
+function filterConversations(
+  convs: HolochainConversation[],
+  text: string,
+  source: SourceFilter,
+): HolochainConversation[] {
+  const needle = text.trim().toLowerCase();
+  return convs.filter((c) => {
+    if (source === "app" && c.source) return false;
+    if (source === "imported" && !c.source?.startsWith("import:")) return false;
+    if (source === "api" && (!c.source || c.source.startsWith("import:"))) return false;
+    if (!needle) return true;
+    const title = (getConversationTitleOverride(c.hash) ?? sanitizeTitle(c.title)).toLowerCase();
+    return title.includes(needle);
+  });
+}
+
 export default component$(() => {
   const nav = useNavigate();
   const headerWs = useHeaderWorkspace();
@@ -251,6 +272,13 @@ export default component$(() => {
   const deletingConv = useSignal(false);
   // A failed delete says so where the row was - never a silent no-op.
   const deleteError = useSignal<string | null>(null);
+  // Narrowing + multi-select: tests and API runs pile up on a dev machine;
+  // a search plus "select all shown" clears a hundred in one confirmation.
+  const filterText = useSignal("");
+  const filterSource = useSignal<SourceFilter>("all");
+  const selected = useSignal<string[]>([]);
+  const bulkDeleteOpen = useSignal(false);
+  const bulkProgress = useSignal<{ done: number; total: number } | null>(null);
 
   const handleExport = $(async (conv: HolochainConversation, opts: ExportOptions, sign: boolean) => {
     exportStatus.value = sign
@@ -556,13 +584,108 @@ export default component$(() => {
             </div>
           ) : (
             <div class="space-y-3">
-              {conversations.value.map((conv) => (
+              {/* Find, narrow, select */}
+              <div class="flex flex-wrap items-center gap-2 text-xs">
+                <input
+                  type="text"
+                  value={filterText.value}
+                  placeholder="Find by title"
+                  onInput$={(_, el) => (filterText.value = el.value)}
+                  class="min-w-[12rem] flex-1 bg-[var(--bg-input)] border border-[var(--border-input)] rounded-lg px-3 py-1.5 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)]"
+                />
+                <div class="flex items-center gap-1">
+                  {(
+                    [
+                      ["all", "All"],
+                      ["app", "In the app"],
+                      ["api", "API"],
+                      ["imported", "Imported"],
+                    ] as [SourceFilter, string][]
+                  ).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick$={() => (filterSource.value = key)}
+                      class={`px-2.5 py-1 rounded-full border transition-colors ${
+                        filterSource.value === key
+                          ? "border-[var(--text-link)] text-[var(--text-link)] bg-[var(--text-link)]/10"
+                          : "border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {(() => {
+                const shown = filterConversations(conversations.value, filterText.value, filterSource.value);
+                const shownHashes = shown.map((c) => c.hash);
+                const allShownSelected = shown.length > 0 && shownHashes.every((h) => selected.value.includes(h));
+                return (
+                  <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--text-muted)]">
+                    <label class="inline-flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={allShownSelected}
+                        disabled={shown.length === 0}
+                        onChange$={() => {
+                          selected.value = allShownSelected
+                            ? selected.value.filter((h) => !shownHashes.includes(h))
+                            : Array.from(new Set([...selected.value, ...shownHashes]));
+                        }}
+                      />
+                      <span>
+                        {shown.length === conversations.value.length
+                          ? `Select all ${shown.length}`
+                          : `Select all ${shown.length} shown of ${conversations.value.length}`}
+                      </span>
+                    </label>
+                    {selected.value.length > 0 && (
+                      <div class="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick$={() => (selected.value = [])}
+                          class="px-2.5 py-1 rounded-full border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                        >
+                          Clear
+                        </button>
+                        <button
+                          type="button"
+                          onClick$={() => (bulkDeleteOpen.value = true)}
+                          class="px-3 py-1 rounded-full border border-red-500/40 text-red-400 hover:bg-red-500/10"
+                        >
+                          Delete {selected.value.length} selected
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+              {filterConversations(conversations.value, filterText.value, filterSource.value).length === 0 && (
+                <p class="py-6 text-center text-sm text-[var(--text-muted)]">No conversations match.</p>
+              )}
+              {filterConversations(conversations.value, filterText.value, filterSource.value).map((conv) => (
                 <div
                   key={conv.hash}
-                  class="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] overflow-hidden transition-colors hover:border-[var(--border-primary)]/40"
+                  class={`rounded-xl border bg-[var(--bg-card)] overflow-hidden transition-colors ${
+                    selected.value.includes(conv.hash)
+                      ? "border-[var(--text-link)]/60"
+                      : "border-[var(--border-subtle)] hover:border-[var(--border-primary)]/40"
+                  }`}
                 >
                   {/* Conversation header */}
                   <div class="flex items-center gap-1 pr-2">
+                    <input
+                      type="checkbox"
+                      checked={selected.value.includes(conv.hash)}
+                      title="Select this conversation"
+                      onChange$={() => {
+                        selected.value = selected.value.includes(conv.hash)
+                          ? selected.value.filter((h) => h !== conv.hash)
+                          : [...selected.value, conv.hash];
+                      }}
+                      class="ml-3 flex-shrink-0 cursor-pointer"
+                    />
                     <button
                       class="flex-1 flex items-center gap-3 min-w-0 p-4 text-left"
                       onClick$={() => toggleConversation(conv.hash, conv.agent_key)}
@@ -941,6 +1064,56 @@ export default component$(() => {
           }
         })}
         onCancel$={$(() => (deleteModalConv.value = null))}
+      />
+
+      <ConfirmModal
+        isOpen={bulkDeleteOpen.value}
+        title={`Delete ${selected.value.length} conversation${selected.value.length === 1 ? "" : "s"}?`}
+        message="This removes the selected conversations and all their messages from your records, one after another. Each deletion is signed into your chain - the record that something was deleted remains, the content does not. This can't be undone."
+        confirmLabel={
+          bulkProgress.value
+            ? `Deleting ${bulkProgress.value.done} of ${bulkProgress.value.total}...`
+            : `Delete ${selected.value.length} conversation${selected.value.length === 1 ? "" : "s"}`
+        }
+        cancelLabel="Cancel"
+        variant="danger"
+        busy={bulkProgress.value !== null}
+        onConfirm$={$(async () => {
+          const targets = conversations.value.filter((c) => selected.value.includes(c.hash));
+          if (targets.length === 0) {
+            bulkDeleteOpen.value = false;
+            return;
+          }
+          deleteError.value = null;
+          bulkProgress.value = { done: 0, total: targets.length };
+          const failed: string[] = [];
+          try {
+            const { deleteConversation } = await import(
+              "../../utils/holochainTranscripts"
+            );
+            for (const conv of targets) {
+              try {
+                await deleteConversation(conv.agent_key || agentKey.value, conv.hash);
+                conversations.value = conversations.value.filter((c) => c.hash !== conv.hash);
+                if (expandedHash.value === conv.hash) expandedHash.value = null;
+              } catch (e) {
+                console.warn("[Memory] bulk delete failed for", conv.hash.slice(0, 12), e);
+                failed.push(conv.hash);
+              }
+              bulkProgress.value = { done: bulkProgress.value!.done + 1, total: targets.length };
+            }
+          } finally {
+            selected.value = failed;
+            bulkProgress.value = null;
+            bulkDeleteOpen.value = false;
+          }
+          if (failed.length > 0) {
+            deleteError.value = `${failed.length} of ${targets.length} conversation${targets.length === 1 ? "" : "s"} couldn't be deleted and ${failed.length === 1 ? "stays" : "stay"} selected. Restart the app and try again - if it still fails, save a diagnostic report from Settings > Help & diagnostics.`;
+          }
+        })}
+        onCancel$={$(() => {
+          if (bulkProgress.value === null) bulkDeleteOpen.value = false;
+        })}
       />
     </div>
   );
