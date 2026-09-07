@@ -61,13 +61,25 @@ pub(crate) fn read_cache(
     read_at(app, &path_for(app, agent_key)?)
 }
 
-/// Was this AI's cached list written within `secs`? The cache is
-/// write-through for everything the app itself does (record, continue,
-/// delete), so a fresh file is the list - a live read of a big chain adds
-/// nothing but a sixty-second stall. Imports and restores, which write the
-/// chain from outside that path, call `mark_stale` so the next read is live.
+fn stale_marker_for(app: &tauri::AppHandle, agent_key: &str) -> Result<PathBuf, String> {
+    path_for(app, agent_key).map(|p| p.with_extension("stale"))
+}
+
+/// Was this AI's cached list written within `secs`, and is it complete?
+/// The cache is write-through for everything the app itself does (record,
+/// continue, delete), so a fresh file is the list - a live read of a big
+/// chain adds nothing but a sixty-second stall. Imports and restores, which
+/// write the chain from outside that path, call `mark_stale`; the list then
+/// reads as stale until a complete live read rewrites it (`clear_stale`),
+/// however many write-through appends touch the file in between. (The
+/// marker used to be the file's own mtime set to zero; the next append
+/// reset it, and a restore on the dev laptop trusted a list missing 43
+/// imported conversations - 09-06.)
 pub(crate) fn fresh_within(app: &tauri::AppHandle, agent_key: &str, secs: u64) -> bool {
     let Ok(path) = path_for(app, agent_key) else { return false };
+    if stale_marker_for(app, agent_key).map(|m| m.exists()).unwrap_or(true) {
+        return false;
+    }
     let Ok(meta) = std::fs::metadata(&path) else { return false };
     let Ok(modified) = meta.modified() else { return false };
     std::time::SystemTime::now()
@@ -79,9 +91,16 @@ pub(crate) fn fresh_within(app: &tauri::AppHandle, agent_key: &str, secs: u64) -
 /// The next list read must be live: the chain changed outside the
 /// write-through path (an import, a restore).
 pub(crate) fn mark_stale(app: &tauri::AppHandle, agent_key: &str) {
-    let Ok(path) = path_for(app, agent_key) else { return };
-    if let Ok(f) = std::fs::File::options().write(true).open(&path) {
-        let _ = f.set_modified(std::time::UNIX_EPOCH);
+    let Ok(marker) = stale_marker_for(app, agent_key) else { return };
+    if let Err(e) = std::fs::write(&marker, b"") {
+        log::warn!("[conv-cache] could not mark the list stale: {}", e);
+    }
+}
+
+/// A complete live read just rewrote the list: it is the list again.
+pub(crate) fn clear_stale(app: &tauri::AppHandle, agent_key: &str) {
+    if let Ok(marker) = stale_marker_for(app, agent_key) {
+        let _ = std::fs::remove_file(marker);
     }
 }
 

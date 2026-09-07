@@ -524,13 +524,24 @@ async fn replayed_conversations_dev(
                 continue;
             }
         };
+        // Start times of the conversations recorded BEFORE the moment: a
+        // candidate whose start time is among them has its original here.
+        let mut originals: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        let mut opened = Vec::with_capacity(records.len());
         for rec in &records {
             let recorded_at = rec.action().timestamp().as_micros();
             let Some((plain, _)) = crate::vault_escrow::open_record(&key, rec) else { continue };
             let started_at = plain["started_at"].as_i64().unwrap_or(0);
+            if recorded_at < since_micros {
+                originals.insert(started_at);
+            }
+            opened.push((rec, recorded_at, plain, started_at));
+        }
+        for (rec, recorded_at, plain, started_at) in opened {
             if recorded_at < since_micros || started_at == 0 || started_at >= started_before {
                 continue;
             }
+            let has_original = originals.contains(&started_at);
             let hash = hex::encode(rec.action_address().get_raw_39());
             let title = plain["title"].as_str().unwrap_or("").to_string();
             let mut item = json!({
@@ -539,8 +550,12 @@ async fn replayed_conversations_dev(
                 "title": title,
                 "started_at": started_at,
                 "recorded_at": recorded_at,
+                "has_original": has_original,
             });
-            if apply {
+            if apply && !has_original {
+                item["kept"] = json!("no original on this chain - not a copy");
+            }
+            if apply && has_original {
                 let payload = match holochain_types::prelude::ExternIO::encode(rec.action_address().clone()) {
                     Ok(p) => p,
                     Err(e) => {

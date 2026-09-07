@@ -2015,6 +2015,21 @@ pub async fn import_archive_adopt(
         });
         let conv_hash =
             commit_encrypted(manager, &ai_id, &key, "start_conversation", None, &meta).await?;
+        crate::conversation_cache::append_to_cache(
+            &app,
+            &ai_id,
+            crate::commands_holochain::ConversationInfo {
+                hash: hex::encode(conv_hash.get_raw_39()),
+                ai_personality_id: ai_id.clone(),
+                ai_personality_name: ai_name.clone(),
+                model_used: "imported".to_string(),
+                started_at,
+                last_active_at: Some(started_at),
+                title: Some(conv.title.clone()),
+                source: Some(format!("import:{}", archive.source)),
+                agent_key: ai_id.clone(),
+            },
+        );
 
         for (seq, msg) in conv.messages.iter().enumerate() {
             let plain = serde_json::json!({

@@ -1182,6 +1182,8 @@ pub async fn get_conversations(
     // while live reads are slow or the conductor is still starting.
     if let Err(e) = crate::conversation_cache::write_cache(&app, &agent_key, &conversations) {
         log::warn!("[conv-cache] write failed: {}", e);
+    } else if unanswered.is_empty() {
+        crate::conversation_cache::clear_stale(&app, &agent_key);
     }
 
     Ok(conversations)
