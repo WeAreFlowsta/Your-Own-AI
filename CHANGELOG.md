@@ -3,7 +3,42 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
-## [0.7.1] - 2026-09-06
+## [0.7.1] - 2026-09-07
+
+### Highlights
+
+- **Your documents, read whole and remembered once.** Everything you give
+  your AIs lives in one collection of your own: whole books and folders,
+  EPUB included, read on your device with a card written for each. An AI
+  answers from every document it has, not the two a search happened to
+  reach, and your own writing carries a Mine tag. The Vault backup carries
+  the records, and after a restore the files are read back in from where
+  they were, with nothing asked. See *Your documents*.
+- **Backups that keep up.** A backup waits for a locked Vault instead of
+  giving up, runs after launch and daily, reads only what changed, is no
+  longer stopped by one AI with a thousand conversations, and checks the
+  Vault against what this device believes it stored. Back up now is a
+  button. See *Your records*.
+- **A restore that keeps your records straight.** Nothing already here is
+  copied, nothing you deleted comes back, and a restore waits for your
+  records to start rather than failing at once. See *Your records*.
+- **Records you can tidy.** Find conversations by title, narrow to the
+  app, the API or imports, select many and delete them behind one
+  confirmation. A project session is recorded once, as the conversation
+  you see. See *Your records*.
+- **llama.cpp v0.4.0 and a compact context cache.** September's engine
+  work on NVIDIA cards, a KV cache at half the memory when Tune on this
+  computer measures it clean, an expert split taken from your own
+  measurements, and a model switch that no longer counts the outgoing
+  server's memory against the next one. See *Engine*.
+- **The memory page says what your AIs are told about you, and says
+  private.** One block, shown on request: the picture written from your
+  facts, a second paragraph written from your documents, and exactly
+  where the text goes. See *Memory*.
+- **A security pass.** The model servers on this computer take a key only
+  the app holds, the CUDA engine download is checked against its published
+  checksum, archives are read within fixed bounds, and the app's window
+  holds no shell permissions. See *Security*.
 
 ### Your documents
 - Documents you give your AIs now live in one collection of your own, with
