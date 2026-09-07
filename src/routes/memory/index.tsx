@@ -9,6 +9,7 @@ import {
   component$,
   useContext,
   useSignal,
+  useComputed$,
   useVisibleTask$,
   $,
   type Signal,
@@ -279,6 +280,15 @@ export default component$(() => {
   const selected = useSignal<string[]>([]);
   const bulkDeleteOpen = useSignal(false);
   const bulkProgress = useSignal<{ done: number; total: number } | null>(null);
+  // Derived signals, not consts computed in render: a handler that closed
+  // over a render-time const kept its first value, so "select all shown"
+  // stopped following the search (Eric, 09-07).
+  const shown = useComputed$(() =>
+    filterConversations(conversations.value, filterText.value, filterSource.value),
+  );
+  const allShownSelected = useComputed$(
+    () => shown.value.length > 0 && shown.value.every((c) => selected.value.includes(c.hash)),
+  );
 
   const handleExport = $(async (conv: HolochainConversation, opts: ExportOptions, sign: boolean) => {
     exportStatus.value = sign
@@ -617,54 +627,48 @@ export default component$(() => {
                   ))}
                 </div>
               </div>
-              {(() => {
-                const shown = filterConversations(conversations.value, filterText.value, filterSource.value);
-                const shownHashes = shown.map((c) => c.hash);
-                const allShownSelected = shown.length > 0 && shownHashes.every((h) => selected.value.includes(h));
-                return (
-                  <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--text-muted)]">
-                    <label class="inline-flex items-center gap-2 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={allShownSelected}
-                        disabled={shown.length === 0}
-                        onChange$={() => {
-                          selected.value = allShownSelected
-                            ? selected.value.filter((h) => !shownHashes.includes(h))
-                            : Array.from(new Set([...selected.value, ...shownHashes]));
-                        }}
-                      />
-                      <span>
-                        {shown.length === conversations.value.length
-                          ? `Select all ${shown.length}`
-                          : `Select all ${shown.length} shown of ${conversations.value.length}`}
-                      </span>
-                    </label>
-                    {selected.value.length > 0 && (
-                      <div class="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick$={() => (selected.value = [])}
-                          class="px-2.5 py-1 rounded-full border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-                        >
-                          Clear
-                        </button>
-                        <button
-                          type="button"
-                          onClick$={() => (bulkDeleteOpen.value = true)}
-                          class="px-3 py-1 rounded-full border border-red-500/40 text-red-400 hover:bg-red-500/10"
-                        >
-                          Delete {selected.value.length} selected
-                        </button>
-                      </div>
-                    )}
+              <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--text-muted)]">
+                <label class="inline-flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={allShownSelected.value}
+                    disabled={shown.value.length === 0}
+                    onChange$={() => {
+                      const hashes = shown.value.map((c) => c.hash);
+                      selected.value = allShownSelected.value
+                        ? selected.value.filter((h) => !hashes.includes(h))
+                        : Array.from(new Set([...selected.value, ...hashes]));
+                    }}
+                  />
+                  <span>
+                    {shown.value.length === conversations.value.length
+                      ? `Select all ${shown.value.length}`
+                      : `Select all ${shown.value.length} shown of ${conversations.value.length}`}
+                  </span>
+                </label>
+                {selected.value.length > 0 && (
+                  <div class="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick$={() => (selected.value = [])}
+                      class="px-2.5 py-1 rounded-full border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                    >
+                      Clear
+                    </button>
+                    <button
+                      type="button"
+                      onClick$={() => (bulkDeleteOpen.value = true)}
+                      class="px-3 py-1 rounded-full border border-red-500/40 text-red-400 hover:bg-red-500/10"
+                    >
+                      Delete {selected.value.length} selected
+                    </button>
                   </div>
-                );
-              })()}
-              {filterConversations(conversations.value, filterText.value, filterSource.value).length === 0 && (
+                )}
+              </div>
+              {shown.value.length === 0 && (
                 <p class="py-6 text-center text-sm text-[var(--text-muted)]">No conversations match.</p>
               )}
-              {filterConversations(conversations.value, filterText.value, filterSource.value).map((conv) => (
+              {shown.value.map((conv) => (
                 <div
                   key={conv.hash}
                   class={`rounded-xl border bg-[var(--bg-card)] overflow-hidden transition-colors ${
