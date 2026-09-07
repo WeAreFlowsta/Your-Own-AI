@@ -49,11 +49,12 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - The Vault backup carries your library's records, cards and tags, not
   the passages, so a large library can never be the reason a backup fails.
   After a restore, the Knowledge tab and the memory page say which
-  documents came back without their text and offer "Re-read from folder":
-  point at where the files live and each one is read again into the same
-  record, keeping its card, its Mine tag and every AI's access. Records
-  are capped in the backup at a size that holds thousands of documents;
-  over it, the oldest cards are left out first and nothing else.
+  documents came back without their text. Drop the files on the zone
+  again, from wherever they live, or choose them, and each one is read
+  again into the same record, keeping its card, its Mine tag and every
+  AI's access. Records are capped in the backup at a size that holds
+  thousands of documents; over it, the oldest cards are left out first
+  and nothing else.
 
 ### Engine
 - Switching models on a machine where a large model holds most of main
@@ -169,7 +170,24 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   conversations. The check for conversations already on this device uses
   the list the app keeps, and reads a cell live only when that list is
   stale, with the same generous wait as a backup.
-- Settings, Backups gains a Back up now button that says what it did.
+- Settings, Backups gains a Back up now button that says what it did,
+  beside Restore conversations from Vault.
+- A backup checks the Vault against what this device believes it has
+  stored there. When the Vault holds fewer conversation objects than the
+  device uploaded, each one is checked and the missing ones are read and
+  stored again on that pass. Before, a conversation the Vault had lost
+  stayed listed as unchanged in every backup and was found missing only
+  by a restore.
+- A restore no longer brings back a copy of a conversation this device
+  already holds, and no longer brings back one this device deleted. The
+  already-here check now also reads the backup's own record of what was
+  uploaded, a list the app keeps for an AI stays marked for a live read
+  until a complete one happens (an ordinary write used to clear the mark
+  and hide imported conversations from the check), and each deletion is
+  noted so a later restore leaves it deleted. The restore summary says
+  how many conversations stayed deleted.
+- Restore waits up to two minutes for your records to start after
+  launch instead of failing at once.
 - The check that stops an empty device from overwriting a full Vault
   counts conversations listed without a read, so a backup where nothing
   changed is not mistaken for an empty device. A conversation stored
