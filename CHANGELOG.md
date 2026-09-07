@@ -14,6 +14,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   reach, and your own writing carries a Mine tag. The Vault backup carries
   the records, and after a restore the files are read back in from where
   they were, with nothing asked. See *Your documents*.
+- **llama.cpp v0.4.0 and a compact context cache.** September's engine
+  work on NVIDIA cards, a KV cache at half the memory when Tune on this
+  computer measures it clean, an expert split taken from your own
+  measurements, and a model switch that no longer counts the outgoing
+  server's memory against the next one. See *Engine*.
 - **Backups that keep up.** A backup waits for a locked Vault instead of
   giving up, runs after launch and daily, reads only what changed, is no
   longer stopped by one AI with a thousand conversations, and checks the
@@ -26,15 +31,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   app, the API or imports, select many and delete them behind one
   confirmation. A project session is recorded once, as the conversation
   you see. See *Your records*.
-- **llama.cpp v0.4.0 and a compact context cache.** September's engine
-  work on NVIDIA cards, a KV cache at half the memory when Tune on this
-  computer measures it clean, an expert split taken from your own
-  measurements, and a model switch that no longer counts the outgoing
-  server's memory against the next one. See *Engine*.
-- **The memory page says what your AIs are told about you, and says
-  private.** One block, shown on request: the picture written from your
-  facts, a second paragraph written from your documents, and exactly
-  where the text goes. See *Memory*.
+- **The memory page shows what your AIs are told about you.** One
+  private block, shown on request: the picture written from your facts,
+  a second paragraph written from your documents, and exactly where the
+  text goes. See *Memory*.
 - **A security pass.** The model servers on this computer take a key only
   the app holds, the CUDA engine download is checked against its published
   checksum, archives are read within fixed bounds, and the app's window
