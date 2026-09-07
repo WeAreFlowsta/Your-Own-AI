@@ -48,11 +48,13 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - EPUB books can be added to the library, read in chapter order.
 - The Vault backup carries your library's records, cards and tags, not
   the passages, so a large library can never be the reason a backup fails.
-  After a restore, the Knowledge tab and the memory page say which
-  documents came back without their text. Drop the files on the zone
-  again, from wherever they live, or choose them, and each one is read
-  again into the same record, keeping its card, its Mine tag and every
-  AI's access. Records are capped in the backup at a size that holds
+  After a restore, the app looks for each file where it was last seen,
+  and under this machine's home folder when the old one differs, and
+  reads the ones that are there straight back into their records with
+  nothing asked. Only files that moved are asked for: the Knowledge tab
+  and the memory page say which, and dropping them on the zone again,
+  from wherever they live, or choosing them, reads each one back into
+  the same record, keeping its card, its Mine tag and every AI's access. Records are capped in the backup at a size that holds
   thousands of documents; over it, the oldest cards are left out first
   and nothing else.
 
@@ -201,6 +203,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   conversation you record, continue or delete, so while it is fresh the
   memory page shows it without re-reading a thousand-conversation cell.
   Imports and restores mark it for a live read.
+- The memory page's conversations tab can find by title, narrow to
+  conversations made in the app, through the API, or imported, and
+  select many at once: Select all takes what is shown, and one
+  confirmation deletes the selection one conversation after another,
+  each deletion signed into your chain as before.
 - A project or tools session is recorded once, as the conversation you see.
   Before, every model call the session made on its way was also recorded
   as its own conversation, titled with your last message and badged API,
