@@ -106,6 +106,9 @@ export default component$<ProfileMemoryProps>(
     /** What the person's library says about them (read-only; written on
      *  the device from the document cards, rewritten when they change). */
     const library = useSignal("");
+    /** The two paragraphs are shown on request: the facts, which the
+     *  person can act on, lead the page. Remembered per device. */
+    const portraitOpen = useSignal(false);
     const addPredicate = useSignal("likes");
     const addValue = useSignal("");
     const relOpen = useSignal(false);
@@ -125,6 +128,11 @@ export default component$<ProfileMemoryProps>(
       let alive = true;
       cleanup(() => (alive = false));
       memoryPaused.value = isMemoryPaused();
+      try {
+        portraitOpen.value = localStorage.getItem("memoryPortraitOpen") === "1";
+      } catch {
+        /* no storage */
+      }
       library.value = await getLibraryPortrait();
       void summarizePendingDocuments()
         .then(() => refreshLibraryPortrait())
@@ -207,33 +215,59 @@ export default component$<ProfileMemoryProps>(
     return (
       <>
         <div>
-        {synthesis.value && (
+        {(synthesis.value || library.value) && (
           <div class="mb-5 p-4 rounded-xl bg-[var(--bg-main)] border border-[var(--border-subtle)]">
-            <p class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-1.5">
-              How your AIs see you
-            </p>
-            <p class="text-sm text-[var(--text-secondary)] leading-relaxed">
-              {synthesis.value}
-            </p>
-            <p class="mt-1.5 text-[11px] text-[var(--text-muted)]">
-              Written on your device from the facts and notes below - it
-              rewrites itself as they change.
-            </p>
-          </div>
-        )}
-        {library.value && (
-          <div class="mb-5 p-4 rounded-xl bg-[var(--bg-main)] border border-[var(--border-subtle)]">
-            <p class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-1.5">
-              What your library says about you
-            </p>
-            <p class="text-sm text-[var(--text-secondary)] leading-relaxed">
-              {library.value}
-            </p>
-            <p class="mt-1.5 text-[11px] text-[var(--text-muted)]">
-              Written on your device from the documents you added - your own
-              writing (tagged Mine) first, then what you keep. It rewrites
-              itself as your library changes.
-            </p>
+            <div class="flex items-center justify-between gap-3">
+              <p class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide">
+                What your AIs are told about you
+              </p>
+              <button
+                type="button"
+                class="text-xs text-[var(--text-link)] hover:underline"
+                onClick$={() => {
+                  portraitOpen.value = !portraitOpen.value;
+                  try {
+                    localStorage.setItem("memoryPortraitOpen", portraitOpen.value ? "1" : "0");
+                  } catch {
+                    /* no storage */
+                  }
+                }}
+              >
+                {portraitOpen.value ? "Hide" : "Show"}
+              </button>
+            </div>
+            {!portraitOpen.value && (
+              <p class="mt-1 text-[11px] text-[var(--text-muted)]">
+                {synthesis.value && library.value
+                  ? "Two short paragraphs"
+                  : "A short paragraph"}
+                , written privately on this computer from the facts
+                {library.value ? " and documents" : ""} below.
+              </p>
+            )}
+            {portraitOpen.value && (
+              <>
+                {synthesis.value && (
+                  <p class="mt-2 text-sm text-[var(--text-secondary)] leading-relaxed">
+                    {synthesis.value}
+                  </p>
+                )}
+                {library.value && (
+                  <p class="mt-2 text-sm text-[var(--text-secondary)] leading-relaxed">
+                    <span class="text-[var(--text-muted)]">From your documents: </span>
+                    {library.value}
+                  </p>
+                )}
+                <p class="mt-2 text-[11px] text-[var(--text-muted)]">
+                  Private: written on this computer by a model running here,
+                  from the facts{library.value ? " and documents" : ""} below,
+                  and stored encrypted with them. It goes nowhere on its own.
+                  Your AIs are told it only when they answer you, the same way
+                  as the facts, so it travels with your question, online models
+                  included. It rewrites itself as they change.
+                </p>
+              </>
+            )}
           </div>
         )}
         {/* Header + controls */}

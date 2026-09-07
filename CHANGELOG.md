@@ -5,17 +5,17 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 
 ## [0.7.1] - 2026-09-06
 
-### Your library
-- Documents you give your AIs now live in one library of your own, with
+### Your documents
+- Documents you give your AIs now live in one collection of your own, with
   each AI granted the ones it may draw on. Adding a document on an AI's
-  Knowledge tab means adding it to your library and giving that AI access;
-  a document given to two AIs is stored and remembered once. The library is
+  Knowledge tab means adding it to your documents and giving that AI access;
+  a document given to two AIs is stored and remembered once. The collection is
   built for size: a whole folder of files, ten years of articles, books,
   read one document at a time with progress and a Stop button, stored in a
   form that a chat turn never has to load whole. Your existing documents
   move into it on their own the first time the app runs.
 - Books are read whole. The attachment reader's 256 KB cut, right for a
-  chat prompt, no longer applies to a document added to the library.
+  chat prompt, no longer applies to a document added to your documents.
 - Answers draw on more of a document: up to eight passages per question
   with an online model and five with a local one, instead of three, chosen
   by meaning across all of an AI's documents and named by document, and a
@@ -37,17 +37,19 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   them best.
 - The Knowledge tab and the memory page show a real drop zone: "Drop files
   or folders here", the file types, and a Choose files button inside it.
-- "What your library says about you": two or three sentences on the memory
-  page, written on your device from the cards, your own writing first and
-  then what you keep. Your AIs are given it the way they are given the
-  facts and notes about you.
+- "What your AIs are told about you": one block on the memory page, shown
+  on request so the facts lead. It holds the short picture written from
+  your facts and a second paragraph written from your documents, your own
+  writing first and then what you keep. Both are written on this computer,
+  stored encrypted with the facts, and given to your AIs the way the facts
+  are; the block says so, and says private.
 - Each document carries a "Mine" tag for your own writing, on the
   Knowledge tab and the memory page. It is guessed from the file's own
   author field (DOCX, ODT, PDF, EPUB) against your Flowsta name, username
   and the name you have told an AI, and stays yours to flip.
-- EPUB books can be added to the library, read in chapter order.
-- The Vault backup carries your library's records, cards and tags, not
-  the passages, so a large library can never be the reason a backup fails.
+- EPUB books can be added to your documents, read in chapter order.
+- The Vault backup carries your documents' records, cards and tags, not
+  the passages, so a large collection can never be the reason a backup fails.
   After a restore, the app looks for each file where it was last seen,
   and under this machine's home folder when the old one differs, and
   reads the ones that are there straight back into their records with
@@ -101,11 +103,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - The CUDA engine download comes only from the app's pinned release and is
   checked against its published checksum before it is installed.
 - Documents and skills read from archives (Word, OpenDocument, EPUB, skill
-  zips) are read within fixed bounds, and a folder dropped on the library
+  zips) are read within fixed bounds, and a folder dropped on the Knowledge tab
   is walked without following links.
 - The app's window holds no shell permissions; everything that runs a
   program runs from the app's own code with the command shown first.
-- "What your library says about you" is kept in the encrypted memory store
+- The paragraph written from your documents is kept in the encrypted memory store
   with the facts, not in the window's local storage.
 - Dependencies: h2 0.4.19; build tooling refreshed.
 
@@ -159,7 +161,7 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   conversation was last continued; the backup now keeps that stamp with
   each conversation it has stored, and a conversation whose stamp has not
   moved is listed without being read again. The first backup after this
-  update reads everything once; after that a backup of a large library
+  update reads everything once; after that a backup of many conversations
   takes minutes rather than an hour. The log reports progress inside a
   large AI every hundred conversations.
 - One backup runs at a time: a trigger that arrives while a pass is

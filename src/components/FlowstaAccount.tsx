@@ -181,7 +181,7 @@ export default component$<FlowstaAccountProps>((props) => {
       }
       if (stats.documents_restored) {
         parts.push(
-          `${stats.documents_restored} library document${stats.documents_restored === 1 ? "" : "s"} restored; the files are being read from where they were, and the Knowledge tab asks for any that moved.`
+          `${stats.documents_restored} document${stats.documents_restored === 1 ? "" : "s"} restored; the files are being read from where they were, and the Knowledge tab asks for any that moved.`
         );
       }
       if (stats.conversations_preserved > 0) {
