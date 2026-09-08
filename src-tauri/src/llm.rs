@@ -2736,24 +2736,73 @@ pub async fn embed_texts(
         })
         .collect();
 
+    match embed_request(&model, &texts).await {
+        Ok(v) => Ok(v),
+        Err(EmbedError::TooLarge(_)) | Err(EmbedError::Server(_)) => {
+            // One input over the model's 512-token window fails the WHOLE
+            // batch (a 900-char passage of dense mathematics is 540 tokens:
+            // Eric's diffusion-models PDF, 2026-09-08). Redo this batch one
+            // text at a time, shrinking any text the server still refuses
+            // until it fits. The opening of a passage carries its meaning.
+            let mut out = Vec::with_capacity(texts.len());
+            for t in texts {
+                out.push(embed_one_shrinking(&model, t).await?);
+            }
+            Ok(out)
+        }
+        Err(EmbedError::Other(e)) => Err(e),
+    }
+}
+
+enum EmbedError {
+    /// The server said an input exceeds its batch/context.
+    TooLarge(String),
+    /// Any other non-success status.
+    Server(String),
+    /// Transport or parse failure.
+    Other(String),
+}
+
+async fn embed_request(model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbedError> {
     let client = local_http();
     let resp = client
         .post(format!("http://localhost:{}/v1/embeddings", EMBED_PORT)).bearer_auth(local_api_key())
         .json(&serde_json::json!({ "model": model, "input": texts }))
         .send()
         .await
-        .map_err(|e| format!("Embedding request failed: {}", e))?;
-
-    if !resp.status().is_success() {
-        return Err(format!("Embedding server returned {}", resp.status()));
+        .map_err(|e| EmbedError::Other(format!("Embedding request failed: {}", e)))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        let msg = format!("Embedding server returned {}", status);
+        return Err(if body.contains("too large") { EmbedError::TooLarge(msg) } else { EmbedError::Server(msg) });
     }
-
     let mut parsed: EmbeddingResponse = resp
         .json()
         .await
-        .map_err(|e| format!("Failed to parse embedding response: {}", e))?;
+        .map_err(|e| EmbedError::Other(format!("Failed to parse embedding response: {}", e)))?;
     parsed.data.sort_by_key(|d| d.index);
     Ok(parsed.data.into_iter().map(|d| d.embedding).collect())
+}
+
+/// Embed one text, halving it on each refusal down to a floor.
+async fn embed_one_shrinking(model: &str, text: String) -> Result<Vec<f32>, String> {
+    let mut t = text;
+    loop {
+        match embed_request(model, std::slice::from_ref(&t)).await {
+            Ok(mut v) => return v.pop().ok_or_else(|| "Embedding server returned no vector".to_string()),
+            Err(EmbedError::TooLarge(msg)) | Err(EmbedError::Server(msg)) => {
+                let n = t.chars().count();
+                if n <= 64 {
+                    return Err(msg);
+                }
+                let keep = n / 2;
+                log::debug!("[embed] shrinking a {}-char input to {} after: {}", n, keep, msg);
+                t = t.chars().take(keep).collect();
+            }
+            Err(EmbedError::Other(e)) => return Err(e),
+        }
+    }
 }
 
 // ── Utility-model server ────────────────────────────────────────────────────

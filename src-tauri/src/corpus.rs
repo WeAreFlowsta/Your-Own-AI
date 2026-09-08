@@ -700,21 +700,26 @@ pub(crate) fn extract_text(path: &Path) -> Result<String, String> {
     }
 }
 
+/// Tags out, text in. Walks CHARS, not bytes: the byte walk it replaces
+/// sliced the string at byte offsets and panicked on the first multibyte
+/// character (a curly quote, an accent), which hung every EPUB or HTML
+/// import of real prose at "reading" (Eric's 10 MB EPUB, 2026-09-08).
+/// Script and style bodies are skipped; the common entities are decoded.
 fn strip_tags(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let mut in_tag = false;
     let mut in_script = false;
+    // to_ascii_lowercase keeps every byte offset, so a char boundary in
+    // `html` is a char boundary in `lower`.
     let lower = html.to_ascii_lowercase();
-    let mut i = 0;
-    let bytes = html.as_bytes();
-    while i < bytes.len() {
-        if !in_tag && lower[i..].starts_with("<script") || lower[i..].starts_with("<style") {
+    for (i, c) in html.char_indices() {
+        let rest = &lower[i..];
+        if !in_tag && (rest.starts_with("<script") || rest.starts_with("<style")) {
             in_script = true;
         }
-        if in_script && (lower[i..].starts_with("</script>") || lower[i..].starts_with("</style>")) {
+        if in_script && (rest.starts_with("</script>") || rest.starts_with("</style>")) {
             in_script = false;
         }
-        let c = bytes[i] as char;
         if c == '<' {
             in_tag = true;
         } else if c == '>' {
@@ -723,9 +728,76 @@ fn strip_tags(html: &str) -> String {
         } else if !in_tag && !in_script {
             out.push(c);
         }
-        i += 1;
     }
+    decode_entities(&out)
+}
+
+/// The entities prose actually carries; anything else is left as written.
+fn decode_entities(s: &str) -> String {
+    if !s.contains('&') {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find('&') {
+        out.push_str(&rest[..i]);
+        let tail = &rest[i..];
+        let end = tail.find(';').filter(|&e| e <= 10);
+        let Some(e) = end else {
+            out.push('&');
+            rest = &tail[1..];
+            continue;
+        };
+        let ent = &tail[1..e];
+        let decoded: Option<String> = match ent {
+            "amp" => Some("&".into()),
+            "lt" => Some("<".into()),
+            "gt" => Some(">".into()),
+            "quot" => Some("\"".into()),
+            "apos" => Some("'".into()),
+            "nbsp" => Some(" ".into()),
+            "hellip" => Some("\u{2026}".into()),
+            "mdash" => Some("\u{2014}".into()),
+            "ndash" => Some("\u{2013}".into()),
+            "lsquo" => Some("\u{2018}".into()),
+            "rsquo" => Some("\u{2019}".into()),
+            "ldquo" => Some("\u{201C}".into()),
+            "rdquo" => Some("\u{201D}".into()),
+            _ => ent
+                .strip_prefix('#')
+                .and_then(|n| {
+                    if let Some(h) = n.strip_prefix('x').or_else(|| n.strip_prefix('X')) {
+                        u32::from_str_radix(h, 16).ok()
+                    } else {
+                        n.parse::<u32>().ok()
+                    }
+                })
+                .and_then(char::from_u32)
+                .map(|c| c.to_string()),
+        };
+        match decoded {
+            Some(d) => {
+                out.push_str(&d);
+                rest = &tail[e + 1..];
+            }
+            None => {
+                out.push('&');
+                rest = &tail[1..];
+            }
+        }
+    }
+    out.push_str(rest);
     out
+}
+
+/// A reader that stops unexpectedly must fail THIS file, never hang the
+/// whole import: the command's future would otherwise die with the panic
+/// and the drop zone would say "reading" forever.
+pub(crate) fn extract_text_safe(path: &Path) -> Result<String, String> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| extract_text(path))) {
+        Ok(r) => r,
+        Err(_) => Err("the reader stopped unexpectedly on this file".to_string()),
+    }
 }
 
 // ---------------------------------------------------------------- import
@@ -742,6 +814,12 @@ struct Progress {
     total: usize,
     added: usize,
     failed: usize,
+    /// Inside one document: pieces embedded so far, of how many. A book is
+    /// thousands of pieces; without this the row reads as stuck.
+    #[serde(default)]
+    pieces_done: usize,
+    #[serde(default)]
+    pieces_total: usize,
 }
 
 fn emit_progress(app: &AppHandle, p: &Progress) {
@@ -837,7 +915,7 @@ pub async fn corpus_import(
         }
         let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("document").to_string();
         let path_str = path.to_string_lossy().to_string();
-        emit_progress(&app, &Progress { phase: "reading", file: name.clone(), done: n, total, added: report.added.len(), failed: report.failed.len() });
+        emit_progress(&app, &Progress { phase: "reading", file: name.clone(), done: n, total, added: report.added.len(), failed: report.failed.len(), pieces_done: 0, pieces_total: 0 });
         if let Some(existing) = already_have(&conn, &path_str)? {
             // Same file again: make sure this AI has it, count it, move on.
             conn.execute("INSERT OR IGNORE INTO grants (doc_id, ai_id) VALUES (?1, ?2)", params![existing, ai_id])
@@ -847,7 +925,7 @@ pub async fn corpus_import(
         }
         let size = std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(-1);
         let waiting_match = match_waiting(&waiting, &name, size);
-        let text = match extract_text(path) {
+        let text = match extract_text_safe(path) {
             Ok(t) => t,
             Err(e) => {
                 report.failed.push(ImportFailure { file: name, reason: e });
@@ -859,9 +937,10 @@ pub async fn corpus_import(
             report.failed.push(ImportFailure { file: name, reason: "no readable text (a scanned PDF or an empty file)".into() });
             continue;
         }
-        emit_progress(&app, &Progress { phase: "embedding", file: name.clone(), done: n, total, added: report.added.len(), failed: report.failed.len() });
+        emit_progress(&app, &Progress { phase: "embedding", file: name.clone(), done: n, total, added: report.added.len(), failed: report.failed.len(), pieces_done: 0, pieces_total: 0 });
         let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(passages.len());
         let mut failed = None;
+        let embed_started = std::time::Instant::now();
         for batch in passages.chunks(EMBED_BATCH) {
             if CANCEL.load(Ordering::SeqCst) {
                 break;
@@ -873,7 +952,15 @@ pub async fn corpus_import(
                     break;
                 }
             }
+            emit_progress(&app, &Progress { phase: "embedding", file: name.clone(), done: n, total, added: report.added.len(), failed: report.failed.len(), pieces_done: vectors.len(), pieces_total: passages.len() });
         }
+        log::info!(
+            "[corpus] {}: {} pieces embedded in {:.1} s{}",
+            name,
+            vectors.len(),
+            embed_started.elapsed().as_secs_f64(),
+            if failed.is_some() { " (stopped on an error)" } else { "" }
+        );
         if let Some(e) = failed {
             report.failed.push(ImportFailure { file: name, reason: format!("embedding: {e}") });
             continue;
@@ -900,7 +987,7 @@ pub async fn corpus_import(
         }
     }
     cache_invalidate();
-    emit_progress(&app, &Progress { phase: "done", file: String::new(), done: total, total, added: report.added.len(), failed: report.failed.len() });
+    emit_progress(&app, &Progress { phase: "done", file: String::new(), done: total, total, added: report.added.len(), failed: report.failed.len(), pieces_done: 0, pieces_total: 0 });
     log::info!(
         "[corpus] import for AI {}: {} added, {} read again, {} failed, {} already, cancelled={}",
         &ai_id[..8.min(ai_id.len())],
@@ -1143,8 +1230,8 @@ async fn reread_paths(
             report.unmatched += 1;
             continue;
         };
-        emit_progress(&app, &Progress { phase: "reading", file: name.clone(), done: n, total, added: report.restored, failed: report.failed.len() });
-        let text = match extract_text(path) {
+        emit_progress(&app, &Progress { phase: "reading", file: name.clone(), done: n, total, added: report.restored, failed: report.failed.len(), pieces_done: 0, pieces_total: 0 });
+        let text = match extract_text_safe(path) {
             Ok(t) => t,
             Err(e) => {
                 report.failed.push(ImportFailure { file: name, reason: e });
@@ -1156,9 +1243,10 @@ async fn reread_paths(
             report.failed.push(ImportFailure { file: name, reason: "no readable text".into() });
             continue;
         }
-        emit_progress(&app, &Progress { phase: "embedding", file: name.clone(), done: n, total, added: report.restored, failed: report.failed.len() });
+        emit_progress(&app, &Progress { phase: "embedding", file: name.clone(), done: n, total, added: report.restored, failed: report.failed.len(), pieces_done: 0, pieces_total: 0 });
         let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(passages.len());
         let mut failed = None;
+        let embed_started = std::time::Instant::now();
         for batch in passages.chunks(EMBED_BATCH) {
             if CANCEL.load(Ordering::SeqCst) {
                 break;
@@ -1170,7 +1258,15 @@ async fn reread_paths(
                     break;
                 }
             }
+            emit_progress(&app, &Progress { phase: "embedding", file: name.clone(), done: n, total, added: report.restored, failed: report.failed.len(), pieces_done: vectors.len(), pieces_total: passages.len() });
         }
+        log::info!(
+            "[corpus] {}: {} pieces embedded in {:.1} s{}",
+            name,
+            vectors.len(),
+            embed_started.elapsed().as_secs_f64(),
+            if failed.is_some() { " (stopped on an error)" } else { "" }
+        );
         if let Some(e) = failed {
             report.failed.push(ImportFailure { file: name, reason: format!("embedding: {e}") });
             continue;
@@ -1186,7 +1282,7 @@ async fn reread_paths(
     }
     report.remaining = waiting.len();
     cache_invalidate();
-    emit_progress(&app, &Progress { phase: "done", file: String::new(), done: total, total, added: report.restored, failed: report.failed.len() });
+    emit_progress(&app, &Progress { phase: "done", file: String::new(), done: total, total, added: report.restored, failed: report.failed.len(), pieces_done: 0, pieces_total: 0 });
     log::info!(
         "[corpus] re-read: {} restored, {} unmatched, {} failed, {} still waiting, cancelled={}",
         report.restored, report.unmatched, report.failed.len(), report.remaining, report.cancelled
@@ -1566,6 +1662,25 @@ mod relink_tests {
         assert!(found[0].ends_with("new-home/Documents/a.txt"));
         assert!(found[1].ends_with("old-home/Documents/b.txt"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod strip_tests {
+    use super::*;
+
+    #[test]
+    fn strip_tags_survives_multibyte_and_decodes_entities() {
+        let html = "<html><head><style>p{x:1}</style><script>var a='<b>';</script></head>\
+            <body><p>Caf\u{e9} \u{2014} \u{201c}quoted\u{201d} &amp; more&nbsp;text &#8217;s &hellip;</p></body></html>";
+        let out = strip_tags(html);
+        let out = out.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(out, "Caf\u{e9} \u{2014} \u{201c}quoted\u{201d} & more text \u{2019}s \u{2026}");
+    }
+
+    #[test]
+    fn strip_tags_handles_a_multibyte_char_right_before_a_tag() {
+        assert_eq!(strip_tags("<p>\u{e9}</p><p>\u{4e2d}\u{6587}</p>").split_whitespace().collect::<Vec<_>>(), vec!["\u{e9}", "\u{4e2d}\u{6587}"]);
     }
 }
 

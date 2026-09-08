@@ -23,5 +23,9 @@ export function useCorpusProgress(): Signal<CorpusProgress | null> {
 
 export function progressText(p: CorpusProgress): string {
   const where = p.total > 1 ? `${p.done + 1} of ${p.total}: ` : '';
-  return p.phase === 'reading' ? `Reading ${where}${p.file}` : `Remembering ${where}${p.file}`;
+  if (p.phase === 'reading') return `Reading ${where}${p.file}`;
+  const pieces = p.pieces_total
+    ? ` (${p.pieces_done?.toLocaleString() ?? 0} of ${p.pieces_total.toLocaleString()} pieces)`
+    : '';
+  return `Remembering ${where}${p.file}${pieces}`;
 }

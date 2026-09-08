@@ -36,6 +36,9 @@ export interface ImportReport {
 export interface CorpusProgress {
   phase: 'reading' | 'embedding' | 'done';
   file: string;
+  /** Inside one document: pieces remembered so far, of how many (0 = not yet known). */
+  pieces_done?: number;
+  pieces_total?: number;
   done: number;
   total: number;
   added: number;
