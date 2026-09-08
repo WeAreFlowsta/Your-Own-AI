@@ -3,6 +3,21 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.7.2] - 2026-09-09
+
+### Your documents
+- EPUB and HTML files with accented letters, curly quotes or dashes read
+  in. The reader walked those files byte by byte and stopped at the first
+  such character, which left the import saying "reading" with no end.
+  A file the reader cannot handle now fails on its own and the rest of
+  the drop continues.
+- A passage the memory model cannot take whole, such as a page of dense
+  mathematics, is shortened until it fits, so one such passage no longer
+  fails the document.
+- The progress line counts pieces inside the document being remembered
+  ("Remembering 2 of 6: book.epub (1,240 of 3,500 pieces)"), and the log
+  records pieces and seconds per document.
+
 ## [0.7.1] - 2026-09-07
 
 ### Highlights
