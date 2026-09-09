@@ -225,8 +225,8 @@ export default component$<ModelTuneDialogProps>((props) => {
   return (
     <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
       <div class="w-full max-w-md max-h-[calc(100vh-2rem)] overflow-y-auto rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-header-footer)] p-6 shadow-2xl">
-        <h3 class="text-base font-semibold text-[var(--text-primary)]">Fine-tune {name}</h3>
-        <p class="mt-1 text-sm text-[var(--text-secondary)]">Optimize {name} for this computer.</p>
+        <h3 class="text-base font-semibold text-[var(--text-primary)] break-all">{name}</h3>
+        <p class="mt-1 text-sm text-[var(--text-secondary)]">Fine-tune how it runs on this computer.</p>
 
         {/* What it runs at now, and where that came from. */}
         <div class="mt-4 flex items-center justify-between gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2">
@@ -264,7 +264,7 @@ export default component$<ModelTuneDialogProps>((props) => {
           ) : positions.value.length < 2 ? (
             <>
               <p class="text-sm text-[var(--text-secondary)]">
-                Loads {name} a few times with different setups and times each one. About three minutes,
+                Loads it a few times with different setups and times each one. About three minutes,
                 and chats pause while it runs.
               </p>
               <LiquidMetalButton class="mt-3 px-5 py-2 text-sm" onClick$={measure}>
