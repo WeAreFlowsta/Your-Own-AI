@@ -820,6 +820,10 @@ struct Progress {
     pieces_done: usize,
     #[serde(default)]
     pieces_total: usize,
+    /// The AI the documents are being given to; empty for a re-read, which
+    /// fills records whichever AIs hold them.
+    #[serde(default)]
+    ai_id: String,
 }
 
 fn emit_progress(app: &AppHandle, p: &Progress) {
@@ -915,7 +919,7 @@ pub async fn corpus_import(
         }
         let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("document").to_string();
         let path_str = path.to_string_lossy().to_string();
-        emit_progress(&app, &Progress { phase: "reading", file: name.clone(), done: n, total, added: report.added.len(), failed: report.failed.len(), pieces_done: 0, pieces_total: 0 });
+        emit_progress(&app, &Progress { phase: "reading", file: name.clone(), done: n, total, added: report.added.len(), failed: report.failed.len(), pieces_done: 0, pieces_total: 0, ai_id: ai_id.clone() });
         if let Some(existing) = already_have(&conn, &path_str)? {
             // Same file again: make sure this AI has it, count it, move on.
             conn.execute("INSERT OR IGNORE INTO grants (doc_id, ai_id) VALUES (?1, ?2)", params![existing, ai_id])
@@ -937,7 +941,7 @@ pub async fn corpus_import(
             report.failed.push(ImportFailure { file: name, reason: "no readable text (a scanned PDF or an empty file)".into() });
             continue;
         }
-        emit_progress(&app, &Progress { phase: "embedding", file: name.clone(), done: n, total, added: report.added.len(), failed: report.failed.len(), pieces_done: 0, pieces_total: 0 });
+        emit_progress(&app, &Progress { phase: "embedding", file: name.clone(), done: n, total, added: report.added.len(), failed: report.failed.len(), pieces_done: 0, pieces_total: 0, ai_id: ai_id.clone() });
         let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(passages.len());
         let mut failed = None;
         let embed_started = std::time::Instant::now();
@@ -952,7 +956,7 @@ pub async fn corpus_import(
                     break;
                 }
             }
-            emit_progress(&app, &Progress { phase: "embedding", file: name.clone(), done: n, total, added: report.added.len(), failed: report.failed.len(), pieces_done: vectors.len(), pieces_total: passages.len() });
+            emit_progress(&app, &Progress { phase: "embedding", file: name.clone(), done: n, total, added: report.added.len(), failed: report.failed.len(), pieces_done: vectors.len(), pieces_total: passages.len(), ai_id: ai_id.clone() });
         }
         log::info!(
             "[corpus] {}: {} pieces embedded in {:.1} s{}",
@@ -987,7 +991,7 @@ pub async fn corpus_import(
         }
     }
     cache_invalidate();
-    emit_progress(&app, &Progress { phase: "done", file: String::new(), done: total, total, added: report.added.len(), failed: report.failed.len(), pieces_done: 0, pieces_total: 0 });
+    emit_progress(&app, &Progress { phase: "done", file: String::new(), done: total, total, added: report.added.len(), failed: report.failed.len(), pieces_done: 0, pieces_total: 0, ai_id: ai_id.clone() });
     log::info!(
         "[corpus] import for AI {}: {} added, {} read again, {} failed, {} already, cancelled={}",
         &ai_id[..8.min(ai_id.len())],
@@ -1230,7 +1234,7 @@ async fn reread_paths(
             report.unmatched += 1;
             continue;
         };
-        emit_progress(&app, &Progress { phase: "reading", file: name.clone(), done: n, total, added: report.restored, failed: report.failed.len(), pieces_done: 0, pieces_total: 0 });
+        emit_progress(&app, &Progress { phase: "reading", file: name.clone(), done: n, total, added: report.restored, failed: report.failed.len(), pieces_done: 0, pieces_total: 0, ai_id: String::new() });
         let text = match extract_text_safe(path) {
             Ok(t) => t,
             Err(e) => {
@@ -1243,7 +1247,7 @@ async fn reread_paths(
             report.failed.push(ImportFailure { file: name, reason: "no readable text".into() });
             continue;
         }
-        emit_progress(&app, &Progress { phase: "embedding", file: name.clone(), done: n, total, added: report.restored, failed: report.failed.len(), pieces_done: 0, pieces_total: 0 });
+        emit_progress(&app, &Progress { phase: "embedding", file: name.clone(), done: n, total, added: report.restored, failed: report.failed.len(), pieces_done: 0, pieces_total: 0, ai_id: String::new() });
         let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(passages.len());
         let mut failed = None;
         let embed_started = std::time::Instant::now();
@@ -1258,7 +1262,7 @@ async fn reread_paths(
                     break;
                 }
             }
-            emit_progress(&app, &Progress { phase: "embedding", file: name.clone(), done: n, total, added: report.restored, failed: report.failed.len(), pieces_done: vectors.len(), pieces_total: passages.len() });
+            emit_progress(&app, &Progress { phase: "embedding", file: name.clone(), done: n, total, added: report.restored, failed: report.failed.len(), pieces_done: vectors.len(), pieces_total: passages.len(), ai_id: String::new() });
         }
         log::info!(
             "[corpus] {}: {} pieces embedded in {:.1} s{}",
@@ -1282,7 +1286,7 @@ async fn reread_paths(
     }
     report.remaining = waiting.len();
     cache_invalidate();
-    emit_progress(&app, &Progress { phase: "done", file: String::new(), done: total, total, added: report.restored, failed: report.failed.len(), pieces_done: 0, pieces_total: 0 });
+    emit_progress(&app, &Progress { phase: "done", file: String::new(), done: total, total, added: report.restored, failed: report.failed.len(), pieces_done: 0, pieces_total: 0, ai_id: String::new() });
     log::info!(
         "[corpus] re-read: {} restored, {} unmatched, {} failed, {} still waiting, cancelled={}",
         report.restored, report.unmatched, report.failed.len(), report.remaining, report.cancelled

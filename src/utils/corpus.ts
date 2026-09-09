@@ -39,6 +39,8 @@ export interface CorpusProgress {
   /** Inside one document: pieces remembered so far, of how many (0 = not yet known). */
   pieces_done?: number;
   pieces_total?: number;
+  /** The AI the documents are being given to; empty for a re-read. */
+  ai_id?: string;
   done: number;
   total: number;
   added: number;

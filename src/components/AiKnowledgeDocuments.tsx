@@ -38,6 +38,8 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
   useTask$(({ track }) => {
     const p = track(() => progress.value);
     if (isServer) return;
+    // Only this AI's read (a re-read carries no AI and fills every record).
+    if (p && p.ai_id && p.ai_id !== props.aiId) return;
     if (p) {
       if (p.done !== lastDone.value) {
         lastDone.value = p.done;
@@ -176,7 +178,7 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
         </p>
       </div>
 
-      {progress.value && (
+      {progress.value && (!progress.value.ai_id || progress.value.ai_id === props.aiId) && (
         <p class="text-xs text-[var(--text-muted)] mb-2 truncate">{progressText(progress.value)}</p>
       )}
       {error.value && (

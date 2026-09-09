@@ -20,6 +20,7 @@
 import { component$, useStore, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
 import { listen } from "@tauri-apps/api/event";
 import { useVisionDownload } from "../contexts/VisionDownloadContext";
+import { useAiData } from "../contexts/AiDataContext";
 import { ACTIVITY_EVENT, labelForFile, formatBytes, type ActivityNote } from "../utils/activity";
 import { firstModelInFlight } from "../utils/firstModel";
 import type { CorpusProgress } from "../utils/corpus";
@@ -44,6 +45,7 @@ export const ActivityTray = component$(() => {
   const expanded = useSignal(false);
   const stopping = useSignal(false);
   const vision = useVisionDownload();
+  const aiData = useAiData();
 
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async ({ cleanup }) => {
@@ -110,12 +112,14 @@ export const ActivityTray = component$(() => {
 
     const unCorpus = await listen<CorpusProgress>("corpus-progress", (e) => {
       const p = e.payload;
+      const forAi = p.ai_id ? aiData.userDefinedAis.find((a) => a.id === p.ai_id)?.name : null;
+      const readTitle = forAi ? `Reading documents for ${forAi}` : "Reading documents";
       if (p.phase === "done") {
         if (p.added > 0 || p.failed > 0) {
           const parts: string[] = [];
           if (p.added > 0) parts.push(`${p.added} document${p.added === 1 ? "" : "s"} in`);
           if (p.failed > 0) parts.push(`${p.failed} couldn't be read`);
-          upsert("read", { kind: "read", title: "Reading documents", state: "done", percent: 100, stoppable: false, detail: parts.join(" · ") });
+          upsert("read", { kind: "read", title: readTitle, state: "done", percent: 100, stoppable: false, detail: parts.join(" · ") });
           linger("read", LINGER_MS);
         } else {
           remove("read");
@@ -135,7 +139,7 @@ export const ActivityTray = component$(() => {
             : null;
       upsert("read", {
         kind: "read",
-        title: "Reading documents",
+        title: readTitle,
         state: "running",
         stoppable: true,
         percent,
