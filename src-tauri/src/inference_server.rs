@@ -219,6 +219,7 @@ pub fn spawn(app: AppHandle, pre_bound: Option<std::net::TcpListener>) {
         .route("/internal/matrix-run", get(matrix_run_dev))
         .route("/internal/online-smoke", get(online_smoke_dev))
         .route("/internal/replayed-conversations", get(replayed_conversations_dev))
+        .route("/internal/conversation-probe", get(conversation_probe_dev))
             .layer(axum::middleware::from_fn_with_state(app.clone(), lan_guard))
             .with_state(app);
 
@@ -461,6 +462,84 @@ async fn matrix_run_dev(
         Ok(path) => Json(json!({ "report": path })).into_response(),
         Err(e) => Json(json!({ "error": e })).into_response(),
     }
+}
+
+/// Dev builds only: read ONE conversation's entries with the backup's long
+/// timeout and report how many, how big and how long - for a conversation
+/// the backup could not read within its per-conversation limit.
+/// `hash` = the conversation hash's hex prefix (the log prints 16 chars).
+async fn conversation_probe_dev(
+    State(app): State<AppHandle>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if !cfg!(debug_assertions) {
+        return err(StatusCode::NOT_FOUND, "not found", "not_found");
+    }
+    let Some(prefix) = q.get("hash").cloned() else {
+        return Json(json!({ "error": "hash=<hex prefix> is required" })).into_response();
+    };
+    let timeout = q.get("timeout").and_then(|s| s.parse::<u64>().ok()).unwrap_or(crate::dna::BACKUP_READ_TIMEOUT_SECS);
+    let hc = app.state::<std::sync::Arc<crate::commands_holochain::HolochainState>>();
+    let manager = match hc.get() {
+        Ok(m) => m,
+        Err(e) => return Json(json!({ "error": e })).into_response(),
+    };
+    let key = match manager.data_key() {
+        Ok(k) => k,
+        Err(e) => return Json(json!({ "error": e })).into_response(),
+    };
+    let agent_keys: Vec<String> = manager.agents.lock().await.keys().cloned().collect();
+    for agent in agent_keys {
+        let payload = match holochain_types::prelude::ExternIO::encode(()) {
+            Ok(p) => p,
+            Err(e) => return Json(json!({ "error": e.to_string() })).into_response(),
+        };
+        let list_started = std::time::Instant::now();
+        let Ok(result) = manager
+            .call_zome_with_timeout(&agent, "transcript", "get_all_conversations", payload, std::time::Duration::from_secs(timeout))
+            .await
+        else { continue };
+        let records: Vec<holochain_types::prelude::Record> = match holochain_types::prelude::ExternIO::decode(&result) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let list_secs = list_started.elapsed().as_secs_f64();
+        for rec in &records {
+            let hash_hex = hex::encode(rec.action_address().get_raw_39());
+            if !hash_hex.starts_with(&prefix) {
+                continue;
+            }
+            let (title, started_at) = crate::vault_escrow::open_record(&key, rec)
+                .map(|(p, _)| (p["title"].as_str().unwrap_or("").to_string(), p["started_at"].as_i64().unwrap_or(0)))
+                .unwrap_or_default();
+            let payload = match holochain_types::prelude::ExternIO::encode(rec.action_address().clone()) {
+                Ok(p) => p,
+                Err(e) => return Json(json!({ "error": e.to_string() })).into_response(),
+            };
+            let started = std::time::Instant::now();
+            let read = manager
+                .call_zome_with_timeout(&agent, "transcript", "get_conversation_entries", payload, std::time::Duration::from_secs(timeout))
+                .await;
+            let secs = started.elapsed().as_secs_f64();
+            return match read {
+                Ok(r) => {
+                    let entries: Vec<holochain_types::prelude::Record> = holochain_types::prelude::ExternIO::decode(&r).unwrap_or_default();
+                    let bytes: usize = entries.iter().map(|e| e.entry().as_option().map(|en| en.as_app_entry().map(|a| a.as_ref().bytes().len()).unwrap_or(0)).unwrap_or(0)).sum();
+                    Json(json!({
+                        "agent": agent, "hash": hash_hex, "title": title, "started_at": started_at,
+                        "list_secs": list_secs, "conversations_in_cell": records.len(),
+                        "entries": entries.len(), "entry_bytes": bytes, "read_secs": secs,
+                    })).into_response()
+                }
+                Err(e) => Json(json!({
+                    "agent": agent, "hash": hash_hex, "title": title, "started_at": started_at,
+                    "list_secs": list_secs, "conversations_in_cell": records.len(),
+                    "error": e, "read_secs": secs,
+                })).into_response(),
+            };
+        }
+    }
+    Json(json!({ "error": "no conversation with that hash prefix on a connected agent" })).into_response()
 }
 
 /// Dev builds only: conversations whose chain record was written at or

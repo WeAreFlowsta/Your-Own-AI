@@ -36,6 +36,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   running for that AI, wherever it was started, and their rows appear as
   each document lands.
 
+### Your records
+- A conversation deleted on one of your computers stays deleted after a
+  restore on another. Each backup carries what its computer deleted, and
+  a restore honors that list along with the one kept here.
+
 ### Everyday comfort
 - One activity card, bottom right, on every page, for everything running
   in the background: model, engine and Projects helper downloads, the

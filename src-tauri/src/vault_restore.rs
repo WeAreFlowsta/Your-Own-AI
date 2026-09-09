@@ -774,7 +774,12 @@ pub async fn vault_restore_conversations(
     // conversation deleted here after the backup was written must stay
     // deleted, not come back as a fresh copy.
     existing_started.extend(vault_escrow::sync_state_started_ats(&app));
-    let deleted = crate::conversation_cache::deleted_ledger(&app);
+    let mut deleted = crate::conversation_cache::deleted_ledger(&app);
+    // What any device deleted, carried in the backup (0.7.2): a conversation
+    // deleted on the other machine stays deleted here after a restore.
+    if let Ok(carried) = serde_json::from_value::<Vec<crate::conversation_cache::DeletedConversation>>(backup["deleted"].clone()) {
+        deleted.extend(carried);
+    }
     let deleted_hashes: HashSet<String> = deleted.iter().map(|d| d.hash.clone()).collect();
     let deleted_started: HashSet<i64> = deleted.iter().filter(|d| d.started_at != 0).map(|d| d.started_at).collect();
     let was_deleted = |g: &ConvGroup| deleted_hashes.contains(&g.old_hash) || deleted_started.contains(&g.started_at);

@@ -579,6 +579,53 @@ struct BackupLimits {
     max_object_bytes: usize,
 }
 
+/// Keep this many tombstones in the manifest, newest first: a year of
+/// deleting on a busy machine, and a few KB.
+const MAX_TOMBSTONES: usize = 5_000;
+
+/// The `deleted` list of the manifest the Vault holds now (empty when there
+/// is none, or it cannot be read - a missing list never blocks a backup).
+async fn fetch_manifest_tombstones(port: u16) -> Vec<crate::conversation_cache::DeletedConversation> {
+    let resp = match http()
+        .post(format!("http://127.0.0.1:{}/backup/retrieve", port))
+        .header("Origin", VAULT_ORIGIN)
+        .json(&serde_json::json!({ "client_id": YOAI_HOLOCHAIN_CLIENT_ID, "label": MANIFEST_LABEL }))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => r,
+        _ => return Vec::new(),
+    };
+    let v: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    serde_json::from_value(v["data"]["deleted"].clone()).unwrap_or_default()
+}
+
+/// Union by hash, newest deletion first, capped.
+pub(crate) fn merge_tombstones(
+    mine: Vec<crate::conversation_cache::DeletedConversation>,
+    theirs: Vec<crate::conversation_cache::DeletedConversation>,
+) -> Vec<serde_json::Value> {
+    let mut by_hash: std::collections::HashMap<String, crate::conversation_cache::DeletedConversation> =
+        std::collections::HashMap::new();
+    for d in theirs.into_iter().chain(mine) {
+        match by_hash.get(&d.hash) {
+            Some(have) if have.deleted_at >= d.deleted_at => {}
+            _ => {
+                by_hash.insert(d.hash.clone(), d);
+            }
+        }
+    }
+    let mut all: Vec<_> = by_hash.into_values().collect();
+    all.sort_by_key(|d| std::cmp::Reverse(d.deleted_at));
+    all.truncate(MAX_TOMBSTONES);
+    all.into_iter()
+        .map(|d| serde_json::json!({ "hash": d.hash, "started_at": d.started_at, "deleted_at": d.deleted_at }))
+        .collect()
+}
+
 /// How many objects the Vault holds for this app right now (None when the
 /// list cannot be read).
 async fn vault_object_count(port: u16) -> Option<usize> {
@@ -1674,6 +1721,13 @@ async fn write_incremental_backup(
         });
     }
     attach_extras(app, recovery, &mut manifest);
+    // Deletions ride the manifest so a restore on ANOTHER device leaves them
+    // deleted too: this device's ledger merged with what the Vault's
+    // manifest already carries (the other device's), newest kept.
+    manifest["deleted"] = serde_json::Value::Array(merge_tombstones(
+        crate::conversation_cache::deleted_ledger(app),
+        fetch_manifest_tombstones(port).await,
+    ));
 
     let resp = http()
         .post(format!("http://127.0.0.1:{}/backup", port))
@@ -2132,6 +2186,28 @@ fn unix_now_secs() -> u64 {
 #[tauri::command]
 pub async fn vault_backup_now(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     write_full_backup(&app).await
+}
+
+#[cfg(test)]
+mod tombstone_tests {
+    use super::*;
+    use crate::conversation_cache::DeletedConversation;
+
+    fn d(hash: &str, started: i64, at: i64) -> DeletedConversation {
+        DeletedConversation { hash: hash.into(), started_at: started, deleted_at: at }
+    }
+
+    #[test]
+    fn merge_unions_by_hash_newest_first_and_caps() {
+        let mine = vec![d("a", 1, 10), d("b", 2, 30)];
+        let theirs = vec![d("a", 1, 20), d("c", 3, 5)];
+        let out = merge_tombstones(mine, theirs);
+        let hashes: Vec<&str> = out.iter().map(|v| v["hash"].as_str().unwrap()).collect();
+        assert_eq!(hashes, vec!["b", "a", "c"]);
+        assert_eq!(out[1]["deleted_at"].as_i64(), Some(20));
+        let many: Vec<_> = (0..MAX_TOMBSTONES as i64 + 10).map(|i| d(&format!("h{i}"), i, i)).collect();
+        assert_eq!(merge_tombstones(many, vec![]).len(), MAX_TOMBSTONES);
+    }
 }
 
 #[cfg(test)]
