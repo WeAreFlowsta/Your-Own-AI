@@ -13,6 +13,7 @@ interface TuneResult {
   failed?: string | null;
 }
 import LiquidMetalButton from './LiquidMetalButton';
+import { LuSave, LuLoader2 } from '@qwikest/icons/lucide';
 import TuneSlider from './TuneSlider';
 
 /**
@@ -271,11 +272,16 @@ export default component$<ModelTuneDialogProps>((props) => {
           })()}
         </div>
         <div class="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          <LiquidMetalButton variant="secondary" class="px-4 py-2 text-sm" onClick$={props.onClose$}>
-            Close
+          <LiquidMetalButton
+            variant="secondary"
+            class="mt-3 sm:mt-0 w-full sm:w-auto inline-flex justify-center px-6 py-2.5 text-base font-medium disabled:opacity-70"
+            disabled={busy.value}
+            onClick$={props.onClose$}
+          >
+            Cancel
           </LiquidMetalButton>
           <LiquidMetalButton
-            class="px-4 py-2 text-sm"
+            class="w-full sm:w-auto inline-flex justify-center items-center px-6 py-2.5 text-base font-medium disabled:opacity-70"
             disabled={busy.value}
             onClick$={async () => {
               busy.value = true;
@@ -299,7 +305,8 @@ export default component$<ModelTuneDialogProps>((props) => {
               }
             }}
           >
-            Save
+            {busy.value ? <LuLoader2 class="h-5 w-5 animate-spin mr-2" /> : <LuSave class="w-[18px] h-[18px] mr-2" />}
+            Save Changes
           </LiquidMetalButton>
         </div>
       </div>
