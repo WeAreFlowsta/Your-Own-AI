@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import LiquidMetalButton from './LiquidMetalButton';
 import { LuSave, LuLoader2, LuChevronRight } from '@qwikest/icons/lucide';
 import TuneSlider from './TuneSlider';
+import { announceActivity } from '../utils/activity';
 
 interface TuneResult {
   ctx: number;
@@ -173,15 +174,18 @@ export default component$<ModelTuneDialogProps>((props) => {
       await invoke('tuning_set', { model: props.model, tuning: t });
       const reloaded = await invoke<boolean>('tuning_apply_now', { model: props.model });
       saved.value = await snapshot();
-      if (unchanged) {
-        note.value = reloaded ? 'Nothing changed. Reloaded as it was.' : 'Nothing changed.';
-        return;
-      }
-      note.value = reloaded
-        ? 'Reloaded with these settings.'
-        : Object.keys(t).length
-          ? 'Saved. Applies when this model next loads.'
-          : 'Back to automatic. Applies when this model next loads.';
+      const detail = unchanged
+        ? reloaded ? 'Nothing changed. Reloaded as it was.' : 'Nothing changed.'
+        : reloaded
+          ? 'Reloaded with these settings.'
+          : Object.keys(t).length
+            ? 'Saved. Applies when this model next loads.'
+            : 'Back to automatic. Applies when this model next loads.';
+      // The outcome rides the activity tray so the dialog can close, as the
+      // edit-AI dialog does on Save.
+      announceActivity({ id: `tune:${props.model}`, title: `${name} fine-tuned`, detail, state: 'done', ttlMs: 8000 });
+      await props.onClose$();
+      return;
     } catch (e) {
       note.value = `Could not save: ${e}`;
     } finally {
