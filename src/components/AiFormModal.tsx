@@ -735,7 +735,7 @@ const AiFormModal = component$<AiFormModalProps>(
           )}
           <div class="flex justify-between items-center mb-6">
             <h2 class="text-2xl font-semibold text-[var(--text-primary)] font-varela">
-              {editingAi ? 'Edit AI' : 'Create New AI'}
+              {editingAi ? `Edit ${store.name.trim() || editingAi.name || 'AI'}` : 'Create New AI'}
             </h2>
             <button
               onClick$={onClose$}
