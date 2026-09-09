@@ -2002,14 +2002,14 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                       })()
                     )}
                     {!unusable && !model.damaged && (
-                      <button
-                        type="button"
+                      <LiquidMetalButton
+                        variant="secondary"
+                        class="mt-1 px-3 py-1 text-xs"
                         onClick$={() => { store.tuneFor = model.name; }}
                         title="Fine-tune how this model runs on this computer: context size, expert offload, the speed-up file. Everything stays automatic unless you set a number."
-                        class="mt-0.5 text-xs text-[var(--text-secondary)] underline underline-offset-2 bg-transparent border-none p-0 cursor-pointer hover:text-[var(--text-primary)]"
                       >
                         Fine-tune
-                      </button>
+                      </LiquidMetalButton>
                     )}
                     {store.tuneFor === model.name && (
                       <ModelTuneDialog
