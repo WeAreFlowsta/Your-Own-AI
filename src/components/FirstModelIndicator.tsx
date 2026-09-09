@@ -1,9 +1,8 @@
 /**
- * First-model notice + finisher (root-level, always mounted).
+ * First-model finisher (root-level, always mounted).
  *
- * While the welcome wizard's first download runs, this shows a small
- * "Downloading your first model" card everywhere but the wizard itself,
- * and it OWNS the finish: when the file lands it loads the model, assigns
+ * While the welcome wizard's first download runs, the activity tray shows
+ * its row everywhere but the wizard itself; this component OWNS the finish: when the file lands it loads the model, assigns
  * it to every AI, clears the in-flight state and announces
  * FIRST_MODEL_READY (the chat answers its held question on that). Doing
  * this here means it happens whether the user stayed on the wizard, moved
@@ -18,6 +17,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useAiDataActions } from "../contexts/AiDataContext";
 import { modelFamilies } from "../data/recommended-models";
 import { modelManager, type DownloadProgress } from "../utils/modelManager";
+import { announceActivity } from "../utils/activity";
 import {
   firstModelInFlight,
   clearFirstModelInFlight,
@@ -62,6 +62,7 @@ export const FirstModelIndicator = component$(() => {
       }
       clearFirstModelInFlight();
       readyLabel.value = f.label;
+      announceActivity({ id: "first-model", title: `${f.label} is ready`, detail: "Your AIs can answer now.", state: "done", ttlMs: 15000 });
       finishing.value = false;
       window.dispatchEvent(new CustomEvent(FIRST_MODEL_READY, { detail: { filename: f.filename, label: f.label } }));
     };
@@ -112,43 +113,10 @@ export const FirstModelIndicator = component$(() => {
     });
   });
 
-  // The wizard shows its own progress; the notice is for every other page.
-  if (loc.url.pathname.startsWith("/welcome")) return null;
-  if (!inFlight.value && !readyLabel.value) return null;
-
-  return (
-    <div class="fixed bottom-4 right-4 z-[60] w-72 max-w-[calc(100vw-2rem)] rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-lg p-3">
-      {readyLabel.value ? (
-        <div class="flex items-start justify-between gap-2">
-          <div>
-            <p class="text-sm font-medium text-[var(--text-primary)]">{readyLabel.value} is ready</p>
-            <p class="text-xs text-[var(--text-muted)] mt-0.5">Your AIs can answer now.</p>
-          </div>
-          <button
-            type="button"
-            class="text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
-            onClick$={() => {
-              readyLabel.value = null;
-            }}
-          >
-            Dismiss
-          </button>
-        </div>
-      ) : (
-        <>
-          <div class="flex items-center gap-2 mb-2">
-            <span class="inline-block w-2 h-2 rounded-full bg-[var(--bg-button-primary)] animate-pulse" />
-            <span class="text-sm font-medium text-[var(--text-primary)]">Downloading your first model</span>
-          </div>
-          <p class="text-xs text-[var(--text-muted)] mb-2 truncate">{inFlight.value?.label}</p>
-          <div class="w-full h-2 rounded-full bg-[var(--bg-main)] overflow-hidden">
-            <div class="h-full bg-[var(--bg-button-primary)] transition-all duration-200" style={{ width: `${percent.value ?? 0}%` }} />
-          </div>
-          <p class="text-xs text-[var(--text-muted)] mt-1">
-            {percent.value !== null ? `${percent.value}%` : "Starting.."} · your AIs answer the moment it lands
-          </p>
-        </>
-      )}
-    </div>
-  );
+  // The activity tray draws the download row and the "is ready" note; this
+  // component only owns the finish (load + assign + announce).
+  void loc;
+  void percent;
+  void readyLabel;
+  return null;
 });

@@ -3497,10 +3497,28 @@ pub async fn download_status(
 }
 
 /**
- * Download a model from Hugging Face with progress tracking
+ * Download a model from Hugging Face with progress tracking. Progress
+ * rides `model-download-progress`, the end `model-download-complete`, and a
+ * failure `model-download-failed` - the activity tray draws all three on
+ * every page, and a caller that navigated away still learns the outcome.
  */
 #[tauri::command]
 pub async fn download_model(
+    app_handle: AppHandle,
+    url: String,
+    filename: String,
+) -> Result<(), String> {
+    let result = download_model_inner(app_handle.clone(), url, filename.clone()).await;
+    if let Err(e) = &result {
+        let _ = app_handle.emit(
+            "model-download-failed",
+            serde_json::json!({ "filename": filename, "error": e }),
+        );
+    }
+    result
+}
+
+async fn download_model_inner(
     app_handle: AppHandle,
     url: String,
     filename: String,

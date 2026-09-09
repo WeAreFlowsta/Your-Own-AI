@@ -18,6 +18,16 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   ("Remembering 2 of 6: book.epub (1,240 of 3,500 pieces)"), and the log
   records pieces and seconds per document.
 
+### Everyday comfort
+- One activity card, bottom right, on every page, for everything running
+  in the background: model, engine and Projects helper downloads, the
+  documents being read with the pieces inside the current one and a Stop,
+  and the cards being written afterwards. Jobs stack as rows, a finished
+  row clears itself after a moment, and a failed one stays until dismissed.
+  Reading keeps going while the app is open, whichever page you are on,
+  and your AIs draw on each document as soon as it is in. The first model's
+  "is ready" note and the vision download show there too.
+
 ## [0.7.1] - 2026-09-07
 
 ### Highlights

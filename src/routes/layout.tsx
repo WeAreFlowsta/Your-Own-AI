@@ -11,7 +11,7 @@ import { useNavigate } from "@builder.io/qwik-city";
 import { ModeProvider } from "../contexts/ModeContext";
 import { AiDataProvider } from "../contexts/AiDataContext";
 import { VisionDownloadProvider } from "../contexts/VisionDownloadContext";
-import { VisionDownloadIndicator } from "../components/VisionDownloadIndicator";
+import { ActivityTray } from "../components/ActivityTray";
 import { FirstModelIndicator } from "../components/FirstModelIndicator";
 import { bumpLaunchCount } from "../utils/homeOffers";
 import { WorkspaceMemoryModal } from "../components/WorkspaceMemoryModal";
@@ -394,7 +394,9 @@ export default component$(() => {
       <AiDataProvider>
         <VisionDownloadProvider>
           <Slot />
-          <VisionDownloadIndicator />
+          {/* Every background job in one card: downloads, document reading,
+              card writing, and the notes features announce. */}
+          <ActivityTray />
           <FirstModelIndicator />
           {/* Root-level so no route stacking context can bury it. */}
           <WorkspaceMemoryModal folderPath={projectMemoryFolder} />

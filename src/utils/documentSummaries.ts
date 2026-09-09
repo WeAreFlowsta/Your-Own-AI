@@ -64,6 +64,27 @@ export function onDocumentSummary(cb: Listener): () => void {
   return () => listeners.delete(cb);
 }
 
+type CardProgress = (done: number, total: number, file: string) => void;
+const cardProgressListeners = new Set<CardProgress>();
+
+/** Hear the card-writing pass move: (written so far, how many, the file
+ *  being written now); done === total when the pass ends. The activity
+ *  tray draws it. */
+export function onCardProgress(cb: CardProgress): () => void {
+  cardProgressListeners.add(cb);
+  return () => cardProgressListeners.delete(cb);
+}
+
+function notifyCardProgress(done: number, total: number, file: string): void {
+  for (const cb of cardProgressListeners) {
+    try {
+      cb(done, total, file);
+    } catch {
+      /* a listener's problem */
+    }
+  }
+}
+
 /** The model that writes on this device, or null when there is none. */
 async function localWriter(): Promise<{ model?: string; preferLoaded: boolean } | null> {
   if (await isUtilityModelReady()) return { preferLoaded: false };
@@ -132,7 +153,9 @@ export function summarizePendingDocuments(): Promise<void> {
       const writer = await localWriter();
       if (!writer) return; // no model on this device yet: the next trigger tries again
       let written = 0;
+      let index = 0;
       for (const doc of pending) {
+        notifyCardProgress(index++, pending.length, doc.meta.filename);
         try {
           const card = await writeCard(doc, writer);
           if (!card) continue;
@@ -143,6 +166,7 @@ export function summarizePendingDocuments(): Promise<void> {
           console.warn(`[Library] card failed for ${doc.meta.filename}:`, e);
         }
       }
+      notifyCardProgress(pending.length, pending.length, "");
       if (written > 0) console.log(`[Library] ${written} document card(s) written on this device`);
     } catch (e) {
       console.warn("[Library] card pass skipped:", e);
