@@ -5,6 +5,29 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 
 ## [0.7.2] - 2026-09-09
 
+### Highlights
+
+- **Every real book reads in.** EPUB and HTML files with accented letters,
+  curly quotes or dashes read in, a page of dense mathematics no longer
+  fails a document, and the progress line counts the pieces inside the
+  book being remembered. See *Your documents*.
+- **One activity card for everything in the background.** Downloads, the
+  documents being read for an AI with a Stop, the cards written after,
+  and the first model's ready note, in one card on every page. Reading
+  keeps going while the app is open, whichever page you are on, and the
+  Knowledge tab and memory page follow it. See *Everyday comfort*.
+- **Fine-tune, measured first.** The dialog opens on what the model runs
+  at now, offers Measure on this computer with its cost stated, then a
+  slider from Faster answers to More room that says what each setup means
+  in pages in view and words a second. The sliders wait under Set it
+  yourself. See *Models*.
+- **Deletions hold across your computers.** A conversation deleted on one
+  machine stays deleted after a restore on another, and a very large
+  conversation the Vault does not hold yet is given the time it needs to
+  reach the backup. See *Your records*.
+- **Windows shows the real free space** on the drive that holds your
+  models, and checks it before a download. See *Models*.
+
 ### Your documents
 - EPUB and HTML files with accented letters, curly quotes or dashes read
   in. The reader walked those files byte by byte and stopped at the first
