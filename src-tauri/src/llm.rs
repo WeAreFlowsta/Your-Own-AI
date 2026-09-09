@@ -189,17 +189,64 @@ fn remember_models_dir(dir: &std::path::Path) {
     }
 }
 
+/// A canonical path in the form the disk list uses. On Windows
+/// `canonicalize` returns the verbatim form (`\\?\C:\Users\...`) while
+/// sysinfo reports the mount point as `C:\`, so no disk ever matched and
+/// Settings said "0 GB free on this drive" (Eric's box, 0.7.2-beta.4); the
+/// download's free-space check was skipped the same way. The prefix is
+/// stripped (`\\?\UNC\server\share` becomes `\\server\share`) and the
+/// comparison is case-insensitive there.
+fn comparable_path(path: &std::path::Path) -> String {
+    let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let s = canon.to_string_lossy().to_string();
+    let s = if let Some(rest) = s.strip_prefix("\\\\?\\UNC\\") {
+        format!("\\\\{rest}")
+    } else if let Some(rest) = s.strip_prefix("\\\\?\\") {
+        rest.to_string()
+    } else {
+        s
+    };
+    if cfg!(windows) { s.to_lowercase() } else { s }
+}
+
+fn mount_matches(path: &str, mount: &std::path::Path) -> bool {
+    let m = mount.to_string_lossy().to_string();
+    let m = if cfg!(windows) { m.to_lowercase() } else { m };
+    path.starts_with(&m)
+}
+
 /// (free, total) bytes of the disk holding `path`: the deepest mount point
 /// that is a prefix of it. None when the disk list gives no match.
 fn disk_space_for(path: &std::path::Path) -> Option<(u64, u64)> {
-    let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let canon = comparable_path(path);
     let disks = sysinfo::Disks::new_with_refreshed_list();
     disks
         .list()
         .iter()
-        .filter(|d| canon.starts_with(d.mount_point()))
+        .filter(|d| mount_matches(&canon, d.mount_point()))
         .max_by_key(|d| d.mount_point().as_os_str().len())
         .map(|d| (d.available_space(), d.total_space()))
+}
+
+#[cfg(test)]
+mod disk_path_tests {
+    #[test]
+    fn verbatim_prefixes_are_stripped() {
+        // The helpers are string-level, so the Windows shapes can be checked on any host.
+        let strip = |s: &str| -> String {
+            if let Some(rest) = s.strip_prefix("\\\\?\\UNC\\") {
+                format!("\\\\{rest}")
+            } else if let Some(rest) = s.strip_prefix("\\\\?\\") {
+                rest.to_string()
+            } else {
+                s.to_string()
+            }
+        };
+        assert_eq!(strip("\\\\?\\C:\\Users\\eric\\models"), "C:\\Users\\eric\\models");
+        assert_eq!(strip("\\\\?\\UNC\\nas\\share\\models"), "\\\\nas\\share\\models");
+        assert_eq!(strip("/home/solar/models"), "/home/solar/models");
+        assert!("c:\\users\\eric\\models".starts_with("c:\\"));
+    }
 }
 
 fn dir_size(path: &std::path::Path) -> u64 {

@@ -19,6 +19,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   records pieces and seconds per document.
 
 ### Models
+- On Windows, Settings shows the real free space on the drive that holds
+  your models, and the free-space check before a download runs there
+  too. The models folder's path is now matched to its drive the way
+  Windows names it.
 - Fine-tune is a small button on each model's row. The dialog opens on
   what the model runs at now and where that came from (automatic,
   measured here, or set by you), then Measure on this computer as the
