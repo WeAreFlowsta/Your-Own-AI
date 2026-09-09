@@ -138,8 +138,6 @@ export default component$<ModelTuneDialogProps>((props) => {
     return { ctx: c, moe: m, kv: k, tps: match?.gen_tps ?? null, source };
   });
 
-  const dirty = useComputed$(() => saved.value !== '' && saved.value !== JSON.stringify([ctx.value, moeN.value, draftOff.value, kv.value]));
-
   const measure = $(async () => {
     note.value = '';
     tuning.value = { done: 0, total: 1, current: 'starting' };
@@ -171,9 +169,14 @@ export default component$<ModelTuneDialogProps>((props) => {
       if (moeN.value != null && moeN.value >= 0) t.moe_cpu_layers = Math.round(moeN.value);
       if (draftOff.value) t.draft_off = true;
       if (kv.value !== 'auto') t.kv_cache = kv.value;
+      const unchanged = saved.value === (await snapshot());
       await invoke('tuning_set', { model: props.model, tuning: t });
       const reloaded = await invoke<boolean>('tuning_apply_now', { model: props.model });
       saved.value = await snapshot();
+      if (unchanged) {
+        note.value = reloaded ? 'Nothing changed. Reloaded as it was.' : 'Nothing changed.';
+        return;
+      }
       note.value = reloaded
         ? 'Reloaded with these settings.'
         : Object.keys(t).length
@@ -430,7 +433,7 @@ export default component$<ModelTuneDialogProps>((props) => {
           </LiquidMetalButton>
           <LiquidMetalButton
             class="w-full sm:w-auto inline-flex justify-center items-center px-6 py-2.5 text-base font-medium disabled:opacity-70"
-            disabled={busy.value || !dirty.value}
+            disabled={busy.value}
             onClick$={save}
           >
             {busy.value ? <LuLoader2 class="h-5 w-5 animate-spin mr-2" /> : <LuSave class="w-[18px] h-[18px] mr-2" />}
