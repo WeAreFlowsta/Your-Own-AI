@@ -1,8 +1,9 @@
-import { component$, $, useSignal, useVisibleTask$ } from '@builder.io/qwik';
+import { component$, $, useSignal, useVisibleTask$, useTask$ } from '@builder.io/qwik';
 import { readThroughWarmup } from '../utils/recordsWarmup';
 import { LuFileText, LuPlus, LuLoader2, LuUpload } from '@qwikest/icons/lucide';
 import { KnowledgeDocumentRow } from './KnowledgeDocumentRow';
 import { LibraryRereadNotice } from './LibraryRereadNotice';
+import { isServer } from '@builder.io/qwik/build';
 import { useCorpusProgress, progressText } from '../hooks/useCorpusProgress';
 import LiquidMetalButton from './LiquidMetalButton';
 import {
@@ -31,6 +32,22 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
   const error = useSignal('');
   const ready = useSignal(true);
   const progress = useCorpusProgress();
+  // Reading may have been started from the edit dialog or on an earlier
+  // visit: follow it here too, and refresh the rows as each document lands.
+  const lastDone = useSignal(-1);
+  useTask$(({ track }) => {
+    const p = track(() => progress.value);
+    if (isServer) return;
+    if (p) {
+      if (p.done !== lastDone.value) {
+        lastDone.value = p.done;
+        void listKnowledgeDocuments(props.aiId).then((d) => (docs.value = d));
+      }
+    } else if (lastDone.value >= 0) {
+      lastDone.value = -1;
+      void listKnowledgeDocuments(props.aiId).then((d) => (docs.value = d));
+    }
+  });
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async () => {
     ready.value = await isEmbeddingModelReady();
@@ -159,7 +176,7 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
         </p>
       </div>
 
-      {busy.value && progress.value && (
+      {progress.value && (
         <p class="text-xs text-[var(--text-muted)] mb-2 truncate">{progressText(progress.value)}</p>
       )}
       {error.value && (

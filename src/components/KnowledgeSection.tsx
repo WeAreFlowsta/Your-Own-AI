@@ -1,10 +1,11 @@
-import { component$, $, useSignal, useVisibleTask$, type QRL } from '@builder.io/qwik';
+import { component$, $, useSignal, useVisibleTask$, type QRL, useTask$ } from '@builder.io/qwik';
 import { LuBookOpen, LuLoader2, LuPlus, LuUpload } from '@qwikest/icons/lucide';
 import LiquidMetalButton from './LiquidMetalButton';
 import { MemoryComponentOffer } from './MemoryComponentOffer';
 import { KnowledgeDocumentRow } from './KnowledgeDocumentRow';
 import { LibraryRereadNotice } from './LibraryRereadNotice';
 import { useFileDrop } from '../hooks/useFileDrop';
+import { isServer } from '@builder.io/qwik/build';
 import { useCorpusProgress, progressText } from '../hooks/useCorpusProgress';
 import { listKnowledgeDocuments, removeKnowledgeDocument } from '../utils/transcriptMemory';
 import { isEmbeddingModelReady } from '../utils/embeddings';
@@ -35,6 +36,22 @@ export const KnowledgeSection = component$<KnowledgeSectionProps>((props) => {
   const ready = useSignal(true);
   const notice = useSignal('');
   const progress = useCorpusProgress();
+  // Reading may have been started from the memory page or on an earlier
+  // visit: follow it here too, and refresh the rows as each document lands.
+  const lastDone = useSignal(-1);
+  useTask$(({ track }) => {
+    const p = track(() => progress.value);
+    if (isServer) return;
+    if (p) {
+      if (p.done !== lastDone.value) {
+        lastDone.value = p.done;
+        void listKnowledgeDocuments(props.aiId).then((d) => (props.store.knowledgeDocs = d));
+      }
+    } else if (lastDone.value >= 0) {
+      lastDone.value = -1;
+      void listKnowledgeDocuments(props.aiId).then((d) => (props.store.knowledgeDocs = d));
+    }
+  });
 
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async ({ cleanup }) => {
@@ -156,7 +173,7 @@ export const KnowledgeSection = component$<KnowledgeSectionProps>((props) => {
         </div>
       </div>
 
-      {props.store.knowledgeBusy && progress.value && (
+      {progress.value && (
         <p class="text-xs text-[var(--text-muted)] mt-2 truncate">{progressText(progress.value)}</p>
       )}
       {notice.value && <p class="text-xs text-[var(--text-secondary)] mt-2">{notice.value}</p>}
