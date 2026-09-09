@@ -18,6 +18,24 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   ("Remembering 2 of 6: book.epub (1,240 of 3,500 pieces)"), and the log
   records pieces and seconds per document.
 
+### Models
+- Fine-tune is a small button on each model's row. The dialog opens on
+  what the model runs at now and where that came from (automatic,
+  measured here, or set by you), then Measure on this computer as the
+  main event: one sentence that says the cost, one button. After
+  measuring, a slider from Faster answers to More room, a card that
+  says what each setup means in pages in view and words a second, the
+  automatic pick marked on the scale, and one line on the trade-off.
+  The sliders live under Set it yourself. Save Changes closes the dialog
+  and the outcome shows in the activity card.
+
+### Your AIs
+- The edit dialog is headed with the AI's name, following the name field
+  as you type.
+- The Knowledge tab and the memory page show a read that is already
+  running for that AI, wherever it was started, and their rows appear as
+  each document lands.
+
 ### Everyday comfort
 - One activity card, bottom right, on every page, for everything running
   in the background: model, engine and Projects helper downloads, the
@@ -25,8 +43,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   and the cards being written afterwards. Jobs stack as rows, a finished
   row clears itself after a moment, and a failed one stays until dismissed.
   Reading keeps going while the app is open, whichever page you are on,
-  and your AIs draw on each document as soon as it is in. The first model's
-  "is ready" note and the vision download show there too.
+  and your AIs draw on each document as soon as it is in. A read names
+  the AI it is for. The first model's "is ready" note and the vision
+  download show there too.
 
 ## [0.7.1] - 2026-09-07
 
