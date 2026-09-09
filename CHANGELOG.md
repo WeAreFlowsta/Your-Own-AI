@@ -37,6 +37,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   each document lands.
 
 ### Your records
+- A conversation not yet in your Vault is given the backup's long wait to
+  read, so a very large one (a long project session) reaches the backup
+  on the first pass instead of waiting forever. One the Vault already
+  holds keeps the short wait, since its previous copy is carried.
 - A conversation deleted on one of your computers stays deleted after a
   restore on another. Each backup carries what its computer deleted, and
   a restore honors that list along with the one kept here.

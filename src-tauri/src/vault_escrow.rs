@@ -1179,8 +1179,19 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
 
             let payload =
                 ExternIO::encode(conv_hash).map_err(|e| e.to_string())?;
+            // A conversation the Vault already holds may stall at 180 s: the
+            // previous copy is carried and nothing is lost. One it does NOT
+            // hold yet gets the backup's long wait, because a stall means it
+            // is never backed up at all - the dev laptop's "yoai build 2"
+            // (1,427 entries in a 1,048-conversation cell) reads in 243 s.
+            let label_now = format!("conv-{}", &conv_hash_hex[..conv_hash_hex.len().min(24)]);
+            let entries_timeout = if sync.contains_key(&label_now) {
+                std::time::Duration::from_secs(180)
+            } else {
+                std::time::Duration::from_secs(crate::dna::BACKUP_READ_TIMEOUT_SECS)
+            };
             let result = match manager
-                .call_zome_with_timeout(&agent_key, "transcript", "get_conversation_entries", payload, std::time::Duration::from_secs(180))
+                .call_zome_with_timeout(&agent_key, "transcript", "get_conversation_entries", payload, entries_timeout)
                 .await
             {
                 Ok(r) => {
