@@ -11,6 +11,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   card on Best for this computer are right without a page refresh. The
   log records the figures each grading pass read.
 
+### Everyday comfort
+- The activity card's download row keeps its text current: the percent
+  and "x of y" move with the bar. Writing a document's card shows its
+  progress through the parts of a long document.
+
 ## [0.7.2] - 2026-09-09
 
 ### Highlights

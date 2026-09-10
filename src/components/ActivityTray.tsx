@@ -53,7 +53,10 @@ export const ActivityTray = component$(() => {
     const upsert = (id: string, patch: Partial<Row> & Pick<Row, "kind" | "title">) => {
       const i = store.rows.findIndex((r) => r.id === id);
       if (i >= 0) {
-        store.rows[i] = { ...store.rows[i], ...patch };
+        // Assign field by field: the store tracks each property, and the
+        // drawn text follows. Swapping the whole object left a row's bar
+        // moving while its "x of y" text stood still (Windows, 0.7.2).
+        Object.assign(store.rows[i], patch);
       } else {
         store.rows = [
           ...store.rows,
@@ -89,7 +92,7 @@ export const ActivityTray = component$(() => {
         percent: p.percent,
         state: "running",
         detail:
-          (p.total ? `${formatBytes(p.downloaded)} of ${formatBytes(p.total)}` : "Starting...") +
+          (p.total ? `${p.percent}% · ${formatBytes(p.downloaded)} of ${formatBytes(p.total)}` : "Starting...") +
           (isFirst ? " · your AIs answer the moment it lands" : ""),
       });
     });
@@ -148,18 +151,19 @@ export const ActivityTray = component$(() => {
     });
 
     const { onCardProgress } = await import("../utils/documentSummaries");
-    const unCards = onCardProgress((done, total, file) => {
+    const unCards = onCardProgress((done, total, file, partDone, partTotal) => {
       if (done >= total) {
         upsert("cards", { kind: "cards", title: "Writing document cards", state: "done", percent: 100, detail: `${total} card${total === 1 ? "" : "s"} written` });
         linger("cards", LINGER_MS);
         return;
       }
+      const within = partTotal ? Math.min(1, (partDone ?? 0) / partTotal) : 0;
       upsert("cards", {
         kind: "cards",
         title: "Writing document cards",
         state: "running",
-        percent: total ? Math.round((done / total) * 100) : null,
-        detail: `${done + 1} of ${total}: ${file}`,
+        percent: total ? Math.round(((done + within) / total) * 100) : null,
+        detail: `${done + 1} of ${total}: ${file}${partTotal && partTotal > 1 ? ` · part ${Math.min(partTotal, (partDone ?? 0) + 1)} of ${partTotal}` : ""}`,
       });
     });
 
@@ -300,7 +304,7 @@ export const ActivityTray = component$(() => {
               </button>
             )}
           </div>
-          {r.detail && <p class="text-xs text-[var(--text-muted)] mt-0.5 break-words">{r.detail}</p>}
+          <p class="text-xs text-[var(--text-muted)] mt-0.5 break-words">{r.detail}</p>
           {r.state === "running" && r.percent !== null && (
             <div class="w-full h-2 mt-1.5 rounded-full bg-[var(--bg-main)] overflow-hidden">
               <div class="h-full bg-[var(--bg-button-primary)] transition-all duration-200" style={{ width: `${r.percent}%` }} />

@@ -64,7 +64,7 @@ export function onDocumentSummary(cb: Listener): () => void {
   return () => listeners.delete(cb);
 }
 
-type CardProgress = (done: number, total: number, file: string) => void;
+type CardProgress = (done: number, total: number, file: string, partDone?: number, partTotal?: number) => void;
 const cardProgressListeners = new Set<CardProgress>();
 
 /** Hear the card-writing pass move: (written so far, how many, the file
@@ -75,10 +75,10 @@ export function onCardProgress(cb: CardProgress): () => void {
   return () => cardProgressListeners.delete(cb);
 }
 
-function notifyCardProgress(done: number, total: number, file: string): void {
+function notifyCardProgress(done: number, total: number, file: string, partDone?: number, partTotal?: number): void {
   for (const cb of cardProgressListeners) {
     try {
-      cb(done, total, file);
+      cb(done, total, file, partDone, partTotal);
     } catch {
       /* a listener's problem */
     }
@@ -125,7 +125,11 @@ export function sampleParts(text: string, partChars = PART_CHARS, maxParts = MAX
   return parts;
 }
 
-async function writeCard(doc: DocRecord, writer: { model?: string; preferLoaded: boolean }): Promise<string> {
+async function writeCard(
+  doc: DocRecord,
+  writer: { model?: string; preferLoaded: boolean },
+  onPart?: (done: number, total: number) => void,
+): Promise<string> {
   const { text } = await corpusDocumentText(doc.doc_id, FETCH_CHARS);
   const head = `Document: "${doc.meta.title || doc.meta.filename}"${doc.meta.author ? ` by ${doc.meta.author}` : ""}`;
   const run = (system: string, user: string, maxTokens: number) =>
@@ -134,10 +138,15 @@ async function writeCard(doc: DocRecord, writer: { model?: string; preferLoaded:
     return usable(await run(SINGLE_SYSTEM, `${head}\n\n${text}`, 160));
   }
   const notes: string[] = [];
-  for (const [i, part] of sampleParts(text).entries()) {
+  const parts = sampleParts(text);
+  // The reduce pass counts as one more step, so the bar reaches the end
+  // only when the card itself is written.
+  for (const [i, part] of parts.entries()) {
+    onPart?.(i, parts.length + 1);
     const note = (await run(PART_SYSTEM, `${head} (part ${i + 1})\n\n${part}`, 120)).trim();
     if (note) notes.push(`Part ${i + 1}: ${note}`);
   }
+  onPart?.(parts.length, parts.length + 1);
   if (notes.length === 0) return "";
   return usable(await run(REDUCE_SYSTEM, `${head}\n\nNotes about its parts:\n${notes.join("\n")}`, 160));
 }
@@ -155,9 +164,10 @@ export function summarizePendingDocuments(): Promise<void> {
       let written = 0;
       let index = 0;
       for (const doc of pending) {
-        notifyCardProgress(index++, pending.length, doc.meta.filename);
+        const at = index++;
+        notifyCardProgress(at, pending.length, doc.meta.filename);
         try {
-          const card = await writeCard(doc, writer);
+          const card = await writeCard(doc, writer, (pd, pt) => notifyCardProgress(at, pending.length, doc.meta.filename, pd, pt));
           if (!card) continue;
           await corpusSetSummary(doc.doc_id, card);
           written++;
