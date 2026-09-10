@@ -954,8 +954,8 @@ pub(crate) async fn select_gpu_device_args(app_handle: &AppHandle) -> Vec<String
 static VRAM_CACHE: std::sync::OnceLock<tokio::sync::Mutex<Option<(std::time::Instant, Option<u64>)>>> =
     std::sync::OnceLock::new();
 
-/// Forget the cached free-VRAM figure (after a load changed it).
-async fn invalidate_vram_cache() {
+/// Forget the cached free-VRAM figure (after a load or a stop changed it).
+pub(crate) async fn invalidate_vram_cache() {
     if let Some(c) = VRAM_CACHE.get() {
         *c.lock().await = None;
     }
@@ -1567,13 +1567,16 @@ pub static FORCE_RELOAD_NEXT: std::sync::atomic::AtomicBool = std::sync::atomic:
 /// Stop the running chat server for maintenance (a storage move, a tune
 /// run): the loaded model holds VRAM and its file open. The next turn
 /// reloads whatever the router asks for.
-pub(crate) async fn stop_chat_server_for_maintenance(state: &LLMState) {
+/// Returns whether a server was running (and so held the card until now).
+pub(crate) async fn stop_chat_server_for_maintenance(state: &LLMState) -> bool {
     let mut server_process = state.server_process.lock().await;
+    let was_running = server_process.is_some();
     if let Some(child) = server_process.take() {
         let _ = child.kill();
     }
     *state.is_server_running.lock().await = false;
     *state.current_model.lock().await = None;
+    was_running
 }
 
 pub async fn reload_for_engine_change(

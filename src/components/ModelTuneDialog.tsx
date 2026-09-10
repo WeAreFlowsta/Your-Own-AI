@@ -56,6 +56,25 @@ function kTokens(n: number): string {
   return n >= 1024 ? `${Math.round(n / 1024)}K` : `${n}`;
 }
 
+/** The best measured setup per context, in context order - the slider's stops. */
+function stopsFor(results: TuneResult[]): TuneResult[] {
+  const byCtx = new Map<number, TuneResult>();
+  for (const r of results) {
+    if (r.failed || !(r.gen_tps > 0)) continue;
+    const b = byCtx.get(r.ctx);
+    if (!b || r.gen_tps > b.gen_tps) byCtx.set(r.ctx, r);
+  }
+  return [...byCtx.values()].sort((a, b) => a.ctx - b.ctx);
+}
+
+/** The stop nearest a context, by distance in context size. */
+function nearestStop(stops: TuneResult[], ctx: number | null): TuneResult | undefined {
+  if (ctx == null || !stops.length) return undefined;
+  let best = stops[0];
+  for (const s of stops) if (Math.abs(s.ctx - ctx) < Math.abs(best.ctx - ctx)) best = s;
+  return best;
+}
+
 export default component$<ModelTuneDialogProps>((props) => {
   const name = props.model.replace(/\.gguf$/, '');
   const ctx = useSignal<number | null>(null);
@@ -72,6 +91,14 @@ export default component$<ModelTuneDialogProps>((props) => {
   const manualOpen = useSignal(false);
 
   const snapshot = $(() => JSON.stringify([ctx.value, moeN.value, draftOff.value, kv.value]));
+
+  /** Put the slider on the stop nearest what the model runs at now, so a
+   *  fresh table opens on the current setup rather than the smallest stop. */
+  const placeSlider = $(() => {
+    const stops = stopsFor(results.value);
+    const near = nearestStop(stops, ctx.value ?? props.autoCtx ?? null);
+    sliderPos.value = near ? stops.indexOf(near) : 0;
+  });
 
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async () => {
@@ -94,14 +121,7 @@ export default component$<ModelTuneDialogProps>((props) => {
       const p = await invoke<{ results: TuneResult[] } | null>('tune_profiles_get', { model: props.model });
       if (p?.results) {
         results.value = p.results;
-        const ok = p.results.filter((r) => !r.failed);
-        const byCtx = [...new Map(ok.map((r) => [r.ctx, r])).keys()].sort((a, b) => a - b);
-        const current = ctx.value ?? props.autoCtx;
-        if (current != null) {
-          let best = 0;
-          byCtx.forEach((c, i) => { if (Math.abs(c - current) < Math.abs(byCtx[best] - current)) best = i; });
-          sliderPos.value = best;
-        }
+        await placeSlider();
       }
     } catch { /* no profile yet */ }
   });
@@ -115,36 +135,33 @@ export default component$<ModelTuneDialogProps>((props) => {
     cleanup(() => un());
   });
 
-  /** The best measured setup per context, in context order - the slider's stops. */
-  const positions = useComputed$(() => {
-    const ok = results.value.filter((r) => !r.failed && r.gen_tps > 0);
-    const byCtx = new Map<number, TuneResult>();
-    for (const r of ok) {
-      const b = byCtx.get(r.ctx);
-      if (!b || r.gen_tps > b.gen_tps) byCtx.set(r.ctx, r);
-    }
-    return [...byCtx.values()].sort((a, b) => a.ctx - b.ctx);
-  });
+  const positions = useComputed$(() => stopsFor(results.value));
 
   /** What the model runs at now: the person's values over the automatics,
-   *  with the measured speed for that setup when there is one. */
+   *  with the measured speed for that setup when there is one, else the
+   *  nearest measured stop (named, so the line never claims a speed at a
+   *  size that was not timed). */
   const current = useComputed$(() => {
     const c = ctx.value ?? props.autoCtx ?? null;
     const m = props.isMoe ? (moeN.value ?? props.autoMoeN ?? null) : null;
     const k: Kv = kv.value;
     const ok = results.value.filter((r) => !r.failed && r.gen_tps > 0);
     const match = ok.find((r) => r.ctx === c && (m == null || r.moe_cpu_layers === m) && (k === 'auto' || r.kv_q8 === (k === 'q8_0')));
+    const near = match ? undefined : nearestStop(stopsFor(results.value), c);
     const manual = ctx.value != null || moeN.value != null || draftOff.value || kv.value !== 'auto';
     const source: 'Automatic' | 'Measured here' | 'Set by you' = !manual ? 'Automatic' : match ? 'Measured here' : 'Set by you';
-    return { ctx: c, moe: m, kv: k, tps: match?.gen_tps ?? null, source };
+    return { ctx: c, moe: m, kv: k, tps: match?.gen_tps ?? null, near: near ? { tps: near.gen_tps, ctx: near.ctx } : null, source };
   });
 
   const measure = $(async () => {
     note.value = '';
     tuning.value = { done: 0, total: 1, current: 'starting' };
     try {
-      const p = await invoke<{ results: TuneResult[] }>('tune_run', { model: props.model });
+      // The run measures the context the app reports for this model, so
+      // Automatic always has a timed row.
+      const p = await invoke<{ results: TuneResult[] }>('tune_run', { model: props.model, autoCtx: props.autoCtx ?? null });
       results.value = p.results;
+      await placeSlider();
     } catch (e) {
       note.value = `Measuring did not finish: ${e}`;
     } finally {
@@ -239,7 +256,7 @@ export default component$<ModelTuneDialogProps>((props) => {
         <div class="mt-4 flex items-center justify-between gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2">
           <p class="text-xs text-[var(--text-primary)] leading-relaxed">
             {cur.ctx != null ? `${kTokens(cur.ctx)} context` : 'Automatic context'}
-            {cur.tps != null ? ` · ${Math.round(cur.tps)} tok/s` : ''}
+            {cur.tps != null ? ` · ${Math.round(cur.tps)} tok/s` : cur.near ? ` · ~${Math.round(cur.near.tps)} tok/s measured at ${kTokens(cur.near.ctx)}` : ''}
             {props.isMoe && cur.moe != null ? (cur.moe === 0 ? ' · all on the card' : ` · ${cur.moe} expert layers in RAM`) : ''}
             {cur.kv !== 'auto' ? (cur.kv === 'q8_0' ? ' · compact cache' : ' · standard cache') : ''}
           </p>

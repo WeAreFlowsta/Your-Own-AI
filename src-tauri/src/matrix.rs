@@ -685,7 +685,7 @@ pub async fn leg_tune_bench(bin: &Path, dir: &Path, model: &str, sink: Sink<'_>)
     let size = std::fs::metadata(dir.join(model)).map_err(|e| e.to_string())?.len();
     let free = free_vram_gb(bin);
     sink(format!("free VRAM: {free:?}"));
-    let arms = arms_for(&meta, size, total_ram_gb(), free, false);
+    let arms = arms_for(&meta, size, total_ram_gb(), free, false, None);
     if arms.is_empty() {
         return Err("no arms".into());
     }

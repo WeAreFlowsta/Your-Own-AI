@@ -264,16 +264,25 @@ pub async fn tune_profiles_get(app: AppHandle, model: String) -> Result<Option<T
 /// each with the automatic expert split; at the automatic rung also the
 /// draft switched off (when one is registered) and a leaner split. Small on
 /// purpose - five loads at most.
+///
+/// `runs_at` is the context the app reports for this model (the models
+/// page's "runs at", fit's `context_runtime`, a pin included). When given
+/// it is the automatic rung: the table then always holds the setup the
+/// model actually starts with, so the Fine-tune dialog can say what
+/// Automatic runs at. Without it the planner sizes the rung itself.
 pub fn arms_for(
     meta: &crate::gguf::GgufMeta,
     size_bytes: u64,
     total_ram_gb: f64,
     free_vram_gb: Option<f64>,
     has_draft: bool,
+    runs_at: Option<u64>,
 ) -> Vec<TuneArm> {
     const LADDER: [u64; 6] = [4096, 8192, 16384, 32768, 65536, 131072];
-    let auto_ctx = crate::fit::choose_ctx(meta, size_bytes, total_ram_gb, free_vram_gb);
     let cap = if meta.context_length > 0 { meta.context_length } else { u64::MAX };
+    let auto_ctx = runs_at
+        .filter(|&c| c >= 4096 && c <= cap)
+        .unwrap_or_else(|| crate::fit::choose_ctx(meta, size_bytes, total_ram_gb, free_vram_gb));
     let i = LADDER
         .iter()
         .position(|&c| c >= auto_ctx)
@@ -533,6 +542,7 @@ pub async fn tune_run(
     app: AppHandle,
     state: State<'_, crate::llm::LLMState>,
     model: String,
+    auto_ctx: Option<u64>,
 ) -> Result<TuneProfile, String> {
     use tauri::Emitter;
     TUNE_CANCEL.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -557,13 +567,19 @@ pub async fn tune_run(
     let gpu_args = crate::llm::select_gpu_device_args(&app).await;
     // The arms are chosen for the card EMPTY: stop the chat server first,
     // then read free VRAM. Reading it first decided the arm count on a
-    // full card (dev box 09-03: "Qwen 2B: 2 arms, free VRAM 0.03").
-    crate::llm::stop_chat_server_for_maintenance(&state).await;
+    // full card (dev box 09-03: "Qwen 2B: 2 arms, free VRAM 0.03"). The
+    // figure is cached for 20 s, so a read taken while the model still
+    // held the card must be forgotten, and the driver needs a moment to
+    // give the memory back after the process goes.
+    if crate::llm::stop_chat_server_for_maintenance(&state).await {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+    crate::llm::invalidate_vram_cache().await;
     let free_vram_gb = crate::llm::available_vram_mib(&app).await.map(|m| m as f64 / 1024.0);
     let draft_file = crate::llm::model_draft_for(&models_dir, &model).map(|d| (d.draft_type, d.draft));
-    let arms = arms_for(&meta, size, total_ram_gb, free_vram_gb, draft_file.is_some());
+    let arms = arms_for(&meta, size, total_ram_gb, free_vram_gb, draft_file.is_some(), auto_ctx);
     let total = arms.len();
-    log::info!("[tune] {model}: {total} arms, free VRAM {free_vram_gb:?}");
+    log::info!("[tune] {model}: {total} arms, free VRAM {free_vram_gb:?}, runs at {auto_ctx:?}");
     let mut results = Vec::new();
     for (i, arm) in arms.into_iter().enumerate() {
         if TUNE_CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
@@ -639,7 +655,7 @@ mod tests {
     #[test]
     fn arms_include_one_compact_cache_twin() {
         let meta = crate::gguf::GgufMeta::default();
-        let arms = arms_for(&meta, 3 * 1024 * 1024 * 1024, 16.0, Some(4.0), false);
+        let arms = arms_for(&meta, 3 * 1024 * 1024 * 1024, 16.0, Some(4.0), false, None);
         let compact: Vec<_> = arms.iter().filter(|a| a.kv_q8).collect();
         assert_eq!(compact.len(), 1);
         let c = compact[0];
@@ -684,7 +700,7 @@ mod tests {
                 if discrete.is_empty() { None } else { Some(discrete.iter().map(|d| d.free_mib).sum::<u64>() as f64 / 1024.0) }
             });
         eprintln!("[matrix] tune bench free VRAM: {free_vram_gb:?}");
-        let arms = arms_for(&meta, size, 31.0, free_vram_gb, false);
+        let arms = arms_for(&meta, size, 31.0, free_vram_gb, false, None);
         assert!(!arms.is_empty());
         // The compact-cache arm and its standard twin: every matrix run
         // measures the pair, so the Auto rule's evidence is never stale.
@@ -838,7 +854,7 @@ mod tests {
     #[test]
     fn arms_cover_rungs_draft_and_leaner_split() {
         let meta = moe_meta();
-        let arms = arms_for(&meta, 4_800_000_000, 31.0, Some(2.0), true);
+        let arms = arms_for(&meta, 4_800_000_000, 31.0, Some(2.0), true, None);
         assert!(arms.len() <= 5, "small on purpose: {arms:?}");
         assert!(arms.iter().any(|a| !a.draft), "a draft-off arm exists");
         let ctxs: std::collections::HashSet<u64> = arms.iter().map(|a| a.ctx).collect();
@@ -847,9 +863,29 @@ mod tests {
     }
 
     #[test]
+    fn arms_center_on_the_context_the_app_reports() {
+        let mut meta = crate::gguf::GgufMeta::default();
+        meta.context_length = 131072;
+        // A 5 GB dense model on a 31 GB box with a small free-VRAM figure:
+        // the planner alone would size the rung low, but the app says it
+        // runs at 128K, so 128K is the automatic rung (with one below).
+        let arms = arms_for(&meta, 5_000_000_000, 31.0, Some(2.0), false, Some(131072));
+        let ctxs: std::collections::HashSet<u64> = arms.iter().map(|a| a.ctx).collect();
+        assert!(ctxs.contains(&131072), "the reported context is measured: {ctxs:?}");
+        assert!(ctxs.contains(&65536), "and the rung below: {ctxs:?}");
+        assert!(arms.iter().any(|a| a.kv_q8 && a.ctx == 131072), "the compact twin sits at the automatic rung");
+        // Past the trained limit or below the floor the figure is ignored.
+        meta.context_length = 32768;
+        let arms = arms_for(&meta, 5_000_000_000, 31.0, Some(2.0), false, Some(131072));
+        assert!(arms.iter().all(|a| a.ctx <= 32768), "inside the trained limit: {arms:?}");
+        let arms = arms_for(&meta, 5_000_000_000, 31.0, Some(2.0), false, Some(1024));
+        assert!(arms.iter().all(|a| a.ctx >= 4096), "never below the floor: {arms:?}");
+    }
+
+    #[test]
     fn arms_for_dense_have_no_moe_field() {
         let meta = crate::gguf::GgufMeta { n_layers: 32, context_length: 16384, ..Default::default() };
-        let arms = arms_for(&meta, 5_000_000_000, 31.0, Some(8.0), false);
+        let arms = arms_for(&meta, 5_000_000_000, 31.0, Some(8.0), false, None);
         assert!(arms.iter().all(|a| a.moe_cpu_layers.is_none()));
         assert!(arms.iter().all(|a| !a.draft));
     }

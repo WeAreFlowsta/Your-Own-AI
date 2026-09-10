@@ -10,6 +10,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   downloaded model has finished loading, so a new download's row and its
   card on Best for this computer are right without a page refresh. The
   log records the figures each grading pass read.
+- Fine-tune measures the context the model runs at, so the status line
+  shows Automatic's speed as soon as the measurement finishes. The run
+  reads the card's free memory fresh after the chat model has left it,
+  and the slider opens on the stop nearest the current setup. When the
+  exact setup was not timed, the line names the nearest measured stop.
 
 ### Everyday comfort
 - The activity card's download row keeps its text current: the percent
