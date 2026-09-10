@@ -1005,6 +1005,13 @@ async fn chat_completions(
         if current.as_deref() != Some(ai.model.as_str()) || engine_flip {
             if agent_turn {
                 crate::llm::FORCE_GGUF_NEXT_LOAD.store(true, std::sync::atomic::Ordering::SeqCst);
+                // The session was told a window at open; the model that
+                // serves its turns must hold it, or the agent compacts
+                // too late and the server refuses the turn.
+                let want = crate::agent_bridge::AGENT_WINDOW.load(std::sync::atomic::Ordering::SeqCst);
+                if want > 0 {
+                    crate::llm::hold_window_for_next_load(&app, &ai.model, want).await;
+                }
             }
             if engine_flip && current.as_deref() == Some(ai.model.as_str()) {
                 // Same model, wrong engine: stop the MLX server so the
@@ -1038,6 +1045,18 @@ async fn chat_completions(
                     break;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+            if agent_turn {
+                let want = crate::agent_bridge::AGENT_WINDOW.load(std::sync::atomic::Ordering::SeqCst);
+                let have = crate::llm::current_ctx_size() as u64;
+                if want > 0 && have < want {
+                    log::warn!(
+                        "[agent] '{}' serves the session at {have} tokens; the session was told {want} - its compaction will trip late",
+                        ai.model
+                    );
+                } else if want > 0 {
+                    log::info!("[agent] '{}' serves the session at {have} tokens (told {want})", ai.model);
+                }
             }
         }
     }

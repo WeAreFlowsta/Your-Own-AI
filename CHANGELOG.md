@@ -16,6 +16,14 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   and the slider opens on the stop nearest the current setup. When the
   exact setup was not timed, the line names the nearest measured stop.
 
+### Projects
+- A project session's context window is the window of the model that
+  serves its agent turns, sized the way the loader sizes it, and a model
+  switch for an agent turn loads with at least that window when the
+  machine holds it. The log shows the window the session was told and
+  the window the server has. A turn that ends on an error no longer
+  shows its last command as still running.
+
 ### Records
 - Opening a conversation from the drawer is written to the app log end to
   end: which AI it matched and how, what the records answered (entries,

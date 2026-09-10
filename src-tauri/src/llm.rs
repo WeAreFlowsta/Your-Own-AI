@@ -1342,6 +1342,57 @@ pub async fn ensure_context(
 /// fit of `filename`. Free VRAM right now excludes what the running model
 /// holds; a reload frees it, so that footprint (at context `have`) is
 /// handed back before judging.
+/// The window `filename` serves at if the loader took it now: the running
+/// window when it is the loaded model, else the loader's own sizing (a
+/// fine-tune pin, else `choose_ctx` on the same free-VRAM figure the
+/// loader reads). Returns (window, loaded now). The agent bridge
+/// advertises this so a session's window is the SERVING model's, not the
+/// one that happened to be loaded when the session opened (field 09-10:
+/// a session told 128K by the chat model; the agent pick loaded at 16K).
+pub(crate) async fn window_if_loaded(app: &AppHandle, filename: &str) -> Option<(u64, bool)> {
+    let state = app.state::<LLMState>();
+    let loaded = state.current_model.lock().await.clone();
+    if loaded.as_deref() == Some(filename) && *state.is_server_running.lock().await {
+        return Some((current_ctx_size() as u64, true));
+    }
+    let path = get_models_dir(app).ok()?.join(filename);
+    let meta = crate::gguf::read_meta(&path).ok()?;
+    let size = crate::fit::model_bytes_on_disk(&path, &meta);
+    let sys = sysinfo::System::new_with_specifics(
+        sysinfo::RefreshKind::nothing().with_memory(sysinfo::MemoryRefreshKind::everything()),
+    );
+    let total_ram_gb = sys.total_memory() as f64 / (1024.0 * 1024.0 * 1024.0);
+    let free_vram_gb = available_vram_mib(app).await.map(|mib| mib as f64 / 1024.0);
+    Some((crate::fit::pinned_or_chosen_ctx(app, filename, &meta, size, total_ram_gb, free_vram_gb), false))
+}
+
+/// Before a load that will serve an agent session: ask the loader for at
+/// least the window the session was told, when this reading says the
+/// machine holds it for `filename`. Says in the log either way.
+pub(crate) async fn hold_window_for_next_load(app: &AppHandle, filename: &str, want: u64) -> Option<u64> {
+    let path = get_models_dir(app).ok()?.join(filename);
+    let meta = crate::gguf::read_meta(&path).ok()?;
+    let size = crate::fit::model_bytes_on_disk(&path, &meta);
+    let sys = sysinfo::System::new_with_specifics(
+        sysinfo::RefreshKind::nothing().with_memory(sysinfo::MemoryRefreshKind::everything()),
+    );
+    let total_ram_gb = sys.total_memory() as f64 / (1024.0 * 1024.0 * 1024.0);
+    let free_vram_gb = available_vram_mib(app).await.map(|mib| mib as f64 / 1024.0);
+    match crate::fit::ctx_for_need(&meta, size, total_ram_gb, free_vram_gb, want) {
+        Some(rung) => {
+            MIN_CTX_NEXT_LOAD.store(rung as u32, std::sync::atomic::Ordering::SeqCst);
+            log::info!("[agent] '{filename}' loads with at least the session's {want}-token window (rung {rung})");
+            Some(rung)
+        }
+        None => {
+            log::warn!(
+                "[agent] '{filename}' cannot hold the session's {want}-token window by this reading (free VRAM {free_vram_gb:?} GB) - the loader sizes it itself"
+            );
+            None
+        }
+    }
+}
+
 async fn fit_inputs(
     app_handle: &AppHandle,
     filename: &str,

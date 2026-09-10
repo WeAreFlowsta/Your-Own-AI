@@ -1093,13 +1093,41 @@ fn select_online_agent_slot(
 /// (compaction must fire before a real 16k window overflows); online
 /// serving takes the catalog's number - Sol is a million-token model, and
 /// believing a local 16k there compacted constantly for nothing.
-pub async fn agent_serving_context(
+/// The window of the model that will serve this AI's agent turns LOCALLY:
+/// a pinned local file, else the agent pick for this kind of work (the
+/// same pick the first agent turn makes), sized the way the loader will
+/// size it. The running window only when that model is the loaded one.
+async fn local_agent_window(app: &AppHandle, ai_model: &str, plan: bool) -> u64 {
+    let running = crate::llm::current_ctx_size() as u64;
+    let serving = if ai_model.ends_with(".gguf") {
+        Some(ai_model.to_string())
+    } else {
+        pick_offline(app, if plan { "reasoning" } else { "code" }, "balanced", true).await.ok()
+    };
+    let Some(name) = serving else { return running };
+    match crate::llm::window_if_loaded(app, &name).await {
+        Some((w, loaded)) => {
+            log::info!(
+                "[agent] {} window {w} from '{name}' ({})",
+                if plan { "planning" } else { "agent" },
+                if loaded { "loaded now" } else { "sized as the loader will on the first agent turn" }
+            );
+            w
+        }
+        None => running,
+    }
+}
+
+/// `agent_serving_context` with whether the figure is a LOCAL window (the
+/// inference server holds a local load to it when the model switches for
+/// an agent turn); an online model's window is never held locally.
+pub async fn agent_serving_window(
     app: &AppHandle,
     ai_model: &str,
     eagerness: &str,
     plan: bool,
-) -> u64 {
-    let local = crate::llm::current_ctx_size() as u64;
+) -> (u64, bool) {
+    let local = local_agent_window(app, ai_model, plan).await;
     let catalog_ctx = |models: &[crate::flowsta::OnlineModel], id: &str| -> Option<u64> {
         models
             .iter()
@@ -1110,16 +1138,16 @@ pub async fn agent_serving_context(
     if ai_model.starts_with("online:") {
         if let Ok(models) = crate::flowsta::list_online_models().await {
             if let Some(c) = catalog_ctx(&models, ai_model) {
-                return c;
+                return (c, false);
             }
         }
-        return local;
+        return (local, true);
     }
     let Some(mode) = ai_model.strip_prefix("auto:") else {
-        return local; // pinned local model (or external server): local truth
+        return (local, true); // pinned local model (or external server): local truth
     };
     if mode != "online-offline" {
-        return local;
+        return (local, true);
     }
     // Mirror route_inner's agent branch: privacy with a capable local model
     // serves locally; otherwise the Agent/Planning slot chain decides.
@@ -1133,7 +1161,7 @@ pub async fn agent_serving_context(
     if (normalize_share(eagerness) == "local" || store_pref(app, "routingProjectThrifty").as_deref() == Some("1"))
         && offline_ok
     {
-        return local;
+        return (local, true);
     }
     if let Ok(models) = crate::flowsta::list_online_models().await {
         let pref = if plan {
@@ -1148,11 +1176,11 @@ pub async fn agent_serving_context(
         };
         if let Some(id) = select_online_agent_slot(&models, pref.as_deref(), if plan { "plan" } else { "agent" }) {
             if let Some(c) = catalog_ctx(&models, &id) {
-                return c;
+                return (c, false);
             }
         }
     }
-    local
+    (local, true)
 }
 
 /// Should simple project side-work (explore subagents) run on the device?

@@ -1883,18 +1883,24 @@ export function useAgentSession(props: UseAgentSessionProps) {
       if (!props.chatState.isLoading) return;
       void stampChecks(turnId.value, state.folderPath);
       mutateTurn((m) => {
-        let log = (m.agentLog ?? []).map((i) =>
-          i.type === "action" &&
-          (i.action.status === "in_progress" || i.action.status === "pending")
-            ? {
-                ...i,
-                action: {
-                  ...i.action,
-                  status: errorText ? ("failed" as const) : ("completed" as const),
-                },
-              }
-            : i,
-        );
+        let log = (m.agentLog ?? []).map((i) => {
+          if (i.type !== "action") return i;
+          const open = i.action.status === "in_progress" || i.action.status === "pending";
+          // A turn that died mid-command: its foreground steps are over,
+          // whatever their logs were saying - the stub must not read
+          // "still running" under the error. Backgrounded tasks keep
+          // their line; the tailer clears it when the log goes quiet.
+          const dropLive = !!errorText && !i.action.waitFor?.length && i.action.liveLine !== undefined;
+          if (!open && !dropLive) return i;
+          return {
+            ...i,
+            action: {
+              ...i.action,
+              status: open ? (errorText ? ("failed" as const) : ("completed" as const)) : i.action.status,
+              liveLine: dropLive ? undefined : i.action.liveLine,
+            },
+          };
+        });
         // The turn's last words ARE the answer: promote the last spoken
         // passage into the bubble body (content goes "" -> answer exactly
         // once - it must never shrink). WHEREVER it sits: a turn that speaks

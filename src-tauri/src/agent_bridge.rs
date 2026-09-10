@@ -19,6 +19,12 @@ use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 use tokio::sync::Mutex;
 
+/// The window the open session was told, when it is a LOCAL one; 0 when
+/// the session serves online or no session is open. The inference server
+/// holds a local load to it when the model switches for an agent turn, so
+/// the agent's compaction and the server's window agree.
+pub static AGENT_WINDOW: AtomicU64 = AtomicU64::new(0);
+
 /// Milliseconds since the current agent process spawned (0 if unknown).
 fn startup_ms(app: &AppHandle) -> u128 {
     app.state::<AgentBridgeState>()
@@ -110,7 +116,7 @@ fn ensure_agent_model_entry(
     let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
     let header = format!("[model.{}]", slug);
     // context_window must be the SERVING model's true window (resolved by
-    // router::agent_serving_context): the agent compacts as it approaches
+    // router::agent_serving_window): the agent compacts as it approaches
     // this number. Too big for a local model = truncation ("Internal
     // error" after eight good calls); the local number for an online model
     // = compacting constantly inside a million-token window.
@@ -413,16 +419,18 @@ pub async fn start_build_agent(
             }
         }
         let eag = eagerness.as_deref().unwrap_or("balanced");
-        let (agent_ctx, plan_ctx) = match ai_model.as_deref() {
-            Some(m) => (
-                crate::router::agent_serving_context(&app_handle, m, eag, false).await,
-                crate::router::agent_serving_context(&app_handle, m, eag, true).await,
-            ),
+        let (agent_ctx, plan_ctx, local_window) = match ai_model.as_deref() {
+            Some(m) => {
+                let (a, local) = crate::router::agent_serving_window(&app_handle, m, eag, false).await;
+                let (p, _) = crate::router::agent_serving_window(&app_handle, m, eag, true).await;
+                (a, p, local)
+            }
             None => {
                 let l = crate::llm::current_ctx_size() as u64;
-                (l, l)
+                (l, l, true)
             }
         };
+        AGENT_WINDOW.store(if local_window { agent_ctx } else { 0 }, Ordering::SeqCst);
         let device_workers = crate::router::device_subagents_enabled(&app_handle).await;
         // The AI's own model setting is the consent to go online: a pinned
         // online model or Auto - Online and Offline may reach the web; every
@@ -936,6 +944,7 @@ pub async fn set_agent_permission_mode(
 #[tauri::command]
 pub async fn stop_build_agent(state: State<'_, AgentBridgeState>) -> Result<(), String> {
     *state.session_id.lock().await = None;
+    AGENT_WINDOW.store(0, Ordering::SeqCst);
     *state.folder.lock().await = None;
     // The workspace is the override's scope - closing it ends the session
     // pick a user accepted from an overload offer.
