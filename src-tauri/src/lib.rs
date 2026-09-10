@@ -700,6 +700,7 @@ pub fn run() {
             commands_holochain::holochain_ready,
             commands_holochain::get_conversations,
             commands_holochain::get_conversation_transcript,
+            commands_holochain::ui_log,
             commands_holochain::get_ai_holochain_status,
             commands_holochain::purge_ai_app,
             commands_holochain::save_text_download,

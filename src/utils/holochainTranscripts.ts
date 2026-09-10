@@ -9,6 +9,7 @@
  * these functions fail silently — chat always works.
  */
 import { invoke } from "@tauri-apps/api/core";
+import { uiLog } from "./uiLog";
 import type {
   HolochainConversation,
   HolochainTranscriptEntry,
@@ -239,6 +240,7 @@ export async function getTranscript(
     );
   } catch (e) {
     console.warn("[Holochain] Failed to get transcript:", e);
+    uiLog(`transcript ${agentKey.slice(0, 8)}../${conversationHash.slice(0, 12)}.. read threw: ${String(e).slice(0, 200)}`, "warn");
     return [];
   }
 }

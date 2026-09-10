@@ -1253,7 +1253,18 @@ pub async fn get_conversation_transcript(
     conversation_hash: String,
     hc_state: State<'_, Arc<HolochainState>>,
 ) -> Result<Vec<TranscriptEntryInfo>, String> {
+    // Every way this read comes back empty is logged: an empty answer opens
+    // as a blank conversation with a banner, and the log has to say which
+    // of the three causes it was (field 09-10: the drawer click that only
+    // switched the AI).
+    let t0 = std::time::Instant::now();
+    let who = format!(
+        "{}../{}..",
+        &agent_key[..8.min(agent_key.len())],
+        &conversation_hash[..12.min(conversation_hash.len())]
+    );
     if !hc_state.get()?.is_provisioned(&agent_key).await {
+        log::warn!("[records] transcript {who}: agent key not provisioned on this conductor - empty answer");
         return Ok(vec![]);
     }
 
@@ -1266,13 +1277,18 @@ pub async fn get_conversation_transcript(
 
     let result = hc_state.get()?
         .call_zome(&agent_key, "transcript", "get_conversation_entries", payload)
-        .await?;
+        .await
+        .map_err(|e| {
+            log::warn!("[records] transcript {who}: read failed after {} ms: {e}", t0.elapsed().as_millis());
+            e
+        })?;
 
     let records: Vec<holochain_types::prelude::Record> = ExternIO::decode(&result)
         .map_err(|e| format!("Failed to decode transcript: {}", e))?;
 
     let data_key = hc_state.get()?.data_key()?;
     let mut entries = Vec::new();
+    let mut skipped = 0usize;
     // Grounding annotations recorded after their message (on-demand "Verify
     // sources"), merged into the target message below. Records arrive
     // timestamp-sorted, so applying in order leaves the latest annotation.
@@ -1280,9 +1296,10 @@ pub async fn get_conversation_transcript(
     for record in records.iter() {
         if let Some(entry) = record.entry().as_option() {
             if let Some(app_bytes) = entry.as_app_entry() {
-                let Ok(ee) = rmp_serde::from_slice::<EncryptedEntryRaw>(app_bytes.as_ref().bytes()) else { continue };
+                let Ok(ee) = rmp_serde::from_slice::<EncryptedEntryRaw>(app_bytes.as_ref().bytes()) else { skipped += 1; continue };
                 let Ok(plain_bytes) = crate::transcript_crypto::decrypt(&data_key, &ee.nonce, &ee.cipher) else {
                     log::warn!("Failed to decrypt a transcript entry (wrong key?)");
+                    skipped += 1;
                     continue;
                 };
                 // A grounding annotation (not a message) carries the marker.
@@ -1302,6 +1319,7 @@ pub async fn get_conversation_transcript(
                             err,
                             String::from_utf8_lossy(&plain_bytes[..plain_bytes.len().min(120)])
                         );
+                        skipped += 1;
                         continue;
                     }
                 };
@@ -1346,7 +1364,27 @@ pub async fn get_conversation_transcript(
     // Content-level ordering (sequence lives inside the ciphertext).
     entries.sort_by_key(|e| e.sequence);
 
+    let ms = t0.elapsed().as_millis();
+    if entries.is_empty() {
+        log::warn!("[records] transcript {who}: {} records, {skipped} skipped, 0 entries in {ms} ms - empty answer", records.len());
+    } else {
+        log::info!("[records] transcript {who}: {} entries from {} records ({skipped} skipped) in {ms} ms", entries.len(), records.len());
+    }
     Ok(entries)
+}
+
+/// A line from the webview into the app log, so what a person saw (a
+/// conversation that would not open, a dead click) sits next to what the
+/// records answered. Diagnostics reports carry the log; the browser
+/// console never leaves the machine.
+#[tauri::command]
+pub fn ui_log(level: String, line: String) {
+    let line: String = line.chars().take(600).collect();
+    match level.as_str() {
+        "warn" => log::warn!("[ui] {line}"),
+        "error" => log::error!("[ui] {line}"),
+        _ => log::info!("[ui] {line}"),
+    }
 }
 
 

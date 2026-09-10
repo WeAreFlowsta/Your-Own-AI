@@ -16,6 +16,13 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   and the slider opens on the stop nearest the current setup. When the
   exact setup was not timed, the line names the nearest measured stop.
 
+### Records
+- Opening a conversation from the drawer is written to the app log end to
+  end: which AI it matched and how, what the records answered (entries,
+  records read, anything skipped, the time taken), and what the page
+  did with it. An empty answer says which of its causes it was. The
+  diagnostics report carries these lines.
+
 ### Everyday comfort
 - The activity card's download row keeps its text current: the percent
   and "x of y" move with the bar. Writing a document's card shows its

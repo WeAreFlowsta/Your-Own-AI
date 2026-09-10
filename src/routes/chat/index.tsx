@@ -22,6 +22,7 @@ import { useAgentSession, readRecentFolders, resolveBinaryPath } from "../../hoo
 import { permissionModeForTools, setPermissionModeForTools, type AgentPermissionMode } from "../../utils/agentPermissions";
 import { ConversationsDrawer } from "../../components/ConversationsDrawer";
 import { loadModelBounded } from "../../utils/loadModelBounded";
+import { uiLog } from "../../utils/uiLog";
 import {
   listAllConversations,
   listAllConversationsCached,
@@ -422,14 +423,17 @@ export default component$(() => {
   const resumeGeneration = useSignal(0);
   const resumeConversation = $(
     async (target: { hash: string; agentKey: string; aiId?: string; title?: string }) => {
+      const who = `${target.agentKey.slice(0, 8)}../${target.hash.slice(0, 12)}..`;
       if (chatState.isLoading) {
         console.warn("[Resume] ignored: a reply is still in flight");
+        uiLog(`resume ${who} ignored: a reply is still in flight`, "warn");
         return;
       }
       // A click while an earlier open is still reading (a slow records read
       // can take a minute) SUPERSEDES it - a second click must never be a
       // dead click. The older open checks its generation before applying.
       const gen = ++resumeGeneration.value;
+      const t0 = Date.now();
       // Visible state FIRST - everything below can take seconds.
       openingTitle.value = target.title ?? null;
       resumeState.value = emptyMayBeWarmup() ? "warming" : "opening";
@@ -445,6 +449,9 @@ export default component$(() => {
           dynamicModelOptions.value.find((o) => o.id === target.aiId) ??
           selectedAi.value;
         selectedAi.value = ai;
+        uiLog(`resume ${who} "${(target.title ?? "").slice(0, 40)}" -> ${ai.label} (matched by ${
+          ai.aiConfig?.agentPubKey === target.agentKey ? "agent key" : ai.id === target.aiId ? "AI id" : "current AI"
+        })`);
         resetChat();
         // A resume fired right after launch (the Memory-page handoff or the
         // hero Continue line) can outrun the conductor - reads would come
@@ -466,8 +473,15 @@ export default component$(() => {
           openingTitle.value = null;
         }
       }
-      if (resumeGeneration.value !== gen) return; // superseded by a newer click
+      if (resumeGeneration.value !== gen) {
+        uiLog(`resume ${who}: superseded by a newer click after ${Date.now() - t0} ms`);
+        return; // superseded by a newer click
+      }
       const { messages, nextSequence, folderPath } = loaded;
+      uiLog(
+        `resume ${who}: ${messages.length} messages in ${Date.now() - t0} ms${messages.length === 0 ? " - banner shown, chat left empty" : ""}`,
+        messages.length === 0 ? "warn" : "info",
+      );
       if (messages.length > 0) noteRecordsSeen();
       if (messages.length === 0) {
         // The read didn't answer (slow or unwell records cell) - say so.
