@@ -592,6 +592,12 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     } catch (e) {
       console.error('[ModelDownloader] Failed to load model:', e);
     }
+    // Grade again now that the engine has settled on the new model: the
+    // pass above ran with the previous model as the incumbent, so the new
+    // row and the picks reflected that moment (Windows, 0.7.2: a just-
+    // downloaded 12B read "too large" and its card kept its Download
+    // button until a page refresh).
+    await loadModels();
 
     store.successMessage = displayName;
     if (isMedicalSpecialist(filename) && !medicalPromptDone()) {

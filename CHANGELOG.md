@@ -3,6 +3,14 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.7.3] - unreleased
+
+### Models
+- The Offline Models page grades its rows and picks again once a
+  downloaded model has finished loading, so a new download's row and its
+  card on Best for this computer are right without a page refresh. The
+  log records the figures each grading pass read.
+
 ## [0.7.2] - 2026-09-09
 
 ### Highlights

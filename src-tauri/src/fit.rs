@@ -579,6 +579,7 @@ pub async fn figures_slot_free(app: &AppHandle, dir: &std::path::Path) -> Machin
     // every "runs at", and the Auto split label (fit-truth 09-01, round
     // 4). The calibration file holds what the last healthy load actually
     // took; use it when it exists.
+    let incumbent_name = incumbent.clone();
     let reclaim_gb = incumbent
         .and_then(|name| {
             if let Some(measured) = crate::llm::moe_calibration_read(app, &name)
@@ -619,7 +620,21 @@ pub async fn figures_slot_free(app: &AppHandle, dir: &std::path::Path) -> Machin
             Some(need)
         })
         .unwrap_or(0.0);
+    let raw_vram = free_vram_gb;
     let (free_vram_gb, free_ram_gb) = reclaim_adjust(free_vram_gb, free_ram_gb, reclaim_gb);
+    // The figures every grade on the page came from - so a grade that
+    // flips between two visits can be explained from the log.
+    log::info!(
+        "[fit] figures: free VRAM {} GB{}, free RAM {:.1} of {:.1} GB",
+        raw_vram.map(|v| format!("{v:.1}")).unwrap_or_else(|| "none".into()),
+        if reclaim_gb > 0.0 {
+            format!(" + {:.1} credited for {}", reclaim_gb, incumbent_name.as_deref().unwrap_or("the running model"))
+        } else {
+            String::new()
+        },
+        free_ram_gb,
+        total_ram_gb
+    );
     MachineFigures { total_ram_gb, avail_ram_gb: free_ram_gb, free_vram_gb }
 }
 
