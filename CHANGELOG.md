@@ -3,7 +3,7 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
-## [0.7.3] - 2026-09-10
+## [0.7.3] - 2026-09-11
 
 ### Models
 - The Offline Models page grades its rows and picks again once a
