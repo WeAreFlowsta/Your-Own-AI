@@ -25,6 +25,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   shows its last command as still running.
 
 ### Records
+- A conversation opened from the drawer stays open: the chat is cleared
+  before the records are read, never after them, so the first open after
+  launch shows its messages like every later one.
 - Opening a conversation from the drawer is written to the app log end to
   end: which AI it matched and how, what the records answered (entries,
   records read, anything skipped, the time taken), and what the page

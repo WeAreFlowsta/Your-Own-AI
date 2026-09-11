@@ -452,7 +452,12 @@ export default component$(() => {
         uiLog(`resume ${who} "${(target.title ?? "").slice(0, 40)}" -> ${ai.label} (matched by ${
           ai.aiConfig?.agentPubKey === target.agentKey ? "agent key" : ai.id === target.aiId ? "AI id" : "current AI"
         })`);
-        resetChat();
+        // AWAITED: resetChat is a lazy closure. Unawaited, its first call
+        // after launch loads its chunk while the transcript read (tens of
+        // ms) completes - the reset then lands AFTER the messages and wipes
+        // them (Windows beta.1, 09-11: "2 messages in 17 ms", blank chat;
+        // the next click, chunk cached, opened fine).
+        await resetChat();
         // A resume fired right after launch (the Memory-page handoff or the
         // hero Continue line) can outrun the conductor - reads would come
         // back empty and the conversation would look blank or unanswered.
