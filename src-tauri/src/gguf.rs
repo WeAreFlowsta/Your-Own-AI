@@ -77,6 +77,12 @@ pub struct GgufMeta {
     /// (None = the template declares no such channel). Read from the
     /// template, never from the model's name.
     pub tool_call_marker: Option<&'static str>,
+    /// The end-of-turn marker this model's own chat template closes an
+    /// assistant turn with (None = none of the known closers appears).
+    /// Read from the template, never from the model's name: it joins the
+    /// stop list so a model whose closer the engine does not treat as an
+    /// end token cannot leak it as text ("<turn|>" on the memory page).
+    pub turn_end_marker: Option<&'static str>,
     /// Bytes of the token-embedding table - the engine keeps it in system
     /// memory even under full offload, so it never costs the card.
     pub embd_bytes: u64,
@@ -556,6 +562,7 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
         template_reasoning_strength: false,
         template_enable_thinking: false,
         tool_call_marker: None,
+        turn_end_marker: None,
         embd_bytes: 0,
         expert_bytes_per_layer: Vec::new(),
         non_expert_bytes: 0,
@@ -604,6 +611,12 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
             const TOOL_CALL_OPENERS: [&str; 4] =
                 ["<|tool_call_start|>", "<|tool▁calls▁begin|>", "<|tool_call|>", "<tool_call>"];
             m.tool_call_marker = TOOL_CALL_OPENERS.iter().copied().find(|o| tpl.contains(o));
+            // The closer this template ends an assistant turn with, across
+            // the formats we ship (Gemma 4's "<turn|>", Gemma 2/3's
+            // "<end_of_turn>", ChatML, Llama 3, Phi). Matched against the
+            // template itself, per format, never per model name.
+            const TURN_CLOSERS: [&str; 5] = ["<turn|>", "<end_of_turn>", "<|im_end|>", "<|eot_id|>", "<|end|>"];
+            m.turn_end_marker = TURN_CLOSERS.iter().copied().find(|c| tpl.contains(c));
             m.template_reasoning_strength = tpl.contains("reasoning_strength");
             m.template_enable_thinking = tpl.contains("enable_thinking");
         } else if key == "general.architecture" && vtype == 8 {

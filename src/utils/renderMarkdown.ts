@@ -26,8 +26,20 @@ marked.use(
 /**
  * Render markdown text to styled HTML string.
  */
+/** Turn delimiters a local model can emit as text when the engine does
+ *  not treat its closer as an end token (Gemma 4's "<turn|>" on the memory
+ *  page, 09-11). Generation stops on them now; this trims one that already
+ *  sits in recorded text. Mirrors llm.rs TURN_MARKERS. */
+const TURN_MARKERS = ["<turn|>", "<|turn>", "<end_of_turn>", "<start_of_turn>", "<|im_end|>", "<|im_start|>", "<|eot_id|>", "<|end|>"];
+
+export function stripTurnMarkers(text: string): string {
+  let out = text;
+  for (const m of TURN_MARKERS) if (out.includes(m)) out = out.split(m).join("");
+  return out;
+}
+
 export function renderMarkdown(text: string): string {
-  let html = marked.parse(text) as string;
+  let html = marked.parse(stripTurnMarkers(text)) as string;
   // Add styled classes to elements
   html = html
     .replace(/<p>/g, '<p class="mb-3 last:mb-0">')

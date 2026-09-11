@@ -9,6 +9,7 @@
  *    back here instead of duplicating the controls.
  */
 import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
+import { stripTurnMarkers } from "../utils/renderMarkdown";
 import { readThroughWarmup } from "../utils/recordsWarmup";
 import { getLibraryPortrait, refreshLibraryPortrait, summarizePendingDocuments } from "../utils/documentSummaries";
 import { Link } from "@builder.io/qwik-city";
@@ -249,13 +250,13 @@ export default component$<ProfileMemoryProps>(
               <>
                 {synthesis.value && (
                   <p class="mt-2 text-sm text-[var(--text-secondary)] leading-relaxed">
-                    {synthesis.value}
+                    {stripTurnMarkers(synthesis.value)}
                   </p>
                 )}
                 {library.value && (
                   <p class="mt-2 text-sm text-[var(--text-secondary)] leading-relaxed">
                     <span class="text-[var(--text-muted)]">From your documents: </span>
-                    {library.value}
+                    {stripTurnMarkers(library.value)}
                   </p>
                 )}
                 <p class="mt-2 text-[11px] text-[var(--text-muted)]">

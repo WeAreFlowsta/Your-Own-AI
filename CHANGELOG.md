@@ -24,6 +24,13 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   the window the server has. A turn that ends on an error no longer
   shows its last command as still running.
 
+### Models
+- A model's own end-of-turn marker, read from its chat template, joins
+  the stop list for every local request, the memory portrait and
+  document cards included, so a marker the engine does not treat as an
+  end token no longer appears as text. One already in stored text is
+  trimmed on display.
+
 ### Records
 - A conversation opened from the drawer stays open: the chat is cleared
   before the records are read, never after them, so the first open after

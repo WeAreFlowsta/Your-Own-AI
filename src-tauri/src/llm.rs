@@ -780,8 +780,36 @@ pub(crate) fn contains_channel_marker(text: &str) -> bool {
     CHANNEL_MARKERS.iter().any(|(open, _)| text.contains(open))
 }
 
+/// Turn delimiters across the formats we ship. A model whose closer the
+/// engine does not treat as an end token can emit it as text; the stop
+/// list catches it on generation and this strips one that already sits
+/// in stored text (a portrait, a card, a recorded reply).
+pub(crate) const TURN_MARKERS: [&str; 8] = [
+    "<turn|>", "<|turn>",               // Gemma 4
+    "<end_of_turn>", "<start_of_turn>", // Gemma 2/3
+    "<|im_end|>", "<|im_start|>",       // ChatML (Qwen, DeepSeek)
+    "<|eot_id|>",                       // Llama 3
+    "<|end|>",                          // Phi
+];
+
+pub(crate) fn strip_turn_markers(text: &str) -> String {
+    let mut out = text.to_string();
+    for m in TURN_MARKERS {
+        if out.contains(m) {
+            out = out.replace(m, "");
+        }
+    }
+    out
+}
+
 pub(crate) fn chat_stop_strings(model_name: &str) -> serde_json::Value {
     chat_stop_strings_with(model_name, tool_marker_for_current(model_name))
+}
+
+/// The template-declared end-of-turn closer for a model in the models dir.
+fn turn_end_for_current(model_name: &str) -> Option<&'static str> {
+    let dir = CURRENT_MODELS_DIR.lock().ok()?.clone()?;
+    crate::gguf::read_meta(&dir.join(model_name)).ok()?.turn_end_marker
 }
 
 /// The template-declared tool-call opener for a model in the models dir
@@ -838,6 +866,14 @@ pub(crate) fn chat_stop_strings_with(model_name: &str, tool_call_marker: Option<
     // local server declares real tools and does not use these stops.
     if let Some(marker) = tool_call_marker {
         stops.push(marker);
+    }
+    // The model's own turn closer, from its template: the list above
+    // knows the common ones, the template knows this one (Gemma 4's
+    // "<turn|>" is not Gemma 3's "<end_of_turn>").
+    if let Some(closer) = turn_end_for_current(model_name) {
+        if !stops.contains(&closer) {
+            stops.push(closer);
+        }
     }
     serde_json::json!(stops)
 }
@@ -3118,7 +3154,11 @@ pub async fn utility_chat(
         "max_tokens": max_tokens,
         "temperature": 0.7,
         "stream": false,
-        "cache_prompt": true
+        "cache_prompt": true,
+        // The same stops as chat: the chat model stands in here when the
+        // helper is missing, and its turn closer leaked into the memory
+        // portrait without them.
+        "stop": chat_stop_strings(&model)
     });
     if let Some(g) = grammar {
         body["grammar"] = serde_json::Value::String(g);
@@ -3140,10 +3180,7 @@ pub async fn utility_chat(
         .json()
         .await
         .map_err(|e| format!("Failed to parse utility response: {}", e))?;
-    Ok(parsed["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("")
-        .to_string())
+    Ok(strip_turn_markers(parsed["choices"][0]["message"]["content"].as_str().unwrap_or("")))
 }
 
 /// The Apple Silicon chip name ("Apple M2"), for the system-info GPU field.
@@ -5312,6 +5349,28 @@ mod stop_chain_tests {
             listed.contains(&"<|tool_call_start|>"),
             "the template-declared tool marker must reach the stop list: {listed:?}"
         );
+    }
+
+    #[test]
+    fn turn_closer_reaches_the_stop_list() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let dir = std::path::Path::new(&home).join(".local/share/com.solar.yourowai/models");
+        let model = "gemma-4-E2B-it-Q4_K_M.gguf";
+        if !dir.join(model).exists() {
+            eprintln!("SKIP: {model} not present");
+            return;
+        }
+        remember_models_dir(&dir);
+        let stops = chat_stop_strings(model);
+        let listed: Vec<&str> = stops.as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+        assert!(listed.contains(&"<turn|>"), "Gemma 4's template closer must reach the stop list: {listed:?}");
+    }
+
+    #[test]
+    fn turn_markers_strip_from_stored_text() {
+        assert_eq!(strip_turn_markers("established doctrines.<turn|>"), "established doctrines.");
+        assert_eq!(strip_turn_markers("<|turn>model\nhello<end_of_turn>"), "model\nhello");
+        assert_eq!(strip_turn_markers("plain words"), "plain words");
     }
 }
 
