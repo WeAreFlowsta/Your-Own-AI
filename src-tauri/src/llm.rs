@@ -1898,27 +1898,47 @@ async fn chat_server_health_ok() -> bool {
 /// model in app data; the next pick hands the difference back to the
 /// budget (fit::moe_budget_correction_gb). Per machine by construction.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
-pub struct MoeCalibration {
-    pub n_cpu_layers: usize,
+pub struct LoadCalibration {
+    /// The context the measured load ran at (0 = a record from before this
+    /// field existed - taken as any context).
+    #[serde(default)]
+    pub ctx: u64,
+    #[serde(default)]
+    pub kv_q8: bool,
+    /// Expert layers on the CPU for a split MoE load; None = dense, or every
+    /// expert on the card.
+    #[serde(default)]
+    pub moe_cpu_layers: Option<usize>,
     pub predicted_gb: f64,
     pub actual_gb: f64,
     pub at: i64,
 }
 
-fn moe_calibration_path(app: &AppHandle) -> Option<std::path::PathBuf> {
-    app.path().app_data_dir().ok().map(|d| d.join("moe-calibration.json"))
+impl LoadCalibration {
+    /// A record taken at the same shape of load as `ctx`/`kv_q8` describes.
+    pub fn matches(&self, ctx: u64, kv_q8: bool) -> bool {
+        (self.ctx == 0 || self.ctx == ctx) && self.kv_q8 == kv_q8
+    }
 }
 
-pub(crate) fn moe_calibration_read(app: &AppHandle, model: &str) -> Option<MoeCalibration> {
-    let p = moe_calibration_path(app)?;
+/// What the last healthy load of each model actually took on the card,
+/// per machine (`load-calibration.json` in app data). Written after every
+/// ready by the measurement in `start_llama_server`; read by the grader's
+/// incumbent credit and by the MoE split correction.
+fn load_calibration_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join("load-calibration.json"))
+}
+
+pub(crate) fn load_calibration_read(app: &AppHandle, model: &str) -> Option<LoadCalibration> {
+    let p = load_calibration_path(app)?;
     let s = std::fs::read_to_string(p).ok()?;
-    let m: std::collections::HashMap<String, MoeCalibration> = serde_json::from_str(&s).ok()?;
+    let m: std::collections::HashMap<String, LoadCalibration> = serde_json::from_str(&s).ok()?;
     m.get(model).cloned()
 }
 
-fn moe_calibration_write(app: &AppHandle, model: &str, c: MoeCalibration) {
-    let Some(p) = moe_calibration_path(app) else { return };
-    let mut m: std::collections::HashMap<String, MoeCalibration> = std::fs::read_to_string(&p)
+fn load_calibration_write(app: &AppHandle, model: &str, c: LoadCalibration) {
+    let Some(p) = load_calibration_path(app) else { return };
+    let mut m: std::collections::HashMap<String, LoadCalibration> = std::fs::read_to_string(&p)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
@@ -2396,7 +2416,8 @@ pub async fn start_llama_server(
                         .lock()
                         .map(|s| s.contains(&model_key))
                         .unwrap_or(false);
-                    let correction = moe_calibration_read(&app_handle, &model_key)
+                    let correction = load_calibration_read(&app_handle, &model_key)
+                        .filter(|c| c.moe_cpu_layers.is_some())
                         .map(|c| crate::fit::moe_budget_correction_gb(c.predicted_gb, c.actual_gb))
                         .unwrap_or(0.0);
                     let pick = if forced_all {
@@ -2464,6 +2485,23 @@ pub async fn start_llama_server(
     // Resolve-and-spawn failures MUST be logged app-side: they return an
     // error to the frontend and otherwise leave no trace in the app log -
     // which read as a "silent stall" in field diagnostics for days.
+    // What this load is expected to take on the card, and the free figure
+    // before it starts (the outgoing server is gone and the figure fresh):
+    // measured against the figure after ready, for every model. A split
+    // MoE plan already carries its own prediction.
+    let kv_q8_now = loading_name.as_ref().map(|f| crate::tuning::kv_choice(&app_handle, f).q8).unwrap_or(false);
+    let load_plan: Option<(f64, f64, Option<usize>)> = match (&header, moe_plan) {
+        (_, Some((n, predicted, free_before))) => Some((predicted, free_before, Some(n))),
+        (Some((meta, size_bytes)), None) if !args_force_cpu(&args) => match available_vram_mib(&app_handle).await {
+            Some(free_mib) => {
+                let kv_scale = loading_name.as_ref().map(|f| crate::tuning::kv_scale_for(&app_handle, f)).unwrap_or(1.0);
+                let (_, _, need_gb) = crate::fit::model_need_scaled(meta, *size_bytes, ctx_size, kv_scale);
+                Some((need_gb, free_mib as f64 / 1024.0, None))
+            }
+            None => None,
+        },
+        _ => None,
+    };
     let cmd = match chat_server_command(&app_handle, &models_dir) {
         Ok(c) => c,
         Err(e) => {
@@ -2587,32 +2625,36 @@ pub async fn start_llama_server(
                     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                     invalidate_vram_cache().await;
                 });
-                // Measure what the split really cost the card and keep it:
-                // the next pick for this model on this machine starts from
-                // the truth, not the estimate.
-                if let (Some((n, predicted, free_before)), Some(model)) = (moe_plan, loading_name.clone()) {
+                // Measure what this load really took on the card and keep
+                // it: the next grade, credit and split pick for this model
+                // on this machine start from the truth, not the estimate.
+                if let (Some((predicted, free_before, moe_n)), Some(model)) = (load_plan, loading_name.clone()) {
                     let app = app_handle.clone();
                     tauri::async_runtime::spawn(async move {
                         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                         invalidate_vram_cache().await;
                         if let Some(after_mib) = available_vram_mib(&app).await {
-                            let actual = (free_before - after_mib as f64 / 1024.0).max(0.0);
+                            let after = after_mib as f64 / 1024.0;
+                            let actual = (free_before - after).max(0.0);
                             log::info!(
-                                "[LLM] MoE offload measured: {n} expert layers on CPU, predicted {predicted:.2} GB on the card, measured {actual:.2} GB (free {free_before:.2} -> {:.2})",
-                                after_mib as f64 / 1024.0
+                                "[LLM] footprint measured: '{model}' at {ctx_size}{}{}: predicted {predicted:.2} GB, measured {actual:.2} GB (free {free_before:.2} -> {after:.2}, {})",
+                                if kv_q8_now { " compact cache" } else { "" },
+                                match moe_n { Some(n) => format!(", {n} expert layers on CPU"), None => String::new() },
+                                vram_figure_source()
                             );
-                            // Windows WDDM virtualizes graphics memory, so
-                            // the free-VRAM query can come back unchanged
-                            // after a 6 GB load. A reading far below the
-                            // prediction is the driver talking, not the
-                            // model - keep the estimate, learn nothing.
+                            // A figure that did not move (the engine probe under
+                            // Windows' display driver model is a constant) is the
+                            // driver talking, not the model - keep the estimate,
+                            // learn nothing.
                             if actual < predicted * 0.2 {
                                 log::info!(
-                                    "[LLM] MoE measurement implausible ({actual:.2} GB for a {predicted:.2} GB plan) - driver-virtualized memory; keeping the estimate"
+                                    "[LLM] footprint measurement implausible ({actual:.2} GB for a {predicted:.2} GB load) - keeping the estimate"
                                 );
                             } else {
-                                moe_calibration_write(&app, &model, MoeCalibration {
-                                    n_cpu_layers: n,
+                                load_calibration_write(&app, &model, LoadCalibration {
+                                    ctx: ctx_size,
+                                    kv_q8: kv_q8_now,
+                                    moe_cpu_layers: moe_n,
                                     predicted_gb: predicted,
                                     actual_gb: actual,
                                     at: chrono_now_secs(),
@@ -5495,6 +5537,17 @@ mod stop_chain_tests {
         } else {
             assert!(d.is_none());
         }
+    }
+
+    #[test]
+    fn load_calibration_matches_shape_and_reads_old_records() {
+        let c = LoadCalibration { ctx: 16384, kv_q8: true, moe_cpu_layers: None, predicted_gb: 5.1, actual_gb: 4.7, at: 0 };
+        assert!(c.matches(16384, true));
+        assert!(!c.matches(131072, true), "another context is another footprint");
+        assert!(!c.matches(16384, false), "another cache mode too");
+        // A record without the newer fields (or ctx 0) applies to any shape.
+        let old: LoadCalibration = serde_json::from_str(r#"{"predicted_gb":5.7,"actual_gb":3.1,"at":1}"#).unwrap();
+        assert!(old.matches(4096, false) && old.moe_cpu_layers.is_none());
     }
 
     #[test]

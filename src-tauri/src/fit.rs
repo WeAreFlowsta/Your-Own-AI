@@ -582,12 +582,6 @@ pub async fn figures_slot_free(app: &AppHandle, dir: &std::path::Path) -> Machin
     let incumbent_name = incumbent.clone();
     let reclaim_gb = incumbent
         .and_then(|name| {
-            if let Some(measured) = crate::llm::moe_calibration_read(app, &name)
-                .map(|c| c.actual_gb)
-                .filter(|&a| a > 0.1)
-            {
-                return Some(measured);
-            }
             let path = dir.join(&name);
             let meta = crate::gguf::read_meta(&path).ok()?;
             let size = model_bytes_on_disk(&path, &meta);
@@ -597,6 +591,15 @@ pub async fn figures_slot_free(app: &AppHandle, dir: &std::path::Path) -> Machin
                 Some(c) => c as _,
                 None => pinned_or_chosen_ctx(app, &name, &meta, size, total_ram_gb, free_vram_gb),
             };
+            // The measured footprint of the last healthy load at this shape
+            // (context, cache mode) beats every estimate below.
+            let kv_q8 = crate::tuning::kv_choice(app, &name).q8;
+            if let Some(measured) = crate::llm::load_calibration_read(app, &name)
+                .filter(|c| c.matches(ctx, kv_q8) && c.actual_gb > 0.1)
+                .map(|c| c.actual_gb)
+            {
+                return Some(measured);
+            }
             let (_, kv, full_need) = model_need_scaled(&meta, size, ctx, crate::tuning::kv_scale_for(app, &name));
             // A split MoE holds only attention + the on-card experts; crediting
             // its FULL need back inflated every other grade. Without a
@@ -849,7 +852,8 @@ async fn assess_uncached(app: &AppHandle) -> Vec<ModelFit> {
         // What the last measured load on this machine taught the split
         // budget - the loader applies it, so the grade and the Auto label
         // apply the same correction or they describe a different load.
-        let correction = crate::llm::moe_calibration_read(app, &m.name)
+        let correction = crate::llm::load_calibration_read(app, &m.name)
+            .filter(|c| c.moe_cpu_layers.is_some())
             .map(|c| moe_budget_correction_gb(c.predicted_gb, c.actual_gb))
             .unwrap_or(0.0);
         let moe_auto_pick: Option<u32> = if meta.is_moe() {
