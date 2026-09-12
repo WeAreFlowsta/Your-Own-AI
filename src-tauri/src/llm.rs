@@ -1054,6 +1054,7 @@ pub(crate) fn parse_nvidia_smi_memory(text: &str) -> Option<DriverVram> {
 /// and Windows (System32, or the driver's own folder on older installs).
 /// None when it is absent or does not answer in 5 s.
 async fn driver_vram() -> Option<DriverVram> {
+    #[allow(unused_mut)]
     let mut candidates: Vec<std::path::PathBuf> = vec![std::path::PathBuf::from("nvidia-smi")];
     #[cfg(target_os = "windows")]
     {
@@ -1083,6 +1084,7 @@ async fn driver_vram() -> Option<DriverVram> {
 /// The same driver figure, synchronously, for the truth matrix (std
 /// Command; the legs run outside the async runtime's reach).
 pub(crate) fn driver_vram_blocking() -> Option<DriverVram> {
+    #[allow(unused_mut)]
     let mut candidates: Vec<std::path::PathBuf> = vec![std::path::PathBuf::from("nvidia-smi")];
     #[cfg(target_os = "windows")]
     {

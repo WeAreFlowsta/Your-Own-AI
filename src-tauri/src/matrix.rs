@@ -852,6 +852,100 @@ pub async fn leg_components(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<
 /// generates, never spends credits: the online catalog list is a free
 /// call and the query embeds run locally. Asserts the promises and prints
 /// the per-bucket online shares.
+/// ONE FIGURE: with model A on the card, the grade's "runs at" for model B
+/// (credited by A's MEASURED footprint) must equal the context the loader
+/// gives B once A is gone. Also proves the footprint measurement lands
+/// (a calibration record for A) and that the driver's count is the source
+/// on an NVIDIA card. Runs inside the app (it needs the real loader).
+pub async fn leg_headroom(
+    app: &AppHandle,
+    state: tauri::State<'_, crate::llm::LLMState>,
+    dir: &Path,
+    sink: Sink<'_>,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    // The two smallest chat models: quick loads, and both fit on any card
+    // the app runs on.
+    let mut files: Vec<(u64, String)> = gguf_files(dir)
+        .into_iter()
+        .filter_map(|n| {
+            let p = dir.join(&n);
+            let meta = crate::gguf::read_meta(&p).ok()?;
+            if meta.is_embedding() || n.to_lowercase().contains("mmproj") {
+                return None;
+            }
+            Some((std::fs::metadata(&p).ok()?.len(), n))
+        })
+        .collect();
+    files.sort();
+    let (Some((_, a)), Some((_, b))) = (files.first().cloned(), files.get(1).cloned()) else {
+        sink("fewer than two chat models - leg skipped".into());
+        return failures;
+    };
+    crate::llm::invalidate_vram_cache().await;
+    let free0 = crate::llm::available_vram_mib(app).await;
+    sink(format!(
+        "empty card: free {} ({})",
+        free0.map(|m| format!("{:.2} GB", m as f64 / 1024.0)).unwrap_or_else(|| "none".into()),
+        crate::llm::vram_figure_source()
+    ));
+    if free0.is_none() {
+        sink("no graphics figure on this machine (CPU / integrated / Apple) - leg skipped".into());
+        return failures;
+    }
+
+    // Load A and let the measurement land.
+    if let Err(e) = crate::llm::load_model(app.clone(), state.clone(), a.clone(), false, "matrix-headroom".into()).await {
+        failures.push(format!("headroom: could not load {a}: {e}"));
+        return failures;
+    }
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    let ctx_a = crate::llm::current_ctx_size();
+    match crate::llm::load_calibration_read(app, &a) {
+        Some(c) if c.matches(ctx_a as u64, c.kv_q8) && c.actual_gb > 0.1 => sink(format!(
+            "{a}: loaded at {ctx_a}, footprint predicted {:.2} GB, measured {:.2} GB",
+            c.predicted_gb, c.actual_gb
+        )),
+        Some(c) => sink(format!("{a}: calibration present but for another shape (ctx {}, {:.2} GB)", c.ctx, c.actual_gb)),
+        None => {
+            let line = format!("{a}: no footprint measured after the load (source {})", crate::llm::vram_figure_source());
+            if crate::llm::vram_figure_source() == "driver" {
+                failures.push(format!("headroom: {line}"));
+            }
+            sink(line);
+        }
+    }
+
+    // The claim: B's "runs at" with A on the card.
+    crate::llm::invalidate_vram_cache().await;
+    let claimed = crate::fit::assess(app)
+        .await
+        .into_iter()
+        .find(|f| f.name == b)
+        .map(|f| (f.context_runtime, f.fit));
+    let Some((claimed_ctx, grade)) = claimed else {
+        failures.push(format!("headroom: {b} not graded"));
+        return failures;
+    };
+    sink(format!("{b}: graded {grade:?}, runs at {claimed_ctx} (with {a} on the card, its footprint credited)"));
+
+    // The truth: load B and read what the loader gave it.
+    if let Err(e) = crate::llm::load_model(app.clone(), state.clone(), b.clone(), false, "matrix-headroom".into()).await {
+        failures.push(format!("headroom: could not load {b}: {e}"));
+        return failures;
+    }
+    let loaded_ctx = crate::llm::current_ctx_size() as u64;
+    if loaded_ctx == claimed_ctx {
+        sink(format!("{b}: loaded at {loaded_ctx} - the grade and the loader agree"));
+    } else {
+        let line = format!("{b}: grade said {claimed_ctx}, loader gave {loaded_ctx}");
+        sink(line.clone());
+        failures.push(format!("headroom: {line}"));
+    }
+    crate::llm::stop_chat_server_for_maintenance(&state).await;
+    failures
+}
+
 pub async fn leg_routing(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<String> {
     let mut failures = Vec::new();
     let table: serde_json::Value = match serde_json::from_str(include_str!("../route-battery.json")) {
@@ -1302,6 +1396,12 @@ pub async fn matrix_run(
     if !cancelled() && want("routing") {
         sink("== Routing (decide-only, no credits; the battery on this machine's models) ==".into());
         failures.extend(leg_routing(&app, &dir, sink).await);
+        sink(String::new());
+    }
+
+    if !cancelled() && want("headroom") {
+        sink("== Headroom (the grade's \"runs at\" vs the loader, on one figure) ==".into());
+        failures.extend(leg_headroom(&app, state.clone(), &dir, sink).await);
         sink(String::new());
     }
 
