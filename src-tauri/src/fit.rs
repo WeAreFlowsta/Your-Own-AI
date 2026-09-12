@@ -625,8 +625,9 @@ pub async fn figures_slot_free(app: &AppHandle, dir: &std::path::Path) -> Machin
     // The figures every grade on the page came from - so a grade that
     // flips between two visits can be explained from the log.
     log::info!(
-        "[fit] figures: free VRAM {} GB{}, free RAM {:.1} of {:.1} GB",
+        "[fit] figures: free VRAM {} GB ({}){}, free RAM {:.1} of {:.1} GB",
         raw_vram.map(|v| format!("{v:.1}")).unwrap_or_else(|| "none".into()),
+        crate::llm::vram_figure_source(),
         if reclaim_gb > 0.0 {
             format!(" + {:.1} credited for {}", reclaim_gb, incumbent_name.as_deref().unwrap_or("the running model"))
         } else {

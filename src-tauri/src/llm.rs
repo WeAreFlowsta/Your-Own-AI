@@ -1010,6 +1010,83 @@ pub async fn available_vram_mib(app_handle: &AppHandle) -> Option<u64> {
     fresh
 }
 
+/// The driver's own device-level figure - used and total MiB summed over
+/// the NVIDIA cards - from nvidia-smi. Under Windows' display driver model
+/// the engine probe's "free" is a constant (total minus the desktop),
+/// blind to the app's own servers: the audit of 2026-09-13 read 6.9 GB
+/// "free" from the probe with 5.7 GB in use by the driver's count. This
+/// figure tracks every process on both Windows and Linux, so it is the
+/// base every consumer reads when an NVIDIA card is present.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DriverVram {
+    pub used_mib: u64,
+    pub total_mib: u64,
+}
+
+impl DriverVram {
+    pub fn free_mib(&self) -> u64 {
+        self.total_mib.saturating_sub(self.used_mib)
+    }
+}
+
+/// `nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader,nounits`
+/// prints one `used, total` line per card. Summed; a line that does not
+/// parse is skipped; no parsable line = None.
+pub(crate) fn parse_nvidia_smi_memory(text: &str) -> Option<DriverVram> {
+    let mut used = 0u64;
+    let mut total = 0u64;
+    let mut any = false;
+    for line in text.lines() {
+        let mut parts = line.split(',').map(|p| p.trim());
+        let (Some(u), Some(t)) = (parts.next(), parts.next()) else { continue };
+        let (Ok(u), Ok(t)) = (u.parse::<u64>(), t.parse::<u64>()) else { continue };
+        if t == 0 {
+            continue;
+        }
+        used += u;
+        total += t;
+        any = true;
+    }
+    any.then_some(DriverVram { used_mib: used, total_mib: total })
+}
+
+/// Ask the driver. nvidia-smi ships with the NVIDIA driver on Linux (PATH)
+/// and Windows (System32, or the driver's own folder on older installs).
+/// None when it is absent or does not answer in 5 s.
+async fn driver_vram() -> Option<DriverVram> {
+    let mut candidates: Vec<std::path::PathBuf> = vec![std::path::PathBuf::from("nvidia-smi")];
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(root) = std::env::var("SystemRoot") {
+            candidates.push(std::path::PathBuf::from(root).join("System32").join("nvidia-smi.exe"));
+        }
+        if let Ok(pf) = std::env::var("ProgramFiles") {
+            candidates.push(std::path::PathBuf::from(pf).join("NVIDIA Corporation").join("NVSMI").join("nvidia-smi.exe"));
+        }
+    }
+    for bin in candidates {
+        let mut cmd = tokio::process::Command::new(&bin);
+        cmd.args(["--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"]);
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        let Ok(Ok(out)) = tokio::time::timeout(std::time::Duration::from_secs(5), cmd.output()).await else { continue };
+        if !out.status.success() {
+            continue;
+        }
+        if let Some(d) = parse_nvidia_smi_memory(&String::from_utf8_lossy(&out.stdout)) {
+            return Some(d);
+        }
+    }
+    None
+}
+
+/// Where the last free-VRAM figure came from, for the grading log line.
+static VRAM_SOURCE_DRIVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn vram_figure_source() -> &'static str {
+    if VRAM_SOURCE_DRIVER.load(std::sync::atomic::Ordering::Relaxed) { "driver" } else { "engine probe" }
+}
+
 async fn compute_available_vram_mib(app_handle: &AppHandle) -> Option<u64> {
     if std::env::var("FLOWSTA_CPU_ONLY").map(|v| v != "0").unwrap_or(false) {
         return None;
@@ -1043,7 +1120,24 @@ async fn compute_available_vram_mib(app_handle: &AppHandle) -> Option<u64> {
     if discrete.is_empty() {
         return None; // iGPU-only / Metal / CPU → use system RAM instead
     }
-    Some(discrete.iter().map(|d| d.free_mib).sum())
+    let probe_free: u64 = discrete.iter().map(|d| d.free_mib).sum();
+    // An NVIDIA card: the driver's device-level count is the truth; the
+    // probe's figure stays as the fallback when nvidia-smi is missing.
+    if discrete.iter().any(|d| d.name.to_lowercase().contains("nvidia")) {
+        if let Some(d) = driver_vram().await {
+            let free = d.free_mib();
+            VRAM_SOURCE_DRIVER.store(true, std::sync::atomic::Ordering::Relaxed);
+            if probe_free.abs_diff(free) > 512 {
+                log::info!(
+                    "[GPU] free VRAM {free} MiB by the driver (used {} of {} MiB); the engine probe said {probe_free} MiB",
+                    d.used_mib, d.total_mib
+                );
+            }
+            return Some(free);
+        }
+    }
+    VRAM_SOURCE_DRIVER.store(false, std::sync::atomic::Ordering::Relaxed);
+    Some(probe_free)
 }
 
 /// Find the multimodal projector (mmproj) paired with a chat model, if one is
@@ -1663,6 +1757,7 @@ pub(crate) async fn stop_chat_server_for_maintenance(state: &LLMState) -> bool {
     }
     *state.is_server_running.lock().await = false;
     *state.current_model.lock().await = None;
+    invalidate_vram_cache().await;
     was_running
 }
 
@@ -2486,6 +2581,12 @@ pub async fn start_llama_server(
                     // The attachment meter re-reads its room on every load.
                     let _ = app_handle.emit("context-size-changed", current_ctx_size());
                 }
+                // The card changed shape: the next reader gets a fresh figure
+                // once the driver has settled the allocation.
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    invalidate_vram_cache().await;
+                });
                 // Measure what the split really cost the card and keep it:
                 // the next pick for this model on this machine starts from
                 // the truth, not the estimate.
@@ -2637,6 +2738,11 @@ pub async fn stop_llama_server(
         child.kill().map_err(|e| format!("Failed to stop server: {}", e))?;
         *is_running = false;
         println!("[LLM] Server stopped");
+        // The card is being given back (sub-second by the driver's count,
+        // audit 09-13): let it settle, then forget the figure read while
+        // this server held it - the loader's sizing reads fresh next.
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        invalidate_vram_cache().await;
     }
 
     Ok(())
@@ -5364,6 +5470,31 @@ mod stop_chain_tests {
         let stops = chat_stop_strings(model);
         let listed: Vec<&str> = stops.as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
         assert!(listed.contains(&"<turn|>"), "Gemma 4's template closer must reach the stop list: {listed:?}");
+    }
+
+    #[test]
+    fn nvidia_smi_memory_parses_and_sums() {
+        let d = parse_nvidia_smi_memory("5738, 8188\n").unwrap();
+        assert_eq!((d.used_mib, d.total_mib, d.free_mib()), (5738, 8188, 2450));
+        let two = parse_nvidia_smi_memory("1024, 8192\n2048, 12288\n").unwrap();
+        assert_eq!((two.used_mib, two.total_mib), (3072, 20480));
+        assert!(parse_nvidia_smi_memory("").is_none());
+        assert!(parse_nvidia_smi_memory("No devices were found\n").is_none());
+        assert!(parse_nvidia_smi_memory("[N/A], [N/A]\n").is_none());
+    }
+
+    /// The driver answers on a box that has nvidia-smi (the dev box: a GTX
+    /// 1050 Ti); elsewhere the query is None and the probe stays the source.
+    #[tokio::test]
+    async fn driver_vram_answers_when_nvidia_smi_exists() {
+        let has = std::process::Command::new("nvidia-smi").arg("-L").output().map(|o| o.status.success()).unwrap_or(false);
+        let d = driver_vram().await;
+        if has {
+            let d = d.expect("nvidia-smi present but no figure parsed");
+            assert!(d.total_mib > 0 && d.used_mib <= d.total_mib, "{d:?}");
+        } else {
+            assert!(d.is_none());
+        }
     }
 
     #[test]
