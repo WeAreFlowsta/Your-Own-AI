@@ -52,6 +52,13 @@ pub fn free_vram_gb(bin: &Path) -> Option<f64> {
     if discrete.is_empty() {
         return None;
     }
+    // An NVIDIA card: the driver's device-level count, as the app reads it
+    // (the probe's figure is a constant under Windows' display driver model).
+    if discrete.iter().any(|d| d.name.to_lowercase().contains("nvidia")) {
+        if let Some(d) = crate::llm::driver_vram_blocking() {
+            return Some(d.free_mib() as f64 / 1024.0);
+        }
+    }
     Some(discrete.iter().map(|d| d.free_mib).sum::<u64>() as f64 / 1024.0)
 }
 
@@ -438,12 +445,11 @@ pub async fn leg_fit_truth(app: Option<&AppHandle>, bin: &Path, dir: &Path, only
         "{} models, RAM {total_ram:.1} GB total / {avail_ram:.1} GB available now (graded against available, as the app does)",
         files.len()
     ));
-    if cfg!(windows) {
-        // WDDM virtualizes GPU memory per process: a probe from a second
-        // process cannot see the bench server's allocations, so the delta
-        // column reads near zero there. 4060 Ti runs proved it; loads and
-        // speeds are the evidence on Windows.
-        sink("note: Windows virtualizes GPU memory per process - the realGB column is unreliable here; load success and speeds are the proof".into());
+    if cfg!(windows) && crate::llm::driver_vram_blocking().is_none() {
+        // Without the driver's own count (nvidia-smi), the engine probe is a
+        // constant under Windows' display driver model and the delta column
+        // reads near zero; loads and speeds are the evidence then.
+        sink("note: no nvidia-smi on this Windows box - the realGB column comes from the engine probe and is unreliable here; load success and speeds are the proof".into());
     }
     sink(format!(
         "{:<38} {:>5} {:>6} {:>6} {:>6} | {:>7} {:>6} {:>6} {:>7}  verdict",

@@ -25,6 +25,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   shows its last command as still running.
 
 ### Models
+- On an NVIDIA card, free graphics memory is read from the driver's own
+  count, which sees every process on Windows as well as Linux. The
+  models page, the loader, the fine-tune run and project sessions all
+  size from that one figure, and every healthy load records what it
+  really took on the card, so grades and "runs at" match what loads.
 - A model's own end-of-turn marker, read from its chat template, joins
   the stop list for every local request, the memory portrait and
   document cards included, so a marker the engine does not treat as an

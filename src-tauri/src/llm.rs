@@ -1080,6 +1080,38 @@ async fn driver_vram() -> Option<DriverVram> {
     None
 }
 
+/// The same driver figure, synchronously, for the truth matrix (std
+/// Command; the legs run outside the async runtime's reach).
+pub(crate) fn driver_vram_blocking() -> Option<DriverVram> {
+    let mut candidates: Vec<std::path::PathBuf> = vec![std::path::PathBuf::from("nvidia-smi")];
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(root) = std::env::var("SystemRoot") {
+            candidates.push(std::path::PathBuf::from(root).join("System32").join("nvidia-smi.exe"));
+        }
+        if let Ok(pf) = std::env::var("ProgramFiles") {
+            candidates.push(std::path::PathBuf::from(pf).join("NVIDIA Corporation").join("NVSMI").join("nvidia-smi.exe"));
+        }
+    }
+    for bin in candidates {
+        let mut cmd = std::process::Command::new(&bin);
+        cmd.args(["--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"]);
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        }
+        let Ok(out) = cmd.output() else { continue };
+        if !out.status.success() {
+            continue;
+        }
+        if let Some(d) = parse_nvidia_smi_memory(&String::from_utf8_lossy(&out.stdout)) {
+            return Some(d);
+        }
+    }
+    None
+}
+
 /// Where the last free-VRAM figure came from, for the grading log line.
 static VRAM_SOURCE_DRIVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
