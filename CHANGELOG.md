@@ -5,6 +5,28 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 
 ## [0.7.3] - 2026-09-13
 
+### Highlights
+
+- **Your graphics card, read right.** On an NVIDIA card the app now
+  takes free graphics memory from the driver's own count, which sees
+  every process on Windows as well as Linux. The models page, the
+  loader, Fine-tune and project sessions all size from that one figure,
+  and every load records what it really took, so a grade and "runs at"
+  match what loads. See *Models*.
+- **Helper models on the card when there is room.** After your chat
+  model loads, the memory model and the helper model move onto the
+  graphics card when the measured room allows, and give it back before
+  a model switch. Automatic, with one choice in Settings › Engines. See
+  *Models*.
+- **Projects keep their window.** A project session's context follows
+  the model that actually serves its turns, so long sessions compact when
+  they should. See *Projects*.
+- **Conversations open on the first click.** A conversation chosen from
+  the drawer opens on the first click after launch, and every open is
+  written to the log end to end. See *Records*.
+- **Clean endings.** A model's own end-of-turn marker stays out of its
+  replies, the memory portrait and document cards. See *Models*.
+
 ### Models
 - The Offline Models page grades its rows and picks again once a
   downloaded model has finished loading, so a new download's row and its
@@ -24,7 +46,7 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   the window the server has. A turn that ends on an error no longer
   shows its last command as still running.
 
-### Models
+### Models, continued
 - On an NVIDIA card, free graphics memory is read from the driver's own
   count, which sees every process on Windows as well as Linux. The
   models page, the loader, the fine-tune run and project sessions all
