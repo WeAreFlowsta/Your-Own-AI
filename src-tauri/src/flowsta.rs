@@ -204,9 +204,12 @@ async fn ensure_linked(
         }
     };
 
+    // The Vault's link dialog waits 60 s for the person; the shared client's
+    // 20 s default cut the ceremony off while they were still reading it.
     let resp: serde_json::Value = client
         .post(format!("http://127.0.0.1:{}/link-identity", port))
         .header("Origin", VAULT_ORIGIN)
+        .timeout(std::time::Duration::from_secs(75))
         .json(&serde_json::json!({
             "app_name": "Your Own AI",
             "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
@@ -288,7 +291,9 @@ pub async fn flowsta_sign_in(app: tauri::AppHandle) -> Result<FlowstaSession, St
     let auth_resp = client
         .post(format!("http://127.0.0.1:{}/authenticate", port))
         .header("Origin", VAULT_ORIGIN)
-        .timeout(std::time::Duration::from_secs(75))
+        // A locked Vault holds the request ~55 s for the unlock, then runs
+        // its 60 s dialog - budget past both.
+        .timeout(std::time::Duration::from_secs(125))
         .json(&serde_json::json!({
             "app_name": "Your Own AI",
             "challenge": challenge,
@@ -960,6 +965,7 @@ pub async fn vault_sign(
     let resp = client
         .post(format!("http://127.0.0.1:{}/sign", port))
         .header("Origin", VAULT_ORIGIN)
+        .timeout(std::time::Duration::from_secs(75)) // per-action dialog waits 60 s
         .json(&serde_json::json!({
             "type": "bytes",
             "bytes": bytes_b64,
