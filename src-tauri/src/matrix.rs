@@ -631,6 +631,11 @@ pub async fn leg_sampling(bin: &Path, dir: &Path, model: &str, sink: Sink<'_>) -
                 "max_tokens": 80,
                 "stream": false,
                 "stop": crate::llm::chat_stop_strings(&model),
+                // Both greedy asks must walk the same path: with the prompt
+                // cache on, the second reuses the first's KV prefix and the
+                // batch shape differs, which on a GPU can flip a token late
+                // in the reply (4060 Ti, 09-13) - the knob was fine.
+                "cache_prompt": false,
             });
             let (budget, effort) = crate::llm::chat_turn_reasoning_controls(&model);
             if let Some(b) = budget {
@@ -668,7 +673,20 @@ pub async fn leg_sampling(bin: &Path, dir: &Path, model: &str, sink: Sink<'_>) -
         return Err("greedy reply empty".into());
     }
     if a1 != a2 {
-        return Err("temperature 0 was not deterministic - the knob did not reach the engine?".into());
+        // Where they part says which it is: a long shared prefix is engine
+        // rounding on this card; two unrelated replies is the knob not
+        // reaching the engine.
+        let shared = a1.chars().zip(a2.chars()).take_while(|(x, y)| x == y).count();
+        let tail = |t: &str| t.chars().skip(shared).take(40).collect::<String>();
+        sink(format!(
+            "greedy replies differ after {shared} shared chars of {} / {}: \"{}\" vs \"{}\"",
+            a1.chars().count(), a2.chars().count(), tail(&a1), tail(&a2)
+        ));
+        return Err(if shared >= 40 {
+            format!("temperature 0 drifted after {shared} shared chars - engine rounding on this card, not the knob")
+        } else {
+            "temperature 0 was not deterministic from the start - the knob did not reach the engine?".into()
+        });
     }
     let wild = crate::llm::SamplingParams { temperature: Some(1.8), top_p: Some(1.0), ..Default::default() };
     let b1 = ask(Some(wild), Some(7)).await?;
