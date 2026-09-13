@@ -972,6 +972,11 @@ pub async fn leg_headroom(
         sink(line.clone());
         failures.push(format!("headroom: {line}"));
     }
+    // The helpers' verdict for this card with B loaded (taken 5 s after
+    // ready by the app; asked again here so the line is this moment's).
+    tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+    let (e, u) = crate::llm::decide_helper_placement(app).await;
+    sink(format!("helpers with {b} loaded: memory model on the {}, helper on the {}", e.word(), u.word()));
     crate::llm::stop_chat_server_for_maintenance(&state).await;
     failures
 }

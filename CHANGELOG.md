@@ -30,6 +30,15 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   models page, the loader, the fine-tune run and project sessions all
   size from that one figure, and every healthy load records what it
   really took on the card, so grades and "runs at" match what loads.
+- The memory model and the helper model use the graphics card when there
+  is room. After a chat model loads, the app reads the card's free memory,
+  keeps a margin for the chat model, and starts each helper on the card
+  when its measured footprint fits, or on the processor when it does not.
+  Before a model switch the helpers give the card back, and the decision
+  is taken again once the new model is ready. A helper that fails to
+  come up on the card runs on the processor and the machine remembers
+  that. Settings › Engines has one choice, Automatic or Keep on the
+  processor. The log says where each helper runs.
 - A model's own end-of-turn marker, read from its chat template, joins
   the stop list for every local request, the memory portrait and
   document cards included, so a marker the engine does not treat as an

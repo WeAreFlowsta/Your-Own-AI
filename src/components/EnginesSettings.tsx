@@ -268,6 +268,7 @@ export default component$(() => {
   // Machine fine-tune (FINE_TUNE_PANEL): worker threads + the global
   // generation layer every AI inherits unless it sets its own.
   const threads = useSignal<number | null>(null);
+  const helperPlacement = useSignal<"auto" | "cpu">("auto");
   const maxThreads = useSignal(32);
   const gTemp = useSignal<number | null>(null);
   const gTopP = useSignal<number | null>(null);
@@ -287,7 +288,27 @@ export default component$(() => {
       const store = await load("settings.json");
       const t = await store.get<number>("engineThreads");
       threads.value = t || null;
+      const hp = await store.get<string>("helperPlacement");
+      helperPlacement.value = hp === "cpu" ? "cpu" : "auto";
     } catch { /* fresh */ }
+  });
+  // Where the memory model and the helper model run. Automatic: on the
+  // graphics card after a chat model loads when the measured room allows,
+  // back to the processor before a model switch. The one door for people
+  // who want the whole card for the chat model.
+  const setHelperPlacement = $(async (v: string) => {
+    helperPlacement.value = v === "cpu" ? "cpu" : "auto";
+    try {
+      const { load } = await import("@tauri-apps/plugin-store");
+      const store = await load("settings.json");
+      await store.set("helperPlacement", helperPlacement.value);
+      await store.save();
+      tuneNote.value = helperPlacement.value === "cpu"
+        ? "Saved - helper models stay on the processor from their next start."
+        : "Saved - helper models use the graphics card when there is room, from their next start.";
+    } catch (e) {
+      tuneNote.value = `Could not save: ${e}`;
+    }
   });
   // Pages apply instantly (modals are where Save lives): every slider
   // release persists after a beat, and Auto is the undo.
@@ -601,6 +622,23 @@ export default component$(() => {
           its form; each model also has its own Fine-tune on the Offline Models page.
         </p>
         <div class="grid gap-4 sm:grid-cols-2">
+          <div class="sm:col-span-2">
+            <label class="block text-xs text-[var(--text-muted)] mb-1" for="helper-placement">Helper models (next start)</label>
+            <select
+              id="helper-placement"
+              value={helperPlacement.value}
+              class="w-full rounded-lg border border-[var(--border-input)] bg-[var(--bg-input)] px-2 py-1.5 text-sm text-[var(--text-primary)]"
+              onChange$={(_, el) => setHelperPlacement(el.value)}
+            >
+              <option value="auto">Automatic - on the graphics card when there is room</option>
+              <option value="cpu">Keep on the processor</option>
+            </select>
+            <p class="mt-1 text-[11px] text-[var(--text-muted)]">
+              The memory model and the helper model run beside your chat model. Automatic puts
+              them on the card after a chat model loads when the measured room allows, and moves
+              them back to the processor before a model switch.
+            </p>
+          </div>
           <div class="sm:col-span-2">
             <TuneSlider label="Worker threads (next model load)" value={threads.value}
               autoLabel="Auto (engine default)" autoValue={Math.round(maxThreads.value / 2)}

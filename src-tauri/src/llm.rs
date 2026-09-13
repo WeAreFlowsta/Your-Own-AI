@@ -114,6 +114,10 @@ pub struct LLMState {
     pub util_model: Mutex<Option<String>>, // utility model filename it was started with
     /// Serializes utility-server startup (same port-collision guard as embed).
     pub util_startup: Mutex<()>,
+    /// Where each helper server runs right now (the verdict it was started
+    /// under) - compared with the latest verdict at its next start.
+    pub embed_place: Mutex<HelperPlace>,
+    pub util_place: Mutex<HelperPlace>,
 }
 
 impl LLMState {
@@ -135,6 +139,8 @@ impl LLMState {
             util_running: Mutex::new(false),
             util_model: Mutex::new(None),
             util_startup: Mutex::new(()),
+            embed_place: Mutex::new(HelperPlace::Cpu),
+            util_place: Mutex::new(HelperPlace::Cpu),
         }
     }
 }
@@ -1010,6 +1016,220 @@ pub async fn available_vram_mib(app_handle: &AppHandle) -> Option<u64> {
     fresh
 }
 
+// ── Helper placement (the headroom rule) ─────────────────────────────
+// The memory model and the helper model run beside the chat model. They
+// take the card only when a chat model is ready and the measured figure
+// leaves room past a margin; they go back to the processor before any
+// switch. Automatic by default; Settings › Engines can keep them on the
+// processor. A helper that fails to come up on the card is remembered
+// per machine and stays on the processor - its failures never touch the
+// chat engine's crash ladder.
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum HelperPlace {
+    Cpu,
+    Card,
+}
+
+impl HelperPlace {
+    pub fn word(self) -> &'static str {
+        match self {
+            HelperPlace::Cpu => "processor",
+            HelperPlace::Card => "card",
+        }
+    }
+}
+
+/// The latest verdict: (memory model, helper). Processor until a chat
+/// model is ready and the figure says there is room.
+static HELPER_VERDICT: std::sync::Mutex<(HelperPlace, HelperPlace)> =
+    std::sync::Mutex::new((HelperPlace::Cpu, HelperPlace::Cpu));
+/// Requests in flight on each helper - a placement change waits for zero.
+static EMBED_INFLIGHT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static UTIL_INFLIGHT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// Room kept for the chat model's own growth (prompt cache, activations).
+const HELPER_MARGIN_GB: f64 = 0.75;
+/// Mirrors UTILITY_MODEL.filename in src/data/recommended-models.ts.
+pub(crate) const UTILITY_MODEL_FILE: &str = "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf";
+const EMBED_CTX: u64 = 512;
+const UTIL_CTX: u64 = 4096;
+
+struct Inflight(&'static std::sync::atomic::AtomicUsize);
+impl Inflight {
+    fn new(c: &'static std::sync::atomic::AtomicUsize) -> Self {
+        c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Inflight(c)
+    }
+}
+impl Drop for Inflight {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+pub(crate) fn helper_verdict() -> (HelperPlace, HelperPlace) {
+    *HELPER_VERDICT.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn set_helper_verdict(v: (HelperPlace, HelperPlace)) {
+    *HELPER_VERDICT.lock().unwrap_or_else(|e| e.into_inner()) = v;
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default, Clone)]
+struct HelperPlacementMemo {
+    embed_failed_at: Option<i64>,
+    util_failed_at: Option<i64>,
+}
+
+fn helper_memo_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join("helper-placement.json"))
+}
+
+fn helper_memo_read(app: &AppHandle) -> HelperPlacementMemo {
+    helper_memo_path(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// A helper that failed on the card within the last 30 days stays on the
+/// processor (a driver update or a new card is the reason to try again).
+fn helper_card_failed_recently(app: &AppHandle, embed: bool) -> bool {
+    let m = helper_memo_read(app);
+    let at = if embed { m.embed_failed_at } else { m.util_failed_at };
+    at.map(|t| chrono_now_secs() - t < 30 * 24 * 3600).unwrap_or(false)
+}
+
+fn note_helper_card_failure(app: &AppHandle, embed: bool) {
+    let Some(p) = helper_memo_path(app) else { return };
+    let mut m = helper_memo_read(app);
+    if embed {
+        m.embed_failed_at = Some(chrono_now_secs());
+    } else {
+        m.util_failed_at = Some(chrono_now_secs());
+    }
+    if let Ok(s) = serde_json::to_string_pretty(&m) {
+        let _ = std::fs::write(p, s);
+    }
+}
+
+/// Settings › Engines "Helper models": "cpu" keeps them on the processor.
+fn helper_placement_pref_cpu(app: &AppHandle) -> bool {
+    use tauri_plugin_store::StoreExt;
+    app.store("settings.json")
+        .ok()
+        .and_then(|s| s.get("helperPlacement"))
+        .and_then(|v| v.as_str().map(|s| s == "cpu"))
+        .unwrap_or(false)
+}
+
+/// What a helper takes on the card: its measured footprint at this shape
+/// when one exists, else the estimate from its header.
+fn helper_need_gb(app: &AppHandle, file: &str, ctx: u64) -> Option<f64> {
+    if let Some(c) = load_calibration_read(app, file).filter(|c| c.matches(ctx, false) && c.actual_gb > 0.05) {
+        return Some(c.actual_gb);
+    }
+    let path = get_models_dir(app).ok()?.join(file);
+    let meta = crate::gguf::read_meta(&path).ok()?;
+    let size = std::fs::metadata(&path).ok()?.len();
+    Some(crate::fit::model_need(&meta, size, ctx).2)
+}
+
+/// Decide where the helpers run, from the figure of THIS moment. Called
+/// a few seconds after a chat model is ready; the verdict applies at each
+/// helper's next start (an idle helper moves right away).
+pub(crate) async fn decide_helper_placement(app: &AppHandle) -> (HelperPlace, HelperPlace) {
+    use HelperPlace::*;
+    let st = app.state::<LLMState>();
+    if helper_placement_pref_cpu(app) {
+        set_helper_verdict((Cpu, Cpu));
+        log::info!("[helpers] kept on the processor - Settings › Engines");
+        return (Cpu, Cpu);
+    }
+    if !*st.is_server_running.lock().await {
+        set_helper_verdict((Cpu, Cpu));
+        return (Cpu, Cpu);
+    }
+    let free_gb = match available_vram_mib(app).await {
+        Some(mib) => mib as f64 / 1024.0,
+        None => {
+            // Apple unified memory: the card IS the RAM; a helper on Metal
+            // is a speed choice inside the RAM headroom, 2 GB kept back.
+            if cfg!(target_os = "macos") && crate::gpu_safety::gpu_allowed(app) {
+                (grading_memory_bytes() as f64 / (1024.0 * 1024.0 * 1024.0) - 2.0).max(0.0)
+            } else {
+                set_helper_verdict((Cpu, Cpu));
+                log::info!("[helpers] on the processor - no graphics figure on this machine");
+                return (Cpu, Cpu);
+            }
+        }
+    };
+    let embed_file = st.embed_model.lock().await.clone().unwrap_or_else(|| crate::corpus::EMBEDDING_MODEL_FILE.to_string());
+    let util_file = st.util_model.lock().await.clone().unwrap_or_else(|| UTILITY_MODEL_FILE.to_string());
+    let need_e = helper_need_gb(app, &embed_file, EMBED_CTX);
+    let need_u = helper_need_gb(app, &util_file, UTIL_CTX);
+    let mut left = free_gb;
+    let embed = match need_e {
+        Some(n) if !helper_card_failed_recently(app, true) && left - n >= HELPER_MARGIN_GB => {
+            left -= n;
+            Card
+        }
+        _ => Cpu,
+    };
+    let util = match need_u {
+        Some(n) if !helper_card_failed_recently(app, false) && left - n >= HELPER_MARGIN_GB => Card,
+        _ => Cpu,
+    };
+    log::info!(
+        "[helpers] memory model: {} (needs {}), helper: {} (needs {}) - free {free_gb:.2} GB by the {}, {HELPER_MARGIN_GB:.2} GB kept for the chat model",
+        embed.word(),
+        need_e.map(|n| format!("{n:.2} GB")).unwrap_or_else(|| "?".into()),
+        util.word(),
+        need_u.map(|n| format!("{n:.2} GB")).unwrap_or_else(|| "?".into()),
+        vram_figure_source()
+    );
+    set_helper_verdict((embed, util));
+    (embed, util)
+}
+
+/// Apply a fresh verdict to helpers already running: an idle helper whose
+/// placement differs restarts now; a busy one moves at its next start.
+pub(crate) async fn move_idle_helpers(app: &AppHandle) {
+    let (e, u) = helper_verdict();
+    let st = app.state::<LLMState>();
+    let embed_model = st.embed_model.lock().await.clone();
+    if let Some(m) = embed_model {
+        if *st.embed_running.lock().await && *st.embed_place.lock().await != e && EMBED_INFLIGHT.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            if let Err(err) = ensure_embedding_server(app, &st, &m).await {
+                log::warn!("[helpers] memory model could not move to the {}: {err}", e.word());
+            }
+        }
+    }
+    let util_model = st.util_model.lock().await.clone();
+    if let Some(m) = util_model {
+        if *st.util_running.lock().await && *st.util_place.lock().await != u && UTIL_INFLIGHT.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            if let Err(err) = ensure_utility_server(app, &st, &m).await {
+                log::warn!("[helpers] helper model could not move to the {}: {err}", u.word());
+            }
+        }
+    }
+}
+
+/// Before a chat-model switch or a maintenance stop: the card belongs to
+/// the incoming model. Helpers on it stop now (they restart on demand on
+/// the processor) and the verdict is re-taken once the new model is ready.
+pub(crate) async fn helpers_off_card(state: &LLMState) {
+    set_helper_verdict((HelperPlace::Cpu, HelperPlace::Cpu));
+    if *state.embed_place.lock().await == HelperPlace::Card {
+        log::info!("[helpers] memory model leaves the card for the switch");
+        stop_embedding_server_inner(state).await;
+    }
+    if *state.util_place.lock().await == HelperPlace::Card {
+        log::info!("[helpers] helper model leaves the card for the switch");
+        stop_utility_server_inner(state).await;
+    }
+}
+
 /// The driver's own device-level figure - used and total MiB summed over
 /// the NVIDIA cards - from nvidia-smi. Under Windows' display driver model
 /// the engine probe's "free" is a constant (total minus the desktop),
@@ -1784,6 +2004,7 @@ pub static FORCE_RELOAD_NEXT: std::sync::atomic::AtomicBool = std::sync::atomic:
 /// reloads whatever the router asks for.
 /// Returns whether a server was running (and so held the card until now).
 pub(crate) async fn stop_chat_server_for_maintenance(state: &LLMState) -> bool {
+    helpers_off_card(state).await;
     let mut server_process = state.server_process.lock().await;
     let was_running = server_process.is_some();
     if let Some(child) = server_process.take() {
@@ -2654,10 +2875,17 @@ pub async fn start_llama_server(
                     let _ = app_handle.emit("context-size-changed", current_ctx_size());
                 }
                 // The card changed shape: the next reader gets a fresh figure
-                // once the driver has settled the allocation.
+                // once the driver has settled the allocation. Then the
+                // helpers' placement is decided from it (after the footprint
+                // measurement at 3 s has read the card).
+                let app_for_helpers = app_handle.clone();
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                     invalidate_vram_cache().await;
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    invalidate_vram_cache().await;
+                    decide_helper_placement(&app_for_helpers).await;
+                    move_idle_helpers(&app_for_helpers).await;
                 });
                 // Measure what this load really took on the card and keep
                 // it: the next grade, credit and split pick for this model
@@ -2881,12 +3109,13 @@ async fn embed_server_ready() -> bool {
     )
 }
 
-async fn stop_embedding_server_inner(state: &State<'_, LLMState>) {
+async fn stop_embedding_server_inner(state: &LLMState) {
     if let Some(child) = state.embed_process.lock().await.take() {
         let _ = child.kill();
     }
     *state.embed_running.lock().await = false;
     *state.embed_model.lock().await = None;
+    *state.embed_place.lock().await = HelperPlace::Cpu;
 }
 
 /// Stop the embedding server (frees its RAM). Safe to call when not running.
@@ -2920,7 +3149,11 @@ async fn ensure_embedding_server(
     {
         let running = *state.embed_running.lock().await;
         let same_model = state.embed_model.lock().await.as_deref() == Some(model_filename);
-        if running && same_model {
+        // The placement it runs under stands while requests are in flight;
+        // a changed verdict lands at the first idle start.
+        let same_place = *state.embed_place.lock().await == helper_verdict().0
+            || EMBED_INFLIGHT.load(std::sync::atomic::Ordering::SeqCst) > 0;
+        if running && same_model && same_place {
             // Already serving (or still loading) this model. If ready, done; if
             // still warming up, WAIT for it rather than restarting - a restart
             // races the old process for the port. Only fall through to a real
@@ -2963,7 +3196,7 @@ async fn ensure_embedding_server(
     // path segfaults instead of exiting. NB: pooling + ctx are
     // model-specific - swapping the embedding model (see EMBEDDING_MODEL)
     // may require changing these.
-    let args = vec![
+    let mut args = vec![
         // Bare filename + models-dir working directory: absolute paths under
         // a non-ASCII user profile arrive mangled in llama-server's argv.
         "--model".to_string(),
@@ -2980,14 +3213,32 @@ async fn ensure_embedding_server(
         "--ctx-size".to_string(),
         "512".to_string(),
         "--no-webui".to_string(),
-        "--device".to_string(),
-        "none".to_string(),
-        "-ngl".to_string(),
-        "0".to_string(),
     ];
-
-    let (mut rx, child) = bundled_llama_command(&app_handle)?
-        .current_dir(models_dir.clone())
+    // Where the verdict puts it: the chat engine on the card, else the
+    // bundled engine with the card switched off.
+    let mut place = helper_verdict().0;
+    let mut device_args = vec!["--device".to_string(), "none".to_string(), "-ngl".to_string(), "0".to_string()];
+    if place == HelperPlace::Card {
+        let d = select_gpu_device_args(app_handle).await;
+        if args_force_cpu(&d) {
+            place = HelperPlace::Cpu;
+        } else {
+            device_args = d;
+        }
+    }
+    args.extend(device_args);
+    let free_before = if place == HelperPlace::Card {
+        invalidate_vram_cache().await;
+        available_vram_mib(app_handle).await.map(|m| m as f64 / 1024.0)
+    } else {
+        None
+    };
+    let cmd = if place == HelperPlace::Card {
+        chat_server_command(app_handle, &models_dir)?
+    } else {
+        bundled_llama_command(app_handle)?.current_dir(models_dir.clone())
+    };
+    let (mut rx, child) = cmd
         .args(&args)
         .spawn()
         .map_err(|e| format!("Failed to start embedding server: {}", e))?;
@@ -2995,7 +3246,8 @@ async fn ensure_embedding_server(
     *state.embed_process.lock().await = Some(child);
     *state.embed_running.lock().await = true;
     *state.embed_model.lock().await = Some(model_filename.to_string());
-    println!("[LLM] embedding server started on port {}", EMBED_PORT);
+    *state.embed_place.lock().await = place;
+    println!("[LLM] embedding server started on port {} ({})", EMBED_PORT, place.word());
 
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
@@ -3015,11 +3267,50 @@ async fn ensure_embedding_server(
     // Wait for the model to load (CPU load of a small embedder is a few seconds).
     for _ in 0..60 {
         if embed_server_ready().await {
+            if place == HelperPlace::Card {
+                helper_measure_after_ready(app_handle.clone(), model_filename.to_string(), EMBED_CTX, free_before, "memory model");
+            }
             return Ok(());
         }
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     }
+    if place == HelperPlace::Card {
+        // The card did not take it: remember that for this machine and
+        // come up on the processor instead, now.
+        log::warn!("[helpers] memory model did not come up on the card - back to the processor (remembered for 30 days)");
+        note_helper_card_failure(app_handle, true);
+        let (_, u) = helper_verdict();
+        set_helper_verdict((HelperPlace::Cpu, u));
+        stop_embedding_server_inner(state).await;
+        drop(_startup);
+        return Box::pin(ensure_embedding_server(app_handle, state, model_filename)).await;
+    }
     Err("Embedding server did not become ready in time".to_string())
+}
+
+/// A helper that came up on the card: record what it took (the next
+/// verdict uses the measured figure, not the estimate).
+fn helper_measure_after_ready(app: AppHandle, model: String, ctx: u64, free_before: Option<f64>, what: &'static str) {
+    let Some(before) = free_before else { return };
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        invalidate_vram_cache().await;
+        if let Some(after_mib) = available_vram_mib(&app).await {
+            let actual = (before - after_mib as f64 / 1024.0).max(0.0);
+            let predicted = helper_need_gb(&app, &model, ctx).unwrap_or(0.0);
+            log::info!("[helpers] {what} on the card took {actual:.2} GB (estimate {predicted:.2}, {})", vram_figure_source());
+            if predicted > 0.0 && actual >= predicted * 0.2 {
+                load_calibration_write(&app, &model, LoadCalibration {
+                    ctx,
+                    kv_q8: false,
+                    moe_cpu_layers: None,
+                    predicted_gb: predicted,
+                    actual_gb: actual,
+                    at: chrono_now_secs(),
+                });
+            }
+        }
+    });
 }
 
 /// Embed a batch of texts → one vector each (same order as input). Lazily
@@ -3083,6 +3374,7 @@ enum EmbedError {
 }
 
 async fn embed_request(model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbedError> {
+    let _busy = Inflight::new(&EMBED_INFLIGHT);
     let client = local_http();
     let resp = client
         .post(format!("http://localhost:{}/v1/embeddings", EMBED_PORT)).bearer_auth(local_api_key())
@@ -3141,12 +3433,13 @@ async fn util_server_ready() -> bool {
     )
 }
 
-async fn stop_utility_server_inner(state: &State<'_, LLMState>) {
+async fn stop_utility_server_inner(state: &LLMState) {
     if let Some(child) = state.util_process.lock().await.take() {
         let _ = child.kill();
     }
     *state.util_running.lock().await = false;
     *state.util_model.lock().await = None;
+    *state.util_place.lock().await = HelperPlace::Cpu;
 }
 
 /// Stop the utility server (frees its RAM). Safe to call when not running.
@@ -3179,7 +3472,9 @@ async fn ensure_utility_server(
     {
         let running = *state.util_running.lock().await;
         let same_model = state.util_model.lock().await.as_deref() == Some(model_filename);
-        if running && same_model {
+        let same_place = *state.util_place.lock().await == helper_verdict().1
+            || UTIL_INFLIGHT.load(std::sync::atomic::Ordering::SeqCst) > 0;
+        if running && same_model && same_place {
             for _ in 0..120 {
                 if util_server_ready().await {
                     return Ok(());
@@ -3213,7 +3508,7 @@ async fn ensure_utility_server(
     // layers, which OOMs on a card the chat model has filled and trips a
     // segfault in llama-server's OOM error path. Reasoning off (these tasks
     // don't reason); modest context fits the extraction prompt + one turn.
-    let args = vec![
+    let mut args = vec![
         // Bare filename + models-dir working directory (same rationale as
         // the chat and embedding servers).
         "--model".to_string(),
@@ -3229,14 +3524,30 @@ async fn ensure_utility_server(
         "--reasoning".to_string(),
         "off".to_string(),
         "--no-webui".to_string(),
-        "--device".to_string(),
-        "none".to_string(),
-        "-ngl".to_string(),
-        "0".to_string(),
     ];
-
-    let (mut rx, child) = bundled_llama_command(&app_handle)?
-        .current_dir(models_dir.clone())
+    let mut place = helper_verdict().1;
+    let mut device_args = vec!["--device".to_string(), "none".to_string(), "-ngl".to_string(), "0".to_string()];
+    if place == HelperPlace::Card {
+        let d = select_gpu_device_args(app_handle).await;
+        if args_force_cpu(&d) {
+            place = HelperPlace::Cpu;
+        } else {
+            device_args = d;
+        }
+    }
+    args.extend(device_args);
+    let free_before = if place == HelperPlace::Card {
+        invalidate_vram_cache().await;
+        available_vram_mib(app_handle).await.map(|m| m as f64 / 1024.0)
+    } else {
+        None
+    };
+    let cmd = if place == HelperPlace::Card {
+        chat_server_command(app_handle, &models_dir)?
+    } else {
+        bundled_llama_command(app_handle)?.current_dir(models_dir.clone())
+    };
+    let (mut rx, child) = cmd
         .args(&args)
         .spawn()
         .map_err(|e| format!("Failed to start utility server: {}", e))?;
@@ -3244,7 +3555,8 @@ async fn ensure_utility_server(
     *state.util_process.lock().await = Some(child);
     *state.util_running.lock().await = true;
     *state.util_model.lock().await = Some(model_filename.to_string());
-    println!("[LLM] utility server started on port {}", UTIL_PORT);
+    *state.util_place.lock().await = place;
+    println!("[LLM] utility server started on port {} ({})", UTIL_PORT, place.word());
 
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
@@ -3264,9 +3576,21 @@ async fn ensure_utility_server(
     // CPU load of a ~2 GB model is a few seconds; allow generous headroom.
     for _ in 0..120 {
         if util_server_ready().await {
+            if place == HelperPlace::Card {
+                helper_measure_after_ready(app_handle.clone(), model_filename.to_string(), UTIL_CTX, free_before, "helper model");
+            }
             return Ok(());
         }
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    }
+    if place == HelperPlace::Card {
+        log::warn!("[helpers] helper model did not come up on the card - back to the processor (remembered for 30 days)");
+        note_helper_card_failure(app_handle, false);
+        let (e, _) = helper_verdict();
+        set_helper_verdict((e, HelperPlace::Cpu));
+        stop_utility_server_inner(state).await;
+        drop(_startup);
+        return Box::pin(ensure_utility_server(app_handle, state, model_filename)).await;
     }
     Err("Utility server did not become ready in time".to_string())
 }
@@ -3326,6 +3650,7 @@ pub async fn utility_chat(
     max_tokens: u32,
 ) -> Result<String, String> {
     ensure_utility_server(&app_handle, &state, &model).await?;
+    let _busy = Inflight::new(&UTIL_INFLIGHT);
 
     let mut body = serde_json::json!({
         "model": model,
@@ -4398,7 +4723,9 @@ pub async fn load_model(
     // load window (cleared at the single exit below).
     *state.loading_model.lock().await = Some(filename.clone());
 
-    // Stop existing server if running
+    // Stop existing server if running - and the helpers leave the card
+    // first: the incoming model gets all of it.
+    helpers_off_card(&state).await;
     stop_llama_server(state.clone()).await.ok();
 
     // Wait for port 8080 to be fully released
