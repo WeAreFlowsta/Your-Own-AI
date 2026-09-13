@@ -550,7 +550,7 @@ pub async fn figures_slot_free(app: &AppHandle, dir: &std::path::Path) -> Machin
     // can exceed the incumbent's true VRAM share when it is partially
     // offloaded - erring green is safe (the loader and the session
     // too-big memo still guard reality); erring yellow is this bug.
-    let (incumbent, vision_paired) = {
+    let (incumbent, vision_paired, running_ctx) = {
         let st = tauri::Manager::state::<crate::llm::LLMState>(app);
         let loading = st.loading_model.lock().await.clone();
         let current = st.current_model.lock().await.clone();
@@ -559,12 +559,22 @@ pub async fn figures_slot_free(app: &AppHandle, dir: &std::path::Path) -> Machin
         // stops it before grading; a phantom reclaim of a 21 GB MoE's full
         // need graded an 18 GB model Green on a 7 GB card - Windows beta.18).
         let running = *st.is_server_running.lock().await;
+        // The context the running server actually holds. Re-sizing the
+        // incumbent from the figure it has itself reduced gave it a smaller
+        // context, no calibration match, and a credit of 2.9 GB for a model
+        // measured at 5.5 (Windows beta.4 headroom leg: Ornith graded Red
+        // at 4096, loaded at 32768).
+        let running_ctx: Option<u64> = if running && loading.is_none() {
+            Some(crate::llm::current_ctx_size() as u64).filter(|&c| c > 0)
+        } else {
+            None
+        };
         let incumbent = if running || loading.is_some() {
             loading.or(current).filter(|c| !c.starts_with("online:"))
         } else {
             None
         };
-        (incumbent, paired)
+        (incumbent, paired, running_ctx)
     };
     // A bench server the app itself started (tune arm, matrix leg) holds
     // the card just like the chat model does - hand its footprint back the
@@ -587,9 +597,10 @@ pub async fn figures_slot_free(app: &AppHandle, dir: &std::path::Path) -> Machin
             let size = model_bytes_on_disk(&path, &meta);
             // The incumbent runs at ITS context - a fine-tune pin included -
             // so the footprint handed back is the one it actually holds.
-            let ctx = match ctx_override {
-                Some(c) => c as _,
-                None => pinned_or_chosen_ctx(app, &name, &meta, size, total_ram_gb, free_vram_gb),
+            let ctx = match (ctx_override, running_ctx) {
+                (Some(c), _) => c as _,
+                (None, Some(c)) => c,
+                (None, None) => pinned_or_chosen_ctx(app, &name, &meta, size, total_ram_gb, free_vram_gb),
             };
             // The measured footprint of the last healthy load at this shape
             // (context, cache mode) beats every estimate below.
