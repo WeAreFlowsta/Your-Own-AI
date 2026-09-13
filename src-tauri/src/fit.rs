@@ -779,6 +779,14 @@ pub async fn assess_fresh(app: &AppHandle) -> Vec<ModelFit> {
     assess(app).await
 }
 
+/// Forget the memoized grades (a leg that changed the card and wants the
+/// grade of THIS moment, not one taken up to three seconds ago mid-load).
+pub fn forget_assess() {
+    if let Ok(mut g) = ASSESS_MEMO.lock() {
+        *g = None;
+    }
+}
+
 pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
     let memo = &ASSESS_MEMO;
     const TTL: std::time::Duration = std::time::Duration::from_secs(3);

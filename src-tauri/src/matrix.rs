@@ -896,8 +896,16 @@ pub async fn leg_headroom(
         })
         .collect();
     files.sort();
-    let (Some((_, a)), Some((_, b))) = (files.first().cloned(), files.get(1).cloned()) else {
-        sink("fewer than two chat models - leg skipped".into());
+    // B must be sized by the figure, not by a fine-tune pin - a pinned
+    // context is the same number whatever the card says, and the check
+    // would prove nothing (E4B pinned at 128K, Windows 09-13).
+    let unpinned = |n: &str| crate::tuning::get(app, n).context.is_none();
+    let Some((_, a)) = files.first().cloned() else {
+        sink("no chat model - leg skipped".into());
+        return failures;
+    };
+    let Some((_, b)) = files.iter().skip(1).find(|(_, n)| unpinned(n)).cloned() else {
+        sink("every other chat model has a fine-tune context pin - nothing for the figure to size; leg skipped".into());
         return failures;
     };
     crate::llm::invalidate_vram_cache().await;
@@ -934,8 +942,10 @@ pub async fn leg_headroom(
         }
     }
 
-    // The claim: B's "runs at" with A on the card.
+    // The claim: B's "runs at" with A on the card - graded NOW, not a
+    // memoized grade from mid-load.
     crate::llm::invalidate_vram_cache().await;
+    crate::fit::forget_assess();
     let claimed = crate::fit::assess(app)
         .await
         .into_iter()
@@ -945,7 +955,9 @@ pub async fn leg_headroom(
         failures.push(format!("headroom: {b} not graded"));
         return failures;
     };
-    sink(format!("{b}: graded {grade:?}, runs at {claimed_ctx} (with {a} on the card, its footprint credited)"));
+    sink(format!("{b}: graded {grade:?}, runs at {claimed_ctx} (with {a} on the card, its footprint credited; free {} GB by the {})",
+        crate::llm::available_vram_mib(app).await.map(|m| format!("{:.2}", m as f64 / 1024.0)).unwrap_or_else(|| "?".into()),
+        crate::llm::vram_figure_source()));
 
     // The truth: load B and read what the loader gave it.
     if let Err(e) = crate::llm::load_model(app.clone(), state.clone(), b.clone(), false, "matrix-headroom".into()).await {
