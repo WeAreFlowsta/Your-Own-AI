@@ -1048,8 +1048,7 @@ pub async fn build_agent_status(app: AppHandle, state: State<'_, AgentBridgeStat
     let tools = folder
         .as_deref()
         .map(|f| {
-            app.path()
-                .app_data_dir()
+            crate::profile::root(&app)
                 .map(|d| std::path::Path::new(f).starts_with(d.join("tool-sessions")))
                 .unwrap_or(false)
         })

@@ -1406,9 +1406,7 @@ fn read_import_file(
 // ── Archive store ──────────────────────────────────────────────────────
 
 fn imports_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
+    let dir = crate::profile::root(&app)
         .map_err(|e| e.to_string())?
         .join(IMPORTS_DIR);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -1416,7 +1414,7 @@ fn imports_dir(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn data_key(app: &AppHandle) -> Result<[u8; 32], String> {
-    let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let app_data = crate::profile::root(&app).map_err(|e| e.to_string())?;
     let material = crate::transcript_crypto::load_recovery_material(&app_data)?
         .ok_or_else(|| "Encryption key not initialized yet - open the app fully once first.".to_string())?;
     material.data_key()

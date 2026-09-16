@@ -540,7 +540,7 @@ fn restore_memory_facts(
     backup: &serde_json::Value,
 ) -> bool {
     let Some(b64) = backup["memory_facts"]["raw_b64"].as_str() else { return false };
-    let Ok(dir) = app.path().app_data_dir() else { return false };
+    let Ok(dir) = crate::profile::root(&app) else { return false };
     let path = dir.join(vault_escrow::FACTS_FILE);
     if path.exists() {
         return false;
@@ -578,7 +578,7 @@ fn restore_thumbnails(
     backup: &serde_json::Value,
 ) -> u64 {
     let Some(map) = backup["thumbnails"]["data"].as_object() else { return 0 };
-    let Ok(dir) = app.path().app_data_dir() else { return 0 };
+    let Ok(dir) = crate::profile::root(&app) else { return 0 };
     let thumb_dir = dir.join("thumbnails");
     let _ = std::fs::create_dir_all(&thumb_dir);
     let mut written = 0u64;
@@ -694,7 +694,7 @@ fn restore_ai_knowledge(
 
 /// Rename a thumbnail file from one AI id to another, if it exists.
 fn move_thumbnail(app: &tauri::AppHandle, from_id: &str, to_id: &str) {
-    let Ok(dir) = app.path().app_data_dir() else { return };
+    let Ok(dir) = crate::profile::root(&app) else { return };
     let from = dir.join("thumbnails").join(format!("{}.jpg", from_id));
     let to = dir.join("thumbnails").join(format!("{}.jpg", to_id));
     if from.exists() && !to.exists() {
@@ -786,7 +786,7 @@ pub async fn vault_restore_conversations(
     let mut conversations_deleted_here = 0u64;
 
     // 1. Merge the backup's AI configs into the local store.
-    let store = app.store(AI_STORE).map_err(|e| e.to_string())?;
+    let store = app.store(crate::profile::store_path(&app, AI_STORE)).map_err(|e| e.to_string())?;
     let local_ais: Vec<serde_json::Value> = match store.get(CUSTOM_AIS_KEY) {
         Some(serde_json::Value::Array(arr)) => arr,
         _ => Vec::new(),

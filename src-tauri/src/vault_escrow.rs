@@ -184,9 +184,7 @@ pub(crate) fn local_recovery(app: &tauri::AppHandle) -> Result<RecoveryMaterial,
             return Ok(manager.recovery.clone());
         }
     }
-    let data_dir = app
-        .path()
-        .app_data_dir()
+    let data_dir = crate::profile::root(&app)
         .map_err(|e| format!("no app data dir: {}", e))?;
     transcript_crypto::load_recovery_material(&data_dir)?
         .ok_or_else(|| "no local recovery material yet".to_string())
@@ -219,8 +217,7 @@ pub(crate) async fn escrow_port(
     app: &tauri::AppHandle,
     require_owner_match: bool,
 ) -> Result<u16, EscrowStatus> {
-    let store = app
-        .store(AUTH_STORE)
+    let store = app.store(crate::profile::store_path(&app, AUTH_STORE))
         .map_err(|e| EscrowStatus::error(e.to_string()))?;
     if !store.get("link_done").and_then(|v| v.as_bool()).unwrap_or(false) {
         return Err(EscrowStatus::state("unlinked"));
@@ -252,6 +249,7 @@ pub(crate) async fn escrow_port(
             // once on upgrade; their sync state stays valid (same identity).
             store.set(ESCROW_OWNER_KEY, serde_json::json!(live));
             let _ = store.save();
+            crate::profile::bind(app, &live);
             Ok(port)
         }
     }
@@ -262,13 +260,14 @@ pub(crate) async fn escrow_port(
 /// state: "already uploaded" beliefs about another identity's slot would
 /// otherwise produce manifests pointing at objects that don't exist there.
 fn adopt_escrow_owner(app: &tauri::AppHandle, live: &str) {
-    if let Ok(store) = app.store(AUTH_STORE) {
+    if let Ok(store) = app.store(crate::profile::store_path(&app, AUTH_STORE)) {
         let prev = store
             .get(ESCROW_OWNER_KEY)
             .and_then(|v| v.as_str().map(String::from));
         if prev.as_deref() != Some(live) {
             store.set(ESCROW_OWNER_KEY, serde_json::json!(live));
             let _ = store.save();
+            crate::profile::bind(app, live);
             clear_sync_state(app);
             log::info!("[escrow] escrow owner adopted for the current Vault identity");
         }
@@ -398,9 +397,7 @@ pub async fn vault_escrow_restore(
         }
     }
 
-    let data_dir = app
-        .path()
-        .app_data_dir()
+    let data_dir = crate::profile::root(&app)
         .map_err(|e| format!("no app data dir: {}", e))?;
 
     // Stop the conductor + lair so their databases aren't held open (same
@@ -466,7 +463,7 @@ pub async fn vault_escrow_restore(
         None => {
             // Vault locked mid-restore: can't read who we just adopted.
             // Drop the owner record so the next unlocked contact re-adopts.
-            if let Ok(store) = app.store(AUTH_STORE) {
+            if let Ok(store) = app.store(crate::profile::store_path(&app, AUTH_STORE)) {
                 store.delete(ESCROW_OWNER_KEY);
                 let _ = store.save();
             }
@@ -521,9 +518,7 @@ pub async fn vault_escrow_keep_local(app: tauri::AppHandle) -> Result<EscrowStat
     let local = local_recovery(&app)?;
     if let Some(old) = fetch_escrow(port).await? {
         if old != local {
-            let data_dir = app
-                .path()
-                .app_data_dir()
+            let data_dir = crate::profile::root(&app)
                 .map_err(|e| format!("no app data dir: {}", e))?;
             let ts = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -771,7 +766,7 @@ struct SyncEntry {
 }
 
 fn sync_state_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    app.path().app_data_dir().ok().map(|d| d.join(SYNC_STATE_FILE))
+    crate::profile::root(&app).ok().map(|d| d.join(SYNC_STATE_FILE))
 }
 
 fn load_sync_state(app: &tauri::AppHandle) -> std::collections::HashMap<String, SyncEntry> {
@@ -913,8 +908,7 @@ async fn delete_backup_label(port: u16, label: &str) {
 pub(crate) const RESTORE_PENDING_FILE: &str = "conversation-restore-pending";
 
 pub(crate) fn restore_pending_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    app.path()
-        .app_data_dir()
+    crate::profile::root(&app)
         .ok()
         .map(|d| d.join(RESTORE_PENDING_FILE))
 }
@@ -935,8 +929,7 @@ pub(crate) fn clear_restore_pending(app: &tauri::AppHandle) {
 const REEMBED_PENDING_FILE: &str = "memory-reembed-pending";
 
 pub(crate) fn reembed_pending_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    app.path()
-        .app_data_dir()
+    crate::profile::root(&app)
         .ok()
         .map(|d| d.join(REEMBED_PENDING_FILE))
 }
@@ -1006,7 +999,7 @@ fn backup_record(
 const LAST_INDEX_FILE: &str = "backup-last-index.json";
 
 fn last_index_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    app.path().app_data_dir().ok().map(|d| d.join(LAST_INDEX_FILE))
+    crate::profile::root(&app).ok().map(|d| d.join(LAST_INDEX_FILE))
 }
 
 fn load_last_index(app: &tauri::AppHandle) -> Vec<serde_json::Value> {
@@ -1021,15 +1014,14 @@ fn load_last_index(app: &tauri::AppHandle) -> Vec<serde_json::Value> {
 const FULL_READ_FILE: &str = "backup-full-read-at";
 
 fn load_full_read_at(app: &tauri::AppHandle) -> Option<i64> {
-    app.path()
-        .app_data_dir()
+    crate::profile::root(&app)
         .ok()
         .and_then(|d| std::fs::read_to_string(d.join(FULL_READ_FILE)).ok())
         .and_then(|s| s.trim().parse::<i64>().ok())
 }
 
 fn save_full_read_at(app: &tauri::AppHandle, at_micros: i64) {
-    if let Ok(d) = app.path().app_data_dir() {
+    if let Ok(d) = crate::profile::root(&app) {
         let _ = std::fs::write(d.join(FULL_READ_FILE), at_micros.to_string());
     }
 }
@@ -1462,7 +1454,7 @@ pub(crate) fn facts_human_readable(
 fn collect_thumbnails(app: &tauri::AppHandle, ai_ids: &[String]) -> serde_json::Map<String, serde_json::Value> {
     use base64::Engine;
     let mut out = serde_json::Map::new();
-    let Ok(dir) = app.path().app_data_dir() else { return out };
+    let Ok(dir) = crate::profile::root(&app) else { return out };
     for id in ai_ids {
         let path = dir.join("thumbnails").join(format!("{}.jpg", id));
         let Ok(meta) = std::fs::metadata(&path) else { continue };
@@ -1516,7 +1508,7 @@ fn attach_extras(
 ) {
     // Your Memory profile facts: local encrypted file, not Holochain data.
     // Carried readable (CAL) + as the raw file for a lossless restore.
-    if let Ok(dir) = app.path().app_data_dir() {
+    if let Ok(dir) = crate::profile::root(&app) {
         let facts_path = dir.join(FACTS_FILE);
         if let Ok(bytes) = std::fs::read(&facts_path) {
             use base64::Engine;
@@ -2040,9 +2032,7 @@ async fn write_full_backup_inner(app: &tauri::AppHandle) -> Result<serde_json::V
             return Ok(skipped("probe_failed"));
         }
     }
-    let ai_configs = app
-        .path()
-        .app_data_dir()
+    let ai_configs = crate::profile::root(&app)
         .ok()
         .map(|d| d.join("ai-data.json"))
         .filter(|p| p.exists())

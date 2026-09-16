@@ -279,7 +279,7 @@ fn slug(s: &str) -> String {
 
 /// Read the user's custom AIs from the store the frontend persists.
 fn load_ais(app: &AppHandle) -> Vec<Value> {
-    let Ok(store) = app.store(AI_STORE) else {
+    let Ok(store) = app.store(crate::profile::store_path(&app, AI_STORE)) else {
         return vec![];
     };
     match store.get(CUSTOM_AIS_KEY) {

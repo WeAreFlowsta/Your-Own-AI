@@ -59,9 +59,22 @@ let storeInstance: Store | null = null;
 /**
  * Get or initialize the store instance
  */
+/**
+ * The AI configs belong to the signed-in identity's profile, so the store
+ * is opened by the absolute path the Rust side resolves for this launch.
+ */
+export async function aiStorePath(): Promise<string> {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke<string>('profile_store_path', { name: STORE_PATH });
+  } catch {
+    return STORE_PATH;
+  }
+}
+
 async function getStore(): Promise<Store> {
   if (!storeInstance) {
-    storeInstance = await Store.load(STORE_PATH);
+    storeInstance = await Store.load(await aiStorePath());
   }
   return storeInstance;
 }

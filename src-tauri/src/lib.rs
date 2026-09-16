@@ -32,6 +32,7 @@ mod inference_memory;     // backend memory assembly for the inference server
 mod router;               // Auto-mode model routing (offline / online+offline)
 mod gguf;                  // minimal GGUF header reader (model metadata for fit)
 mod fit;                   // VRAM/RAM fit grading per downloaded model
+mod profile;               // identity profiles: one data set per Flowsta identity
 mod reset;                 // factory reset (wipe local AIs/transcripts/memory, relaunch)
 mod vault_escrow;          // transcript-key escrow in the user's Flowsta Vault
 mod vault_restore;         // replay conversations from the Vault backup onto this device
@@ -127,11 +128,8 @@ pub fn resolve_sidecar_bin(name: &str) -> PathBuf {
 
 /// Get the thumbnails directory path
 fn get_thumbnails_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-    
+    let app_data_dir = crate::profile::root(app)?;
+
     let thumbnails_dir = app_data_dir.join("thumbnails");
     
     // Create directory if it doesn't exist
@@ -570,6 +568,7 @@ pub fn run() {
         .manage(LLMState::new())
         .manage(agent_bridge::AgentBridgeState::new())
         .invoke_handler(tauri::generate_handler![
+            profile::profile_store_path,
             inference_server::lan_access_status,
             inference_server::lan_access_set,
             inference_server::lan_access_regenerate_key,
@@ -765,6 +764,19 @@ pub fn run() {
             flowsta::share_submit,
         ])
         .setup(|app| {
+            // Identity profiles: pick (or create) the profile for the Flowsta
+            // identity the Vault has unlocked right now, else the last one
+            // used; a pre-profiles install is moved into a profile first.
+            // Before anything opens a store or a data file.
+            {
+                let device_dir = app.path().app_data_dir().expect("Failed to get app data dir");
+                let _ = std::fs::create_dir_all(&device_dir);
+                let live = tauri::async_runtime::block_on(flowsta::vault_identity_quick())
+                    .and_then(|(unlocked, key)| if unlocked { key } else { None });
+                let root = profile::init(&device_dir, live.as_deref());
+                log::info!("Profile root: {:?}", root);
+            }
+
             // yourownai:// links (Add to Your Own AI on the site). Registered
             // at runtime so a dev build answers too; a first launch by link
             // arrives through on_open_url, a later one via single-instance.
@@ -852,11 +864,11 @@ pub fn run() {
 
             // Start Holochain conductor in background
             let hc_app_handle = app.handle().clone();
-            let data_dir = app
-                .path()
-                .app_data_dir()
-                .expect("Failed to get app data dir");
-            let resource_dir = resolve_resource_dir(app.handle(), &data_dir);
+            // Identity-scoped data lives in the profile chosen at the top of
+            // setup; the bundled resources resolve against the app data dir.
+            let data_dir = profile::root(app.handle()).expect("Failed to get the profile root");
+            let device_dir = profile::device_root(app.handle()).expect("Failed to get app data dir");
+            let resource_dir = resolve_resource_dir(app.handle(), &device_dir);
 
             tauri::async_runtime::spawn(async move {
                 log::info!("Starting Holochain conductor...");

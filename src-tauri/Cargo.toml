@@ -95,6 +95,9 @@ opt-level = 3
 opt-level = 3
 
 # Linux: prctl(PR_SET_PDEATHSIG) so lair/conductor die with the app (process_ext.rs).
+[dev-dependencies]
+tempfile = "3"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
 

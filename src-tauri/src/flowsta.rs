@@ -163,7 +163,7 @@ async fn ensure_linked(
     client: &reqwest::Client,
     port: u16,
 ) -> Result<(), String> {
-    let store = app.store(AUTH_STORE).map_err(|e| e.to_string())?;
+    let store = app.store(crate::profile::store_path(&app, AUTH_STORE)).map_err(|e| e.to_string())?;
     // Don't trust a stale local link flag. Vault drops every app link on reset,
     // so confirm the link still exists there before skipping re-link. A wiped
     // Vault would otherwise leave YOAI absent from its connected apps and make
@@ -242,7 +242,7 @@ async fn fetch_vault_profile(
         .await
     {
         if let Ok(v) = resp.json::<serde_json::Value>().await {
-            if let Ok(store) = app.store(AUTH_STORE) {
+            if let Ok(store) = app.store(crate::profile::store_path(&app, AUTH_STORE)) {
                 store.set("display_name", v["display_name"].clone());
                 store.set("web_username", v["web_username"].clone());
                 store.set("profile_picture", v["profile_picture"].clone());
@@ -347,7 +347,7 @@ pub async fn flowsta_sign_in(app: tauri::AppHandle) -> Result<FlowstaSession, St
     })?;
 
     // 4. Persist Rust-side; tokens never enter the webview
-    let store = app.store(AUTH_STORE).map_err(|e| e.to_string())?;
+    let store = app.store(crate::profile::store_path(&app, AUTH_STORE)).map_err(|e| e.to_string())?;
     store.set("access_token", serde_json::json!(access));
     store.set("refresh_token", tokens["refresh_token"].clone());
     store.set("agent_pub_key", serde_json::json!(agent_pub_key));
@@ -372,6 +372,7 @@ pub async fn flowsta_sign_in(app: tauri::AppHandle) -> Result<FlowstaSession, St
         );
     }
     store.save().map_err(|e| e.to_string())?;
+    crate::profile::bind(&app, &agent_pub_key);
 
     // Profile (display name / username / avatar) via the scope grant
     fetch_vault_profile(&app, &client, port).await;
@@ -381,7 +382,7 @@ pub async fn flowsta_sign_in(app: tauri::AppHandle) -> Result<FlowstaSession, St
 
 #[tauri::command]
 pub async fn flowsta_sign_out(app: tauri::AppHandle) -> Result<(), String> {
-    let store = app.store(AUTH_STORE).map_err(|e| e.to_string())?;
+    let store = app.store(crate::profile::store_path(&app, AUTH_STORE)).map_err(|e| e.to_string())?;
     // Clear the session but keep the link ceremony state (link_done,
     // app_link_key) — the Vault-side link persists, so re-linking on
     // every sign-in would just re-prompt the user pointlessly.
@@ -497,7 +498,7 @@ pub async fn flowsta_link_url(app: tauri::AppHandle) -> Result<String, String> {
     if !session_identity_ok(&app).await {
         return Err("identity_mismatch".into());
     }
-    let store = app.store(AUTH_STORE).map_err(|e| e.to_string())?;
+    let store = app.store(crate::profile::store_path(&app, AUTH_STORE)).map_err(|e| e.to_string())?;
     let key = store
         .get("agent_pub_key")
         .and_then(|v| v.as_str().map(String::from))
@@ -708,7 +709,7 @@ async fn session_identity_ok(app: &tauri::AppHandle) -> bool {
 }
 
 async fn session_identity_ok_uncached(app: &tauri::AppHandle) -> bool {
-    let store = match app.store(AUTH_STORE) {
+    let store = match app.store(crate::profile::store_path(&app, AUTH_STORE)) {
         Ok(s) => s,
         Err(_) => return true,
     };
@@ -741,7 +742,7 @@ async fn session_identity_ok_uncached(app: &tauri::AppHandle) -> bool {
 /// timeout. The guard only needs an answer when Vault is genuinely up; a
 /// down/slow Vault yields `None` ("can't tell"), so the caller keeps the cached
 /// session instead of stalling online use behind a multi-port scan.
-async fn vault_identity_quick() -> Option<(bool, Option<String>)> {
+pub(crate) async fn vault_identity_quick() -> Option<(bool, Option<String>)> {
     let port = (*cached_port().lock().unwrap()).unwrap_or(27777);
     let resp = http()
         .get(format!("http://127.0.0.1:{}/status", port))
@@ -763,7 +764,7 @@ async fn vault_identity_quick() -> Option<(bool, Option<String>)> {
 /// if YOAI has a session but its link was wiped, it re-links (which pops Vault's
 /// approval), matching ProofPoll.
 async fn reconcile_vault_link(app: &tauri::AppHandle) -> bool {
-    let store = match app.store(AUTH_STORE) {
+    let store = match app.store(crate::profile::store_path(&app, AUTH_STORE)) {
         Ok(s) => s,
         Err(_) => return true,
     };
@@ -835,7 +836,7 @@ pub async fn get_access_token(app: &tauri::AppHandle) -> Result<String, String> 
     if !session_identity_ok(app).await {
         return Err("auth_required".to_string());
     }
-    let store = app.store(AUTH_STORE).map_err(|e| e.to_string())?;
+    let store = app.store(crate::profile::store_path(&app, AUTH_STORE)).map_err(|e| e.to_string())?;
     let access = store
         .get("access_token")
         .and_then(|v| v.as_str().map(String::from))
@@ -887,7 +888,7 @@ async fn session_from_store(app: &tauri::AppHandle) -> Result<FlowstaSession, St
     // session first so the reads below report signed-out (not the prior
     // identity's plan/profile).
     let _ = session_identity_ok(app).await;
-    let store = app.store(AUTH_STORE).map_err(|e| e.to_string())?;
+    let store = app.store(crate::profile::store_path(&app, AUTH_STORE)).map_err(|e| e.to_string())?;
     let agent_pub_key = store.get("agent_pub_key").and_then(|v| v.as_str().map(String::from));
     let did = store.get("did").and_then(|v| v.as_str().map(String::from));
     if agent_pub_key.is_none() {
@@ -1143,7 +1144,7 @@ pub async fn vault_sign_document(
             if desc.contains("linked apps") {
                 if !relinked {
                     relinked = true;
-                    if let Ok(store) = app.store(AUTH_STORE) {
+                    if let Ok(store) = app.store(crate::profile::store_path(&app, AUTH_STORE)) {
                         store.delete("link_done");
                         let _ = store.save();
                     }

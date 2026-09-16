@@ -64,9 +64,7 @@ fn safe_id(ai_id: &str) -> String {
 }
 
 fn file_for(app: &tauri::AppHandle, ai_id: &str) -> Result<std::path::PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
+    let dir = crate::profile::root(&app)
         .map_err(|e| format!("No app data dir: {}", e))?;
     Ok(dir.join(format!("transcript-emb-{}.enc", safe_id(ai_id))))
 }

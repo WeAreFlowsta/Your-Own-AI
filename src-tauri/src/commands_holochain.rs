@@ -655,7 +655,7 @@ static PROJECT_MEMORY_CACHE: std::sync::LazyLock<tokio::sync::Mutex<std::collect
 
 fn project_memory_index_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     use tauri::Manager;
-    app.path().app_data_dir().ok().map(|d| d.join("project-memory-index.json"))
+    crate::profile::root(&app).ok().map(|d| d.join("project-memory-index.json"))
 }
 
 fn project_memory_index_load(app: &tauri::AppHandle) -> std::collections::HashMap<String, Vec<(String, String)>> {
@@ -693,12 +693,12 @@ fn project_memory_disk_path(app: &tauri::AppHandle, folder: &str) -> Option<std:
     use sha2::Digest as _;
     use tauri::Manager;
     let tag = hex::encode(&sha2::Sha256::digest(folder.as_bytes())[..12]);
-    app.path().app_data_dir().ok().map(|d| d.join(format!("project-memory-{tag}.enc")))
+    crate::profile::root(&app).ok().map(|d| d.join(format!("project-memory-{tag}.enc")))
 }
 
 fn project_memory_data_key(app: &tauri::AppHandle) -> Result<[u8; 32], String> {
     use tauri::Manager;
-    let dir = app.path().app_data_dir().map_err(|e| format!("No app data dir: {e}"))?;
+    let dir = crate::profile::root(&app).map_err(|e| format!("No app data dir: {e}"))?;
     crate::transcript_crypto::load_recovery_material(&dir)?
         .ok_or_else(|| "No recovery material yet".to_string())?
         .data_key()
@@ -976,7 +976,7 @@ pub async fn cell_tidy(
     let manager = hc_state.get()?;
     let live = live_ais(&app);
     let result = manager.tidy_cells(&live).await?;
-    if let Ok(dir) = app.path().app_data_dir() {
+    if let Ok(dir) = crate::profile::root(&app) {
         let _ = std::fs::write(
             dir.join("cell-tidy-log.json"),
             serde_json::to_string_pretty(&result).unwrap_or_default(),
@@ -989,7 +989,7 @@ pub async fn cell_tidy(
 fn live_ais(app: &tauri::AppHandle) -> Vec<(String, String)> {
     use tauri_plugin_store::StoreExt;
     let mut live: Vec<(String, String)> = Vec::new();
-    if let Ok(store) = app.store("ai-data.json") {
+    if let Ok(store) = app.store(crate::profile::store_path(&app, "ai-data.json")) {
         if let Some(serde_json::Value::Array(arr)) = store.get("custom-ais") {
             for ai in arr {
                 let key = ai.get("agentPubKey").and_then(|v| v.as_str()).unwrap_or("");
@@ -1016,9 +1016,7 @@ pub async fn cell_lineage_report(
     let live = live_ais(&app);
     let report = manager.cell_lineage_report(&live).await?;
 
-    let dir = app
-        .path()
-        .app_data_dir()
+    let dir = crate::profile::root(&app)
         .map_err(|e| format!("No app data dir: {}", e))?;
     let path = dir.join("cell-lineage-report.json");
     std::fs::write(

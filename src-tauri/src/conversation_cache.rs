@@ -35,9 +35,7 @@ fn safe_key(agent_key: &str) -> String {
 }
 
 fn path_for(app: &tauri::AppHandle, agent_key: &str) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
+    let dir = crate::profile::root(&app)
         .map_err(|e| format!("No app data dir: {}", e))?;
     Ok(dir.join(format!("conv-list-{}.enc", safe_key(agent_key))))
 }
@@ -45,9 +43,7 @@ fn path_for(app: &tauri::AppHandle, agent_key: &str) -> Result<PathBuf, String> 
 /// The user data key straight from the recovery file - deliberately NOT
 /// through the conductor, so cached lists open while it is still starting.
 fn data_key(app: &tauri::AppHandle) -> Result<[u8; 32], String> {
-    let dir = app
-        .path()
-        .app_data_dir()
+    let dir = crate::profile::root(&app)
         .map_err(|e| format!("No app data dir: {}", e))?;
     crate::transcript_crypto::load_recovery_material(&dir)?
         .ok_or_else(|| "No recovery material yet".to_string())?
@@ -189,7 +185,7 @@ pub(crate) struct DeletedConversation {
 }
 
 fn ledger_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    app.path().app_data_dir().ok().map(|d| d.join(DELETED_LEDGER_FILE))
+    crate::profile::root(&app).ok().map(|d| d.join(DELETED_LEDGER_FILE))
 }
 
 pub(crate) fn deleted_ledger(app: &tauri::AppHandle) -> Vec<DeletedConversation> {
@@ -242,7 +238,7 @@ pub(crate) fn append_to_cache(app: &tauri::AppHandle, agent_key: &str, info: Con
 /// a handful of small files. Silent when the conversation is not cached yet
 /// (the next live read lists it by its start time).
 pub(crate) fn touch(app: &tauri::AppHandle, hash: &str, at_micros: i64) {
-    let Ok(dir) = app.path().app_data_dir() else { return };
+    let Ok(dir) = crate::profile::root(&app) else { return };
     let Ok(entries) = std::fs::read_dir(&dir) else { return };
     for entry in entries.flatten() {
         let path = entry.path();

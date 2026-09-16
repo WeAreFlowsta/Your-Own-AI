@@ -18,10 +18,10 @@ use tauri::{AppHandle, Manager};
 /// before calling this.
 #[tauri::command]
 pub async fn reset_to_defaults(app: AppHandle) -> Result<(), String> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Could not find the app data directory: {e}"))?;
+    // Identity-scoped data lives in the active profile; the GPU safety
+    // ladder is machine state at the device root.
+    let data_dir = crate::profile::root(&app)?;
+    let device_dir = crate::profile::device_root(&app)?;
 
     // Stop the conductor + lair so their database files aren't held open when we
     // delete them. We only have the PIDs (the Child handles are shared, not
@@ -49,10 +49,10 @@ pub async fn reset_to_defaults(app: AppHandle) -> Result<(), String> {
             }
         }
     }
-    for file in ["ai-data.json", "memory-facts.enc", "gpu-safety.json",
-                 crate::vault_escrow::SYNC_STATE_FILE] {
+    for file in ["ai-data.json", "memory-facts.enc", crate::vault_escrow::SYNC_STATE_FILE] {
         let _ = std::fs::remove_file(data_dir.join(file));
     }
+    let _ = std::fs::remove_file(device_dir.join("gpu-safety.json"));
     // The Vault may hold the only copy of the conversations this reset just
     // wiped. Without this marker, the first post-reset chat would arm a
     // backup that rewrites the Vault snapshot down to one conversation -

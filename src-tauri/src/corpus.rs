@@ -355,7 +355,7 @@ pub fn looks_mine(author: &str, names: &[String]) -> bool {
 // ---------------------------------------------------------------- storage
 
 fn db_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app.path().app_data_dir().map_err(|e| format!("No app data dir: {e}"))?;
+    let dir = crate::profile::root(&app).map_err(|e| format!("No app data dir: {e}"))?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("app data dir: {e}"))?;
     Ok(dir.join("corpus.sqlite"))
 }

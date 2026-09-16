@@ -626,7 +626,8 @@ export function useAiDataActions() {
     // Persist the new order by overwriting the store
     try {
       const { Store } = await import("@tauri-apps/plugin-store");
-      const store = await Store.load("ai-data.json");
+      const { aiStorePath } = await import("../utils/localAiStorage");
+      const store = await Store.load(await aiStorePath());
       await store.set("custom-ais", reorderedAis);
       await store.save();
     } catch (error) {

@@ -90,9 +90,7 @@ pub fn get_memory_facts(
     app: tauri::AppHandle,
     hc_state: State<'_, Arc<HolochainState>>,
 ) -> Result<Vec<MemoryFact>, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
+    let dir = crate::profile::root(&app)
         .map_err(|e| format!("No app data dir: {}", e))?;
     let path = dir.join(FACTS_FILE);
     if !path.exists() {
@@ -128,9 +126,7 @@ pub fn save_memory_facts(
         cipher: hex::encode(cipher),
     };
 
-    let dir = app
-        .path()
-        .app_data_dir()
+    let dir = crate::profile::root(&app)
         .map_err(|e| format!("No app data dir: {}", e))?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create app data dir: {}", e))?;
     let path = dir.join(FACTS_FILE);

@@ -129,12 +129,12 @@ fn save(app: &AppHandle, list: &[McpServer]) -> Result<(), String> {
 // --- secrets: `<app data>/mcp-secrets.json` = secretbox of a JSON map
 // "<server>:<KEY>" -> value, under the user's transcript data key.
 fn secrets_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app.path().app_data_dir().map_err(|e| format!("cannot resolve app data dir: {e}"))?;
+    let dir = crate::profile::root(&app).map_err(|e| format!("cannot resolve app data dir: {e}"))?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create app data dir: {e}"))?;
     Ok(dir.join("mcp-secrets.json"))
 }
 fn secrets_key(app: &AppHandle) -> Result<[u8; 32], String> {
-    let dir = app.path().app_data_dir().map_err(|e| format!("cannot resolve app data dir: {e}"))?;
+    let dir = crate::profile::root(&app).map_err(|e| format!("cannot resolve app data dir: {e}"))?;
     crate::transcript_crypto::ensure_recovery_material(&dir)?.data_key()
 }
 fn secrets_load(app: &AppHandle) -> Result<HashMap<String, String>, String> {
@@ -831,9 +831,7 @@ pub async fn tool_session_dir(app: AppHandle, ai_id: String) -> Result<String, S
     if safe.is_empty() {
         return Err("no AI id".into());
     }
-    let dir = app
-        .path()
-        .app_data_dir()
+    let dir = crate::profile::root(&app)
         .map_err(|e| format!("cannot resolve app data dir: {e}"))?
         .join("tool-sessions")
         .join(safe);
