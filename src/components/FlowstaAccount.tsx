@@ -221,12 +221,12 @@ export default component$<FlowstaAccountProps>((props) => {
       const msg = String(e);
       if (msg.includes("key_mismatch")) {
         error.value =
-          "Your Vault backup was made under a different transcript key. Restore the key from Vault first (above), then try again.";
+          "Your Vault backup was made by a different setup of this app. Restore from Vault first (above), then try again.";
       } else if (msg.includes("no_backup")) {
         error.value = "No conversation backup found in your Vault yet.";
       } else if (msg.includes("identity_mismatch")) {
         error.value =
-          "Your Vault is unlocked under a different identity than the one this device's data belongs to. Unlock the Vault that owns this data, or use \"Restore key from Vault\" to adopt the current identity.";
+          "Your Vault is signed in as someone else. Unlock the identity this device belongs to, or restore from this Vault to make the device theirs.";
       } else if (msg.includes("vault_locked")) {
         error.value = "Your Vault is locked - unlock it and try again.";
       } else if (msg.includes("vault_unavailable")) {
@@ -601,15 +601,13 @@ export default component$<FlowstaAccountProps>((props) => {
           {escrow.value?.state === "identity_mismatch" && (
             <div class="rounded-lg border border-amber-700/60 bg-amber-900/20 p-4">
               <p class="text-sm font-medium text-amber-200">
-                Your Vault holds a different identity
+                Your Vault is signed in as someone else
               </p>
               <p class="mt-1 text-xs text-[var(--text-secondary)]">
-                The data on this device belongs to a different Flowsta identity
-                than the one your Vault is unlocked with, so automatic backups
-                are paused - they would overwrite the other identity's backup.
-                Unlock the Vault that owns this data to resume, or use
-                "Restore key from Vault" below to adopt the current identity
-                (this replaces what's on this device).
+                The AIs and conversations on this device belong to a different
+                Flowsta identity, so backups are paused. Unlock that identity's
+                Vault to continue, or restore from this Vault below to make
+                the device theirs (that replaces what is here).
               </p>
             </div>
           )}
@@ -640,11 +638,11 @@ export default component$<FlowstaAccountProps>((props) => {
           </h3>
         )}
         <p class="mt-1 text-sm text-[var(--text-secondary)]">
-          Your AIs' conversations live on this device, encrypted with a key
-          only you hold. While you're signed in, Your Own AI automatically
-          backs up that key AND your conversations to your Flowsta Vault -
-          and Vault's "Download Export" hands you all of it, readable, with
-          the keys, yours to take anywhere. No lock-in, by design.
+          Your conversations live on this device, encrypted so only you can
+          read them. While you're signed in they back up to your Flowsta
+          Vault automatically, together with what a new machine needs to
+          read them. The Vault's "Download Export" hands you all of it,
+          readable, to take anywhere. No lock-in, by design.
         </p>
         {/* Key conflict = the start of the RECOVERY story, so it lives here
             with the rest of it, framed as the two steps it actually is.
@@ -653,27 +651,25 @@ export default component$<FlowstaAccountProps>((props) => {
         {signedIn() && escrow.value?.state === "conflict" && (
           <div class="mt-3 rounded-lg border border-amber-700/60 bg-amber-900/20 p-4">
             <p class="text-sm font-medium text-amber-200">
-              Bringing this device back from your Vault takes two steps
+              Pick up where you left off
             </p>
             <p class="mt-1 text-xs text-[var(--text-secondary)]">
-              Your Vault's backup was made under a different key than this
-              device is using - usually because this is a fresh install
-              while your Vault kept the key from the previous one.{" "}
+              This is a fresh install. Your Vault backup brings it back in
+              two steps: restore (the app restarts), then bring your
+              conversations back.
               {(escrow.value.local_conversations ?? 0) > 0
-                ? `Step 1 restores the Vault's key (this device has ${escrow.value.local_conversations} conversation record${escrow.value.local_conversations === 1 ? "" : "s"} under its own key - restoring deletes ${escrow.value.local_conversations === 1 ? "it" : "them"}, and the app restarts). `
-                : "Step 1 restores the Vault's key (nothing has been written under this device's key yet, so this is safe - the app restarts). "}
-              Step 2, after the restart: "Restore conversations from Vault"
-              below brings everything back.
+                ? ` This device already has ${escrow.value.local_conversations} conversation record${escrow.value.local_conversations === 1 ? "" : "s"} of its own. Restoring deletes ${escrow.value.local_conversations === 1 ? "it" : "them"}.`
+                : ""}
             </p>
             <div class="mt-3 flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
               <button
                 class="rounded-full border border-[var(--border-subtle)] px-5 py-2 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)]"
                 onClick$={() => (confirmAction.value = "keep_local")}
               >
-                Keep this device's key
+                Keep this device as is
               </button>
               <LiquidMetalButton onClick$={() => (confirmAction.value = "restore")}>
-                <span class="px-5 py-2 text-sm">Step 1: Restore the Vault's key</span>
+                <span class="px-5 py-2 text-sm">Step 1: Restore from Vault</span>
               </LiquidMetalButton>
             </div>
           </div>
@@ -685,17 +681,16 @@ export default component$<FlowstaAccountProps>((props) => {
         )}
         {signedIn() && escrow.value?.state === "synced" && !escrow.value.backups_held && (
           <p class="mt-2 text-xs text-emerald-400">
-            ✓ Recovery key and conversations back up to your Vault
-            automatically.
+            ✓ Backed up to your Vault automatically. A new machine can pick
+            up where you left off.
           </p>
         )}
         {signedIn() && escrow.value?.backups_held && (
           <p class="mt-2 text-xs text-amber-300">
             Automatic backups are paused: your Vault backup may hold
-            conversations this device doesn't (after a key restore or a
-            reset). Restore conversations from Vault below to resume - or
-            they resume on their own if the Vault backup turns out to be
-            empty.
+            conversations this device doesn't (after a restore or a reset).
+            Restore conversations from Vault below to resume - or they
+            resume on their own if the Vault backup turns out to be empty.
           </p>
         )}
         {signedIn() && escrow.value?.state === "vault_locked" && (
@@ -725,7 +720,7 @@ export default component$<FlowstaAccountProps>((props) => {
               {(lastBackup.value.reason ?? "").includes("restore_choice_pending")
                 ? "Automatic backups are paused: your Vault was just restored and is waiting for you to import your Vault export (or choose to start fresh) in the Vault. Backups resume once you decide."
                 : (lastBackup.value.reason ?? "").includes("escrow_conflict")
-                  ? "Automatic backups are paused: your Vault holds recovery material for a different key than this device's. Restore conversations from Vault below, or resolve the key conflict, to resume."
+                  ? "Automatic backups are paused: your Vault backup was made by a different setup of this app. Restore from Vault in Backups & recovery, or keep this device as is, to resume."
                   : (lastBackup.value.reason ?? "").includes("empty_would_overwrite")
                     ? "Automatic backups are paused: the Vault backup has conversations this device doesn't. Restore conversations from Vault below to resume."
                     : (lastBackup.value.reason ?? "").includes("probe_failed")
@@ -806,13 +801,13 @@ export default component$<FlowstaAccountProps>((props) => {
 
       <ConfirmModal
         isOpen={confirmAction.value === "restore"}
-        title="Restore transcript key from Vault?"
+        title="Restore from Vault?"
         message={
           (escrow.value?.local_conversations ?? 0) > 0
-            ? `Your Own AI will switch to the key stored in your Vault and restart. The ${escrow.value?.local_conversations} conversation record${escrow.value?.local_conversations === 1 ? "" : "s"} on this device will be permanently deleted - they belong to this device's current key. That key is saved to a local file first, and your AIs and downloaded models stay untouched.`
-            : "Your Own AI will switch to the key stored in your Vault and restart. Your AIs and downloaded models stay untouched, and this device's current key is saved to a local file first."
+            ? `Your Own AI restarts as the setup saved in your Vault. The ${escrow.value?.local_conversations} conversation record${escrow.value?.local_conversations === 1 ? "" : "s"} on this device will be permanently deleted. A copy of this device's current setup is saved to a file first, and your AIs and downloaded models stay.`
+            : "Your Own AI restarts as the setup saved in your Vault. Your AIs and downloaded models stay, and a copy of this device's current setup is saved to a file first."
         }
-        confirmLabel={restarting.value ? "Restarting…" : "Restore & restart"}
+        confirmLabel={restarting.value ? "Restarting…" : "Restore and restart"}
         variant={(escrow.value?.local_conversations ?? 0) > 0 ? "danger" : "default"}
         busy={restarting.value}
         onConfirm$={handleRestore}
@@ -828,8 +823,8 @@ export default component$<FlowstaAccountProps>((props) => {
       />
       <ConfirmModal
         isOpen={confirmAction.value === "keep_local"}
-        title="Keep this device's key?"
-        message="The key stored in your Vault will be replaced with this device's key. Any transcripts created under the old key stay unreadable without it, so a copy of the old key is saved to a local file on this device before the switch."
+        title="Keep this device as is?"
+        message="Your Vault backup is replaced with this device's. Conversations from the old backup can only be read with the old setup, so a copy of it is saved to a file on this device first - nothing is lost."
         confirmLabel="Replace Vault backup"
         variant="danger"
         onConfirm$={handleKeepLocal}
