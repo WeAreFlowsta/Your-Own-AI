@@ -75,6 +75,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   reports that instead of "too slow" or "crashed". The engine line in
   a report names what the bundled engine runs on: Metal, Vulkan, or the
   processor on Intel Macs.
+- The MLX engine preview is offered only on macOS 14 and later, the
+  oldest release it can start on. On an older macOS it was offered,
+  downloaded, and then could not run.
 
 ### Records
 - A conversation opened from the drawer stays open: the chat is cleared

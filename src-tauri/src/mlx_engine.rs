@@ -33,8 +33,40 @@ const SWIFTLM_REPO: &str = "SharpAI/SwiftLM";
 /// different port keeps logs and health probes unambiguous.
 pub const MLX_CHAT_PORT: u16 = 8090;
 
+/// The oldest macOS the pinned SwiftLM binary will start on, as its own
+/// header declares it (read at pin time with the sha256 - re-read on every
+/// bump). MLX itself needs this release, so it is a real floor, not a
+/// build accident.
+const SWIFTLM_MIN_MACOS_MAJOR: u32 = 14;
+
+/// Whether a macOS version string ("13.6.4") meets the engine's floor. An
+/// unreadable version passes - only a positive too-old reading gates, so a
+/// parsing surprise never hides the engine from a Mac that can run it.
+fn macos_meets_floor(version: Option<&str>) -> bool {
+    match version.and_then(|v| v.split('.').next()?.trim().parse::<u32>().ok()) {
+        Some(major) => major >= SWIFTLM_MIN_MACOS_MAJOR,
+        None => true,
+    }
+}
+
+/// Apple Silicon on a macOS the engine can start on. Offering it anywhere
+/// else means a download the operating system then refuses to run.
 pub fn supported() -> bool {
-    cfg!(all(target_os = "macos", target_arch = "aarch64"))
+    if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        return false;
+    }
+    static OK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OK.get_or_init(|| {
+        let version = sysinfo::System::os_version();
+        let ok = macos_meets_floor(version.as_deref());
+        if !ok {
+            log::info!(
+                "[Engine] MLX engine not offered: it needs macOS {SWIFTLM_MIN_MACOS_MAJOR} or later, this Mac runs {}",
+                version.as_deref().unwrap_or("an unknown version")
+            );
+        }
+        ok
+    })
 }
 
 fn download_url() -> String {
@@ -85,7 +117,7 @@ fn other_mlx_version_installed(app: &AppHandle) -> bool {
 
 #[derive(Serialize)]
 pub struct MlxEngineStatus {
-    /// This platform can run the MLX engine (Apple Silicon macOS).
+    /// This machine can run the MLX engine (Apple Silicon, macOS 14 or later).
     pub supported: bool,
     /// SwiftLM is installed at the app's pinned tag.
     pub installed: bool,
@@ -230,5 +262,17 @@ mod tests {
         assert!(url.contains(super::SWIFTLM_TAG));
         assert!(!url.contains("latest"), "engine downloads must be release-pinned");
         assert_eq!(super::SWIFTLM_SHA256.len(), 64);
+    }
+
+    #[test]
+    fn the_engine_is_offered_only_from_its_own_macos_floor() {
+        assert!(!super::macos_meets_floor(Some("12.7.6")));
+        assert!(!super::macos_meets_floor(Some("13.6.4")));
+        assert!(super::macos_meets_floor(Some("14.0")));
+        assert!(super::macos_meets_floor(Some("15.5")));
+        assert!(super::macos_meets_floor(Some("26.0.1")));
+        // Unreadable never hides it.
+        assert!(super::macos_meets_floor(None));
+        assert!(super::macos_meets_floor(Some("Unknown")));
     }
 }
