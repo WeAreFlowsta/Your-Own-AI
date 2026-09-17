@@ -37,6 +37,7 @@ jobs:
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DBUILD_SHARED_LIBS=OFF \
             -DGGML_STATIC=ON \
             -DGGML_NATIVE=OFF \
@@ -54,6 +55,11 @@ jobs:
             echo "llama-server links runner-only dylibs - it will crash on user Macs"; exit 1
           fi
           ./build/bin/llama-server --version
+          # The runner's own macOS must never become the floor: a binary
+          # stamped "minos 15" cannot start on any older Mac.
+          MINOS=$(vtool -show-build build/bin/llama-server | awk '/minos/ {print $2}')
+          echo "declared minimum macOS: ${MINOS}"
+          case "$MINOS" in 11.*|10.*) ;; *) echo "minimum macOS is ${MINOS}, expected 11.x"; exit 1 ;; esac
           strip build/bin/llama-server
 
       - name: Replace the release asset
@@ -79,6 +85,7 @@ jobs:
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DCMAKE_OSX_ARCHITECTURES=x86_64 \
             -DBUILD_SHARED_LIBS=OFF \
             -DGGML_STATIC=ON \
@@ -101,6 +108,11 @@ jobs:
           if otool -L build/bin/llama-server | grep -E "/opt/homebrew/|/usr/local/opt/|libssl|libcrypto|libcurl"; then
             echo "llama-server links runner-only dylibs - it will crash on user Macs"; exit 1
           fi
+          # The runner's own macOS must never become the floor: a binary
+          # stamped "minos 15" cannot start on any older Mac.
+          MINOS=$(vtool -show-build build/bin/llama-server | awk '/minos/ {print $2}')
+          echo "declared minimum macOS: ${MINOS}"
+          case "$MINOS" in 11.*|10.*) ;; *) echo "minimum macOS is ${MINOS}, expected 11.x"; exit 1 ;; esac
           strip build/bin/llama-server
 
       - name: Replace the release asset
