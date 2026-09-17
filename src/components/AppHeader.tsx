@@ -76,7 +76,7 @@ interface AppHeaderProps {
   currentModel: string | null;
   isModelLoading?: boolean;
   modelTooBig?: boolean;
-  /// Why the chip is red when it is: "too big" | "not loaded" | "can't be read" | "engine crashed".
+  /// Why the chip is red when it is: "too big" | "not loaded" | "can't be read" | "engine crashed" | "engine can't start".
   modelIssue?: string;
   showModelWidget?: boolean;
   /** The app-wide workspace folder - null = none open. */

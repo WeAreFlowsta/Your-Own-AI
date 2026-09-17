@@ -2,6 +2,7 @@ import { component$, useSignal, useVisibleTask$, type QRL, type Signal } from '@
 import CudaOfferCallout from './CudaOfferCallout';
 import HelperModelOfferCallout from './HelperModelOfferCallout';
 import GpuFallbackCallout from './GpuFallbackCallout';
+import EngineCannotStartCallout from './EngineCannotStartCallout';
 import UpdateAvailableCallout from './UpdateAvailableCallout';
 import { ChatInputBar } from './ChatInputBar';
 import { SelectedAiModel, ChatAction, AttachedFile, AttachedImage, UserDefinedAI } from '../types';
@@ -104,6 +105,7 @@ export default component$<InitialViewProps>((props) => {
           </button>
         </div>
       )}
+      <EngineCannotStartCallout />
       <GpuFallbackCallout />
       {/* One offer slot: NVIDIA engine first, then the helper model - rules in utils/homeOffers.ts */}
       <CudaOfferCallout />

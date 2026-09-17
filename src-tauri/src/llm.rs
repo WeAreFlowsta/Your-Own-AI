@@ -2077,6 +2077,70 @@ static CHAT_LOAD_OPEN_FAILED: std::sync::atomic::AtomicBool =
 static CHAT_LOAD_MODEL_REJECTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// Whether the operating system's program loader refused the engine binary
+/// itself (built for a newer OS release than this machine runs, or a system
+/// library it needs is absent). No model can load until the OS or the app
+/// changes, so it must never read as "too large", "crashed" or "too slow".
+static CHAT_LOAD_LOADER_REFUSED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// The program loader's own words when it will not run a binary on this OS:
+/// macOS dyld ("Symbol not found", "built for macOS 15.0 which is newer than
+/// running OS", "Library not loaded") and the Linux loader ("version
+/// `GLIBC_2.38' not found").
+pub(crate) fn looks_like_loader_refusal(text: &str) -> bool {
+    let l = text.to_ascii_lowercase();
+    (l.contains("dyld")
+        && (l.contains("symbol not found")
+            || l.contains("newer than running os")
+            || l.contains("library not loaded")))
+        || (l.contains("glibc") && l.contains("not found"))
+        || (l.contains("glibcxx") && l.contains("not found"))
+}
+
+/// One bounded `--version` run of the engine the next load would use, kept
+/// for the session: whether the OS will run it at all. Lets the app say so
+/// before a model is downloaded, instead of after a failed load.
+static ENGINE_START_CHECK: tokio::sync::OnceCell<bool> = tokio::sync::OnceCell::const_new();
+
+/// True when the OS loader refuses the engine binary on this machine.
+pub(crate) async fn engine_refused_by_os(app_handle: &AppHandle) -> bool {
+    *ENGINE_START_CHECK
+        .get_or_init(|| async {
+            let dir = get_models_dir(app_handle).unwrap_or_else(|_| std::env::temp_dir());
+            let Ok(cmd) = chat_server_command(app_handle, &dir) else { return false };
+            let out = match tokio::time::timeout(
+                std::time::Duration::from_secs(15),
+                cmd.args(["--version"]).output(),
+            )
+            .await
+            {
+                Ok(Ok(o)) => o,
+                _ => return false, // no answer is not a refusal - stay quiet
+            };
+            if out.status.success() {
+                return false;
+            }
+            let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+            text.push_str(&String::from_utf8_lossy(&out.stderr));
+            let refused = looks_like_loader_refusal(&text);
+            if refused {
+                log::error!(
+                    "[LLM] the operating system will not run the engine binary - no offline model can load: {}",
+                    text.lines().find(|l| looks_like_loader_refusal(l)).unwrap_or("").trim()
+                );
+            }
+            refused
+        })
+        .await
+}
+
+/// For the UI: whether offline models can start at all on this machine.
+#[tauri::command]
+pub async fn engine_start_check(app: AppHandle) -> Result<bool, String> {
+    Ok(!engine_refused_by_os(&app).await)
+}
+
 /// Engine "this file's layout is wrong" markers. Excludes the device
 /// verdicts ("Unsupported device"), which classify separately.
 fn looks_like_model_rejected(line: &str) -> bool {
@@ -2736,6 +2800,7 @@ pub async fn start_llama_server(
     CHAT_LOAD_OPEN_FAILED.store(false, std::sync::atomic::Ordering::SeqCst);
     CHAT_LOAD_DEVICE_UNSUPPORTED.store(0, std::sync::atomic::Ordering::SeqCst);
     CHAT_LOAD_MODEL_REJECTED.store(false, std::sync::atomic::Ordering::SeqCst);
+    CHAT_LOAD_LOADER_REFUSED.store(false, std::sync::atomic::Ordering::SeqCst);
     CHAT_ANY_OUTPUT.store(false, std::sync::atomic::Ordering::SeqCst);
     // Resolve-and-spawn failures MUST be logged app-side: they return an
     // error to the frontend and otherwise leave no trace in the app log -
@@ -2819,6 +2884,9 @@ pub async fn start_llama_server(
                     if looks_like_open_failure(&text) {
                         CHAT_LOAD_OPEN_FAILED.store(true, std::sync::atomic::Ordering::SeqCst);
                     }
+                    if looks_like_loader_refusal(&text) {
+                        CHAT_LOAD_LOADER_REFUSED.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
                     if let Some(reason) = looks_like_device_unsupported(&text) {
                         let code = if reason == "cuda-arch" { 1 } else { 2 };
                         CHAT_LOAD_DEVICE_UNSUPPORTED
@@ -2831,10 +2899,16 @@ pub async fn start_llama_server(
                 tauri_plugin_shell::process::CommandEvent::Terminated(payload) => {
                     log::warn!("[llama-server] Process terminated with code: {:?}", payload.code);
                     // A NON-ZERO exit means the server died on its own - almost always
-                    // out of GPU memory loading a too-large model. A `None` code means
-                    // WE killed it (a model swap / shutdown), which is not a failure;
-                    // flagging it would make a superseded load wrongly report "too large".
-                    if matches!(payload.code, Some(code) if code != 0) {
+                    // out of GPU memory loading a too-large model. A kill or
+                    // terminate signal means WE stopped it (a model swap / shutdown),
+                    // which is not a failure; flagging it would make a superseded load
+                    // wrongly report "too large". Any OTHER signal (an abort from the
+                    // program loader, a segfault) is the process dying on its own -
+                    // unflagged, it cost the user the full timeout and a "too slow"
+                    // message.
+                    let own_death = matches!(payload.code, Some(code) if code != 0)
+                        || matches!(payload.signal, Some(sig) if sig != 9 && sig != 15);
+                    if own_death {
                         CHAT_LOAD_FAILED.store(true, std::sync::atomic::Ordering::SeqCst);
                     }
                     break;
@@ -2926,6 +3000,10 @@ pub async fn start_llama_server(
                     });
                 }
                 return Ok(());
+            }
+            if CHAT_LOAD_LOADER_REFUSED.load(Ordering::SeqCst) {
+                log::error!("[LLM] the operating system refused the engine binary - not a model or memory problem");
+                return Err("MODEL_ENGINE_CANNOT_START".to_string());
             }
             if CHAT_LOAD_FAILED.load(Ordering::SeqCst) {
                 // Device verdict FIRST - a rejected device can also print
@@ -5909,6 +5987,23 @@ mod stop_chain_tests {
         // A record without the newer fields (or ctx 0) applies to any shape.
         let old: LoadCalibration = serde_json::from_str(r#"{"predicted_gb":5.7,"actual_gb":3.1,"at":1}"#).unwrap();
         assert!(old.matches(4096, false) && old.moe_cpu_layers.is_none());
+    }
+
+    #[test]
+    fn loader_refusals_are_recognized_and_ordinary_lines_are_not() {
+        // macOS dyld, as printed when a binary needs a newer macOS.
+        assert!(looks_like_loader_refusal(
+            "dyld[612]: Symbol not found: __ZNSt3__113__hash_memoryEPKvm\n  Referenced from: llama-server (built for macOS 15.0 which is newer than running OS)"
+        ));
+        assert!(looks_like_loader_refusal("dyld: Library not loaded: /opt/homebrew/opt/openssl@3/lib/libssl.3.dylib"));
+        // The Linux loader.
+        assert!(looks_like_loader_refusal(
+            "llama-server: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.38' not found (required by llama-server)"
+        ));
+        // Ordinary engine output must never trip it.
+        assert!(!looks_like_loader_refusal("llama_model_load: error loading model: missing tensor 'blk.0.attn_q.weight'"));
+        assert!(!looks_like_loader_refusal("ggml_vulkan: Found 1 Vulkan devices:"));
+        assert!(!looks_like_loader_refusal("srv  load_model: failed to open gguf file: No such file or directory"));
     }
 
     #[test]

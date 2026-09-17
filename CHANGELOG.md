@@ -66,6 +66,15 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   document cards included, so a marker the engine does not treat as an
   end token no longer appears as text. One already in stored text is
   trimmed on display.
+- Offline models start on older Macs. The Mac AI engine was built for
+  the newest macOS only, so on an older macOS it never started and a
+  model would not load. Both Mac engines, Intel and Apple Silicon, are
+  now built for macOS 11 and later. Where an operating system still
+  cannot run the engine, the app says so on the start view and above
+  the Offline Models list before anything is downloaded, and a load
+  reports that instead of "too slow" or "crashed". The engine line in
+  a report names what the bundled engine runs on: Metal, Vulkan, or the
+  processor on Intel Macs.
 
 ### Records
 - A conversation opened from the drawer stays open: the chat is cleared

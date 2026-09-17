@@ -651,6 +651,7 @@ pub fn run() {
             llm::is_vision_ready,
             llm::find_vision_model,
             llm::start_llama_server,
+            llm::engine_start_check,
             llm::stop_llama_server,
             llm::embed_texts,
             llm::stop_embedding_server,

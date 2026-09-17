@@ -883,7 +883,16 @@ export function useChat(props: UseChatProps) {
         } catch (error) {
           const errorMessage =
             error instanceof Error ? error.message : String(error);
-          if (errorMessage.includes("MODEL_DEVICE_UNSUPPORTED")) {
+          if (errorMessage.includes("MODEL_ENGINE_CANNOT_START")) {
+            // The OS will not run the engine binary: no model can load, so
+            // never suggest a smaller model or a restart.
+            props.currentModel.value = preferredModel;
+            props.modelTooBig.value = true;
+            props.modelIssue.value = "engine can't start";
+            abortWith(
+              `The AI engine in this version of Your Own AI needs a newer release of your operating system than this computer is running, so offline models will not load. Your computer and ${selectedAi.label}'s model are fine. A new version of Your Own AI, or an operating system update, fixes it - online models work as normal until then.`
+            );
+          } else if (errorMessage.includes("MODEL_DEVICE_UNSUPPORTED")) {
             // Normally the backend retries on the processor and this never
             // surfaces - it reaches here only if that retry also failed.
             props.currentModel.value = preferredModel;

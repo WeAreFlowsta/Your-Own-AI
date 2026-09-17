@@ -932,13 +932,15 @@ export default component$(() => {
             isModelLoading.value = false;
             return;
           }
-          if (msg.includes("MODEL_TOO_LARGE") || msg.includes("MODEL_LOAD_CRASHED") || msg.includes("MODEL_FILE_UNREADABLE") || msg.includes("MODEL_FILE_REJECTED")) {
+          if (msg.includes("MODEL_ENGINE_CANNOT_START") || msg.includes("MODEL_TOO_LARGE") || msg.includes("MODEL_LOAD_CRASHED") || msg.includes("MODEL_FILE_UNREADABLE") || msg.includes("MODEL_FILE_REJECTED")) {
             // Show it red in the header rather than a stuck spinner, and say
             // why. Nothing's loading, so skip the readiness poll.
             console.log("[ChatPage] Preload refused:", targetModel, msg);
             currentModel.value = targetModel;
             modelTooBig.value = true;
-            modelIssue.value = msg.includes("MODEL_TOO_LARGE")
+            modelIssue.value = msg.includes("MODEL_ENGINE_CANNOT_START")
+              ? "engine can't start"
+              : msg.includes("MODEL_TOO_LARGE")
               ? "too big"
               : msg.includes("MODEL_LOAD_CRASHED")
                 ? "engine crashed"

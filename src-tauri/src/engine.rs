@@ -209,6 +209,10 @@ pub struct EngineStatus {
     pub stale_version_installed: bool,
     /// What the NEXT chat-server spawn will use.
     pub active_backend: Backend,
+    /// What the bundled engine runs models on, on THIS platform: "metal"
+    /// (Apple Silicon), "processor" (Intel Macs - the bundled Intel build has
+    /// no graphics path) or "vulkan" (Windows, Linux).
+    pub bundled_runs_on: &'static str,
     /// What the RUNNING chat server was actually spawned with, if one runs -
     /// the card says "powering your chats" only when this says so.
     pub running_backend: Option<String>,
@@ -232,6 +236,13 @@ pub async fn engine_status(
         installed: cuda_engine_binary(&app).is_some(),
         stale_version_installed: other_cuda_version_installed(&app),
         active_backend: active_backend(&app),
+        bundled_runs_on: if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            "metal"
+        } else if cfg!(target_os = "macos") {
+            "processor"
+        } else {
+            "vulkan"
+        },
         running_backend,
         tag: LLAMA_ENGINE_TAG.to_string(),
         download_url: cuda_download_url(),

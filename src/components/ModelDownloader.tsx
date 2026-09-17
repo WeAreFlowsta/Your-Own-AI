@@ -71,6 +71,7 @@ import { listen } from '@tauri-apps/api/event';
 import DeleteModelModal from './DeleteModelModal';
 import ModelTuneDialog from './ModelTuneDialog';
 import CustomModelModal from './CustomModelModal';
+import EngineCannotStartCallout from './EngineCannotStartCallout';
 import { useAiData, useAiDataActions } from '../contexts/AiDataContext';
 
 /** Shape persisted to localStorage while a download is in progress */
@@ -485,12 +486,16 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
         }
       }).catch(() => {}),
     );
-    invoke<{ installed: boolean; active_backend: 'bundled' | 'cuda' }>('engine_status')
+    invoke<{ installed: boolean; active_backend: 'bundled' | 'cuda'; bundled_runs_on?: string }>('engine_status')
       .then((e) => {
         store.engineBackend =
           e.active_backend === 'cuda'
             ? 'CUDA (downloaded engine)'
-            : 'Bundled (Vulkan / Metal)';
+            : e.bundled_runs_on === 'metal'
+              ? 'Bundled (Metal)'
+              : e.bundled_runs_on === 'processor'
+                ? 'Bundled (processor)'
+                : 'Bundled (Vulkan)';
       })
       .catch(() => {});
   });
@@ -1658,6 +1663,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
 
   return (
     <div class="max-w-7xl mx-auto px-6">
+      <EngineCannotStartCallout class="mb-6 text-left" />
       {/* Help tip - privacy (verifiable, not trust-based) */}
       <Callout
         intent="success"
