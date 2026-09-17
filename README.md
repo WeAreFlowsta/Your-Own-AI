@@ -79,8 +79,9 @@ open source, that claim is verifiable, not promised.
 
 ## Requirements
 
-- macOS 10.15 or later (Apple Silicon or Intel), Windows 10/11 (64-bit), or
-  a 64-bit Linux desktop (`.deb` or `.rpm`).
+- macOS 11 or later (Apple Silicon or Intel; on Intel Macs offline models
+  run on the processor), Windows 10/11 (64-bit), or a 64-bit Linux desktop
+  (`.deb` or `.rpm`).
 - 8 GB of memory runs the small models; 16 GB and a graphics card with
   6 GB or more opens up most of the catalog; 32 GB carries the large
   mixture-of-experts models with the graphics card doing part of the
