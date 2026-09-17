@@ -186,16 +186,11 @@ fn profile_entries(root: &Path) -> Vec<PathBuf> {
 }
 
 /// Lair's config pins absolute paths (connectionUrl, pidFile, storeFile);
-/// after the directory moved, point them at the new location.
-fn rewrite_lair_paths(new_lair_dir: &Path, old_lair_dir: &Path) -> Result<(), String> {
-    let cfg = new_lair_dir.join("lair-keystore-config.yaml");
-    if !cfg.exists() { return Ok(()); }
-    let content = std::fs::read_to_string(&cfg).map_err(|e| format!("lair config unreadable: {}", e))?;
-    let rewritten = content.replace(&old_lair_dir.to_string_lossy().to_string(), &new_lair_dir.to_string_lossy().to_string());
-    if rewritten == content { return Ok(()); }
-    let tmp = cfg.with_extension("yaml.tmp");
-    std::fs::write(&tmp, rewritten).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &cfg).map_err(|e| e.to_string())
+/// after the directory moved, point them at the new location. The socket
+/// address is a percent-encoded URL, so this goes through the URL-aware
+/// repoint, never a plain text replace.
+fn rewrite_lair_paths(new_lair_dir: &Path, _old_lair_dir: &Path) -> Result<(), String> {
+    crate::lair::repoint_config(new_lair_dir).map(|_| ())
 }
 
 /// Move the legacy root layout into `profiles/<folder>/`, all-or-nothing.
@@ -250,6 +245,13 @@ pub fn select_profile_root(device_root: &Path, live_identity: Option<&str>) -> P
                 profiles.touch(&folder, bound.as_deref());
                 if let Err(e) = profiles.save(device_root) { log::warn!("[profile] profiles.json not saved: {}", e); }
                 log::info!("[profile] identity data moved into profile {:?}", root);
+            }
+            Err(e) if profile_root(device_root, &folder).join("lair").exists()
+                || profile_root(device_root, &folder).join("transcript-recovery.json").exists() =>
+            {
+                // The move already happened; something recreated a legacy
+                // name at the device root. The profile is the truth.
+                log::warn!("[profile] legacy names at the device root beside a finished profile ({}) - using the profile", e);
             }
             Err(e) => {
                 log::warn!("[profile] relocation skipped: {} - staying on the legacy layout", e);
