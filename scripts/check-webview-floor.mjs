@@ -41,9 +41,13 @@ for (const name of readdirSync(dir).filter((f) => f.endsWith(".js"))) {
     if (/\(\?<[=!]/.test(pattern)) {
       problems.push(`${name}: regex lookbehind literal /${pattern.slice(0, 60)}/ - Safari < 16.4 cannot parse it; rewrite without lookbehind, or build it with new RegExp() behind a feature test`);
     }
-    if (/[dv]/.test(flags)) {
-      problems.push(`${name}: regex flag "${flags}" on /${pattern.slice(0, 40)}/ - not parseable on Safari 15`);
+    if (flags.includes("v")) {
+      problems.push(`${name}: regex flag "v" on /${pattern.slice(0, 40)}/ - Safari < 17 cannot parse it`);
     }
+  });
+  // Belt and braces for a build that was NOT held to the Safari 15 target.
+  walk(ast, (n) => {
+    if (n.type === "StaticBlock") problems.push(`${name}: class static block - Safari < 16.4 cannot parse it`);
   });
 }
 
