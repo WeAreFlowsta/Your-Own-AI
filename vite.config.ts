@@ -45,15 +45,22 @@ export default defineConfig((): UserConfig => ({
       "lottie-web",
       "cropperjs",
     ],
-    // The app runs only inside Tauri's modern webview, so dev pre-bundling
-    // targets esnext like the production build does. Vite's default legacy
+    // Dev pre-bundling targets esnext: it only ever runs on the developer's
+    // own machine. (The PRODUCTION build is held to Safari 15 - see `build`
+    // below - because a Mac's webview is as old as its macOS.) Vite's default legacy
     // browser list (chrome87/safari14) is not something esbuild 0.28 will
     // down-level modern syntax to - and nothing here needs it to.
     esbuildOptions: { target: "esnext" },
   },
 
   build: {
-    target: "esnext",
+    // The webview is NOT evergreen everywhere: on macOS it is the system's
+    // WKWebView, as old as the OS (macOS 12 = the Safari 15.6 level). So the
+    // production build is held to Safari 15 syntax. esbuild cannot target
+    // Safari 14 (it refuses destructuring there), and it does not look
+    // inside regex literals at all - scripts/check-webview-floor.mjs covers
+    // that and runs at the end of `npm run build`.
+    target: "safari15",
     outDir: "dist",
   },
 

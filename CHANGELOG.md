@@ -75,6 +75,13 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   reports that instead of "too slow" or "crashed". The engine line in
   a report names what the bundled engine runs on: Metal, Vulkan, or the
   processor on Intel Macs.
+- The app responds on macOS 12 and earlier. On those Macs the window is
+  drawn by the system's own, older browser engine, and one line of the
+  app's code was written in a form it could not read, so buttons, the
+  Settings menu item, the chat box and the diagnostics report did
+  nothing while plain links still worked. The line is rewritten, the app
+  is now built for that older engine, and every build is checked against
+  it.
 - The MLX engine preview is offered only on macOS 14 and later, the
   oldest release it can start on. On an older macOS it was offered,
   downloaded, and then could not run.

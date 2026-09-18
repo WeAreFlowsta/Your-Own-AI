@@ -9,7 +9,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --mode ssr",
-    "build": "vite build && vite build -c adapters/static/vite.config.ts",
+    "build": "vite build && vite build -c adapters/static/vite.config.ts && node scripts/check-webview-floor.mjs",
     "build.client": "vite build",
     "build.static": "vite build -c adapters/static/vite.config.ts",
     "preview": "vite preview",

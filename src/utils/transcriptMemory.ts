@@ -390,6 +390,26 @@ export async function findAuthoredByText(
   return null;
 }
 
+
+/** Split at whitespace that follows sentence punctuation, keeping the
+ *  punctuation with its sentence. Written WITHOUT a regex lookbehind on
+ *  purpose: a lookbehind LITERAL is a parse error in WebKit before Safari
+ *  16.4 (every Mac on macOS 12 and earlier, where the app's webview is the
+ *  system's), and a parse error kills this whole chunk and every chunk that
+ *  imports it - chat input, the header menu and the diagnostics report. */
+export function splitSentences(text: string): string[] {
+  const out: string[] = [];
+  const boundary = /[.!?]\s+/g;
+  let start = 0;
+  let m: RegExpExecArray | null;
+  while ((m = boundary.exec(text))) {
+    out.push(text.slice(start, m.index + 1));
+    start = m.index + m[0].length;
+  }
+  out.push(text.slice(start));
+  return out;
+}
+
 /** Chunk a document's text for retrieval: pack whole paragraphs/sentences into
  *  ~MAX_TEXT-char pieces so each embedded chunk is a coherent passage, with a
  *  sentence of overlap so a fact split across a boundary is still findable. */
@@ -405,7 +425,7 @@ export function chunkDocumentText(text: string): string[] {
       units.push(p);
     } else {
       let buf = "";
-      for (const sentence of p.split(/(?<=[.!?])\s+/)) {
+      for (const sentence of splitSentences(p)) {
         if (buf && (buf.length + sentence.length + 1) > MAX_TEXT) {
           units.push(buf.trim());
           buf = "";
