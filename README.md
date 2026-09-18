@@ -79,7 +79,7 @@ open source, that claim is verifiable, not promised.
 
 ## Requirements
 
-- macOS 11 or later (Apple Silicon or Intel; on Intel Macs offline models
+- macOS 12 or later (Apple Silicon or Intel; on Intel Macs offline models
   run on the processor), Windows 10/11 (64-bit), or a 64-bit Linux desktop
   (`.deb` or `.rpm`).
 - 8 GB of memory runs the small models; 16 GB and a graphics card with
