@@ -231,13 +231,64 @@ fn rollback(done: &[(PathBuf, PathBuf)]) {
     }
 }
 
+/// Where data written by an OLDER copy of the app is kept once profiles
+/// exist. Outside `profiles/` on purpose: it is never a profile.
+pub const OLDER_COPY_DIR: &str = "older-copy-data";
+
+/// Identity-named files and folders at the device root while profiles ALREADY
+/// exist were not left behind by a move - an older copy of the app (one that
+/// knows nothing of profiles) ran, found its old location empty and set
+/// itself up there as a brand new install. Treating that as "a legacy install
+/// to move" promoted the empty newcomer to the active profile and the
+/// person's real data vanished from view (field 2026-09-19: an installed
+/// 0.7.1 opened once beside a dev build).
+///
+/// So it is moved ASIDE: kept whole under `older-copy-data/<unix time>/`,
+/// never listed in `profiles.json`, never made active, its key store config
+/// left pointing where the older copy expects it. All-or-nothing like the
+/// real move.
+pub fn set_aside_older_copy(device_root: &Path) -> Result<PathBuf, String> {
+    let entries = profile_entries(device_root);
+    if entries.is_empty() {
+        return Err("nothing to set aside".into());
+    }
+    let mut dir = device_root.join(OLDER_COPY_DIR).join(now().to_string());
+    let mut n = 1;
+    while dir.exists() {
+        dir = device_root.join(OLDER_COPY_DIR).join(format!("{}-{}", now(), n));
+        n += 1;
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {:?}: {}", dir, e))?;
+    let mut done: Vec<(PathBuf, PathBuf)> = Vec::new();
+    for from in entries {
+        let to = dir.join(from.file_name().unwrap());
+        if let Err(e) = std::fs::rename(&from, &to) {
+            rollback(&done);
+            let _ = std::fs::remove_dir(&dir);
+            return Err(format!("could not move {:?}: {}", from, e));
+        }
+        done.push((from, to));
+    }
+    Ok(dir)
+}
+
 /// Decide which profile this launch runs, moving a legacy layout first if
 /// there is one. `live_identity` = the Vault's unlocked agent key when the
 /// Vault answered at launch, else None.
 pub fn select_profile_root(device_root: &Path, live_identity: Option<&str>) -> PathBuf {
     let mut profiles = Profiles::load(device_root);
 
-    if legacy_layout_present(device_root) {
+    if legacy_layout_present(device_root) && !profiles.profiles.is_empty() {
+        // The move already happened on this machine. What sits at the root
+        // now came from an older copy of the app - keep it, never use it.
+        match set_aside_older_copy(device_root) {
+            Ok(dir) => log::warn!(
+                "[profile] data written by an older copy of the app was found beside the profiles - kept at {:?}, not used; the active profile is unchanged",
+                dir
+            ),
+            Err(e) => log::warn!("[profile] older-copy data could not be set aside ({}) - continuing with the profile", e),
+        }
+    } else if legacy_layout_present(device_root) {
         let bound = legacy_identity(device_root);
         let folder = bound.as_deref().and_then(partition_key).unwrap_or_else(|| LOCAL_PROFILE.to_string());
         match relocate_legacy(device_root, &folder) {
@@ -418,6 +469,70 @@ mod tests {
         assert_eq!(chosen, profile_root(root, LOCAL_PROFILE));
         assert!(Profiles::load(root).profiles[LOCAL_PROFILE].identity.is_none());
         assert_eq!(select_profile_root(root, Some(KEY_A)), chosen);
+    }
+
+    /// Field 2026-09-19, replayed: the move happened; later an OLDER copy of
+    /// the app ran once, found its old location empty and set itself up
+    /// there as a new install; the next launch of this version must keep
+    /// the person's real profile active, not the newcomer.
+    #[test]
+    fn data_left_by_an_older_copy_is_set_aside_and_never_becomes_the_profile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let device = tmp.path();
+        // 1. A signed-in 0.7.2 install, moved on the first launch.
+        legacy_install(device, Some(KEY_A));
+        let real = select_profile_root(device, None);
+        let folder = partition_key(KEY_A).unwrap();
+        assert_eq!(real, profile_root(device, &folder));
+        std::fs::write(real.join("conv-list-REAL.enc"), b"years of conversations").unwrap();
+        assert!(!legacy_layout_present(device));
+
+        // 2. The older copy runs: a brand new, never-signed-in install at the root.
+        legacy_install(device, None);
+        assert!(legacy_layout_present(device));
+
+        // 3. This version launches again, Vault not answering.
+        let chosen = select_profile_root(device, None);
+        assert_eq!(chosen, real, "the real profile stays in charge");
+        assert!(chosen.join("conv-list-REAL.enc").exists());
+
+        let profiles = Profiles::load(device);
+        assert_eq!(profiles.active.as_deref(), Some(folder.as_str()), "active is unchanged");
+        assert_eq!(profiles.profiles.len(), 1, "the newcomer is not a profile");
+        assert!(!profile_root(device, LOCAL_PROFILE).exists(), "and no `local` profile was made of it");
+
+        // The older copy's data is kept whole, outside profiles/, and the root is clean again.
+        assert!(!legacy_layout_present(device));
+        let kept: Vec<_> = std::fs::read_dir(device.join(OLDER_COPY_DIR)).unwrap().flatten().collect();
+        assert_eq!(kept.len(), 1);
+        let kept = kept[0].path();
+        for name in ["transcript-recovery.json", "ai-data.json", "lair/store_file", "conductor/databases/x", "thumbnails/veebo.jpg"] {
+            assert!(kept.join(name).exists(), "{name} kept");
+        }
+        // Its key store config still names the root - it was never repointed or run.
+        let yaml = std::fs::read_to_string(kept.join("lair/lair-keystore-config.yaml")).unwrap();
+        assert!(yaml.contains(&format!("{}/socket", device.join("lair").display())));
+        // Device-level files never move.
+        assert!(device.join("settings.json").exists() && device.join("models/m.gguf").exists());
+
+        // 4. It can happen again (the older copy is opened a second time): same outcome.
+        legacy_install(device, None);
+        assert_eq!(select_profile_root(device, Some(KEY_A)), real);
+        assert_eq!(std::fs::read_dir(device.join(OLDER_COPY_DIR)).unwrap().count(), 2);
+        assert_eq!(Profiles::load(device).profiles.len(), 1);
+    }
+
+    /// The first-time move is untouched by that rule: no profiles yet = a
+    /// real legacy install = moved and made active, as before.
+    #[test]
+    fn the_first_move_still_activates_the_moved_install() {
+        let tmp = tempfile::tempdir().unwrap();
+        legacy_install(tmp.path(), None);
+        let root = select_profile_root(tmp.path(), None);
+        assert_eq!(root, profile_root(tmp.path(), LOCAL_PROFILE));
+        assert!(root.join("ai-data.json").exists());
+        assert!(!tmp.path().join(OLDER_COPY_DIR).exists());
+        assert_eq!(Profiles::load(tmp.path()).active.as_deref(), Some(LOCAL_PROFILE));
     }
 
     #[test]
