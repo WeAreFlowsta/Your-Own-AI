@@ -111,6 +111,8 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   progress through the parts of a long document.
 - You can write your next message while a reply is still coming. It
   stays in the box and sends when you press Ask after the reply ends.
+- Stop on an online model's reply now ends it at the provider too, so a
+  stopped reply is metered for what you received, as an estimate.
 
 ## [0.7.2] - 2026-09-09
 
