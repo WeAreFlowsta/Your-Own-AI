@@ -1155,7 +1155,9 @@ pub(crate) async fn decide_helper_placement(app: &AppHandle) -> (HelperPlace, He
         None => {
             // Apple unified memory: the card IS the RAM; a helper on Metal
             // is a speed choice inside the RAM headroom, 2 GB kept back.
-            if cfg!(target_os = "macos") && crate::gpu_safety::gpu_allowed(app) {
+            // Apple Silicon only - the bundled Intel Mac engine has no
+            // graphics path, so an Intel Mac is a processor machine.
+            if cfg!(all(target_os = "macos", target_arch = "aarch64")) && crate::gpu_safety::gpu_allowed(app) {
                 (grading_memory_bytes() as f64 / (1024.0 * 1024.0 * 1024.0) - 2.0).max(0.0)
             } else {
                 set_helper_verdict((Cpu, Cpu));
