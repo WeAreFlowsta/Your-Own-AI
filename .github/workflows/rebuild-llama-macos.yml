@@ -19,12 +19,19 @@ on:
         description: 'Release to replace the assets on (e.g. llama-b9637)'
         required: true
         default: 'llama-b10809'
+      targets:
+        description: 'Which Mac engine to rebuild: both, x64 (Intel) or arm64 (Apple Silicon)'
+        required: true
+        default: 'both'
+        type: choice
+        options: [both, x64, arm64]
 
 permissions:
   contents: write
 
 jobs:
   build-macos-arm64:
+    if: ${{ github.event.inputs.targets == 'both' || github.event.inputs.targets == 'arm64' }}
     runs-on: macos-14
     steps:
       - name: Checkout llama.cpp
@@ -73,6 +80,7 @@ jobs:
           echo "Replaced llama-server-aarch64-apple-darwin on ${{ github.event.inputs.release_tag }}"
 
   build-macos-x64:
+    if: ${{ github.event.inputs.targets == 'both' || github.event.inputs.targets == 'x64' }}
     runs-on: macos-15
     steps:
       - name: Checkout llama.cpp
@@ -95,6 +103,9 @@ jobs:
             -DGGML_FMA=ON \
             -DGGML_F16C=ON \
             -DGGML_METAL=OFF \
+            -DGGML_ACCELERATE=OFF \
+            -DGGML_BLAS=OFF \
+            -DGGML_LLAMAFILE=ON \
             -DLLAMA_CURL=OFF \
             -DLLAMA_SERVER_SSL=OFF \
             -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON \
@@ -113,6 +124,14 @@ jobs:
           MINOS=$(vtool -show-build build/bin/llama-server | awk '/minos/ {print $2}')
           echo "declared minimum macOS: ${MINOS}"
           case "$MINOS" in 11.*|10.*) ;; *) echo "minimum macOS is ${MINOS}, expected 11.x"; exit 1 ;; esac
+          # Apple's Accelerate is OFF for Intel on purpose. On Macs ggml uses
+          # its NEW interface (cblas_sgemm$NEWLAPACK$ILP64), which exists only
+          # from macOS 13.3. Built for an older macOS the symbol is weak, is
+          # null at run time, and the first batch of 32+ tokens jumps to
+          # address zero. ggml's own AVX2 kernels do the work instead.
+          if nm -u build/bin/llama-server | grep -q 'NEWLAPACK'; then
+            echo "llama-server imports the macOS 13.3+ Accelerate interface - it will crash on older macOS"; exit 1
+          fi
           strip build/bin/llama-server
 
       - name: Replace the release asset
