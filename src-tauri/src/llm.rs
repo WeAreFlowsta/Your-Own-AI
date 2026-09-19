@@ -5407,6 +5407,8 @@ pub async fn stream_chat_completion(
         client
             .post(format!("{}/v1/chat/completions", crate::flowsta::proxy_url()))
             .header("Content-Type", "application/json")
+            // The id Stop names, so the service can end the provider call.
+            .header("x-yoai-request-id", &request_id)
             .bearer_auth(token)
             .json(&request_body)
             .send()
@@ -5532,6 +5534,9 @@ pub async fn stream_chat_completion(
         // Check for cancellation
         if state.cancel_stream.load(std::sync::atomic::Ordering::Relaxed) {
             println!("[LLM] Stream cancelled by user for request: {}", request_id);
+            if online_model.is_some() {
+                stop_online_reply(app.clone(), client.clone(), request_id.clone());
+            }
             let _ = app.emit(&format!("chat-stream-{}", request_id), StreamChunkData {
                 chunk: "[DONE]".to_string(),
             });
@@ -5810,6 +5815,27 @@ pub async fn stream_chat_completion(
     });
 
     Ok(())
+}
+
+/// Tell the online-model service to end a reply the person stopped. Dropping
+/// the connection is not enough: the service's host does not report it, so
+/// the provider would write (and meter) the whole reply. Best effort, off the
+/// stream's path.
+fn stop_online_reply(app: tauri::AppHandle, client: reqwest::Client, request_id: String) {
+    tauri::async_runtime::spawn(async move {
+        let Ok(token) = crate::flowsta::get_access_token(&app).await else { return };
+        let sent = client
+            .post(format!("{}/v1/chat/cancel", crate::flowsta::proxy_url()))
+            .bearer_auth(token)
+            .json(&serde_json::json!({ "id": request_id }))
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await;
+        match sent {
+            Ok(r) => println!("[LLM] Online reply stop for {}: {}", request_id, r.status()),
+            Err(e) => println!("[LLM] Online reply stop for {} did not reach the service: {}", request_id, e),
+        }
+    });
 }
 
 /// Cancel the active streaming chat completion.
