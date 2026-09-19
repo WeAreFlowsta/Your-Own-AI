@@ -21,6 +21,7 @@ import { useChat } from "../../hooks/useChat";
 import { useAgentSession, readRecentFolders, resolveBinaryPath } from "../../hooks/useAgentSession";
 import { permissionModeForTools, setPermissionModeForTools, type AgentPermissionMode } from "../../utils/agentPermissions";
 import { ConversationsDrawer } from "../../components/ConversationsDrawer";
+import OnlineModelsDoor from "../../components/OnlineModelsDoor";
 import { loadModelBounded } from "../../utils/loadModelBounded";
 import { uiLog } from "../../utils/uiLog";
 import {
@@ -2092,6 +2093,39 @@ export default component$(() => {
                               class="px-4 py-2 text-sm"
                             >
                               Switch {o.aiLabel} to Auto
+                            </LiquidMetalButton>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  }
+                  // This computer can't do what was asked (a model too large
+                  // for it, too slow to load, a graphics card the engine can't
+                  // use, an OS the engine can't start on). Said plainly, with
+                  // the offline way forward first and the online door second.
+                  if (online?.code === "hardware_limit") {
+                    const h = online as { title?: string; message?: string; offlineModels?: boolean };
+                    return (
+                      <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-700 rounded-lg p-4">
+                        <p class="text-sm font-medium text-yellow-800 dark:text-yellow-200 mb-1">
+                          {h.title ?? "This computer can't run that model"}
+                        </p>
+                        <p class="text-sm text-yellow-700 dark:text-yellow-300 mb-2">{h.message}</p>
+                        <OnlineModelsDoor class="text-sm text-yellow-700 dark:text-yellow-300 mb-4" />
+                        <div class="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+                          <LiquidMetalButton
+                            variant="secondary"
+                            onClick$={() => {
+                              chatState.pendingTurn = null;
+                              chatState.error = null;
+                            }}
+                            class="px-4 py-2 text-sm"
+                          >
+                            Dismiss
+                          </LiquidMetalButton>
+                          {h.offlineModels && (
+                            <LiquidMetalButton onClick$={() => nav("/setup")} class="px-4 py-2 text-sm">
+                              Offline Models
                             </LiquidMetalButton>
                           )}
                         </div>

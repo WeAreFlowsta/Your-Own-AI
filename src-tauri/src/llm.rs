@@ -2137,10 +2137,62 @@ pub(crate) async fn engine_refused_by_os(app_handle: &AppHandle) -> bool {
         .await
 }
 
-/// For the UI: whether offline models can start at all on this machine.
+/// The oldest macOS the bundled APPLE SILICON engine is supported on. On
+/// Macs the engine uses Apple's Accelerate through its newer interface
+/// (`cblas_sgemm$NEWLAPACK$ILP64`), which exists only from macOS 13.3. The
+/// binary still loads on older releases (the symbol is weak) and then jumps
+/// to address zero on the first processor-side batch of 32+ tokens. The
+/// Intel engine is built without Accelerate and has no such floor.
+const APPLE_SILICON_MIN_MACOS: (u32, u32) = (13, 3);
+
+/// Whether a macOS version string ("13.2.1") is below a (major, minor)
+/// floor. Unreadable = not below: only a positive reading says anything.
+fn macos_below(version: Option<&str>, floor: (u32, u32)) -> bool {
+    let Some(v) = version else { return false };
+    let mut parts = v.split('.').map(|p| p.trim().parse::<u32>());
+    let (Some(Ok(major)), minor) = (parts.next(), parts.next()) else { return false };
+    let minor = minor.and_then(|m| m.ok()).unwrap_or(0);
+    (major, minor) < floor
+}
+
+/// What the UI is told about running offline models on this machine.
+#[derive(serde::Serialize)]
+pub struct EngineStartCheck {
+    /// false = no offline model can load at all (the OS refuses the binary).
+    pub ok: bool,
+    /// "loader" when the OS refuses the binary; "macos-too-old" when the
+    /// engine runs but this macOS is below what it is supported on and it
+    /// can stop without warning.
+    pub reason: Option<&'static str>,
+    /// The macOS release that fixes it, for the message ("13.3").
+    pub needs_macos: Option<String>,
+    /// What this machine runs, for the message.
+    pub os_version: Option<String>,
+}
+
+/// For the UI: whether offline models can start at all on this machine, and
+/// whether this operating system is one the engine is supported on.
 #[tauri::command]
-pub async fn engine_start_check(app: AppHandle) -> Result<bool, String> {
-    Ok(!engine_refused_by_os(&app).await)
+pub async fn engine_start_check(app: AppHandle) -> Result<EngineStartCheck, String> {
+    let os_version = sysinfo::System::os_version();
+    if engine_refused_by_os(&app).await {
+        return Ok(EngineStartCheck { ok: false, reason: Some("loader"), needs_macos: None, os_version });
+    }
+    if cfg!(all(target_os = "macos", target_arch = "aarch64"))
+        && macos_below(os_version.as_deref(), APPLE_SILICON_MIN_MACOS)
+    {
+        log::warn!(
+            "[LLM] this macOS ({}) is older than the engine is supported on ({}.{}) - offline models can stop without warning",
+            os_version.as_deref().unwrap_or("?"), APPLE_SILICON_MIN_MACOS.0, APPLE_SILICON_MIN_MACOS.1
+        );
+        return Ok(EngineStartCheck {
+            ok: true,
+            reason: Some("macos-too-old"),
+            needs_macos: Some(format!("{}.{}", APPLE_SILICON_MIN_MACOS.0, APPLE_SILICON_MIN_MACOS.1)),
+            os_version,
+        });
+    }
+    Ok(EngineStartCheck { ok: true, reason: None, needs_macos: None, os_version })
 }
 
 /// Engine "this file's layout is wrong" markers. Excludes the device
@@ -5704,7 +5756,17 @@ pub async fn stream_chat_completion(
                 }
             }
             Err(e) => {
-                let error_msg = format!("Stream error: {}", e);
+                // The engine dying mid-answer used to reach the person as
+                // "Stream error: error decoding response body". Say what
+                // happened, and that it is ours to fix.
+                let engine_died = CHAT_LOAD_FAILED.load(std::sync::atomic::Ordering::SeqCst)
+                    || !chat_server_health_ok().await;
+                let error_msg = if engine_died {
+                    log::error!("[LLM] the engine stopped while answering: {e}");
+                    "The AI engine stopped while it was answering. That is a problem on our side, not something you did. A diagnostics report (Settings, Help and diagnostics) shows us why.".to_string()
+                } else {
+                    format!("Stream error: {}", e)
+                };
                 println!("[LLM] {}", error_msg);
                 let _ = app.emit(&format!("chat-stream-error-{}", request_id), StreamErrorData {
                     error: error_msg.clone(),
@@ -5989,6 +6051,20 @@ mod stop_chain_tests {
         // A record without the newer fields (or ctx 0) applies to any shape.
         let old: LoadCalibration = serde_json::from_str(r#"{"predicted_gb":5.7,"actual_gb":3.1,"at":1}"#).unwrap();
         assert!(old.matches(4096, false) && old.moe_cpu_layers.is_none());
+    }
+
+    #[test]
+    fn the_apple_silicon_floor_reads_macos_versions() {
+        let floor = APPLE_SILICON_MIN_MACOS;
+        for old in ["11.7.10", "12.7.6", "13.0", "13.2.1", "13"] {
+            assert!(macos_below(Some(old), floor), "{old} is below 13.3");
+        }
+        for ok in ["13.3", "13.3.1", "13.6.4", "14.0", "15.3.1", "26.0"] {
+            assert!(!macos_below(Some(ok), floor), "{ok} is supported");
+        }
+        // Unreadable never warns.
+        assert!(!macos_below(None, floor));
+        assert!(!macos_below(Some("Unknown"), floor));
     }
 
     #[test]

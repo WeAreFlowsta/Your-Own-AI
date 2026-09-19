@@ -66,15 +66,24 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   document cards included, so a marker the engine does not treat as an
   end token no longer appears as text. One already in stored text is
   trimmed on display.
-- Offline models start on older Macs. The Mac AI engine was built for
-  the newest macOS only, so on an older macOS it never started and a
-  model would not load. Both Mac engines, Intel and Apple Silicon, are
-  now built for macOS 11 and later. Where an operating system still
-  cannot run the engine, the app says so on the start view and above
-  the Offline Models list before anything is downloaded, and a load
-  reports that instead of "too slow" or "crashed". The engine line in
-  a report names what the bundled engine runs on: Metal, Vulkan, or the
-  processor on Intel Macs.
+- Offline models run on older Macs. The Mac AI engine was built for the
+  newest macOS only, so on an older macOS it never started and a model
+  would not load. The Intel engine is now built for macOS 12 and later,
+  and no longer uses a part of macOS that older releases lack, which
+  made it stop on its first answer there. On Apple Silicon the engine is
+  supported from macOS 13.3: on an older macOS the app says so on the
+  start view and above the Offline Models list, before anything is
+  downloaded. Where an operating system cannot run the engine at all,
+  the app says that too, and a load reports it instead of "too slow" or
+  "crashed". If the engine stops part way through an answer, the chat
+  says so in plain words. The engine line in a report names what the
+  bundled engine runs on: Metal, Vulkan, or the processor on Intel Macs.
+- When this computer cannot run a model - too large for it, too slow to
+  load, a graphics card the engine cannot use - the chat now shows one
+  card that says so, offers the Offline Models page for a smaller model,
+  and adds a single line that online models run at full speed on any
+  computer and are an optional paid service. Someone with a plan is told
+  how to use it instead. The line never appears on a fault of ours.
 - The app responds on macOS 12 and earlier. On those Macs the window is
   drawn by the system's own, older browser engine, and one line of the
   app's code was written in a form it could not read, so buttons, the

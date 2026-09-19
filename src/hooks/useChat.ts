@@ -889,18 +889,22 @@ export function useChat(props: UseChatProps) {
             props.currentModel.value = preferredModel;
             props.modelTooBig.value = true;
             props.modelIssue.value = "engine can't start";
-            abortWith(
-              `The AI engine in this version of Your Own AI needs a newer release of your operating system than this computer is running, so offline models will not load. Your computer and ${selectedAi.label}'s model are fine. A new version of Your Own AI, or an operating system update, fixes it - online models work as normal until then.`
-            );
+            abortWith(JSON.stringify({
+              code: "hardware_limit",
+              title: "Offline models can't start on this computer yet",
+              message: `The AI engine in this version of Your Own AI needs a newer release of your operating system than this computer is running, so offline models will not load. Your computer and ${selectedAi.label}'s model are fine. A new version of Your Own AI, or an operating system update, fixes it.`,
+            }));
           } else if (errorMessage.includes("MODEL_DEVICE_UNSUPPORTED")) {
             // Normally the backend retries on the processor and this never
             // surfaces - it reaches here only if that retry also failed.
             props.currentModel.value = preferredModel;
             props.modelTooBig.value = true;
             props.modelIssue.value = "not loaded";
-            abortWith(
-              `Your graphics card can't run AI models right now (the app will use your processor instead). The retry didn't complete - restarting the app usually finishes the switch.`
-            );
+            abortWith(JSON.stringify({
+              code: "hardware_limit",
+              title: "Your graphics card can't run AI models right now",
+              message: `The app will use your processor instead. The retry didn't complete - restarting the app usually finishes the switch. On the processor, smaller models run best.`,
+            }));
           } else if (errorMessage.includes("MODEL_LOAD_CRASHED")) {
             props.currentModel.value = preferredModel;
             props.modelTooBig.value = true;
@@ -931,15 +935,23 @@ export function useChat(props: UseChatProps) {
             abortWith(
               tuned
                 ? `${selectedAi.label}'s model didn't fit - its Fine-tune settings ask for more graphics memory than this machine has. On the Offline Models page, open Fine-tune on that model and set the rows back to Auto, then try again.`
-                : `${selectedAi.label}'s model is too large for your graphics card. Pick a smaller model on the Offline Models page (look for the "Full speed" badge).`
+                : JSON.stringify({
+                    code: "hardware_limit",
+                    title: `${selectedAi.label}'s model is too large for this computer`,
+                    message: `It needs more graphics memory than this machine has. A smaller model will run - on the Offline Models page, look for the "Full speed" badge.`,
+                    offlineModels: true,
+                  })
             );
           } else if (errorMessage.includes("MODEL_LOAD_TIMEOUT")) {
             props.currentModel.value = preferredModel;
             props.modelTooBig.value = true;
             props.modelIssue.value = "not loaded";
-            abortWith(
-              `${selectedAi.label}'s model took too long to load on this hardware, so the attempt was stopped. It won't be retried this session - a smaller model will load quickly (look for the "Full speed" badge on the Offline Models page).`
-            );
+            abortWith(JSON.stringify({
+              code: "hardware_limit",
+              title: `${selectedAi.label}'s model took too long to load on this computer`,
+              message: `The attempt was stopped and won't be retried this session. A smaller model will load quickly - on the Offline Models page, look for the "Full speed" badge.`,
+              offlineModels: true,
+            }));
           } else if (errorMessage.includes("MODEL_FILE_UNREADABLE")) {
             props.currentModel.value = preferredModel;
             props.modelTooBig.value = true;
