@@ -109,6 +109,8 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - The activity card's download row keeps its text current: the percent
   and "x of y" move with the bar. Writing a document's card shows its
   progress through the parts of a long document.
+- You can write your next message while a reply is still coming. It
+  stays in the box and sends when you press Ask after the reply ends.
 
 ## [0.7.2] - 2026-09-09
 

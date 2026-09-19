@@ -286,7 +286,9 @@ export const ContentEditor = component$<ContentEditorProps>((props) => {
               )}
               <div
                 ref={contentEditableRef}
-                contentEditable={props.isLoading ? 'false' : 'true'}
+                // Always editable: the next message can be written while a
+                // reply runs. Sending waits for the reply (handleSubmit).
+                contentEditable="true"
                 onInput$={onContentChange}
                 onDrop$={onDrop}
                 onKeyDown$={handleEditorKeyDown}
