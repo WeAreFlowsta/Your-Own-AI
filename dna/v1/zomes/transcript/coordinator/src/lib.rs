@@ -193,29 +193,56 @@ fn from_own_chain(targets: &[ActionHash]) -> ExternResult<HashMap<ActionHash, Re
         return Ok(HashMap::new());
     }
     let wanted: HashSet<&ActionHash> = targets.iter().collect();
-    // Actions only: which of the wanted records are on this chain, and the
-    // hash of the entry each one carries.
+    // Actions only (no entry is loaded): which of the wanted records are on
+    // this chain, and at which sequence numbers.
     let actions = query(ChainQueryFilter::new().action_type(ActionType::Create).include_entries(false))?;
-    let entry_hashes: HashSet<EntryHash> = actions
+    let mut seqs: Vec<u32> = actions
         .iter()
         .filter(|r| wanted.contains(r.action_address()))
-        .filter_map(|r| r.action().entry_hash().cloned())
+        .map(|r| r.action().action_seq())
         .collect();
-    if entry_hashes.is_empty() {
-        return Ok(HashMap::new());
+    drop(actions);
+    // Full records for those sequence numbers only. NEVER ask for entries
+    // without a sequence range: the conductor applies `entry_hashes` AFTER
+    // loading every entry of the chain, so an unranged query reads the whole
+    // chain's contents into memory on every call (on a 1,059-conversation
+    // cell that froze a 16 GB machine). The sequence range is applied in the
+    // database, so only these rows' entries are loaded.
+    let mut out = HashMap::new();
+    for (from, to) in seq_ranges(&mut seqs, RANGE_GAP) {
+        let records = query(
+            ChainQueryFilter::new()
+                .sequence_range(ChainQueryFilterRange::ActionSeqRange(from, to))
+                .action_type(ActionType::Create)
+                .include_entries(true),
+        )?;
+        for r in records {
+            if wanted.contains(r.action_address()) {
+                out.insert(r.action_address().clone(), r);
+            }
+        }
     }
-    // Full records for exactly those entries.
-    let records = query(
-        ChainQueryFilter::new()
-            .action_type(ActionType::Create)
-            .entry_hashes(entry_hashes)
-            .include_entries(true),
-    )?;
-    Ok(records
-        .into_iter()
-        .filter(|r| wanted.contains(r.action_address()))
-        .map(|r| (r.action_address().clone(), r))
-        .collect())
+    Ok(out)
+}
+
+/// Sequence numbers this close together are fetched as one range: a
+/// conversation's messages sit side by side on the chain, so one range covers
+/// a run of them, and the few records loaded in between are thrown away.
+const RANGE_GAP: u32 = 16;
+
+/// Sorted, merged (from, to) ranges covering every number, joining numbers
+/// no further apart than `gap`.
+fn seq_ranges(seqs: &mut Vec<u32>, gap: u32) -> Vec<(u32, u32)> {
+    seqs.sort_unstable();
+    seqs.dedup();
+    let mut out: Vec<(u32, u32)> = Vec::new();
+    for &s in seqs.iter() {
+        match out.last_mut() {
+            Some((_, to)) if s - *to <= gap => *to = s,
+            _ => out.push((s, s)),
+        }
+    }
+    out
 }
 
 fn read_window(window: Vec<Link>, more: bool, total: u32) -> ExternResult<RecordsPage> {
@@ -403,6 +430,21 @@ mod paging_tests {
             assert_eq!(walk(&stamps, limit), stamps, "limit {limit}");
         }
         assert_eq!(walk(&[], 10), Vec::<i64>::new());
+    }
+
+    #[test]
+    fn wanted_records_are_fetched_in_tight_ranges_never_the_whole_chain() {
+        use super::seq_ranges;
+        // A conversation's messages: side by side, with another chat's in between.
+        let mut run = vec![100, 101, 103, 104, 110, 111];
+        assert_eq!(seq_ranges(&mut run, 16), vec![(100, 111)]);
+        // A list page: conversation starts scattered across the chain.
+        let mut scattered = vec![9_000, 12, 4_500, 13];
+        assert_eq!(seq_ranges(&mut scattered, 16), vec![(12, 13), (4_500, 4_500), (9_000, 9_000)]);
+        let covered: u32 = seq_ranges(&mut vec![12, 13, 4_500, 9_000], 16).iter().map(|(a, b)| b - a + 1).sum();
+        assert_eq!(covered, 4, "four records wanted, four rows loaded - not nine thousand");
+        assert!(seq_ranges(&mut Vec::new(), 16).is_empty());
+        assert_eq!(seq_ranges(&mut vec![7, 7, 7], 16), vec![(7, 7)]);
     }
 
     #[test]
