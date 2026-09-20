@@ -480,7 +480,7 @@ export default component$(() => {
                   <span class="mt-0.5 inline-block h-4 w-4 flex-shrink-0 rounded-full border-2 border-[var(--border-subtle)] border-t-[var(--text-secondary)] animate-spin" />
                   <span>
                     {workspacesWarming.value
-                      ? "Your records are warming up - just after launch, project notes take a moment to be ready."
+                      ? "Your records are warming up - just after launch, project memory takes a moment to be ready."
                       : "Reading every AI's records - a long history takes a moment.."}
                   </span>
                 </div>
@@ -488,7 +488,7 @@ export default component$(() => {
               {!workspacesLoading.value && workspaceMemories.value.length === 0 && (
                 <div class="p-5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)]">
                   <p class="text-sm font-semibold text-[var(--text-primary)] mb-1.5">
-                    No project notes yet - because no projects yet.
+                    No project memory yet - because no projects yet.
                   </p>
                   <p class="text-sm text-[var(--text-secondary)] leading-relaxed">
                     A project lets an AI work directly in a folder of your

@@ -175,12 +175,23 @@ fn window_end<T: PartialEq>(stamps: &[T], limit: u32) -> usize {
         .unwrap_or(stamps.len())
 }
 
+/// Windows up to this many records are read with `get`; larger ones with the
+/// chain queries (one scan ≈ six gets on a large cell).
+const CHAIN_SCAN_ABOVE: usize = 6;
+
 /// The records of a window that sit on THIS agent's own chain, read with two
 /// chain queries instead of one `get` per record. A `get` costs about 0.3 s
 /// on a large cell whatever its strategy (measured: 1,427 messages, 450 s by
 /// network-first gets, 488 s by local-first gets); a person's records are
 /// written on their own device, so the chain has them.
 fn from_own_chain(targets: &[ActionHash]) -> ExternResult<HashMap<ActionHash, Record>> {
+    // The two queries scan the chain once whatever the window's size (~1.7 s
+    // on a 1,048-conversation cell), so they only beat `get` above a handful
+    // of records. A short conversation is read record by record: measured,
+    // a 1-message conversation took ~2 s through the scan.
+    if targets.len() <= CHAIN_SCAN_ABOVE {
+        return Ok(HashMap::new());
+    }
     let wanted: HashSet<&ActionHash> = targets.iter().collect();
     // Actions only: which of the wanted records are on this chain, and the
     // hash of the entry each one carries.

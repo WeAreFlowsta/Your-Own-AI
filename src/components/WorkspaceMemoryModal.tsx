@@ -107,7 +107,7 @@ export const WorkspaceMemoryModal = component$<{
         <div class="flex items-center justify-between px-5 py-3 border-b border-[var(--border-subtle)]">
           <div class="min-w-0">
             <h2 class="text-base font-semibold text-[var(--text-primary)] font-varela truncate">
-              Project notes - {folderLeaf}
+              Project memory - {folderLeaf}
             </h2>
             <p class="text-xs text-[var(--text-muted)] truncate">
               {loading.value
@@ -136,7 +136,7 @@ export const WorkspaceMemoryModal = component$<{
               <span>
                 {slowLoad.value
                   ? warmupLikely.value
-                    ? "Your records are warming up - just after launch, project notes take a moment to be ready."
+                    ? "Your records are warming up - just after launch, project memory takes a moment to be ready."
                     : "Still reading - your records hold a lot of history.."
                   : "Loading from your records.."}
               </span>
