@@ -451,19 +451,12 @@ async fn local_conversation_index(
                 continue;
             }
         }
-        let payload = ExternIO::encode(()).map_err(|e| e.to_string())?;
-        let result = manager
-            .call_zome_with_timeout(
-                &agent,
-                "transcript",
-                "get_all_conversations",
-                payload,
-                std::time::Duration::from_secs(crate::dna::BACKUP_READ_TIMEOUT_SECS),
-            )
+        // The list decides what is already here: a partial one would let
+        // a restore write conversations twice, so only a whole list counts.
+        let records = crate::transcript_pages::all_conversations(manager, &agent, std::time::Duration::from_secs(180))
             .await
-            .map_err(|e| format!("get_all_conversations({}): {}", agent, e))?;
-        let records: Vec<holochain_types::prelude::Record> =
-            ExternIO::decode(&result).map_err(|e| e.to_string())?;
+            .and_then(|r| r.whole())
+            .map_err(|e| format!("conversation list read ({}): {}", agent, e))?;
         counts.insert(agent, records.len() as u64);
         for rec in &records {
             if let Some((plain, _)) = vault_escrow::open_record(key, rec) {

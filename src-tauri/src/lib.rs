@@ -22,6 +22,7 @@ mod holochain;            // Multi-agent manager
 mod transcript_crypto;    // User data key + per-user seed (Phase A privacy)
 mod commands_holochain;   // Tauri commands for transcript operations
 mod memory;               // Phase A persistent memory (encrypted profile facts)
+mod transcript_pages;     // Conversation records read a page at a time
 mod transcript_memory;    // Per-AI episodic memory (embedded conversation turns)
 mod gpu_safety;           // GPU crash-loop → CPU fallback (safe mode)
 mod agent_bridge;         // Your Own AI Build coding agent over ACP (stdio JSON-RPC)

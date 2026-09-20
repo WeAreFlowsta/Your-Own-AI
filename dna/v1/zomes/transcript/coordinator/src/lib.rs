@@ -6,6 +6,7 @@
 //! ordering by `sequence` happens client-side after decryption).
 
 use hdk::prelude::*;
+use std::collections::{HashMap, HashSet};
 use transcript_integrity::*;
 
 #[hdk_dependent_entry_types]
@@ -118,6 +119,160 @@ pub fn get_conversation_entries(conversation_hash: ActionHash) -> ExternResult<V
     Ok(entries)
 }
 
+/// A window onto a list of links, so a long list is read a page at a time.
+/// Listing links is cheap; the cost of the unpaged reads is one `get` per
+/// link, so a page fetches records for its own window only.
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ConversationsPageInput {
+    /// Whose list to read. None = this cell's own agent.
+    pub anchor: Option<AgentPubKey>,
+    /// Only conversations started before this time. None = from the newest.
+    pub before: Option<Timestamp>,
+    pub limit: u32,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct EntriesPageInput {
+    pub conversation_hash: ActionHash,
+    /// Only messages recorded after this time. None = from the first.
+    pub after: Option<Timestamp>,
+    pub limit: u32,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct RecordsPage {
+    pub records: Vec<Record>,
+    /// Pass back as `before` / `after` for the next page. None = no more.
+    pub next: Option<Timestamp>,
+    /// Links in the whole list, all pages.
+    pub total: u32,
+    /// Links in this window whose record could not be read.
+    pub missing: u32,
+}
+
+/// Take one window from links already sorted in reading order. Links that
+/// share the window's last timestamp ride along, so the timestamp cursor
+/// never skips one.
+fn take_window(sorted: Vec<Link>, limit: u32) -> (Vec<Link>, bool) {
+    let stamps: Vec<Timestamp> = sorted.iter().map(|l| l.timestamp).collect();
+    let end = window_end(&stamps, limit);
+    let more = end < sorted.len();
+    (sorted.into_iter().take(end).collect(), more)
+}
+
+/// How many items of an ordered list one page takes: `limit` (at least 1),
+/// plus any that share the last one's stamp.
+fn window_end<T: PartialEq>(stamps: &[T], limit: u32) -> usize {
+    let limit = limit.max(1) as usize;
+    if stamps.len() <= limit {
+        return stamps.len();
+    }
+    let edge = &stamps[limit - 1];
+    stamps[limit..]
+        .iter()
+        .position(|s| s != edge)
+        .map(|p| limit + p)
+        .unwrap_or(stamps.len())
+}
+
+/// The records of a window that sit on THIS agent's own chain, read with two
+/// chain queries instead of one `get` per record. A `get` costs about 0.3 s
+/// on a large cell whatever its strategy (measured: 1,427 messages, 450 s by
+/// network-first gets, 488 s by local-first gets); a person's records are
+/// written on their own device, so the chain has them.
+fn from_own_chain(targets: &[ActionHash]) -> ExternResult<HashMap<ActionHash, Record>> {
+    let wanted: HashSet<&ActionHash> = targets.iter().collect();
+    // Actions only: which of the wanted records are on this chain, and the
+    // hash of the entry each one carries.
+    let actions = query(ChainQueryFilter::new().action_type(ActionType::Create).include_entries(false))?;
+    let entry_hashes: HashSet<EntryHash> = actions
+        .iter()
+        .filter(|r| wanted.contains(r.action_address()))
+        .filter_map(|r| r.action().entry_hash().cloned())
+        .collect();
+    if entry_hashes.is_empty() {
+        return Ok(HashMap::new());
+    }
+    // Full records for exactly those entries.
+    let records = query(
+        ChainQueryFilter::new()
+            .action_type(ActionType::Create)
+            .entry_hashes(entry_hashes)
+            .include_entries(true),
+    )?;
+    Ok(records
+        .into_iter()
+        .filter(|r| wanted.contains(r.action_address()))
+        .map(|r| (r.action_address().clone(), r))
+        .collect())
+}
+
+fn read_window(window: Vec<Link>, more: bool, total: u32) -> ExternResult<RecordsPage> {
+    let next = if more { window.last().map(|l| l.timestamp) } else { None };
+    let mut targets = Vec::with_capacity(window.len());
+    for link in window {
+        targets.push(
+            ActionHash::try_from(link.target).map_err(|_| wasm_error!("Invalid record hash"))?,
+        );
+    }
+    let mut own = from_own_chain(&targets)?;
+    let mut records = Vec::new();
+    let mut missing = 0u32;
+    for hash in targets {
+        // Not on this chain (another agent's list): the store, then the network.
+        let found = match own.remove(&hash) {
+            Some(record) => Some(record),
+            None => match get(hash.clone(), GetOptions::local())? {
+                Some(record) => Some(record),
+                None => get(hash, GetOptions::default())?,
+            },
+        };
+        match found {
+            Some(record) => records.push(record),
+            None => missing += 1,
+        }
+    }
+    Ok(RecordsPage { records, next, total, missing })
+}
+
+/// One page of conversations (encrypted records), newest first.
+#[hdk_extern]
+pub fn get_conversations_page(input: ConversationsPageInput) -> ExternResult<RecordsPage> {
+    let anchor = match input.anchor {
+        Some(a) => a,
+        None => agent_anchor()?,
+    };
+    let mut links = get_links(
+        LinkQuery::try_new(anchor, LinkTypes::AllConversations)?,
+        GetStrategy::default(),
+    )?;
+    let total = links.len() as u32;
+    links.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    if let Some(before) = input.before {
+        links.retain(|l| l.timestamp < before);
+    }
+    let (window, more) = take_window(links, input.limit);
+    read_window(window, more, total)
+}
+
+/// One page of a conversation's (encrypted) messages, oldest first.
+#[hdk_extern]
+pub fn get_conversation_entries_page(input: EntriesPageInput) -> ExternResult<RecordsPage> {
+    let mut links = get_links(
+        LinkQuery::try_new(input.conversation_hash, LinkTypes::ConversationToEntries)?,
+        GetStrategy::default(),
+    )?;
+    let total = links.len() as u32;
+    links.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+    if let Some(after) = input.after {
+        links.retain(|l| l.timestamp > after);
+    }
+    let (window, more) = take_window(links, input.limit);
+    let mut page = read_window(window, more, total)?;
+    page.records.sort_by_key(|record| record.action().timestamp());
+    Ok(page)
+}
+
 /// Get a single conversation record.
 #[hdk_extern]
 pub fn get_conversation(action_hash: ActionHash) -> ExternResult<Option<Record>> {
@@ -209,4 +364,40 @@ pub fn get_migration_mappings(_: ()) -> ExternResult<Vec<Record>> {
         }
     }
     Ok(mappings)
+}
+
+#[cfg(test)]
+mod paging_tests {
+    use super::window_end;
+
+    /// Walk a newest-first list by the `before` cursor the way a caller does.
+    fn walk(stamps: &[i64], limit: u32) -> Vec<i64> {
+        let mut seen = Vec::new();
+        let mut before: Option<i64> = None;
+        loop {
+            let rest: Vec<i64> = stamps.iter().copied().filter(|s| before.map_or(true, |b| *s < b)).collect();
+            let end = window_end(&rest, limit);
+            seen.extend_from_slice(&rest[..end]);
+            if end >= rest.len() {
+                return seen;
+            }
+            before = Some(rest[end - 1]);
+        }
+    }
+
+    #[test]
+    fn every_item_is_read_once_even_when_stamps_tie_at_a_page_edge() {
+        let stamps = vec![90, 80, 80, 80, 70, 60, 60, 50];
+        for limit in [0, 1, 2, 3, 5, 8, 100] {
+            assert_eq!(walk(&stamps, limit), stamps, "limit {limit}");
+        }
+        assert_eq!(walk(&[], 10), Vec::<i64>::new());
+    }
+
+    #[test]
+    fn a_short_list_is_one_page() {
+        assert_eq!(window_end(&[3, 2, 1], 50), 3);
+        assert_eq!(window_end(&[3, 2, 1], 3), 3);
+        assert_eq!(window_end(&[3, 2, 1], 2), 2);
+    }
 }

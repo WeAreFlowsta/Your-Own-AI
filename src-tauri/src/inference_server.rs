@@ -490,19 +490,10 @@ async fn conversation_probe_dev(
     };
     let agent_keys: Vec<String> = manager.agents.lock().await.keys().cloned().collect();
     for agent in agent_keys {
-        let payload = match holochain_types::prelude::ExternIO::encode(()) {
-            Ok(p) => p,
-            Err(e) => return Json(json!({ "error": e.to_string() })).into_response(),
-        };
         let list_started = std::time::Instant::now();
-        let Ok(result) = manager
-            .call_zome_with_timeout(&agent, "transcript", "get_all_conversations", payload, std::time::Duration::from_secs(timeout))
-            .await
+        let Ok(list) = crate::transcript_pages::all_conversations(&manager, &agent, std::time::Duration::from_secs(timeout)).await
         else { continue };
-        let records: Vec<holochain_types::prelude::Record> = match holochain_types::prelude::ExternIO::decode(&result) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
+        let records = list.records;
         let list_secs = list_started.elapsed().as_secs_f64();
         for rec in &records {
             let hash_hex = hex::encode(rec.action_address().get_raw_39());
@@ -512,23 +503,19 @@ async fn conversation_probe_dev(
             let (title, started_at) = crate::vault_escrow::open_record(&key, rec)
                 .map(|(p, _)| (p["title"].as_str().unwrap_or("").to_string(), p["started_at"].as_i64().unwrap_or(0)))
                 .unwrap_or_default();
-            let payload = match holochain_types::prelude::ExternIO::encode(rec.action_address().clone()) {
-                Ok(p) => p,
-                Err(e) => return Json(json!({ "error": e.to_string() })).into_response(),
-            };
             let started = std::time::Instant::now();
-            let read = manager
-                .call_zome_with_timeout(&agent, "transcript", "get_conversation_entries", payload, std::time::Duration::from_secs(timeout))
-                .await;
+            let read = crate::transcript_pages::all_entries(&manager, &agent, rec.action_address().clone(), std::time::Duration::from_secs(timeout)).await;
             let secs = started.elapsed().as_secs_f64();
             return match read {
                 Ok(r) => {
-                    let entries: Vec<holochain_types::prelude::Record> = holochain_types::prelude::ExternIO::decode(&r).unwrap_or_default();
+                    let (complete, links, missing, stopped_by) = (r.complete, r.total, r.missing, r.stopped_by.clone());
+                    let entries = r.records;
                     let bytes: usize = entries.iter().map(|e| e.entry().as_option().map(|en| en.as_app_entry().map(|a| a.as_ref().bytes().len()).unwrap_or(0)).unwrap_or(0)).sum();
                     Json(json!({
                         "agent": agent, "hash": hash_hex, "title": title, "started_at": started_at,
                         "list_secs": list_secs, "conversations_in_cell": records.len(),
                         "entries": entries.len(), "entry_bytes": bytes, "read_secs": secs,
+                        "entry_links": links, "missing": missing, "complete": complete, "stopped_by": stopped_by,
                     })).into_response()
                 }
                 Err(e) => Json(json!({
@@ -576,30 +563,21 @@ async fn replayed_conversations_dev(
     let mut deleted = 0u32;
     let mut failed = Vec::new();
     for agent in agent_keys {
-        let payload = match holochain_types::prelude::ExternIO::encode(()) {
-            Ok(p) => p,
-            Err(e) => return Json(json!({ "error": e.to_string() })).into_response(),
-        };
-        let result = match manager
-            .call_zome_with_timeout(
-                &agent,
-                "transcript",
-                "get_all_conversations",
-                payload,
-                std::time::Duration::from_secs(crate::dna::BACKUP_READ_TIMEOUT_SECS),
-            )
-            .await
+        let records = match crate::transcript_pages::all_conversations(
+            &manager,
+            &agent,
+            std::time::Duration::from_secs(60),
+        )
+        .await
         {
-            Ok(r) => r,
-            Err(e) => {
-                failed.push(json!({ "agent": agent, "error": e }));
+            // A partial list could miss the original of a replayed copy.
+            Ok(r) if r.complete => r.records,
+            Ok(r) => {
+                failed.push(json!({ "agent": agent, "error": r.stopped_by }));
                 continue;
             }
-        };
-        let records: Vec<holochain_types::prelude::Record> = match holochain_types::prelude::ExternIO::decode(&result) {
-            Ok(r) => r,
             Err(e) => {
-                failed.push(json!({ "agent": agent, "error": e.to_string() }));
+                failed.push(json!({ "agent": agent, "error": e }));
                 continue;
             }
         };

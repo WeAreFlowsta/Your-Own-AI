@@ -28,8 +28,12 @@ const HAPP_FILENAME: &str = "yourown_ai_transcript_v1_happ.happ";
 /// v1 = original externs; v2 = + delete_conversation; v3 = same wasm as v2,
 /// re-swept because cells installed after a v2 sweep (new AIs, Vault
 /// restores, fresh installs whose default AIs came after the sweep) had kept
-/// the bundle's v1.
-pub const COORDINATOR_VERSION: u32 = 3;
+/// the bundle's v1; v4-v6 = + get_conversations_page and
+/// get_conversation_entries_page (callers fall back to the unpaged reads on
+/// a cell the sweep has not reached - transcript_pages.rs); v6 reads a
+/// page from the agent's own chain in two queries (v4 and v5 read record by
+/// record, ~0.3 s each on a large cell, and never left the dev box).
+pub const COORDINATOR_VERSION: u32 = 6;
 /// The standalone coordinator wasm (in src-tauri/resources/), staged by
 /// dna/v1/build-coordinator.sh.
 const COORDINATOR_WASM_FILENAME: &str = "transcript_coordinator.wasm";

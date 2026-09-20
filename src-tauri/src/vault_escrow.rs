@@ -23,7 +23,6 @@
 use crate::commands_holochain::HolochainState;
 use crate::flowsta::{self, http, AUTH_STORE, VAULT_ORIGIN, YOAI_HOLOCHAIN_CLIENT_ID};
 use crate::transcript_crypto::{self, RecoveryMaterial};
-use holochain_types::prelude::ExternIO;
 use serde::Serialize;
 use std::sync::Arc;
 use tauri::Manager;
@@ -295,16 +294,8 @@ async fn count_local_conversations(app: &tauri::AppHandle) -> Result<u64, String
     };
     let mut total = 0u64;
     for key in keys {
-        let payload = ExternIO::encode(()).map_err(|e| e.to_string())?;
-        match manager
-            .call_zome_with_timeout(&key, "transcript", "get_all_conversations", payload, std::time::Duration::from_secs(crate::dna::BACKUP_READ_TIMEOUT_SECS))
-            .await
-        {
-            Ok(result) => {
-                let records: Vec<holochain_types::prelude::Record> =
-                    ExternIO::decode(&result).map_err(|e| e.to_string())?;
-                total += records.len() as u64;
-            }
+        match crate::transcript_pages::conversation_count(&manager, &key, std::time::Duration::from_secs(180)).await {
+            Ok(n) => total += n,
             Err(e) => {
                 // A cell that can't answer might hold data - fail safe by
                 // treating the count as unknown rather than zero.
@@ -1069,22 +1060,22 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
     let mut conv_unreadable = 0usize;
     for (agent_key, installed_app_id) in agents {
         let started = std::time::Instant::now();
-        let payload = ExternIO::encode(()).map_err(|e| e.to_string())?;
-        let result = match manager
-            .call_zome_with_timeout(&agent_key, "transcript", "get_all_conversations", payload, std::time::Duration::from_secs(crate::dna::BACKUP_READ_TIMEOUT_SECS))
+        // A page at a time; a list that stops part way counts as unread,
+        // so a partial list never drops conversations from the backup.
+        let conv_records: Vec<Record> = match crate::transcript_pages::all_conversations(&manager, &agent_key, std::time::Duration::from_secs(180))
             .await
+            .and_then(|r| r.whole())
         {
             Ok(r) => r,
             Err(e) => {
                 log::warn!(
-                    "[escrow] get_all_conversations({}) failed - keeping this AI's conversations from the previous backup: {}",
+                    "[escrow] conversation list read ({}) failed - keeping this AI's conversations from the previous backup: {}",
                     agent_key, e
                 );
                 unreadable.push(installed_app_id.clone());
                 continue;
             }
         };
-        let conv_records: Vec<Record> = ExternIO::decode(&result).map_err(|e| e.to_string())?;
 
         // Changed-only reads: the local list cache is written through on
         // every turn the app records, so a conversation whose activity stamp
@@ -1169,8 +1160,6 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
             let mut records =
                 vec![backup_record("Conversation", conv, conv_plain, &conv_raw)];
 
-            let payload =
-                ExternIO::encode(conv_hash).map_err(|e| e.to_string())?;
             // A conversation the Vault already holds may stall at 180 s: the
             // previous copy is carried and nothing is lost. One it does NOT
             // hold yet gets the backup's long wait, because a stall means it
@@ -1182,9 +1171,11 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
             } else {
                 std::time::Duration::from_secs(crate::dna::BACKUP_READ_TIMEOUT_SECS)
             };
-            let result = match manager
-                .call_zome_with_timeout(&agent_key, "transcript", "get_conversation_entries", payload, entries_timeout)
+            // `entries_timeout` is per page of messages; half a conversation
+            // is never backed up (`whole`).
+            let entry_records: Vec<Record> = match crate::transcript_pages::all_entries(&manager, &agent_key, conv_hash.clone(), entries_timeout)
                 .await
+                .and_then(|r| r.whole())
             {
                 Ok(r) => {
                     stalled_in_a_row = 0;
@@ -1214,8 +1205,6 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
                     continue;
                 }
             };
-            let entry_records: Vec<Record> =
-                ExternIO::decode(&result).map_err(|e| e.to_string())?;
             for er in &entry_records {
                 let Some((mut plain, raw)) = open_record(&key, er) else { continue };
                 let entry_type = if plain["annotation"] == "grounding" {

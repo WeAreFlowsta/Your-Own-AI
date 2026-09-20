@@ -459,19 +459,14 @@ impl HolochainManager {
 
             // Count conversations - a decode-only read, no decryption.
             let conversations = if connected {
-                let payload = holochain_types::prelude::ExternIO::encode(())
-                    .map_err(|e| format!("Failed to encode: {}", e))?;
-                match self
-                    .call_zome(&key_hex, "transcript", "get_all_conversations", payload)
-                    .await
-                {
-                    Ok(r) => holochain_types::prelude::ExternIO::decode::<
-                        Vec<holochain_types::prelude::Record>,
-                    >(&r)
-                    .ok()
-                    .map(|v| v.len() as u64),
-                    Err(_) => None,
-                }
+                // The link count alone - no record is fetched for it.
+                crate::transcript_pages::conversation_count(
+                    self,
+                    &key_hex,
+                    std::time::Duration::from_secs(60),
+                )
+                .await
+                .ok()
             } else {
                 None
             };

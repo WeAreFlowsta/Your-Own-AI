@@ -1924,7 +1924,6 @@ pub async fn import_archive_adopt(
     ai_name: String,
     hc_state: tauri::State<'_, std::sync::Arc<crate::commands_holochain::HolochainState>>,
 ) -> Result<u32, String> {
-    use holochain_types::prelude::ExternIO;
     use tauri::Emitter;
 
     let flight_key = format!("{archive_id}:{ai_id}");
@@ -1955,12 +1954,9 @@ pub async fn import_archive_adopt(
 
     // Existing started_at values on the adopting agent's chain.
     let mut existing_started: std::collections::HashSet<i64> = std::collections::HashSet::new();
-    let payload = ExternIO::encode(()).map_err(|e| e.to_string())?;
-    if let Ok(result) = manager
-        .call_zome(&ai_id, "transcript", "get_all_conversations", payload)
-        .await
-    {
-        if let Ok(records) = ExternIO::decode::<Vec<holochain_types::prelude::Record>>(&result) {
+    if let Ok(read) = crate::transcript_pages::all_conversations(&manager, &ai_id, std::time::Duration::from_secs(60)).await {
+        {
+            let records = read.records;
             for record in &records {
                 let Some(entry) = record.entry().as_option() else { continue };
                 let Some(app_bytes) = entry.as_app_entry() else { continue };

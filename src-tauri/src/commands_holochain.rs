@@ -1094,30 +1094,35 @@ pub async fn get_conversations(
             log::debug!("get_conversations: lineage agent {} is not connected (tidied) - skipped", key);
             continue;
         }
-        let payload = ExternIO::encode(())
-            .map_err(|e| format!("Failed to encode: {}", e))?;
-
-        let result = match manager
-            .call_zome(key, "transcript", "get_all_conversations", payload)
-            .await
+        let read = match crate::transcript_pages::all_conversations(
+            &manager,
+            key,
+            std::time::Duration::from_secs(60),
+        )
+        .await
         {
             Ok(r) => r,
             Err(e) => {
-                log::warn!("get_all_conversations failed for lineage agent {}: {}", key, e);
+                log::warn!("conversation list read failed for lineage agent {}: {}", key, e);
                 if !e.contains("Agent not found") {
                     unanswered.push(key.clone());
                 }
                 continue;
             }
         };
-
-        let records: Vec<holochain_types::prelude::Record> = match ExternIO::decode(&result) {
-            Ok(r) => r,
-            Err(e) => {
-                log::warn!("Failed to decode conversations for lineage agent {}: {}", key, e);
-                continue;
-            }
-        };
+        if !read.complete {
+            // Some pages answered: keep them, and let the cache stand in
+            // for the rest of this agent's list.
+            log::warn!(
+                "conversation list for lineage agent {} stopped after {} of {}: {}",
+                key,
+                read.records.len(),
+                read.total,
+                read.stopped_by.as_deref().unwrap_or("unknown")
+            );
+            unanswered.push(key.clone());
+        }
+        let records = read.records;
 
         for record in &records {
             if let Some(entry) = record.entry().as_option() {
@@ -1270,19 +1275,30 @@ pub async fn get_conversation_transcript(
         .map_err(|e| format!("Invalid conversation hash hex: {}", e))?;
     let conv_hash = ActionHash::from_raw_39(raw_bytes);
 
-    let payload = ExternIO::encode(conv_hash)
-        .map_err(|e| format!("Failed to encode: {}", e))?;
-
-    let result = hc_state.get()?
-        .call_zome(&agent_key, "transcript", "get_conversation_entries", payload)
-        .await
-        .map_err(|e| {
-            log::warn!("[records] transcript {who}: read failed after {} ms: {e}", t0.elapsed().as_millis());
-            e
-        })?;
-
-    let records: Vec<holochain_types::prelude::Record> = ExternIO::decode(&result)
-        .map_err(|e| format!("Failed to decode transcript: {}", e))?;
+    let manager = hc_state.get()?;
+    let read = crate::transcript_pages::all_entries(
+        &manager,
+        &agent_key,
+        conv_hash,
+        std::time::Duration::from_secs(60),
+    )
+    .await
+    .map_err(|e| {
+        log::warn!("[records] transcript {who}: read failed after {} ms: {e}", t0.elapsed().as_millis());
+        e
+    })?;
+    if !read.complete {
+        // A conversation opened with its tail missing would read as whole.
+        let why = read.stopped_by.unwrap_or_else(|| "unknown".to_string());
+        log::warn!(
+            "[records] transcript {who}: stopped after {} of {} messages in {} ms: {why}",
+            read.records.len(),
+            read.total,
+            t0.elapsed().as_millis()
+        );
+        return Err(why);
+    }
+    let records = read.records;
 
     let data_key = hc_state.get()?.data_key()?;
     let mut entries = Vec::new();

@@ -96,6 +96,12 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   downloaded, and then could not run.
 
 ### Records
+- Your records are read a page at a time. A long list of conversations,
+  or one very long conversation, no longer has to arrive in a single
+  read: the drawer, opening a conversation, backup to your Vault, restore
+  and import all read in pages, and a list that stops part way keeps
+  what it already has. A backup still takes a conversation whole or not
+  at all.
 - A conversation opened from the drawer stays open: the chat is cleared
   before the records are read, never after them, so the first open after
   launch shows its messages like every later one.
