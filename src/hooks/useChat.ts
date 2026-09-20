@@ -2070,13 +2070,16 @@ export function useChat(props: UseChatProps) {
   );
 
   const stopGeneration = $(async () => {
+    // The abort stops this turn's own request by id (llamaServerApi), so a
+    // reply sent right after a stop can never be caught by it.
     if (abortControllerRef.value) {
       abortControllerRef.value.abort();
+      return;
     }
-    // Also cancel the Rust-side streaming request
+    // No turn of ours is known: stop whatever is streaming.
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("cancel_chat_completion");
+      await invoke("cancel_chat_completion", { requestId: null });
     } catch (e) {
       console.error("[useChat] Failed to cancel Rust stream:", e);
     }

@@ -185,12 +185,24 @@ export class LlamaServerAPI {
       streamComplete = true;
     });
 
+    // Stop is per reply: the caller's abort stops THIS request in the app
+    // (and, for an online model, at the provider), never another one.
+    const stopThisReply = () => {
+      invoke('cancel_chat_completion', { requestId }).catch(err =>
+        console.error('[LlamaServer] Failed to stop the stream:', err)
+      );
+    };
+    _signal?.addEventListener('abort', stopThisReply, { once: true });
+
     try {
       // Convert frontend messages to backend format
       const backendMessages = messages.map(m => ({
         role: m.role,
         content: m.content
       }));
+
+      // Stopped before it began: nothing to start.
+      if (_signal?.aborted) return;
 
       // Start streaming via Rust command (non-blocking)
       invoke('stream_chat_completion', {
@@ -247,6 +259,7 @@ export class LlamaServerAPI {
       unlistenSources();
       unlistenSearch();
       unlistenError();
+      _signal?.removeEventListener('abort', stopThisReply);
     }
   }
 

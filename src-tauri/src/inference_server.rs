@@ -1239,6 +1239,11 @@ async fn chat_completions(
     // models, else the local llama-server. No client timeout — generations
     // are long. The response shape is identical OpenAI SSE either way.
     let client = reqwest::Client::new();
+    // The id the service can be told to stop, should the caller leave.
+    let online_request_id = online_id.as_ref().map(|_| {
+        use rand::Rng as _;
+        format!("api-{}-{:08x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0), rand::thread_rng().gen::<u32>())
+    });
     let send = if online_id.is_some() {
         let token = match crate::flowsta::get_access_token(&app).await {
             Ok(t) => t,
@@ -1255,6 +1260,7 @@ async fn chat_completions(
         };
         client
             .post(format!("{}/v1/chat/completions", crate::flowsta::proxy_url()))
+            .header("x-yoai-request-id", online_request_id.as_deref().unwrap_or_default())
             .bearer_auth(token)
             .json(&body)
             .send()
@@ -1292,6 +1298,9 @@ async fn chat_completions(
         let timing_agent = agent_mode;
         // Tee: forward each SSE chunk to the caller while accumulating the body,
         // then record the exchange once the stream completes.
+        let mut online_guard = online_request_id
+            .clone()
+            .map(|id| crate::llm::OnlineReplyGuard::new(app.clone(), client.clone(), id));
         let body_stream = async_stream::stream! {
             let mut s = upstream.bytes_stream();
             let mut raw: Vec<u8> = Vec::new();      // full body (incl. <think>) → recording
@@ -1317,6 +1326,11 @@ async fn chat_completions(
                         break;
                     }
                 }
+            }
+            // The upstream ended on its own: nothing left to stop. (A caller
+            // that leaves drops this stream before here, guard still armed.)
+            if let Some(g) = online_guard.as_mut() {
+                g.disarm();
             }
             if !pending.is_empty() {
                 let s = String::from_utf8_lossy(&pending);

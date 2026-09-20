@@ -93,7 +93,9 @@ pub struct LLMState {
     pub spawned_backend: Mutex<Option<String>>,
     /// Cancellation token for the active streaming request.
     /// Set to true to abort the current stream_chat_completion.
-    pub cancel_stream: std::sync::atomic::AtomicBool,
+    /// Replies streaming right now, by request id. Stop is per reply: a new
+    /// reply can never clear or inherit another's stop.
+    pub live_streams: LiveStreams,
     /// Second llama-server, run in `--embedding` mode on a separate port for
     /// memory retrieval. Same binary as the chat server (no extra download)  - 
     /// just a second process, started on demand. Runs CPU-only so it never
@@ -130,7 +132,7 @@ impl LLMState {
             server_process: Mutex::new(None),
             is_server_running: Mutex::new(false),
             spawned_backend: Mutex::new(None),
-            cancel_stream: std::sync::atomic::AtomicBool::new(false),
+            live_streams: LiveStreams::default(),
             embed_process: Mutex::new(None),
             embed_running: Mutex::new(false),
             embed_model: Mutex::new(None),
@@ -5139,8 +5141,8 @@ pub async fn stream_chat_completion(
         .as_deref()
         .filter(|m| m.starts_with("external:"))
         .map(|m| m["external:".len()..].to_string());
-    // Reset cancellation flag at the start of each new request
-    state.cancel_stream.store(false, std::sync::atomic::Ordering::Relaxed);
+    // This reply's own stop handle, released when the function returns.
+    let stop = state.live_streams.register(&request_id);
 
     println!("[LLM] Starting stream_chat_completion for request: {}", request_id);
 
@@ -5518,7 +5520,24 @@ pub async fn stream_chat_completion(
     };
 
     loop {
-        let next = match tokio::time::timeout(STALL, stream.next()).await {
+        // Stop is heard at once, not at the next chunk: a model thinking
+        // quietly (or a stalled engine) would otherwise ignore it.
+        let waited = tokio::select! {
+            biased;
+            _ = stop.stopped() => None,
+            n = tokio::time::timeout(STALL, stream.next()) => Some(n),
+        };
+        let Some(waited) = waited else {
+            println!("[LLM] Stream cancelled by user for request: {}", request_id);
+            if online_model.is_some() {
+                stop_online_reply(app.clone(), client.clone(), request_id.clone());
+            }
+            let _ = app.emit(&format!("chat-stream-{}", request_id), StreamChunkData {
+                chunk: "[DONE]".to_string(),
+            });
+            return Ok(());
+        };
+        let next = match waited {
             Ok(n) => n,
             Err(_) => {
                 log::warn!("[LLM] no bytes from the engine for {}s on request {} - giving up on the stream", STALL.as_secs(), request_id);
@@ -5532,7 +5551,7 @@ pub async fn stream_chat_completion(
         };
         let Some(chunk_result) = next else { break };
         // Check for cancellation
-        if state.cancel_stream.load(std::sync::atomic::Ordering::Relaxed) {
+        if stop.is_stopped() {
             println!("[LLM] Stream cancelled by user for request: {}", request_id);
             if online_model.is_some() {
                 stop_online_reply(app.clone(), client.clone(), request_id.clone());
@@ -5821,7 +5840,7 @@ pub async fn stream_chat_completion(
 /// the connection is not enough: the service's host does not report it, so
 /// the provider would write (and meter) the whole reply. Best effort, off the
 /// stream's path.
-fn stop_online_reply(app: tauri::AppHandle, client: reqwest::Client, request_id: String) {
+pub(crate) fn stop_online_reply(app: tauri::AppHandle, client: reqwest::Client, request_id: String) {
     tauri::async_runtime::spawn(async move {
         let Ok(token) = crate::flowsta::get_access_token(&app).await else { return };
         let sent = client
@@ -5843,10 +5862,192 @@ fn stop_online_reply(app: tauri::AppHandle, client: reqwest::Client, request_id:
 #[tauri::command]
 pub async fn cancel_chat_completion(
     state: State<'_, LLMState>,
+    request_id: Option<String>,
 ) -> Result<(), String> {
-    println!("[LLM] Cancelling active stream");
-    state.cancel_stream.store(true, std::sync::atomic::Ordering::Relaxed);
+    let stopped = state.live_streams.stop(request_id.as_deref());
+    println!("[LLM] Stop for {}: {} live stream(s) stopped", request_id.as_deref().unwrap_or("every reply"), stopped);
     Ok(())
+}
+
+/// Ends an online reply at the service if it is dropped while still armed -
+/// the shape of a caller that went away mid-reply (an agent turn cancelled,
+/// an outside tool that closed its connection). Disarm when the reply ends.
+pub(crate) struct OnlineReplyGuard {
+    armed: Option<(tauri::AppHandle, reqwest::Client, String)>,
+}
+
+impl OnlineReplyGuard {
+    pub(crate) fn new(app: tauri::AppHandle, client: reqwest::Client, request_id: String) -> Self {
+        Self { armed: Some((app, client, request_id)) }
+    }
+    pub(crate) fn disarm(&mut self) {
+        self.armed = None;
+    }
+}
+
+impl Drop for OnlineReplyGuard {
+    fn drop(&mut self) {
+        if let Some((app, client, id)) = self.armed.take() {
+            stop_online_reply(app, client, id);
+        }
+    }
+}
+
+/// One reply's stop handle. Dropping the guard releases the id.
+pub struct StopHandle {
+    flag: std::sync::atomic::AtomicBool,
+    notify: tokio::sync::Notify,
+}
+
+impl StopHandle {
+    pub fn is_stopped(&self) -> bool {
+        self.flag.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    fn stop(&self) {
+        self.flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.notify.notify_waiters();
+    }
+    /// Resolves once this reply has been stopped (at once if it already was).
+    pub async fn stopped(&self) {
+        loop {
+            let waiting = self.notify.notified();
+            if self.is_stopped() {
+                return;
+            }
+            waiting.await;
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct LiveStreams(std::sync::Arc<std::sync::Mutex<LiveMap>>);
+
+#[derive(Default)]
+struct LiveMap {
+    live: std::collections::HashMap<String, std::sync::Arc<StopHandle>>,
+    /// Ids stopped before their reply registered (Stop pressed in the moment
+    /// between the send and the stream starting). Such a reply starts stopped.
+    early: std::collections::VecDeque<String>,
+}
+
+pub struct LiveStream {
+    id: String,
+    handle: std::sync::Arc<StopHandle>,
+    streams: LiveStreams,
+}
+
+impl std::ops::Deref for LiveStream {
+    type Target = StopHandle;
+    fn deref(&self) -> &StopHandle {
+        &self.handle
+    }
+}
+
+impl Drop for LiveStream {
+    fn drop(&mut self) {
+        let mut map = self.streams.0.lock().unwrap_or_else(|e| e.into_inner());
+        // Only our own entry: an id reused by a later reply is not ours.
+        if map.live.get(&self.id).is_some_and(|h| std::sync::Arc::ptr_eq(h, &self.handle)) {
+            map.live.remove(&self.id);
+        }
+    }
+}
+
+impl LiveStreams {
+    pub fn register(&self, id: &str) -> LiveStream {
+        let handle = std::sync::Arc::new(StopHandle {
+            flag: std::sync::atomic::AtomicBool::new(false),
+            notify: tokio::sync::Notify::new(),
+        });
+        let mut map = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(at) = map.early.iter().position(|e| e == id) {
+            map.early.remove(at);
+            handle.stop();
+        }
+        map.live.insert(id.to_string(), handle.clone());
+        LiveStream { id: id.to_string(), handle, streams: self.clone() }
+    }
+
+    /// Stop one reply by id, or every reply streaming NOW when no id is
+    /// given. Returns how many were stopped. A reply that starts afterwards
+    /// is never affected - unless it is the very id that was named.
+    pub fn stop(&self, id: Option<&str>) -> usize {
+        let mut map = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        match id {
+            Some(id) => match map.live.get(id) {
+                Some(h) => {
+                    h.stop();
+                    1
+                }
+                None => {
+                    if map.early.len() >= 16 {
+                        map.early.pop_front();
+                    }
+                    map.early.push_back(id.to_string());
+                    0
+                }
+            },
+            None => {
+                map.live.values().for_each(|h| h.stop());
+                map.live.len()
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod live_stream_tests {
+    use super::LiveStreams;
+
+    #[tokio::test]
+    async fn a_stop_reaches_its_own_reply_and_no_other() {
+        let streams = LiveStreams::default();
+        let old = streams.register("old");
+        let other = streams.register("other");
+        assert_eq!(streams.stop(Some("old")), 1);
+        assert!(old.is_stopped());
+        assert!(!other.is_stopped());
+        // The reply that follows a stop starts clean and leaves the old one stopped.
+        let next = streams.register("next");
+        assert!(!next.is_stopped());
+        assert!(old.is_stopped());
+        // Already stopped: the wait resolves at once.
+        tokio::time::timeout(std::time::Duration::from_millis(200), old.stopped()).await.expect("stopped() resolves");
+    }
+
+    #[tokio::test]
+    async fn a_waiting_reply_hears_the_stop_and_a_finished_one_is_released() {
+        let streams = LiveStreams::default();
+        let reply = streams.register("r1");
+        let s2 = streams.clone();
+        let stopper = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            s2.stop(None)
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), reply.stopped()).await.expect("the wait ends on stop");
+        assert_eq!(stopper.await.unwrap(), 1);
+        drop(reply);
+        assert_eq!(streams.stop(None), 0);
+    }
+
+    #[test]
+    fn a_stop_that_arrives_before_the_reply_starts_is_kept_for_it() {
+        let streams = LiveStreams::default();
+        assert_eq!(streams.stop(Some("soon")), 0);
+        assert!(streams.register("soon").is_stopped());
+        assert!(!streams.register("soon").is_stopped(), "kept once, not forever");
+        assert!(!streams.register("another").is_stopped());
+    }
+
+    #[test]
+    fn a_reused_id_is_not_released_by_the_older_reply() {
+        let streams = LiveStreams::default();
+        let first = streams.register("same");
+        let second = streams.register("same");
+        drop(first);
+        assert_eq!(streams.stop(Some("same")), 1);
+        assert!(second.is_stopped());
+    }
 }
 
 #[cfg(test)]
