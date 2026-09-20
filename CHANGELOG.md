@@ -119,6 +119,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   during a reply: the reply finishes its sentence and stops, your message
   goes next, and the AI carries on from what it had already said. Nothing
   to choose. Stop still stops at once.
+- In a project, say something while the agent is working and it reaches
+  the agent at its next step, without cancelling the work in progress.
+  Your message shows in the conversation where you sent it and the work
+  carries on below it.
 - A reply you stop is kept as far as it got, marked as stopped, and is
   recorded that way. A reply stopped before its first word leaves nothing
   behind.

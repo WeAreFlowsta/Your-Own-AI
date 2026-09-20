@@ -1134,13 +1134,14 @@ export default component$(() => {
       return;
     }
 
-    if (chatState.isLoading) {
-      // Something to say while the reply is still coming (direct chat; a
-      // project session has its own queue). No choice to make and nothing
-      // to show: the reply finishes its sentence and stops, and the message
-      // goes next. A second message before then joins the first. Stop is
-      // the "right now" button.
-      if (agentState.folderPath) return;
+    // A session (project or tools) takes a message mid-turn itself: it is
+    // delivered into the running turn (useAgentSession sendPrompt$), so it
+    // goes on to the session branch below.
+    if (chatState.isLoading && !agentState.folderPath) {
+      // Something to say while a direct reply is still coming. No choice to
+      // make and nothing to show: the reply finishes its sentence and
+      // stops, and the message goes next. A second message before then
+      // joins the first. Stop is the "right now" button.
       const text = input.value.trim();
       const already = queuedMessage.value;
       queuedMessage.value = already ? `${already}\n${text}` : text;

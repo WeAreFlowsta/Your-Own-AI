@@ -839,6 +839,32 @@ async fn request_reply(
     }
 }
 
+/// Say something to the agent WHILE it is working. The agent takes it in at
+/// its next safe point in the running turn (between steps), framed as "the
+/// user sent a message while you were working" - the turn is not cancelled.
+/// If no turn is running by the time it arrives, the agent runs it as a turn
+/// of its own. Errors when the installed agent has no such method (the
+/// caller then holds the message until the turn ends).
+#[tauri::command]
+pub async fn agent_interject(state: State<'_, AgentBridgeState>, text: String) -> Result<(), String> {
+    let session_id = state.session_id.lock().await.clone().ok_or("agent session is not ready")?;
+    let interjection_id = format!("yoai-{}", state.next_id.load(Ordering::SeqCst));
+    let reply = request_reply(
+        &state,
+        "_x.ai/interject",
+        json!({ "sessionId": session_id, "text": text, "interjectionId": interjection_id }),
+        std::time::Duration::from_secs(15),
+    )
+    .await?;
+    if let Some(err) = reply.get("error") {
+        let why = err.get("message").and_then(Value::as_str).unwrap_or("unknown error");
+        log::warn!("[agent] interjection not taken: {why}");
+        return Err(format!("interjection not taken: {why}"));
+    }
+    log::info!("[agent] interjection delivered into the running turn ({} chars)", text.chars().count());
+    Ok(())
+}
+
 /// Undo every file change the agent made in one turn (`prompt_index` as
 /// the agent numbers prompts, from 0): edits reverted, created files
 /// removed, deleted files restored - the hunk tracker's per-turn reject.

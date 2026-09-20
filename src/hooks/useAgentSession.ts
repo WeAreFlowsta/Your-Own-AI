@@ -764,12 +764,21 @@ export function useAgentSession(props: UseAgentSessionProps) {
       });
       return;
     }
+    if (state.status === "working") {
+      // The agent is mid-turn: say it to the agent NOW. It takes the message
+      // in at its next safe point (between steps) without cancelling the
+      // turn - the way a message typed to a working agent should land. The
+      // listener scope owns the turn's bubble, so it does the split there.
+      window.dispatchEvent(
+        new CustomEvent("yoai-agent-interject", { detail: { text, wire, files: extra?.files } }),
+      );
+      return;
+    }
     await startTurnBubble(text, extra?.files);
     if (state.status === "ready") {
       await dispatchPrompt(wire);
     } else {
-      // Working: turns are strictly sequential over ACP - hold until the
-      // current turn completes. Starting: hold until agent-ready.
+      // Starting: hold until agent-ready.
       queued.value = wire;
     }
   });
@@ -1231,6 +1240,41 @@ export function useAgentSession(props: UseAgentSessionProps) {
         m.id === id ? mutate(m) : m,
       );
     };
+
+    // A message sent while the agent works (see sendPrompt$). The running
+    // bubble is closed as far as it got and recorded; the person's message
+    // and a fresh bubble follow, so the conversation reads in the order it
+    // happened. Steps still running move to the fresh bubble - their
+    // updates keep arriving and must find them.
+    const onInterject = async (ev: Event) => {
+      const { text, wire, files } = (ev as CustomEvent).detail as {
+        text: string;
+        wire: string;
+        files?: string[];
+      };
+      const oldId = turnId.value;
+      const isOpen = (i: { type: string; action?: { status?: string } }) =>
+        i.type === "action" && (i.action?.status === "in_progress" || i.action?.status === "pending");
+      const running = (props.chatState.messages.find((m) => m.id === oldId)?.agentLog ?? []).filter(isOpen);
+      mutateTurn((m) => ({
+        ...m,
+        isLoading: false,
+        agentLog: (m.agentLog ?? []).filter((i) => !isOpen(i)),
+      }));
+      recordTurnOnce(oldId);
+      await startTurnBubble(text, files);
+      if (running.length) {
+        mutateTurn((m) => ({ ...m, agentLog: [...running, ...(m.agentLog ?? [])] }));
+      }
+      try {
+        await invokeTauri("agent_interject", { text: wire });
+      } catch (e) {
+        // An agent without the method: hold the message until the turn ends.
+        console.warn("[Agent] interjection not taken - it waits for the turn to end:", e);
+        queued.value = wire;
+      }
+    };
+    window.addEventListener("yoai-agent-interject", onInterject);
 
     const unReady = await listen<{ sessionId: string }>("agent-ready", async () => {
       state.status = "ready";
@@ -2089,6 +2133,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     });
 
     cleanup(() => {
+      window.removeEventListener("yoai-agent-interject", onInterject);
       unReady();
       unUpdate();
       unPermission();

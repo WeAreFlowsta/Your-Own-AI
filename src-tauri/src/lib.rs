@@ -674,6 +674,7 @@ pub fn run() {
             agent_bridge::path_is_dir,
             agent_bridge::path_is_file,
             agent_bridge::agent_undo_turn,
+            agent_bridge::agent_interject,
             checks::project_checks_last,
             terminal::open_in_terminal,
             model_caps::agent_capability,
