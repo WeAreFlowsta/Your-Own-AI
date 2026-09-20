@@ -128,6 +128,11 @@ export const ContentEditor = component$<ContentEditorProps>((props) => {
       el.innerHTML = '';
       hasContent.value = false;
       setTimeout(() => { el.focus(); }, 0);
+    } else if (currentInput !== '' && (el.textContent ?? '').replace(/\u200B/g, '') !== currentInput) {
+      // Text set from outside (a queued message put back): show it. Typing
+      // never lands here - the input signal is written FROM this element.
+      el.textContent = currentInput;
+      hasContent.value = true;
     }
     lastSyncedInput.value = currentInput;
   });

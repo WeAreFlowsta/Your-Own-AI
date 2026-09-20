@@ -5528,7 +5528,7 @@ pub async fn stream_chat_completion(
             n = tokio::time::timeout(STALL, stream.next()) => Some(n),
         };
         let Some(waited) = waited else {
-            println!("[LLM] Stream cancelled by user for request: {}", request_id);
+            log::info!("[LLM] reply {} stopped by the person", request_id);
             if online_model.is_some() {
                 stop_online_reply(app.clone(), client.clone(), request_id.clone());
             }
@@ -5552,7 +5552,7 @@ pub async fn stream_chat_completion(
         let Some(chunk_result) = next else { break };
         // Check for cancellation
         if stop.is_stopped() {
-            println!("[LLM] Stream cancelled by user for request: {}", request_id);
+            log::info!("[LLM] reply {} stopped by the person", request_id);
             if online_model.is_some() {
                 stop_online_reply(app.clone(), client.clone(), request_id.clone());
             }
@@ -5851,8 +5851,8 @@ pub(crate) fn stop_online_reply(app: tauri::AppHandle, client: reqwest::Client, 
             .send()
             .await;
         match sent {
-            Ok(r) => println!("[LLM] Online reply stop for {}: {}", request_id, r.status()),
-            Err(e) => println!("[LLM] Online reply stop for {} did not reach the service: {}", request_id, e),
+            Ok(r) => log::info!("[LLM] online reply {} ended at the service: {}", request_id, r.status()),
+            Err(e) => log::warn!("[LLM] online reply {} - the stop did not reach the service: {}", request_id, e),
         }
     });
 }
@@ -5865,7 +5865,7 @@ pub async fn cancel_chat_completion(
     request_id: Option<String>,
 ) -> Result<(), String> {
     let stopped = state.live_streams.stop(request_id.as_deref());
-    println!("[LLM] Stop for {}: {} live stream(s) stopped", request_id.as_deref().unwrap_or("every reply"), stopped);
+    log::info!("[LLM] Stop for {}: {} live stream(s) stopped", request_id.as_deref().unwrap_or("every reply"), stopped);
     Ok(())
 }
 

@@ -26,6 +26,7 @@ import { isUtilityModelReady } from "../utils/utilityModel";
 import { groundDocument, type GroundedSource } from "../utils/grounding";
 import { loadMemoryBlock, loadDocumentContext } from "../utils/memory";
 import { indexTurn } from "../utils/transcriptMemory";
+import { boundaryIndex } from "../utils/replyBoundary";
 import { llamaServerApi } from "../utils/llamaServerApi";
 import {
   getDispositionPrompt,
@@ -267,6 +268,10 @@ export interface UseChatState {
   /** A resend after the app grew the context (context_grown) must not
    *  record the user turn a second time - the first attempt already did. */
   skipNextUserRecord?: boolean;
+  /** Set when the person sends something while a reply is streaming: the
+   *  length of the visible reply at that moment. The reply then runs to the
+   *  end of its sentence (replyBoundary.ts) and stops. null = not asked. */
+  stopAtBoundary: number | null;
   pendingTurn: {
     userInput: string;
     chatAction: ChatAction;
@@ -338,6 +343,7 @@ export function useChat(props: UseChatProps) {
     isLoading: false,
     error: null,
     skipNextUserRecord: false,
+    stopAtBoundary: null,
     pendingTurn: null,
     firstModelWait: null,
     conversationHash: null,
@@ -400,7 +406,8 @@ export function useChat(props: UseChatProps) {
       // (avoids duplicating the user message). A past user turn that had images is
       // rebuilt as a multimodal content array so the model can still see them.
       const chatHistory: ChatMessage[] = state.messages
-        .filter((m) => !m.isLoading && !m.error)
+        // A reply stopped before its first word said nothing: leave it out.
+        .filter((m) => !m.isLoading && !m.error && !(m.role === "assistant" && !m.content.trim()))
         .map((m) =>
           m.images && m.images.length > 0
             ? {
@@ -413,7 +420,15 @@ export function useChat(props: UseChatProps) {
                   })),
                 ],
               }
-            : { role: m.role, content: m.content },
+            : {
+                role: m.role,
+                // The model sees that it was cut off here, so its next reply
+                // picks up from what it had said instead of starting over.
+                content:
+                  m.role === "assistant" && m.stopped
+                    ? `${m.content}\n[The person interrupted the reply here.]`
+                    : m.content,
+              },
         );
 
       // Add current user input to history (with file context for AI, if provided).
@@ -1148,6 +1163,7 @@ export function useChat(props: UseChatProps) {
       }
       const controller = new AbortController();
       abortControllerRef.value = noSerialize(controller);
+      state.stopAtBoundary = null;
 
       // Records: the conversation and the user's message are written the
       // moment they are sent - in parallel with the request, never gating
@@ -1507,6 +1523,27 @@ export function useChat(props: UseChatProps) {
           fullResponse += chunk.content;
           updateCount++;
 
+          // The person sent something while this reply was streaming: finish
+          // the sentence, then stop (the check after the loop records the
+          // partial as stopped). While the model is still thinking there is
+          // no sentence to finish - stop now.
+          if (state.stopAtBoundary !== null) {
+            const { thinking: thoughtSoFar, contentWithoutThinking: visible } =
+              extractThinkingFromContent(fullResponse);
+            const cut = visible.trim() ? boundaryIndex(visible, state.stopAtBoundary) : 0;
+            if (cut !== null) {
+              // Keep the reply up to the end of that sentence (a chunk may
+              // have run on into the next one).
+              state.messages = state.messages.map((m) =>
+                m.id === assistantId
+                  ? { ...m, content: visible.slice(0, cut), thinking: thoughtSoFar || m.thinking }
+                  : m,
+              );
+              controller.abort();
+              break;
+            }
+          }
+
           // Throttle UI flushes to ~20/s. Fast models emit 40-70 chunks/s and
           // each flush re-parses the whole accumulated reply and replaces the
           // messages array - per-chunk that's quadratic work the screen can't
@@ -1534,6 +1571,14 @@ export function useChat(props: UseChatProps) {
                 }
               : m
           );
+        }
+
+        // Stopped by the person: the stream ends quietly (the app closes
+        // it), so say so here - the stopped branch below keeps the partial,
+        // marks it stopped and records it that way. Without this a stopped
+        // reply was saved as a finished one.
+        if (controller.signal.aborted) {
+          throw new DOMException("Stopped by the person", "AbortError");
         }
 
         // A reply with no text at all (not even thinking): the model spent
@@ -1899,6 +1944,9 @@ export function useChat(props: UseChatProps) {
                 : m,
             );
             const stoppedPre = preRecord;
+            // Take this partial's place in the order NOW: the message that
+            // interrupted it is sent straight after and takes the next one.
+            const stoppedSeq = state.messageSequence++;
             void (async () => {
               const pre = stoppedPre ? await stoppedPre : null;
               if (!pre || !recordCtx.holochainId || !state.conversationHash) return;
@@ -1908,7 +1956,7 @@ export function useChat(props: UseChatProps) {
                   state.conversationHash,
                   "assistant",
                   partialText,
-                  state.messageSequence,
+                  stoppedSeq,
                   recordCtx.modelName,
                   partialThinking || undefined,
                   undefined,
@@ -1923,7 +1971,6 @@ export function useChat(props: UseChatProps) {
                     },
                   },
                 );
-                state.messageSequence++;
                 console.log("[Holochain] Stopped reply recorded as far as it got");
               } catch (e) {
                 console.warn("[Holochain] Stopped reply not recorded:", e);
@@ -2062,12 +2109,32 @@ export function useChat(props: UseChatProps) {
           }
         }
       } finally {
-        state.isLoading = false;
-        props.isModelLoading.value = false;
-        abortControllerRef.value = null;
+        // Only when this turn is still the current one: a turn sent right
+        // after a stop has its own controller, and this older turn's
+        // cleanup must not switch its loading state off.
+        if (!abortControllerRef.value || abortControllerRef.value === controller) {
+          state.stopAtBoundary = null;
+          state.isLoading = false;
+          props.isModelLoading.value = false;
+          abortControllerRef.value = null;
+        }
       }
     }
   );
+
+  /** The person has something to say NOW: let the streaming reply finish its
+   *  sentence, then stop it. Before the first visible word there is nothing
+   *  to finish, so that stops at once. A second call (or Stop) is immediate. */
+  const stopAtBoundary = $(() => {
+    if (!state.isLoading || !abortControllerRef.value) return;
+    const streaming = state.messages.find((m) => m.isLoading && m.role === "assistant");
+    const visible = streaming?.content ?? "";
+    if (!visible.trim() || state.stopAtBoundary !== null) {
+      abortControllerRef.value.abort();
+      return;
+    }
+    state.stopAtBoundary = visible.length;
+  });
 
   const stopGeneration = $(async () => {
     // The abort stops this turn's own request by id (llamaServerApi), so a
@@ -2250,6 +2317,7 @@ export function useChat(props: UseChatProps) {
     state,
     sendMessage,
     stopGeneration,
+    stopAtBoundary,
     resetChat,
     retry,
     groundMessage$,

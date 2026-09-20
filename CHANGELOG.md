@@ -115,8 +115,13 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - The activity card's download row keeps its text current: the percent
   and "x of y" move with the bar. Writing a document's card shows its
   progress through the parts of a long document.
-- You can write your next message while a reply is still coming. It
-  stays in the box and sends when you press Ask after the reply ends.
+- Say something while your AI is still answering. Type and press Enter
+  during a reply: the reply finishes its sentence and stops, your message
+  goes next, and the AI carries on from what it had already said. Nothing
+  to choose. Stop still stops at once.
+- A reply you stop is kept as far as it got, marked as stopped, and is
+  recorded that way. A reply stopped before its first word leaves nothing
+  behind.
 - Stop on an online model's reply now ends it at the provider too, so a
   stopped reply is metered for what you received, as an estimate.
 

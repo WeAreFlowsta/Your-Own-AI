@@ -150,6 +150,7 @@ export default component$(() => {
     state: chatState,
     sendMessage,
     stopGeneration,
+    stopAtBoundary,
     resetChat,
     retry,
     groundMessage$,
@@ -421,6 +422,9 @@ export default component$(() => {
     setTimeout(jump, 0);
   });
 
+  // A message sent while a reply was streaming (see handleSubmit).
+  const queuedMessage = useSignal<string | null>(null);
+
   const resumeGeneration = useSignal(0);
   const resumeConversation = $(
     async (target: { hash: string; agentKey: string; aiId?: string; title?: string }) => {
@@ -433,6 +437,7 @@ export default component$(() => {
       // A click while an earlier open is still reading (a slow records read
       // can take a minute) SUPERSEDES it - a second click must never be a
       // dead click. The older open checks its generation before applying.
+      queuedMessage.value = null; // it belonged to the conversation being left
       const gen = ++resumeGeneration.value;
       const t0 = Date.now();
       // Visible state FIRST - everything below can take seconds.
@@ -1129,7 +1134,22 @@ export default component$(() => {
       return;
     }
 
-    if (chatState.isLoading) return;
+    if (chatState.isLoading) {
+      // Something to say while the reply is still coming (direct chat; a
+      // project session has its own queue). No choice to make and nothing
+      // to show: the reply finishes its sentence and stops, and the message
+      // goes next. A second message before then joins the first. Stop is
+      // the "right now" button.
+      if (agentState.folderPath) return;
+      const text = input.value.trim();
+      const already = queuedMessage.value;
+      queuedMessage.value = already ? `${already}\n${text}` : text;
+      input.value = "";
+      // The first message asks the reply to stop; asking twice would cut
+      // it mid-sentence.
+      if (!already) await stopAtBoundary();
+      return;
+    }
 
     const finalInput = selectedAction.value
       ? `${selectedAction.value.replace(/\.\.\.$/, "")} ${input.value}`
@@ -1193,6 +1213,22 @@ export default component$(() => {
     attachedImages.value = []; // image is per-turn — don't silently re-send it
   });
 
+  // The reply has ended (stopped at its sentence, run to its end, or Stop):
+  // the waiting message goes now, through the same path as any other send.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    const loading = track(() => chatState.isLoading);
+    const waiting = track(() => queuedMessage.value);
+    if (loading || !waiting) return;
+    queuedMessage.value = null;
+    const typedSince = input.value;
+    input.value = waiting;
+    void handleSubmit().then(() => {
+      // Anything typed while it waited stays in the input.
+      if (typedSince.trim()) input.value = typedSince;
+    });
+  });
+
   // Stop: an agent turn cancels over ACP (the agent still ends the turn);
   // a direct model turn aborts the stream.
   const handleStop = $(async () => {
@@ -1227,6 +1263,7 @@ export default component$(() => {
   });
 
   const handleNewQuestion = $(() => {
+    queuedMessage.value = null; // it belonged to the conversation being left
     resetChat();
     input.value = "";
     selectedAction.value = null;
