@@ -22,6 +22,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
 
+/// Keeping a folder in sync with the library.
+pub mod sync;
+/// Markdown from a notes app, made ready for the splitter.
+mod notes;
+
 /// Target passage size. Larger than the old 600 so book prose keeps its
 /// sense; well under the embed server's 1400-character input cap.
 pub const PASSAGE_CHARS: usize = 900;
@@ -387,6 +392,7 @@ fn open_at(path: &Path) -> Result<Connection, String> {
          CREATE INDEX IF NOT EXISTS grants_ai ON grants(ai_id);",
     )
     .map_err(|e| format!("corpus schema: {e}"))?;
+    sync::ensure_schema(&conn)?;
     Ok(conn)
 }
 
@@ -512,6 +518,36 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
 /// last sentence of each passage repeated at the start of the next so a
 /// fact split across a boundary is still findable. Ported from the
 /// frontend's chunkDocumentText with the overlap made explicit.
+/// A run with no sentence end that is longer than a passage (a long list, a
+/// table row, a page of fragments): cut at a line end or a space, never
+/// inside a word. Only a single "word" longer than `max` is cut by length.
+fn split_long(run: &str, max: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut buf = String::new();
+    let mut len = 0usize;
+    for word in run.split_inclusive(|c: char| c == ' ' || c == '\n') {
+        let w = word.chars().count();
+        if len + w > max && !buf.trim().is_empty() {
+            out.push(buf.trim().to_string());
+            buf.clear();
+            len = 0;
+        }
+        if w > max {
+            let chars: Vec<char> = word.chars().collect();
+            for piece in chars.chunks(max) {
+                out.push(piece.iter().collect::<String>().trim().to_string());
+            }
+            continue;
+        }
+        buf.push_str(word);
+        len += w;
+    }
+    if !buf.trim().is_empty() {
+        out.push(buf.trim().to_string());
+    }
+    out
+}
+
 pub fn chunk_text(text: &str, max: usize) -> Vec<String> {
     let clean = text.replace("\r\n", "\n");
     let clean = clean
@@ -541,10 +577,7 @@ pub fn chunk_text(text: &str, max: usize) -> Vec<String> {
                 buf.clear();
             }
             if s_len > max {
-                let chars: Vec<char> = sentence.chars().collect();
-                for piece in chars.chunks(max) {
-                    units.push(piece.iter().collect::<String>().trim().to_string());
-                }
+                units.extend(split_long(sentence, max));
             } else {
                 if !buf.is_empty() {
                     buf.push(' ');
@@ -692,6 +725,10 @@ pub(crate) fn extract_text(path: &Path) -> Result<String, String> {
         "html" | "htm" => {
             let raw = std::fs::read(path).map_err(|e| e.to_string())?;
             Ok(strip_tags(&String::from_utf8_lossy(&raw)))
+        }
+        "md" | "markdown" => {
+            let raw = std::fs::read(path).map_err(|e| e.to_string())?;
+            Ok(notes::prepare_markdown(&String::from_utf8_lossy(&raw)))
         }
         _ => {
             let raw = std::fs::read(path).map_err(|e| e.to_string())?;

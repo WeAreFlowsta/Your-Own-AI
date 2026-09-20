@@ -1168,7 +1168,19 @@ export default component$(() => {
     // Folder open -> the agent session is the one brain for this
     // conversation. Attached-file text rides along; images are a direct-chat
     // feature for now.
+    // A tools session keeps the tools it started with. When a tool's
+    // settings have changed since (read only switched off, another vault),
+    // an idle session is not reused: the branch below opens a fresh one.
+    let toolsSetUpTheSame = true;
+    if (agentState.mode === "tools" && !chatState.isLoading) {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const now = await invoke<string>("mcp_tools_signature", { names: activeTools(selectedAi.value.aiConfig) });
+        toolsSetUpTheSame = now === agentState.sessionToolsSig;
+      } catch { /* cannot tell: keep the session */ }
+    }
     const toolsSessionIsThisAis =
+      toolsSetUpTheSame &&
       agentState.mode === "tools" &&
       activeTools(selectedAi.value.aiConfig).length > 0 &&
       (!agentState.sessionAiId || agentState.sessionAiId === selectedAi.value.aiConfig?.id);

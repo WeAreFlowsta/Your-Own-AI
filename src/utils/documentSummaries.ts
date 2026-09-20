@@ -125,6 +125,11 @@ export function sampleParts(text: string, partChars = PART_CHARS, maxParts = MAX
   return parts;
 }
 
+/** Up to this many characters a document is shown as itself, not described:
+ *  a note barely longer than its card has nothing to summarize, and a model
+ *  asked to anyway invents. */
+const SHORT_DOCUMENT_CHARS = 600;
+
 async function writeCard(
   doc: DocRecord,
   writer: { model?: string; preferLoaded: boolean },
@@ -134,6 +139,12 @@ async function writeCard(
   const head = `Document: "${doc.meta.title || doc.meta.filename}"${doc.meta.author ? ` by ${doc.meta.author}` : ""}`;
   const run = (system: string, user: string, maxTokens: number) =>
     runUtilityTask(system, user, undefined, maxTokens, writer.model, 120_000, writer.preferLoaded);
+  // A note of a line or two is its own card: asked to describe almost
+  // nothing, a model invents (a 34-byte note came back as "practical video
+  // creation tips tailored for self-taught AI developers"). Show its words.
+  if (text.trim().length <= SHORT_DOCUMENT_CHARS) {
+    return text.trim().replace(/\s+/g, " ");
+  }
   if (text.length <= SINGLE_PASS_CHARS) {
     return usable(await run(SINGLE_SYSTEM, `${head}\n\n${text}`, 160));
   }

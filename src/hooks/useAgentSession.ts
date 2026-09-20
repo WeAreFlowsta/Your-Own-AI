@@ -59,6 +59,9 @@ export interface AgentSessionState {
   /** The tool set the open tools session started with (joined names) - a
    *  changed set opens a fresh session, since the harness fixes tools at start. */
   sessionTools: string;
+  /** How the session's tools were launched (mcp_tools_signature). A changed
+   *  setting changes it, and the next message opens a fresh session. */
+  sessionToolsSig: string;
   /** Tool servers that failed to start for this session (from their stderr
    *  logs) - surfaced as notices on the next turn, then cleared. */
   toolStartFailures: { name: string; tail: string }[];
@@ -383,6 +386,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     mode: null,
     sessionAiId: null,
     sessionTools: "",
+    sessionToolsSig: "",
     toolStartFailures: [],
     startNotices: [],
     status: "idle",
@@ -974,10 +978,12 @@ export function useAgentSession(props: UseAgentSessionProps) {
     } catch {
       return false;
     }
+    const sig = (await invokeTauri("mcp_tools_signature", { names }).catch(() => "")) as string;
     if (
       state.folderPath === path &&
       state.sessionAiId === aiId &&
       state.sessionTools === names.join(",") &&
+      state.sessionToolsSig === sig &&
       (state.status === "ready" || state.status === "working" || state.status === "starting")
     ) {
       return true;
@@ -989,6 +995,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.mode = "tools";
     state.sessionAiId = aiId;
     state.sessionTools = names.join(",");
+    state.sessionToolsSig = sig;
     state.status = "starting";
     state.statusNote = "Getting your tools ready...";
     state.touchedFiles = [];
@@ -1037,6 +1044,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.mode = null;
     state.sessionAiId = null;
     state.sessionTools = "";
+    state.sessionToolsSig = "";
     state.status = "idle";
     state.statusNote = "";
     try { (window as unknown as { __yoaiTurnRunning?: boolean }).__yoaiTurnRunning = false; } catch { /* fine */ }

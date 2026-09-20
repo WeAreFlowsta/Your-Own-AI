@@ -23,7 +23,8 @@ pub struct ConfigField {
     pub key: String,
     #[serde(default)]
     pub label: String,
-    /// "url" | "secret" | "text" | "path"
+    /// "url" | "secret" | "text" | "path" | "toggle" (stored "on" / "off";
+    /// on stands for `on_value`, off for nothing)
     #[serde(default)]
     pub kind: String,
     #[serde(default)]
@@ -35,6 +36,14 @@ pub struct ConfigField {
     /// Put in front of the value on the way out ("Bearer " for a token header).
     #[serde(default)]
     pub prefix: String,
+    /// What a "toggle" stands for when it is on (an argument such as
+    /// `--read-only`, or an env value such as `true`).
+    #[serde(default)]
+    pub on_value: String,
+    /// The value used until the person sets one ("on" for a toggle that
+    /// ships on - a safety switch does).
+    #[serde(default)]
+    pub default: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -190,56 +199,128 @@ fn resolve_program(cmd: &str) -> String {
     which_sync(cmd).unwrap_or_else(|| cmd.to_string())
 }
 
+/// A fingerprint of how these tools would be launched RIGHT NOW: program,
+/// arguments, address, settings (secrets included, hashed - never returned).
+/// The agent fixes its tools when a session starts, so a session remembers
+/// the fingerprint it started with; when it no longer matches - a switch
+/// flipped, a folder changed, a token replaced - the next message opens a
+/// fresh session instead of talking to tools set up the old way.
+#[tauri::command]
+pub fn mcp_tools_signature(app: AppHandle, names: Vec<String>) -> String {
+    use sha2::{Digest, Sha256};
+    let (entries, skipped) = acp_entries_checked(&app, &names);
+    let mut h = Sha256::new();
+    h.update(serde_json::to_vec(&entries).unwrap_or_default());
+    for t in &skipped {
+        h.update(t.name.as_bytes());
+        h.update(t.reason.as_bytes());
+    }
+    hex::encode(&h.finalize()[..8])
+}
+
+/// A tool that was asked for but cannot join the session, and why - said on
+/// the turn, not only in the log (a tool that silently is not there reads as
+/// an AI that cannot do what its card promises).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SkippedTool {
+    pub name: String,
+    pub reason: String,
+}
+
 /// ACP `session/new` entries for the named servers (unknown names are
 /// skipped, never an error - an AI may reference a server that was removed).
 pub(crate) fn acp_entries(app: &AppHandle, names: &[String]) -> Vec<Value> {
-    let Ok(list) = load(app) else { return vec![] };
+    acp_entries_checked(app, names).0
+}
+
+pub(crate) fn acp_entries_checked(app: &AppHandle, names: &[String]) -> (Vec<Value>, Vec<SkippedTool>) {
+    let Ok(list) = load(app) else { return (vec![], vec![]) };
     let secrets = secrets_load(app).unwrap_or_default();
-    names
+    let mut skipped = Vec::new();
+    let entries = names
         .iter()
         .filter_map(|n| list.iter().find(|s| &s.name == n))
-        .filter_map(|s| {
-            // Every value the tool asked for, secrets included.
-            let mut vals = s.values.clone();
-            for f in &s.config {
-                if f.kind == "secret" {
-                    if let Some(v) = secrets.get(&format!("{}:{}", s.name, f.key)) {
-                        vals.insert(f.key.clone(), v.clone());
-                    }
+        .filter_map(|s| match entry_for(s, &secrets) {
+            Ok(mut e) => {
+                if let Some(cmd) = e.get("command").and_then(Value::as_str).map(str::to_string) {
+                    e["command"] = json!(resolve_program(&expand_home(app, &cmd)));
                 }
-            }
-            if let Some(missing) = s.config.iter().find(|f| f.required && vals.get(&f.key).map(|v| v.trim().is_empty()).unwrap_or(true)) {
-                log::warn!("[mcp] {} skipped: setting {} not filled in", s.name, missing.key);
-                return None;
-            }
-            let mut env: Vec<Value> = s.env.iter().map(|(k, v)| json!({ "name": k, "value": v })).collect();
-            let mut headers: Vec<Value> = vec![];
-            for f in &s.config {
-                let Some(v) = vals.get(&f.key) else { continue };
-                let v = format!("{}{}", f.prefix, v);
-                if let Some(h) = f.where_.strip_prefix("header:") {
-                    headers.push(json!({ "name": h, "value": v }));
-                } else if f.where_ != "arg" {
-                    env.push(json!({ "name": f.key, "value": v }));
+                if let Some(args) = e.get("args").and_then(Value::as_array).cloned() {
+                    e["args"] = json!(args.iter().filter_map(Value::as_str).map(|a| expand_home(app, a)).collect::<Vec<_>>());
                 }
+                Some(e)
             }
-            match s.transport.as_str() {
-                "stdio" => Some(json!({
-                    "name": s.name,
-                    "command": resolve_program(&expand_home(app, &fill(&s.command.clone().unwrap_or_default(), &vals))),
-                    "args": s.args.iter().map(|a| expand_home(app, &fill(a, &vals))).collect::<Vec<_>>(),
-                    "env": env,
-                })),
-                "http" => Some(json!({
-                    "type": "http",
-                    "name": s.name,
-                    "url": fill(&s.url.clone().unwrap_or_default(), &vals),
-                    "headers": headers,
-                })),
-                _ => None,
+            Err(reason) => {
+                log::warn!("[mcp] {} left out of the session: {reason}", s.name);
+                skipped.push(SkippedTool { name: s.name.clone(), reason });
+                None
             }
         })
-        .collect()
+        .collect();
+    (entries, skipped)
+}
+
+/// One server's session entry, settings filled in. Pure: no disk, no app.
+fn entry_for(s: &McpServer, secrets: &HashMap<String, String>) -> Result<Value, String> {
+    // Every value the tool asked for: what the person set, else the default.
+    let mut vals = s.values.clone();
+    for f in &s.config {
+        if f.kind == "secret" {
+            if let Some(v) = secrets.get(&format!("{}:{}", s.name, f.key)) {
+                vals.insert(f.key.clone(), v.clone());
+            }
+        }
+        if !vals.contains_key(&f.key) && !f.default.is_empty() {
+            vals.insert(f.key.clone(), f.default.clone());
+        }
+        // A toggle is stored as "on" / "off" (an empty value cannot be
+        // stored, and "never set" must mean the default, not off). On stands
+        // for `on_value`; off fills its `${KEY}` with nothing.
+        if f.kind == "toggle" {
+            let on = vals.get(&f.key).map(|v| v == "on").unwrap_or(false);
+            vals.insert(f.key.clone(), if on { f.on_value.clone() } else { String::new() });
+        }
+    }
+    if let Some(missing) = s.config.iter().find(|f| f.required && vals.get(&f.key).map(|v| v.trim().is_empty()).unwrap_or(true)) {
+        let label = if missing.label.is_empty() { missing.key.as_str() } else { missing.label.as_str() };
+        return Err(format!("it needs a setting first: {label}"));
+    }
+    let mut env: Vec<Value> = s.env.iter().map(|(k, v)| json!({ "name": k, "value": v })).collect();
+    let mut headers: Vec<Value> = vec![];
+    for f in &s.config {
+        let Some(v) = vals.get(&f.key) else { continue };
+        if v.is_empty() {
+            continue;
+        }
+        let v = format!("{}{}", f.prefix, v);
+        if let Some(h) = f.where_.strip_prefix("header:") {
+            headers.push(json!({ "name": h, "value": v }));
+        } else if f.where_ != "arg" && f.where_ != "app" {
+            // "app" = a setting for this app about the tool (keep the vault
+            // in sync), never handed to the tool.
+            env.push(json!({ "name": f.key, "value": v }));
+        }
+    }
+    match s.transport.as_str() {
+        "stdio" => Ok(json!({
+            "name": s.name,
+            "command": fill(&s.command.clone().unwrap_or_default(), &vals),
+            // An argument that filled to nothing (a toggle that is off) is
+            // not passed as an empty argument.
+            "args": s.args.iter().map(|a| fill(a, &vals)).filter(|a| !a.trim().is_empty()).collect::<Vec<_>>(),
+            "env": env,
+        })),
+        "http" => {
+            let url = fill(&s.url.clone().unwrap_or_default(), &vals);
+            // The rule is checked again on the address as it will be USED: a
+            // template passes at add time because its value is not known yet.
+            if url.contains("${") || !is_local_or_lan(&url) {
+                return Err("its address is not on this computer or your own network".into());
+            }
+            Ok(json!({ "type": "http", "name": s.name, "url": url, "headers": headers }))
+        }
+        other => Err(format!("unknown transport {other}")),
+    }
 }
 
 /// Local, LAN, or a template the person's settings fill in - never the
@@ -869,4 +950,66 @@ pub async fn mcp_start_failures(names: Vec<String>) -> Result<Vec<StartFailure>,
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod entry_tests {
+    use super::*;
+
+    fn obsidian(values: &[(&str, &str)]) -> McpServer {
+        McpServer {
+            name: "obsidian".into(),
+            transport: "stdio".into(),
+            command: Some("npx".into()),
+            args: vec!["-y".into(), "@bitbonsai/mcpvault@0.16.0".into(), "${VAULT_PATH}".into(), "${READ_ONLY}".into()],
+            config: vec![
+                ConfigField { key: "VAULT_PATH".into(), label: "Vault folder".into(), kind: "path".into(), required: true, where_: "arg".into(), ..Default::default() },
+                ConfigField { key: "READ_ONLY".into(), kind: "toggle".into(), where_: "arg".into(), on_value: "--read-only".into(), default: "on".into(), ..Default::default() },
+                ConfigField { key: "KEEP_IN_SYNC".into(), kind: "toggle".into(), where_: "app".into(), on_value: "yes".into(), default: "on".into(), ..Default::default() },
+            ],
+            values: values.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            ..Default::default()
+        }
+    }
+
+    fn args(v: &Value) -> Vec<String> {
+        v["args"].as_array().unwrap().iter().map(|a| a.as_str().unwrap().to_string()).collect()
+    }
+
+    #[test]
+    fn a_safety_toggle_ships_on_and_an_off_toggle_passes_no_empty_argument() {
+        let none = HashMap::new();
+        let e = entry_for(&obsidian(&[("VAULT_PATH", "/home/me/My Notes")]), &none).unwrap();
+        assert_eq!(args(&e), ["-y", "@bitbonsai/mcpvault@0.16.0", "/home/me/My Notes", "--read-only"]);
+        let e = entry_for(&obsidian(&[("VAULT_PATH", "/home/me/My Notes"), ("READ_ONLY", "off")]), &none).unwrap();
+        assert_eq!(args(&e), ["-y", "@bitbonsai/mcpvault@0.16.0", "/home/me/My Notes"], "switched off = the argument is gone, not empty");
+        assert!(e["env"].as_array().unwrap().is_empty(), "arg settings are not also exported as env");
+    }
+
+    #[test]
+    fn a_missing_required_setting_is_said_by_its_label() {
+        let err = entry_for(&obsidian(&[]), &HashMap::new()).unwrap_err();
+        assert_eq!(err, "it needs a setting first: Vault folder");
+    }
+
+    #[test]
+    fn the_network_rule_holds_on_the_address_as_used() {
+        let mut s = McpServer {
+            name: "logseq".into(),
+            transport: "http".into(),
+            url: Some("${BASE}/mcp".into()),
+            config: vec![
+                ConfigField { key: "BASE".into(), kind: "url".into(), required: true, where_: "arg".into(), ..Default::default() },
+                ConfigField { key: "TOKEN".into(), kind: "secret".into(), required: true, where_: "header:Authorization".into(), prefix: "Bearer ".into(), ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let secrets: HashMap<String, String> = [("logseq:TOKEN".to_string(), "abc".to_string())].into();
+        s.values = [("BASE".to_string(), "http://127.0.0.1:12315".to_string())].into();
+        let e = entry_for(&s, &secrets).unwrap();
+        assert_eq!(e["url"], "http://127.0.0.1:12315/mcp");
+        assert_eq!(e["headers"][0]["value"], "Bearer abc");
+        s.values = [("BASE".to_string(), "https://notes.example.com".to_string())].into();
+        assert!(entry_for(&s, &secrets).unwrap_err().contains("not on this computer"));
+    }
 }

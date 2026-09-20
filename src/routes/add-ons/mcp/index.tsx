@@ -33,6 +33,7 @@ import {
   blenderAddonInstall,
   type BlenderAddonStatus,
   mcpUsedBy,
+  keepVaultInSync,
   mcpSummary,
   readyPresets,
   setToolConfig,
@@ -185,7 +186,9 @@ export default component$(() => {
     const s = store.servers.find((x) => x.name === name);
     store.configFor = name;
     store.configDraft = {};
-    for (const f of s?.config ?? []) store.configDraft[f.key] = f.kind === "secret" ? "" : (s?.values?.[f.key] ?? "");
+    for (const f of s?.config ?? []) {
+      store.configDraft[f.key] = f.kind === "secret" ? "" : (s?.values?.[f.key] ?? f.default ?? (f.kind === "toggle" ? "off" : ""));
+    }
   });
   const saveConfig = $(async () => {
     store.configSaving = true;
@@ -195,8 +198,13 @@ export default component$(() => {
       for (const [k, v] of Object.entries(store.configDraft)) if (v.trim()) values[k] = v.trim();
       store.servers = await setToolConfig(store.configFor, values);
       store.configOk[store.configFor] = await toolConfigStatus(store.configFor);
+      const saved = store.servers.find((x) => x.name === store.configFor);
+      const users = aiData.userDefinedAis.filter((a) => Array.isArray(a.mcp) && a.mcp.includes(store.configFor)).map((a) => a.id);
+      const remembering = saved ? await keepVaultInSync(saved, users).catch(() => 0) : 0;
       store.configFor = "";
-      store.note = "Settings saved on this computer.";
+      store.note = remembering
+        ? `Settings saved. The vault is being read into ${remembering === 1 ? "that AI's" : "those AIs'"} documents and will be kept in sync.`
+        : "Settings saved on this computer.";
     } catch (e) {
       store.error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -399,7 +407,16 @@ export default component$(() => {
     const a = aiData.userDefinedAis.find((x) => x.id === aiId);
     if (!a) return;
     const cur = Array.isArray(a.mcp) ? a.mcp : [];
-    await editUserAi(aiId, { mcp: cur.includes(name) ? cur.filter((n) => n !== name) : [...cur, name] });
+    const adding = !cur.includes(name);
+    await editUserAi(aiId, { mcp: adding ? [...cur, name] : cur.filter((n) => n !== name) });
+    // A notes tool that also remembers its vault: the AI that now carries it
+    // gets the vault in its documents. (Taking the tool away leaves the
+    // documents - "Stop syncing" on the AI's documents is the way out.)
+    const s = store.servers.find((x) => x.name === name);
+    if (adding && s) {
+      const n = await keepVaultInSync(s, [aiId]).catch(() => 0);
+      if (n) store.note = `${a.name} can use ${name}, and the vault is being read into its documents and kept in sync.`;
+    }
   });
 
 
@@ -790,6 +807,19 @@ export default component$(() => {
                 {(s?.config ?? []).map((f) => {
                   const key = f.key;
                   const filled = store.configOk[store.configFor]?.[key];
+                  if (f.kind === "toggle") {
+                    return (
+                      <label key={key} class="flex items-start gap-2 text-xs text-[var(--text-secondary)] cursor-pointer">
+                        <input
+                          type="checkbox"
+                          class="mt-0.5 cursor-pointer"
+                          checked={(store.configDraft[key] ?? "off") === "on"}
+                          onChange$={(_, el) => { store.configDraft[key] = el.checked ? "on" : "off"; }}
+                        />
+                        <span>{f.label || f.key}</span>
+                      </label>
+                    );
+                  }
                   return (
                     <label key={key} class="block text-xs text-[var(--text-secondary)]">
                       {f.label || f.key}{f.required ? "" : " (optional)"}
@@ -802,6 +832,19 @@ export default component$(() => {
                         autocomplete="off"
                         class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none"
                       />
+                      {f.kind === "path" && (
+                        <button
+                          type="button"
+                          class="mt-1 text-[var(--text-link)] hover:underline cursor-pointer"
+                          onClick$={async () => {
+                            const { open } = await import("@tauri-apps/plugin-dialog");
+                            const picked = await open({ directory: true, multiple: false });
+                            if (picked && !Array.isArray(picked)) store.configDraft[key] = picked;
+                          }}
+                        >
+                          Choose the folder
+                        </button>
+                      )}
                     </label>
                   );
                 })}

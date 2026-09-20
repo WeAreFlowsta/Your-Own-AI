@@ -95,6 +95,53 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   oldest release it can start on. On an older macOS it was offered,
   downloaded, and then could not run.
 
+### Tools
+- Obsidian. A new tool card: your AI searches your vault, reads notes,
+  lists folders and tags, and - when you allow it - writes and edits
+  notes. It works on the vault's folder, so there is no Obsidian plugin to
+  install and Obsidian does not need to be open. It starts read only; one
+  switch in its settings allows writing. A second switch, on by default,
+  also reads the vault into the documents of each AI that uses the tool
+  and keeps it in sync, so the AI remembers your notes in every chat, not
+  only while a tool is running. Needs Node.js 20 or newer; the first
+  session fetches the tool itself (a few MB).
+- Your first message waits for the tools. A chat that carries tools opens
+  once every tool has finished starting ("Getting your tools ready..."),
+  so the AI no longer answers a first message without them. A tool that
+  never starts cannot hold the chat up: after 45 seconds it opens anyway
+  and says which tool did not start.
+- Change a tool's settings and the next message uses them: the chat opens
+  a fresh tools session instead of carrying on with tools set up the old
+  way.
+- A tool that cannot join a session says so on the turn, with the reason
+  (a setting not filled in, an address that is not on your computer or
+  network), instead of being left out without a word.
+- A tool's settings can now be switches and folders (with a folder
+  picker), not only text.
+- The "this computer or your own network only" rule for a tool's address
+  is checked again on the address as it is used, once its settings are
+  filled in.
+
+### Your documents
+- Keep a folder in sync. Drop a folder on an AI's documents, or press
+  Keep a folder in sync - a Logseq or Obsidian vault, or any folder of
+  documents - and it stays current: new files are
+  read, edited ones are read again (the document keeps its card and who
+  can read it), deleted ones leave. Checked a few minutes after you open
+  the app, every half hour, and when you press Check now. A folder that
+  cannot be read (a drive that is away) changes nothing. Logseq's own
+  backup copies are left out.
+- The documents list follows every change: a drop, an import started
+  elsewhere in the app, or a folder check in the background.
+- A very short document shows its own words on its card. A model asked
+  to describe a one-line note used to make something up.
+- Notes read as notes. A Markdown page from a notes app is taken in by
+  thought, not by length: each top-level bullet stays together with its
+  sub-points, a title and tags are kept as words while ids and other
+  bookkeeping are dropped, `[[links]]` read as plain words, and a long
+  passage is never cut in the middle of a word. Applies to documents read
+  from now on.
+
 ### Records
 - Your records are read a page at a time. A long list of conversations,
   or one very long conversation, no longer has to arrive in a single

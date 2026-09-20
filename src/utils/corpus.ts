@@ -175,3 +175,50 @@ export async function migrateLegacyDocuments(aiIds: string[]): Promise<number> {
   if (moved) console.log(`[corpus] moved ${moved} document(s) into the library`);
   return moved;
 }
+
+// ---- folders kept in sync (src-tauri/src/corpus/sync.rs)
+
+export interface SyncedFolder {
+  folder_id: string;
+  added_at: number;
+  last_scan_at: number | null;
+  documents: number;
+  meta: { path: string; ai_ids: string[]; kind?: string | null };
+  /** False when the folder cannot be read right now (drive away, renamed). */
+  reachable: boolean;
+}
+
+export interface FolderSyncReport {
+  folder_id: string;
+  folder: string;
+  added: number;
+  updated: number;
+  removed: number;
+  unchanged: number;
+  failed: { file: string; reason: string }[];
+  unreachable: boolean;
+  cancelled: boolean;
+}
+
+/** Keep a folder in sync for this AI; returns its id. Run corpusFolderSync next. */
+export function corpusFolderAdd(path: string, aiId: string, kind?: string): Promise<string> {
+  return invoke<string>('corpus_folder_add', { path, aiId, kind: kind ?? null });
+}
+
+export function corpusFolders(): Promise<SyncedFolder[]> {
+  return invoke<SyncedFolder[]>('corpus_folders');
+}
+
+/** Stop keeping a folder in sync; its documents stay unless removeDocuments. */
+export function corpusFolderRemove(folderId: string, removeDocuments = false): Promise<void> {
+  return invoke<void>('corpus_folder_remove', { folderId, removeDocuments });
+}
+
+/** One pass over one folder (or all). Progress on `corpus-progress`. Empty = a pass was already running. */
+export function corpusFolderSync(folderId?: string): Promise<FolderSyncReport[]> {
+  return invoke<FolderSyncReport[]>('corpus_folder_sync', { folderId: folderId ?? null });
+}
+
+export function corpusFolderSyncCancel(): Promise<void> {
+  return invoke<void>('corpus_folder_sync_cancel');
+}

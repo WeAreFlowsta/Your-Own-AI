@@ -13,6 +13,10 @@ export function useFileDrop(owner: string, onPaths$: QRL<(paths: string[]) => vo
   useVisibleTask$(({ cleanup }) => {
     claimFileDrops(owner);
     let unlisten: (() => void) | null = null;
+    // Registration is async: a section removed before it lands must still
+    // drop its listener, or a dead copy keeps catching drops (and refreshes
+    // a list nobody sees).
+    let gone = false;
     import('@tauri-apps/api/webviewWindow').then(({ getCurrentWebviewWindow }) => {
       getCurrentWebviewWindow()
         .onDragDropEvent((event) => {
@@ -20,15 +24,18 @@ export function useFileDrop(owner: string, onPaths$: QRL<(paths: string[]) => vo
           if (t === 'enter' || t === 'over') hovering.value = true;
           else if (t === 'leave') hovering.value = false;
           else if (t === 'drop') {
+            if (gone) return;
             hovering.value = false;
             if (event.payload.paths.length > 0) void onPaths$(event.payload.paths);
           }
         })
         .then((fn) => {
-          unlisten = fn;
+          if (gone) fn();
+          else unlisten = fn;
         });
     });
     cleanup(() => {
+      gone = true;
       releaseFileDrops(owner);
       if (unlisten) unlisten();
     });

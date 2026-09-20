@@ -53,6 +53,14 @@ pub struct AgentBridgeState {
     /// emit agent-exit - without this, reopening a folder raced the old
     /// process's death event and the fresh session showed "stopped".
     generation: AtomicU64,
+    /// A session that carries tools is READY only once the agent reports its
+    /// tool servers are up (`x.ai/mcp_initialized`): a tool started through
+    /// `npx` or `uv` takes seconds, and a first message sent before that is
+    /// answered by an AI that cannot see its tools ("the server is still
+    /// connecting"). `Some(sid)` = the ready signal is being held for it.
+    ready_held: Mutex<Option<String>>,
+    /// The agent has reported its tool servers up, for the current session.
+    tools_up: std::sync::atomic::AtomicBool,
 }
 
 impl AgentBridgeState {
@@ -81,7 +89,55 @@ impl AgentBridgeState {
             pending: Mutex::new(std::collections::HashMap::new()),
             started_at: std::sync::Mutex::new(None),
             generation: AtomicU64::new(0),
+            ready_held: Mutex::new(None),
+            tools_up: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+}
+
+/// How long a session waits for its tools before it opens without them.
+const TOOLS_READY_WAIT: std::time::Duration = std::time::Duration::from_secs(45);
+
+/// Tell the app the session is open - at once when it carries no tools or
+/// they are already up, otherwise when they are (or after the wait: a tool
+/// that never starts must not hang the conversation; the start-failure
+/// notice then says which one).
+async fn announce_ready(app: &AppHandle, sid: String, carries_tools: bool) {
+    let state = app.state::<AgentBridgeState>();
+    if !carries_tools || state.tools_up.load(Ordering::SeqCst) {
+        log::info!("[agent] ready in {}ms", startup_ms(app));
+        let _ = app.emit("agent-ready", json!({ "sessionId": sid }));
+        return;
+    }
+    *state.ready_held.lock().await = Some(sid.clone());
+    log::info!("[agent] session open - waiting for its tools before the first message");
+    let app = app.clone();
+    let gen = state.generation.load(Ordering::SeqCst);
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(TOOLS_READY_WAIT).await;
+        let state = app.state::<AgentBridgeState>();
+        if state.generation.load(Ordering::SeqCst) != gen {
+            return;
+        }
+        let held = state.ready_held.lock().await.take();
+        if let Some(sid) = held {
+            log::warn!("[agent] tools not reported up after {}s - opening the session without waiting longer", TOOLS_READY_WAIT.as_secs());
+            let _ = app.emit("agent-ready", json!({ "sessionId": sid }));
+        }
+    });
+}
+
+/// The agent's "every tool server is up" notice (`x.ai/mcp_initialized`).
+async fn tools_are_up(app: &AppHandle, params: Option<&Value>) {
+    let state = app.state::<AgentBridgeState>();
+    state.tools_up.store(true, Ordering::SeqCst);
+    let count = params.and_then(|p| p.get("mcpToolCount")).and_then(Value::as_u64).unwrap_or(0);
+    let ms = params.and_then(|p| p.get("elapsedMs")).and_then(Value::as_u64).unwrap_or(0);
+    log::info!("[agent] tools up: {count} tool(s) in {ms} ms");
+    let held = state.ready_held.lock().await.take();
+    if let Some(sid) = held {
+        log::info!("[agent] ready in {}ms", startup_ms(app));
+        let _ = app.emit("agent-ready", json!({ "sessionId": sid }));
     }
 }
 
@@ -355,6 +411,9 @@ pub async fn start_build_agent(
     // generation FIRST makes the old process's reader stand down - its
     // termination event must not touch the new session's state.
     let my_gen = state.generation.fetch_add(1, Ordering::SeqCst) + 1;
+    // A new session: nothing is held for it yet and its tools are not up.
+    *state.ready_held.lock().await = None;
+    state.tools_up.store(false, Ordering::SeqCst);
     if let Some(old) = state.child.lock().await.take() {
         let _ = old.kill();
     }
@@ -497,7 +556,11 @@ pub async fn start_build_agent(
     );
     let session_auto_mode = auto_mode;
     let session_approve_all = approve_all;
-    let session_mcp = crate::mcp::acp_entries(&app_handle, &mcp_names.unwrap_or_default());
+    let (session_mcp, skipped_tools) = crate::mcp::acp_entries_checked(&app_handle, &mcp_names.unwrap_or_default());
+    for t in &skipped_tools {
+        let text = format!("{} is not available in this session - {}. Open Add-ons > Tools to fix it.", t.name, t.reason);
+        let _ = app_handle.emit("agent-hint", json!({ "kind": format!("tool-skipped-{}", t.name), "sticky": true, "text": text }));
+    }
     if !session_mcp.is_empty() {
         log::info!(
             "[agent] MCP servers for this session: {}",
@@ -648,6 +711,10 @@ async fn handle_agent_message(
         (Some("flowsta/permission_decided"), None) => {
             let _ = app.emit("agent-permission-decided", msg.get("params").cloned().unwrap_or(Value::Null));
         }
+        (Some("_x.ai/mcp_initialized"), None) | (Some("x.ai/mcp_initialized"), None) => {
+            tools_are_up(app, msg.get("params")).await;
+            let _ = app.emit("agent-update", &msg);
+        }
         // Notifications: session updates and agent housekeeping.
         (Some(_), None) => {
             let _ = app.emit("agent-update", &msg);
@@ -738,8 +805,7 @@ async fn handle_agent_message(
                         });
                         let _ = write_line(&state, &request).await;
                     } else {
-                        log::info!("[agent] ready in {}ms", startup_ms(app));
-                        let _ = app.emit("agent-ready", json!({ "sessionId": sid }));
+                        announce_ready(app, sid.to_string(), !extra_mcp.is_empty()).await;
                     }
                 }
                 None => {
@@ -761,7 +827,7 @@ async fn handle_agent_message(
             }
             let sid = state.session_id.lock().await.clone();
             if let Some(sid) = sid {
-                let _ = app.emit("agent-ready", json!({ "sessionId": sid }));
+                announce_ready(app, sid, !extra_mcp.is_empty()).await;
             }
         }
         // Prompt-turn completions (and any other response to our requests).

@@ -12,10 +12,15 @@ import type { KnowledgeDocument } from '../utils/transcriptMemory';
  */
 export const LibraryRereadNotice = component$<{
   docs: KnowledgeDocument[];
+  /** The AI whose documents these are - "remove them" takes them from it. */
+  aiId: string;
   onDone$: QRL<() => void>;
 }>((props) => {
   const busy = useSignal(false);
   const result = useSignal('');
+  // The files may be gone for good (deleted before the restore, left on an
+  // old computer). Without a way to say so the notice would never leave.
+  const confirmRemove = useSignal(false);
   const waiting = props.docs.filter((d) => d.chunkCount === 0).length;
 
   // First, look where the files were last seen (and under this machine's
@@ -69,6 +74,24 @@ export const LibraryRereadNotice = component$<{
     }
   });
 
+  const removeWaiting = $(async () => {
+    busy.value = true;
+    result.value = '';
+    try {
+      const { removeKnowledgeDocument } = await import('../utils/transcriptMemory');
+      const gone = props.docs.filter((d) => d.chunkCount === 0);
+      for (const d of gone) await removeKnowledgeDocument(props.aiId, d.docId);
+      result.value = `Removed ${gone.length} ${gone.length === 1 ? 'document' : 'documents'} that had no file to read.`;
+    } catch (e) {
+      console.error('[Library] remove waiting failed:', e);
+      result.value = 'Could not remove them.';
+    } finally {
+      busy.value = false;
+      confirmRemove.value = false;
+      await props.onDone$();
+    }
+  });
+
   return (
     <div class="mb-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2 text-xs">
       {waiting > 0 && (
@@ -105,6 +128,22 @@ export const LibraryRereadNotice = component$<{
               <LuFolderOpen class="w-3.5 h-3.5" />
               Choose a folder
             </button>
+          )}
+          {!busy.value && !confirmRemove.value && (
+            <button
+              type="button"
+              onClick$={() => (confirmRemove.value = true)}
+              class="text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:underline"
+            >
+              I no longer have {waiting === 1 ? 'it' : 'them'}
+            </button>
+          )}
+          {!busy.value && confirmRemove.value && (
+            <span class="inline-flex flex-wrap items-center gap-2 text-[var(--text-secondary)]">
+              Remove {waiting === 1 ? 'this document' : `these ${waiting} documents`} from this AI? Their cards go too.
+              <button type="button" onClick$={removeWaiting} class="text-red-600 dark:text-red-400 hover:underline">Remove</button>
+              <button type="button" onClick$={() => (confirmRemove.value = false)} class="text-[var(--text-link)] hover:underline">Keep</button>
+            </span>
           )}
         </div>
       )}

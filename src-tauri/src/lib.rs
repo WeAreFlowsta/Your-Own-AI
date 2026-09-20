@@ -675,6 +675,7 @@ pub fn run() {
             agent_bridge::path_is_file,
             agent_bridge::agent_undo_turn,
             agent_bridge::agent_interject,
+            mcp::mcp_tools_signature,
             checks::project_checks_last,
             terminal::open_in_terminal,
             model_caps::agent_capability,
@@ -717,6 +718,11 @@ pub fn run() {
             corpus::corpus_documents,
             corpus::corpus_grant,
             corpus::corpus_delete,
+            corpus::sync::corpus_folder_add,
+            corpus::sync::corpus_folders,
+            corpus::sync::corpus_folder_remove,
+            corpus::sync::corpus_folder_sync,
+            corpus::sync::corpus_folder_sync_cancel,
             corpus::corpus_set_mine,
             corpus::corpus_set_summary,
             corpus::corpus_recall,
@@ -859,6 +865,7 @@ pub fn run() {
                     vault_escrow::backup_when_vault_unlocks(&link_app_handle);
                 }
                 vault_escrow::start_daily_backup_check(&link_app_handle);
+                corpus::sync::start_folder_sync(&link_app_handle);
             });
 
             // Register Holochain state synchronously (manager filled when conductor starts)

@@ -1,17 +1,18 @@
 import { component$, $, useSignal, useVisibleTask$, useTask$ } from '@builder.io/qwik';
+import { SyncedFolders } from './SyncedFolders';
 import { readThroughWarmup } from '../utils/recordsWarmup';
 import { LuFileText, LuPlus, LuLoader2, LuUpload } from '@qwikest/icons/lucide';
 import { KnowledgeDocumentRow } from './KnowledgeDocumentRow';
 import { LibraryRereadNotice } from './LibraryRereadNotice';
 import { isServer } from '@builder.io/qwik/build';
-import { useCorpusProgress, progressText } from '../hooks/useCorpusProgress';
+import { useCorpusProgress, useLibraryChanged, progressText } from '../hooks/useCorpusProgress';
 import LiquidMetalButton from './LiquidMetalButton';
 import {
   listKnowledgeDocuments,
   removeKnowledgeDocument,
   type KnowledgeDocument,
 } from '../utils/transcriptMemory';
-import { pickAndIngestDocuments, ingestDocumentPaths, ingestFailureMessage, type IngestOutcome } from '../utils/knowledgeIngest';
+import { pickAndIngestDocuments, ingestDocumentPaths, ingestFailureMessage, ingestOutcomeMessage, type IngestOutcome } from '../utils/knowledgeIngest';
 import { isEmbeddingModelReady } from '../utils/embeddings';
 import { MemoryComponentOffer } from './MemoryComponentOffer';
 import { useFileDrop } from '../hooks/useFileDrop';
@@ -30,8 +31,24 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
   const docs = useSignal<KnowledgeDocument[]>([]);
   const busy = useSignal(false);
   const error = useSignal('');
+  // What the last drop or pick did, said plainly - silence after a drag
+  // reads as "nothing happened".
+  const said = useSignal('');
   const ready = useSignal(true);
   const progress = useCorpusProgress();
+  // Whatever added or changed documents (this section, the edit dialog, a
+  // folder check in the background): the list on screen follows.
+  useLibraryChanged(
+    $(async () => {
+      docs.value = await listKnowledgeDocuments(props.aiId);
+      // A folder check adds and changes documents too: their cards are
+      // written like an import's (one run at a time; a second call joins).
+      if (docs.value.some((d) => !d.summary && d.chunkCount > 0)) {
+        const lib = await import('../utils/documentSummaries');
+        void lib.summarizePendingDocuments().then(() => lib.refreshLibraryPortrait());
+      }
+    }),
+  );
   // Reading may have been started from the edit dialog or on an earlier
   // visit: follow it here too, and refresh the rows as each document lands.
   const lastDone = useSignal(-1);
@@ -80,6 +97,7 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
     if (!picked) return; // cancelled the picker
     docs.value = await listKnowledgeDocuments(props.aiId);
     if (picked.failures.length > 0) error.value = ingestFailureMessage(picked.failures);
+    said.value = ingestOutcomeMessage(picked);
     if (picked.added) {
       const lib = await import('../utils/documentSummaries');
       void lib.summarizePendingDocuments().then(() => lib.refreshLibraryPortrait());
@@ -93,6 +111,7 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
 
   const addDocuments = $(async () => {
     error.value = '';
+    said.value = '';
     if (!ready.value) {
       error.value = 'Add the memory component above first.';
       return;
@@ -111,6 +130,7 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
 
   const onDrop = $(async (paths: string[]) => {
     error.value = '';
+    said.value = '';
     if (!ready.value) {
       error.value = 'Add the memory component above first.';
       return;
@@ -178,8 +198,19 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
         </p>
       </div>
 
+      <SyncedFolders
+        aiId={props.aiId}
+        ready={ready.value}
+        onChanged$={$(async () => {
+          docs.value = await listKnowledgeDocuments(props.aiId);
+        })}
+      />
+
       {progress.value && (!progress.value.ai_id || progress.value.ai_id === props.aiId) && (
         <p class="text-xs text-[var(--text-muted)] mb-2 truncate">{progressText(progress.value)}</p>
+      )}
+      {said.value && !busy.value && (
+        <p class="text-xs text-[var(--text-secondary)] mb-2">{said.value}</p>
       )}
       {error.value && (
         <p class="text-xs text-red-600 dark:text-red-400 mb-2">{error.value}</p>
@@ -197,6 +228,7 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
       ) : (
         <>
         <LibraryRereadNotice
+          aiId={props.aiId}
           docs={docs.value}
           onDone$={async () => {
             docs.value = await listKnowledgeDocuments(props.aiId);

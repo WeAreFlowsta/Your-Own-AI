@@ -2,6 +2,7 @@ import { component$, $, useSignal, useVisibleTask$, type QRL, useTask$ } from '@
 import { LuBookOpen, LuLoader2, LuPlus, LuUpload } from '@qwikest/icons/lucide';
 import LiquidMetalButton from './LiquidMetalButton';
 import { MemoryComponentOffer } from './MemoryComponentOffer';
+import { SyncedFolders } from './SyncedFolders';
 import { KnowledgeDocumentRow } from './KnowledgeDocumentRow';
 import { LibraryRereadNotice } from './LibraryRereadNotice';
 import { useFileDrop } from '../hooks/useFileDrop';
@@ -9,7 +10,7 @@ import { isServer } from '@builder.io/qwik/build';
 import { useCorpusProgress, progressText } from '../hooks/useCorpusProgress';
 import { listKnowledgeDocuments, removeKnowledgeDocument } from '../utils/transcriptMemory';
 import { isEmbeddingModelReady } from '../utils/embeddings';
-import { pickAndIngestDocuments, ingestDocumentPaths, ingestFailureMessage, type IngestOutcome } from '../utils/knowledgeIngest';
+import { pickAndIngestDocuments, ingestDocumentPaths, ingestFailureMessage, ingestOutcomeMessage, type IngestOutcome } from '../utils/knowledgeIngest';
 
 /** Store slice this section reads/writes (a subset of AiFormModal's store). */
 interface KnowledgeStore {
@@ -71,12 +72,8 @@ export const KnowledgeSection = component$<KnowledgeSectionProps>((props) => {
   const finish = $(async (picked: Outcome) => {
     if (!picked) return; // cancelled the picker
     props.store.knowledgeDocs = await listKnowledgeDocuments(props.aiId);
-    const parts: string[] = [];
-    if (picked.added) parts.push(`Added ${picked.added} ${picked.added === 1 ? 'document' : 'documents'}`);
-    if (picked.reread) parts.push(`Read ${picked.reread} again`);
-    if (picked.already) parts.push(`${picked.already} already here`);
-    if (picked.cancelled) parts.push('stopped early');
-    notice.value = parts.join(' · ');
+    // One wording for both places documents are managed (the memory page too).
+    notice.value = ingestOutcomeMessage(picked);
     if (picked.failures.length > 0) props.store.knowledgeError = ingestFailureMessage(picked.failures);
     if (picked.added) {
       const lib = await import('../utils/documentSummaries');
@@ -175,6 +172,16 @@ export const KnowledgeSection = component$<KnowledgeSectionProps>((props) => {
         </div>
       </div>
 
+      <div class="mt-3">
+        <SyncedFolders
+          aiId={props.aiId}
+          ready={ready.value}
+          onChanged$={$(async () => {
+            props.store.knowledgeDocs = await listKnowledgeDocuments(props.aiId);
+          })}
+        />
+      </div>
+
       {progress.value && (!progress.value.ai_id || progress.value.ai_id === props.aiId) && (
         <p class="text-xs text-[var(--text-muted)] mt-2 truncate">{progressText(progress.value)}</p>
       )}
@@ -186,6 +193,7 @@ export const KnowledgeSection = component$<KnowledgeSectionProps>((props) => {
       {docs.length > 0 && (
         <div class="mt-3">
           <LibraryRereadNotice
+            aiId={props.aiId}
             docs={docs}
             onDone$={async () => {
               props.store.knowledgeDocs = await listKnowledgeDocuments(props.aiId);
