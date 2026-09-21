@@ -1137,6 +1137,100 @@ fn helper_need_gb(app: &AppHandle, file: &str, ctx: u64) -> Option<f64> {
     Some(crate::fit::model_need(&meta, size, ctx).2)
 }
 
+/// How a helper starts on the processor: no card, and the model READ INTO
+/// memory instead of mapped from the file. The processor engine repacks a
+/// quantized model into a faster layout at load - a second copy; with the
+/// file mapped as well, the first copy stays resident and is never read
+/// again. Measured 2026-09-22 (Ministral-3B Q4_K_M, ctx 4096): mapped 4.03 GB,
+/// read into memory 2.73 GB, the same 35 tok/s reading speed, ready in 5 s.
+/// `--no-mmap` is the long-standing spelling (newer engines also say
+/// `--load-mode none`); re-check it on every engine bump.
+fn helper_processor_args() -> Vec<String> {
+    ["--device", "none", "-ngl", "0", "--no-mmap"].iter().map(|s| s.to_string()).collect()
+}
+
+/// The footprint record of a PROCESSOR placement lives beside the card one,
+/// under its own key: older builds look a model up by its bare file name.
+fn processor_record_key(file: &str) -> String {
+    format!("{file}@cpu")
+}
+
+/// What a helper holds in RAM on the processor: its measured footprint at
+/// this context when one exists, else the estimate from its header.
+fn helper_ram_need_gb(app: &AppHandle, file: &str, ctx: u64) -> Option<f64> {
+    if let Some(c) = load_calibration_read(app, &processor_record_key(file)).filter(|c| c.matches(ctx, false) && c.actual_gb > 0.05) {
+        return Some(c.actual_gb);
+    }
+    let path = get_models_dir(app).ok()?.join(file);
+    let meta = crate::gguf::read_meta(&path).ok()?;
+    let size = std::fs::metadata(&path).ok()?.len();
+    Some(crate::fit::model_need(&meta, size, ctx).2)
+}
+
+/// Memory left to the rest of the machine after a helper starts on the
+/// processor. Below it the helper does not start: on a 16 GB machine a
+/// helper that did not fit pushed 2.5 GB of OTHER programs to swap.
+const HELPER_RAM_MARGIN_GB: f64 = 1.0;
+
+/// Is there room in RAM, right now, for this helper on the processor? Said
+/// once per helper until it next starts (it is asked for on every turn).
+fn helper_has_ram_room(app: &AppHandle, file: &str, ctx: u64, what: &'static str, said: &std::sync::atomic::AtomicBool) -> bool {
+    use std::sync::atomic::Ordering::SeqCst;
+    let Some(need) = helper_ram_need_gb(app, file, ctx) else { return true };
+    let free = available_memory_bytes() as f64 / 1024f64.powi(3);
+    if free - need >= HELPER_RAM_MARGIN_GB {
+        said.store(false, SeqCst);
+        return true;
+    }
+    if !said.swap(true, SeqCst) {
+        log::warn!(
+            "[helpers] {what} not started on the processor: it holds {need:.2} GB and {free:.2} GB of memory is free ({HELPER_RAM_MARGIN_GB:.2} GB is kept for everything else) - tried again when there is room"
+        );
+    }
+    false
+}
+static EMBED_NO_ROOM_SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static UTIL_NO_ROOM_SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// A helper that came up on the processor: record what it holds, read from
+/// the OS by pid (resident memory - the same figure a task manager shows).
+/// A card placement has been measured since the first build; a processor
+/// one never was, so an estimate 1.25 GB under could never correct itself.
+fn helper_ram_measure_after_ready(app: AppHandle, model: String, ctx: u64, pid: u32, what: &'static str) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        let pid = sysinfo::Pid::from_u32(pid);
+        let mut sys = sysinfo::System::new();
+        sys.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::Some(&[pid]),
+            true,
+            sysinfo::ProcessRefreshKind::nothing().with_memory(),
+        );
+        let Some(bytes) = sys.process(pid).map(|p| p.memory()).filter(|b| *b > 0) else { return };
+        let actual = bytes as f64 / 1024f64.powi(3);
+        let path_need = get_models_dir(&app).ok().map(|d| d.join(&model));
+        let predicted = path_need
+            .and_then(|p| Some((crate::gguf::read_meta(&p).ok()?, std::fs::metadata(&p).ok()?.len())))
+            .map(|(meta, size)| crate::fit::model_need(&meta, size, ctx).2)
+            .unwrap_or(0.0);
+        log::info!("[helpers] {what} on the processor holds {actual:.2} GB (estimate {predicted:.2}, resident memory by pid)");
+        load_calibration_write(&app, &processor_record_key(&model), LoadCalibration {
+            ctx,
+            kv_q8: false,
+            moe_cpu_layers: None,
+            predicted_gb: predicted,
+            actual_gb: actual,
+            at: chrono_now_secs(),
+        });
+    });
+}
+
+/// Why a helper's need is not known: almost always the file is not there.
+fn helper_need_unknown(app: &AppHandle, file: &str) -> String {
+    let there = get_models_dir(app).map(|d| d.join(file).is_file()).unwrap_or(false);
+    if there { "its file could not be read".into() } else { "not installed".into() }
+}
+
 /// Decide where the helpers run, from the figure of THIS moment. Called
 /// a few seconds after a chat model is ready; the verdict applies at each
 /// helper's next start (an idle helper moves right away).
@@ -1185,11 +1279,11 @@ pub(crate) async fn decide_helper_placement(app: &AppHandle) -> (HelperPlace, He
         _ => Cpu,
     };
     log::info!(
-        "[helpers] memory model: {} (needs {}), helper: {} (needs {}) - free {free_gb:.2} GB by the {}, {HELPER_MARGIN_GB:.2} GB kept for the chat model",
+        "[helpers] memory model: {} (card need: {}), helper: {} (card need: {}) - free {free_gb:.2} GB by the {}, {HELPER_MARGIN_GB:.2} GB kept for the chat model",
         embed.word(),
-        need_e.map(|n| format!("{n:.2} GB")).unwrap_or_else(|| "?".into()),
+        need_e.map(|n| format!("{n:.2} GB")).unwrap_or_else(|| helper_need_unknown(app, &embed_file)),
         util.word(),
-        need_u.map(|n| format!("{n:.2} GB")).unwrap_or_else(|| "?".into()),
+        need_u.map(|n| format!("{n:.2} GB")).unwrap_or_else(|| helper_need_unknown(app, &util_file)),
         vram_figure_source()
     );
     set_helper_verdict((embed, util));
@@ -3351,7 +3445,7 @@ async fn ensure_embedding_server(
     // Where the verdict puts it: the chat engine on the card, else the
     // bundled engine with the card switched off.
     let mut place = helper_verdict().0;
-    let mut device_args = vec!["--device".to_string(), "none".to_string(), "-ngl".to_string(), "0".to_string()];
+    let mut device_args = helper_processor_args();
     if place == HelperPlace::Card {
         let d = select_gpu_device_args(app_handle).await;
         if args_force_cpu(&d) {
@@ -3361,6 +3455,9 @@ async fn ensure_embedding_server(
         }
     }
     args.extend(device_args);
+    if place == HelperPlace::Cpu && !helper_has_ram_room(app_handle, model_filename, EMBED_CTX, "memory model", &EMBED_NO_ROOM_SAID) {
+        return Err("Not enough free memory for the memory model right now".to_string());
+    }
     let free_before = if place == HelperPlace::Card {
         invalidate_vram_cache().await;
         available_vram_mib(app_handle).await.map(|m| m as f64 / 1024.0)
@@ -3376,6 +3473,7 @@ async fn ensure_embedding_server(
         .args(&args)
         .spawn()
         .map_err(|e| format!("Failed to start embedding server: {}", e))?;
+    let child_pid = child.pid();
 
     *state.embed_process.lock().await = Some(child);
     *state.embed_running.lock().await = true;
@@ -3403,6 +3501,8 @@ async fn ensure_embedding_server(
         if embed_server_ready().await {
             if place == HelperPlace::Card {
                 helper_measure_after_ready(app_handle.clone(), model_filename.to_string(), EMBED_CTX, free_before, "memory model");
+            } else {
+                helper_ram_measure_after_ready(app_handle.clone(), model_filename.to_string(), EMBED_CTX, child_pid, "memory model");
             }
             return Ok(());
         }
@@ -3660,7 +3760,7 @@ async fn ensure_utility_server(
         "--no-webui".to_string(),
     ];
     let mut place = helper_verdict().1;
-    let mut device_args = vec!["--device".to_string(), "none".to_string(), "-ngl".to_string(), "0".to_string()];
+    let mut device_args = helper_processor_args();
     if place == HelperPlace::Card {
         let d = select_gpu_device_args(app_handle).await;
         if args_force_cpu(&d) {
@@ -3670,6 +3770,9 @@ async fn ensure_utility_server(
         }
     }
     args.extend(device_args);
+    if place == HelperPlace::Cpu && !helper_has_ram_room(app_handle, model_filename, UTIL_CTX, "helper model", &UTIL_NO_ROOM_SAID) {
+        return Err("Not enough free memory for the helper model right now".to_string());
+    }
     let free_before = if place == HelperPlace::Card {
         invalidate_vram_cache().await;
         available_vram_mib(app_handle).await.map(|m| m as f64 / 1024.0)
@@ -3685,6 +3788,7 @@ async fn ensure_utility_server(
         .args(&args)
         .spawn()
         .map_err(|e| format!("Failed to start utility server: {}", e))?;
+    let child_pid = child.pid();
 
     *state.util_process.lock().await = Some(child);
     *state.util_running.lock().await = true;
@@ -3712,6 +3816,8 @@ async fn ensure_utility_server(
         if util_server_ready().await {
             if place == HelperPlace::Card {
                 helper_measure_after_ready(app_handle.clone(), model_filename.to_string(), UTIL_CTX, free_before, "helper model");
+            } else {
+                helper_ram_measure_after_ready(app_handle.clone(), model_filename.to_string(), UTIL_CTX, child_pid, "helper model");
             }
             return Ok(());
         }
@@ -6321,6 +6427,23 @@ mod stop_chain_tests {
 
 #[cfg(test)]
 mod live_matrix {
+    #[test]
+    fn a_helper_on_the_processor_is_read_into_memory_not_mapped() {
+        let a = super::helper_processor_args();
+        assert!(a.windows(2).any(|w| w[0] == "--device" && w[1] == "none"));
+        assert!(a.windows(2).any(|w| w[0] == "-ngl" && w[1] == "0"));
+        // mapped + repacked held 4.03 GB; read into memory 2.73 GB, same speed
+        assert!(a.iter().any(|x| x == "--no-mmap"));
+        // still recognized as a processor start by the code that asks
+        assert!(super::args_force_cpu(&a));
+    }
+
+    #[test]
+    fn a_processor_footprint_never_overwrites_the_card_one() {
+        assert_eq!(super::processor_record_key("model.gguf"), "model.gguf@cpu");
+        assert_ne!(super::processor_record_key("model.gguf"), "model.gguf");
+    }
+
     use super::*;
     use std::process::{Child, Command, Stdio};
     use std::time::{Duration, Instant};

@@ -28,6 +28,17 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   replies, the memory portrait and document cards. See *Models*.
 
 ### Models
+- The small helper model takes 1.3 GB less memory when it runs on the
+  processor, at the same speed. The processor engine keeps a faster,
+  repacked copy of a model; the app also kept the original mapped from the
+  file, never read again. It is now read straight into memory (measured:
+  4.0 GB down to 2.7 GB, 35 tokens a second either way). On a 16 GB computer
+  the old figure pushed other programs out to the swap file, felt as short
+  freezes.
+- What a helper holds on the processor is now measured after it starts, the
+  way a graphics-card placement always was, and the app checks that figure
+  against free memory before starting one: with too little room the helper
+  waits instead of squeezing everything else.
 - "Fine-tune" now means one thing: how a model runs on this computer -
   speed, context, memory. The sliders for how replies are written
   (creativity, word variety, rare-word floor, repetition brake) moved out
