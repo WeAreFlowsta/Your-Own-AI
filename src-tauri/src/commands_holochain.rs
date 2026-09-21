@@ -86,6 +86,7 @@ pub struct TranscriptEntryInfo {
     pub attachments: Option<AttachmentInfo>,
     pub images: Option<Vec<ImageAttachmentInfo>>,
     pub grounded: Option<Vec<GroundedSource>>,
+    pub library: Option<Vec<LibraryDoc>>,
     pub runtime: Option<RuntimeInfo>,
     pub routing_reason: Option<String>,
     pub routing_task: Option<String>,
@@ -139,6 +140,24 @@ pub struct ImageAttachmentInfo {
 /// verbatim quote + character span in an attached document (the verifiable chain
 /// claim → quote+offset → doc SHA-256), or a coarse image-hash link. Typed
 /// alongside the web `sources`; surfaced together in the "Sources" UI.
+/// A document from the AI's own library whose passages were GIVEN to the model
+/// for this reply (matched by meaning to the question). Names and counts only:
+/// the passages themselves are not recorded - every record rides the Vault
+/// backup twice over, and the size backstop trims a reply's own words, never
+/// a provenance field. "Given" is not "used": tying a claim to a quote stays
+/// the job of `grounded`.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct LibraryDoc {
+    pub doc_id: String,
+    /// The name the person knows it by (its title, else its file name).
+    pub name: String,
+    /// How many of its passages were given.
+    pub passages: u32,
+    /// The best match score among them (0..1).
+    #[serde(default)]
+    pub best: f32,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct GroundedSource {
     pub kind: String, // "document" | "image"
@@ -193,6 +212,8 @@ pub struct Provenance {
     #[serde(default)]
     pub grounded: Option<Vec<GroundedSource>>,
     #[serde(default)]
+    pub library: Option<Vec<LibraryDoc>>,
+    #[serde(default)]
     pub runtime: Option<RuntimeInfo>,
     /// Why the router picked this turn's model (Auto modes; None = the user
     /// picked the model). Human-readable, shown in receipts.
@@ -244,6 +265,8 @@ struct MessagePlain {
     pub images: Option<Vec<ImageAttachmentInfo>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grounded: Option<Vec<GroundedSource>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library: Option<Vec<LibraryDoc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<RuntimeInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -526,6 +549,7 @@ pub async fn record_transcript_entry(
         attachments: prov.attachments,
         images: prov.images,
         grounded: prov.grounded,
+        library: prov.library.filter(|l| !l.is_empty()),
         runtime: prov.runtime,
         routing_reason: prov.routing_reason,
         routing_task: prov.routing_task,
@@ -1354,6 +1378,7 @@ pub async fn get_conversation_transcript(
                     attachments: e.attachments,
                     images: e.images,
                     grounded: e.grounded,
+                    library: e.library,
                     runtime: e.runtime,
                     routing_reason: e.routing_reason,
                     routing_task: e.routing_task,
@@ -1480,6 +1505,7 @@ mod size_guard_tests {
             attachments: None,
             images: None,
             grounded: None,
+            library: None,
             runtime: None,
             routing_reason: None,
             routing_task: None,

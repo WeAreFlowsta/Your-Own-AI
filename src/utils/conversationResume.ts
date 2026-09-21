@@ -178,6 +178,22 @@ export async function loadConversationMessages(
       routingReason: e.routing_reason || undefined,
       stopped: e.stopped || undefined,
       routingTask: e.routing_task || undefined,
+      // What the reply drew on comes back too. It was recorded all along and
+      // never restored, so a reopened conversation had no Sources button:
+      // web links, quotes tied to an attached file, and the AI's own
+      // documents whose passages it was given.
+      sources: e.sources?.length ? e.sources : undefined,
+      grounded: e.grounded?.length
+        ? e.grounded.map((g) => ({
+            kind: g.kind,
+            doc_sha256: g.doc_sha256,
+            doc_name: g.doc_name ?? undefined,
+            claim: g.claim ?? undefined,
+            quote: g.quote ?? undefined,
+            span: g.span ?? undefined,
+          }))
+        : undefined,
+      library: e.library?.length ? e.library : undefined,
       // Agent turns come back whole: the rail's stub renders from the
       // stored working log, expandable to the full story (step outputs
       // are not persisted - those rows simply are not expandable).

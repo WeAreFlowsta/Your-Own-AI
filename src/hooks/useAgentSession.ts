@@ -29,6 +29,7 @@ import type {
   Message,
   PermissionLedger,
   SelectedAiModel,
+  LibraryDocGiven,
 } from "../types";
 import {
   buildSupportsAutoPermissions,
@@ -627,8 +628,15 @@ export function useAgentSession(props: UseAgentSessionProps) {
         : undefined,
       // Routing provenance: folder decisions belong in the on-chain audit
       // exactly like chat turns (the Settings ledger is only a live window).
-      bubble.routingReason
-        ? { routing_reason: bubble.routingReason, routing_task: "agent" }
+      // Built from whatever the bubble carries - it used to exist only when
+      // there was a routing reason, which would drop everything else.
+      bubble.routingReason || bubble.library?.length
+        ? {
+            ...(bubble.routingReason ? { routing_reason: bubble.routingReason, routing_task: "agent" } : {}),
+            ...(bubble.library?.length
+              ? { library: bubble.library.map(({ doc_id, name, passages, best }) => ({ doc_id, name, passages, best })) }
+              : {}),
+          }
         : undefined,
       {
         agentLog: items.length || bubble.permissionLedger
@@ -649,7 +657,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
 
   /** The turn's single reply bubble, pushed at Enter. Mounting it anchors
    *  the question to the top and shows the avatar + action bar instantly. */
-  const startTurnBubble = $((userText: string, attachedFiles?: string[]) => {
+  const startTurnBubble = $((userText: string, attachedFiles?: string[], library?: LibraryDocGiven[]) => {
     const id = uuidv4();
     turnId.value = id;
     props.chatState.messages = [
@@ -670,6 +678,9 @@ export function useAgentSession(props: UseAgentSessionProps) {
         aiImageUrl: props.selectedAi.value.imageUrl || undefined,
         isLoading: true,
         agentTurn: true,
+        // The AI's own documents whose passages rode with this prompt
+        // (shown under Sources, recorded with the turn as names and counts).
+        ...(library?.length ? { library } : {}),
         // A tool server that died at start is invisible otherwise - say so
         // on the turn, once, with the reason its log gave.
         agentLog: [
@@ -755,7 +766,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
    *  bubble shows a chip per `extra.files` name instead. Same split as the
    *  resume digest in dispatchPrompt: what the model reads vs what the
    *  user sees are different strings. */
-  const sendPrompt$ = $(async (text: string, extra?: { context?: string; files?: string[] }) => {
+  const sendPrompt$ = $(async (text: string, extra?: { context?: string; files?: string[]; library?: LibraryDocGiven[] }) => {
     if (!text.trim() && !extra?.context) return;
     const wire = extra?.context ? `${extra.context}\n\n${text}` : text;
     lastPrompt.value = wire;
@@ -774,11 +785,11 @@ export function useAgentSession(props: UseAgentSessionProps) {
       // turn - the way a message typed to a working agent should land. The
       // listener scope owns the turn's bubble, so it does the split there.
       window.dispatchEvent(
-        new CustomEvent("yoai-agent-interject", { detail: { text, wire, files: extra?.files } }),
+        new CustomEvent("yoai-agent-interject", { detail: { text, wire, files: extra?.files, library: extra?.library } }),
       );
       return;
     }
-    await startTurnBubble(text, extra?.files);
+    await startTurnBubble(text, extra?.files, extra?.library);
     if (state.status === "ready") {
       await dispatchPrompt(wire);
     } else {
@@ -1255,10 +1266,11 @@ export function useAgentSession(props: UseAgentSessionProps) {
     // happened. Steps still running move to the fresh bubble - their
     // updates keep arriving and must find them.
     const onInterject = async (ev: Event) => {
-      const { text, wire, files } = (ev as CustomEvent).detail as {
+      const { text, wire, files, library } = (ev as CustomEvent).detail as {
         text: string;
         wire: string;
         files?: string[];
+        library?: LibraryDocGiven[];
       };
       const oldId = turnId.value;
       const isOpen = (i: { type: string; action?: { status?: string } }) =>
@@ -1270,7 +1282,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         agentLog: (m.agentLog ?? []).filter((i) => !isOpen(i)),
       }));
       recordTurnOnce(oldId);
-      await startTurnBubble(text, files);
+      await startTurnBubble(text, files, library);
       if (running.length) {
         mutateTurn((m) => ({ ...m, agentLog: [...running, ...(m.agentLog ?? [])] }));
       }

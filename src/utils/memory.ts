@@ -512,6 +512,30 @@ export function removePendingTurn(id: string): void {
  * that fits (full card, first sentence, name only); passages get the rest
  * at ~300 tokens each, up to `maxPassages`.
  */
+/** The best match has to score at least this for ANY passage to be given.
+ *  This embedding model packs everything into a narrow band - measured on
+ *  one library 2026-09-21: an unrelated question 0.62, the right document
+ *  0.70 / 0.71 / 0.75 - so below the bar nothing in the library really fits,
+ *  and handing over the "least bad" passages only misleads a small model and
+ *  sends private text to an online one for nothing. Not a perfect line;
+ *  every turn logs its top score so it can be tuned. */
+export const RECALL_BEST_AT_LEAST = 0.66;
+/** How far below the best match a passage may score and still be given. */
+export const RECALL_MARGIN = 0.12;
+
+/** The passages worth giving: none unless the best one clears the bar, then
+ *  only those close to it (input in any order). */
+export function keepNearBest<T extends { score: number }>(
+  hits: T[],
+  margin = RECALL_MARGIN,
+  bestAtLeast = RECALL_BEST_AT_LEAST,
+): T[] {
+  if (hits.length === 0) return hits;
+  const best = Math.max(...hits.map((h) => h.score));
+  if (best < bestAtLeast) return [];
+  return hits.filter((h) => h.score >= best - margin);
+}
+
 /**
  * The text to ALSO search by when a message leans on the conversation: a
  * follow-up ("and the updated quote?", "what about the second one?") names
@@ -535,11 +559,27 @@ export async function loadDocumentContext(
    *  (followUpQuery). Results are merged, best score first. */
   followUpVec: number[] | null = null,
 ): Promise<string> {
-  if (!aiId || roomTokens <= 0) return "";
+  return (await loadDocumentContextUsed(aiId, queryVec, roomTokens, maxPassages, followUpVec)).text;
+}
+
+/** The same block, WITH which documents' passages went into it - so the
+ *  reply's Sources can say what the AI was given. Only documents with a
+ *  matched passage are listed (every granted document is also named to the
+ *  model as a one-line card; that is not "given a passage"). */
+export async function loadDocumentContextUsed(
+  aiId: string,
+  queryVec: number[] | null,
+  roomTokens: number,
+  maxPassages = 8,
+  followUpVec: number[] | null = null,
+): Promise<{ text: string; used: import("../types").LibraryDocGiven[] }> {
+  const none = { text: "", used: [] };
+  if (!aiId || roomTokens <= 0) return none;
   try {
     const { corpusRecall, corpusDocuments } = await import("./corpus");
     const docs = (await corpusDocuments(aiId)).slice(0, 40);
-    if (docs.length === 0) return "";
+    if (docs.length === 0) return none;
+    const used: import("../types").LibraryDocGiven[] = [];
     const tokens = (t: string) => Math.ceil(t.length / 4);
     const label = (d: (typeof docs)[number]) =>
       `"${d.meta.title || d.meta.filename}"${d.meta.mine ? " (written by you)" : ""}`;
@@ -583,12 +623,34 @@ export async function loadDocumentContext(
           })
           .slice(0, passages);
       }
+      // Only what is CLOSE to the best match. The floor alone lets almost
+      // anything through (unrelated text scores 0.45-0.6 with this embedding
+      // model; one question had 176 passages above it), and recall fills every
+      // slot, so a one-passage document arrived padded with passages from an
+      // unrelated one. A passage has to be within RECALL_MARGIN of the top.
+      const found = hits.length;
+      const top = found ? Math.max(...hits.map((h) => h.score)) : 0;
+      hits = keepNearBest(hits);
+      // Scores only, never a name or a passage - for tuning the two numbers.
+      console.log(
+        `[Memory] documents: best match ${top.toFixed(2)} (bar ${RECALL_BEST_AT_LEAST}) - ${hits.length} of ${found} passages given`,
+      );
+      void import("./uiLog").then(({ uiLog }) =>
+        uiLog(`documents: best match ${top.toFixed(2)}, bar ${RECALL_BEST_AT_LEAST} - ${hits.length} of ${found} passages given`),
+      ).catch(() => {});
       if (hits.length > 0) {
-        const byDoc = new Map<string, { name: string; texts: string[] }>();
+        const byDoc = new Map<string, { name: string; texts: string[]; best: number }>();
         for (const h of hits) {
-          const d = byDoc.get(h.doc_id) ?? { name: h.filename, texts: [] };
+          // One name per document, the one its card uses (title, else file name).
+          const known = docs.find((x) => x.doc_id === h.doc_id);
+          const name = known?.meta.title || known?.meta.filename || h.filename;
+          const d = byDoc.get(h.doc_id) ?? { name, texts: [], best: 0 };
           d.texts.push(h.text);
+          d.best = Math.max(d.best, h.score);
           byDoc.set(h.doc_id, d);
+        }
+        for (const [doc_id, d] of byDoc) {
+          used.push({ doc_id, name: d.name, passages: d.texts.length, best: Math.round(d.best * 100) / 100, texts: d.texts });
         }
         block += "\nPassages that match this question:\n";
         for (const d of byDoc.values()) {
@@ -597,9 +659,9 @@ export async function loadDocumentContext(
       }
     }
     block += "\nUse these when they answer the question, and say which document they came from.";
-    return block;
+    return { text: block, used };
   } catch (e) {
     console.warn("[Memory] document context skipped:", e);
-    return "";
+    return none;
   }
 }

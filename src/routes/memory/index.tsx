@@ -943,7 +943,7 @@ export default component$(() => {
                                     )}
                                   </div>
 
-                                  {(entry.thinking || entry.system_prompt || (entry.sources && entry.sources.length > 0) || (entry.grounded && entry.grounded.length > 0) || entry.runtime) && (
+                                  {(entry.thinking || entry.system_prompt || (entry.sources && entry.sources.length > 0) || (entry.grounded && entry.grounded.length > 0) || (entry.library && entry.library.length > 0) || entry.runtime) && (
                                     <details class="mt-2 group">
                                       <summary class="text-xs text-[var(--text-muted)] cursor-pointer hover:text-[var(--text-secondary)] flex items-center gap-1 select-none">
                                         <LuInfo class="w-3 h-3" />
@@ -1002,6 +1002,21 @@ export default component$(() => {
                                                   ) : (
                                                     <div class="text-[10px] text-[var(--text-muted)] font-mono break-all">🖼 {g.doc_name || "image"} · sha256 {g.doc_sha256.slice(0, 12)}…</div>
                                                   )}
+                                                </li>
+                                              ))}
+                                            </ul>
+                                          </div>
+                                        )}
+                                        {entry.library && entry.library.length > 0 && (
+                                          <div>
+                                            <div class="text-[var(--text-muted)] mb-1">Documents given</div>
+                                            <ul class="space-y-0.5">
+                                              {entry.library.map((d) => (
+                                                <li key={d.doc_id} class="text-[var(--text-secondary)]">
+                                                  {d.name}
+                                                  <span class="text-[10px] text-[var(--text-muted)]">
+                                                    {" "}· {d.passages} {d.passages === 1 ? "passage" : "passages"}
+                                                  </span>
                                                 </li>
                                               ))}
                                             </ul>

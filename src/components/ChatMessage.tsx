@@ -409,11 +409,15 @@ const ActionBar = component$<ActionBarProps>((props) => {
   const hasThoughts = !!props.message.thinking && props.message.thinking.trim().length >= MIN_THINKING_DISPLAY_CHARS;
   const hasSources = props.message.sources && props.message.sources.length > 0;
   const hasGrounded = !!props.message.grounded && props.message.grounded.length > 0;
+  // The AI's own documents whose passages it was given for this reply.
+  const hasLibrary = !!props.message.library && props.message.library.length > 0;
+  // With more than one kind of source in the panel, every block says what it is.
+  const severalKinds = [hasSources, hasGrounded || !!props.message.groundingNote, hasLibrary].filter(Boolean).length > 1;
   const canGround = !!props.onGround$ && !hasGrounded && !props.message.groundingPending;
   const hasModelInfo = props.message.role === 'assistant' && !!props.message.servedBy;
   const hasSteps =
     !!props.railOpen && !!props.message.agentLog && props.message.agentLog.length > 0 && !props.message.isLoading;
-  const hasButtons = hasSteps || hasTokens || hasThoughts || hasSources || hasGrounded || canGround || !!props.message.groundingPending || !!props.message.groundingNote || hasModelInfo;
+  const hasButtons = hasSteps || hasTokens || hasThoughts || hasSources || hasGrounded || hasLibrary || canGround || !!props.message.groundingPending || !!props.message.groundingNote || hasModelInfo;
   const showStatus = props.isLoading && !props.message.error;
 
   // Nothing to say and nothing to offer: render nothing. (The empty bar
@@ -658,7 +662,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
                 </span>
               </LiquidMetalButton>
             )}
-            {(hasSources || hasGrounded || !!props.message.groundingNote) && (
+            {(hasSources || hasGrounded || hasLibrary || !!props.message.groundingNote) && (
               <LiquidMetalButton
                 onClick$={() => toggleSection$('sources')}
                 class="px-3 py-1 text-xs flex items-center"
@@ -804,7 +808,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
       )}
 
       {openSection.value === 'sources' &&
-        (hasSources || hasGrounded || props.message.groundingPending || props.message.groundingNote) && (
+        (hasSources || hasGrounded || hasLibrary || props.message.groundingPending || props.message.groundingNote) && (
         <div class="px-4 pb-4 -mt-2 text-[var(--text-primary)] text-base leading-relaxed tracking-normal font-light">
           <div class="pt-4 space-y-4">
             {/* Verify-sources outcome lives here, where located quotes would
@@ -817,15 +821,15 @@ const ActionBar = component$<ActionBarProps>((props) => {
             )}
             {!props.message.groundingPending && !hasGrounded && props.message.groundingNote && (
               <div>
-                {hasSources && (
-                  <div class="text-xs text-[var(--text-muted)] mb-1">From your documents</div>
+                {severalKinds && (
+                  <div class="text-xs text-[var(--text-muted)] mb-1">Quotes from the attached file</div>
                 )}
                 <p class="text-sm text-[var(--text-secondary)]">{props.message.groundingNote}</p>
               </div>
             )}
             {hasSources && (
               <div>
-                {hasGrounded && (
+                {severalKinds && (
                   <div class="text-xs text-[var(--text-muted)] mb-1">From the web</div>
                 )}
                 <ul class="list-decimal list-inside space-y-2">
@@ -846,8 +850,8 @@ const ActionBar = component$<ActionBarProps>((props) => {
             )}
             {hasGrounded && (
               <div>
-                {hasSources && (
-                  <div class="text-xs text-[var(--text-muted)] mb-1">From your documents</div>
+                {severalKinds && (
+                  <div class="text-xs text-[var(--text-muted)] mb-1">Quotes from the attached file</div>
                 )}
                 <ul class="space-y-3">
                   {props.message.grounded?.map((g, i) => (
@@ -874,6 +878,38 @@ const ActionBar = component$<ActionBarProps>((props) => {
                           🖼 {g.doc_name || 'image'} · sha256 {g.doc_sha256.slice(0, 12)}…
                         </div>
                       )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {hasLibrary && (
+              <div>
+                <div class="text-xs text-[var(--text-muted)] mb-1">
+                  From this AI's documents - the passages it was given for this question
+                </div>
+                <ul class="space-y-2">
+                  {props.message.library?.map((d) => (
+                    <li key={d.doc_id} class="text-sm">
+                      <details>
+                        <summary class={d.texts?.length ? 'cursor-pointer' : 'list-none'}>
+                          <span class="text-[var(--text-primary)]">{d.name}</span>
+                          <span class="text-xs text-[var(--text-muted)]">
+                            {' '}· {d.passages} {d.passages === 1 ? 'passage' : 'passages'}
+                          </span>
+                        </summary>
+                        {d.texts?.length ? (
+                          <ul class="mt-1 space-y-1.5">
+                            {d.texts.map((t, i) => (
+                              <li key={i}>
+                                <blockquote class="pl-3 border-l-2 border-[var(--border-subtle)] text-[var(--text-secondary)] whitespace-pre-wrap">
+                                  {t}
+                                </blockquote>
+                              </li>
+                            ))}
+                          </ul>
+                        ) : null}
+                      </details>
                     </li>
                   ))}
                 </ul>

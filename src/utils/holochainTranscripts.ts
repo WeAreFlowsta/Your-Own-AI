@@ -85,6 +85,8 @@ export async function recordMessage(
       sha256: string;
       content?: string;
     }[];
+    /** Library documents given for this reply: names and counts, never passages. */
+    library?: { doc_id: string; name: string; passages: number; best: number }[];
     grounded?: {
       kind: "document" | "image";
       doc_sha256: string;

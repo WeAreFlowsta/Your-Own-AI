@@ -14,7 +14,7 @@ import { skillsPromptBlock } from "../utils/skills";
 import { wireSampling } from "../utils/sampling";
 import { activeSkills, activeTools } from "../utils/carry";
 import { useStore, useSignal, $, noSerialize, type Signal, type NoSerialize } from "@builder.io/qwik";
-import type { Message, ChatMessage, SelectedAiModel, ChatAction, TurnMode } from "../types";
+import type { Message, ChatMessage, SelectedAiModel, ChatAction, TurnMode, LibraryDocGiven } from "../types";
 import { v4 as uuidv4 } from "uuid";
 import {
   startConversation,
@@ -24,7 +24,7 @@ import {
 import { extractAndStoreFacts, looksLikeUserFact } from "../utils/memoryExtraction";
 import { isUtilityModelReady } from "../utils/utilityModel";
 import { groundDocument, type GroundedSource } from "../utils/grounding";
-import { loadMemoryBlock, loadDocumentContext, followUpQuery } from "../utils/memory";
+import { loadMemoryBlock, loadDocumentContextUsed, followUpQuery } from "../utils/memory";
 import { indexTurn } from "../utils/transcriptMemory";
 import { boundaryIndex } from "../utils/replyBoundary";
 import { llamaServerApi } from "../utils/llamaServerApi";
@@ -1358,6 +1358,9 @@ export function useChat(props: UseChatProps) {
         // overrun (dev 2026-09-06: a 4K pin with five passages trimmed the
         // persona off the front).
         let docContext = "";
+        // Which of the AI's documents had passages given to the model this turn
+        // (shown under Sources; names and counts are recorded with the reply).
+        let libraryGiven: LibraryDocGiven[] = [];
         {
           const qvec = await queryVecPromise;
           // Online: no measured limit (the block caps itself). Local: the
@@ -1374,7 +1377,9 @@ export function useChat(props: UseChatProps) {
           const followUpVec = followUp
             ? await import("../utils/embeddings").then(({ embedQuery }) => embedQuery(followUp)).catch(() => null)
             : null;
-          docContext = await loadDocumentContext(selectedAi.id, qvec, room, 8, followUpVec);
+          const recalled = await loadDocumentContextUsed(selectedAi.id, qvec, room, 8, followUpVec);
+          docContext = recalled.text;
+          libraryGiven = recalled.used;
           if (docContext) {
             const last = chatHistory[chatHistory.length - 1];
             const wire = (text: string) => `${docContext}\n\n[User question]\n${text}`;
@@ -1693,6 +1698,7 @@ export function useChat(props: UseChatProps) {
                     }
                   : undefined,
                 sources: sources || undefined,
+                library: libraryGiven.length ? libraryGiven : undefined,
               }
             : m
         );
@@ -1876,6 +1882,10 @@ export function useChat(props: UseChatProps) {
               } : undefined,
               {
                 sources: sources || undefined,
+                // Names and counts only - the passages stay out of the record.
+                library: libraryGiven.length
+                  ? libraryGiven.map(({ doc_id, name, passages, best }) => ({ doc_id, name, passages, best }))
+                  : undefined,
                 system_prompt: systemPrompt,
                 mode: turnMode,
                 grounded: grounded.length > 0 ? grounded : undefined,

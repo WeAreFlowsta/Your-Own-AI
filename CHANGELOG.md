@@ -105,6 +105,25 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   and keeps it in sync, so the AI remembers your notes in every chat, not
   only while a tool is running. Needs Node.js 20 or newer; the first
   session fetches the tool itself (a few MB).
+- Sources shows the AI's own documents. When a reply was given passages
+  from documents you have given that AI, the Sources button under the
+  reply lists them - which documents, how many passages, and the passages
+  themselves as the AI saw them. It works in an ordinary chat and when the
+  AI is using a tool or working in a project. These are the passages the
+  AI was given, not proof it used them; Verify sources still ties a claim
+  to a quote. The list is kept in your records (names and counts), in the
+  transcript export and on the Records page.
+- Sources come back when you reopen a conversation. Web links and quoted
+  sources were always recorded, but a reopened conversation had no Sources
+  button. It has one now.
+- Only passages that fit the question are given to your AI. A question
+  that matched one document used to arrive padded with passages from
+  unrelated ones, because every slot was filled. Now a passage has to score
+  close to the best match, and when nothing in your documents fits the
+  question, no passages are given at all - your AI still knows which
+  documents it has. Less for the model to read, nothing irrelevant to be
+  led by, and no private text sent to an online model for a question it
+  has nothing to do with.
 - Follow-up questions find the right document. A short message that
   leans on the conversation ("and the updated figure?") is matched to your
   documents together with the question before it, not only on its own

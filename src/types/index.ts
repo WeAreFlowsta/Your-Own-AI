@@ -153,6 +153,11 @@ export interface Message {
   // OwnServer-only properties (unused in Desktop, but needed for TypeScript compatibility)
   tokens?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; tokens_per_second?: number; prompt_per_second?: number; engine?: string };
   sources?: any[];
+  /** Documents from the AI's own library whose passages were GIVEN to the
+   *  model for this reply (not proof it used them). `texts` = the passages
+   *  themselves, kept in memory for this session only; the record keeps
+   *  names and counts. */
+  library?: LibraryDocGiven[];
   /** Source-grounding: an answer's claims anchored to document quotes/spans (+
    *  image links), computed after the reply and shown in this message's Sources
    *  panel. Same shape recorded in the transcript provenance. */
@@ -395,6 +400,8 @@ export interface HolochainTranscriptEntry {
   /** Reply stopped by the user - recorded as far as it got. */
   stopped?: boolean | null;
   sources?: { url: string; title: string }[] | null;
+  /** Library documents given for this reply (names and counts). */
+  library?: LibraryDocGiven[] | null;
   system_prompt?: string | null;
   mode?: string | null;
   attachments?: { bytes: number; sha256: string; content?: string | null } | null;
@@ -421,4 +428,14 @@ export interface HolochainTranscriptEntry {
   agent_log?: { items?: AgentLogItem[]; stats?: Message['agentStats'] } | null;
   /** Workspace folder the turn worked in. */
   folder_path?: string | null;
+}
+
+/** One library document given to the model for a reply. */
+export interface LibraryDocGiven {
+  doc_id: string;
+  name: string;
+  passages: number;
+  best: number;
+  /** In memory only (never recorded): the passages as the model saw them. */
+  texts?: string[];
 }

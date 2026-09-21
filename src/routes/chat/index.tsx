@@ -59,7 +59,7 @@ import {
   FIRST_MODEL_READY,
 } from "../../utils/firstModel";
 
-import type { SelectedAiModel, ChatAction, AttachedFile, AttachedImage, UserDefinedAI, Message } from "../../types";
+import type { SelectedAiModel, ChatAction, AttachedFile, AttachedImage, UserDefinedAI, Message, LibraryDocGiven } from "../../types";
 import { activeTools } from "../../utils/carry";
 import LiquidMetalButton from "../../components/LiquidMetalButton";
 import veeboThumb from "../../assets/veebo-thumb.jpg";
@@ -1127,25 +1127,31 @@ export default component$(() => {
     // direct chat gets. Without this an AI that carries a tool (every one of
     // its turns is a session) never saw its documents: it could act on a
     // notes vault and remember none of it.
-    const sessionContext = async (attached: string | undefined, question: string): Promise<string | undefined> => {
+    const sessionContext = async (
+      attached: string | undefined,
+      question: string,
+    ): Promise<{ context: string | undefined; library: LibraryDocGiven[] }> => {
       let remembered = "";
+      let library: LibraryDocGiven[] = [];
       try {
         const { embedQuery } = await import("../../utils/embeddings");
-        const { loadDocumentContext, followUpQuery } = await import("../../utils/memory");
+        const { loadDocumentContextUsed, followUpQuery } = await import("../../utils/memory");
         // A follow-up is also searched together with the question before it.
         const before = [...chatState.messages].reverse().find((m) => m.role === "user")?.content;
         const followUp = followUpQuery(before, question);
         // A session's own prompt and tool definitions are large: a modest,
         // fixed share of the window, not everything that would fit.
-        remembered = await loadDocumentContext(
+        const recalled = await loadDocumentContextUsed(
           selectedAi.value.id,
           await embedQuery(question),
           2000,
           6,
           followUp ? await embedQuery(followUp) : null,
         );
+        remembered = recalled.text;
+        library = recalled.used;
       } catch { /* the memory component may not be on this computer */ }
-      return [attached, remembered].filter(Boolean).join("\n\n") || undefined;
+      return { context: [attached, remembered].filter(Boolean).join("\n\n") || undefined, library };
     };
 
     if (!input.value.trim()) return;
@@ -1214,8 +1220,10 @@ export default component$(() => {
       // Document text goes to the model as context; the bubble shows file
       // chips - never the extracted text (a PDF used to land wholesale in
       // the user's bubble on this path).
+      const given = await sessionContext(fileContext, finalInput);
       sendAgentPrompt$(finalInput, {
-        context: await sessionContext(fileContext, finalInput),
+        context: given.context,
+        library: given.library,
         files: attachedFiles.value.map((f) => f.filename),
       });
       input.value = "";
@@ -1235,8 +1243,10 @@ export default component$(() => {
       attachedImages.value.length === 0 &&
       (await openToolsSession$())
     ) {
+      const given = await sessionContext(fileContext, finalInput);
       sendAgentPrompt$(finalInput, {
-        context: await sessionContext(fileContext, finalInput),
+        context: given.context,
+        library: given.library,
         files: attachedFiles.value.map((f) => f.filename),
       });
       input.value = "";

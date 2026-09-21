@@ -155,6 +155,14 @@ export function conversationToMarkdown(
           out.push("");
         }
       }
+      if (e.library && e.library.length > 0) {
+        out.push("**Documents given** — the AI's own documents whose passages it was given for this reply");
+        out.push("");
+        for (const d of e.library) {
+          out.push(`- ${d.name} · ${d.passages} ${d.passages === 1 ? "passage" : "passages"}`);
+        }
+        out.push("");
+      }
     }
   }
 
