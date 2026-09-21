@@ -1,6 +1,6 @@
 // Qwik gotcha #30 guard: a `$()` closure that calls another `const x = $(...)`
 // declared LATER in the same component throws "x is not defined" at runtime -
-// no typecheck or build error. Exit 1 with the offenders. Run before commits.
+// no typecheck or build error. Exit 1 with the offenders. Runs first in `npm run build`.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 const files = [];
@@ -9,8 +9,10 @@ walk("src");
 let bad = 0;
 for (const f of files) {
   const s = readFileSync(f, "utf8");
-  const decl = [...s.matchAll(/^([ \t]*)const (\w+) = \$\(/gm)].map((m) => ({ name: m[2], at: m.index, indent: m[1] }));
-  for (const d of decl) {
+  const decl = [...s.matchAll(/^([ \t]*)const (\w+\$?) = \$\(/gm)].map((m) => ({ name: m[2], at: m.index, indent: m[1] }));
+  // a task is a closure too: it takes what it uses when the component renders
+  const tasks = [...s.matchAll(/^([ \t]*)use(?:Visible)?Task\$\(/gm)].map((m) => ({ name: `a task (line ${s.slice(0, m.index).split("\n").length})`, at: m.index, indent: m[1] }));
+  for (const d of [...decl, ...tasks]) {
     // the closure body: from its declaration to the matching `});` at the same indent
     const endRe = new RegExp(`^${d.indent}\\}\\);`, "m");
     endRe.lastIndex = d.at;
@@ -19,7 +21,7 @@ for (const f of files) {
     const body = endMatch ? rest.slice(0, endMatch.index) : rest.slice(0, 4000);
     for (const other of decl) {
       if (other.name === d.name || other.at < d.at) continue;
-      if (new RegExp(`\\b${other.name}\\(`).test(body)) {
+      if (new RegExp(`(?<![.\\w])${other.name.replace(/\$/g, "\\$")}\\(`).test(body)) {
         console.log(`${f}: ${d.name} calls ${other.name}, which is declared later (line ${s.slice(0, other.at).split("\n").length})`);
         bad++;
       }

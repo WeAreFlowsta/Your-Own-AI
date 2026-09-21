@@ -626,6 +626,85 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
 
   // On mount: check for completed or in-progress downloads
   // eslint-disable-next-line qwik/no-use-visible-task
+  // These two sit ABOVE the task below because it calls them: a closure takes
+  // what it uses when it is created (scripts/check-closure-order.mjs).
+  /** Download the parts of a sharded variant in order, from `startPart`
+   *  (1-based). Parts already on disk are skipped; each part resumes its own
+   *  .part. The card shows "part i of N". Throws on a real failure. */
+  const downloadParts$ = $(async (
+    familyId: string,
+    family: ModelFamily,
+    variant: ModelVariant,
+    displayName: string,
+    isFirstModel: boolean,
+    startPart: number,
+  ) => {
+    const count = variant.shards ?? 1;
+    for (let i = Math.max(1, startPart); i <= count; i++) {
+      const filename = shardFilename(variant.filename, i);
+      const url = shardUrl(variant.downloadUrl, i);
+      const current = store.downloads[familyId];
+      store.downloads = {
+        ...store.downloads,
+        [familyId]: { progress: null, stage: current?.stage ?? 'model', part: { index: i, count } },
+      };
+      rememberActiveDownload({
+        familyId,
+        familyName: displayName,
+        filename,
+        modelFilename: variant.filename,
+        partIndex: i,
+        partCount: count,
+        isFirstModel,
+        startedAt: Date.now(),
+      });
+      try {
+        await modelManager.downloadModel(url, filename, (progress) => {
+          const now = store.downloads[familyId];
+          store.downloads = { ...store.downloads, [familyId]: { stage: now?.stage ?? 'model', part: { index: i, count }, progress } };
+        });
+      } catch (error) {
+        // A part that finished earlier reports "already downloaded": move on.
+        const msg = error instanceof Error ? error.message : String(error);
+        if (!msg.includes('already downloaded')) throw error;
+      }
+    }
+    void family;
+  });
+
+  const handleGetDraft$ = $(async (familyId: string, modelFilename: string) => {
+    const hit = variantByFirstPart(familyId, modelFilename);
+    const draft = hit?.variant.draft;
+    if (!hit || !draft) return;
+    store.downloads = { ...store.downloads, [familyId]: { progress: null, stage: 'draft' } };
+    store.error = null;
+    rememberActiveDownload({
+      familyId,
+      familyName: `${hit.family.name} ${hit.variant.parameterCount}`,
+      filename: draft.filename,
+      modelFilename,
+      stage: 'draft',
+      isFirstModel: false,
+      startedAt: Date.now(),
+    });
+    try {
+      if (!(await modelManager.isModelDownloaded(draft.filename))) {
+        await modelManager.downloadModel(draft.downloadUrl, draft.filename, (progress) => {
+          store.downloads = { ...store.downloads, [familyId]: { stage: 'draft', progress } };
+        });
+      }
+      await modelManager.registerModelDraft(modelFilename, draft.filename, draft.type);
+      await loadModels();
+    } catch (error) {
+      console.error('Speed-up file download failed:', error);
+      store.error = getUserFriendlyErrorMessage(error);
+    } finally {
+      forgetActiveDownload(familyId);
+      const { [familyId]: _done, ...rest } = store.downloads;
+      store.downloads = rest;
+    }
+  });
+
   useVisibleTask$(async ({ cleanup }) => {
     // 1. Show recent completion banner (user navigated away and came back after download finished)
     const completedDownload = localStorage.getItem('completedModelDownload');
@@ -813,50 +892,6 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     }
   });
 
-  /** Download the parts of a sharded variant in order, from `startPart`
-   *  (1-based). Parts already on disk are skipped; each part resumes its own
-   *  .part. The card shows "part i of N". Throws on a real failure. */
-  const downloadParts$ = $(async (
-    familyId: string,
-    family: ModelFamily,
-    variant: ModelVariant,
-    displayName: string,
-    isFirstModel: boolean,
-    startPart: number,
-  ) => {
-    const count = variant.shards ?? 1;
-    for (let i = Math.max(1, startPart); i <= count; i++) {
-      const filename = shardFilename(variant.filename, i);
-      const url = shardUrl(variant.downloadUrl, i);
-      const current = store.downloads[familyId];
-      store.downloads = {
-        ...store.downloads,
-        [familyId]: { progress: null, stage: current?.stage ?? 'model', part: { index: i, count } },
-      };
-      rememberActiveDownload({
-        familyId,
-        familyName: displayName,
-        filename,
-        modelFilename: variant.filename,
-        partIndex: i,
-        partCount: count,
-        isFirstModel,
-        startedAt: Date.now(),
-      });
-      try {
-        await modelManager.downloadModel(url, filename, (progress) => {
-          const now = store.downloads[familyId];
-          store.downloads = { ...store.downloads, [familyId]: { stage: now?.stage ?? 'model', part: { index: i, count }, progress } };
-        });
-      } catch (error) {
-        // A part that finished earlier reports "already downloaded": move on.
-        const msg = error instanceof Error ? error.message : String(error);
-        if (!msg.includes('already downloaded')) throw error;
-      }
-    }
-    void family;
-  });
-
   /** Fetch the maker's speed-up file for a model that is already downloaded
    *  (downloaded before the catalog carried it), then register it. */
 
@@ -871,39 +906,6 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     } catch (error) {
       store.error = getUserFriendlyErrorMessage(error);
       store.mlxArtifacts = { ...store.mlxArtifacts, [repo]: { complete: false, percent: null } };
-    }
-  });
-
-  const handleGetDraft$ = $(async (familyId: string, modelFilename: string) => {
-    const hit = variantByFirstPart(familyId, modelFilename);
-    const draft = hit?.variant.draft;
-    if (!hit || !draft) return;
-    store.downloads = { ...store.downloads, [familyId]: { progress: null, stage: 'draft' } };
-    store.error = null;
-    rememberActiveDownload({
-      familyId,
-      familyName: `${hit.family.name} ${hit.variant.parameterCount}`,
-      filename: draft.filename,
-      modelFilename,
-      stage: 'draft',
-      isFirstModel: false,
-      startedAt: Date.now(),
-    });
-    try {
-      if (!(await modelManager.isModelDownloaded(draft.filename))) {
-        await modelManager.downloadModel(draft.downloadUrl, draft.filename, (progress) => {
-          store.downloads = { ...store.downloads, [familyId]: { stage: 'draft', progress } };
-        });
-      }
-      await modelManager.registerModelDraft(modelFilename, draft.filename, draft.type);
-      await loadModels();
-    } catch (error) {
-      console.error('Speed-up file download failed:', error);
-      store.error = getUserFriendlyErrorMessage(error);
-    } finally {
-      forgetActiveDownload(familyId);
-      const { [familyId]: _done, ...rest } = store.downloads;
-      store.downloads = rest;
     }
   });
 
