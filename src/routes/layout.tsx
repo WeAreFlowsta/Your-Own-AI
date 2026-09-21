@@ -157,11 +157,26 @@ export default component$(() => {
         .then(({ recheckEntitlementIfUnentitled }) => recheckEntitlementIfUnentitled())
         .catch(() => { /* best-effort */ });
     };
+    // Coming back to the app is when a note edited elsewhere should be
+    // known: look at the synced folders and linked documents, at most once
+    // every ten minutes (the pass itself is one `stat` per unchanged file,
+    // and only one runs at a time).
+    let lastDocumentsLook = Date.now();
+    const lookAtDocuments = () => {
+      if (document.visibilityState === "hidden") return;
+      if (Date.now() - lastDocumentsLook < 10 * 60 * 1000) return;
+      lastDocumentsLook = Date.now();
+      import("../utils/corpus")
+        .then(({ corpusFolderSync }) => corpusFolderSync())
+        .catch(() => { /* best-effort */ });
+    };
     window.addEventListener("focus", recheckEntitlement);
+    window.addEventListener("focus", lookAtDocuments);
     document.addEventListener("visibilitychange", recheckEntitlement);
     cleanup(() => {
       clearTimeout(launchCheck);
       window.removeEventListener("focus", recheckEntitlement);
+      window.removeEventListener("focus", lookAtDocuments);
       document.removeEventListener("visibilitychange", recheckEntitlement);
     });
 

@@ -2641,6 +2641,7 @@ mod corpus_budget_tests {
             chunk_count: 1,
             meta: DocMeta { filename: format!("f{i}.txt"), summary: Some(card.to_string()), ..Default::default() },
             ai_ids: vec!["ai".into()],
+            link: Default::default(),
         }
     }
 

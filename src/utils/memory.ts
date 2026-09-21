@@ -512,11 +512,28 @@ export function removePendingTurn(id: string): void {
  * that fits (full card, first sentence, name only); passages get the rest
  * at ~300 tokens each, up to `maxPassages`.
  */
+/**
+ * The text to ALSO search by when a message leans on the conversation: a
+ * follow-up ("and the updated quote?", "what about the second one?") names
+ * nothing, so on its own words it matches the wrong document or none. The
+ * previous question supplies the subject. Null when there is no previous
+ * question, or the message is long enough to stand on its own.
+ */
+export function followUpQuery(previousQuestion: string | undefined, question: string): string | null {
+  const prev = (previousQuestion ?? "").trim();
+  const q = question.trim();
+  if (!prev || !q || q.length > 200) return null;
+  return `${prev.slice(0, 400)}\n${q}`;
+}
+
 export async function loadDocumentContext(
   aiId: string,
   queryVec: number[] | null,
   roomTokens: number,
   maxPassages = 8,
+  /** A second look, by the message TOGETHER with the previous question
+   *  (followUpQuery). Results are merged, best score first. */
+  followUpVec: number[] | null = null,
 ): Promise<string> {
   if (!aiId || roomTokens <= 0) return "";
   try {
@@ -549,7 +566,23 @@ export async function loadDocumentContext(
     const room = Number.isFinite(roomTokens) ? roomTokens - tokens(cards) : Number.POSITIVE_INFINITY;
     const passages = Number.isFinite(room) ? Math.max(0, Math.min(maxPassages, Math.floor(room / 300))) : maxPassages;
     if (queryVec && passages > 0) {
-      const hits = await corpusRecall(aiId, queryVec, passages);
+      let hits = await corpusRecall(aiId, queryVec, passages);
+      if (followUpVec) {
+        // The message alone AND the message in its conversation: a question
+        // that stands by itself still wins on its own words; a follow-up is
+        // found through what it follows.
+        const more = await corpusRecall(aiId, followUpVec, passages);
+        const seen = new Set<string>();
+        hits = [...hits, ...more]
+          .sort((a, b) => b.score - a.score)
+          .filter((h) => {
+            const k = `${h.doc_id}\u0000${h.text}`;
+            if (seen.has(k)) return false;
+            seen.add(k);
+            return true;
+          })
+          .slice(0, passages);
+      }
       if (hits.length > 0) {
         const byDoc = new Map<string, { name: string; texts: string[] }>();
         for (const h of hits) {

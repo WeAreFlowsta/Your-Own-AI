@@ -24,7 +24,7 @@ import {
 import { extractAndStoreFacts, looksLikeUserFact } from "../utils/memoryExtraction";
 import { isUtilityModelReady } from "../utils/utilityModel";
 import { groundDocument, type GroundedSource } from "../utils/grounding";
-import { loadMemoryBlock, loadDocumentContext } from "../utils/memory";
+import { loadMemoryBlock, loadDocumentContext, followUpQuery } from "../utils/memory";
 import { indexTurn } from "../utils/transcriptMemory";
 import { boundaryIndex } from "../utils/replyBoundary";
 import { llamaServerApi } from "../utils/llamaServerApi";
@@ -1368,7 +1368,13 @@ export function useChat(props: UseChatProps) {
             await growContextFor(base);
             room = roomCtx > 0 ? Math.max(0, roomCtx - base) : 0;
           }
-          docContext = await loadDocumentContext(selectedAi.id, qvec, room);
+          // A follow-up is also searched together with the question before it.
+          const before = [...state.messages].reverse().find((m) => m.role === "user" && m.content !== userInput)?.content;
+          const followUp = followUpQuery(before, userInput);
+          const followUpVec = followUp
+            ? await import("../utils/embeddings").then(({ embedQuery }) => embedQuery(followUp)).catch(() => null)
+            : null;
+          docContext = await loadDocumentContext(selectedAi.id, qvec, room, 8, followUpVec);
           if (docContext) {
             const last = chatHistory[chatHistory.length - 1];
             const wire = (text: string) => `${docContext}\n\n[User question]\n${text}`;

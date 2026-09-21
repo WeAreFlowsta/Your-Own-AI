@@ -1122,6 +1122,32 @@ export default component$(() => {
 
   // --- Callbacks (replace useCallback with $()) ---
   const handleSubmit = $(async () => {
+    // What a session turn is told beside the question: attached files, AND
+    // the passages of the AI's own documents that match it - the same ones a
+    // direct chat gets. Without this an AI that carries a tool (every one of
+    // its turns is a session) never saw its documents: it could act on a
+    // notes vault and remember none of it.
+    const sessionContext = async (attached: string | undefined, question: string): Promise<string | undefined> => {
+      let remembered = "";
+      try {
+        const { embedQuery } = await import("../../utils/embeddings");
+        const { loadDocumentContext, followUpQuery } = await import("../../utils/memory");
+        // A follow-up is also searched together with the question before it.
+        const before = [...chatState.messages].reverse().find((m) => m.role === "user")?.content;
+        const followUp = followUpQuery(before, question);
+        // A session's own prompt and tool definitions are large: a modest,
+        // fixed share of the window, not everything that would fit.
+        remembered = await loadDocumentContext(
+          selectedAi.value.id,
+          await embedQuery(question),
+          2000,
+          6,
+          followUp ? await embedQuery(followUp) : null,
+        );
+      } catch { /* the memory component may not be on this computer */ }
+      return [attached, remembered].filter(Boolean).join("\n\n") || undefined;
+    };
+
     if (!input.value.trim()) return;
 
     // Typing while a permission card waits IS the answer: decline with
@@ -1189,7 +1215,7 @@ export default component$(() => {
       // chips - never the extracted text (a PDF used to land wholesale in
       // the user's bubble on this path).
       sendAgentPrompt$(finalInput, {
-        context: fileContext,
+        context: await sessionContext(fileContext, finalInput),
         files: attachedFiles.value.map((f) => f.filename),
       });
       input.value = "";
@@ -1210,7 +1236,7 @@ export default component$(() => {
       (await openToolsSession$())
     ) {
       sendAgentPrompt$(finalInput, {
-        context: fileContext,
+        context: await sessionContext(fileContext, finalInput),
         files: attachedFiles.value.map((f) => f.filename),
       });
       input.value = "";

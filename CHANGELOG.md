@@ -105,6 +105,15 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   and keeps it in sync, so the AI remembers your notes in every chat, not
   only while a tool is running. Needs Node.js 20 or newer; the first
   session fetches the tool itself (a few MB).
+- Follow-up questions find the right document. A short message that
+  leans on the conversation ("and the updated figure?") is matched to your
+  documents together with the question before it, not only on its own
+  words.
+- An AI that carries a tool remembers its documents. A chat that runs
+  through a tools session, and a project session, are now given the
+  passages of the AI's own documents that match the question, the same
+  ones an ordinary chat gets. Before, an AI with a tool switched on never
+  saw its documents at all.
 - Your first message waits for the tools. A chat that carries tools opens
   once every tool has finished starting ("Getting your tools ready..."),
   so the AI no longer answers a first message without them. A tool that
@@ -131,6 +140,29 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   the app, every half hour, and when you press Check now. A folder that
   cannot be read (a drive that is away) changes nothing. Logseq's own
   backup copies are left out.
+- Files kept in a cloud drive are left alone. When OneDrive, iCloud or
+  Dropbox keeps a file online only, the app sees the name and never
+  opens it (opening would download it), never takes it for deleted, and
+  says how many it skipped. This matters even if you never chose a cloud
+  folder: with OneDrive's folder backup or iCloud's Desktop & Documents,
+  your own Documents folder is one.
+- A document you added yourself is never removed without you. If its
+  file goes missing it is kept, goes on answering from what was read, and
+  is marked as having no file. Inside a folder you keep in sync, only the
+  notes the folder itself found leave when you delete them.
+- Documents stay linked to their files. A document you give an AI keeps
+  track of its file: when the file changes it is read again (the row
+  says when), and when the file cannot be found the row says so and
+  offers Relink and Remove - the document goes on answering from what was
+  read. If a whole folder moved (three or more documents from one place),
+  one Locate finds them all again; with three or more documents needing
+  files you can also find them in a folder or remove them together. A relinked file with the same words is
+  only moved, not read again. Each row can also be read again by hand.
+  Checked a few minutes after launch, every half hour, and when you come
+  back to the app. Files dropped on the chat input are one-message
+  attachments and are not tracked.
+- Documents that came back from a backup without their text use the same
+  Relink, Locate and Remove - the separate notice is gone.
 - The documents list follows every change: a drop, an import started
   elsewhere in the app, or a folder check in the background.
 - A very short document shows its own words on its card. A model asked

@@ -45,7 +45,21 @@ pub(super) fn ensure_schema(conn: &Connection) -> Result<(), String> {
         let cols = stmt.query_map([], |r| r.get::<_, String>(1)).map_err(|e| e.to_string())?;
         cols.flatten().collect()
     };
-    for (col, ty) in [("folder_id", "TEXT"), ("content_hash", "TEXT"), ("mtime", "INTEGER")] {
+    for (col, ty) in [
+        ("folder_id", "TEXT"),
+        ("content_hash", "TEXT"),
+        ("mtime", "INTEGER"),
+        // How the document came in: "given" (the person's own hand), "folder"
+        // (found by a synced folder), NULL = before this was kept (treated as
+        // given: the careful reading).
+        ("origin", "TEXT"),
+        // Set while the file cannot be found. NEVER inferred from anything
+        // else - an offline document still has its text.
+        ("offline_since", "INTEGER"),
+        // Set while the file is a cloud placeholder (named here, stored elsewhere).
+        ("online_only", "INTEGER"),
+        ("reread_at", "INTEGER"),
+    ] {
         if !have.contains(col) {
             conn.execute(&format!("ALTER TABLE documents ADD COLUMN {col} {ty}"), [])
                 .map_err(|e| format!("corpus schema ({col}): {e}"))?;
@@ -86,6 +100,10 @@ pub struct SyncReport {
     pub removed: usize,
     pub unchanged: usize,
     pub failed: Vec<ImportFailure>,
+    /// Files that are online only (kept in a cloud): not read, not removed.
+    pub online_only: usize,
+    /// Hand-picked documents whose file is gone: kept, marked offline.
+    pub offline: usize,
     /// The folder could not be read: nothing was changed.
     pub unreachable: bool,
     pub cancelled: bool,
@@ -163,6 +181,16 @@ fn content_hash(key: &[u8; 32], bytes: &[u8]) -> String {
     h.update(key);
     h.update(bytes);
     hex::encode(h.finalize())
+}
+
+/// The file's identity (BLAKE3, streamed - a document has no size limit)
+/// and the keyed value kept in the plain column, from ONE pass over the
+/// file. None = the file is not fully on this computer right now.
+fn identify(key: &[u8; 32], path: &Path) -> Result<Option<(String, String)>, String> {
+    Ok(links::content_id(path)?.map(|id| {
+        let keyed = content_hash(key, id.as_bytes());
+        (id, keyed)
+    }))
 }
 
 fn stat(path: &Path) -> Option<(i64, i64)> {
@@ -252,6 +280,21 @@ fn known_for(conn: &Connection, folder_id: &str, seen: &[Seen]) -> Result<Vec<Kn
     Ok(rows.flatten().collect())
 }
 
+/// Record how a document came in, and what its file looked like then, so the
+/// later check can tell "unchanged" from "changed" without reading it.
+pub(super) fn mark_origin(conn: &Connection, doc_id: &str, origin: &str, path: &Path) -> Result<(), String> {
+    let (size, mtime) = match links::file_state(path) {
+        links::FileState::Present { size, mtime } => (Some(size), Some(mtime)),
+        _ => (None, None),
+    };
+    conn.execute(
+        "UPDATE documents SET origin = ?2, mtime = COALESCE(?3, mtime), byte_size = COALESCE(?4, byte_size) WHERE doc_id = ?1",
+        params![doc_id, origin, mtime, size],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
 fn stamp(conn: &Connection, doc_id: &str, folder_id: &str, size: i64, mtime: i64, hash: &str) -> Result<(), String> {
     conn.execute(
         "UPDATE documents SET folder_id = ?2, byte_size = ?3, mtime = ?4, content_hash = ?5 WHERE doc_id = ?1",
@@ -302,14 +345,33 @@ async fn sync_one(
         report.unreachable = true;
         return Ok(report);
     }
-    let seen: Vec<Seen> = walk(&[folder.meta.path.clone()])
+    let found = walk_found(&[folder.meta.path.clone()]);
+    let seen: Vec<Seen> = found
+        .files
         .into_iter()
         .filter(|p| !is_vault_noise(&root, p))
         .filter_map(|p| stat(&p).map(|(size, mtime)| Seen { path: p.to_string_lossy().to_string(), size, mtime }))
         .collect();
+    // Named here, stored in a cloud: never read, and - the point - never
+    // taken for deleted. A document the library already holds keeps its text.
+    let cloud: HashSet<String> = found
+        .online_only
+        .iter()
+        .filter(|p| !is_vault_noise(&root, p))
+        .map(|p| path_hash(&p.to_string_lossy()))
+        .collect();
+    report.online_only = cloud.len();
+    let known_places = links::known_folders(app);
     let mut conn = open(app)?;
     let known = known_for(&conn, &folder.folder_id, &seen)?;
-    let plan = plan(&seen, &known);
+    let mut plan = plan(&seen, &known);
+    plan.remove.retain(|doc_id| {
+        let is_cloud = known.iter().any(|k| &k.doc_id == doc_id && cloud.contains(&k.path_hash));
+        if is_cloud {
+            let _ = conn.execute("UPDATE documents SET online_only = 1, offline_since = NULL WHERE doc_id = ?1", params![doc_id]);
+        }
+        !is_cloud
+    });
     report.unchanged = plan.unchanged;
     let total = plan.add.len() + plan.look.len();
     let ai_label = folder.meta.ai_ids.first().cloned().unwrap_or_default();
@@ -329,11 +391,18 @@ async fn sync_one(
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("document").to_string();
         progress("reading", &name, done, report.added, report.failed.len());
         done += 1;
-        let Ok(bytes) = std::fs::read(path) else {
-            report.failed.push(ImportFailure { file: name, reason: "could not be read".into() });
-            continue;
+        let (content_id, hash) = match identify(key, path) {
+            Ok(Some(pair)) => pair,
+            Ok(None) => {
+                // Went online only between the walk and now: leave it be.
+                report.online_only += 1;
+                continue;
+            }
+            Err(_) => {
+                report.failed.push(ImportFailure { file: name, reason: "could not be read".into() });
+                continue;
+            }
         };
-        let hash = content_hash(key, &bytes);
         let stored: Option<String> = conn
             .query_row("SELECT content_hash FROM documents WHERE doc_id = ?1", params![doc_id], |r| r.get(0))
             .optional()
@@ -355,8 +424,11 @@ async fn sync_one(
                 // the card is written again from the new text. (Mine, author
                 // and title are about the document, not its wording - kept.)
                 meta.summary = None;
+                meta.content_id = Some(content_id.clone());
+                meta.anchor = links::anchor_among(path, &known_places);
                 store_reread(&mut conn, key, doc_id, meta, &s.path, s.size, &passages, &vectors)?;
                 stamp(&conn, doc_id, &folder.folder_id, s.size, s.mtime, &hash)?;
+                conn.execute("UPDATE documents SET reread_at = ?2 WHERE doc_id = ?1", params![doc_id, now_secs()]).map_err(|e| e.to_string())?;
                 report.updated += 1;
             }
             Err(e) if e == "stopped" => {
@@ -383,7 +455,10 @@ async fn sync_one(
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("document").to_string();
             progress("embedding", &name, done, report.added, report.failed.len());
             done += 1;
-            let hash = std::fs::read(path).map(|b| content_hash(key, &b)).unwrap_or_default();
+            let Ok(Some((content_id, hash))) = identify(key, path) else {
+                report.online_only += 1;
+                continue;
+            };
             match read_and_embed(app, llm_state, path).await {
                 Ok((passages, vectors)) => {
                     if let Some(w) = match_waiting(&waiting, &name, s.size) {
@@ -394,7 +469,15 @@ async fn sync_one(
                         continue;
                     }
                     let info = doc_info(path);
-                    let meta = DocMeta { filename: name.clone(), path: Some(s.path.clone()), author: info.author, title: info.title, ..Default::default() };
+                    let meta = DocMeta {
+                        filename: name.clone(),
+                        path: Some(s.path.clone()),
+                        author: info.author,
+                        title: info.title,
+                        content_id: Some(content_id.clone()),
+                        anchor: links::anchor_among(path, &known_places),
+                        ..Default::default()
+                    };
                     let first = folder.meta.ai_ids.first().cloned().unwrap_or_default();
                     match insert_document(&mut conn, key, &meta, s.size, &passages, &vectors, &first) {
                         Ok(rec) => {
@@ -403,6 +486,7 @@ async fn sync_one(
                                     .map_err(|e| e.to_string())?;
                             }
                             stamp(&conn, &rec.doc_id, &folder.folder_id, s.size, s.mtime, &hash)?;
+                            conn.execute("UPDATE documents SET origin = 'folder' WHERE doc_id = ?1", params![rec.doc_id]).map_err(|e| e.to_string())?;
                             report.added += 1;
                         }
                         Err(e) => report.failed.push(ImportFailure { file: name, reason: e }),
@@ -422,15 +506,17 @@ async fn sync_one(
     // for a folder that held documents (a vault mid-move looks like that).
     if !report.cancelled && !(seen.is_empty() && !known.is_empty()) {
         for doc_id in &plan.remove {
-            delete_document(&conn, doc_id)?;
-            report.removed += 1;
+            if retire(&conn, doc_id)? {
+                report.removed += 1;
+            } else {
+                report.offline += 1;
+            }
         }
     }
-    // Every AI of the folder holds every document of the folder.
-    for ai in &folder.meta.ai_ids {
+    for s in &seen {
         conn.execute(
-            "INSERT OR IGNORE INTO grants (doc_id, ai_id) SELECT doc_id, ?2 FROM documents WHERE folder_id = ?1",
-            params![folder.folder_id, ai],
+            "UPDATE documents SET offline_since = NULL, online_only = NULL WHERE path_hash = ?1 AND (offline_since IS NOT NULL OR online_only IS NOT NULL)",
+            params![path_hash(&s.path)],
         )
         .map_err(|e| e.to_string())?;
     }
@@ -441,16 +527,43 @@ async fn sync_one(
     }
     progress("done", "", total, report.added, report.failed.len());
     log::info!(
-        "[corpus] folder sync {}: {} new, {} changed, {} gone, {} unchanged, {} failed{}",
+        "[corpus] folder sync {}: {} new, {} changed, {} gone, {} offline, {} online only, {} unchanged, {} failed{}",
         folder.folder_id,
         report.added,
         report.updated,
         report.removed,
+        report.offline,
+        report.online_only,
         report.unchanged,
         report.failed.len(),
         if report.cancelled { " (stopped)" } else { "" }
     );
     Ok(report)
+}
+
+/// A synced folder's file is gone. True = the document was removed; false =
+/// it was kept and marked offline.
+///
+/// Only a note the FOLDER found leaves when the person deletes it. A document
+/// given by the person's own hand - or one from before origins were kept,
+/// the careful reading - is never removed without them: it keeps its text,
+/// goes on answering, and waits to be relinked or removed.
+pub(super) fn retire(conn: &Connection, doc_id: &str) -> Result<bool, String> {
+    let origin: Option<String> = conn
+        .query_row("SELECT origin FROM documents WHERE doc_id = ?1", params![doc_id], |r| r.get(0))
+        .optional()
+        .map_err(|e| e.to_string())?
+        .flatten();
+    if origin.as_deref() == Some("folder") {
+        delete_document(conn, doc_id)?;
+        return Ok(true);
+    }
+    conn.execute(
+        "UPDATE documents SET offline_since = COALESCE(offline_since, ?2), online_only = NULL WHERE doc_id = ?1",
+        params![doc_id, now_secs()],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(false)
 }
 
 fn document_meta(conn: &Connection, key: &[u8; 32], doc_id: &str) -> Result<Option<DocMeta>, String> {
@@ -486,15 +599,235 @@ pub async fn sync_folders(
         list_folders(&conn, &key)?
     };
     let mut out = Vec::new();
+    let mut stopped = false;
     for f in folders.iter().filter(|f| only.as_deref().map_or(true, |id| id == f.folder_id)) {
         let r = sync_one(app, llm_state, &key, f).await?;
-        let stop = r.cancelled;
+        stopped = r.cancelled;
         out.push(r);
-        if stop {
+        if stopped {
             break;
         }
     }
+    // A full pass (not one folder's "Check now") also looks at the documents
+    // that are linked to a file on their own.
+    if only.is_none() && !stopped {
+        match check_linked(app, llm_state, &key).await {
+            Ok(r) if r.changed() => {
+                let _ = app.emit("corpus-folders-synced", &r);
+            }
+            Ok(_) => {}
+            Err(e) => log::warn!("[corpus] linked documents check failed: {e}"),
+        }
+    }
     Ok(out)
+}
+
+// ---------------------------------------------------------------- linked documents
+
+/// What a look at the single (not-in-a-folder) documents found.
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct LinkReport {
+    pub reread: usize,
+    /// Found again somewhere else (its well-known folder on this machine).
+    pub relinked: usize,
+    pub offline: usize,
+    pub online_only: usize,
+    pub failed: Vec<ImportFailure>,
+}
+
+impl LinkReport {
+    pub fn changed(&self) -> bool {
+        self.reread + self.relinked + self.offline + self.online_only > 0
+    }
+}
+
+/// Read a document again from `path` into its record. `same_words` = the file
+/// is the one already read (relinking a moved file): the path is updated and
+/// nothing is embedded again.
+async fn take_in(
+    app: &AppHandle,
+    llm_state: &State<'_, crate::llm::LLMState>,
+    key: &[u8; 32],
+    doc_id: &str,
+    path: &Path,
+) -> Result<bool, String> {
+    let links::FileState::Present { size, mtime } = links::file_state(path) else {
+        return Err(match links::file_state(path) {
+            links::FileState::OnlineOnly => "is online only - it is kept in a cloud drive; make it available on this computer first".into(),
+            _ => "is not a file this computer can read".into(),
+        });
+    };
+    let Some((content_id, keyed)) = identify(key, path)? else {
+        return Err("is online only - it is kept in a cloud drive; make it available on this computer first".into());
+    };
+    let path_str = path.to_string_lossy().to_string();
+    let known_places = links::known_folders(app);
+    let mut conn = open(app)?;
+    let mut meta = document_meta(&conn, key, doc_id)?.ok_or("this document is no longer in the library")?;
+    let had_text: i64 = conn
+        .query_row("SELECT chunk_count FROM documents WHERE doc_id = ?1", params![doc_id], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    let same_words = had_text > 0 && meta.content_id.as_deref() == Some(content_id.as_str());
+    meta.anchor = links::anchor_among(path, &known_places);
+    meta.filename = path.file_name().and_then(|n| n.to_str()).unwrap_or(&meta.filename).to_string();
+    if same_words {
+        meta.path = Some(path_str.clone());
+        let json = serde_json::to_vec(&meta).map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE documents SET path_hash = ?2, meta_enc = ?3 WHERE doc_id = ?1",
+            params![doc_id, path_hash(&path_str), enc(key, &json)?],
+        )
+        .map_err(|e| e.to_string())?;
+    } else {
+        drop(conn);
+        let (passages, vectors) = read_and_embed(app, llm_state, path).await?;
+        conn = open(app)?;
+        meta.summary = None;
+        meta.content_id = Some(content_id);
+        store_reread(&mut conn, key, doc_id, meta, &path_str, size, &passages, &vectors)?;
+        conn.execute("UPDATE documents SET reread_at = ?2 WHERE doc_id = ?1", params![doc_id, now_secs()]).map_err(|e| e.to_string())?;
+    }
+    conn.execute(
+        "UPDATE documents SET byte_size = ?2, mtime = ?3, content_hash = ?4, offline_since = NULL, online_only = NULL WHERE doc_id = ?1",
+        params![doc_id, size, mtime, keyed],
+    )
+    .map_err(|e| e.to_string())?;
+    cache_invalidate();
+    Ok(!same_words)
+}
+
+/// Look at every document that is linked to a file on its own (not part of a
+/// synced folder): changed -> read again; missing -> looked for under its
+/// well-known folder on this machine, else OFFLINE (kept, still answering);
+/// kept in a cloud -> marked online only and left alone. One `stat` per
+/// document when nothing changed.
+async fn check_linked(
+    app: &AppHandle,
+    llm_state: &State<'_, crate::llm::LLMState>,
+    key: &[u8; 32],
+) -> Result<LinkReport, String> {
+    let mut report = LinkReport::default();
+    let known_places = links::known_folders(app);
+    struct Row {
+        doc_id: String,
+        size: i64,
+        mtime: Option<i64>,
+        keyed: Option<String>,
+        offline: bool,
+        cloud: bool,
+        meta: DocMeta,
+    }
+    let rows: Vec<Row> = {
+        let conn = open(app)?;
+        let mut stmt = conn
+            .prepare("SELECT doc_id, byte_size, mtime, content_hash, offline_since, online_only, meta_enc FROM documents WHERE folder_id IS NULL AND chunk_count > 0")
+            .map_err(|e| e.to_string())?;
+        let found = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, Option<i64>>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, Option<i64>>(4)?,
+                    r.get::<_, Option<i64>>(5)?,
+                    r.get::<_, Vec<u8>>(6)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        found
+            .flatten()
+            .filter_map(|(doc_id, size, mtime, keyed, off, cloud, blob)| {
+                let meta: DocMeta = serde_json::from_slice(&dec(key, &blob).ok()?).ok()?;
+                Some(Row { doc_id, size, mtime, keyed, offline: off.is_some(), cloud: cloud.unwrap_or(0) != 0, meta })
+            })
+            .collect()
+    };
+    links::never_download_on_this_thread();
+    for row in rows {
+        if SYNC_CANCEL.load(Ordering::SeqCst) {
+            break;
+        }
+        // A document with no known file (given before paths were kept, or
+        // migrated) is a copy: there is nothing to look at.
+        let Some(path_str) = row.meta.path.clone() else { continue };
+        let path = PathBuf::from(&path_str);
+        match links::file_state(&path) {
+            links::FileState::Present { size, mtime } => {
+                if size == row.size && Some(mtime) == row.mtime && !row.offline && !row.cloud {
+                    continue;
+                }
+                let Ok(Some((_, keyed))) = identify(key, &path) else { continue };
+                let first_look = row.keyed.is_none() && size == row.size;
+                if row.keyed.as_deref() == Some(keyed.as_str()) || first_look {
+                    // Touched, found again, or first seen by this check: note it.
+                    let conn = open(app)?;
+                    conn.execute(
+                        "UPDATE documents SET byte_size = ?2, mtime = ?3, content_hash = ?4, offline_since = NULL, online_only = NULL WHERE doc_id = ?1",
+                        params![row.doc_id, size, mtime, keyed],
+                    )
+                    .map_err(|e| e.to_string())?;
+                    if first_look && row.meta.content_id.is_none() {
+                        if let Ok(Some(id)) = links::content_id(&path) {
+                            let mut meta = row.meta.clone();
+                            meta.content_id = Some(id);
+                            meta.anchor = links::anchor_among(&path, &known_places);
+                            let json = serde_json::to_vec(&meta).map_err(|e| e.to_string())?;
+                            conn.execute("UPDATE documents SET meta_enc = ?2 WHERE doc_id = ?1", params![row.doc_id, enc(key, &json)?])
+                                .map_err(|e| e.to_string())?;
+                        }
+                    }
+                    continue;
+                }
+                match take_in(app, llm_state, key, &row.doc_id, &path).await {
+                    Ok(_) => report.reread += 1,
+                    Err(e) if e == "stopped" => break,
+                    Err(e) => report.failed.push(ImportFailure { file: row.meta.filename.clone(), reason: e }),
+                }
+            }
+            links::FileState::OnlineOnly => {
+                if !row.cloud {
+                    let conn = open(app)?;
+                    conn.execute("UPDATE documents SET online_only = 1, offline_since = NULL WHERE doc_id = ?1", params![row.doc_id])
+                        .map_err(|e| e.to_string())?;
+                    report.online_only += 1;
+                }
+            }
+            links::FileState::Missing => {
+                // The same place on THIS machine (another user name, a moved
+                // Documents folder): only a file with the SAME words counts.
+                let elsewhere = row
+                    .meta
+                    .anchor
+                    .as_ref()
+                    .and_then(|a| links::resolve_among(a, &known_places))
+                    .filter(|p| p != &path)
+                    .filter(|p| match (&row.meta.content_id, links::content_id(p)) {
+                        (Some(want), Ok(Some(got))) => want == &got,
+                        _ => false,
+                    });
+                if let Some(p) = elsewhere {
+                    if take_in(app, llm_state, key, &row.doc_id, &p).await.is_ok() {
+                        report.relinked += 1;
+                        continue;
+                    }
+                }
+                if !row.offline {
+                    let conn = open(app)?;
+                    conn.execute("UPDATE documents SET offline_since = ?2, online_only = NULL WHERE doc_id = ?1", params![row.doc_id, now_secs()])
+                        .map_err(|e| e.to_string())?;
+                    report.offline += 1;
+                }
+            }
+        }
+    }
+    if report.changed() {
+        log::info!(
+            "[corpus] linked documents: {} read again, {} found elsewhere, {} offline, {} online only, {} failed",
+            report.reread, report.relinked, report.offline, report.online_only, report.failed.len()
+        );
+    }
+    Ok(report)
 }
 
 // ---------------------------------------------------------------- commands
@@ -551,6 +884,107 @@ pub async fn corpus_folder_sync(
     folder_id: Option<String>,
 ) -> Result<Vec<SyncReport>, String> {
     sync_folders(&app, &hc_state, &llm_state, folder_id).await
+}
+
+/// Point ONE document at a file the person chose. A file with the same words
+/// only updates where the document lives; a different file is read in its
+/// place (same document: its grants and Mine flag stay).
+#[tauri::command]
+pub async fn corpus_relink_one(
+    app: AppHandle,
+    hc_state: State<'_, Arc<HolochainState>>,
+    llm_state: State<'_, crate::llm::LLMState>,
+    doc_id: String,
+    path: String,
+) -> Result<bool, String> {
+    let key = data_key(&hc_state)?;
+    SYNC_CANCEL.store(false, Ordering::SeqCst);
+    take_in(&app, &llm_state, &key, &doc_id, Path::new(&path)).await
+}
+
+/// Read ONE document again from where it lives (a card gone stale, or a
+/// change the periodic look has not reached yet).
+#[tauri::command]
+pub async fn corpus_read_again(
+    app: AppHandle,
+    hc_state: State<'_, Arc<HolochainState>>,
+    llm_state: State<'_, crate::llm::LLMState>,
+    doc_id: String,
+) -> Result<(), String> {
+    let key = data_key(&hc_state)?;
+    let path = {
+        let conn = open(&app)?;
+        let mut meta = document_meta(&conn, &key, &doc_id)?.ok_or("this document is no longer in the library")?;
+        // Forget the identity so the same words are still read again.
+        let p = meta.path.clone().ok_or("this document has no file to read again")?;
+        meta.content_id = None;
+        let json = serde_json::to_vec(&meta).map_err(|e| e.to_string())?;
+        conn.execute("UPDATE documents SET meta_enc = ?2 WHERE doc_id = ?1", params![doc_id, enc(&key, &json)?])
+            .map_err(|e| e.to_string())?;
+        p
+    };
+    // Asked to read a file that is gone: that IS the news. The document goes
+    // offline now (its row then offers Relink) instead of waiting for the
+    // periodic look to notice.
+    if links::file_state(Path::new(&path)) == links::FileState::Missing {
+        let conn = open(&app)?;
+        conn.execute(
+            "UPDATE documents SET offline_since = COALESCE(offline_since, ?2), online_only = NULL WHERE doc_id = ?1",
+            params![doc_id, now_secs()],
+        )
+        .map_err(|e| e.to_string())?;
+        return Err("is no longer where it was - relink it to where it is now.".into());
+    }
+    SYNC_CANCEL.store(false, Ordering::SeqCst);
+    take_in(&app, &llm_state, &key, &doc_id, Path::new(&path)).await.map(|_| ())
+}
+
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct LocateReport {
+    pub relinked: usize,
+    pub still_missing: usize,
+    pub failed: Vec<ImportFailure>,
+}
+
+/// A whole folder moved: every document that needs its file and was under
+/// `old_dir` is looked for at the same place under `new_dir`.
+#[tauri::command]
+pub async fn corpus_locate(
+    app: AppHandle,
+    hc_state: State<'_, Arc<HolochainState>>,
+    llm_state: State<'_, crate::llm::LLMState>,
+    old_dir: String,
+    new_dir: String,
+) -> Result<LocateReport, String> {
+    let key = data_key(&hc_state)?;
+    SYNC_CANCEL.store(false, Ordering::SeqCst);
+    let wanted: Vec<(String, String, PathBuf)> = {
+        let conn = open(&app)?;
+        let mut stmt = conn
+            .prepare("SELECT doc_id, meta_enc FROM documents WHERE offline_since IS NOT NULL OR chunk_count = 0")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))).map_err(|e| e.to_string())?;
+        rows.flatten()
+            .filter_map(|(doc_id, blob)| {
+                let meta: DocMeta = serde_json::from_slice(&dec(&key, &blob).ok()?).ok()?;
+                let old = meta.path?;
+                let rest = Path::new(&old).strip_prefix(&old_dir).ok()?.to_path_buf();
+                Some((doc_id, meta.filename, Path::new(&new_dir).join(rest)))
+            })
+            .collect()
+    };
+    let mut report = LocateReport::default();
+    for (doc_id, filename, candidate) in wanted {
+        if !matches!(links::file_state(&candidate), links::FileState::Present { .. }) {
+            report.still_missing += 1;
+            continue;
+        }
+        match take_in(&app, &llm_state, &key, &doc_id, &candidate).await {
+            Ok(_) => report.relinked += 1,
+            Err(e) => report.failed.push(ImportFailure { file: filename, reason: e }),
+        }
+    }
+    Ok(report)
 }
 
 #[tauri::command]
@@ -647,6 +1081,42 @@ mod tests {
         assert_eq!(folders[0].meta.ai_ids, vec!["ai-1".to_string(), "ai-2".to_string()]);
         assert_eq!(folders[0].meta.kind.as_deref(), Some("obsidian"));
         assert!(!folders[0].reachable);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_note_the_folder_found_leaves_and_a_document_you_gave_goes_offline() {
+        let dir = std::env::temp_dir().join(format!("yoai-retire-{}", new_doc_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut conn = open_at(&dir.join("corpus.sqlite")).unwrap();
+        let key = [3u8; 32];
+        let mut add = |name: &str, origin: Option<&str>| {
+            let meta = DocMeta { filename: name.into(), path: Some(format!("/v/{name}")), ..Default::default() };
+            let rec = insert_document(&mut conn, &key, &meta, 10, &["text".to_string()], &[vec![0.1f32, 0.2]], "ai-1").unwrap();
+            if let Some(o) = origin {
+                conn.execute("UPDATE documents SET origin = ?2 WHERE doc_id = ?1", params![rec.doc_id, o]).unwrap();
+            }
+            rec.doc_id
+        };
+        let found = add("found.md", Some("folder"));
+        let given = add("given.md", Some("given"));
+        let older = add("older.md", None);
+
+        assert!(retire(&conn, &found).unwrap(), "the folder's own find leaves");
+        assert!(!retire(&conn, &given).unwrap());
+        assert!(!retire(&conn, &older).unwrap(), "unknown origin = the careful reading");
+
+        let left: i64 = conn.query_row("SELECT COUNT(*) FROM documents", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, 2);
+        let (offline, pieces): (Option<i64>, i64) = conn
+            .query_row("SELECT offline_since, chunk_count FROM documents WHERE doc_id = ?1", params![given], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert!(offline.is_some());
+        assert_eq!(pieces, 1, "an offline document keeps its text");
+        let first = offline;
+        retire(&conn, &given).unwrap();
+        let again: Option<i64> = conn.query_row("SELECT offline_since FROM documents WHERE doc_id = ?1", params![given], |r| r.get(0)).unwrap();
+        assert_eq!(again, first, "offline since the FIRST time it was missed");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

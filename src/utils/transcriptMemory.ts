@@ -51,6 +51,16 @@ export interface KnowledgeDocument {
   /** From the file's own metadata, when it carries any. */
   author?: string;
   title?: string;
+  /** Where its file was last seen (absent for a document kept as a copy). */
+  path?: string;
+  /** Its file cannot be found (seconds since 1970). It still has its text. */
+  offlineSince?: number;
+  /** Its file is named here but kept in a cloud drive. */
+  onlineOnly?: boolean;
+  /** When its file last changed and was read again. */
+  rereadAt?: number;
+  /** Part of a folder kept in sync. */
+  inFolder?: boolean;
 }
 
 /** Cap EPISODIC entries per AI (drop oldest) so the per-AI blob can't grow
@@ -514,6 +524,11 @@ export async function listKnowledgeDocuments(aiId: string): Promise<KnowledgeDoc
     summary: d.meta.summary,
     author: d.meta.author,
     title: d.meta.title,
+    path: d.meta.path,
+    offlineSince: d.link?.offline_since ?? undefined,
+    onlineOnly: d.link?.online_only || undefined,
+    rereadAt: d.link?.reread_at ?? undefined,
+    inFolder: d.link?.in_folder || undefined,
   }));
 }
 

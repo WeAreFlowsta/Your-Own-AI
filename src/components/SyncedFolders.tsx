@@ -34,7 +34,16 @@ function said(r: FolderSyncReport): string {
   ].filter(Boolean);
   const base = parts.length ? parts.join(', ') : 'nothing new';
   const failed = r.failed.length ? ` - ${r.failed.length} could not be read` : '';
-  return `${leaf(r.folder)}: ${base}${failed}${r.cancelled ? ' (stopped)' : ''}.`;
+  // Said, never silent: what was left alone and why.
+  const cloud = r.online_only
+    ? ` ${r.online_only} ${r.online_only === 1 ? 'file is' : 'files are'} online only (kept in a cloud drive) and ${r.online_only === 1 ? 'was' : 'were'} not read.`
+    : '';
+  // Neutral on purpose: a document from before origins were kept is also
+  // held back, and nobody "added it themselves".
+  const offline = r.offline
+    ? ` ${r.offline} ${r.offline === 1 ? "document's file is" : "documents' files are"} gone - kept, and still answering. Relink or remove ${r.offline === 1 ? 'it' : 'them'} in the list below.`
+    : '';
+  return `${leaf(r.folder)}: ${base}${failed}${r.cancelled ? ' (stopped)' : ''}.${cloud}${offline}`;
 }
 
 /**

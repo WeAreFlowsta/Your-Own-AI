@@ -4,7 +4,7 @@ import LiquidMetalButton from './LiquidMetalButton';
 import { MemoryComponentOffer } from './MemoryComponentOffer';
 import { SyncedFolders } from './SyncedFolders';
 import { KnowledgeDocumentRow } from './KnowledgeDocumentRow';
-import { LibraryRereadNotice } from './LibraryRereadNotice';
+import { DocumentsNeedingFiles } from './DocumentsNeedingFiles';
 import { useFileDrop } from '../hooks/useFileDrop';
 import { isServer } from '@builder.io/qwik/build';
 import { useCorpusProgress, progressText } from '../hooks/useCorpusProgress';
@@ -192,7 +192,7 @@ export const KnowledgeSection = component$<KnowledgeSectionProps>((props) => {
 
       {docs.length > 0 && (
         <div class="mt-3">
-          <LibraryRereadNotice
+          <DocumentsNeedingFiles
             aiId={props.aiId}
             docs={docs}
             onDone$={async () => {
@@ -204,7 +204,15 @@ export const KnowledgeSection = component$<KnowledgeSectionProps>((props) => {
       {docs.length > 0 && (
         <ul class="mt-3 space-y-1.5">
           {docs.map((doc) => (
-            <KnowledgeDocumentRow key={doc.docId} doc={doc} onToggleMine$={toggleMine} onRemove$={removeDoc} />
+            <KnowledgeDocumentRow
+              key={doc.docId}
+              doc={doc}
+              onToggleMine$={toggleMine}
+              onRemove$={removeDoc}
+              onChanged$={$(async () => {
+                props.store.knowledgeDocs = await listKnowledgeDocuments(props.aiId);
+              })}
+            />
           ))}
         </ul>
       )}

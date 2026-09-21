@@ -26,6 +26,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 pub mod sync;
 /// Markdown from a notes app, made ready for the splitter.
 mod notes;
+/// A document's link to its file: state on disk, identity, anchor.
+pub mod links;
 
 /// Target passage size. Larger than the old 600 so book prose keeps its
 /// sense; well under the embed server's 1400-character input cap.
@@ -66,6 +68,14 @@ pub struct DocMeta {
     /// Written by the person (guessed from metadata, flippable).
     #[serde(default)]
     pub mine: bool,
+    /// The file's identity: BLAKE3 of its bytes (links.rs). "The same file"
+    /// is decided by this, never by the path's spelling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_id: Option<String>,
+    /// Where the file lives in terms every computer shares
+    /// ("documents" + "Research/paper.pdf").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<links::Anchor>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -77,6 +87,33 @@ pub struct DocRecord {
     pub meta: DocMeta,
     /// AIs granted this document.
     pub ai_ids: Vec<String>,
+    /// How its link to the file stands. Read from the store; never trusted
+    /// from a backup (a restored record is simply "needs its file").
+    #[serde(default, skip_serializing_if = "DocLink::is_default")]
+    pub link: DocLink,
+}
+
+/// The state of a document's link to its file (links.rs, sync.rs).
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct DocLink {
+    /// Set while the file cannot be found. The document keeps its text.
+    #[serde(default)]
+    pub offline_since: Option<i64>,
+    /// The file is named here but kept in a cloud drive.
+    #[serde(default)]
+    pub online_only: bool,
+    /// When its file last changed and was read again.
+    #[serde(default)]
+    pub reread_at: Option<i64>,
+    /// It belongs to a folder kept in sync.
+    #[serde(default)]
+    pub in_folder: bool,
+}
+
+impl DocLink {
+    fn is_default(&self) -> bool {
+        *self == DocLink::default()
+    }
 }
 
 #[derive(Serialize, Clone, Debug, Default)]
@@ -367,6 +404,8 @@ fn db_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn open_at(path: &Path) -> Result<Connection, String> {
     let conn = Connection::open(path).map_err(|e| format!("corpus db: {e}"))?;
+    // A second writer waits its turn instead of failing the whole job.
+    let _ = conn.busy_timeout(std::time::Duration::from_secs(5));
     conn.execute_batch(
         "PRAGMA journal_mode = WAL;
          CREATE TABLE IF NOT EXISTS documents (
@@ -671,10 +710,28 @@ fn is_document(path: &Path) -> bool {
     DOC_EXTENSIONS.contains(&ext_of(path).as_str())
 }
 
+/// What a walk found.
+#[derive(Debug, Default)]
+pub struct Walked {
+    /// Documents that are on this computer and can be read.
+    pub files: Vec<PathBuf>,
+    /// Documents that are here in name only: their data is in a cloud
+    /// (OneDrive, iCloud, Dropbox). Never read - reading downloads them - and
+    /// never mistaken for deleted. Reported under their REAL name.
+    pub online_only: Vec<PathBuf>,
+}
+
 /// Every document under the given paths: files as they are, folders walked
 /// (bounded depth, hidden and build folders skipped). Order is stable.
 pub fn walk(paths: &[String]) -> Vec<PathBuf> {
-    fn rec(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+    walk_found(paths).files
+}
+
+/// The walk, telling apart what is here from what is only named here. Looks
+/// at attributes and never at data; a cloud-only FOLDER is not listed at all
+/// (on macOS listing it is what downloads it).
+pub fn walk_found(paths: &[String]) -> Walked {
+    fn rec(dir: &Path, depth: usize, out: &mut Walked) {
         if depth > MAX_DEPTH {
             return;
         }
@@ -683,30 +740,47 @@ pub fn walk(paths: &[String]) -> Vec<PathBuf> {
         entries.sort();
         for p in entries {
             let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            // An evicted iCloud file (macOS 13 and earlier) leaves a hidden
+            // stub `.<name>.icloud`: the document is online only, not gone.
+            if links::is_icloud_stub(name) {
+                let real = dir.join(&name[1..name.len() - ".icloud".len()]);
+                if is_document(&real) {
+                    out.online_only.push(real);
+                }
+                continue;
+            }
             if name.starts_with('.') {
                 continue;
             }
             // A symlink is never followed: a link to the home directory
             // inside a dropped folder must not import the home directory.
-            if std::fs::symlink_metadata(&p).map(|m| m.file_type().is_symlink()).unwrap_or(true) {
+            let Ok(meta) = std::fs::symlink_metadata(&p) else { continue };
+            if meta.file_type().is_symlink() {
                 continue;
             }
-            if p.is_dir() {
-                if !SKIP_DIRS.contains(&name) {
+            let cloud = links::is_online_only(&meta, name);
+            if meta.is_dir() {
+                if !cloud && !SKIP_DIRS.contains(&name) {
                     rec(&p, depth + 1, out);
                 }
             } else if is_document(&p) {
-                out.push(p);
+                if cloud {
+                    out.online_only.push(p);
+                } else {
+                    out.files.push(p);
+                }
             }
         }
     }
-    let mut out = Vec::new();
+    links::never_download_on_this_thread();
+    let mut out = Walked::default();
     for s in paths {
         let p = PathBuf::from(s);
-        if p.is_dir() {
-            rec(&p, 0, &mut out);
-        } else if p.is_file() {
-            out.push(p);
+        match links::file_state(&p) {
+            links::FileState::OnlineOnly => out.online_only.push(p),
+            _ if p.is_dir() => rec(&p, 0, &mut out),
+            links::FileState::Present { .. } => out.files.push(p),
+            _ => {}
         }
     }
     out
@@ -909,6 +983,7 @@ fn insert_document(
         chunk_count: passages.len() as i64,
         meta: meta.clone(),
         ai_ids: vec![ai_id.to_string()],
+        link: DocLink::default(),
     })
 }
 
@@ -939,9 +1014,17 @@ pub async fn corpus_import(
     CANCEL.store(false, Ordering::SeqCst);
     let names = names.unwrap_or_default();
     let key = data_key(&hc_state)?;
-    let files = walk(&paths);
+    let found = walk_found(&paths);
+    let files = found.files;
     let total = files.len();
     let mut report = ImportReport::default();
+    // Named here, stored in a cloud: reading one would download it, so it is
+    // said plainly instead.
+    for p in &found.online_only {
+        let file = p.file_name().and_then(|s| s.to_str()).unwrap_or("document").to_string();
+        report.failed.push(ImportFailure { file, reason: "is online only - it is kept in a cloud drive; make it available on this computer first".into() });
+    }
+    let known = links::known_folders(&app);
     let mut conn = open(&app)?;
     // Records restored from a backup without their text: a dropped file
     // that matches one goes back into that record (its card, Mine flag and
@@ -1021,9 +1104,23 @@ pub async fn corpus_import(
         let byte_size = if size >= 0 { size } else { text.len() as i64 };
         let info = doc_info(path);
         let mine = info.author.as_deref().map(|a| looks_mine(a, &names)).unwrap_or(false);
-        let meta = DocMeta { filename: name.clone(), path: Some(path_str), author: info.author, title: info.title, mine, ..Default::default() };
+        let meta = DocMeta {
+            filename: name.clone(),
+            path: Some(path_str),
+            author: info.author,
+            title: info.title,
+            mine,
+            content_id: links::content_id(path).ok().flatten(),
+            anchor: links::anchor_among(path, &known),
+            ..Default::default()
+        };
         match insert_document(&mut conn, &key, &meta, byte_size, &passages, &vectors, &ai_id) {
-            Ok(rec) => report.added.push(rec),
+            Ok(rec) => {
+                // Given by the person's own hand: linked to its file, and
+                // never removed without them (sync.rs, rule 4).
+                let _ = sync::mark_origin(&conn, &rec.doc_id, "given", path);
+                report.added.push(rec)
+            }
             Err(e) => report.failed.push(ImportFailure { file: name, reason: e }),
         }
     }
@@ -1363,7 +1460,7 @@ pub fn corpus_import_prepared(
 
 fn read_records(conn: &Connection, key: &[u8; 32], ai_id: Option<&str>) -> Result<Vec<DocRecord>, String> {
     let mut stmt = conn
-        .prepare("SELECT doc_id, added_at, byte_size, chunk_count, meta_enc FROM documents ORDER BY added_at DESC")
+        .prepare("SELECT doc_id, added_at, byte_size, chunk_count, meta_enc, offline_since, online_only, reread_at, folder_id FROM documents ORDER BY added_at DESC")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |r| {
@@ -1373,12 +1470,18 @@ fn read_records(conn: &Connection, key: &[u8; 32], ai_id: Option<&str>) -> Resul
                 r.get::<_, i64>(2)?,
                 r.get::<_, i64>(3)?,
                 r.get::<_, Vec<u8>>(4)?,
+                DocLink {
+                    offline_since: r.get::<_, Option<i64>>(5)?,
+                    online_only: r.get::<_, Option<i64>>(6)?.unwrap_or(0) != 0,
+                    reread_at: r.get::<_, Option<i64>>(7)?,
+                    in_folder: r.get::<_, Option<String>>(8)?.is_some(),
+                },
             ))
         })
         .map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     for row in rows {
-        let (doc_id, added_at, byte_size, chunk_count, meta_enc) = row.map_err(|e| e.to_string())?;
+        let (doc_id, added_at, byte_size, chunk_count, meta_enc, link) = row.map_err(|e| e.to_string())?;
         let meta: DocMeta = serde_json::from_slice(&dec(key, &meta_enc)?).map_err(|e| e.to_string())?;
         let mut g = conn.prepare("SELECT ai_id FROM grants WHERE doc_id = ?1").map_err(|e| e.to_string())?;
         let ai_ids: Vec<String> = g
@@ -1391,7 +1494,7 @@ fn read_records(conn: &Connection, key: &[u8; 32], ai_id: Option<&str>) -> Resul
                 continue;
             }
         }
-        out.push(DocRecord { doc_id, added_at, byte_size, chunk_count, meta, ai_ids });
+        out.push(DocRecord { doc_id, added_at, byte_size, chunk_count, meta, ai_ids, link });
     }
     Ok(out)
 }

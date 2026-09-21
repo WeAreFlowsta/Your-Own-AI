@@ -22,6 +22,8 @@ export interface DocRecord {
   chunk_count: number;
   meta: DocMeta;
   ai_ids: string[];
+  /** How its link to the file stands (absent = linked, nothing to say). */
+  link?: { offline_since?: number | null; online_only?: boolean; reread_at?: number | null; in_folder?: boolean };
 }
 
 export interface ImportReport {
@@ -74,7 +76,7 @@ export function corpusRelink(): Promise<RereadReport> {
   return invoke<RereadReport>('corpus_relink');
 }
 
-/** Read restored records' files again from the files or folders given (LibraryRereadNotice). */
+/** Read restored records' files again from the files or folders given (DocumentsNeedingFiles). */
 export function corpusReread(paths: string[]): Promise<RereadReport> {
   return invoke<RereadReport>('corpus_reread', { paths });
 }
@@ -195,6 +197,10 @@ export interface FolderSyncReport {
   updated: number;
   removed: number;
   unchanged: number;
+  /** Files kept in a cloud (OneDrive, iCloud, Dropbox): not read, not removed. */
+  online_only: number;
+  /** Documents you gave the AI yourself whose file is gone: kept, marked offline. */
+  offline: number;
   failed: { file: string; reason: string }[];
   unreachable: boolean;
   cancelled: boolean;
@@ -221,4 +227,28 @@ export function corpusFolderSync(folderId?: string): Promise<FolderSyncReport[]>
 
 export function corpusFolderSyncCancel(): Promise<void> {
   return invoke<void>('corpus_folder_sync_cancel');
+}
+
+// ---- one document and its file (src-tauri/src/corpus/sync.rs)
+
+/** Point one document at a file. Resolves true when the file was read in
+ *  (different words), false when only its location was updated (same words). */
+export function corpusRelinkOne(docId: string, path: string): Promise<boolean> {
+  return invoke<boolean>('corpus_relink_one', { docId, path });
+}
+
+/** Read one document again from where it lives. */
+export function corpusReadAgain(docId: string): Promise<void> {
+  return invoke<void>('corpus_read_again', { docId });
+}
+
+export interface LocateReport {
+  relinked: number;
+  still_missing: number;
+  failed: { file: string; reason: string }[];
+}
+
+/** A whole folder moved: documents that were under `oldDir` are looked for under `newDir`. */
+export function corpusLocate(oldDir: string, newDir: string): Promise<LocateReport> {
+  return invoke<LocateReport>('corpus_locate', { oldDir, newDir });
 }

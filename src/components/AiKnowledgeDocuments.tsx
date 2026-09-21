@@ -3,7 +3,7 @@ import { SyncedFolders } from './SyncedFolders';
 import { readThroughWarmup } from '../utils/recordsWarmup';
 import { LuFileText, LuPlus, LuLoader2, LuUpload } from '@qwikest/icons/lucide';
 import { KnowledgeDocumentRow } from './KnowledgeDocumentRow';
-import { LibraryRereadNotice } from './LibraryRereadNotice';
+import { DocumentsNeedingFiles } from './DocumentsNeedingFiles';
 import { isServer } from '@builder.io/qwik/build';
 import { useCorpusProgress, useLibraryChanged, progressText } from '../hooks/useCorpusProgress';
 import LiquidMetalButton from './LiquidMetalButton';
@@ -227,7 +227,7 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
         </p>
       ) : (
         <>
-        <LibraryRereadNotice
+        <DocumentsNeedingFiles
           aiId={props.aiId}
           docs={docs.value}
           onDone$={async () => {
@@ -236,7 +236,15 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
         />
         <ul class="space-y-1.5">
           {docs.value.map((doc) => (
-            <KnowledgeDocumentRow key={doc.docId} doc={doc} onToggleMine$={toggleMine} onRemove$={removeDoc} />
+            <KnowledgeDocumentRow
+              key={doc.docId}
+              doc={doc}
+              onToggleMine$={toggleMine}
+              onRemove$={removeDoc}
+              onChanged$={$(async () => {
+                docs.value = await listKnowledgeDocuments(props.aiId);
+              })}
+            />
           ))}
         </ul>
         </>
