@@ -1792,7 +1792,7 @@ export default component$(() => {
                   - checks the app's claims about this computer against what
                   really happens. It loads every downloaded model and checks
                   that each one loads at the promised size, answers in plain
-                  words, and respects the generation settings; then it checks
+                  words, and respects your reply style settings; then it checks
                   the pieces around them - the helper and memory components,
                   the routing decisions for your own models, and whether a
                   model's thinking switch is honored. Routing is decided

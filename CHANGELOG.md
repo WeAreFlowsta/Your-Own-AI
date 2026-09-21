@@ -28,6 +28,16 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   replies, the memory portrait and document cards. See *Models*.
 
 ### Models
+- "Fine-tune" now means one thing: how a model runs on this computer -
+  speed, context, memory. The sliders for how replies are written
+  (creativity, word variety, rare-word floor, repetition brake) moved out
+  of "Fine-tune this computer" into their own section in Settings, "Reply
+  style for every AI", and the same sliders in an AI's form are now
+  "Reply style for this AI". Nothing you had set changes.
+- The helper models dropdown in Settings now follows the light and dark
+  theme like every other dropdown. When the helper models are not
+  installed, that spot offers the download instead of a choice with
+  nothing to place.
 - The Offline Models page grades its rows and picks again once a
   downloaded model has finished loading, so a new download's row and its
   card on Best for this computer are right without a page refresh. The
@@ -169,6 +179,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   filled in.
 
 ### Your documents
+- Adding documents without the small helper download now says so where
+  you add them, with the download right there, even if you dismissed the
+  offer on the home page. That offer is also shorter and says plainly what
+  it is for: remembering what you tell your AIs, and reading documents.
 - Keep a folder in sync. Drop a folder on an AI's documents, or press
   Keep a folder in sync - your Logseq or Obsidian notes, or any folder of
   documents - and it stays current: new files are

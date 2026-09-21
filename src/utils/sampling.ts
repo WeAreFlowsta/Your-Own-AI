@@ -58,7 +58,7 @@ export function samplingAutoValue(field: keyof SamplingOverrides): number {
 /** Placeholder text for an empty field: names the layer that answers. */
 export function samplingPlaceholder(field: keyof SamplingOverrides): string {
   const g = globalSampling()[field];
-  if (typeof g === "number") return `Global (${g})`;
+  if (typeof g === "number") return `Every AI (${g})`;
   return `Model default (${SAMPLING_DEFAULTS[field]})`;
 }
 

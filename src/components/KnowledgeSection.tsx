@@ -1,4 +1,5 @@
 import { component$, $, useSignal, useVisibleTask$, type QRL, useTask$ } from '@builder.io/qwik';
+import HelperModelOfferCallout from './HelperModelOfferCallout';
 import { LuBookOpen, LuLoader2, LuPlus, LuUpload } from '@qwikest/icons/lucide';
 import LiquidMetalButton from './LiquidMetalButton';
 import { MemoryComponentOffer } from './MemoryComponentOffer';
@@ -127,6 +128,7 @@ export const KnowledgeSection = component$<KnowledgeSectionProps>((props) => {
 
   return (
     <div>
+      <HelperModelOfferCallout needFor="documents" />
       <div class="flex items-center gap-2 mb-1">
         <LuBookOpen class="w-4 h-4 text-[var(--text-secondary)]" />
         <h3 class="text-sm font-medium text-[var(--text-secondary)]">Knowledge</h3>

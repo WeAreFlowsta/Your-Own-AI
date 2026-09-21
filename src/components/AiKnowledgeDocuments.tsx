@@ -1,4 +1,5 @@
 import { component$, $, useSignal, useVisibleTask$, useTask$ } from '@builder.io/qwik';
+import HelperModelOfferCallout from './HelperModelOfferCallout';
 import { SyncedFolders } from './SyncedFolders';
 import { readThroughWarmup } from '../utils/recordsWarmup';
 import { LuFileText, LuPlus, LuLoader2, LuUpload } from '@qwikest/icons/lucide';
@@ -161,6 +162,7 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
 
   return (
     <div>
+      <HelperModelOfferCallout needFor="documents" />
       {/* Section header — same shape as the sibling sections on this tab. */}
       <div class="flex items-center justify-between mb-3">
         <p class="text-sm text-[var(--text-secondary)] flex items-center gap-1.5">

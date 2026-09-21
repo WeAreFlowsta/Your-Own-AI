@@ -588,7 +588,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
                   class="px-3 py-1 text-xs flex items-center"
                   title={
                     rememberState.value === 'error'
-                      ? 'Could not save - the memory model may still be downloading (Settings - Components)'
+                      ? 'Could not save - remembering needs the small helper download (Settings - Components)'
                       : rememberState.value === 'saved'
                         ? 'Remembered - click to forget it again'
                         : rememberState.value === 'saved-folder'

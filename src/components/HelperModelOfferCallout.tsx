@@ -16,7 +16,18 @@ const HELPER_FILES = [UTILITY_MODEL.filename, EMBEDDING_MODEL.filename];
 
 export const HELPER_OFFER_TIP_ID = 'home-tip-helper-model';
 
-export default component$(() => {
+export interface HelperModelOfferProps {
+  /**
+   * Where the person has just asked for something the helper does. Set, the
+   * offer shows whenever the files are missing - no launch count, no shared
+   * slot, and no "Got it": a dismissal on the home page was about the home
+   * page, and here they are adding the documents it reads. Unset = the home
+   * page offer (rules in utils/homeOffers.ts).
+   */
+  needFor?: 'documents' | 'placement';
+}
+
+export default component$<HelperModelOfferProps>(({ needFor }) => {
   const eligible = useSignal(false);
   const downloading = useSignal(false);
   const percent = useSignal(0);
@@ -26,9 +37,9 @@ export default component$(() => {
 
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async ({ cleanup }) => {
-    eligible.value = await helperOfferEligible();
-    if (!eligible.value) return;
     const missing = await helperFilesMissing();
+    eligible.value = needFor ? missing.length > 0 : await helperOfferEligible();
+    if (!eligible.value) return;
     totalGb.value = Math.round(missing.reduce((n, f) => n + f.size, 0) * 10) / 10;
     // A download started on an earlier visit is still running - reattach.
     for (const f of HELPER_FILES) {
@@ -84,21 +95,28 @@ export default component$(() => {
   if (!eligible.value) return null;
 
   return (
-    <Callout intent="info" title="Give your AIs a small helper" id={HELPER_OFFER_TIP_ID} class="mt-10 text-left">
+    <Callout
+      intent="info"
+      title={needFor === 'documents' ? 'Documents need a small download' : needFor === 'placement' ? 'The helper models are not installed yet' : 'Give your AIs a memory'}
+      id={needFor ? undefined : HELPER_OFFER_TIP_ID}
+      class={needFor === 'documents' ? 'mb-4 text-left' : needFor ? 'text-left' : 'mt-10 text-left'}
+    >
       {done.value ? (
         <p>
-          Installed. Your AIs now remember what you tell them, recall earlier conversations, pick the
-          right model for each question, and read the documents you add - all privately, on this
-          computer. Nothing else to do.
+          {needFor === 'documents'
+            ? 'Installed. Add your documents now.'
+            : needFor === 'placement'
+              ? 'Installed. Where they run can be chosen here the next time you open Settings.'
+              : 'Installed. Your AIs now remember what you tell them and can read documents you add. Nothing else to do.'}
         </p>
       ) : (
         <>
           <p class="mb-2.5">
-            An optional {totalGb.value || UTILITY_MODEL.size} GB helper that works quietly in the background
-            so your AIs remember the things you tell them, recall earlier conversations, pick the right
-            model for each question, and make sense of documents you add. It runs privately on this
-            computer and nothing it reads leaves it, even when you chat with online models, and you can
-            remove it anytime in Settings.
+            {needFor === 'placement'
+              ? `A small optional download (${totalGb.value || UTILITY_MODEL.size} GB) so your AIs remember what you tell them and can read documents you add. It runs on this computer only.`
+              : needFor
+              ? `Your AIs read documents with a small helper (${totalGb.value || UTILITY_MODEL.size} GB). It runs on this computer only. Download it once, then add your documents.`
+              : `A small optional download (${totalGb.value || UTILITY_MODEL.size} GB) so your AIs remember what you tell them and can read documents you add. It runs on this computer only. Remove it anytime in Settings.`}
           </p>
           {downloading.value ? (
             <div class="flex items-center gap-3">

@@ -13,6 +13,9 @@ import { LuCheck, LuCpu, LuDownload, LuLink, LuTrash2, LuZap } from "@qwikest/ic
 import LiquidMetalButton from "./LiquidMetalButton";
 import { SAMPLING_BOUNDS, SAMPLING_DEFAULTS, globalSampling, setGlobalSampling, type SamplingOverrides } from "../utils/sampling";
 import TuneSlider from "./TuneSlider";
+import ThemedSelect from "./ThemedSelect";
+import HelperModelOfferCallout from "./HelperModelOfferCallout";
+import { helperFilesMissing } from "../utils/homeOffers";
 
 interface ExternalEngineInfo {
   url: string | null;
@@ -269,6 +272,8 @@ export default component$(() => {
   // generation layer every AI inherits unless it sets its own.
   const threads = useSignal<number | null>(null);
   const helperPlacement = useSignal<"auto" | "cpu">("auto");
+  // null until checked: the dropdown shows unless the files are KNOWN missing.
+  const helpersInstalled = useSignal<boolean | null>(null);
   const maxThreads = useSignal(32);
   const gTemp = useSignal<number | null>(null);
   const gTopP = useSignal<number | null>(null);
@@ -283,6 +288,7 @@ export default component$(() => {
     gMinP.value = g.minP ?? null;
     gRepeat.value = g.repeatPenalty ?? null;
     maxThreads.value = Math.max(2, navigator.hardwareConcurrency || 32);
+    void helperFilesMissing().then((m) => { helpersInstalled.value = m.length === 0; }).catch(() => {});
     try {
       const { load } = await import("@tauri-apps/plugin-store");
       const store = await load("settings.json");
@@ -325,7 +331,7 @@ export default component$(() => {
       await invoke("tuning_set_engine_threads", {
         threads: threads.value != null && threads.value >= 1 ? Math.round(threads.value) : null,
       });
-      tuneNote.value = "Saved - generation settings reach new replies now; threads at the next model load.";
+      tuneNote.value = "Saved - reply style reaches new replies now; threads at the next model load.";
     } catch (e) {
       tuneNote.value = `Could not save: ${e}`;
     }
@@ -617,27 +623,35 @@ export default component$(() => {
       <div class="mt-6 pt-5 border-t border-[var(--border-subtle)]">
         <h3 class="font-semibold text-[var(--text-primary)] mb-1">Fine-tune this computer</h3>
         <p class="text-sm text-[var(--text-secondary)] mb-3">
-          For people who like to turn the dials. Empty fields mean the automatics decide (the value in
-          the box). Generation settings here are the layer every AI inherits unless it sets its own in
-          its form; each model also has its own Fine-tune on the Offline Models page.
+          How models run on this computer, for people who like to turn the dials. Empty fields mean the
+          automatics decide (the value in the box). Each model also has its own Fine-tune on the Offline
+          Models page: context size, expert offload, its speed-up file.
         </p>
         <div class="grid gap-4 sm:grid-cols-2">
           <div class="sm:col-span-2">
-            <label class="block text-xs text-[var(--text-muted)] mb-1" for="helper-placement">Helper models (next start)</label>
-            <select
-              id="helper-placement"
-              value={helperPlacement.value}
-              class="w-full rounded-lg border border-[var(--border-input)] bg-[var(--bg-input)] px-2 py-1.5 text-sm text-[var(--text-primary)]"
-              onChange$={(_, el) => setHelperPlacement(el.value)}
-            >
-              <option value="auto">Automatic - on the graphics card when there is room</option>
-              <option value="cpu">Keep on the processor</option>
-            </select>
-            <p class="mt-1 text-[11px] text-[var(--text-muted)]">
-              The memory model and the helper model run beside your chat model. Automatic puts
-              them on the card after a chat model loads when the measured room allows, and moves
-              them back to the processor before a model switch.
-            </p>
+            {helpersInstalled.value === false ? (
+              // Nothing to place yet: offer the download where a person who
+              // opens this section will see it.
+              <HelperModelOfferCallout needFor="placement" />
+            ) : (
+              <>
+                <label class="block text-xs text-[var(--text-muted)] mb-1" for="helper-placement">Helper models (next start)</label>
+                <ThemedSelect
+                  id="helper-placement"
+                  value={helperPlacement.value}
+                  options={[
+                    { value: 'auto', label: 'Automatic - on the graphics card when there is room' },
+                    { value: 'cpu', label: 'Keep on the processor' },
+                  ]}
+                  onChange$={(v) => setHelperPlacement(v)}
+                />
+                <p class="mt-1 text-[11px] text-[var(--text-muted)]">
+                  The memory model and the helper model run beside your chat model. Automatic puts
+                  them on the card after a chat model loads when the measured room allows, and moves
+                  them back to the processor before a model switch.
+                </p>
+              </>
+            )}
           </div>
           <div class="sm:col-span-2">
             <TuneSlider label="Worker threads (next model load)" value={threads.value}
@@ -645,6 +659,17 @@ export default component$(() => {
               min={1} max={maxThreads.value} step={1} unit="threads"
               onChange$={(v) => { threads.value = v; saveSoon(); }} />
           </div>
+        </div>
+      </div>
+      {/* Reply style: how replies are written, not how fast. The layer every AI
+          inherits; an AI's own sliders (its form) win for that AI. */}
+      <div class="mt-6 pt-5 border-t border-[var(--border-subtle)]">
+        <h3 class="font-semibold text-[var(--text-primary)] mb-1">Reply style for every AI</h3>
+        <p class="text-sm text-[var(--text-secondary)] mb-3">
+          How replies are written, not how fast. Every AI uses these unless it sets its own under
+          Reply style in its form. Empty means the model's own default.
+        </p>
+        <div class="grid gap-4 sm:grid-cols-2">
           <TuneSlider label="Creativity (temperature)" value={gTemp.value}
             autoLabel={`Model default (${SAMPLING_DEFAULTS.temperature})`} autoValue={SAMPLING_DEFAULTS.temperature}
             min={SAMPLING_BOUNDS.temperature.min} max={SAMPLING_BOUNDS.temperature.max} step={SAMPLING_BOUNDS.temperature.step}
