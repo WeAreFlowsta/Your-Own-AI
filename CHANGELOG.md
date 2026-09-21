@@ -124,6 +124,16 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   is a line with its own button like everything else. Tools you
   added yourself get the same Set up list, which replaces the separate
   settings window and the "Used by" list.
+- Logseq. A new tool card: your AI searches your Logseq graph, reads pages
+  and blocks, follows backlinks, runs queries, and - when you allow it -
+  creates and edits pages and blocks. It works with both kinds of graph,
+  files and the newer database, through Logseq's own HTTP API on this
+  computer, so Logseq has to be open with that server started; the card's
+  Set up list checks for it and says how. An API token is required. It
+  starts read only; one switch allows writing. For a graph kept as files,
+  a second switch also reads the folder into the documents of each AI
+  that uses the tool and keeps it in sync. Needs uv; the first session
+  fetches the tool itself (about 45 MB).
 - Obsidian. A new tool card: your AI searches your Obsidian vault, reads notes,
   lists folders and tags, and - when you allow it - writes and edits
   notes. It works on that folder directly, so there is no Obsidian plugin to
