@@ -79,8 +79,30 @@ pub struct McpServer {
     /// what "Check for updates" looks at. Never checked without a click.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fetch_dir: Option<String>,
+    /// Which of its settings mean "also keep this folder in the AI's
+    /// documents": the CARD says so, the app does not know key names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync: Option<SyncDecl>,
+    /// Checks the card declares for its Set up list (is something listening
+    /// on a local port, a named built-in helper). Opaque here: the page reads
+    /// them and calls the matching generic command.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<serde_json::Value>,
+    /// What the person should know about the tool's own download when there
+    /// is no fetch step (a launcher fetches it on first use).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub first_use: String,
     #[serde(default)]
     pub added_at: u64,
+}
+
+/// The two settings of a tool that together mean "keep this folder in sync".
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct SyncDecl {
+    /// The setting that holds the folder.
+    pub path: String,
+    /// The toggle that switches it on.
+    pub switch: String,
 }
 
 fn store_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -216,6 +238,58 @@ pub fn mcp_tools_signature(app: AppHandle, names: Vec<String>) -> String {
         h.update(t.reason.as_bytes());
     }
     hex::encode(&h.finalize()[..8])
+}
+
+/// Would this tool join a session started right now - and if not, why? The
+/// same decision a session makes (`entry_for`), without starting one, so a
+/// Set up list can end on an honest "Ready" or say exactly what is missing.
+#[derive(Serialize, Clone, Debug)]
+pub struct Readiness {
+    pub ready: bool,
+    pub reason: String,
+    /// Its program was found on this computer (stdio tools).
+    pub program_found: bool,
+    /// The tool's own download is on this computer (true for a tool that has
+    /// none). Adding a tool fetches nothing; its Set up list does.
+    pub fetched: bool,
+}
+
+#[tauri::command]
+pub fn mcp_readiness(app: AppHandle, name: String) -> Result<Readiness, String> {
+    let list = load(&app)?;
+    let Some(server) = list.iter().find(|s| s.name == name) else { return Err("no such tool".into()) };
+    let secrets = secrets_load(&app).unwrap_or_default();
+    let program_found = match (server.transport.as_str(), server.command.as_deref()) {
+        ("stdio", Some(cmd)) => which_sync(&expand_home(&app, cmd)).is_some(),
+        _ => true,
+    };
+    let fetched = match server.fetch_dir.as_deref() {
+        Some(dir) => PathBuf::from(expand_home(&app, dir)).is_dir(),
+        None => true,
+    };
+    Ok(match entry_for(server, &secrets) {
+        Err(reason) => Readiness { ready: false, reason, program_found, fetched },
+        Ok(_) if !fetched => Readiness { ready: false, reason: "the tool is not fetched yet".into(), program_found, fetched },
+        Ok(_) if !program_found => Readiness {
+            ready: false,
+            reason: format!("{} was not found on this computer", server.command.clone().unwrap_or_default()),
+            program_found,
+            fetched,
+        },
+        Ok(_) => Readiness { ready: true, reason: String::new(), program_found, fetched },
+    })
+}
+
+/// Is something listening on this port ON THIS COMPUTER? A card's declared
+/// check ("the program is open with its add-on loaded"). Loopback only - the
+/// port is the card's, the host never is.
+#[tauri::command]
+pub fn mcp_check_port(port: u16) -> bool {
+    std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        std::time::Duration::from_millis(400),
+    )
+    .is_ok()
 }
 
 /// A tool that was asked for but cannot join the session, and why - said on

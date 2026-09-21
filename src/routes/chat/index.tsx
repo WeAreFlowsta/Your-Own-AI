@@ -1664,7 +1664,15 @@ export default component$(() => {
               })}
               onToolsPermission$={setToolsPermission$}
               onToolsAction$={$(async (action: "install-projects" | "manage") => {
-                if (action === "manage") { await nav("/add-ons/mcp"); return; }
+                if (action === "manage") {
+                  // One tool on this AI: land on that tool's Set up list.
+                  const carried = selectedAi.value.aiConfig?.mcp ?? [];
+                  if (carried.length === 1) {
+                    try { sessionStorage.setItem("addOnFocusId", carried[0]); } catch { /* the page opens at its top */ }
+                  }
+                  await nav("/add-ons/mcp");
+                  return;
+                }
                 // The same consented download as the projects menu; the
                 // header's install listeners flip buildInstalled when done.
                 buildInstalling.value = true;

@@ -96,13 +96,31 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   downloaded, and then could not run.
 
 ### Tools
-- Obsidian. A new tool card: your AI searches your vault, reads notes,
+- One Set up list per tool. Each tool card now opens a single list of
+  everything that tool needs, in order: Your Own AI Build (the free add-on
+  that lets your AIs use tools), the programs the tool runs on, the tool
+  itself, its settings, which AI uses it, and any check the tool declares
+  (for Blender, its add-on). Each line shows where it stands and has its
+  own button - nothing downloads or installs until you press that line's
+  button - and the list ends on Ready, or on exactly what is still
+  missing. It also says when a tool is switched off in chat for the AI
+  that has it. The Tools page says so when Your Own AI Build is not
+  installed, and the tools chip in chat opens the tool's list directly.
+- The Tools page is laid out like the offline models page. Your Tools
+  comes first, as compact rows that each say in one line whether the tool
+  is ready or what it is waiting on; Available Tools follows, and a card
+  there has one button: Add. Adding downloads nothing - it puts the tool
+  in Your Tools and opens its Set up list, where the tool's own download
+  is a line with its own button like everything else. Tools you
+  added yourself get the same Set up list, which replaces the separate
+  settings window and the "Used by" list.
+- Obsidian. A new tool card: your AI searches your Obsidian vault, reads notes,
   lists folders and tags, and - when you allow it - writes and edits
-  notes. It works on the vault's folder, so there is no Obsidian plugin to
+  notes. It works on that folder directly, so there is no Obsidian plugin to
   install and Obsidian does not need to be open. It starts read only; one
   switch in its settings allows writing. A second switch, on by default,
-  also reads the vault into the documents of each AI that uses the tool
-  and keeps it in sync, so the AI remembers your notes in every chat, not
+  also reads those notes into the documents of each AI that uses the tool
+  and keeps them in sync, so the AI remembers your notes in every chat, not
   only while a tool is running. Needs Node.js 20 or newer; the first
   session fetches the tool itself (a few MB).
 - Sources shows the AI's own documents. When a reply was given passages
@@ -152,7 +170,7 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 
 ### Your documents
 - Keep a folder in sync. Drop a folder on an AI's documents, or press
-  Keep a folder in sync - a Logseq or Obsidian vault, or any folder of
+  Keep a folder in sync - your Logseq or Obsidian notes, or any folder of
   documents - and it stays current: new files are
   read, edited ones are read again (the document keeps its card and who
   can read it), deleted ones leave. Checked a few minutes after you open

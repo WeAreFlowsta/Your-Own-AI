@@ -4,6 +4,7 @@
  * and Settings > Storage (manage: only what is installed, remove).
  */
 import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
+import { useBuildInstall } from '../hooks/useBuildInstall';
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { LuBrain, LuEye, LuFileText, LuSparkles, LuCheck, LuDownload, LuTrash2, LuFolderOpen } from "@qwikest/icons/lucide";
@@ -257,87 +258,11 @@ export const ComponentCard = component$<CardProps>((props) => {
  *  machinery (pinned release, atomic install, nav-proof background
  *  download), but the same card language as every other component. */
 export const BuildComponentCard = component$<{ manageOnly?: boolean }>((props) => {
-  const installed = useSignal(false);
-  // Installed, but older than the version this app ships - the card offers
-  // an update, never the first-install pitch ("didn't I already do this?").
-  const updateAvailable = useSignal(false);
-  const installedVersion = useSignal('');
-  const pinnedVersion = useSignal('');
-  const downloading = useSignal(false);
-  const percent = useSignal(0);
-  const error = useSignal<string | null>(null);
+  // One source for the install's state and action (also used by a tool's
+  // Set up checklist).
+  const { installed, updateAvailable, installedVersion, pinnedVersion, downloading, percent, error, install$: doDownload } =
+    useBuildInstall();
   const busy = useSignal(false);
-
-  // eslint-disable-next-line qwik/no-use-visible-task
-  useVisibleTask$(async ({ cleanup }) => {
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const st = (await invoke("build_install_status")) as {
-        installed: boolean;
-        installed_version: string | null;
-        pinned_version: string;
-        update_available: boolean;
-        downloading: boolean;
-        error: string | null;
-      };
-      installed.value = st.installed;
-      updateAvailable.value = st.update_available;
-      installedVersion.value = st.installed_version ?? '';
-      pinnedVersion.value = st.pinned_version;
-      downloading.value = st.downloading;
-      error.value = st.error;
-    } catch {
-      /* card stays in its defaults */
-    }
-    const { listen } = await import("@tauri-apps/api/event");
-    const unp = await listen<any>("model-download-progress", (e) => {
-      const f = e.payload?.filename;
-      if (typeof f === "string" && f.startsWith("your-own-ai-build-")) {
-        downloading.value = true;
-        percent.value = Math.round(e.payload?.percent ?? 0);
-      }
-    });
-    const und = await listen<any>("build-install-done", (e) => {
-      downloading.value = false;
-      installed.value = true;
-      updateAvailable.value = false;
-      installedVersion.value = pinnedVersion.value;
-      error.value = null;
-      const path = e.payload?.path;
-      if (typeof path === "string" && path) {
-        try {
-          localStorage.setItem("build-binary-path", path);
-        } catch { /* resolver falls back */ }
-      }
-    });
-    const unf = await listen<any>("build-install-failed", (e) => {
-      downloading.value = false;
-      error.value = String(e.payload?.error ?? "download failed");
-    });
-    cleanup(() => {
-      unp();
-      und();
-      unf();
-    });
-  });
-
-  const doDownload = $(async () => {
-    error.value = null;
-    downloading.value = true;
-    percent.value = 0;
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      invoke("download_build_agent").catch((e) => {
-        // Guard rejections (e.g. "Close the open project first, then
-        // update.") return straight from the command without firing the
-        // failure event - surface them here or the button spins forever.
-        downloading.value = false;
-        error.value = String(e);
-      });
-    } catch {
-      downloading.value = false;
-    }
-  });
 
   const doUninstall = $(async () => {
     if (busy.value) return;

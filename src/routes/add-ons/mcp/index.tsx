@@ -8,14 +8,15 @@
  */
 import { component$, useSignal, useStore, useVisibleTask$, $ } from "@builder.io/qwik";
 import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
-import { LuWrench, LuTrash2, LuChevronLeft, LuUsers, LuAlertTriangle, LuCheck, LuLoader2, LuChevronDown } from "@qwikest/icons/lucide";
+import { LuWrench, LuTrash2, LuChevronLeft, LuAlertTriangle, LuCheck, LuChevronDown } from "@qwikest/icons/lucide";
 import AppHeader from "../../../components/AppHeader";
 import { useHeaderWorkspace } from "../../../hooks/useHeaderWorkspace";
 import { useAiData, useAiDataActions } from "../../../contexts/AiDataContext";
 import LiquidMetalButton from "../../../components/LiquidMetalButton";
 import ConfirmModal from "../../../components/ConfirmModal";
 import { Callout } from "../../../components/Callout";
-import { RequirementLine } from "../../../components/RequirementLine";
+import { ToolSetup } from "../../../components/ToolSetup";
+import { useBuildInstall } from "../../../hooks/useBuildInstall";
 import { LICENSES, currentMaker, shareTool, shareErrorText, type ShareResult } from "../../../utils/share";
 import { rememberShare, rememberedShare, fetchShareStatus, shareStatusText, type ShareStatus } from "../../../utils/shareStatus";
 import { LuShare2 } from "@qwikest/icons/lucide";
@@ -24,23 +25,17 @@ import {
   addMcpServer,
   removeMcpServer,
   whichProgram,
-  requirementPlan,
-  requirementInstall,
   fetchGit,
   checkToolSource,
   updateToolSource,
-  blenderAddonStatus,
-  blenderAddonInstall,
-  type BlenderAddonStatus,
-  mcpUsedBy,
   keepVaultInSync,
   mcpSummary,
   readyPresets,
-  setToolConfig,
   toolConfigStatus,
+  toolReadiness,
+  withCardData,
   type McpPreset,
   type McpServer,
-  type RequirementPlan,
 } from "../../../utils/mcp";
 
 /** Programs a shared tool may start through (the directory's rule) - they verify what they fetch. */
@@ -71,6 +66,7 @@ export default component$(() => {
   const headerWs = useHeaderWorkspace();
   const aiData = useAiData();
   const { editUserAi } = useAiDataActions();
+  const build = useBuildInstall();
   const currentModel = useSignal<string | null>(null);
   const showModelWidget = useSignal(false);
   const store = useStore({
@@ -84,21 +80,16 @@ export default component$(() => {
     busy: "" as string, // preset id or "manual" while adding
     // preset readiness: program -> path | null (checked on open)
     have: {} as Record<string, string | null>,
-    // "Install what it needs": the preset whose plan panel is open, its plans, progress
-    installFor: "" as string,
-    installPlans: [] as { program: string; label: string; install: string; plan: RequirementPlan }[],
-    installStage: "" as string,
+    /** The row in Your Tools whose Set up list is open. */
+    rowOpen: "" as string,
+    inventoryOpen: true,
     // explicit source checks: preset id -> "checking" | "up-to-date" | "behind" | "updating" | "updated"
     sourceState: {} as Record<string, string>,
-    // Blender's own add-on (only meaningful once the blender tool is added)
-    blenderAddon: null as BlenderAddonStatus | null,
-    blenderAddonBusy: "" as string,
     confirmRemove: "" as string,
-    // settings form: which tool, the draft values, and what is filled in
-    configFor: "" as string,
-    configDraft: {} as Record<string, string>,
+    // which settings hold a value: tool name -> key -> filled
     configOk: {} as Record<string, Record<string, boolean>>,
-    configSaving: false,
+    // the tool's own download is on this computer: tool name -> yes / no
+    fetched: {} as Record<string, boolean>,
     // share dialog (your own tools only)
     shareFor: "" as string,
     shareTitle: "",
@@ -115,7 +106,6 @@ export default component$(() => {
     shareLauncherOk: true,
     shareLauncher: "",
     shareStatus: {} as Record<string, ShareStatus>,
-    usedByOpen: "" as string,
     addOpen: false,
     // manual add form
     mName: "",
@@ -126,16 +116,17 @@ export default component$(() => {
     mDescription: "",
   });
 
+  // What a row's status line reads: which settings are filled, and whether
+  // the tool's own download is here.
+  const refreshTool = $(async (name: string) => {
+    try { store.configOk[name] = await toolConfigStatus(name); } catch { /* shown as unfilled */ }
+    try { store.fetched[name] = (await toolReadiness(name)).fetched; } catch { /* no line */ }
+  });
   const load = $(async () => {
     store.servers = await listMcpServers();
     store.loading = false;
-    if (store.servers.some((s) => s.name === "blender")) {
-      try { store.blenderAddon = await blenderAddonStatus(); } catch { /* no line */ }
-    }
     for (const s of store.servers) {
-      if (s.config?.length) {
-        try { store.configOk[s.name] = await toolConfigStatus(s.name); } catch { /* shown as unfilled */ }
-      }
+      await refreshTool(s.name);
       const r = rememberedShare("mcp", s.name);
       if (r) void fetchShareStatus(r).then((st) => { if (st) store.shareStatus[s.name] = st; });
     }
@@ -182,37 +173,24 @@ export default component$(() => {
     }
   });
 
-  const openConfig = $((name: string) => {
-    const s = store.servers.find((x) => x.name === name);
-    store.configFor = name;
-    store.configDraft = {};
-    for (const f of s?.config ?? []) {
-      store.configDraft[f.key] = f.kind === "secret" ? "" : (s?.values?.[f.key] ?? f.default ?? (f.kind === "toggle" ? "off" : ""));
-    }
+  // Settings saved in a Set up list: take the new list, re-read the tool.
+  const saved = $(async (name: string, servers: McpServer[]) => {
+    store.servers = servers;
+    await refreshTool(name);
   });
-  const saveConfig = $(async () => {
-    store.configSaving = true;
-    store.error = "";
-    try {
-      const values: Record<string, string> = {};
-      for (const [k, v] of Object.entries(store.configDraft)) if (v.trim()) values[k] = v.trim();
-      store.servers = await setToolConfig(store.configFor, values);
-      store.configOk[store.configFor] = await toolConfigStatus(store.configFor);
-      const saved = store.servers.find((x) => x.name === store.configFor);
-      const users = aiData.userDefinedAis.filter((a) => Array.isArray(a.mcp) && a.mcp.includes(store.configFor)).map((a) => a.id);
-      const remembering = saved ? await keepVaultInSync(saved, users).catch(() => 0) : 0;
-      store.configFor = "";
-      store.note = remembering
-        ? `Settings saved. The vault is being read into ${remembering === 1 ? "that AI's" : "those AIs'"} documents and will be kept in sync.`
-        : "Settings saved on this computer.";
-    } catch (e) {
-      store.error = e instanceof Error ? e.message : String(e);
-    } finally {
-      store.configSaving = false;
-    }
+  // Open a tool's row in Your Tools and bring it into view.
+  const showRow = $((name: string) => {
+    store.inventoryOpen = true;
+    store.rowOpen = name;
+    store.focus = name;
+    setTimeout(() => {
+      document.getElementById(`tool-${name}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+      setTimeout(() => { store.focus = ""; }, 4000);
+    }, 80);
   });
   const missingSettings = (name: string): string[] => {
-    const s = store.servers.find((x) => x.name === name);
+    const raw = store.servers.find((x) => x.name === name);
+    const s = raw ? withCardData(raw) : undefined;
     const ok = store.configOk[name] ?? {};
     return (s?.config ?? []).filter((f) => f.required && !ok[f.key]).map((f) => f.label || f.key);
   };
@@ -221,10 +199,15 @@ export default component$(() => {
   useVisibleTask$(async () => {
     await load();
     store.presets = await readyPresets();
-    const wanted = takeAddOnFocus();
-    if (wanted && store.presets.some((p) => p.id === wanted)) {
-      store.focus = wanted;
-      scrollToAddOn(wanted, () => { store.focus = ""; });
+    // A card id (a yourownai:// link) or a tool's name (the chat's tools
+    // chip). An added tool opens its row in Your Tools; otherwise its card.
+    const asked = takeAddOnFocus();
+    const added = store.servers.find((s) => s.name === asked || s.source === `preset:${asked}` || s.source === `directory:${asked}`);
+    if (added) {
+      await showRow(added.name);
+    } else if (asked && store.presets.some((p) => p.id === asked)) {
+      store.focus = asked;
+      scrollToAddOn(asked, () => { store.focus = ""; });
     }
     const programs = new Set<string>();
     for (const p of store.presets) for (const n of p.needs) programs.add(n.program);
@@ -234,6 +217,9 @@ export default component$(() => {
   const handleNewQuestion = $(() => { nav("/chat"); });
   const handleModelsClick = $(() => { nav("/setup"); });
 
+  // Add puts the tool in Your Tools and opens its Set up list. It fetches
+  // and installs NOTHING - every download is a line in that list, with its
+  // own button.
   const addPreset = $(async (id: string) => {
     const preset = store.presets.find((p) => p.id === id);
     if (!preset) return;
@@ -241,77 +227,23 @@ export default component$(() => {
     store.note = "";
     store.busy = id;
     try {
-      if (preset.fetch) await fetchGit(preset.fetch.url, preset.fetch.dest);
       const built = preset.build();
       store.servers = await addMcpServer(built);
-      if (built.config?.length) {
-        store.note = `${preset.title} added - it needs a few settings first.`;
-        await openConfig(built.name);
-      } else {
-        store.note = `${preset.title} added. Give it to an AI: Your AIs, edit, Tools.`;
-      }
+      await refreshTool(built.name);
+      await showRow(built.name);
     } catch (e) {
       store.error = e instanceof Error ? e.message : String(e);
     } finally {
       store.busy = "";
     }
   });
-
-  // One button for everything a tool needs: show every step first (what
-  // runs, from where), then run them in order; things that need a password
-  // open the terminal; when all are present, carry on to the add itself.
-  const openInstallAll = $(async (id: string) => {
-    const preset = store.presets.find((p) => p.id === id);
-    if (!preset) return;
-    store.error = "";
-    store.installStage = "";
-    const missing = preset.needs.filter((n) => store.have[n.program] === null);
-    const plans = [];
-    for (const n of missing) {
-      try { plans.push({ ...n, plan: await requirementPlan(n.program) }); }
-      catch (e) { store.error = e instanceof Error ? e.message : String(e); return; }
-    }
-    store.installPlans = plans;
-    store.installFor = id;
-  });
-  const runInstallAll = $(async () => {
-    const id = store.installFor;
-    const preset = store.presets.find((p) => p.id === id);
-    if (!preset) return;
-    store.busy = id;
-    let needsTerminal = false;
-    try {
-      for (const item of store.installPlans) {
-        if (item.plan.mode === "run") {
-          store.installStage = `Installing ${item.program}...`;
-          await requirementInstall(item.program);
-        } else if (item.plan.mode === "terminal") {
-          const { invoke } = await import("@tauri-apps/api/core");
-          await invoke("open_in_terminal", { command: item.plan.command, cwd: null });
-          needsTerminal = true;
-        } else {
-          const { openUrl } = await import("@tauri-apps/plugin-opener");
-          await openUrl(item.plan.command || item.install);
-          needsTerminal = true;
-        }
-      }
-      for (const n of preset.needs) store.have[n.program] = await whichProgram(n.program);
-      const stillMissing = preset.needs.filter((n) => store.have[n.program] === null);
-      if (stillMissing.length) {
-        store.installStage = needsTerminal
-          ? `Finish ${stillMissing.map((n) => n.program).join(", ")} in your terminal, then press Check again.`
-          : `${stillMissing.map((n) => n.program).join(", ")} still not found - open a new terminal or restart the app, then Check again.`;
-        return;
-      }
-      store.installFor = "";
-      store.installStage = "";
-      store.busy = "";
-      await addPreset(id);
-    } catch (e) {
-      store.error = e instanceof Error ? e.message : String(e);
-    } finally {
-      if (store.busy === id) store.busy = "";
-    }
+  // The tool's own download, from its row's Set up list.
+  const fetchTool = $(async (name: string) => {
+    const s = store.servers.find((x) => x.name === name);
+    const card = store.presets.find((p) => s?.source === `preset:${p.id}` || s?.source === `directory:${p.id}`);
+    if (!card?.fetch) return;
+    await fetchGit(card.fetch.url, card.fetch.dest);
+    await refreshTool(name);
   });
   const checkSource = $(async (id: string) => {
     store.error = "";
@@ -335,27 +267,6 @@ export default component$(() => {
       store.error = e instanceof Error ? e.message : String(e);
     }
   });
-  const installBlenderAddon = $(async () => {
-    store.error = "";
-    if (store.blenderAddonBusy !== "confirm") { store.blenderAddonBusy = "confirm"; return; }
-    store.blenderAddonBusy = "installing";
-    try {
-      await blenderAddonInstall();
-      store.blenderAddon = await blenderAddonStatus();
-      store.blenderAddonBusy = "";
-      store.note = "Blender add-on installed and enabled (and Blender's Allow Online Access turned on). If Blender is open, restart it once.";
-    } catch (e) {
-      store.blenderAddonBusy = "";
-      store.error = e instanceof Error ? e.message : String(e);
-    }
-  });
-  const recheckPreset = $(async (id: string) => {
-    const preset = store.presets.find((p) => p.id === id);
-    if (!preset) return;
-    for (const n of preset.needs) store.have[n.program] = await whichProgram(n.program);
-    if (!preset.needs.some((n) => store.have[n.program] === null)) { store.installFor = ""; store.installStage = ""; }
-  });
-
 
   const addManual = $(async () => {
     store.error = "";
@@ -415,7 +326,7 @@ export default component$(() => {
     const s = store.servers.find((x) => x.name === name);
     if (adding && s) {
       const n = await keepVaultInSync(s, [aiId]).catch(() => 0);
-      if (n) store.note = `${a.name} can use ${name}, and the vault is being read into its documents and kept in sync.`;
+      if (n) store.note = `${a.name} can use ${name}, and its notes folder is being read into that AI's documents and kept in sync.`;
     }
   });
 
@@ -468,10 +379,22 @@ export default component$(() => {
           </div>
 
           <Callout intent="info" title="How tools work" id="tools-intro">
-            A tool does nothing until you give it to an AI - "Used by" on a card here, or Your AIs, edit, Tools. For now
+            A tool does nothing until you give it to an AI - its Set up list here, or Your AIs, edit, Tools. For now
             tools work in projects: open a folder in a conversation with that AI and it can use them. Every action a tool
             takes goes through your approve step, the same as a file edit, and stays in your records.
           </Callout>
+
+          {!build.installed.value && store.servers.length > 0 && (
+            <p class="mt-4 text-sm text-[var(--text-secondary)]">
+              Your AIs use tools through Your Own AI Build, a free add-on that is not installed yet.{" "}
+              {build.downloading.value ? (
+                <span class="text-[var(--text-muted)]">Downloading... {build.percent.value}%</span>
+              ) : (
+                <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={build.install$}>Install it</button>
+              )}
+              {build.error.value && <span class="ml-2 text-red-400">{build.error.value}</span>}
+            </p>
+          )}
 
           {store.addOpen && (
             <div class="mt-4 rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4 space-y-3">
@@ -528,14 +451,114 @@ export default component$(() => {
           )}
           {store.note && <p class="mt-4 text-sm text-[var(--text-secondary)]">{store.note}</p>}
 
+          {/* Your tools - the inventory: compact rows, the Set up list opens in the row */}
+          {(store.loading || store.servers.length > 0) && (
+            <div class="mt-8">
+              <button
+                type="button"
+                onClick$={() => { store.inventoryOpen = !store.inventoryOpen; }}
+                class="flex w-full items-center justify-between mb-4 border-b border-[var(--border-subtle)] pb-2 bg-transparent border-x-0 border-t-0 cursor-pointer text-left"
+              >
+                <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela">
+                  Your Tools{store.loading ? "" : ` (${store.servers.length})`}
+                </h2>
+                <LuChevronDown class={`h-5 w-5 text-[var(--text-muted)] transition-transform ${store.inventoryOpen ? "" : "-rotate-90"}`} />
+              </button>
+              {store.loading ? (
+                <p class="text-sm text-[var(--text-muted)]">Loading...</p>
+              ) : store.inventoryOpen && (
+                <div class="generic-container rounded-2xl divide-y divide-[var(--border-subtle)]">
+                  {store.servers.map((raw) => {
+                    const s = withCardData(raw);
+                    const users = aiData.userDefinedAis.filter((x) => x.status === "active" && Array.isArray(x.mcp) && x.mcp.includes(s.name));
+                    const acting = users.filter((x) => !(Array.isArray(x.mcpOff) && x.mcpOff.includes(s.name)));
+                    const fromCard = s.source.replace(/^(preset|directory):/, "");
+                    const card = fromCard !== s.source ? store.presets.find((p) => p.id === fromCard) : undefined;
+                    const unset = missingSettings(s.name);
+                    const open = store.rowOpen === s.name;
+                    // One line: the first thing standing between this tool and an AI using it.
+                    const status = !build.installed.value
+                      ? { ok: false, text: "Your Own AI Build is not installed" }
+                      : store.fetched[s.name] === false
+                        ? { ok: false, text: "Not fetched yet" }
+                      : unset.length
+                        ? { ok: false, text: `Needs its settings: ${unset.join(", ")}` }
+                        : users.length === 0
+                          ? { ok: false, text: "No AI uses it yet" }
+                          : acting.length === 0
+                            ? { ok: false, text: `Switched off in chat for ${users.map((x) => x.name).join(", ")}` }
+                            : { ok: true, text: `Ready - used by ${acting.map((x) => x.name).join(", ")}` };
+                    return (
+                      <div key={s.name} id={`tool-${s.name}`} class={`p-4 transition-shadow ${store.focus === s.name ? "ring-2 ring-[var(--text-link)] rounded-2xl" : ""}`}>
+                        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div class="min-w-0">
+                            <h3 class="font-medium text-[var(--text-primary)]">{card?.title ?? s.name}</h3>
+                            {s.description && <p class="text-sm text-[var(--text-secondary)]">{s.description}</p>}
+                            <p class={`mt-1 flex items-center gap-1.5 text-xs ${status.ok ? "text-[var(--text-secondary)]" : "text-amber-600 dark:text-amber-400"}`}>
+                              {status.ok ? <LuCheck class="h-3.5 w-3.5 shrink-0 text-emerald-500" /> : <LuAlertTriangle class="h-3.5 w-3.5 shrink-0" />}
+                              {status.text}
+                            </p>
+                            {!card && <p class="mt-1 text-xs text-[var(--text-muted)] font-mono truncate">{mcpSummary(s)}</p>}
+                          </div>
+                          <div class="flex shrink-0 flex-wrap gap-2">
+                            {s.source === "manual" && (
+                              <LiquidMetalButton variant="secondary" onClick$={() => openShare(s)} class="flex items-center gap-1.5 px-3 py-1.5 text-xs" title="List this tool for everyone, signed with your Flowsta identity">
+                                <LuShare2 class="h-3.5 w-3.5" /> Share
+                              </LiquidMetalButton>
+                            )}
+                            <LiquidMetalButton variant="secondary" onClick$={() => { store.confirmRemove = s.name; }} class="flex items-center gap-1.5 px-3 py-1.5 text-xs">
+                              <LuTrash2 class="h-3.5 w-3.5" /> Remove
+                            </LiquidMetalButton>
+                            <LiquidMetalButton
+                              variant={status.ok ? "secondary" : undefined}
+                              onClick$={() => { store.rowOpen = open ? "" : s.name; }}
+                              class="flex items-center gap-1.5 px-3 py-1.5 text-xs"
+                            >
+                              Set up
+                              <LuChevronDown class={`h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
+                            </LiquidMetalButton>
+                          </div>
+                        </div>
+                        {store.shareStatus[s.name] && (
+                          <p class="mt-2 text-xs text-[var(--text-secondary)]">
+                            <span class="font-medium text-[var(--text-primary)]">Shared with everyone: </span>
+                            {shareStatusText(store.shareStatus[s.name], s.name)}{" "}
+                            <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={async () => {
+                              const st = store.shareStatus[s.name];
+                              const { openUrl } = await import("@tauri-apps/plugin-opener");
+                              await openUrl(st.state === "live" ? st.page : st.pr_url);
+                            }}>{store.shareStatus[s.name].state === "live" ? "Open the page" : "See the submission"}</button>
+                          </p>
+                        )}
+                        {open && (
+                          <ToolSetup
+                            title={card?.title ?? s.name}
+                            needs={card?.needs ?? []}
+                            fetch={card?.fetch}
+                            server={s}
+                            ais={aiData.userDefinedAis}
+                            have={store.have}
+                            onHave$={(program, v) => { store.have[program] = v; }}
+                            onFetch$={() => fetchTool(s.name)}
+                            onToggleAi$={(aiId) => toggleAi(aiId, s.name)}
+                            onSaved$={(servers) => saved(s.name, servers)}
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Presets - the ones we know how to set up */}
-          <h2 class="mt-8 text-lg font-semibold text-[var(--text-primary)]">Ready to add</h2>
-          <div class="mt-3 grid gap-4 sm:grid-cols-2">
+          <h2 class="mt-8 mb-4 border-b border-[var(--border-subtle)] pb-2 text-2xl font-bold text-[var(--text-primary)] font-varela">Available Tools</h2>
+          <div class="grid gap-4 sm:grid-cols-2">
             {store.presets.map((p) => {
               const pid = p.id;
-              const installed = store.servers.some((s) => s.source === `preset:${pid}` || s.source === `directory:${pid}`);
-              const missing = p.needs.filter((n) => store.have[n.program] === null);
-              const checking = p.needs.some((n) => store.have[n.program] === undefined);
+              const mine = store.servers.find((s) => s.source === `preset:${pid}` || s.source === `directory:${pid}`);
+              const installed = !!mine;
               return (
                 <div key={p.id} id={`addon-${p.id}`} class={`rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4 flex flex-col gap-3 transition-shadow ${store.focus === p.id ? "ring-2 ring-[var(--text-link)]" : ""}`}>
                   <div>
@@ -543,106 +566,49 @@ export default component$(() => {
                     <p class="mt-1 text-sm text-[var(--text-secondary)]">{p.blurb}</p>
                   </div>
                   <p class="text-xs text-[var(--text-muted)]">{p.notes}</p>
-                  <ul class="text-xs space-y-1">
-                    {p.needs.map((n) => (
-                      <RequirementLine
-                        key={n.program}
-                        program={n.program}
-                        label={n.label}
-                        install={n.install}
-                        have={store.have[n.program]}
-                        onChange$={(v) => { store.have[n.program] = v; }}
-                      />
-                    ))}
-                  </ul>
-                  {pid === "blender" && installed && store.blenderAddon && (
-                    <p class="flex flex-wrap items-center gap-1.5 text-xs">
-                      {store.blenderAddon.installed && store.blenderAddon.listening ? (
-                        <><LuCheck class="h-3.5 w-3.5 text-emerald-500" /><span class="text-[var(--text-secondary)]">Blender add-on installed and running - your AI can reach Blender</span></>
-                      ) : store.blenderAddon.installed ? (
-                        <>
-                          <LuAlertTriangle class="h-3.5 w-3.5 text-amber-500" />
-                          <span class="text-amber-500">Blender add-on installed, not running</span>
-                          <span class="text-[var(--text-muted)]">- open Blender (or restart it if it was open during the install), then</span>
-                          <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={async () => { try { store.blenderAddon = await blenderAddonStatus(); } catch { /* keep */ } }}>Check again</button>
-                        </>
-                      ) : !store.blenderAddon.blender ? (
-                        <><LuAlertTriangle class="h-3.5 w-3.5 text-amber-500" /><span class="text-amber-500">Blender 5.1+ not found on this computer</span></>
-                      ) : (
-                        <>
-                          <LuAlertTriangle class="h-3.5 w-3.5 text-amber-500" />
-                          <span class="text-amber-500">Blender add-on not installed</span>
-                          <button type="button" class="text-[var(--text-link)] hover:underline disabled:opacity-60" disabled={store.blenderAddonBusy === "installing"} onClick$={installBlenderAddon}>
-                            {store.blenderAddonBusy === "installing" ? "Installing..." : store.blenderAddonBusy === "confirm" ? "Install it now" : "Install the add-on"}
-                          </button>
-                          {store.blenderAddonBusy === "confirm" && (
-                            <span class="text-[var(--text-muted)]">Runs Blender's own extension installer on the add-on that came with the fetch, enables it, and turns on Blender's "Allow Online Access" setting - the add-on will not open its connection without it. That connection is local (this computer only); the setting is Blender's, and also lets Blender check its own extensions site for updates. Restart Blender afterwards if it is open.</span>
-                          )}
-                        </>
-                      )}
-                    </p>
-                  )}
-                  {p.fetch && !installed && (
-                    <p class="text-xs text-[var(--text-muted)]">
-                      Adding fetches the server ({p.fetch.size}) from {p.fetch.url.replace(/^https:\/\//, "").replace(/\.git$/, "")} into your home folder.
-                    </p>
-                  )}
-                  {store.installFor === pid && (
-                    <div class="rounded-xl border border-[var(--text-link)]/40 bg-[var(--bg-input)] p-3 text-xs">
-                      <p class="font-medium text-[var(--text-primary)]">This will:</p>
-                      <ul class="mt-1.5 space-y-1.5">
-                        {store.installPlans.map((it) => (
-                          <li key={it.program} class="text-[var(--text-secondary)]">
-                            <span class="font-medium text-[var(--text-primary)]">{it.program}</span>
-                            {" - "}
-                            {it.plan.mode === "run" ? "runs here: " : it.plan.mode === "terminal" ? "opens your terminal (needs your password): " : "opens the download page: "}
-                            {it.plan.note}{" "}
-                            <code class="rounded bg-[var(--bg-card)] px-1 py-0.5 text-[10px] break-all">{it.plan.command || it.install}</code>
-                          </li>
-                        ))}
-                      </ul>
-                      {store.installStage && <p class="mt-2 text-amber-500">{store.installStage}</p>}
-                      <div class="mt-3 flex flex-wrap gap-2">
-                        <LiquidMetalButton onClick$={runInstallAll} disabled={!!store.busy} class="h-8 px-3 text-xs">
-                          {store.busy === pid ? "Installing..." : "Install"}
-                        </LiquidMetalButton>
-                        <LiquidMetalButton variant="secondary" onClick$={() => recheckPreset(pid)} disabled={!!store.busy} class="h-8 px-3 text-xs">Check again</LiquidMetalButton>
-                        <LiquidMetalButton variant="secondary" onClick$={() => { store.installFor = ""; store.installStage = ""; }} disabled={!!store.busy} class="h-8 px-3 text-xs">Cancel</LiquidMetalButton>
-                      </div>
-                    </div>
+                  {p.needs.length > 0 && (
+                    <p class="text-xs text-[var(--text-muted)]">Runs on {p.needs.map((n) => n.program).join(" and ")} - its Set up list checks for them.</p>
                   )}
                   <div class="flex items-center justify-between gap-2 mt-auto">
-                    <span class="text-xs text-[var(--text-muted)]">
-                      {installed ? "In your tools below - give it to an AI" : ""}
+                    <span class="inline-flex flex-wrap items-center gap-2 text-xs text-[var(--text-muted)]">
+                      {installed ? (
+                        <span class="inline-flex items-center gap-1.5 text-sm text-emerald-500"><LuCheck class="h-4 w-4" /> Added</span>
+                      ) : (
+                        ""
+                      )}
+                      {installed && p.fetch && (() => {
+                        const st = store.sourceState[pid] ?? "";
+                        return st === "checking" ? (
+                          <span>Checking...</span>
+                        ) : st === "up-to-date" ? (
+                          <span>Up to date</span>
+                        ) : st === "behind" ? (
+                          <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={() => updateSource(pid)}>Update available - update</button>
+                        ) : st === "updating" ? (
+                          <span>Updating...</span>
+                        ) : st === "updated" ? (
+                          <span>Updated</span>
+                        ) : (
+                          <button type="button" class="text-[var(--text-link)] hover:underline" title="One check against the tool's source - nothing is checked unless you press this" onClick$={() => checkSource(pid)}>Check for updates</button>
+                        );
+                      })()}
                     </span>
                     {installed ? (
-                      <span class="inline-flex flex-wrap items-center gap-2 h-9 px-1 text-sm">
-                        <span class="inline-flex items-center gap-1.5 text-emerald-500"><LuCheck class="h-4 w-4" /> Added</span>
-                        {p.fetch && (() => {
-                          const st = store.sourceState[pid] ?? "";
-                          return st === "checking" ? (
-                            <span class="text-xs text-[var(--text-muted)]">Checking...</span>
-                          ) : st === "up-to-date" ? (
-                            <span class="text-xs text-[var(--text-muted)]">Up to date</span>
-                          ) : st === "behind" ? (
-                            <button type="button" class="text-xs text-[var(--text-link)] hover:underline" onClick$={() => updateSource(pid)}>Update available - update</button>
-                          ) : st === "updating" ? (
-                            <span class="text-xs text-[var(--text-muted)]">Updating...</span>
-                          ) : st === "updated" ? (
-                            <span class="text-xs text-[var(--text-muted)]">Updated</span>
-                          ) : (
-                            <button type="button" class="text-xs text-[var(--text-link)] hover:underline" title="One check against the tool's source - nothing is checked unless you press this" onClick$={() => checkSource(pid)}>Check for updates</button>
-                          );
-                        })()}
-                      </span>
+                      <button
+                        type="button"
+                        class="text-sm text-[var(--text-link)] hover:underline"
+                        onClick$={() => { if (mine) showRow(mine.name); }}
+                      >
+                        Set up in Your Tools
+                      </button>
                     ) : (
                       <LiquidMetalButton
-                        disabled={!!store.busy || checking}
-                        onClick$={() => (missing.length ? openInstallAll(pid) : addPreset(pid))}
+                        disabled={!!store.busy}
+                        onClick$={() => addPreset(pid)}
                         class="flex items-center gap-1.5 h-9 px-4 text-sm"
+                        title="Adds it to Your Tools. Nothing is downloaded until you press a line in its Set up list."
                       >
-                        {store.busy === p.id && <LuLoader2 class="h-4 w-4 animate-spin" />}
-                        {missing.length ? "Install what it needs" : p.fetch ? "Fetch and add" : "Add"}
+                        Add
                       </LiquidMetalButton>
                     )}
                   </div>
@@ -651,85 +617,6 @@ export default component$(() => {
             })}
           </div>
 
-          {/* Installed */}
-          <h2 class="mt-8 text-lg font-semibold text-[var(--text-primary)]">Your tools</h2>
-          {store.loading ? (
-            <p class="mt-3 text-sm text-[var(--text-muted)]">Loading...</p>
-          ) : store.servers.length === 0 ? (
-            <p class="mt-3 text-sm text-[var(--text-secondary)]">None yet. Add Blender above, or add your own.</p>
-          ) : (
-            <div class="mt-3 space-y-3">
-              {store.servers.map((s) => {
-                const users = mcpUsedBy(aiData.userDefinedAis, s.name);
-                return (
-                  <div key={s.name} class="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4 flex flex-col gap-2">
-                    <div class="flex items-start justify-between gap-3">
-                      <div class="min-w-0">
-                        <h3 class="font-medium text-[var(--text-primary)]">{s.name}</h3>
-                        {s.description && <p class="text-sm text-[var(--text-secondary)]">{s.description}</p>}
-                        <p class="text-xs text-[var(--text-muted)] font-mono truncate">{mcpSummary(s)}</p>
-                      </div>
-                      <div class="flex shrink-0 gap-2">
-                        {s.source === "manual" && (
-                          <LiquidMetalButton variant="secondary" onClick$={() => openShare(s)} class="flex items-center gap-1.5 px-3 py-1.5 text-xs" title="List this tool for everyone, signed with your Flowsta identity">
-                            <LuShare2 class="h-3.5 w-3.5" /> Share
-                          </LiquidMetalButton>
-                        )}
-                        {s.config?.length ? (
-                          <LiquidMetalButton variant="secondary" onClick$={() => openConfig(s.name)} class="flex items-center gap-1.5 px-3 py-1.5 text-xs">
-                            Settings
-                          </LiquidMetalButton>
-                        ) : null}
-                        <LiquidMetalButton variant="secondary" onClick$={() => { store.confirmRemove = s.name; }} class="flex items-center gap-1.5 px-3 py-1.5 text-xs">
-                          <LuTrash2 class="h-3.5 w-3.5" /> Remove
-                        </LiquidMetalButton>
-                      </div>
-                    </div>
-                    {store.shareStatus[s.name] && (
-                      <p class="text-xs text-[var(--text-secondary)]">
-                        <span class="font-medium text-[var(--text-primary)]">Shared with everyone: </span>
-                        {shareStatusText(store.shareStatus[s.name], s.name)}{" "}
-                        <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={async () => {
-                          const st = store.shareStatus[s.name];
-                          const { openUrl } = await import("@tauri-apps/plugin-opener");
-                          await openUrl(st.state === "live" ? st.page : st.pr_url);
-                        }}>{store.shareStatus[s.name].state === "live" ? "Open the page" : "See the submission"}</button>
-                      </p>
-                    )}
-                    {missingSettings(s.name).length > 0 && (
-                      <p class="flex items-center gap-1.5 text-xs text-amber-500">
-                        <LuAlertTriangle class="h-3.5 w-3.5" /> Needs its settings before an AI can use it: {missingSettings(s.name).join(", ")}
-                      </p>
-                    )}
-                    <button
-                      type="button"
-                      onClick$={() => { store.usedByOpen = store.usedByOpen === s.name ? "" : s.name; }}
-                      class="inline-flex items-center gap-1.5 text-left text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
-                      title="Choose which AIs carry this tool"
-                    >
-                      <LuUsers class="h-3.5 w-3.5 shrink-0" />
-                      Used by: {users.length ? users.join(", ") : "no AI yet - choose one"}
-                    </button>
-                    {store.usedByOpen === s.name && (
-                      <div class="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-main)] p-3 space-y-1.5">
-                        {aiData.userDefinedAis
-                          .filter((a) => a.status === "active")
-                          .map((a) => {
-                            const on = Array.isArray(a.mcp) && a.mcp.includes(s.name);
-                            return (
-                              <label key={a.id} class="flex items-center gap-2 text-sm text-[var(--text-primary)]">
-                                <input type="checkbox" checked={on} onChange$={() => toggleAi(a.id, s.name)} />
-                                {a.name}
-                              </label>
-                            );
-                          })}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
         </div>
       </div>
 
@@ -793,70 +680,6 @@ export default component$(() => {
           </div>
         </div>
       )}
-
-      {store.configFor && (() => {
-        const s = store.servers.find((x) => x.name === store.configFor);
-        return (
-          <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-            <div class="w-full max-w-md rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-header-footer)] p-6 shadow-2xl">
-              <h3 class="text-base font-semibold text-[var(--text-primary)]">Settings for {s?.name}</h3>
-              <p class="mt-1 text-xs text-[var(--text-muted)]">
-                Kept on this computer only. Secrets are stored encrypted and are sent only to this tool.
-              </p>
-              <div class="mt-4 space-y-3">
-                {(s?.config ?? []).map((f) => {
-                  const key = f.key;
-                  const filled = store.configOk[store.configFor]?.[key];
-                  if (f.kind === "toggle") {
-                    return (
-                      <label key={key} class="flex items-start gap-2 text-xs text-[var(--text-secondary)] cursor-pointer">
-                        <input
-                          type="checkbox"
-                          class="mt-0.5 cursor-pointer"
-                          checked={(store.configDraft[key] ?? "off") === "on"}
-                          onChange$={(_, el) => { store.configDraft[key] = el.checked ? "on" : "off"; }}
-                        />
-                        <span>{f.label || f.key}</span>
-                      </label>
-                    );
-                  }
-                  return (
-                    <label key={key} class="block text-xs text-[var(--text-secondary)]">
-                      {f.label || f.key}{f.required ? "" : " (optional)"}
-                      {f.kind === "secret" && filled && <span class="ml-2 text-emerald-500">set - leave blank to keep</span>}
-                      <input
-                        type={f.kind === "secret" ? "password" : "text"}
-                        value={store.configDraft[key] ?? ""}
-                        onInput$={(_, el) => { store.configDraft[key] = el.value; }}
-                        placeholder={f.hint ?? ""}
-                        autocomplete="off"
-                        class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none"
-                      />
-                      {f.kind === "path" && (
-                        <button
-                          type="button"
-                          class="mt-1 text-[var(--text-link)] hover:underline cursor-pointer"
-                          onClick$={async () => {
-                            const { open } = await import("@tauri-apps/plugin-dialog");
-                            const picked = await open({ directory: true, multiple: false });
-                            if (picked && !Array.isArray(picked)) store.configDraft[key] = picked;
-                          }}
-                        >
-                          Choose the folder
-                        </button>
-                      )}
-                    </label>
-                  );
-                })}
-              </div>
-              <div class="mt-5 flex justify-end gap-2">
-                <LiquidMetalButton variant="secondary" onClick$={() => { store.configFor = ""; }} disabled={store.configSaving} class="h-9 px-4 text-sm">Cancel</LiquidMetalButton>
-                <LiquidMetalButton onClick$={saveConfig} disabled={store.configSaving} class="h-9 px-4 text-sm">{store.configSaving ? "Saving..." : "Save"}</LiquidMetalButton>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
 
       <ConfirmModal
         isOpen={!!store.confirmRemove}

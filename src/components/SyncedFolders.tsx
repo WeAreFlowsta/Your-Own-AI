@@ -128,7 +128,7 @@ export const SyncedFolders = component$<SyncedFoldersProps>((props) => {
     <div class="mb-3">
       <div class="flex items-center justify-between gap-3 mb-1.5">
         <p class="text-xs text-[var(--text-muted)]">
-          Folders kept in sync - a notes vault or any folder: new files are read, edited ones read
+          Folders kept in sync - a notes folder (Logseq, Obsidian) or any folder: new files are read, edited ones read
           again, deleted ones leave.
         </p>
         <button

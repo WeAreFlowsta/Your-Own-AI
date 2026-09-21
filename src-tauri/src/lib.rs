@@ -676,6 +676,8 @@ pub fn run() {
             agent_bridge::agent_undo_turn,
             agent_bridge::agent_interject,
             mcp::mcp_tools_signature,
+            mcp::mcp_readiness,
+            mcp::mcp_check_port,
             checks::project_checks_last,
             terminal::open_in_terminal,
             model_caps::agent_capability,
