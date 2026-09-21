@@ -124,6 +124,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   is a line with its own button like everything else. Tools you
   added yourself get the same Set up list, which replaces the separate
   settings window and the "Used by" list.
+- A tool's settings are harder to leave unsaved: Save is a real button, an
+  amber "Not saved yet" shows while what you typed differs from what is
+  stored, and the last line of the Set up list says to press it. Settings
+  that do not apply (a Logseq graph folder while "database graph" is on)
+  are greyed out.
 - Logseq. A new tool card: your AI searches your Logseq graph, reads pages
   and blocks, follows backlinks, runs queries, and - when you allow it -
   creates and edits pages and blocks. It works with both kinds of graph,

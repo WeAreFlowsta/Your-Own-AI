@@ -1,7 +1,8 @@
-import { component$, useStore, useVisibleTask$, $, type QRL } from '@builder.io/qwik';
+import { component$, useStore, useTask$, useVisibleTask$, $, type QRL } from '@builder.io/qwik';
 import { LuCheck, LuCircle, LuLoader2, LuAlertTriangle, LuInfo } from '@qwikest/icons/lucide';
 import { RequirementLine } from './RequirementLine';
 import { ToolSettingsFields } from './ToolSettingsFields';
+import LiquidMetalButton from './LiquidMetalButton';
 import { useBuildInstall } from '../hooks/useBuildInstall';
 import {
   withCardData,
@@ -12,6 +13,7 @@ import {
   blenderAddonStatus,
   blenderAddonInstall,
   keepVaultInSync,
+  unsavedSettings,
   type McpServer,
   type BlenderAddonStatus,
   type Readiness,
@@ -79,6 +81,8 @@ export const ToolSetup = component$<ToolSetupProps>((props) => {
     saving: false,
     saved: '',
     settingsError: '',
+    /** Short names of the settings that differ from what is stored. */
+    unsaved: [] as string[],
     readiness: null as Readiness | null,
     ports: {} as Record<number, boolean>,
     blender: null as BlenderAddonStatus | null,
@@ -111,6 +115,15 @@ export const ToolSetup = component$<ToolSetupProps>((props) => {
         state.blender = await blenderAddonStatus().catch(() => null);
       }
     }
+  });
+
+  // What differs from what is stored. Watched here, over the WHOLE form and
+  // the stored values at once - worked out while drawing, a change could be
+  // missed and "Not saved yet" outlive the edit that caused it.
+  useTask$(({ track }) => {
+    track(() => JSON.stringify(state.draft));
+    track(() => JSON.stringify(props.server.values ?? {}));
+    state.unsaved = unsavedSettings(withCardData(props.server).config ?? [], state.draft, props.server.values);
   });
 
   // eslint-disable-next-line qwik/no-use-visible-task
@@ -151,6 +164,9 @@ export const ToolSetup = component$<ToolSetupProps>((props) => {
       const values: Record<string, string> = {};
       for (const [k, v] of Object.entries(state.draft)) if (v.trim()) values[k] = v.trim();
       const servers = await setToolConfig(name, values);
+      // A saved secret never comes back: empty its box, so the field reads
+      // "set" and nothing looks unsaved.
+      for (const f of props.server.config ?? []) if (f.kind === 'secret') state.draft[f.key] = '';
       await props.onSaved$(servers);
       const mine = servers.find((s) => s.name === name);
       const users = props.ais.filter((a) => Array.isArray(a.mcp) && a.mcp.includes(name)).map((a) => a.id);
@@ -190,6 +206,7 @@ export const ToolSetup = component$<ToolSetupProps>((props) => {
   const fetched = state.readiness?.fetched ?? true;
   const config = server.config ?? [];
   const missingSettings = config.filter((f) => f.required && !state.filled[f.key]).map((f) => f.label || f.key);
+  const unsaved = state.unsaved.length > 0;
   const users = props.ais.filter((a) => a.status === 'active' && Array.isArray(a.mcp) && a.mcp.includes(name));
   const resting = users.filter((a) => Array.isArray(a.mcpOff) && a.mcpOff.includes(name));
   const acting = users.length - resting.length;
@@ -204,7 +221,10 @@ export const ToolSetup = component$<ToolSetupProps>((props) => {
   if (!build.installed.value) blockers.push('Your Own AI Build is not installed');
   if (missingPrograms.length) blockers.push(`${missingPrograms.map((n) => n.program).join(', ')} not found`);
   if (!fetched) blockers.push('the tool is not fetched yet');
-  if (missingSettings.length) blockers.push(`settings missing: ${missingSettings.join(', ')}`);
+  if (unsaved) blockers.push(`not saved yet (${state.unsaved.join(', ')}) - press Save settings`);
+  else if (missingSettings.length) {
+    blockers.push(`${missingSettings.join(', ')} ${missingSettings.length === 1 ? 'is' : 'are'} missing - fill ${missingSettings.length === 1 ? 'it' : 'them'} in above and press Save settings`);
+  }
   if (users.length === 0) blockers.push('no AI uses it yet');
   if (users.length > 0 && acting === 0) blockers.push('it is switched off in chat for every AI that has it');
   if (fetched && state.readiness && !state.readiness.ready && !missingSettings.length) blockers.push(state.readiness.reason);
@@ -285,18 +305,26 @@ export const ToolSetup = component$<ToolSetupProps>((props) => {
       {/* 4. Its settings */}
       {config.length > 0 && (
         <div class={row}>
-          <Mark state={state.saving ? 'busy' : missingSettings.length ? 'todo' : 'done'} />
+          <Mark state={state.saving ? 'busy' : unsaved ? 'warn' : missingSettings.length ? 'todo' : 'done'} />
           <div class="min-w-0 flex-1">
             <p class={head}>Settings</p>
             <p class={sub}>Kept on this computer only. Secrets are stored encrypted and are sent only to this tool.</p>
             <div class="mt-2">
               <ToolSettingsFields config={config} draft={state.draft} filled={state.filled} />
             </div>
-            <div class="mt-2 flex items-center gap-3 text-xs">
-              <button type="button" class={btn} disabled={state.saving} onClick$={save}>
+            <div class="mt-3 flex flex-wrap items-center gap-3 text-xs">
+              <LiquidMetalButton
+                variant={unsaved ? undefined : 'secondary'}
+                disabled={state.saving}
+                onClick$={save}
+                class="h-8 px-4 text-xs"
+              >
                 {state.saving ? 'Saving...' : 'Save settings'}
-              </button>
-              {state.saved && <span class="text-[var(--text-muted)]">{state.saved}</span>}
+              </LiquidMetalButton>
+              {unsaved && !state.saving && (
+                <span class="text-amber-600 dark:text-amber-400">Not saved yet: {state.unsaved.join(', ')}</span>
+              )}
+              {!unsaved && state.saved && <span class="text-[var(--text-muted)]">{state.saved}</span>}
               {state.settingsError && <span class="text-red-500">{state.settingsError}</span>}
             </div>
           </div>
