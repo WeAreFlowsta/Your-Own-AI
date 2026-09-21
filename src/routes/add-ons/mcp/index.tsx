@@ -367,7 +367,7 @@ export default component$(() => {
                 <LuWrench class="h-6 w-6 text-[var(--text-secondary)]" /> Tools
               </h1>
               <p class="mt-1 text-[var(--text-secondary)]">
-                Programs your AIs can work in - Blender, a browser, a 3D printer, your smart home.
+                Let your AIs work inside other programs - Blender, Obsidian, a browser, your smart home.
               </p>
             </div>
             <LiquidMetalButton
@@ -378,10 +378,9 @@ export default component$(() => {
             </LiquidMetalButton>
           </div>
 
-          <Callout intent="info" title="How tools work" id="tools-intro">
-            A tool does nothing until you give it to an AI - its Set up list here, or Your AIs, edit, Tools. For now
-            tools work in projects: open a folder in a conversation with that AI and it can use them. Every action a tool
-            takes goes through your approve step, the same as a file edit, and stays in your records.
+          <Callout intent="info" title="What tools are" id="tools-what">
+            Tools let your AI work in other programs, like Blender or Obsidian. Add one, set it up, then ask your AI
+            in chat. It asks before each action.
           </Callout>
 
           {!build.installed.value && store.servers.length > 0 && (

@@ -46,7 +46,7 @@ export default component$(() => {
       id: "tools",
       icon: LuWrench,
       title: "Tools",
-      blurb: "Programs your AIs can work in - Blender, a browser, a 3D printer, your smart home. Chosen per AI, every action approved by you.",
+      blurb: "Let your AIs work inside other programs - Blender, Obsidian, a browser, your smart home. You choose which AI gets each tool, and it asks you before each action.",
       meta: "In projects",
       href: "/add-ons/mcp",
     },
