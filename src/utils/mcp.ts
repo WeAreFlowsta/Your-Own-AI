@@ -78,6 +78,7 @@ export function withCardData(s: McpServer): McpServer {
     sync: s.sync ?? card.sync,
     checks: s.checks?.length ? s.checks : card.checks,
     first_use: s.first_use || card.first_use,
+    examples: s.examples?.length ? s.examples : card.examples,
   };
 }
 
@@ -152,6 +153,9 @@ export interface McpServer {
   checks?: ToolCheck[];
   /** What to know about the tool's own download when there is no fetch step. */
   first_use?: string;
+  /** Things a person says when they want this tool - short, in their words.
+   *  The chat's tools gate compares a message with these (utils/toolsGate.ts). */
+  examples?: string[];
   added_at: number;
 }
 export interface SourceStatus { behind: boolean; local: string; remote: string }
@@ -281,6 +285,22 @@ export const MCP_PRESETS: McpPreset[] = [
       env: [],
       guidance: "Blender is open and connected to you through its add-on. Make every change with execute_blender_code in that live session - the person watches it happen in their viewport. Work in small steps: several short calls of a few seconds each rather than one long script - never more than about 40 lines in a single execute_blender_code call; build a piece, check it, then the next - so Blender stays responsive (a long script freezes or crashes it) and the person sees progress; keep geometry simple unless asked for detail. Never run blender --background, --python or --python-expr from the terminal on the open file: that edits a second copy on disk that the open Blender does not show; never run python from the terminal either - Blender's own Python is inside the tool. If a tool returns a picture you cannot see, verify with get_objects_summary instead. Look before you act (get_objects_summary), do not save the file unless asked, and use the _for_cli variants only when no Blender is open.",
       checks: [{ kind: "helper", helper: "blender-addon" }],
+      examples: [
+        "add a cube to the scene",
+        "remove that object from the scene",
+        "make the model smoother",
+        "make this part bigger",
+        "turn it around a little",
+        "what is slowing my scene down?",
+        "render a thumbnail of this",
+        "take a screenshot of the viewport",
+        "move the camera back a bit",
+        "change the lighting",
+        "give the chair a wooden material",
+        "how many objects are in my scene?",
+        "what is in my scene right now?",
+        "run this script in Blender",
+      ],
       source: "preset:blender",
       fetch_dir: "~/blender_mcp",
       added_at: 0,
@@ -315,6 +335,24 @@ export const MCP_PRESETS: McpPreset[] = [
       sync: { path: "VAULT_PATH", switch: "KEEP_IN_SYNC" },
       first_use:
         "Fetched the first time your AI uses it - mcpvault 0.16.0, a few MB, from the npm registry. That first start takes a little longer.",
+      examples: [
+        "show me my note on the budget",
+        "what did I save about the trip?",
+        "put this in my notes",
+        "jot this down for me",
+        "take a note of this",
+        "check my notes for the recipe",
+        "did I note down her birthday?",
+        "open my page about the garden",
+        "what have I written on this topic?",
+        "what have I gathered so far on this?",
+        "what did I settle on last time?",
+        "what is on my list?",
+        "add this to my list",
+        "look through my journal for when that happened",
+        "show me what I tagged with this",
+        "make a new note for this idea",
+      ],
       source: "preset:obsidian",
       added_at: 0,
     }),
@@ -359,6 +397,24 @@ export const MCP_PRESETS: McpPreset[] = [
       ],
       first_use:
         "Fetched the first time your AI uses it - mcp-logseq 1.9.1 and the Python packages it runs on, about 45 MB on disk, from the Python package index (and a Python of its own, when this computer has none from 3.11 up). That first start takes longer.",
+      examples: [
+        "show me my note on the budget",
+        "what did I save about the trip?",
+        "put this in my notes",
+        "jot this down for me",
+        "take a note of this",
+        "check my notes for the recipe",
+        "did I note down her birthday?",
+        "open my page about the garden",
+        "what have I written on this topic?",
+        "what have I gathered so far on this?",
+        "what did I settle on last time?",
+        "what is on my list?",
+        "add this to my list",
+        "look through my journal for when that happened",
+        "show me what I tagged with this",
+        "make a new note for this idea",
+      ],
       source: "preset:logseq",
       added_at: 0,
     }),

@@ -1121,7 +1121,20 @@ export default component$(() => {
   });
 
   // --- Callbacks (replace useCallback with $()) ---
+  // "Answer again with tools" on a reply: the next submit skips the gate.
+  const forceToolsNext = useSignal(false);
+  // ...and the exchange it replaces: where it starts in the list, or -1. The
+  // old question and reply stay on screen until the new turn is actually
+  // sent (a session takes a couple of seconds to open; an empty list in the
+  // meantime is the home view - the chat used to jump there and back).
+  const replaceTurnFrom = useSignal(-1);
+
   const handleSubmit = $(async () => {
+    const dropReplacedTurn = () => {
+      if (replaceTurnFrom.value < 0) return;
+      chatState.messages = chatState.messages.slice(0, replaceTurnFrom.value);
+      replaceTurnFrom.value = -1;
+    };
     // What a session turn is told beside the question: attached files, AND
     // the passages of the AI's own documents that match it - the same ones a
     // direct chat gets. Without this an AI that carries a tool (every one of
@@ -1200,6 +1213,36 @@ export default component$(() => {
     // Folder open -> the agent session is the one brain for this
     // conversation. Attached-file text rides along; images are a direct-chat
     // feature for now.
+    // An AI that carries tools answers through a tools session - but only
+    // when THIS message is about a tool (utils/toolsGate.ts):
+    // it names one, sounds like what one does, the conversation has already
+    // used one, or the person asked for the tools. Anything else is an
+    // ordinary answer - "thanks" does not start a session.
+    let wantsTools = false;
+    if (activeTools(selectedAi.value.aiConfig).length > 0 && attachedImages.value.length === 0) {
+      const forced = forceToolsNext.value;
+      forceToolsNext.value = false;
+      try {
+        const { toolsGate, gateTools } = await import("../../utils/toolsGate");
+        const verdict = await toolsGate({
+          message: finalInput,
+          previous: [...chatState.messages].reverse().find((m) => m.role === "user")?.content,
+          tools: await gateTools(activeTools(selectedAi.value.aiConfig)),
+          sticky:
+            agentState.mode === "tools" &&
+            agentState.sessionAiId === selectedAi.value.aiConfig?.id &&
+            agentState.sessionToolCalls > 0,
+          forced,
+        });
+        wantsTools = verdict.session;
+      } catch {
+        wantsTools = true; // cannot judge: the old behavior
+      }
+      // An ordinary answer while a session that never used a tool sits open:
+      // end it. It would not see this turn, and the next tools message opens
+      // a fresh one that is told the whole conversation.
+      if (!wantsTools && agentState.mode === "tools" && !chatState.isLoading) await closeFolder$();
+    }
     // A tools session keeps the tools it started with. When a tool's
     // settings have changed since (read only switched off, another vault),
     // an idle session is not reused: the branch below opens a fresh one.
@@ -1212,6 +1255,7 @@ export default component$(() => {
       } catch { /* cannot tell: keep the session */ }
     }
     const toolsSessionIsThisAis =
+      wantsTools &&
       toolsSetUpTheSame &&
       agentState.mode === "tools" &&
       activeTools(selectedAi.value.aiConfig).length > 0 &&
@@ -1221,6 +1265,7 @@ export default component$(() => {
       // chips - never the extracted text (a PDF used to land wholesale in
       // the user's bubble on this path).
       const given = await sessionContext(fileContext, finalInput);
+      dropReplacedTurn();
       sendAgentPrompt$(finalInput, {
         context: given.context,
         library: given.library,
@@ -1238,12 +1283,9 @@ export default component$(() => {
     // the printer work right here in chat. Falls back to a direct answer
     // when the session cannot start (Build not installed, no agent-ready
     // model) - the AI then says tools need Projects.
-    if (
-      activeTools(selectedAi.value.aiConfig).length > 0 &&
-      attachedImages.value.length === 0 &&
-      (await openToolsSession$())
-    ) {
+    if (wantsTools && (await openToolsSession$())) {
       const given = await sessionContext(fileContext, finalInput);
+      dropReplacedTurn();
       sendAgentPrompt$(finalInput, {
         context: given.context,
         library: given.library,
@@ -1256,10 +1298,29 @@ export default component$(() => {
     }
 
     const images = attachedImages.value.map((i) => i.dataUrl);
+    dropReplacedTurn();
     sendMessage(finalInput, selectedAction.value, fileContext, images);
     input.value = "";
     selectedAction.value = null;
     attachedImages.value = []; // image is per-turn — don't silently re-send it
+  });
+
+  // Retry, redo on the other side, or - for an AI that carries tools -
+  // "Answer again with tools": the direct reply and its question leave the
+  // list (as any retry does) and the same question goes through a session.
+  const retryOrTools$ = $(async (id: string, target?: "online" | "device" | "tools") => {
+    if (target !== "tools") return retry(id, target);
+    const at = chatState.messages.findIndex((m) => m.id === id);
+    const asked = at > 0 ? chatState.messages[at - 1] : undefined;
+    if (!asked || asked.role !== "user" || chatState.isLoading) return;
+    replaceTurnFrom.value = at - 1;
+    input.value = asked.content;
+    forceToolsNext.value = true;
+    try {
+      await handleSubmit();
+    } finally {
+      replaceTurnFrom.value = -1; // a submit that sent nothing replaces nothing
+    }
   });
 
   // The reply has ended (stopped at its sentence, run to its end, or Stop):
@@ -1578,7 +1639,8 @@ export default component$(() => {
             <ChatContainer
               messages={chatState.messages}
               messagesEndRef={messagesEndRef}
-              retry$={retry}
+              retry$={retryOrTools$}
+              canUseTools={activeTools(selectedAi.value.aiConfig).length > 0 && !chatState.isLoading}
               canRouteOnline={selectedAi.value.aiConfig?.model === 'auto:online-offline'}
               onGround$={groundMessage$}
               scrollToBottom$={scrollToBottom}

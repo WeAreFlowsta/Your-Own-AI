@@ -124,6 +124,15 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   is a line with its own button like everything else. Tools you
   added yourself get the same Set up list, which replaces the separate
   settings window and the "Used by" list.
+- Tools only when a message needs them. An AI that carries a tool used to
+  answer every message through a tools session - slower to start, and more
+  paid tokens on an online model - even for "thanks". Now a message goes
+  to a session when it names the tool, sounds like what the tool does, or
+  the conversation has already used a tool; anything else is an ordinary
+  answer. The check runs on this computer, with no model call. When it
+  gets it wrong, the reply has "Answer again with tools". Without the
+  small helper download nothing changes: every message still goes to a
+  session.
 - A tool's settings are harder to leave unsaved: Save is a real button, an
   amber "Not saved yet" shows while what you typed differs from what is
   stored, and the last line of the Set up list says to press it. Settings

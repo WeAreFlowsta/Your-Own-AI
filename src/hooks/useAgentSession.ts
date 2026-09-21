@@ -63,6 +63,9 @@ export interface AgentSessionState {
   /** How the session's tools were launched (mcp_tools_signature). A changed
    *  setting changes it, and the next message opens a fresh session. */
   sessionToolsSig: string;
+  /** Tool calls this session has made - a tools conversation that has used
+   *  a tool stays in its session (utils/toolsGate.ts, "sticky"). */
+  sessionToolCalls: number;
   /** Tool servers that failed to start for this session (from their stderr
    *  logs) - surfaced as notices on the next turn, then cleared. */
   toolStartFailures: { name: string; tail: string }[];
@@ -388,6 +391,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     sessionAiId: null,
     sessionTools: "",
     sessionToolsSig: "",
+    sessionToolCalls: 0,
     toolStartFailures: [],
     startNotices: [],
     status: "idle",
@@ -1007,6 +1011,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.sessionAiId = aiId;
     state.sessionTools = names.join(",");
     state.sessionToolsSig = sig;
+    state.sessionToolCalls = 0;
     state.status = "starting";
     state.statusNote = "Getting your tools ready...";
     state.touchedFiles = [];
@@ -1056,6 +1061,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.sessionAiId = null;
     state.sessionTools = "";
     state.sessionToolsSig = "";
+    state.sessionToolCalls = 0;
     state.status = "idle";
     state.statusNote = "";
     try { (window as unknown as { __yoaiTurnRunning?: boolean }).__yoaiTurnRunning = false; } catch { /* fine */ }
@@ -1570,6 +1576,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
           state.liveStatus = "Planning..";
           return;
         }
+        if (kind === "tool_call") state.sessionToolCalls += 1;
         const out = actionOutput(update);
         const diff = extractDiff(update.content);
         if (!update.status || update.status === "in_progress" || update.status === "pending") {

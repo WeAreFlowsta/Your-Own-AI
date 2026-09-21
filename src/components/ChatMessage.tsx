@@ -121,9 +121,11 @@ interface ChatMessageProps {
   onScrollNeeded$?: QRL<() => void>;
   onUpgradeClick$?: QRL<(originalQuery: string, triggerMessageId: string) => void>;
   /** Redo this turn on the other side ("Try online" / "Redo on your device"). */
-  onRouteRetry$?: QRL<(target: 'online' | 'device') => void>;
+  onRouteRetry$?: QRL<(target: 'online' | 'device' | 'tools') => void>;
   /** Whether this AI may go online at all (auto online-offline mode). */
   canRouteOnline?: boolean;
+  /** This AI carries tools (a direct reply offers them). */
+  canUseTools?: boolean;
   aiLabel?: string;
   aiImageUrl?: string | null;
   setSidePanelContent$: QRL<(content: { messageId: string; codeString: string; language: string } | null) => void>;
@@ -290,8 +292,10 @@ interface ActionBarProps {
   theme: 'light' | 'dark';
   onGround$?: QRL<() => void>;
   isLast?: boolean;
-  onRouteRetry$?: QRL<(target: 'online' | 'device') => void>;
+  onRouteRetry$?: QRL<(target: 'online' | 'device' | 'tools') => void>;
   canRouteOnline?: boolean;
+  /** This AI carries tools (a direct reply offers them). */
+  canUseTools?: boolean;
   /** Agent turns: the work rail's expansion state - the Steps button and
    *  the collapsed stub toggle the same signal. */
   railOpen?: Signal<boolean>;
@@ -581,6 +585,23 @@ const ActionBar = component$<ActionBarProps>((props) => {
                 <span class="hidden md:inline">Tokens</span>
               </LiquidMetalButton>
             )}
+            {/* The tools gate sent this message to an ordinary answer. When
+                that was the wrong call, the tools are one press away - the
+                same question, through a tools session. */}
+            {props.isLast &&
+              props.canUseTools &&
+              props.onRouteRetry$ &&
+              props.message.role === 'assistant' &&
+              !props.message.agentTurn &&
+              !!props.message.content && (
+                <LiquidMetalButton
+                  onClick$={() => props.onRouteRetry$!('tools')}
+                  class="px-3 py-1 text-xs flex items-center"
+                  title="Ask the same question again, this time with this AI's tools"
+                >
+                  <span>Answer again with tools</span>
+                </LiquidMetalButton>
+              )}
             {props.message.role === 'assistant' && !!props.message.content && (
               <span class="relative inline-flex">
                 <LiquidMetalButton
@@ -1455,6 +1476,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
                   isLast={props.isLast}
                   onRouteRetry$={props.onRouteRetry$}
                   canRouteOnline={props.canRouteOnline}
+                  canUseTools={props.canUseTools}
                 />
               )}
               {/* Agent work rail: the turn's story (speech, thread, cards),
