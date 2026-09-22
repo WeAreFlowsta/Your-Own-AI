@@ -123,6 +123,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   reads the card's free memory fresh after the chat model has left it,
   and the slider opens on the stop nearest the current setup. When the
   exact setup was not timed, the line names the nearest measured stop.
+- Fine-tune's measured slider no longer pins the context when it lands on
+  the "auto" stop. The automatics already take the measured winners at
+  that size, so sliding back to auto returns to Automatic and Save clears
+  the entry, instead of leaving a pinned context the person did not mean
+  to set.
 
 ### Projects
 - When a tools session warns that the model's window is small, it now says

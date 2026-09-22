@@ -178,11 +178,23 @@ export default component$<ModelTuneDialogProps>((props) => {
   const usePick = $((i: number) => {
     const p = positions.value[i];
     if (!p) return;
+    note.value = '';
+    // The auto stop IS Automatic: at that size the automatics already take
+    // the measured winners (compact cache, expert split, micro-batch), so
+    // landing here clears every pin. Sliding back to auto leaves nothing
+    // behind, and Save then removes the entry instead of pinning the
+    // automatic size as if the person had chosen it.
+    if (p.ctx === props.autoCtx) {
+      ctx.value = null;
+      moeN.value = null;
+      draftOff.value = false;
+      kv.value = 'auto';
+      return;
+    }
     ctx.value = p.ctx;
     if (p.moe_cpu_layers != null) moeN.value = p.moe_cpu_layers;
     draftOff.value = !p.draft && props.hasDraft;
     kv.value = p.kv_q8 ? 'q8_0' : 'auto';
-    note.value = '';
   });
 
   const save = $(async () => {
