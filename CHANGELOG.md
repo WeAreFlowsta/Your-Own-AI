@@ -28,6 +28,14 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   replies, the memory portrait and document cards. See *Models*.
 
 ### Models
+- A computer whose only graphics is integrated now gets a measured choice:
+  Fine-tune's bench tries the processor against the integrated graphics and
+  keeps the processor when it reads and writes at least 10% faster (an
+  Intel UHD 630 read at 29 tokens a second and wrote at 5.6; the same
+  machine's processor did 52 and 9.1). A modern integrated GPU that wins
+  keeps the model.
+- On the bundled graphics engine with a graphics card, the bench also tries
+  bigger batches and keeps them per model where they read faster.
 - Long prompts read faster on a split model. Fine-tune's bench now tries a
   bigger batch for a mixture-of-experts model whose expert layers sit in
   main memory, and keeps it where it read at least 15% faster (measured on

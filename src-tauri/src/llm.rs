@@ -894,6 +894,22 @@ fn args_force_cpu(args: &[String]) -> bool {
     })
 }
 
+/// The engine sees graphics, and all of it is integrated (shares main
+/// memory): the machine the processor may beat. False when the probe fails
+/// or nothing is listed.
+pub(crate) async fn only_integrated_gpu(app_handle: &AppHandle) -> bool {
+    if !crate::gpu_safety::gpu_allowed(app_handle) || crate::gpu_safety::device_unsupported(app_handle).is_some() {
+        return false;
+    }
+    let probe_dir = get_models_dir(app_handle).unwrap_or_else(|_| std::env::temp_dir());
+    let Ok(cmd) = chat_server_command(app_handle, &probe_dir) else { return false };
+    let Ok(Ok(output)) = tokio::time::timeout(std::time::Duration::from_secs(15), cmd.args(["--list-devices"]).output()).await else { return false };
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    let devices = parse_gpu_devices(&text);
+    !devices.is_empty() && devices.iter().all(|d| d.integrated)
+}
+
 pub(crate) async fn select_gpu_device_args(app_handle: &AppHandle) -> Vec<String> {
     // Escape hatch: force CPU-only inference with FLOWSTA_CPU_ONLY=1. Some
     // setups (notably NVIDIA + Wayland + Vulkan compute) hard-hang the whole
@@ -2818,7 +2834,16 @@ pub async fn start_llama_server(
     // path) rather than crawling on the CPU - a slow CPU fallback was worse than an
     // honest stop, and small-GPU is the case we optimise for. A machine with no
     // discrete GPU gets `-ngl 0` from here and runs on the CPU (its only path).
-    args.extend(select_gpu_device_args(&app_handle).await);
+    let device_args = select_gpu_device_args(&app_handle).await;
+    // A machine whose only graphics is integrated leaves the engine's
+    // choice alone - unless the bench measured the processor faster for
+    // this model here (utils: tuning `processor_choice`).
+    if device_args.is_empty() && loading_name.as_deref().map(|f| crate::tuning::processor_choice(&app_handle, f)).unwrap_or(false) {
+        log::info!("[LLM] on the processor - the bench measured it faster than the integrated graphics for this model");
+        args.extend(["--device", "none", "-ngl", "0"].iter().map(|s| s.to_string()));
+    } else {
+        args.extend(device_args);
+    }
 
     // Mixture-of-experts models that do not fit the graphics card run with
     // their expert tensors pinned to the CPU (`--cpu-moe`): attention, the
