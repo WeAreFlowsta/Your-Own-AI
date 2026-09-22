@@ -218,6 +218,10 @@ pub struct TuneArm {
     /// Compact (q8_0) KV cache with flash attention on.
     #[serde(default)]
     pub kv_q8: bool,
+    /// Bigger micro-batch (`-ub 2048 -b 2048`): fewer, larger passes over
+    /// expert weights in main memory. 0 = the engine default (512).
+    #[serde(default)]
+    pub ubatch: u32,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -227,6 +231,8 @@ pub struct TuneResult {
     pub draft: bool,
     #[serde(default)]
     pub kv_q8: bool,
+    #[serde(default)]
+    pub ubatch: u32,
     pub load_secs: f32,
     pub pp_tps: f32,
     pub gen_tps: f32,
@@ -310,24 +316,64 @@ pub fn arms_for(
     };
     let mut arms: Vec<TuneArm> = Vec::new();
     for &r in &rungs {
-        arms.push(TuneArm { ctx: r, moe_cpu_layers: auto_n(r), draft: has_draft, kv_q8: false });
+        arms.push(TuneArm { ctx: r, moe_cpu_layers: auto_n(r), draft: has_draft, kv_q8: false, ubatch: 0 });
     }
     let auto_rung = LADDER[i];
     if has_draft {
-        arms.push(TuneArm { ctx: auto_rung, moe_cpu_layers: auto_n(auto_rung), draft: false, kv_q8: false });
+        arms.push(TuneArm { ctx: auto_rung, moe_cpu_layers: auto_n(auto_rung), draft: false, kv_q8: false, ubatch: 0 });
     }
     if let Some(n) = auto_n(auto_rung) {
         if n > 0 {
             let step = ((meta.expert_bytes_per_layer.len() as u32) / 8).max(2);
-            arms.push(TuneArm { ctx: auto_rung, moe_cpu_layers: Some(n.saturating_sub(step)), draft: has_draft, kv_q8: false });
+            arms.push(TuneArm { ctx: auto_rung, moe_cpu_layers: Some(n.saturating_sub(step)), draft: has_draft, kv_q8: false, ubatch: 0 });
         }
     }
     // The compact-cache arm: the automatic rung with everything else the
     // same, so Auto has a like-for-like twin to judge it against.
-    arms.push(TuneArm { ctx: auto_rung, moe_cpu_layers: auto_n(auto_rung), draft: has_draft, kv_q8: true });
+    arms.push(TuneArm { ctx: auto_rung, moe_cpu_layers: auto_n(auto_rung), draft: has_draft, kv_q8: true, ubatch: 0 });
+    // The micro-batch arm: the automatic rung again with `-ub 2048`, only
+    // when expert layers sit in main memory - that is where it pays
+    // (measured 2026-09-22, 8k prompt: a split MoE 501 -> 699 tok/s, a
+    // model whole on the card 745 -> 729, nothing). Costs ~200 MB of card.
+    if auto_n(auto_rung).map(|n| n > 0).unwrap_or(false) {
+        arms.push(TuneArm { ctx: auto_rung, moe_cpu_layers: auto_n(auto_rung), draft: has_draft, kv_q8: false, ubatch: 2048 });
+    }
     let mut seen = std::collections::HashSet::new();
-    arms.retain(|a| seen.insert((a.ctx, a.moe_cpu_layers, a.draft, a.kv_q8)));
+    arms.retain(|a| seen.insert((a.ctx, a.moe_cpu_layers, a.draft, a.kv_q8, a.ubatch)));
     arms
+}
+
+/// The micro-batch the bench proved faster here, if any: the arm with
+/// `-ub 2048` at the automatic rung that loaded and READ at least 15%
+/// faster than its like-for-like twin without writing more than 10% slower
+/// (the gain is in prompt reading; the card cost is real, so a small gain
+/// does not earn it).
+pub fn ubatch_choice_from_profile(profile: Option<&TuneProfile>) -> u32 {
+    let Some(p) = profile else { return 0 };
+    for big in p.results.iter().filter(|r| r.ubatch > 0 && r.failed.is_none() && r.pp_tps > 0.0) {
+        let twin = p.results.iter().find(|r| {
+            r.ubatch == 0 && r.failed.is_none() && r.ctx == big.ctx && r.moe_cpu_layers == big.moe_cpu_layers && r.draft == big.draft && r.kv_q8 == big.kv_q8
+        });
+        if let Some(t) = twin {
+            // reading at least 15% faster, writing within 10% (the measured
+            // split case: reading +40%, writing -12% one run, -2% the next)
+            if big.pp_tps >= 1.15 * t.pp_tps && big.gen_tps >= 0.88 * t.gen_tps {
+                return big.ubatch;
+            }
+        }
+    }
+    0
+}
+
+/// The engine flags for a micro-batch the bench proved (0 = none).
+pub fn ubatch_args(ubatch: u32) -> Vec<String> {
+    if ubatch == 0 { return Vec::new() }
+    vec!["-ub".into(), ubatch.to_string(), "-b".into(), ubatch.to_string()]
+}
+
+/// This model's proven micro-batch on this machine (0 = the default).
+pub fn ubatch_choice(app: &AppHandle, model: &str) -> u32 {
+    ubatch_choice_from_profile(profiles_load(app).get(model))
 }
 
 static TUNE_CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -372,6 +418,9 @@ pub async fn bench_one(
     threads: Option<u32>,
     gpu_args: &[String],
     vram_probe: Option<&(dyn Fn() -> Option<f64> + Send + Sync)>,
+    // This arm is the like-for-like twin of a micro-batch arm: it reads
+    // the same long prompt so the two compare.
+    arm_has_ubatch_twin: bool,
 ) -> TuneResult {
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
@@ -380,6 +429,7 @@ pub async fn bench_one(
         moe_cpu_layers: arm.moe_cpu_layers,
         draft: arm.draft,
         kv_q8: arm.kv_q8,
+        ubatch: arm.ubatch,
         load_secs: 0.0,
         pp_tps: 0.0,
         gen_tps: 0.0,
@@ -411,6 +461,7 @@ pub async fn bench_one(
     if force_cpu || arm.moe_cpu_layers.map(|n| n > 0).unwrap_or(false) || cfg!(target_os = "macos") {
         args.push("--no-mmap".into());
     }
+    args.extend(ubatch_args(arm.ubatch));
     if arm.draft {
         if let Some((dt, df)) = &draft_file {
             args.push("--spec-type".into());
@@ -496,7 +547,11 @@ pub async fn bench_one(
     // A fixed reading-heavy prompt (~700 tokens) and a short answer: prompt
     // speed and generation speed from the server's own timing report.
     let sentence = "The measurement paragraph describes the same simple scene again so that every arm reads an identical stretch of text before it answers the one small question at the end. ";
-    let prompt = format!("{}\nIn one short sentence, what is this text for?", sentence.repeat(24));
+    // The micro-batch arm and its twin read a LONG prompt (~5k tokens):
+    // a 700-token prompt is over in a quarter of a second, start-up cost
+    // dominates, and the difference the arm exists to measure is invisible.
+    let reps = if arm.ubatch > 0 || arm_has_ubatch_twin { 170 } else { 24 };
+    let prompt = format!("{}\nIn one short sentence, what is this text for?", sentence.repeat(reps));
     let mut body = serde_json::json!({
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
@@ -587,19 +642,22 @@ pub async fn tune_run(
     let total = arms.len();
     log::info!("[tune] {model}: {total} arms, free VRAM {free_vram_gb:?}, runs at {auto_ctx:?}");
     let mut results = Vec::new();
-    for (i, arm) in arms.into_iter().enumerate() {
+    for (i, arm) in arms.clone().into_iter().enumerate() {
         if TUNE_CANCEL.load(std::sync::atomic::Ordering::SeqCst) {
             break;
         }
         let desc = format!(
-            "{} context{}{}{}",
+            "{} context{}{}{}{}",
             arm.ctx,
             match arm.moe_cpu_layers { Some(0) => " - all on the card".into(), Some(n) => format!(" - {n} expert layers in RAM"), None => String::new() },
             if draft_file.is_some() { if arm.draft { " - speed-up on" } else { " - speed-up off" } } else { "" },
-            if arm.kv_q8 { " - compact cache" } else { "" }
+            if arm.kv_q8 { " - compact cache" } else { "" },
+            if arm.ubatch > 0 { " - bigger batches" } else { "" }
         );
         let _ = app.emit("tune-run", serde_json::json!({ "model": model, "done": i, "total": total, "current": desc }));
-        let r = bench_one(&bin, &models_dir, &model, arm, draft_file.clone(), engine_threads(&app), &gpu_args, None).await;
+        // A twin is any arm a micro-batch arm will be compared with.
+        let twin = arm.ubatch == 0 && arms.iter().any(|b| b.ubatch > 0 && b.ctx == arm.ctx && b.moe_cpu_layers == arm.moe_cpu_layers && b.draft == arm.draft && b.kv_q8 == arm.kv_q8);
+        let r = bench_one(&bin, &models_dir, &model, arm, draft_file.clone(), engine_threads(&app), &gpu_args, None, twin).await;
         log::info!(
             "[tune] {model} arm {desc}: load {:.1} s, prompt {:.0} tok/s, gen {:.1} tok/s{}",
             r.load_secs, r.pp_tps, r.gen_tps,
@@ -625,7 +683,7 @@ mod tests {
     use super::*;
 
     fn r(ctx: u64, kv_q8: bool, gen: f32, failed: Option<&str>) -> TuneResult {
-        TuneResult { ctx, moe_cpu_layers: None, draft: false, kv_q8, load_secs: 1.0, pp_tps: 50.0, gen_tps: gen, failed: failed.map(String::from), during_free: None }
+        TuneResult { ctx, moe_cpu_layers: None, draft: false, kv_q8, ubatch: 0, load_secs: 1.0, pp_tps: 50.0, gen_tps: gen, failed: failed.map(String::from), during_free: None }
     }
 
     #[test]
@@ -645,7 +703,7 @@ mod tests {
 
     #[test]
     fn measured_split_takes_a_faster_smaller_split_only() {
-        let arm = |ctx: u64, n: u32, gen: f32| TuneResult { ctx, moe_cpu_layers: Some(n), draft: false, kv_q8: false, load_secs: 3.0, pp_tps: 300.0, gen_tps: gen, failed: None, during_free: None };
+        let arm = |ctx: u64, n: u32, gen: f32| TuneResult { ctx, moe_cpu_layers: Some(n), draft: false, kv_q8: false, ubatch: 0, load_secs: 3.0, pp_tps: 300.0, gen_tps: gen, failed: None, during_free: None };
         let p = TuneProfile { measured_at: 0, results: vec![arm(16384, 16, 34.5), arm(16384, 13, 39.8), arm(8192, 15, 36.5)] };
         assert_eq!(measured_moe_split(Some(&p), 16384, 16), Some(13));
         assert_eq!(measured_moe_split(Some(&p), 16384, 13), None, "nothing smaller measured");
@@ -718,7 +776,7 @@ mod tests {
             .expect("its standard twin");
         let mut results = Vec::new();
         for arm in [twin, compact] {
-            let r = bench_one(&bin, &dir, &model, arm, None, None, &[], None).await;
+            let r = bench_one(&bin, &dir, &model, arm, None, None, &[], None, false).await;
             results.push(r.clone());
             eprintln!(
                 "[matrix] tune arm ctx {} moe {:?} draft {} compact {}: load {:.1} s, prompt {:.0} tok/s, gen {:.1} tok/s, failed {:?}",
@@ -858,11 +916,31 @@ mod tests {
     }
 
     #[test]
+    fn a_bigger_batch_is_kept_only_when_it_reads_clearly_faster() {
+        let r = |ubatch: u32, pp: f32, gen: f32| TuneResult { ctx: 32768, moe_cpu_layers: Some(15), draft: false, kv_q8: false, ubatch, load_secs: 3.0, pp_tps: pp, gen_tps: gen, failed: None, during_free: None };
+        let p = |results: Vec<TuneResult>| TuneProfile { results, ..Default::default() };
+        assert_eq!(ubatch_choice_from_profile(None), 0);
+        // measured 501 -> 699 tok/s reading: kept
+        assert_eq!(ubatch_choice_from_profile(Some(&p(vec![r(0, 501.0, 18.5), r(2048, 699.0, 16.3)]))), 2048);
+        // 10% is not enough for ~200 MB of card
+        assert_eq!(ubatch_choice_from_profile(Some(&p(vec![r(0, 500.0, 18.0), r(2048, 550.0, 18.0)]))), 0);
+        // reads faster but writes much slower: not kept
+        assert_eq!(ubatch_choice_from_profile(Some(&p(vec![r(0, 500.0, 18.0), r(2048, 700.0, 14.0)]))), 0);
+        // no twin to compare with
+        assert_eq!(ubatch_choice_from_profile(Some(&p(vec![r(2048, 700.0, 18.0)]))), 0);
+        assert_eq!(ubatch_args(0).len(), 0);
+        assert_eq!(ubatch_args(2048), vec!["-ub", "2048", "-b", "2048"]);
+    }
+
+    #[test]
     fn arms_cover_rungs_draft_and_leaner_split() {
         let meta = moe_meta();
         let arms = arms_for(&meta, 4_800_000_000, 31.0, Some(2.0), true, None);
-        assert!(arms.len() <= 5, "small on purpose: {arms:?}");
+        assert!(arms.len() <= 6, "small on purpose: {arms:?}");
         assert!(arms.iter().any(|a| !a.draft), "a draft-off arm exists");
+        // experts in main memory: the bigger-batch arm exists, with a twin
+        let big = arms.iter().find(|a| a.ubatch > 0).expect("a micro-batch arm");
+        assert!(arms.iter().any(|a| a.ubatch == 0 && a.ctx == big.ctx && a.moe_cpu_layers == big.moe_cpu_layers && a.draft == big.draft && !a.kv_q8), "its twin");
         let ctxs: std::collections::HashSet<u64> = arms.iter().map(|a| a.ctx).collect();
         assert!(ctxs.len() >= 2, "more than one context rung: {ctxs:?}");
         assert!(arms.iter().all(|a| a.ctx <= 32768), "inside the trained limit");

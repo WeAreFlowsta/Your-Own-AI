@@ -2771,6 +2771,13 @@ pub async fn start_llama_server(
             } else {
                 log::debug!("[LLM] KV cache f16 - {}", kv.reason);
             }
+            // A bigger micro-batch where this machine's bench proved it
+            // reads faster (expert layers in main memory): ~200 MB of card.
+            let ub = crate::tuning::ubatch_choice(&app_handle, &filename);
+            if ub > 0 {
+                args.extend(crate::tuning::ubatch_args(ub));
+                log::info!("[LLM] micro-batch {ub} - the bench read prompts at least 15% faster with it here");
+            }
             log::info!("[LLM] Starting server with model: {}", filename);
 
             // Pair the multimodal projector only when this load is FOR vision

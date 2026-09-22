@@ -455,6 +455,7 @@ pub async fn leg_fit_truth(app: Option<&AppHandle>, bin: &Path, dir: &Path, only
         "{:<38} {:>5} {:>6} {:>6} {:>6} | {:>7} {:>6} {:>6} {:>7}  verdict",
         "model", "grade", "ctx", "estGB", "freeGB", "realGB", "load_s", "gen", "prompt"
     ));
+    sink("  (gen = tok/s writing at a near-empty context; prompt = tok/s reading a ~700-token prompt, where start-up cost dominates - a long prompt reads several times faster, see the tune bench leg)".into());
     let mut failures = Vec::new();
     for name in files {
         if cancelled() {
@@ -483,9 +484,9 @@ pub async fn leg_fit_truth(app: Option<&AppHandle>, bin: &Path, dir: &Path, only
             .get(&name)
             .copied()
             .unwrap_or_else(|| crate::fit::grade(need, free, avail_ram));
-        let arm = TuneArm { ctx, moe_cpu_layers: moe_decision(&meta, size, ctx, free), draft: false, kv_q8: false };
+        let arm = TuneArm { ctx, moe_cpu_layers: moe_decision(&meta, size, ctx, free), draft: false, kv_q8: false, ubatch: 0 };
         let before = free_vram();
-        let r = bench_one(bin, dir, &name, arm, None, None, &[], Some(&free_vram)).await;
+        let r = bench_one(bin, dir, &name, arm, None, None, &[], Some(&free_vram), false).await;
         let after_kill = free_vram();
         let real = match (before, r.during_free) {
             (Some(b), Some(d)) => format!("{:.2}", b - d),
@@ -584,7 +585,7 @@ pub async fn leg_chat_format(bin: &Path, dir: &Path, sink: Sink<'_>) -> Vec<Stri
             Err(_) => continue,
         };
         let free = free_vram_gb(bin);
-        let arm = TuneArm { ctx: 4096, moe_cpu_layers: moe_decision(&meta, size, 4096, free), draft: false, kv_q8: false };
+        let arm = TuneArm { ctx: 4096, moe_cpu_layers: moe_decision(&meta, size, 4096, free), draft: false, kv_q8: false, ubatch: 0 };
         let r = bench_chat_format(bin, dir, &name, arm, &CHAT_SCENARIOS).await;
         sink(format!("{:<38} {}", name, r));
         if r.starts_with("FAIL") {
@@ -717,10 +718,14 @@ pub async fn leg_tune_bench(bin: &Path, dir: &Path, model: &str, sink: Sink<'_>)
         if cancelled() {
             return Err("cancelled".into());
         }
-        let r = bench_one(bin, dir, model, arm, None, None, &[], None).await;
+        // The second arm reads the LONG prompt (~5k tokens): the honest
+        // reading figure, next to the short one above it.
+        let long = arm.ubatch > 0;
+        let r = bench_one(bin, dir, model, arm, None, None, &[], None, long).await;
         sink(format!(
-            "arm ctx {} moe {:?} draft {}: load {:.1} s, prompt {:.0} tok/s, gen {:.1} tok/s, failed {:?}",
-            r.ctx, r.moe_cpu_layers, r.draft, r.load_secs, r.pp_tps, r.gen_tps, r.failed
+            "arm ctx {} moe {:?} draft {}{}: load {:.1} s, prompt {:.0} tok/s ({} prompt), gen {:.1} tok/s, failed {:?}",
+            r.ctx, r.moe_cpu_layers, r.draft, if r.ubatch > 0 { format!(" ubatch {}", r.ubatch) } else { String::new() },
+            r.load_secs, r.pp_tps, if long || r.ubatch > 0 { "~5k-token" } else { "~700-token" }, r.gen_tps, r.failed
         ));
         if let Some(f) = r.failed {
             return Err(format!("arm failed: {f}"));

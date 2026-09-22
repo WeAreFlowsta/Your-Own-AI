@@ -28,6 +28,15 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   replies, the memory portrait and document cards. See *Models*.
 
 ### Models
+- Long prompts read faster on a split model. Fine-tune's bench now tries a
+  bigger batch for a mixture-of-experts model whose expert layers sit in
+  main memory, and keeps it where it read at least 15% faster (measured on
+  a 4 GB card: an 8,000-token prompt 501 to 699 tokens a second, for about
+  200 MB of graphics memory). A model that fits on the card whole gains
+  nothing from it and is left alone.
+- The truth-matrix report says what its speed figures measure: writing at
+  a near-empty context, and reading a short prompt where start-up cost
+  dominates; the bench leg reads a long prompt too and labels both.
 - A computer with several different graphics cards is described truthfully:
   each card by name with its size, biggest first (a box with an RTX PRO
   6000, an RTX 4090 and an RTX 5060 Ti read "2× RTX 5060 Ti (128.9GB)").
