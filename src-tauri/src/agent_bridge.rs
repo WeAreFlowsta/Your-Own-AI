@@ -469,11 +469,28 @@ pub async fn start_build_agent(
                 }
             };
             if let Some(ctx) = short {
-                let text = format!(
-                    "This model gets a {}k-token window on your computer, and the tools this AI carries take about 10k of it - a session can run out of room mid-task. A model with a bigger window, or fewer tools on this AI, gives it more to work with.",
-                    ctx / 1024
-                );
-                log::warn!("[agent] tools session on a {ctx}-token window - tight");
+                // Say WHY the window is small and where to fix it: a pin in
+                // Fine-tune is the person's own setting (Eric's 4k pin on
+                // Phi-4-mini, 09-22); a machine that cannot afford more is a
+                // different answer.
+                let pinned = room
+                    .as_ref()
+                    .ok()
+                    .and_then(|r| r.model.as_deref())
+                    .map(|m| crate::tuning::get(&app_handle, m).context.is_some())
+                    .unwrap_or(false);
+                let text = if pinned {
+                    format!(
+                        "This model's context is pinned at {}k in its Fine-tune settings, and the tools this AI carries take about 10k of it - a session can run out of room mid-task. Set the context back to Auto in Fine-tune (Offline Models), or pick a bigger size.",
+                        ctx / 1024
+                    )
+                } else {
+                    format!(
+                        "This model gets a {}k-token window on your computer, and the tools this AI carries take about 10k of it - a session can run out of room mid-task. A model with a bigger window, or fewer tools on this AI, gives it more to work with.",
+                        ctx / 1024
+                    )
+                };
+                log::warn!("[agent] tools session on a {ctx}-token window - tight{}", if pinned { " (pinned in Fine-tune)" } else { "" });
                 let _ = app_handle.emit("agent-hint", json!({ "kind": "context-room", "sticky": true, "text": text }));
             }
         }

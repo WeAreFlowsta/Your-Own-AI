@@ -125,6 +125,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   exact setup was not timed, the line names the nearest measured stop.
 
 ### Projects
+- When a tools session warns that the model's window is small, it now says
+  why: a context pinned in Fine-tune is named as the cause, with where to
+  change it; a machine that cannot afford more gets the other advice
+  (a bigger-window model, or fewer tools on the AI).
 - A project session's context window is the window of the model that
   serves its agent turns, sized the way the loader sizes it, and a model
   switch for an agent turn loads with at least that window when the
