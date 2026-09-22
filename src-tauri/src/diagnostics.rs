@@ -118,19 +118,20 @@ fn system_section() -> String {
                     format!("{name} (integrated, shares system memory)")
                 }
                 Some(name) => match si.total_vram_gb {
+                    Some(v) if name.contains(" + ") => format!("{name} - models are sized against the biggest, {v:.1}GB"),
                     Some(v) => format!("{name} ({v:.1}GB VRAM)"),
                     None => name.clone(),
                 },
                 None => "none detected".to_string(),
             };
             format!(
-                "OS: {} {}\nCPU: {} ({} cores)\nMemory: {:.1}GB total, {:.1}GB used\nGraphics: {}",
+                "OS: {} {}\nCPU: {} ({} cores)\nMemory: {:.1}GB total, {:.1}GB available now (what models are graded against)\nGraphics: {}",
                 si.os_name,
                 si.os_version,
                 si.cpu_brand,
                 si.cpu_count,
                 si.total_memory_gb,
-                si.used_memory_gb,
+                si.available_memory_gb,
                 gpu
             )
         }

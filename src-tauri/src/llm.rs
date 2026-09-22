@@ -4031,6 +4031,30 @@ fn mac_chip_name() -> String {
         .unwrap_or_else(|| "Apple Silicon".to_string())
 }
 
+/// One line for a set of cards: a single card by name; several of one kind
+/// as "2× <name>"; mixed cards each by name with their size, biggest first.
+pub(crate) fn gpu_summary_name(cards: &[(String, u64)]) -> String {
+    let gib = |b: u64| b as f64 / 1024_f64.powi(3);
+    let mut kinds: Vec<(String, u64, usize)> = Vec::new();
+    for (n, v) in cards {
+        match kinds.iter_mut().find(|(k, _, _)| k == n) {
+            Some(k) => k.2 += 1,
+            None => kinds.push((n.clone(), *v, 1)),
+        }
+    }
+    kinds.sort_by(|a, b| b.1.cmp(&a.1));
+    match kinds.as_slice() {
+        [] => String::new(),
+        [(n, _, 1)] => n.clone(),
+        [(n, _, c)] => format!("{c}× {n}"),
+        many => many
+            .iter()
+            .map(|(n, v, c)| if *c > 1 { format!("{c}× {n} ({:.0} GB each)", gib(*v)) } else { format!("{n} ({:.0} GB)", gib(*v)) })
+            .collect::<Vec<_>>()
+            .join(" + "),
+    }
+}
+
 /**
  * Get GPU information using Vulkan
  */
@@ -4116,22 +4140,23 @@ fn get_gpu_info() -> (Option<String>, Option<f64>) {
         }
     };
 
-    let total_vram_gb =
-        selected.iter().map(|(_, _, v)| *v).sum::<u64>() as f64 / 1024_f64.powi(3);
-    let name = if selected.len() == 1 {
-        selected[0].1.clone()
-    } else {
-        format!("{}× {}", selected.len(), selected[0].1)
-    };
-
+    // The figure the app sizes with is ONE card's: the engine loads a
+    // model onto the biggest card (a 23 GB model split across mismatched
+    // cards would be slower than the big card alone - a three-card
+    // Blackwell box measured 174 tok/s on its RTX PRO 6000 alone). A
+    // pooled sum credited that box with 128.9 GB nobody could use. The
+    // name lists every distinct card with its own size - "2× RTX 5060 Ti"
+    // named the FIRST card twice on a box with one of them.
+    let biggest_gb = selected.iter().map(|(_, _, v)| *v).max().unwrap_or(0) as f64 / 1024_f64.powi(3);
+    let name = gpu_summary_name(&selected.iter().map(|(_, n, v)| (n.clone(), *v)).collect::<Vec<_>>());
     log::info!(
-        "[LLM] GPU detected: {} ({:.1}GB usable VRAM across {} device(s))",
+        "[LLM] GPU detected: {} - {:.1} GB on the biggest card is what models are sized against ({} device(s))",
         name,
-        total_vram_gb,
+        biggest_gb,
         selected.len()
     );
 
-    (Some(name), Some(total_vram_gb))
+    (Some(name), Some(biggest_gb))
 }
 
 /**
@@ -6548,6 +6573,18 @@ mod stop_chain_tests {
 
 #[cfg(test)]
 mod live_matrix {
+    #[test]
+    fn gpu_summary_names_each_distinct_card() {
+        let g = 1024u64.pow(3);
+        assert_eq!(super::gpu_summary_name(&[("RTX 4070".into(), 12 * g)]), "RTX 4070");
+        assert_eq!(super::gpu_summary_name(&[("RTX 5060 Ti".into(), 16 * g), ("RTX 5060 Ti".into(), 16 * g)]), "2× RTX 5060 Ti");
+        // the Blackwell box: one of each, biggest first, never "2× <first card>"
+        assert_eq!(
+            super::gpu_summary_name(&[("RTX 5060 Ti".into(), 16 * g), ("RTX PRO 6000".into(), 96 * g), ("RTX 4090".into(), 24 * g)]),
+            "RTX PRO 6000 (96 GB) + RTX 4090 (24 GB) + RTX 5060 Ti (16 GB)"
+        );
+    }
+
     #[test]
     fn a_helper_on_the_processor_is_read_into_memory_not_mapped() {
         let a = super::helper_processor_args();

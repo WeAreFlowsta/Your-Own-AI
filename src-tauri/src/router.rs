@@ -101,7 +101,23 @@ async fn embed_guarded(app: &AppHandle, texts: Vec<String>) -> Result<Vec<Vec<f3
     r
 }
 
+/// Said once per app run: the memory model is simply not installed. Every
+/// routing decision asks for it (two warnings per decision filled a
+/// 500-line diagnostics tail with 1,224 matrix decisions), and "failure"
+/// was the wrong word for a file that is not there.
+static EMBED_NOT_INSTALLED_SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn embed_model_installed(app: &AppHandle) -> bool {
+    crate::llm::get_models_dir(app).map(|d| d.join(EMBED_MODEL).is_file()).unwrap_or(true)
+}
+
 async fn embed_guarded_inner(app: &AppHandle, texts: Vec<String>) -> Result<Vec<Vec<f32>>, String> {
+    if !embed_model_installed(app) {
+        if !EMBED_NOT_INSTALLED_SAID.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            log::info!("[router] the memory model is not installed - freshness and health checks use keywords only (Settings › Components adds it)");
+        }
+        return Err("memory model not installed".into());
+    }
     if let Ok(g) = EMBED_BROKEN_UNTIL.lock() {
         if let Some(until) = *g {
             if std::time::Instant::now() < until {
@@ -272,7 +288,7 @@ async fn fresh_benign_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec
             embed_guarded(app, texts).await
         })
         .await
-        .map_err(|e| log::warn!("[router] freshness anchors could not be embedded: {e}"))
+        .map_err(|e| if e != "memory model not installed" { log::warn!("[router] freshness anchors could not be embedded: {e}") })
         .ok()
 }
 
@@ -283,7 +299,7 @@ async fn fresh_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec<f32>>>
             embed_guarded(app, texts).await
         })
         .await
-        .map_err(|e| log::warn!("[router] freshness references could not be embedded: {e}"))
+        .map_err(|e| if e != "memory model not installed" { log::warn!("[router] freshness references could not be embedded: {e}") })
         .ok()
 }
 
@@ -491,7 +507,9 @@ pub(crate) async fn medical_check(
         return (true, true);
     }
     let Some(refs) = medical_reference_vecs(app).await else {
-        log::warn!("[router] health check: medical references unavailable (embedding down?)");
+        if embed_model_installed(app) {
+            log::warn!("[router] health check: medical references unavailable (embedding down?)");
+        }
         return (false, false);
     };
     let Some(benign) = benign_reference_vecs(app).await else {

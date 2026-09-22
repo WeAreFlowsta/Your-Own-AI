@@ -28,6 +28,17 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   replies, the memory portrait and document cards. See *Models*.
 
 ### Models
+- A computer with several different graphics cards is described truthfully:
+  each card by name with its size, biggest first (a box with an RTX PRO
+  6000, an RTX 4090 and an RTX 5060 Ti read "2× RTX 5060 Ti (128.9GB)").
+  The figure models are sized against is the biggest card's, not a pooled
+  sum: a model runs on one card, and that is what the welcome pick and the
+  system line now say.
+- The diagnostics report says how much memory is available now, the figure
+  models are graded against, instead of a "used" figure that did not add up.
+- Without the small memory model installed the log said so once and moved
+  on; it used to write two warnings about a "failure" on every routing
+  decision, which hid everything else in a diagnostics report.
 - On a small computer the first reply no longer takes twice as long. After
   a model loads, the app reads the AI's instructions once so the first
   question only pays for its own words; a question sent during that read
