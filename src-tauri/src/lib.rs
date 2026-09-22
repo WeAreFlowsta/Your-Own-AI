@@ -878,6 +878,7 @@ pub fn run() {
                 }
                 vault_escrow::start_daily_backup_check(&link_app_handle);
                 corpus::sync::start_folder_sync(&link_app_handle);
+                tuning::refresh_gpu_choices(&link_app_handle);
             });
 
             // Register Holochain state synchronously (manager filled when conductor starts)

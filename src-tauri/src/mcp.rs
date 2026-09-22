@@ -92,6 +92,11 @@ pub struct McpServer {
     /// is no fetch step (a launcher fetches it on first use).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub first_use: String,
+    /// Things a person says when they want this tool - the chat's tools
+    /// gate compares a message with these (a card's data; a hand-added
+    /// tool's from its form).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub examples: Vec<String>,
     #[serde(default)]
     pub added_at: u64,
 }

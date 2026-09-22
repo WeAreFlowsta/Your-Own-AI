@@ -28,6 +28,15 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   replies, the memory portrait and document cards. See *Models*.
 
 ### Models
+- Several graphics cards: a model now runs on the biggest card alone when
+  it fits there (pooling is always slower - a token passes through every
+  card in turn) and is pooled across all cards only when it does not fit.
+  Fine-tune gains a "Graphics cards" row on such computers: Auto, Biggest
+  card only, or Pool all cards (more memory and a larger context, slower),
+  and its bench measures the pooled case so the row shows real numbers.
+  Model sizes are graded against the biggest card, not a pooled total.
+- A bigger micro-batch the bench kept counts its own card memory (about
+  200 MB) in a model's estimate.
 - A computer whose only graphics is integrated now gets a measured choice:
   Fine-tune's bench tries the processor against the integrated graphics and
   keeps the processor when it reads and writes at least 10% faster (an
@@ -167,6 +176,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   downloaded, and then could not run.
 
 ### Tools
+- "Add your own" asks for a few things you would say to use the tool
+  (optional, one per line), so a chat message that sounds like one reaches
+  it and small talk does not; a tool without them is judged by its
+  description, which sends more messages to a session than needed.
 - One Set up list per tool. Each tool card now opens a single list of
   everything that tool needs, in order: Your Own AI Build (the free add-on
   that lets your AIs use tools), the programs the tool runs on, the tool

@@ -195,6 +195,8 @@ const finalizeInFlight = new Set<string>();
 export interface SystemInfo {
   /** True when the GPU shares system RAM (Intel/AMD integrated) - sized as CPU. */
   gpu_integrated?: boolean;
+  /** Discrete graphics cards the engine sees (Fine-tune's "Graphics cards" row shows from two). */
+  gpu_count?: number;
   total_memory_gb: number;
   used_memory_gb: number;
   /** The grader's own available figure (vm_stat on macOS). */
@@ -2034,6 +2036,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                         isMoe={!!fitInfo?.is_moe}
                         autoMoeN={fitInfo?.moe_auto_pick ?? fitInfo?.moe_cpu_layers}
                         hasDraft={!!model.draft}
+                        gpuCount={systemInfo?.gpu_count ?? 0}
                         onClose$={() => { store.tuneFor = ''; }}
                       />
                     )}

@@ -15,6 +15,8 @@ interface TuneResult {
   pp_tps: number;
   gen_tps: number;
   failed?: string | null;
+  /** "pool" for the all-cards-pooled arm. */
+  gpu?: string | null;
 }
 
 /**
@@ -43,6 +45,8 @@ interface ModelTuneDialogProps {
   autoMoeN?: number | null;
   /** A speed-up draft file is registered for this model. */
   hasDraft: boolean;
+  /** Discrete graphics cards on this computer; the cards row shows from two. */
+  gpuCount?: number;
   onClose$: QRL<() => void>;
 }
 
@@ -81,6 +85,7 @@ export default component$<ModelTuneDialogProps>((props) => {
   const moeN = useSignal<number | null>(null);
   const draftOff = useSignal(false);
   const kv = useSignal<Kv>('auto');
+  const gpu = useSignal<'auto' | 'biggest' | 'pool'>('auto');
   /** What was loaded from disk, to know whether anything changed. */
   const saved = useSignal<string>('');
   const note = useSignal('');
@@ -90,7 +95,7 @@ export default component$<ModelTuneDialogProps>((props) => {
   const sliderPos = useSignal(0);
   const manualOpen = useSignal(false);
 
-  const snapshot = $(() => JSON.stringify([ctx.value, moeN.value, draftOff.value, kv.value]));
+  const snapshot = $(() => JSON.stringify([ctx.value, moeN.value, draftOff.value, kv.value, gpu.value]));
 
   /** Put the slider on the stop nearest what the model runs at now, so a
    *  fresh table opens on the current setup rather than the smallest stop. */
@@ -103,7 +108,7 @@ export default component$<ModelTuneDialogProps>((props) => {
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async () => {
     try {
-      const t = await invoke<{ context?: number; moe_cpu_layers?: number; draft_off?: boolean; kv_cache?: string }>(
+      const t = await invoke<{ context?: number; moe_cpu_layers?: number; draft_off?: boolean; kv_cache?: string; gpu?: string }>(
         'tuning_get',
         { model: props.model },
       );
@@ -111,6 +116,7 @@ export default component$<ModelTuneDialogProps>((props) => {
       moeN.value = t.moe_cpu_layers ?? null;
       draftOff.value = !!t.draft_off;
       kv.value = t.kv_cache === 'q8_0' ? 'q8_0' : t.kv_cache === 'f16' ? 'f16' : 'auto';
+      gpu.value = t.gpu === 'pool' ? 'pool' : t.gpu === 'biggest' ? 'biggest' : 'auto';
     } catch {
       /* fresh dialog */
     }
@@ -187,6 +193,7 @@ export default component$<ModelTuneDialogProps>((props) => {
       if (moeN.value != null && moeN.value >= 0) t.moe_cpu_layers = Math.round(moeN.value);
       if (draftOff.value) t.draft_off = true;
       if (kv.value !== 'auto') t.kv_cache = kv.value;
+      if (gpu.value !== 'auto') t.gpu = gpu.value;
       const unchanged = saved.value === (await snapshot());
       await invoke('tuning_set', { model: props.model, tuning: t });
       const reloaded = await invoke<boolean>('tuning_apply_now', { model: props.model });
@@ -227,6 +234,17 @@ export default component$<ModelTuneDialogProps>((props) => {
       }
     } else if (results.value.some((r) => r.kv_q8 && r.failed)) {
       lines.push('Compact cache did not load here, so Auto keeps standard.');
+    }
+    const pooled = ok.find((r) => r.gpu === 'pool');
+    if (pooled) {
+      const twin = ok.find((r) => !r.gpu && r.ctx === pooled.ctx && r.moe_cpu_layers === pooled.moe_cpu_layers && r.draft === pooled.draft && !r.kv_q8);
+      if (twin) {
+        lines.push(`All cards pooled: ~${Math.round(pooled.gen_tps)} tok/s against ~${Math.round(twin.gen_tps)} on the biggest card alone at the same context - pooling buys memory, not speed.`);
+      } else {
+        lines.push(`All cards pooled: ~${Math.round(pooled.gen_tps)} tok/s.`);
+      }
+    } else if (results.value.some((r) => r.gpu === 'pool' && r.failed)) {
+      lines.push('Pooling across every card did not load here.');
     }
     if (props.isMoe && props.autoMoeN != null && props.autoCtx) {
       const atCtx = ok.filter((r) => r.ctx === props.autoCtx);
@@ -417,6 +435,32 @@ export default component$<ModelTuneDialogProps>((props) => {
                   ))}
                 </div>
               </div>
+              {(props.gpuCount ?? 0) >= 2 && (
+                <div>
+                  <p class={label} title="A model runs on one card unless pooled. Pooling adds the other cards' memory - a bigger model or a larger context fits - but a token passes through every card in turn, so it is slower than the biggest card alone. Auto pools only when the model does not fit the biggest card.">
+                    Graphics cards
+                  </p>
+                  <div class="mt-1 flex gap-1">
+                    {(['auto', 'biggest', 'pool'] as const).map((opt) => (
+                      <button
+                        key={opt}
+                        type="button"
+                        onClick$={() => { gpu.value = opt; note.value = ''; }}
+                        class={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
+                          gpu.value === opt
+                            ? 'border-[var(--text-link)] text-[var(--text-primary)]'
+                            : 'border-[var(--border-subtle)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
+                        }`}
+                      >
+                        {opt === 'auto' ? 'Auto' : opt === 'biggest' ? 'Biggest card only' : 'Pool all cards'}
+                      </button>
+                    ))}
+                  </div>
+                  <p class="mt-1 text-[11px] text-[var(--text-muted)]">
+                    Pooling: more memory and a larger context, slower. Biggest card only: full speed, what fits it.
+                  </p>
+                </div>
+              )}
               {props.hasDraft && (
                 <label class="flex items-center gap-2 text-xs text-[var(--text-secondary)]" title="A speed-up file drafts likely words ahead of the model. Leave it out to measure the difference yourself.">
                   <input

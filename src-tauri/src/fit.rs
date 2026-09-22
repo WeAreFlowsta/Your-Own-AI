@@ -866,6 +866,8 @@ async fn assess_uncached(app: &AppHandle) -> Vec<ModelFit> {
         // router and the "runs at" line all tell the same story.
         let ctx = pinned_or_chosen_ctx(app, &m.name, &meta, m.size_bytes, total_ram_gb, free_vram_gb);
         let (weights_gb, kv_gb, need_gb) = model_need_scaled(&meta, m.size_bytes, ctx, crate::tuning::kv_scale_for(app, &m.name));
+        // A proven bigger micro-batch takes its own compute buffer on the card.
+        let need_gb = need_gb + crate::tuning::ubatch_extra_gb(app, &m.name);
         // The projector (mmproj) is paired only for image turns now, so the
         // text grade leaves it out; `vision_fit` below says whether an image
         // turn can pair it. (Counting it always graded 6 GB vision-capable

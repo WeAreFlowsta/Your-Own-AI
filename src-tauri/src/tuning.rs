@@ -25,6 +25,18 @@ pub struct ModelTuning {
     /// tune profile measured it clean (see `kv_choice`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kv_cache: Option<KvCache>,
+    /// Several graphics cards: the biggest alone, or all pooled. None =
+    /// Auto (the biggest when the model fits it, pooled when it does not).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gpu: Option<GpuChoice>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum GpuChoice {
+    #[serde(rename = "biggest")]
+    Biggest,
+    #[serde(rename = "pool")]
+    Pool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -37,7 +49,7 @@ pub enum KvCache {
 
 impl ModelTuning {
     pub fn is_empty(&self) -> bool {
-        self.context.is_none() && self.moe_cpu_layers.is_none() && self.draft_off.is_none() && self.kv_cache.is_none()
+        self.context.is_none() && self.moe_cpu_layers.is_none() && self.draft_off.is_none() && self.kv_cache.is_none() && self.gpu.is_none()
     }
 }
 
@@ -155,6 +167,12 @@ pub async fn tuning_get(app: AppHandle, model: String) -> Result<ModelTuning, St
 pub async fn tuning_set(app: AppHandle, model: String, tuning: ModelTuning) -> Result<(), String> {
     crate::llm::forgive_too_big(&model);
     let mut all = load_all(&app);
+    if let Ok(mut m) = GPU_CHOICES.lock() {
+        match tuning.gpu {
+            Some(g) => { m.insert(model.clone(), g); }
+            None => { m.remove(&model); }
+        }
+    }
     if tuning.is_empty() {
         all.remove(&model);
     } else {
@@ -229,6 +247,10 @@ pub struct TuneArm {
     /// may well win; measured, never assumed.
     #[serde(default)]
     pub cpu: bool,
+    /// Pooled across every card (Some(Pool)) or the biggest alone; None =
+    /// the automatic choice for this model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu: Option<GpuChoice>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -242,6 +264,8 @@ pub struct TuneResult {
     pub ubatch: u32,
     #[serde(default)]
     pub cpu: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu: Option<GpuChoice>,
     pub load_secs: f32,
     pub pp_tps: f32,
     pub gen_tps: f32,
@@ -325,30 +349,30 @@ pub fn arms_for(
     };
     let mut arms: Vec<TuneArm> = Vec::new();
     for &r in &rungs {
-        arms.push(TuneArm { ctx: r, moe_cpu_layers: auto_n(r), draft: has_draft, kv_q8: false, ubatch: 0, cpu: false });
+        arms.push(TuneArm { ctx: r, moe_cpu_layers: auto_n(r), draft: has_draft, kv_q8: false, ubatch: 0, cpu: false, gpu: None });
     }
     let auto_rung = LADDER[i];
     if has_draft {
-        arms.push(TuneArm { ctx: auto_rung, moe_cpu_layers: auto_n(auto_rung), draft: false, kv_q8: false, ubatch: 0, cpu: false });
+        arms.push(TuneArm { ctx: auto_rung, moe_cpu_layers: auto_n(auto_rung), draft: false, kv_q8: false, ubatch: 0, cpu: false, gpu: None });
     }
     if let Some(n) = auto_n(auto_rung) {
         if n > 0 {
             let step = ((meta.expert_bytes_per_layer.len() as u32) / 8).max(2);
-            arms.push(TuneArm { ctx: auto_rung, moe_cpu_layers: Some(n.saturating_sub(step)), draft: has_draft, kv_q8: false, ubatch: 0, cpu: false });
+            arms.push(TuneArm { ctx: auto_rung, moe_cpu_layers: Some(n.saturating_sub(step)), draft: has_draft, kv_q8: false, ubatch: 0, cpu: false, gpu: None });
         }
     }
     // The compact-cache arm: the automatic rung with everything else the
     // same, so Auto has a like-for-like twin to judge it against.
-    arms.push(TuneArm { ctx: auto_rung, moe_cpu_layers: auto_n(auto_rung), draft: has_draft, kv_q8: true, ubatch: 0, cpu: false });
+    arms.push(TuneArm { ctx: auto_rung, moe_cpu_layers: auto_n(auto_rung), draft: has_draft, kv_q8: true, ubatch: 0, cpu: false, gpu: None });
     // The micro-batch arm: the automatic rung again with `-ub 2048`, only
     // when expert layers sit in main memory - that is where it pays
     // (measured 2026-09-22, 8k prompt: a split MoE 501 -> 699 tok/s, a
     // model whole on the card 745 -> 729, nothing). Costs ~200 MB of card.
     if auto_n(auto_rung).map(|n| n > 0).unwrap_or(false) {
-        arms.push(TuneArm { ctx: auto_rung, moe_cpu_layers: auto_n(auto_rung), draft: has_draft, kv_q8: false, ubatch: 2048, cpu: false });
+        arms.push(TuneArm { ctx: auto_rung, moe_cpu_layers: auto_n(auto_rung), draft: has_draft, kv_q8: false, ubatch: 2048, cpu: false, gpu: None });
     }
     let mut seen = std::collections::HashSet::new();
-    arms.retain(|a| seen.insert((a.ctx, a.moe_cpu_layers, a.draft, a.kv_q8, a.ubatch, a.cpu)));
+    arms.retain(|a| seen.insert((a.ctx, a.moe_cpu_layers, a.draft, a.kv_q8, a.ubatch, a.cpu, a.gpu)));
     arms
 }
 
@@ -381,16 +405,43 @@ pub fn ubatch_choice_from_profile(profile: Option<&TuneProfile>) -> u32 {
 ///    (Vulkan: Gemma E2B read +29% with them, a dense 2B −13% - so measured
 ///    per model, never a blanket flag);
 ///  - the processor on a machine whose only graphics is integrated.
-pub fn machine_arms(arms: &[TuneArm], bundled_engine: bool, discrete_card: bool, only_integrated: bool) -> Vec<TuneArm> {
+pub fn machine_arms(arms: &[TuneArm], bundled_engine: bool, discrete_cards: usize, only_integrated: bool) -> Vec<TuneArm> {
     let Some(auto) = arms.iter().find(|a| a.kv_q8).map(|a| TuneArm { kv_q8: false, ..a.clone() }) else { return Vec::new() };
     let mut out = Vec::new();
-    if bundled_engine && discrete_card && !arms.iter().any(|a| a.ubatch > 0) {
+    if bundled_engine && discrete_cards >= 1 && !arms.iter().any(|a| a.ubatch > 0) {
         out.push(TuneArm { ubatch: 2048, ..auto.clone() });
     }
     if only_integrated {
-        out.push(TuneArm { cpu: true, ..auto });
+        out.push(TuneArm { cpu: true, ..auto.clone() });
+    }
+    // Two or more cards: the pooled twin, so the Fine-tune row can say what
+    // pooling costs and buys on this machine (the automatic arm is the
+    // biggest card alone whenever the model fits it).
+    if discrete_cards >= 2 {
+        out.push(TuneArm { gpu: Some(GpuChoice::Pool), ..auto });
     }
     out
+}
+
+/// The person's choice for this model, read without an app handle (the
+/// device selection runs deep inside the loader).
+pub fn gpu_choice_static(model: &str) -> Option<GpuChoice> {
+    GPU_CHOICES.lock().ok().and_then(|m| m.get(model).copied())
+}
+/// Mirror of every model's `gpu` choice, kept current by `tuning_set` and
+/// at start (`refresh_gpu_choices`), so the loader needs no app handle.
+static GPU_CHOICES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, GpuChoice>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+pub fn refresh_gpu_choices(app: &AppHandle) {
+    let all = load_all(app);
+    if let Ok(mut m) = GPU_CHOICES.lock() {
+        m.clear();
+        for (model, t) in all {
+            if let Some(g) = t.gpu {
+                m.insert(model, g);
+            }
+        }
+    }
 }
 
 /// Did the processor beat the integrated graphics here? Both reading and
@@ -414,6 +465,15 @@ pub fn processor_choice_from_profile(profile: Option<&TuneProfile>) -> bool {
 /// than the integrated graphics.
 pub fn processor_choice(app: &AppHandle, model: &str) -> bool {
     processor_choice_from_profile(profiles_load(app).get(model))
+}
+
+/// What a bigger micro-batch costs on the card, on top of a model's need:
+/// measured +186 MiB (split MoE) and +198 MiB (dense) at 2048, 2026-09-22.
+pub const UBATCH_EXTRA_GB: f64 = 0.2;
+
+/// The card memory a model's proven micro-batch adds (0 when none).
+pub fn ubatch_extra_gb(app: &AppHandle, model: &str) -> f64 {
+    if ubatch_choice(app, model) > 0 { UBATCH_EXTRA_GB } else { 0.0 }
 }
 
 /// The engine flags for a micro-batch the bench proved (0 = none).
@@ -482,6 +542,7 @@ pub async fn bench_one(
         kv_q8: arm.kv_q8,
         ubatch: arm.ubatch,
         cpu: arm.cpu,
+        gpu: arm.gpu,
         load_secs: 0.0,
         pp_tps: 0.0,
         gen_tps: 0.0,
@@ -695,7 +756,9 @@ pub async fn tune_run(
     let free_vram_gb = crate::llm::available_vram_mib(&app).await.map(|m| m as f64 / 1024.0);
     let draft_file = crate::llm::model_draft_for(&models_dir, &model).map(|d| (d.draft_type, d.draft));
     let mut arms = arms_for(&meta, size, total_ram_gb, free_vram_gb, draft_file.is_some(), auto_ctx);
-    arms.extend(machine_arms(&arms, crate::engine::active_backend(&app) == crate::engine::Backend::Bundled, !gpu_args.is_empty(), crate::llm::only_integrated_gpu(&app).await));
+    let discrete_cards = if gpu_args.is_empty() { 0 } else { crate::llm::discrete_card_count().max(1) };
+    arms.extend(machine_arms(&arms, crate::engine::active_backend(&app) == crate::engine::Backend::Bundled, discrete_cards, crate::llm::only_integrated_gpu(&app).await));
+    let pooled_args = if discrete_cards >= 2 { crate::llm::device_args_for_choice(&app, GpuChoice::Pool).await } else { Vec::new() };
     let total = arms.len();
     log::info!("[tune] {model}: {total} arms, free VRAM {free_vram_gb:?}, runs at {auto_ctx:?}");
     let mut results = Vec::new();
@@ -704,18 +767,20 @@ pub async fn tune_run(
             break;
         }
         let desc = format!(
-            "{} context{}{}{}{}{}",
+            "{} context{}{}{}{}{}{}",
             arm.ctx,
             match arm.moe_cpu_layers { Some(0) => " - all on the card".into(), Some(n) => format!(" - {n} expert layers in RAM"), None => String::new() },
             if draft_file.is_some() { if arm.draft { " - speed-up on" } else { " - speed-up off" } } else { "" },
             if arm.kv_q8 { " - compact cache" } else { "" },
             if arm.ubatch > 0 { " - bigger batches" } else { "" },
-            if arm.cpu { " - on the processor" } else { "" }
+            if arm.cpu { " - on the processor" } else { "" },
+            if arm.gpu == Some(GpuChoice::Pool) { " - all cards pooled" } else { "" }
         );
         let _ = app.emit("tune-run", serde_json::json!({ "model": model, "done": i, "total": total, "current": desc }));
         // A twin is any arm a micro-batch arm will be compared with.
-        let twin = arm.ubatch == 0 && !arm.cpu && arms.iter().any(|b| b.ubatch > 0 && b.ctx == arm.ctx && b.moe_cpu_layers == arm.moe_cpu_layers && b.draft == arm.draft && b.kv_q8 == arm.kv_q8);
-        let r = bench_one(&bin, &models_dir, &model, arm, draft_file.clone(), engine_threads(&app), &gpu_args, None, twin).await;
+        let twin = arm.ubatch == 0 && !arm.cpu && arm.gpu.is_none() && arms.iter().any(|b| b.ubatch > 0 && b.ctx == arm.ctx && b.moe_cpu_layers == arm.moe_cpu_layers && b.draft == arm.draft && b.kv_q8 == arm.kv_q8);
+        let arm_gpu_args = if arm.gpu == Some(GpuChoice::Pool) { &pooled_args } else { &gpu_args };
+        let r = bench_one(&bin, &models_dir, &model, arm, draft_file.clone(), engine_threads(&app), arm_gpu_args, None, twin).await;
         log::info!(
             "[tune] {model} arm {desc}: load {:.1} s, prompt {:.0} tok/s, gen {:.1} tok/s{}",
             r.load_secs, r.pp_tps, r.gen_tps,
@@ -741,7 +806,7 @@ mod tests {
     use super::*;
 
     fn r(ctx: u64, kv_q8: bool, gen: f32, failed: Option<&str>) -> TuneResult {
-        TuneResult { ctx, moe_cpu_layers: None, draft: false, kv_q8, ubatch: 0, cpu: false, load_secs: 1.0, pp_tps: 50.0, gen_tps: gen, failed: failed.map(String::from), during_free: None }
+        TuneResult { ctx, moe_cpu_layers: None, draft: false, kv_q8, ubatch: 0, cpu: false, gpu: None, load_secs: 1.0, pp_tps: 50.0, gen_tps: gen, failed: failed.map(String::from), during_free: None }
     }
 
     #[test]
@@ -761,7 +826,7 @@ mod tests {
 
     #[test]
     fn measured_split_takes_a_faster_smaller_split_only() {
-        let arm = |ctx: u64, n: u32, gen: f32| TuneResult { ctx, moe_cpu_layers: Some(n), draft: false, kv_q8: false, ubatch: 0, cpu: false, load_secs: 3.0, pp_tps: 300.0, gen_tps: gen, failed: None, during_free: None };
+        let arm = |ctx: u64, n: u32, gen: f32| TuneResult { ctx, moe_cpu_layers: Some(n), draft: false, kv_q8: false, ubatch: 0, cpu: false, gpu: None, load_secs: 3.0, pp_tps: 300.0, gen_tps: gen, failed: None, during_free: None };
         let p = TuneProfile { measured_at: 0, results: vec![arm(16384, 16, 34.5), arm(16384, 13, 39.8), arm(8192, 15, 36.5)] };
         assert_eq!(measured_moe_split(Some(&p), 16384, 16), Some(13));
         assert_eq!(measured_moe_split(Some(&p), 16384, 13), None, "nothing smaller measured");
@@ -975,7 +1040,7 @@ mod tests {
 
     #[test]
     fn a_bigger_batch_is_kept_only_when_it_reads_clearly_faster() {
-        let r = |ubatch: u32, pp: f32, gen: f32| TuneResult { ctx: 32768, moe_cpu_layers: Some(15), draft: false, kv_q8: false, ubatch, cpu: false, load_secs: 3.0, pp_tps: pp, gen_tps: gen, failed: None, during_free: None };
+        let r = |ubatch: u32, pp: f32, gen: f32| TuneResult { ctx: 32768, moe_cpu_layers: Some(15), draft: false, kv_q8: false, ubatch, cpu: false, gpu: None, load_secs: 3.0, pp_tps: pp, gen_tps: gen, failed: None, during_free: None };
         let p = |results: Vec<TuneResult>| TuneProfile { results, ..Default::default() };
         assert_eq!(ubatch_choice_from_profile(None), 0);
         // measured 501 -> 699 tok/s reading: kept
@@ -993,23 +1058,27 @@ mod tests {
     #[test]
     fn machine_arms_are_twins_of_the_automatic_rung() {
         let base = vec![
-            TuneArm { ctx: 16384, moe_cpu_layers: None, draft: false, kv_q8: false, ubatch: 0, cpu: false },
-            TuneArm { ctx: 32768, moe_cpu_layers: None, draft: false, kv_q8: false, ubatch: 0, cpu: false },
-            TuneArm { ctx: 32768, moe_cpu_layers: None, draft: false, kv_q8: true, ubatch: 0, cpu: false },
+            TuneArm { ctx: 16384, moe_cpu_layers: None, draft: false, kv_q8: false, ubatch: 0, cpu: false, gpu: None },
+            TuneArm { ctx: 32768, moe_cpu_layers: None, draft: false, kv_q8: false, ubatch: 0, cpu: false, gpu: None },
+            TuneArm { ctx: 32768, moe_cpu_layers: None, draft: false, kv_q8: true, ubatch: 0, cpu: false, gpu: None },
         ];
-        let m = machine_arms(&base, true, true, false);
+        let m = machine_arms(&base, true, 1, false);
         assert_eq!(m.len(), 1);
         assert_eq!((m[0].ctx, m[0].ubatch, m[0].cpu, m[0].kv_q8), (32768, 2048, false, false));
-        let m = machine_arms(&base, false, true, true);
+        let m = machine_arms(&base, false, 0, true);
         assert_eq!(m.len(), 1);
         assert!(m[0].cpu && m[0].ubatch == 0 && m[0].ctx == 32768);
-        assert!(machine_arms(&base, false, true, false).is_empty(), "CUDA with a card: nothing to add");
-        assert!(machine_arms(&[], true, true, true).is_empty(), "no automatic rung to twin");
+        assert!(machine_arms(&base, false, 1, false).is_empty(), "CUDA with a card: nothing to add");
+        assert!(machine_arms(&[], true, 1, true).is_empty(), "no automatic rung to twin");
+        // two cards: the pooled twin of the automatic rung
+        let m = machine_arms(&base, false, 2, false);
+        assert_eq!(m.len(), 1);
+        assert_eq!((m[0].gpu, m[0].ctx, m[0].kv_q8), (Some(GpuChoice::Pool), 32768, false));
     }
 
     #[test]
     fn the_processor_is_chosen_only_when_it_wins_on_both_counts() {
-        let r = |cpu: bool, pp: f32, gen: f32| TuneResult { ctx: 32768, moe_cpu_layers: None, draft: false, kv_q8: false, ubatch: 0, cpu, load_secs: 3.0, pp_tps: pp, gen_tps: gen, failed: None, during_free: None };
+        let r = |cpu: bool, pp: f32, gen: f32| TuneResult { ctx: 32768, moe_cpu_layers: None, draft: false, kv_q8: false, ubatch: 0, cpu, gpu: None, load_secs: 3.0, pp_tps: pp, gen_tps: gen, failed: None, during_free: None };
         let p = |results: Vec<TuneResult>| TuneProfile { results, ..Default::default() };
         assert!(!processor_choice_from_profile(None));
         // the UHD 630 case: 52 / 9.1 on the processor vs 29 / 5.6 on the iGPU

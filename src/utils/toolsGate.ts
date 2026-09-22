@@ -196,6 +196,8 @@ export async function toolsGate(input: {
   previous: string | undefined;
   tools: GateTool[];
   sticky: boolean;
+  /** Tool calls this conversation's session has made (what makes it sticky). */
+  toolCalls?: number;
   forced: boolean;
 }): Promise<GateVerdict> {
   const named = namedTool(input.message, input.tools);
@@ -239,7 +241,7 @@ export async function toolsGate(input: {
   const verdict = decide({ forced: input.forced, sticky: input.sticky, named, scores });
   // Scores only - never the message, never a note's words.
   const sign = verdict.best >= 0 ? "+" : "";
-  const line = `tools gate: best ${sign}${verdict.best.toFixed(2)}${verdict.tool ? ` (${verdict.tool})` : ""}, line ${CONTRAST_LINE} - ${verdict.session ? "session" : "direct"} (${verdict.reason})`;
+  const line = `tools gate: best ${sign}${verdict.best.toFixed(2)}${verdict.tool ? ` (${verdict.tool})` : ""}, line ${CONTRAST_LINE}, ${input.toolCalls ?? 0} tool call${(input.toolCalls ?? 0) === 1 ? "" : "s"} so far - ${verdict.session ? "session" : "direct"} (${verdict.reason})`;
   console.log(`[Tools] ${line}`);
   void import("./uiLog").then(({ uiLog }) => uiLog(line)).catch(() => {});
   return verdict;

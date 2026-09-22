@@ -114,6 +114,8 @@ export default component$(() => {
     mArgs: "",
     mUrl: "",
     mDescription: "",
+    /** Things a person would say to use it, one per line - the chat's tools gate reads these. */
+    mExamples: "",
   });
 
   // What a row's status line reads: which settings are filled, and whether
@@ -280,6 +282,7 @@ export default component$(() => {
       store.servers = await addMcpServer({
         name: store.mName,
         description: store.mDescription.trim(),
+        examples: store.mExamples.split("\n").map((l) => l.trim()).filter(Boolean),
         transport: store.mTransport,
         command: store.mTransport === "stdio" ? line[0] ?? "" : undefined,
         args: store.mTransport === "stdio" ? args : [],
@@ -289,7 +292,7 @@ export default component$(() => {
         added_at: 0,
       });
       store.addOpen = false;
-      store.mName = ""; store.mCommand = ""; store.mArgs = ""; store.mUrl = ""; store.mDescription = "";
+      store.mName = ""; store.mCommand = ""; store.mArgs = ""; store.mUrl = ""; store.mDescription = ""; store.mExamples = "";
       store.note = "Added. Give it to an AI: Your AIs, edit, Tools.";
     } catch (e) {
       store.error = e instanceof Error ? e.message : String(e);
@@ -412,6 +415,16 @@ export default component$(() => {
                     class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-full px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none" />
                 </label>
               </div>
+              <label class="block text-xs text-[var(--text-secondary)]">
+                Things you would say to use it (optional, one per line) - so a chat message that sounds like one of these reaches the tool, and small talk does not
+                <textarea
+                  value={store.mExamples}
+                  onInput$={(_, el) => { store.mExamples = el.value; }}
+                  rows={3}
+                  placeholder={"print this part\nhow long will the print take?\nis the printer busy?"}
+                  class="mt-1 w-full bg-[var(--bg-input)] text-[var(--text-primary)] rounded-xl px-4 py-2 text-sm border border-[var(--border-subtle)] focus:outline-none"
+                />
+              </label>
               <div class="flex gap-4 text-sm text-[var(--text-primary)]">
                 <label class="flex items-center gap-2"><input type="radio" checked={store.mTransport === "stdio"} onChange$={() => { store.mTransport = "stdio"; }} /> A program to run</label>
                 <label class="flex items-center gap-2"><input type="radio" checked={store.mTransport === "http"} onChange$={() => { store.mTransport = "http"; }} /> A local address</label>

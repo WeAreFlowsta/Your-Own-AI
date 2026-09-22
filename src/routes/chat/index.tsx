@@ -1242,6 +1242,7 @@ export default component$(() => {
             agentState.mode === "tools" &&
             agentState.sessionAiId === selectedAi.value.aiConfig?.id &&
             agentState.sessionToolCalls > 0,
+          toolCalls: agentState.mode === "tools" && agentState.sessionAiId === selectedAi.value.aiConfig?.id ? agentState.sessionToolCalls : 0,
           forced,
         });
         wantsTools = verdict.session;

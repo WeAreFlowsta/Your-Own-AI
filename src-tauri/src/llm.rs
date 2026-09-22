@@ -69,6 +69,9 @@ pub struct SystemInfo {
     /// Silicon's unified memory is deliberately NOT flagged - Metal is fast
     /// there and its budget above is already a conservative slice.
     pub gpu_integrated: bool,
+    /// Discrete graphics cards (the Fine-tune "Graphics cards" row shows from two).
+    #[serde(default)]
+    pub gpu_count: usize,
 }
 
 pub struct LLMState {
@@ -570,6 +573,7 @@ pub async fn kill_port_8080() -> Result<String, String> {
 }
 
 /// A GPU as reported by `llama-server --list-devices`.
+#[derive(Clone, Debug)]
 pub(crate) struct GpuDevice {
     pub(crate) id: String,        // e.g. "Vulkan1" / "CUDA0" - what the --device flag wants
     pub(crate) name: String,
@@ -911,6 +915,10 @@ pub(crate) async fn only_integrated_gpu(app_handle: &AppHandle) -> bool {
 }
 
 pub(crate) async fn select_gpu_device_args(app_handle: &AppHandle) -> Vec<String> {
+    gpu_args_for(app_handle, None).await
+}
+
+pub(crate) async fn gpu_args_for(app_handle: &AppHandle, plan: Option<&GpuPlan>) -> Vec<String> {
     // Escape hatch: force CPU-only inference with FLOWSTA_CPU_ONLY=1. Some
     // setups (notably NVIDIA + Wayland + Vulkan compute) hard-hang the whole
     // system under GPU load; `-ngl 0` keeps every layer on the CPU. Slower, but
@@ -985,25 +993,76 @@ pub(crate) async fn select_gpu_device_args(app_handle: &AppHandle) -> Vec<String
         return Vec::new(); // iGPU-only / Metal / CPU - leave the default alone
     }
 
-    let device_list = discrete
-        .iter()
-        .map(|d| d.id.as_str())
-        .collect::<Vec<_>>()
-        .join(",");
-    let mut args = vec!["--device".to_string(), device_list];
-    if discrete.len() >= 2 {
-        // Pool multiple discrete GPUs, weighted by free VRAM.
-        let split = discrete
-            .iter()
-            .map(|d| d.free_mib.to_string())
-            .collect::<Vec<_>>()
-            .join(",");
-        args.push("--tensor-split".to_string());
-        args.push(split);
+    DISCRETE_CARDS.store(discrete.len(), std::sync::atomic::Ordering::Relaxed);
+    let owned: Vec<GpuDevice> = discrete.into_iter().cloned().collect();
+    device_args_for(&owned, plan)
+}
+
+/// What the chat server should know about the model it is about to load,
+/// so several cards can be used the right way (see `device_args_for`).
+pub(crate) struct GpuPlan {
+    pub model: String,
+    pub need_gb: f64,
+}
+
+/// Several discrete cards: the BIGGEST alone when the model fits it (a
+/// token passes through every pooled card in turn, so pooling is always
+/// slower than the fast card alone - the three-card Blackwell box measured
+/// its RTX PRO 6000 alone at full speed); pooled with `--tensor-split` when
+/// it does not fit, or when the person chose "Pool all cards" in Fine-tune.
+/// Without a plan (helpers, probes): the biggest alone.
+fn device_args_for(discrete: &[GpuDevice], plan: Option<&GpuPlan>) -> Vec<String> {
+    if discrete.is_empty() {
+        return Vec::new();
     }
+    let biggest = discrete.iter().max_by_key(|d| d.free_mib).expect("non-empty");
+    let choice = plan.and_then(|p| crate::tuning::gpu_choice_static(&p.model));
+    let pool = discrete.len() >= 2
+        && match choice {
+            Some(crate::tuning::GpuChoice::Pool) => true,
+            Some(crate::tuning::GpuChoice::Biggest) => false,
+            None => plan.map(|p| p.need_gb > 0.9 * biggest.free_mib as f64 / 1024.0).unwrap_or(false),
+        };
+    let args = if pool { pooled_args(discrete) } else { vec!["--device".to_string(), biggest.id.clone()] };
     let names = discrete.iter().map(|d| d.name.as_str()).collect::<Vec<_>>().join(", ");
-    log::info!("[LLM] GPU selection - using discrete only: {} ({:?})", names, args);
+    log::info!(
+        "[LLM] GPU selection - {} ({names}): {:?}",
+        if discrete.len() < 2 { "the discrete card" } else if pool { "pooled across every card" } else { "the biggest card alone" },
+        args
+    );
     args
+}
+
+fn pooled_args(discrete: &[GpuDevice]) -> Vec<String> {
+    let list = discrete.iter().map(|d| d.id.as_str()).collect::<Vec<_>>().join(",");
+    let split = discrete.iter().map(|d| d.free_mib.to_string()).collect::<Vec<_>>().join(",");
+    vec!["--device".to_string(), list, "--tensor-split".to_string(), split]
+}
+
+/// The device flags for a Fine-tune choice, for the bench's arms.
+pub(crate) async fn device_args_for_choice(app_handle: &AppHandle, choice: crate::tuning::GpuChoice) -> Vec<String> {
+    let devices = engine_devices(app_handle).await.unwrap_or_default();
+    let discrete: Vec<GpuDevice> = devices.into_iter().filter(|d| !d.integrated).collect();
+    if discrete.len() < 2 {
+        return select_gpu_device_args(app_handle).await;
+    }
+    match choice {
+        crate::tuning::GpuChoice::Pool => pooled_args(&discrete),
+        crate::tuning::GpuChoice::Biggest => {
+            let biggest = discrete.iter().max_by_key(|d| d.free_mib).expect("non-empty");
+            vec!["--device".to_string(), biggest.id.clone()]
+        }
+    }
+}
+
+/// The engine's device list, or None when it could not be asked.
+pub(crate) async fn engine_devices(app_handle: &AppHandle) -> Option<Vec<GpuDevice>> {
+    let probe_dir = get_models_dir(app_handle).unwrap_or_else(|_| std::env::temp_dir());
+    let cmd = chat_server_command(app_handle, &probe_dir).ok()?;
+    let output = tokio::time::timeout(std::time::Duration::from_secs(15), cmd.args(["--list-devices"]).output()).await.ok()?.ok()?;
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    Some(parse_gpu_devices(&text))
 }
 
 /// Free VRAM (MiB) on the discrete GPU(s) the chat server uses, from
@@ -1011,8 +1070,14 @@ pub(crate) async fn select_gpu_device_args(app_handle: &AppHandle) -> Vec<String
 /// (unlike total heap size, which over-counts on small cards). `None` in CPU
 /// mode → caller falls back to system RAM. Cached ~20s so the router can call it
 /// per request without re-spawning the probe.
-static VRAM_CACHE: std::sync::OnceLock<tokio::sync::Mutex<Option<(std::time::Instant, Option<u64>)>>> =
+/// (biggest card's free, pooled free across every discrete card), MiB.
+static VRAM_CACHE: std::sync::OnceLock<tokio::sync::Mutex<Option<(std::time::Instant, Option<(u64, u64)>)>>> =
     std::sync::OnceLock::new();
+/// Discrete cards the last probe saw (the Fine-tune row shows from two).
+static DISCRETE_CARDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+pub(crate) fn discrete_card_count() -> usize {
+    DISCRETE_CARDS.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// Forget the cached free-VRAM figure (after a load or a stop changed it).
 pub(crate) async fn invalidate_vram_cache() {
@@ -1021,7 +1086,21 @@ pub(crate) async fn invalidate_vram_cache() {
     }
 }
 
+/// Free memory on the BIGGEST discrete card - what a model is sized and
+/// graded against, because it runs on one card unless pooled on purpose
+/// (`pooled_vram_mib`). A pooled sum credited a three-card box with memory
+/// no single load could use.
 pub async fn available_vram_mib(app_handle: &AppHandle) -> Option<u64> {
+    vram_figures(app_handle).await.map(|(biggest, _)| biggest)
+}
+
+/// Free memory across every discrete card together: what a load pooled
+/// with `--tensor-split` can count on.
+pub async fn pooled_vram_mib(app_handle: &AppHandle) -> Option<u64> {
+    vram_figures(app_handle).await.map(|(_, pooled)| pooled)
+}
+
+async fn vram_figures(app_handle: &AppHandle) -> Option<(u64, u64)> {
     use std::time::{Duration, Instant};
     let cache = VRAM_CACHE.get_or_init(|| tokio::sync::Mutex::new(None));
     if let Some((t, v)) = cache.lock().await.as_ref() {
@@ -1355,6 +1434,8 @@ pub(crate) async fn helpers_off_card(state: &LLMState) {
 pub(crate) struct DriverVram {
     pub used_mib: u64,
     pub total_mib: u64,
+    /// Free on the single biggest card (the sum is the pooled figure).
+    pub biggest_free_mib: u64,
 }
 
 impl DriverVram {
@@ -1369,6 +1450,7 @@ impl DriverVram {
 pub(crate) fn parse_nvidia_smi_memory(text: &str) -> Option<DriverVram> {
     let mut used = 0u64;
     let mut total = 0u64;
+    let mut biggest_free = 0u64;
     let mut any = false;
     for line in text.lines() {
         let mut parts = line.split(',').map(|p| p.trim());
@@ -1379,9 +1461,10 @@ pub(crate) fn parse_nvidia_smi_memory(text: &str) -> Option<DriverVram> {
         }
         used += u;
         total += t;
+        biggest_free = biggest_free.max(t.saturating_sub(u));
         any = true;
     }
-    any.then_some(DriverVram { used_mib: used, total_mib: total })
+    any.then_some(DriverVram { used_mib: used, total_mib: total, biggest_free_mib: biggest_free })
 }
 
 /// Ask the driver. nvidia-smi ships with the NVIDIA driver on Linux (PATH)
@@ -1455,7 +1538,7 @@ pub(crate) fn vram_figure_source() -> &'static str {
     if VRAM_SOURCE_DRIVER.load(std::sync::atomic::Ordering::Relaxed) { "driver" } else { "engine probe" }
 }
 
-async fn compute_available_vram_mib(app_handle: &AppHandle) -> Option<u64> {
+async fn compute_available_vram_mib(app_handle: &AppHandle) -> Option<(u64, u64)> {
     if std::env::var("FLOWSTA_CPU_ONLY").map(|v| v != "0").unwrap_or(false) {
         return None;
     }
@@ -1485,10 +1568,12 @@ async fn compute_available_vram_mib(app_handle: &AppHandle) -> Option<u64> {
         .into_iter()
         .filter(|d| !d.integrated)
         .collect();
+    DISCRETE_CARDS.store(discrete.len(), std::sync::atomic::Ordering::Relaxed);
     if discrete.is_empty() {
         return None; // iGPU-only / Metal / CPU → use system RAM instead
     }
     let probe_free: u64 = discrete.iter().map(|d| d.free_mib).sum();
+    let probe_biggest: u64 = discrete.iter().map(|d| d.free_mib).max().unwrap_or(0);
     // An NVIDIA card: the driver's device-level count is the truth; the
     // probe's figure stays as the fallback when nvidia-smi is missing.
     if discrete.iter().any(|d| d.name.to_lowercase().contains("nvidia")) {
@@ -1501,11 +1586,11 @@ async fn compute_available_vram_mib(app_handle: &AppHandle) -> Option<u64> {
                     d.used_mib, d.total_mib
                 );
             }
-            return Some(free);
+            return Some((d.biggest_free_mib.min(free), free));
         }
     }
     VRAM_SOURCE_DRIVER.store(false, std::sync::atomic::Ordering::Relaxed);
-    Some(probe_free)
+    Some((probe_biggest, probe_free))
 }
 
 /// Find the multimodal projector (mmproj) paired with a chat model, if one is
@@ -2834,7 +2919,11 @@ pub async fn start_llama_server(
     // path) rather than crawling on the CPU - a slow CPU fallback was worse than an
     // honest stop, and small-GPU is the case we optimise for. A machine with no
     // discrete GPU gets `-ngl 0` from here and runs on the CPU (its only path).
-    let device_args = select_gpu_device_args(&app_handle).await;
+    let plan = header.as_ref().zip(loading_name.as_ref()).map(|((meta, size), name)| GpuPlan {
+        model: name.clone(),
+        need_gb: crate::fit::model_need(meta, *size, ctx_size).2,
+    });
+    let device_args = gpu_args_for(&app_handle, plan.as_ref()).await;
     // A machine whose only graphics is integrated leaves the engine's
     // choice alone - unless the bench measured the processor faster for
     // this model here (utils: tuning `processor_choice`).
@@ -3019,6 +3108,7 @@ pub async fn start_llama_server(
             Some(free_mib) => {
                 let kv_scale = loading_name.as_ref().map(|f| crate::tuning::kv_scale_for(&app_handle, f)).unwrap_or(1.0);
                 let (_, _, need_gb) = crate::fit::model_need_scaled(meta, *size_bytes, ctx_size, kv_scale);
+                let need_gb = need_gb + loading_name.as_deref().map(|f| crate::tuning::ubatch_extra_gb(&app_handle, f)).unwrap_or(0.0);
                 Some((need_gb, free_mib as f64 / 1024.0, None))
             }
             None => None,
@@ -4225,6 +4315,8 @@ pub fn get_system_info() -> Result<SystemInfo, String> {
     );
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     let (gpu_name, total_vram_gb) = get_gpu_info();
+    // How many discrete cards the engine last saw (0 until a probe ran).
+    let gpu_count = discrete_card_count();
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     let gpu_integrated = false;
@@ -4246,6 +4338,7 @@ pub fn get_system_info() -> Result<SystemInfo, String> {
         gpu_name,
         total_vram_gb,
         gpu_integrated,
+        gpu_count,
     })
 }
 
