@@ -1216,6 +1216,10 @@ pub async fn corpus_search_missing(
             None => report.still_missing += 1,
         }
     }
+    log::info!(
+        "[corpus] search for missing files: {} found, {} still missing, {} could not be read",
+        report.relinked, report.still_missing, report.failed.len()
+    );
     Ok(report)
 }
 

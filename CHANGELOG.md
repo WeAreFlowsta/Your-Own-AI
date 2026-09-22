@@ -123,6 +123,14 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   reads the card's free memory fresh after the chat model has left it,
   and the slider opens on the stop nearest the current setup. When the
   exact setup was not timed, the line names the nearest measured stop.
+- Back up now while a backup is already running (the launch pass or a
+  Vault unlock fires one first) now says so and clears itself when that
+  backup finishes, instead of reporting "did not complete" and leaving the
+  note on screen after the backup succeeded.
+- "Search for them" on missing documents writes one log line with what it
+  found, what is still missing and what could not be read.
+- Manage plan and Sign out on the Flowsta account panel sit on their own
+  lines.
 - Fine-tune's measured slider no longer pins the context when it lands on
   the "auto" stop. The automatics already take the measured winners at
   that size, so sliding back to auto returns to Automatic and Save clears

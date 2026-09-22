@@ -259,7 +259,13 @@ export default component$<FlowstaAccountProps>((props) => {
     } catch { /* older backend without the command */ }
     const unlistenBackup = await listen<{ status: string; reason?: string }>(
       "escrow-backup-outcome",
-      (event) => (lastBackup.value = event.payload)
+      (event) => {
+        lastBackup.value = event.payload;
+        if (backingUp.value) {
+          backingUp.value = false;
+          backupNote.value = "";
+        }
+      }
     );
     cleanup(() => unlistenBackup());
     // Live-poll Vault state until signed in - installing or unlocking
@@ -588,7 +594,7 @@ export default component$<FlowstaAccountProps>((props) => {
             session.value.tier &&
             session.value.tier !== "free" && (
               <button
-                class="text-sm text-[var(--text-link)] hover:underline"
+                class="block text-sm text-[var(--text-link)] hover:underline"
                 onClick$={async () => {
                   const url = await invoke<string>("flowsta_account_url");
                   await openUrl(url);
@@ -613,7 +619,7 @@ export default component$<FlowstaAccountProps>((props) => {
           )}
 
           <button
-            class="text-sm text-[var(--text-muted)] underline hover:text-[var(--text-secondary)]"
+            class="mt-3 block text-sm text-[var(--text-muted)] underline hover:text-[var(--text-secondary)]"
             onClick$={handleSignOut}
           >
             Sign out
@@ -752,10 +758,15 @@ export default component$<FlowstaAccountProps>((props) => {
                     ? "Held: " + r.skipped
                     : "Backed up" + (r?.records != null ? ` (${r.records} records)` : "") + ".";
                 } catch (e) {
+                  if (String(e) === "backup_in_progress") {
+                    // The launch pass or the unlock fired one first; the
+                    // outcome listener clears this when it finishes.
+                    backupNote.value = "A backup is already running. It will show here when it finishes.";
+                    return;
+                  }
                   backupNote.value = `Backup did not complete (${String(e)}).`;
-                } finally {
-                  backingUp.value = false;
                 }
+                backingUp.value = false;
               }}
             >
               {backingUp.value ? "Backing up..." : "Back up now"}
