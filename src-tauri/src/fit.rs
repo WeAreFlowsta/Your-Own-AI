@@ -359,8 +359,9 @@ pub fn moe_offload_fits(weights_gb: f64, need_gb: f64, free_vram_gb: f64, ram_bu
 }
 
 /// The RAM an offloaded MoE model can count on: what is free now, or total
-/// minus the OS reserve, whichever is larger. The file is memory-mapped and
-/// the OS makes room for it on load, so a machine that happens to have
+/// minus the OS reserve, whichever is larger. The OS makes room for the
+/// load (the expert weights are read into pinned memory since 0.8.0; what
+/// gives way is caches and idle programs), so a machine that happens to have
 /// 18 GB in use this minute is still a 32 GB machine for this purpose
 /// (seen live: the 4060 Ti box graded the 35B red while running it at 32
 /// tok/s). The reserve mirrors the catalog's: 40% of RAM, 3..7 GB.
@@ -507,22 +508,27 @@ pub async fn machine_figures(app: &AppHandle) -> MachineFigures {
     MachineFigures::with_vram(free_vram_gb)
 }
 
-/// Hand the incumbent's estimated footprint back to the free figures
-/// candidates are graded against ("as if the slot were free"). The
-/// incumbent lives in VRAM when a GPU budget exists, in RAM otherwise -
-/// a CPU-loaded incumbent distorts free RAM the same way.
+/// Hand the incumbent's footprint back to the free figures candidates are
+/// graded against ("as if the slot were free"): what it holds on the card
+/// to the card figure, what it holds in MAIN memory to the RAM figure. The
+/// two are separate: a split MoE holds both; a processor load holds RAM
+/// only; on a machine with no card budget the card share, if any was
+/// estimated, is RAM too. A credit never lifts a figure past the total it
+/// belongs to (a tester's Mac read "free 18.6 of 16.0 GB": the credit was
+/// added to a free figure the mapped load had not lowered).
 pub(crate) fn reclaim_adjust(
     free_vram_gb: Option<f64>,
     free_ram_gb: f64,
-    incumbent_need_gb: f64,
+    total_ram_gb: f64,
+    incumbent_vram_gb: f64,
+    incumbent_ram_gb: f64,
 ) -> (Option<f64>, f64) {
-    if incumbent_need_gb <= 0.0 {
-        return (free_vram_gb, free_ram_gb);
-    }
-    match free_vram_gb {
-        Some(free) => (Some(free + incumbent_need_gb), free_ram_gb),
-        None => (None, free_ram_gb + incumbent_need_gb),
-    }
+    let (vram, ram_credit) = match free_vram_gb {
+        Some(free) => (Some(free + incumbent_vram_gb.max(0.0)), incumbent_ram_gb.max(0.0)),
+        None => (None, (incumbent_vram_gb + incumbent_ram_gb).max(0.0)),
+    };
+    let ram = if total_ram_gb > 0.0 { (free_ram_gb + ram_credit).min(total_ram_gb) } else { free_ram_gb + ram_credit };
+    (vram, ram)
 }
 
 fn models_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
@@ -634,8 +640,19 @@ pub async fn figures_slot_free(app: &AppHandle, dir: &std::path::Path) -> Machin
             Some(need)
         })
         .unwrap_or(0.0);
+    // What the incumbent holds in MAIN memory: the measured record of its
+    // last load whose weights lived there (a processor or split load, or
+    // any load on a Mac). Nothing to hand back when there is no record - a
+    // full card load holds no weights in RAM worth crediting.
+    let reclaim_ram_gb = incumbent_name
+        .as_deref()
+        .and_then(|name| crate::llm::load_calibration_read(app, &crate::llm::processor_record_key(name)))
+        .filter(|c| c.actual_gb > 0.1)
+        .map(|c| c.actual_gb)
+        .unwrap_or(0.0);
     let raw_vram = free_vram_gb;
-    let (free_vram_gb, free_ram_gb) = reclaim_adjust(free_vram_gb, free_ram_gb, reclaim_gb);
+    let raw_ram = free_ram_gb;
+    let (free_vram_gb, free_ram_gb) = reclaim_adjust(free_vram_gb, free_ram_gb, total_ram_gb, reclaim_gb, reclaim_ram_gb);
     // The figures every grade on the page came from - so a grade that
     // flips between two visits can be explained from the log.
     log::info!(
@@ -650,6 +667,9 @@ pub async fn figures_slot_free(app: &AppHandle, dir: &std::path::Path) -> Machin
         free_ram_gb,
         total_ram_gb
     );
+    if reclaim_ram_gb > 0.0 {
+        log::info!("[fit] free RAM {raw_ram:.1} + {reclaim_ram_gb:.1} credited for what the running model holds in main memory (measured) = {free_ram_gb:.1} of {total_ram_gb:.1} GB");
+    }
     MachineFigures { total_ram_gb, avail_ram_gb: free_ram_gb, free_vram_gb }
 }
 
@@ -859,7 +879,18 @@ async fn assess_uncached(app: &AppHandle) -> Vec<ModelFit> {
         } else {
             0.0
         };
-        let mut fit = grade(need_gb, free_vram_gb, free_ram_gb);
+        // What this model HELD in main memory the last time its weights
+        // lived there on this machine (a processor load, a split load, any
+        // load on a Mac), at this context - measured by pid, not estimated.
+        let ram_measured = crate::llm::load_calibration_read(app, &crate::llm::processor_record_key(&m.name))
+            .filter(|c| c.matches(ctx, crate::tuning::kv_choice(app, &m.name).q8) && c.actual_gb > 0.1);
+        // No card budget: the whole load is a RAM question, and the measured
+        // figure answers it better than the header estimate.
+        let ram_need_gb = match (free_vram_gb, &ram_measured) {
+            (None, Some(c)) => c.actual_gb,
+            _ => need_gb,
+        };
+        let mut fit = grade(ram_need_gb, free_vram_gb, free_ram_gb);
         let mut moe_offload = false;
         let mut moe_cpu_layers_pick: Option<u32> = None;
         // The tuned expert split replaces the automatics here too - the
@@ -898,9 +929,17 @@ async fn assess_uncached(app: &AppHandle) -> Vec<ModelFit> {
             }
         } else if meta.is_moe() {
             if let Some(vram) = free_vram_gb {
+                // The RAM side of a split: what a split load of this model
+                // measured in main memory when there is a record, else the
+                // whole file (the experts are most of it).
+                let ram_side_gb = ram_measured
+                    .as_ref()
+                    .filter(|c| c.moe_cpu_layers.is_some())
+                    .map(|c| c.actual_gb)
+                    .unwrap_or(weights_gb);
                 if moe_offload_wanted(need_gb, vram)
                     && moe_offload_fits(
-                        weights_gb,
+                        ram_side_gb,
                         need_gb,
                         vram,
                         moe_ram_budget_gb(free_ram_gb, total_ram_gb),
@@ -989,12 +1028,18 @@ mod tests {
 
     #[test]
     fn reclaim_returns_incumbent_footprint_to_the_right_budget() {
-        // GPU budget: incumbent's footprint comes back as VRAM.
-        assert_eq!(reclaim_adjust(Some(1.0), 16.0, 7.0), (Some(8.0), 16.0));
+        // GPU budget: the card share comes back as VRAM, RAM untouched.
+        assert_eq!(reclaim_adjust(Some(1.0), 16.0, 32.0, 7.0, 0.0), (Some(8.0), 16.0));
         // CPU-only: it comes back as RAM instead.
-        assert_eq!(reclaim_adjust(None, 10.0, 5.0), (None, 15.0));
+        assert_eq!(reclaim_adjust(None, 10.0, 32.0, 5.0, 0.0), (None, 15.0));
         // No incumbent: both figures untouched.
-        assert_eq!(reclaim_adjust(Some(8.0), 16.0, 0.0), (Some(8.0), 16.0));
+        assert_eq!(reclaim_adjust(Some(8.0), 16.0, 32.0, 0.0, 0.0), (Some(8.0), 16.0));
+        // A split load holds both: each share goes to its own figure.
+        assert_eq!(reclaim_adjust(Some(1.1), 9.0, 16.0, 2.9, 3.2), (Some(4.0), 12.2));
+        // Heinrich's Mac: a credit never reads past the machine's total.
+        assert_eq!(reclaim_adjust(None, 12.0, 16.0, 6.6, 0.0), (None, 16.0));
+        // Total unknown (0): no cap.
+        assert_eq!(reclaim_adjust(None, 12.0, 0.0, 6.6, 0.0), (None, 18.6));
     }
 
     /// The 0.4.0-beta.1 field case (4060 Ti, balanced lean): with a ~7 GB
@@ -1012,7 +1057,7 @@ mod tests {
         assert_eq!(grade(7.0, free_raw, ram), Fit::Red);
         assert_eq!(grade(13.0, free_raw, ram), Fit::Red);
         // With the incumbent's 7 GB reclaimed (card is really 8 GB):
-        let (free, ram) = reclaim_adjust(free_raw, ram, 7.0);
+        let (free, ram) = reclaim_adjust(free_raw, ram, 32.0, 7.0, 0.0);
         assert_eq!(grade(7.0, free, ram), Fit::Green);
         assert_eq!(grade(13.0, free, ram), Fit::Red);
     }

@@ -1151,7 +1151,7 @@ fn helper_processor_args() -> Vec<String> {
 
 /// The footprint record of a PROCESSOR placement lives beside the card one,
 /// under its own key: older builds look a model up by its bare file name.
-fn processor_record_key(file: &str) -> String {
+pub(crate) fn processor_record_key(file: &str) -> String {
     format!("{file}@cpu")
 }
 

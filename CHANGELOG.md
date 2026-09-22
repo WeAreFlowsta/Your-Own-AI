@@ -47,7 +47,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   against free memory before starting one: with too little room the helper
   waits instead of squeezing everything else. The same measurement is
   taken for a chat model whose weights are in main memory, so the fit
-  figures come from what the machine holds.
+  figures come from what the machine holds: on a computer without a
+  graphics card the grade uses that measured figure, a split model's main
+  memory side does too, and the free memory credited back for the loaded
+  model can no longer read past the machine's total (a Mac reported
+  "free 18.6 of 16.0 GB").
 - "Fine-tune" now means one thing: how a model runs on this computer -
   speed, context, memory. The sliders for how replies are written
   (creativity, word variety, rare-word floor, repetition brake) moved out
