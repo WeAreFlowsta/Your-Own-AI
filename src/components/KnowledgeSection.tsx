@@ -5,6 +5,7 @@ import LiquidMetalButton from './LiquidMetalButton';
 import { MemoryComponentOffer } from './MemoryComponentOffer';
 import { SyncedFolders } from './SyncedFolders';
 import { KnowledgeDocumentRow } from './KnowledgeDocumentRow';
+import DocumentsSelectBar from './DocumentsSelectBar';
 import { DocumentsNeedingFiles } from './DocumentsNeedingFiles';
 import { useFileDrop } from '../hooks/useFileDrop';
 import { isServer } from '@builder.io/qwik/build';
@@ -125,6 +126,7 @@ export const KnowledgeSection = component$<KnowledgeSectionProps>((props) => {
     await removeKnowledgeDocument(props.aiId, docId);
     props.store.knowledgeDocs = await listKnowledgeDocuments(props.aiId);
   });
+  const selected = useSignal<string[]>([]);
 
   const docs = props.store.knowledgeDocs;
 
@@ -206,19 +208,28 @@ export const KnowledgeSection = component$<KnowledgeSectionProps>((props) => {
         </div>
       )}
       {docs.length > 0 && (
-        <ul class="mt-3 space-y-1.5">
-          {docs.map((doc) => (
-            <KnowledgeDocumentRow
-              key={doc.docId}
-              doc={doc}
-              onToggleMine$={toggleMine}
-              onRemove$={removeDoc}
-              onChanged$={$(async () => {
-                props.store.knowledgeDocs = await listKnowledgeDocuments(props.aiId);
-              })}
-            />
-          ))}
-        </ul>
+        <>
+          <div class="mt-3">
+            <DocumentsSelectBar docIds={docs.map((d) => d.docId)} selected={selected} onRemoveOne$={removeDoc} />
+          </div>
+          <ul class="mt-2 space-y-1.5">
+            {docs.map((doc) => (
+              <KnowledgeDocumentRow
+                key={doc.docId}
+                doc={doc}
+                onToggleMine$={toggleMine}
+                onRemove$={removeDoc}
+                onChanged$={$(async () => {
+                  props.store.knowledgeDocs = await listKnowledgeDocuments(props.aiId);
+                })}
+                selected={selected.value.includes(doc.docId)}
+                onSelect$={$((id: string, on: boolean) => {
+                  selected.value = on ? [...selected.value, id] : selected.value.filter((x) => x !== id);
+                })}
+              />
+            ))}
+          </ul>
+        </>
       )}
     </div>
   );

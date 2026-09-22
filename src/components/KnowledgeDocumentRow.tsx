@@ -40,6 +40,9 @@ export const KnowledgeDocumentRow = component$<{
   onRemove$: QRL<(docId: string) => void>;
   /** The document changed (relinked, read again): the list reloads. */
   onChanged$?: QRL<() => void>;
+  /** A tick box for choosing several rows at once (the list owns the choice). */
+  selected?: boolean;
+  onSelect$?: QRL<(docId: string, on: boolean) => void>;
 }>((props) => {
   const doc = props.doc;
   const state = linkState(doc);
@@ -106,8 +109,17 @@ export const KnowledgeDocumentRow = component$<{
 
   const action = 'inline-flex items-center gap-1 text-[var(--text-link)] hover:underline disabled:opacity-60 cursor-pointer';
   return (
-    <li class="rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-2 group">
+    <li class={`rounded-lg border bg-[var(--bg-card)] px-3 py-2 group ${props.selected ? 'border-[var(--text-link)]' : 'border-[var(--border-subtle)]'}`}>
       <div class="flex items-center gap-2.5">
+        {props.onSelect$ && (
+          <input
+            type="checkbox"
+            checked={!!props.selected}
+            onChange$={(_, el) => props.onSelect$!(doc.docId, el.checked)}
+            class={`shrink-0 cursor-pointer ${props.selected ? '' : 'opacity-40 group-hover:opacity-100'}`}
+            title="Choose this document"
+          />
+        )}
         {state?.kind === 'online' ? (
           <LuCloud class="w-4 h-4 text-[var(--text-muted)] shrink-0" />
         ) : state ? (

@@ -914,8 +914,32 @@ pub(crate) fn extract_text_safe(path: &Path) -> Result<String, String> {
 // ---------------------------------------------------------------- import
 
 static CANCEL: AtomicBool = AtomicBool::new(false);
+
+/// The library does ONE job at a time - an import, a folder check, a search
+/// for missing files, a relink - each with its own Stop. A second job asked
+/// for while one runs is refused with the running job's name, never queued
+/// behind it in silence and never run beside it (two writers racing the
+/// same store, two progress bars over one list).
+static LIBRARY_JOB: std::sync::Mutex<Option<&'static str>> = std::sync::Mutex::new(None);
+
+pub(crate) struct JobGuard;
+impl Drop for JobGuard {
+    fn drop(&mut self) {
+        *LIBRARY_JOB.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
+/// Take the library for `what` ("adding documents", "a folder check", ...),
+/// or say which job has it.
+pub(crate) fn begin_job(what: &'static str) -> Result<JobGuard, String> {
+    let mut slot = LIBRARY_JOB.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(running) = *slot {
+        return Err(format!("The library is busy with {running} - wait for it to finish, or stop it first."));
+    }
+    *slot = Some(what);
+    Ok(JobGuard)
+}
 /// One relink pass at a time (the restore starts one, the notice may too).
-static RELINK_RUNNING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Serialize, Clone)]
 struct Progress {
@@ -1011,6 +1035,7 @@ pub async fn corpus_import(
     // for the Mine guess; the tag stays flippable on the row.
     names: Option<Vec<String>>,
 ) -> Result<ImportReport, String> {
+    let _job = begin_job("adding documents")?;
     CANCEL.store(false, Ordering::SeqCst);
     let names = names.unwrap_or_default();
     let key = data_key(&hc_state)?;
@@ -1298,12 +1323,10 @@ pub async fn corpus_relink(
     hc_state: State<'_, Arc<HolochainState>>,
     llm_state: State<'_, crate::llm::LLMState>,
 ) -> Result<RereadReport, String> {
-    if RELINK_RUNNING.swap(true, Ordering::SeqCst) {
-        return Ok(RereadReport::default());
-    }
-    let result = relink_inner(app, hc_state, llm_state).await;
-    RELINK_RUNNING.store(false, Ordering::SeqCst);
-    result
+    // Started by the app itself after a restore: a busy library means
+    // "not now", not an error to show.
+    let Ok(_job) = begin_job("finding documents' files") else { return Ok(RereadReport::default()) };
+    relink_inner(app, hc_state, llm_state).await
 }
 
 async fn relink_inner(
@@ -1346,6 +1369,7 @@ async fn reread_paths(
     llm_state: State<'_, crate::llm::LLMState>,
     paths: Vec<String>,
 ) -> Result<RereadReport, String> {
+    let _job = begin_job("reading documents again")?;
     CANCEL.store(false, Ordering::SeqCst);
     let key = data_key(&hc_state)?;
     let mut conn = open(&app)?;

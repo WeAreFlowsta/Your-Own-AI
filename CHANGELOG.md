@@ -281,6 +281,14 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   renamed into it - is recognized by its words and pointed at the file.
   Its card, who can read it and its history stay; it is never added a
   second time beside itself.
+- The library does one job at a time. Adding documents, a folder check, a
+  search for missing files and finding files after a restore no longer run
+  over each other; a second one asked for while one runs says which job
+  has the library. Each running job has its own Stop: a folder check and a
+  search now have one where they run.
+- Choose several documents at once. Both document lists have a tick box
+  on each row and a Select all, with one Remove for the chosen ones after
+  a confirmation.
 - One document, once. When a document's file went missing and its words
   turn out to be in the library already under a newer record (a synced
   folder took the moved file in before the old record knew), the two are
@@ -291,10 +299,13 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   press looks where the file was; back with the same words, the row clears
   with nothing read; still gone, it says so. Relink is for a file that is
   somewhere else now.
-- A folder check reports a file that went missing once, on the check that
-  noticed; a document still waiting for its file from an earlier check is
-  said quietly, not repeated as news. The automatic look says what it
-  changed, in the same words as Check now.
+- Inside a synced folder the folder decides: a file deleted there takes its
+  document with it, whichever way the document first arrived (a note
+  deleted in Obsidian used to sit "still waiting for its file" on every
+  check). Outside a synced folder nothing is ever removed for you - a
+  missing file only goes offline, with Check again, Relink and Remove on
+  its row. The automatic look says what it changed, in the same words as
+  Check now.
 - The documents list looks for moved and edited files when you open it,
   the same look that runs when the app comes back to the front, at most
   once every ten minutes.

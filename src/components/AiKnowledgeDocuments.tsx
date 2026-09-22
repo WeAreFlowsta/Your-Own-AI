@@ -4,6 +4,7 @@ import { SyncedFolders } from './SyncedFolders';
 import { readThroughWarmup } from '../utils/recordsWarmup';
 import { LuFileText, LuPlus, LuLoader2, LuUpload } from '@qwikest/icons/lucide';
 import { KnowledgeDocumentRow } from './KnowledgeDocumentRow';
+import DocumentsSelectBar from './DocumentsSelectBar';
 import { DocumentsNeedingFiles } from './DocumentsNeedingFiles';
 import { isServer } from '@builder.io/qwik/build';
 import { useCorpusProgress, useLibraryChanged, progressText } from '../hooks/useCorpusProgress';
@@ -30,6 +31,7 @@ interface AiKnowledgeDocumentsProps {
  */
 export default component$<AiKnowledgeDocumentsProps>((props) => {
   const docs = useSignal<KnowledgeDocument[]>([]);
+  const selected = useSignal<string[]>([]);
   const busy = useSignal(false);
   const error = useSignal('');
   // What the last drop or pick did, said plainly - silence after a drag
@@ -238,6 +240,11 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
             docs.value = await listKnowledgeDocuments(props.aiId);
           }}
         />
+        <DocumentsSelectBar
+          docIds={docs.value.map((d) => d.docId)}
+          selected={selected}
+          onRemoveOne$={removeDoc}
+        />
         <ul class="space-y-1.5">
           {docs.value.map((doc) => (
             <KnowledgeDocumentRow
@@ -247,6 +254,10 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
               onRemove$={removeDoc}
               onChanged$={$(async () => {
                 docs.value = await listKnowledgeDocuments(props.aiId);
+              })}
+              selected={selected.value.includes(doc.docId)}
+              onSelect$={$((id: string, on: boolean) => {
+                selected.value = on ? [...selected.value, id] : selected.value.filter((x) => x !== id);
               })}
             />
           ))}

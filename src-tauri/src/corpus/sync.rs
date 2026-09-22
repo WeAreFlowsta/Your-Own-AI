@@ -25,7 +25,6 @@ use super::*;
 use std::collections::{HashMap, HashSet};
 
 /// One sync pass at a time, across all folders.
-static SYNC_RUNNING: AtomicBool = AtomicBool::new(false);
 static SYNC_CANCEL: AtomicBool = AtomicBool::new(false);
 
 /// Columns and the table a synced folder needs. Safe to run on every open.
@@ -102,10 +101,10 @@ pub struct SyncReport {
     pub failed: Vec<ImportFailure>,
     /// Files that are online only (kept in a cloud): not read, not removed.
     pub online_only: usize,
-    /// Hand-picked documents whose file went missing on THIS check: kept,
-    /// marked offline.
+    /// Kept for older readers of the report; the folder pass no longer marks
+    /// anything offline (a file gone from a synced folder is removed).
+    #[serde(default)]
     pub offline: usize,
-    /// Still offline from an earlier check - state, not news.
     #[serde(default)]
     pub still_offline: usize,
     /// Offline documents whose file turned up in this folder (same words):
@@ -542,11 +541,8 @@ async fn sync_one(
     // for a folder that held documents (a vault mid-move looks like that).
     if !report.cancelled && !(seen.is_empty() && !known.is_empty()) {
         for doc_id in &plan.remove {
-            match retire(&conn, doc_id)? {
-                Retired::Removed => report.removed += 1,
-                Retired::WentOffline => report.offline += 1,
-                Retired::Unchanged => report.still_offline += 1,
-            }
+            retire(&conn, doc_id)?;
+            report.removed += 1;
         }
     }
     for s in &seen {
@@ -584,34 +580,16 @@ async fn sync_one(
 /// given by the person's own hand - or one from before origins were kept,
 /// the careful reading - is never removed without them: it keeps its text,
 /// goes on answering, and waits to be relinked or removed.
-/// A file that is gone takes a folder-owned document with it (Removed);
-/// a document the person gave by hand is kept and marked offline - once
-/// (WentOffline); one that was already offline is nothing new (Unchanged).
-pub(super) enum Retired {
-    Removed,
-    WentOffline,
-    Unchanged,
-}
-
-pub(super) fn retire(conn: &Connection, doc_id: &str) -> Result<Retired, String> {
-    let (origin, offline): (Option<String>, Option<i64>) = conn
-        .query_row("SELECT origin, offline_since FROM documents WHERE doc_id = ?1", params![doc_id], |r| Ok((r.get(0)?, r.get(1)?)))
-        .optional()
-        .map_err(|e| e.to_string())?
-        .unwrap_or((None, None));
-    if origin.as_deref() == Some("folder") {
-        delete_document(conn, doc_id)?;
-        return Ok(Retired::Removed);
-    }
-    if offline.is_some() {
-        return Ok(Retired::Unchanged);
-    }
-    conn.execute(
-        "UPDATE documents SET offline_since = ?2, online_only = NULL WHERE doc_id = ?1",
-        params![doc_id, now_secs()],
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(Retired::WentOffline)
+/// A file gone from a synced folder takes its document with it, whatever
+/// the document's origin: inside a synced folder the folder decides, and a
+/// deletion there is a deletion (a note deleted in Obsidian sat "still
+/// waiting for its file" on every check for two days because the folder
+/// had ADOPTED it after a hand drop). Outside a synced folder nothing is
+/// ever removed for the person - that is `check_linked`, which only marks
+/// offline. The callers' guards stay: never on a pass stopped part way,
+/// never when a folder's walk came back empty (a vault mid-move).
+pub(super) fn retire(conn: &Connection, doc_id: &str) -> Result<(), String> {
+    delete_document(conn, doc_id)
 }
 
 fn document_meta(conn: &Connection, key: &[u8; 32], doc_id: &str) -> Result<Option<DocMeta>, String> {
@@ -630,16 +608,12 @@ pub async fn sync_folders(
     llm_state: &State<'_, crate::llm::LLMState>,
     only: Option<String>,
 ) -> Result<Vec<SyncReport>, String> {
-    if SYNC_RUNNING.swap(true, Ordering::SeqCst) {
-        return Ok(Vec::new());
-    }
-    struct Done;
-    impl Drop for Done {
-        fn drop(&mut self) {
-            SYNC_RUNNING.store(false, Ordering::SeqCst);
-        }
-    }
-    let _done = Done;
+    // The automatic look (open, focus, timer) asks for `only = None` and
+    // takes "busy" as "not now"; a person's Check now gets the reason.
+    let _job = match begin_job("a folder check") {
+        Ok(j) => j,
+        Err(e) => return if only.is_none() { Ok(Vec::new()) } else { Err(e) },
+    };
     SYNC_CANCEL.store(false, Ordering::SeqCst);
     let key = data_key(hc_state)?;
     let folders = {
@@ -1122,6 +1096,7 @@ pub async fn corpus_locate(
     new_dir: String,
 ) -> Result<LocateReport, String> {
     let key = data_key(&hc_state)?;
+    let _job = begin_job("finding documents in a folder")?;
     SYNC_CANCEL.store(false, Ordering::SeqCst);
     let wanted: Vec<(String, String, PathBuf)> = {
         let conn = open(&app)?;
@@ -1167,6 +1142,7 @@ pub async fn corpus_search_missing(
     llm_state: State<'_, crate::llm::LLMState>,
 ) -> Result<LocateReport, String> {
     let key = data_key(&hc_state)?;
+    let _job = begin_job("a search for missing files")?;
     SYNC_CANCEL.store(false, Ordering::SeqCst);
     // (doc_id, filename lower, size, content_id)
     let wanted: Vec<(String, String, i64, Option<String>)> = {
@@ -1375,7 +1351,7 @@ mod tests {
     }
 
     #[test]
-    fn a_note_the_folder_found_leaves_and_a_document_you_gave_goes_offline() {
+    fn a_file_gone_from_a_synced_folder_takes_its_document_whatever_its_origin() {
         let dir = std::env::temp_dir().join(format!("yoai-retire-{}", new_doc_id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut conn = open_at(&dir.join("corpus.sqlite")).unwrap();
@@ -1391,24 +1367,11 @@ mod tests {
         let found = add("found.md", Some("folder"));
         let given = add("given.md", Some("given"));
         let older = add("older.md", None);
-
-        assert!(matches!(retire(&conn, &found).unwrap(), Retired::Removed), "the folder's own find leaves");
-        assert!(matches!(retire(&conn, &given).unwrap(), Retired::WentOffline));
-        assert!(matches!(retire(&conn, &older).unwrap(), Retired::WentOffline), "unknown origin = the careful reading");
-        // a second look at the same gone file is not news
-        assert!(matches!(retire(&conn, &given).unwrap(), Retired::Unchanged));
-
-        let left: i64 = conn.query_row("SELECT COUNT(*) FROM documents", [], |r| r.get(0)).unwrap();
-        assert_eq!(left, 2);
-        let (offline, pieces): (Option<i64>, i64) = conn
-            .query_row("SELECT offline_since, chunk_count FROM documents WHERE doc_id = ?1", params![given], |r| Ok((r.get(0)?, r.get(1)?)))
-            .unwrap();
-        assert!(offline.is_some());
-        assert_eq!(pieces, 1, "an offline document keeps its text");
-        let first = offline;
+        retire(&conn, &found).unwrap();
         retire(&conn, &given).unwrap();
-        let again: Option<i64> = conn.query_row("SELECT offline_since FROM documents WHERE doc_id = ?1", params![given], |r| r.get(0)).unwrap();
-        assert_eq!(again, first, "offline since the FIRST time it was missed");
+        retire(&conn, &older).unwrap();
+        let left: i64 = conn.query_row("SELECT COUNT(*) FROM documents", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, 0, "inside a synced folder the folder decides");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -41,14 +41,7 @@ function said(r: FolderSyncReport): string {
     : '';
   // Neutral on purpose: a document from before origins were kept is also
   // held back, and nobody "added it themselves".
-  const offline = r.offline
-    ? ` ${r.offline} ${r.offline === 1 ? "document's file has" : "documents' files have"} gone since the last check - kept, and still answering. Check again, relink or remove ${r.offline === 1 ? 'it' : 'them'} in the list below.`
-    : '';
-  // Standing state, said quietly: not news, but not hidden either.
-  const still = r.still_offline
-    ? ` ${r.still_offline} ${r.still_offline === 1 ? 'document is' : 'documents are'} still waiting for ${r.still_offline === 1 ? 'its' : 'their'} file.`
-    : '';
-  return `${leaf(r.folder)}: ${base}${failed}${r.cancelled ? ' (stopped)' : ''}.${cloud}${offline}${still}`;
+  return `${leaf(r.folder)}: ${base}${failed}${r.cancelled ? ' (stopped)' : ''}.${cloud}`;
 }
 
 /**
@@ -108,7 +101,7 @@ export const SyncedFolders = component$<SyncedFoldersProps>((props) => {
         void lib.summarizePendingDocuments().then(() => lib.refreshLibraryPortrait());
       }
     } catch (e) {
-      note.value = `The folder could not be checked: ${String(e)}`;
+      note.value = String(e);
     } finally {
       busy.value = null;
     }
@@ -180,14 +173,25 @@ export const SyncedFolders = component$<SyncedFoldersProps>((props) => {
             )}
             Check now
           </button>
-          <button
-            type="button"
-            onClick$={() => stop(f.folder_id)}
-            disabled={busy.value !== null}
-            class="shrink-0 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] disabled:opacity-50 cursor-pointer"
-          >
-            Stop syncing
-          </button>
+          {busy.value === f.folder_id ? (
+            <button
+              type="button"
+              onClick$={async () => { const m = await import('../utils/corpus'); await m.corpusFolderSyncCancel(); }}
+              class="shrink-0 text-xs text-[var(--text-link)] hover:underline cursor-pointer"
+              title="Stop this check after the file it is on"
+            >
+              Stop
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick$={() => stop(f.folder_id)}
+              disabled={busy.value !== null}
+              class="shrink-0 text-xs text-[var(--text-muted)] hover:text-[var(--text-primary)] disabled:opacity-50 cursor-pointer"
+            >
+              Stop syncing
+            </button>
+          )}
         </div>
       ))}
       {note.value && (

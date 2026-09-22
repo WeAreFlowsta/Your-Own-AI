@@ -175,6 +175,11 @@ export const DocumentsNeedingFiles = component$<{
             {busy.value === 'search' ? <LuLoader2 class="w-3.5 h-3.5 animate-spin" /> : <LuFolderSearch class="w-3.5 h-3.5" />}
             {busy.value === 'search' ? 'Searching this computer...' : 'Search for them'}
           </button>
+          {busy.value === 'search' && (
+            <button type="button" onClick$={async () => { const m = await import('../utils/corpus'); await m.corpusFolderSyncCancel(); }} class={link}>
+              Stop
+            </button>
+          )}
           <button type="button" disabled={busy.value !== ''} onClick$={choose} class={link}>
             {busy.value === 'choose' ? <LuLoader2 class="w-3.5 h-3.5 animate-spin" /> : <LuFolderOpen class="w-3.5 h-3.5" />}
             {busy.value === 'choose' ? 'Looking...' : 'Find them in a folder'}
