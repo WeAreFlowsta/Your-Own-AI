@@ -28,6 +28,12 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   replies, the memory portrait and document cards. See *Models*.
 
 ### Models
+- Two requests no longer trip over each other on a local model. Each
+  local server takes one request at a time - the reply included - so a
+  request always has the whole context window; two together used to fail
+  with "context size exceeded" when their sizes added up past it (an AI's
+  two parallel calls in a project session; three memory extractions at
+  once on the small helper).
 - Several graphics cards: a model now runs on the biggest card alone when
   it fits there (pooling is always slower - a token passes through every
   card in turn) and is pooled across all cards only when it does not fit.

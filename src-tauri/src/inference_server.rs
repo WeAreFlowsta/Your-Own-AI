@@ -1244,6 +1244,7 @@ async fn chat_completions(
         use rand::Rng as _;
         format!("api-{}-{:08x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0), rand::thread_rng().gen::<u32>())
     });
+    let mut local_permit: Option<tokio::sync::SemaphorePermit<'static>> = None;
     let send = if online_id.is_some() {
         let token = match crate::flowsta::get_access_token(&app).await {
             Ok(t) => t,
@@ -1266,6 +1267,9 @@ async fn chat_completions(
             .send()
             .await
     } else {
+        // One request at a time on the chat server: an agent's parallel
+        // calls used to overflow the shared window together.
+        local_permit = crate::llm::CHAT_ONE_AT_A_TIME.acquire().await.ok();
         client.post(llama_upstream()).bearer_auth(crate::llm::local_api_key()).json(&body).send().await
     };
     let upstream = match send {
@@ -1302,6 +1306,7 @@ async fn chat_completions(
             .clone()
             .map(|id| crate::llm::OnlineReplyGuard::new(app.clone(), client.clone(), id));
         let body_stream = async_stream::stream! {
+            let _turn = local_permit; // released when the stream ends
             let mut s = upstream.bytes_stream();
             let mut raw: Vec<u8> = Vec::new();      // full body (incl. <think>) → recording
             let mut pending: Vec<u8> = Vec::new();  // bytes not yet split into events
@@ -1437,6 +1442,7 @@ async fn caption_one(model: &str, image_part: &Value) -> Result<String, String> 
         // answered a synthetic test image exactly, in under two seconds).
         "reasoning_budget_tokens": 0,
     });
+    let _turn = crate::llm::CHAT_ONE_AT_A_TIME.acquire().await.map_err(|e| e.to_string())?;
     let resp = reqwest::Client::new()
         .post(format!("http://localhost:{}/v1/chat/completions", crate::llm::CHAT_PORT)).bearer_auth(crate::llm::local_api_key())
         .json(&body)

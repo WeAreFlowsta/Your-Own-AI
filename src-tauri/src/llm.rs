@@ -4021,6 +4021,16 @@ async fn ensure_utility_server(
 /// (task 0 cancelled) - the first reply took three minutes.
 static WARM_IN_FLIGHT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+/// One request at a time on each local server. Every server keeps four
+/// slots over ONE unified cache, so two requests together can exceed the
+/// window while each alone fits: 10,323 + 6,144 tokens on a 16,384-token
+/// session (both failed, 09-20); three ~1,390-token extractions on the
+/// 4,096-token helper (09-21). One at a time, each sees the whole window;
+/// the slots still keep their cached prefixes for the next turn. Held for
+/// the whole of a request, its streamed reply included.
+pub(crate) static CHAT_ONE_AT_A_TIME: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+pub(crate) static UTIL_ONE_AT_A_TIME: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+
 /// Turns of the PERSON running on the local chat server right now.
 /// Background work that rides the chat model (memory extraction when no
 /// helper model is installed) waits for zero: side by side they share the
@@ -4068,6 +4078,7 @@ pub async fn warm_chat_prompt(state: State<'_, LLMState>, system: String) -> Res
         return Ok(0);
     }
     let _warming = WARM_IN_FLIGHT.lock().await;
+    let _turn = CHAT_ONE_AT_A_TIME.acquire().await.map_err(|e| e.to_string())?;
     let started = std::time::Instant::now();
     let resp = local_http()
         .post(format!("http://localhost:{}/v1/chat/completions", CHAT_PORT)).bearer_auth(local_api_key())
@@ -4121,6 +4132,7 @@ pub async fn utility_chat(
         body["grammar"] = serde_json::Value::String(g);
     }
 
+    let _turn = UTIL_ONE_AT_A_TIME.acquire().await.map_err(|e| e.to_string())?;
     let client = local_http();
     let resp = client
         .post(format!("http://localhost:{}/v1/chat/completions", UTIL_PORT)).bearer_auth(local_api_key())
@@ -5772,6 +5784,9 @@ pub async fn stream_chat_completion(
     }
     
     // Now send the actual chat completion request
+    // Local: one request at a time on the chat server (see CHAT_ONE_AT_A_TIME);
+    // held through the streamed reply below.
+    let _turn = if is_local { Some(CHAT_ONE_AT_A_TIME.acquire().await.map_err(|e| e.to_string())?) } else { None };
     let response = if online_model.is_some() {
         let token = crate::flowsta::get_access_token(&app).await.map_err(|_| {
             // Structured error so the UI can raise the sign-in modal.
