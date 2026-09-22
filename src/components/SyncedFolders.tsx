@@ -30,6 +30,7 @@ function said(r: FolderSyncReport): string {
   const parts = [
     r.added ? `${r.added} new` : '',
     r.updated ? `${r.updated} changed` : '',
+    r.relinked ? `${r.relinked} found again` : '',
     r.removed ? `${r.removed} gone` : '',
   ].filter(Boolean);
   const base = parts.length ? parts.join(', ') : 'nothing new';
@@ -41,9 +42,13 @@ function said(r: FolderSyncReport): string {
   // Neutral on purpose: a document from before origins were kept is also
   // held back, and nobody "added it themselves".
   const offline = r.offline
-    ? ` ${r.offline} ${r.offline === 1 ? "document's file is" : "documents' files are"} gone - kept, and still answering. Relink or remove ${r.offline === 1 ? 'it' : 'them'} in the list below.`
+    ? ` ${r.offline} ${r.offline === 1 ? "document's file has" : "documents' files have"} gone since the last check - kept, and still answering. Check again, relink or remove ${r.offline === 1 ? 'it' : 'them'} in the list below.`
     : '';
-  return `${leaf(r.folder)}: ${base}${failed}${r.cancelled ? ' (stopped)' : ''}.${cloud}${offline}`;
+  // Standing state, said quietly: not news, but not hidden either.
+  const still = r.still_offline
+    ? ` ${r.still_offline} ${r.still_offline === 1 ? 'document is' : 'documents are'} still waiting for ${r.still_offline === 1 ? 'its' : 'their'} file.`
+    : '';
+  return `${leaf(r.folder)}: ${base}${failed}${r.cancelled ? ' (stopped)' : ''}.${cloud}${offline}${still}`;
 }
 
 /**
@@ -61,8 +66,11 @@ export const SyncedFolders = component$<SyncedFoldersProps>((props) => {
     const { corpusFolders } = await import('../utils/corpus');
     try {
       folders.value = (await corpusFolders()).filter((f) => f.meta.ai_ids.includes(props.aiId));
-    } catch {
-      folders.value = [];
+    } catch (e) {
+      // A listing that failed (the store busy mid-check, the data key not
+      // to hand for a moment) keeps the last good list on screen: an empty
+      // list would read as "the folder is gone" (seen 2026-09-22).
+      void import('../utils/uiLog').then(({ uiLog }) => uiLog(`synced folders could not be listed: ${String(e)}`, 'warn'));
     }
   });
 
@@ -75,7 +83,12 @@ export const SyncedFolders = component$<SyncedFoldersProps>((props) => {
     track(() => props.aiId);
     await load();
     const { listen } = await import('@tauri-apps/api/event');
-    const un = await listen('corpus-folders-synced', async () => {
+    // The automatic look (on open, on focus, on the timer) says what it
+    // changed, in the same words as Check now - a "gone" is never silent.
+    const un = await listen<FolderSyncReport[]>('corpus-folders-synced', async (e) => {
+      // The same event also carries the linked-documents report (not an array): only folder reports are worded here.
+      const mine = (Array.isArray(e.payload) ? e.payload : []).filter((r) => folders.value.some((f) => f.folder_id === r.folder_id));
+      if (mine.length) note.value = mine.map(said).join(' ');
       await load();
       await props.onChanged$();
     });
@@ -90,7 +103,7 @@ export const SyncedFolders = component$<SyncedFoldersProps>((props) => {
       const reports = await corpusFolderSync(folderId);
       note.value = reports.length ? reports.map(said).join(' ') : 'A check is already running.';
       // New and changed documents get their cards, like an import's.
-      if (reports.some((r) => r.added + r.updated > 0)) {
+      if (reports.some((r) => r.added + r.updated + (r.relinked ?? 0) > 0)) {
         const lib = await import('../utils/documentSummaries');
         void lib.summarizePendingDocuments().then(() => lib.refreshLibraryPortrait());
       }

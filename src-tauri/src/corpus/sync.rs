@@ -102,8 +102,16 @@ pub struct SyncReport {
     pub failed: Vec<ImportFailure>,
     /// Files that are online only (kept in a cloud): not read, not removed.
     pub online_only: usize,
-    /// Hand-picked documents whose file is gone: kept, marked offline.
+    /// Hand-picked documents whose file went missing on THIS check: kept,
+    /// marked offline.
     pub offline: usize,
+    /// Still offline from an earlier check - state, not news.
+    #[serde(default)]
+    pub still_offline: usize,
+    /// Offline documents whose file turned up in this folder (same words):
+    /// pointed at it, not added again.
+    #[serde(default)]
+    pub relinked: usize,
     /// The folder could not be read: nothing was changed.
     pub unreachable: bool,
     pub cancelled: bool,
@@ -230,7 +238,7 @@ fn list_folders(conn: &Connection, key: &[u8; 32]) -> Result<Vec<FolderRecord>, 
 }
 
 /// Register a folder for an AI (or add the AI to a folder already kept).
-fn add_folder(conn: &Connection, key: &[u8; 32], path: &str, ai_id: &str, kind: Option<String>) -> Result<String, String> {
+pub(super) fn add_folder(conn: &Connection, key: &[u8; 32], path: &str, ai_id: &str, kind: Option<String>) -> Result<String, String> {
     let ph = path_hash(path);
     let existing: Option<(String, Vec<u8>)> = conn
         .query_row("SELECT folder_id, meta_enc FROM folders WHERE path_hash = ?1", params![ph], |r| Ok((r.get(0)?, r.get(1)?)))
@@ -443,6 +451,7 @@ async fn sync_one(
     // folder that matches one fills THAT record (its card, Mine flag and
     // grants kept) instead of becoming a second document beside it.
     let mut waiting = waiting_records(&conn, key)?;
+    let mut known_words = by_content_id(&conn, key)?;
 
     if !report.cancelled {
         for i in &plan.add {
@@ -459,6 +468,33 @@ async fn sync_one(
                 report.online_only += 1;
                 continue;
             };
+            // The same words as a document whose own file is gone: it moved
+            // here. Point that document at the file (its words, card, grants
+            // and history stay) - nothing is read again.
+            let moved = known_words.get(&content_id).filter(|(_, old)| {
+                old.as_deref().map(|p| p != s.path.as_str() && links::file_state(Path::new(p)) == links::FileState::Missing).unwrap_or(true)
+            }).map(|(id, _)| id.clone());
+            if let Some(doc_id) = moved {
+                known_words.remove(&content_id);
+                if let Some(mut meta) = document_meta(&conn, key, &doc_id)? {
+                    meta.path = Some(s.path.clone());
+                    meta.filename = name.clone();
+                    meta.anchor = links::anchor_among(path, &known_places);
+                    let json = serde_json::to_vec(&meta).map_err(|e| e.to_string())?;
+                    conn.execute(
+                        "UPDATE documents SET path_hash = ?2, meta_enc = ?3, offline_since = NULL, online_only = NULL, origin = 'folder' WHERE doc_id = ?1",
+                        params![doc_id, path_hash(&s.path), enc(key, &json)?],
+                    )
+                    .map_err(|e| e.to_string())?;
+                    stamp(&conn, &doc_id, &folder.folder_id, s.size, s.mtime, &hash)?;
+                    for ai in &folder.meta.ai_ids {
+                        conn.execute("INSERT OR IGNORE INTO grants (doc_id, ai_id) VALUES (?1, ?2)", params![doc_id, ai])
+                            .map_err(|e| e.to_string())?;
+                    }
+                    report.relinked += 1;
+                    continue;
+                }
+            }
             match read_and_embed(app, llm_state, path).await {
                 Ok((passages, vectors)) => {
                     if let Some(w) = match_waiting(&waiting, &name, s.size) {
@@ -506,10 +542,10 @@ async fn sync_one(
     // for a folder that held documents (a vault mid-move looks like that).
     if !report.cancelled && !(seen.is_empty() && !known.is_empty()) {
         for doc_id in &plan.remove {
-            if retire(&conn, doc_id)? {
-                report.removed += 1;
-            } else {
-                report.offline += 1;
+            match retire(&conn, doc_id)? {
+                Retired::Removed => report.removed += 1,
+                Retired::WentOffline => report.offline += 1,
+                Retired::Unchanged => report.still_offline += 1,
             }
         }
     }
@@ -548,22 +584,34 @@ async fn sync_one(
 /// given by the person's own hand - or one from before origins were kept,
 /// the careful reading - is never removed without them: it keeps its text,
 /// goes on answering, and waits to be relinked or removed.
-pub(super) fn retire(conn: &Connection, doc_id: &str) -> Result<bool, String> {
-    let origin: Option<String> = conn
-        .query_row("SELECT origin FROM documents WHERE doc_id = ?1", params![doc_id], |r| r.get(0))
+/// A file that is gone takes a folder-owned document with it (Removed);
+/// a document the person gave by hand is kept and marked offline - once
+/// (WentOffline); one that was already offline is nothing new (Unchanged).
+pub(super) enum Retired {
+    Removed,
+    WentOffline,
+    Unchanged,
+}
+
+pub(super) fn retire(conn: &Connection, doc_id: &str) -> Result<Retired, String> {
+    let (origin, offline): (Option<String>, Option<i64>) = conn
+        .query_row("SELECT origin, offline_since FROM documents WHERE doc_id = ?1", params![doc_id], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()
         .map_err(|e| e.to_string())?
-        .flatten();
+        .unwrap_or((None, None));
     if origin.as_deref() == Some("folder") {
         delete_document(conn, doc_id)?;
-        return Ok(true);
+        return Ok(Retired::Removed);
+    }
+    if offline.is_some() {
+        return Ok(Retired::Unchanged);
     }
     conn.execute(
-        "UPDATE documents SET offline_since = COALESCE(offline_since, ?2), online_only = NULL WHERE doc_id = ?1",
+        "UPDATE documents SET offline_since = ?2, online_only = NULL WHERE doc_id = ?1",
         params![doc_id, now_secs()],
     )
     .map_err(|e| e.to_string())?;
-    Ok(false)
+    Ok(Retired::WentOffline)
 }
 
 fn document_meta(conn: &Connection, key: &[u8; 32], doc_id: &str) -> Result<Option<DocMeta>, String> {
@@ -644,6 +692,33 @@ impl LinkReport {
 /// Read a document again from `path` into its record. `same_words` = the file
 /// is the one already read (relinking a moved file): the path is updated and
 /// nothing is embedded again.
+/// Every document with words and a fingerprint, keyed by the fingerprint:
+/// (doc_id, its path). A file that turns up in a synced folder with the
+/// same words as a document whose own file is now GONE is that document,
+/// moved - it is relinked, never added again beside itself. Not only the
+/// records already flagged offline: the folder pass runs before the linked
+/// documents are checked, so a file moved into the vault a minute ago is
+/// "new" to the folder while its old record still looks fine (Eric saw the
+/// boat survey twice, 2026-09-22). A same-words file whose old copy still
+/// exists is a copy in two places: a new document.
+fn by_content_id(conn: &Connection, key: &[u8; 32]) -> Result<HashMap<String, (String, Option<String>)>, String> {
+    let mut stmt = conn
+        .prepare("SELECT doc_id, meta_enc FROM documents WHERE chunk_count > 0")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?)))
+        .map_err(|e| e.to_string())?;
+    let mut out = HashMap::new();
+    for row in rows {
+        let (id, blob) = row.map_err(|e| e.to_string())?;
+        let meta: DocMeta = serde_json::from_slice(&dec(key, &blob)?).map_err(|e| e.to_string())?;
+        if let Some(cid) = meta.content_id {
+            out.insert(cid, (id, meta.path));
+        }
+    }
+    Ok(out)
+}
+
 async fn take_in(
     app: &AppHandle,
     llm_state: &State<'_, crate::llm::LLMState>,
@@ -696,6 +771,88 @@ async fn take_in(
     Ok(!same_words)
 }
 
+/// A present record of the same document as an offline one: the same
+/// fingerprint when the offline record has one, else the same name and
+/// size (a fingerprint lost to an old "Read again"). (doc_id, path,
+/// folder_id, size, mtime, content_hash, origin).
+struct Twin {
+    doc_id: String,
+    path: String,
+    folder_id: Option<String>,
+    size: i64,
+    mtime: Option<i64>,
+    keyed: Option<String>,
+    origin: Option<String>,
+}
+
+fn present_twin(app: &AppHandle, key: &[u8; 32], want: &CheckRow) -> Result<Option<Twin>, String> {
+    let conn = open(app)?;
+    let mut stmt = conn
+        .prepare("SELECT doc_id, folder_id, byte_size, mtime, content_hash, origin, meta_enc FROM documents WHERE chunk_count > 0 AND offline_since IS NULL AND doc_id <> ?1")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![want.doc_id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, Option<i64>>(3)?,
+                r.get::<_, Option<String>>(4)?,
+                r.get::<_, Option<String>>(5)?,
+                r.get::<_, Vec<u8>>(6)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    for row in rows.flatten() {
+        let (doc_id, folder_id, size, mtime, keyed, origin, blob) = row;
+        let Ok(meta) = serde_json::from_slice::<DocMeta>(&dec(key, &blob)?) else { continue };
+        let Some(path) = meta.path.clone() else { continue };
+        let same = match (&want.meta.content_id, &meta.content_id) {
+            (Some(a), Some(b)) => a == b,
+            _ => meta.filename.eq_ignore_ascii_case(&want.meta.filename) && size == want.size,
+        };
+        if !same || !matches!(links::file_state(Path::new(&path)), links::FileState::Present { .. }) {
+            continue;
+        }
+        return Ok(Some(Twin { doc_id, path, folder_id, size, mtime, keyed, origin }));
+    }
+    Ok(None)
+}
+
+/// The older record takes the newer twin's file, folder and grants; the
+/// twin is deleted. The card, the Mine flag and the history stay with the
+/// older record - it is the one the person knows.
+fn merge_into(conn: &Connection, key: &[u8; 32], keep: &str, twin: &Twin, known_places: &[(&str, PathBuf)]) -> Result<(), String> {
+    let mut meta = document_meta(conn, key, keep)?.ok_or("this document is no longer in the library")?;
+    meta.path = Some(twin.path.clone());
+    meta.anchor = links::anchor_among(Path::new(&twin.path), known_places);
+    if meta.content_id.is_none() {
+        meta.content_id = links::content_id(Path::new(&twin.path)).ok().flatten();
+    }
+    let json = serde_json::to_vec(&meta).map_err(|e| e.to_string())?;
+    conn.execute("INSERT OR IGNORE INTO grants (doc_id, ai_id) SELECT ?1, ai_id FROM grants WHERE doc_id = ?2", params![keep, twin.doc_id])
+        .map_err(|e| e.to_string())?;
+    delete_document(conn, &twin.doc_id)?;
+    conn.execute(
+        "UPDATE documents SET path_hash = ?2, meta_enc = ?3, folder_id = ?4, byte_size = ?5, mtime = ?6, content_hash = ?7, origin = COALESCE(?8, origin), offline_since = NULL, online_only = NULL WHERE doc_id = ?1",
+        params![keep, path_hash(&twin.path), enc(key, &json)?, twin.folder_id, twin.size, twin.mtime, twin.keyed, twin.origin],
+    )
+    .map_err(|e| e.to_string())?;
+    cache_invalidate();
+    Ok(())
+}
+
+/// One linked document as the check reads it.
+struct CheckRow {
+    doc_id: String,
+    size: i64,
+    mtime: Option<i64>,
+    keyed: Option<String>,
+    offline: bool,
+    cloud: bool,
+    meta: DocMeta,
+}
+
 /// Look at every document that is linked to a file on its own (not part of a
 /// synced folder): changed -> read again; missing -> looked for under its
 /// well-known folder on this machine, else OFFLINE (kept, still answering);
@@ -708,15 +865,7 @@ async fn check_linked(
 ) -> Result<LinkReport, String> {
     let mut report = LinkReport::default();
     let known_places = links::known_folders(app);
-    struct Row {
-        doc_id: String,
-        size: i64,
-        mtime: Option<i64>,
-        keyed: Option<String>,
-        offline: bool,
-        cloud: bool,
-        meta: DocMeta,
-    }
+    type Row = CheckRow;
     let rows: Vec<Row> = {
         let conn = open(app)?;
         let mut stmt = conn
@@ -811,6 +960,18 @@ async fn check_linked(
                         report.relinked += 1;
                         continue;
                     }
+                }
+                // The same words already live under ANOTHER record whose file
+                // is present (a synced folder registered the moved file before
+                // this record was known to be missing): one document, twice.
+                // This record - the older, with the card, grants and history -
+                // takes that file; the newer copy goes.
+                if let Some(twin) = present_twin(app, key, &row)? {
+                    let conn = open(app)?;
+                    merge_into(&conn, key, &row.doc_id, &twin, &known_places)?;
+                    log::info!("[corpus] '{}' was already in the library under a newer record - merged, one document", row.meta.filename);
+                    report.relinked += 1;
+                    continue;
                 }
                 if !row.offline {
                     let conn = open(app)?;
@@ -915,12 +1076,16 @@ pub async fn corpus_read_again(
     let path = {
         let conn = open(&app)?;
         let mut meta = document_meta(&conn, &key, &doc_id)?.ok_or("this document is no longer in the library")?;
-        // Forget the identity so the same words are still read again.
         let p = meta.path.clone().ok_or("this document has no file to read again")?;
-        meta.content_id = None;
-        let json = serde_json::to_vec(&meta).map_err(|e| e.to_string())?;
-        conn.execute("UPDATE documents SET meta_enc = ?2 WHERE doc_id = ?1", params![doc_id, enc(&key, &json)?])
-            .map_err(|e| e.to_string())?;
+        // Forget the identity so the same words are still read again - but
+        // only when there IS a file to read: the fingerprint of a missing
+        // file is what finds it when it turns up somewhere else.
+        if links::file_state(Path::new(&p)) != links::FileState::Missing {
+            meta.content_id = None;
+            let json = serde_json::to_vec(&meta).map_err(|e| e.to_string())?;
+            conn.execute("UPDATE documents SET meta_enc = ?2 WHERE doc_id = ?1", params![doc_id, enc(&key, &json)?])
+                .map_err(|e| e.to_string())?;
+        }
         p
     };
     // Asked to read a file that is gone: that IS the news. The document goes
@@ -987,6 +1152,131 @@ pub async fn corpus_locate(
     Ok(report)
 }
 
+/// "Search for them": look for every offline document on this computer -
+/// the home folder and the OS well-known folders (never an external or
+/// network drive uninvited - that is `corpus_locate` with a chosen folder).
+/// A file with the same name and size is a candidate; only the same
+/// FINGERPRINT (the words) proves it - a namesake of a different size or
+/// different words is left alone. Each find goes through the same relink
+/// as a hand pick. With Vault file sync this becomes the fallback after
+/// the index says where the file is.
+#[tauri::command]
+pub async fn corpus_search_missing(
+    app: AppHandle,
+    hc_state: State<'_, Arc<HolochainState>>,
+    llm_state: State<'_, crate::llm::LLMState>,
+) -> Result<LocateReport, String> {
+    let key = data_key(&hc_state)?;
+    SYNC_CANCEL.store(false, Ordering::SeqCst);
+    // (doc_id, filename lower, size, content_id)
+    let wanted: Vec<(String, String, i64, Option<String>)> = {
+        let conn = open(&app)?;
+        let mut stmt = conn
+            .prepare("SELECT doc_id, byte_size, meta_enc FROM documents WHERE offline_since IS NOT NULL OR chunk_count = 0")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, Vec<u8>>(2)?)))
+            .map_err(|e| e.to_string())?;
+        rows.flatten()
+            .filter_map(|(doc_id, size, blob)| {
+                let meta: DocMeta = serde_json::from_slice(&dec(&key, &blob).ok()?).ok()?;
+                Some((doc_id, meta.filename.to_lowercase(), size, meta.content_id))
+            })
+            .collect()
+    };
+    let mut report = LocateReport::default();
+    if wanted.is_empty() {
+        return Ok(report);
+    }
+    // One walk, off the async runtime: the home folder covers the well-known
+    // folders when they live under it; any that do not are walked too.
+    let roots: Vec<String> = {
+        let mut r: Vec<PathBuf> = links::known_folders(&app).into_iter().map(|(_, p)| p).collect();
+        let home = app.path().home_dir().ok();
+        r.retain(|p| home.as_ref().map(|h| !p.starts_with(h) || p == h).unwrap_or(true));
+        r.sort();
+        r.dedup();
+        r.into_iter().map(|p| p.to_string_lossy().to_string()).collect()
+    };
+    let files = tokio::task::spawn_blocking(move || walk(&roots)).await.map_err(|e| e.to_string())?;
+    let names: HashSet<&str> = wanted.iter().map(|(_, n, _, _)| n.as_str()).collect();
+    // Candidates by lower-cased name, cheap: name and size before any hash.
+    let mut by_name: HashMap<String, Vec<(PathBuf, i64)>> = HashMap::new();
+    for f in files {
+        let Some(n) = f.file_name().and_then(|n| n.to_str()).map(|n| n.to_lowercase()) else { continue };
+        if !names.contains(n.as_str()) {
+            continue;
+        }
+        if let links::FileState::Present { size, .. } = links::file_state(&f) {
+            by_name.entry(n).or_default().push((f, size));
+        }
+    }
+    let mut taken: HashSet<PathBuf> = HashSet::new();
+    for (doc_id, name, size, content_id) in wanted {
+        if SYNC_CANCEL.load(Ordering::SeqCst) {
+            break;
+        }
+        let Some(cands) = by_name.get(&name) else { report.still_missing += 1; continue };
+        // Same size first; a text-less restore (no fingerprint) accepts the
+        // only same-size namesake, a document with words wants its own.
+        let found = cands.iter().filter(|(p, _)| !taken.contains(p)).find(|(p, sz)| {
+            if *sz != size {
+                return false;
+            }
+            match &content_id {
+                Some(id) => links::content_id(p).ok().flatten().as_deref() == Some(id.as_str()),
+                None => true,
+            }
+        });
+        match found {
+            Some((p, _)) => {
+                let p = p.clone();
+                taken.insert(p.clone());
+                match take_in(&app, &llm_state, &key, &doc_id, &p).await {
+                    Ok(_) => report.relinked += 1,
+                    Err(e) => report.failed.push(ImportFailure { file: name, reason: e }),
+                }
+            }
+            None => report.still_missing += 1,
+        }
+    }
+    Ok(report)
+}
+
+/// Every kept folder's metadata, for the backup.
+pub(super) fn folders_for_backup(conn: &Connection, key: &[u8; 32]) -> Result<Vec<FolderMeta>, String> {
+    let mut stmt = conn.prepare("SELECT meta_enc FROM folders").map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], |r| r.get::<_, Vec<u8>>(0)).map_err(|e| e.to_string())?;
+    Ok(rows.flatten().filter_map(|blob| read_folder(key, &blob)).collect())
+}
+
+/// "Check again" on an offline row: is the file back where the document
+/// points? Back with the same words = the row clears, nothing is read;
+/// back with different words = read again in place; still gone = say so.
+#[tauri::command]
+pub async fn corpus_check_one(
+    app: AppHandle,
+    hc_state: State<'_, Arc<HolochainState>>,
+    llm_state: State<'_, crate::llm::LLMState>,
+    doc_id: String,
+) -> Result<bool, String> {
+    let key = data_key(&hc_state)?;
+    let path = {
+        let conn = open(&app)?;
+        document_meta(&conn, &key, &doc_id)?
+            .and_then(|m| m.path)
+            .ok_or("this document has no file to look for")?
+    };
+    match links::file_state(Path::new(&path)) {
+        links::FileState::Missing => Err("is still not where it was.".into()),
+        links::FileState::OnlineOnly => Err("is online only - make it available on this computer first.".into()),
+        links::FileState::Present { .. } => {
+            SYNC_CANCEL.store(false, Ordering::SeqCst);
+            take_in(&app, &llm_state, &key, &doc_id, Path::new(&path)).await
+        }
+    }
+}
+
 #[tauri::command]
 pub fn corpus_folder_sync_cancel() {
     SYNC_CANCEL.store(true, Ordering::SeqCst);
@@ -1006,7 +1296,7 @@ pub fn start_folder_sync(app: &AppHandle) {
             let llm = app.state::<crate::llm::LLMState>();
             match sync_folders(&app, &hc, &llm, None).await {
                 Ok(reports) => {
-                    let changed: usize = reports.iter().map(|r| r.added + r.updated + r.removed).sum();
+                    let changed: usize = reports.iter().map(|r| r.added + r.updated + r.removed + r.offline + r.relinked).sum();
                     if changed > 0 {
                         let _ = app.emit("corpus-folders-synced", &reports);
                     }
@@ -1102,9 +1392,11 @@ mod tests {
         let given = add("given.md", Some("given"));
         let older = add("older.md", None);
 
-        assert!(retire(&conn, &found).unwrap(), "the folder's own find leaves");
-        assert!(!retire(&conn, &given).unwrap());
-        assert!(!retire(&conn, &older).unwrap(), "unknown origin = the careful reading");
+        assert!(matches!(retire(&conn, &found).unwrap(), Retired::Removed), "the folder's own find leaves");
+        assert!(matches!(retire(&conn, &given).unwrap(), Retired::WentOffline));
+        assert!(matches!(retire(&conn, &older).unwrap(), Retired::WentOffline), "unknown origin = the careful reading");
+        // a second look at the same gone file is not news
+        assert!(matches!(retire(&conn, &given).unwrap(), Retired::Unchanged));
 
         let left: i64 = conn.query_row("SELECT COUNT(*) FROM documents", [], |r| r.get(0)).unwrap();
         assert_eq!(left, 2);

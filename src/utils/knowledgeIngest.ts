@@ -36,7 +36,7 @@ export function isDocumentPath(path: string): boolean {
  * The reading, cutting and embedding happen in Rust (src-tauri/src/corpus.rs)
  * one document at a time; progress arrives on `corpus-progress`.
  */
-export type IngestOutcome = { failures: string[]; added: number; already: number; reread: number; cancelled: boolean; folders?: number };
+export type IngestOutcome = { failures: string[]; added: number; already: number; reread: number; relinked?: number; cancelled: boolean; folders?: number };
 
 export async function ingestDocumentPaths(aiId: string, paths: string[]): Promise<IngestOutcome> {
   const { corpusImport, corpusFolderAdd, corpusFolderSync } = await import('./corpus');
@@ -50,7 +50,7 @@ export async function ingestDocumentPaths(aiId: string, paths: string[]): Promis
     const isDir = await invoke<boolean>('path_is_dir', { path: p }).catch(() => false);
     (isDir ? folders : files).push(p);
   }
-  const out: IngestOutcome = { failures: [], added: 0, already: 0, reread: 0, cancelled: false, folders: folders.length };
+  const out: IngestOutcome = { failures: [], added: 0, already: 0, reread: 0, relinked: 0, cancelled: false, folders: folders.length };
   if (files.length) {
     const report = await corpusImport(files, aiId, await userNames());
     out.failures.push(...report.failed.map((f) => `${f.file} (${f.reason})`));
@@ -68,6 +68,7 @@ export async function ingestDocumentPaths(aiId: string, paths: string[]): Promis
       out.added += r.added;
       out.already += r.unchanged;
       out.reread += r.updated;
+      out.relinked = (out.relinked ?? 0) + (r.relinked ?? 0);
       out.cancelled = out.cancelled || r.cancelled;
     }
   }
@@ -86,6 +87,7 @@ export function ingestOutcomeMessage(o: IngestOutcome): string {
   const parts = [
     o.added ? `${n(o.added, 'document', 'documents')} added` : '',
     o.reread ? `${n(o.reread, 'document', 'documents')} read again` : '',
+    o.relinked ? `${n(o.relinked, 'document', 'documents')} found again` : '',
   ].filter(Boolean);
   const kept = o.folders ? (o.folders === 1 ? ' This folder is kept in sync.' : ' These folders are kept in sync.') : '';
   if (parts.length) return `${parts.join(', ')}.${kept}${o.cancelled ? ' Stopped before the end.' : ''}`;

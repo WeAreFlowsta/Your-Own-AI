@@ -199,8 +199,12 @@ export interface FolderSyncReport {
   unchanged: number;
   /** Files kept in a cloud (OneDrive, iCloud, Dropbox): not read, not removed. */
   online_only: number;
-  /** Documents you gave the AI yourself whose file is gone: kept, marked offline. */
+  /** Documents you gave the AI yourself whose file went missing on this check: kept, marked offline. */
   offline: number;
+  /** Still offline from an earlier check - state, not news. */
+  still_offline?: number;
+  /** Offline documents whose file turned up in this folder (the same words): found again, not added twice. */
+  relinked?: number;
   failed: { file: string; reason: string }[];
   unreachable: boolean;
   cancelled: boolean;
@@ -225,6 +229,27 @@ export function corpusFolderSync(folderId?: string): Promise<FolderSyncReport[]>
   return invoke<FolderSyncReport[]>('corpus_folder_sync', { folderId: folderId ?? null });
 }
 
+/** A look at the synced folders and linked documents when a documents
+ *  screen opens or the app comes back to the front - at most once every
+ *  ten minutes across both (one `stat` per unchanged file; one run at a
+ *  time). Best-effort: the screen shows what is there and the look
+ *  corrects it through the library-changed event. */
+let lastDocumentsLook = 0;
+export function lookAtDocumentsSoon(): void {
+  if (Date.now() - lastDocumentsLook < 10 * 60 * 1000) return;
+  lastDocumentsLook = Date.now();
+  corpusFolderSync()
+    .then(async (reports) => {
+      // Tell the folder lists what changed, in the words Check now uses.
+      const changed = reports.some((r) => r.added + r.updated + r.removed + r.offline + (r.relinked ?? 0) > 0 || r.unreachable);
+      if (changed) {
+        const { emit } = await import('@tauri-apps/api/event');
+        await emit('corpus-folders-synced', reports);
+      }
+    })
+    .catch(() => { /* best-effort */ });
+}
+
 export function corpusFolderSyncCancel(): Promise<void> {
   return invoke<void>('corpus_folder_sync_cancel');
 }
@@ -235,6 +260,13 @@ export function corpusFolderSyncCancel(): Promise<void> {
  *  (different words), false when only its location was updated (same words). */
 export function corpusRelinkOne(docId: string, path: string): Promise<boolean> {
   return invoke<boolean>('corpus_relink_one', { docId, path });
+}
+
+/** "Check again" on an offline document: is the file back where it was?
+ *  Back with the same words = the row clears without a read; different
+ *  words = read again in place. Rejects with a short reason otherwise. */
+export function corpusCheckOne(docId: string): Promise<boolean> {
+  return invoke<boolean>('corpus_check_one', { docId });
 }
 
 /** Read one document again from where it lives. */
@@ -251,4 +283,11 @@ export interface LocateReport {
 /** A whole folder moved: documents that were under `oldDir` are looked for under `newDir`. */
 export function corpusLocate(oldDir: string, newDir: string): Promise<LocateReport> {
   return invoke<LocateReport>('corpus_locate', { oldDir, newDir });
+}
+
+/** Look for every document that needs its file across this computer's own
+ *  folders (home and the well-known ones; never a drive uninvited). A find
+ *  must have the same words, not only the same name. */
+export function corpusSearchMissing(): Promise<LocateReport> {
+  return invoke<LocateReport>('corpus_search_missing');
 }

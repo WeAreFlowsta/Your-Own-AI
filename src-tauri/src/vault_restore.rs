@@ -650,6 +650,17 @@ fn restore_corpus(
             .filter_map(|backup_id| resolve_local_ai_id(merged, backup_id))
             .collect();
     }
+    // A synced folder's AIs are backup ids too; one with no AI here is
+    // nothing to keep in sync.
+    for f in records.folders.iter_mut() {
+        f.ai_ids = f.ai_ids.iter().filter_map(|backup_id| resolve_local_ai_id(merged, backup_id)).collect();
+    }
+    records.folders.retain(|f| !f.ai_ids.is_empty());
+    match crate::corpus::restore_folders(app, key, &records.folders) {
+        Ok(n) if n > 0 => log::info!("[restore] corpus: {n} synced folder(s) kept again on this machine"),
+        Ok(_) => {}
+        Err(e) => log::warn!("[restore] corpus folders failed: {e}"),
+    }
     match crate::corpus::restore_records(app, key, &records) {
         Ok(n) => n,
         Err(e) => {

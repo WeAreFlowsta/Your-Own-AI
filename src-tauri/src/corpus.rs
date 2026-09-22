@@ -1511,7 +1511,7 @@ pub fn corpus_documents(
     read_records(&conn, &key, ai_id.as_deref())
 }
 
-fn delete_document(conn: &Connection, doc_id: &str) -> Result<(), String> {
+pub(crate) fn delete_document(conn: &Connection, doc_id: &str) -> Result<(), String> {
     conn.execute("DELETE FROM passages WHERE doc_id = ?1", params![doc_id]).map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM grants WHERE doc_id = ?1", params![doc_id]).map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM documents WHERE doc_id = ?1", params![doc_id]).map_err(|e| e.to_string())?;
@@ -1721,10 +1721,38 @@ pub fn corpus_document_text(
 pub struct CorpusRecords {
     pub version: u32,
     pub documents: Vec<DocRecord>,
+    /// Folders kept in sync, so another machine (or this one after a
+    /// restore) picks them up again. Each carries an anchor (well-known
+    /// folder + relative path) beside its path: the path is this machine's,
+    /// the anchor maps onto any. A backup from before this field has none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folders: Vec<FolderBackup>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct FolderBackup {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<links::Anchor>,
+    pub ai_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 pub(crate) fn records_for_backup(app: &AppHandle, key: &[u8; 32]) -> Result<CorpusRecords, String> {
-    records_from(&open(app)?, key)
+    let conn = open(app)?;
+    let mut records = records_from(&conn, key)?;
+    let places = links::known_folders(app);
+    records.folders = sync::folders_for_backup(&conn, key)?
+        .into_iter()
+        .map(|m| FolderBackup {
+            anchor: links::anchor_among(Path::new(&m.path), &places),
+            path: m.path,
+            ai_ids: m.ai_ids,
+            kind: m.kind,
+        })
+        .collect();
+    Ok(records)
 }
 
 fn records_from(conn: &Connection, key: &[u8; 32]) -> Result<CorpusRecords, String> {
@@ -1732,7 +1760,7 @@ fn records_from(conn: &Connection, key: &[u8; 32]) -> Result<CorpusRecords, Stri
     // it was last seen (and under this machine's home folder when the old
     // one differs) before anyone is asked to point at it.
     let documents = read_records(conn, key, None)?;
-    Ok(CorpusRecords { version: 1, documents })
+    Ok(CorpusRecords { version: 1, documents, folders: Vec::new() })
 }
 
 /// Restore records from a backup: documents that are not here yet come back
@@ -1766,6 +1794,39 @@ fn restore_records_into(conn: &mut Connection, key: &[u8; 32], records: &CorpusR
         tx.commit().map_err(|e| e.to_string())?;
     }
     Ok(restored)
+}
+
+/// The folders a backup kept in sync, brought back on THIS machine: by the
+/// anchor when its well-known folder exists here (Documents › Research maps
+/// onto another computer's Documents), else by the path when it exists
+/// here, else left out - a folder that is nowhere on this machine is not
+/// registered (the next sync would only report it unreachable). Folders
+/// already kept are merged (their AIs added). Returns how many were kept.
+pub(crate) fn restore_folders(app: &AppHandle, key: &[u8; 32], folders: &[FolderBackup]) -> Result<usize, String> {
+    if folders.is_empty() {
+        return Ok(0);
+    }
+    let places = links::known_folders(app);
+    let conn = open(app)?;
+    let mut kept = 0usize;
+    for f in folders {
+        let here = f
+            .anchor
+            .as_ref()
+            .and_then(|a| links::resolve_among(a, &places))
+            .filter(|p| p.is_dir())
+            .or_else(|| Some(PathBuf::from(&f.path)).filter(|p| p.is_dir()));
+        let Some(dir) = here else {
+            log::info!("[corpus] a synced folder from the backup is not on this machine - left out: {}", f.anchor.as_ref().map(|a| format!("{} › {}", a.base, a.rel)).unwrap_or_else(|| f.path.clone()));
+            continue;
+        };
+        let dir_s = dir.to_string_lossy().to_string();
+        for ai in &f.ai_ids {
+            sync::add_folder(&conn, key, &dir_s, ai, f.kind.clone())?;
+        }
+        kept += 1;
+    }
+    Ok(kept)
 }
 
 // ---------------------------------------------------------------- tests
@@ -2071,7 +2132,7 @@ mod tests {
         let best = cache.iter().map(|c| (cosine(&[0.9, 0.1, 0.0], &c.vec), c.idx)).fold((0.0, 9), |a, b| if b.0 > a.0 { b } else { a });
         assert_eq!(best.1, 0);
         // records for backup carry no path; restore into a fresh store keeps grants
-        let backup = CorpusRecords { version: 1, documents: recs.clone().into_iter().map(|mut d| { d.meta.path = None; d }).collect() };
+        let backup = CorpusRecords { version: 1, documents: recs.clone().into_iter().map(|mut d| { d.meta.path = None; d }).collect(), folders: Vec::new() };
         let path2 = std::env::temp_dir().join(format!("corpus-{}.sqlite", new_doc_id()));
         let conn2 = open_at(&path2).unwrap();
         drop(conn2);

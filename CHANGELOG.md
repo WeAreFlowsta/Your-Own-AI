@@ -256,6 +256,34 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   filled in.
 
 ### Your documents
+- A document that went offline and turns up in a synced folder - moved or
+  renamed into it - is recognized by its words and pointed at the file.
+  Its card, who can read it and its history stay; it is never added a
+  second time beside itself.
+- One document, once. When a document's file went missing and its words
+  turn out to be in the library already under a newer record (a synced
+  folder took the moved file in before the old record knew), the two are
+  merged: the older record, with its card and history, takes the file.
+  And Read again on a document whose file is gone no longer forgets the
+  document's fingerprint, which is what finds the file later.
+- A document whose file went missing has a Check again on its row: one
+  press looks where the file was; back with the same words, the row clears
+  with nothing read; still gone, it says so. Relink is for a file that is
+  somewhere else now.
+- A folder check reports a file that went missing once, on the check that
+  noticed; a document still waiting for its file from an earlier check is
+  said quietly, not repeated as news. The automatic look says what it
+  changed, in the same words as Check now.
+- The documents list looks for moved and edited files when you open it,
+  the same look that runs when the app comes back to the front, at most
+  once every ten minutes.
+- Search for them. When several documents need their files, one press
+  looks through your home folder and the usual places on this computer.
+  A file counts only when its words match, never by name alone. An
+  external or network drive is searched only when you choose it.
+- Folders kept in sync ride your Vault backup, by their place (Documents,
+  Downloads, the desktop) and path, so a restore on this or another
+  computer keeps them in sync again where that place exists.
 - Adding documents without the small helper download now says so where
   you add them, with the download right there, even if you dismissed the
   offer on the home page. That offer is also shorter and says plainly what

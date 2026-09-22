@@ -728,6 +728,8 @@ pub fn run() {
             corpus::sync::corpus_relink_one,
             corpus::sync::corpus_read_again,
             corpus::sync::corpus_locate,
+            corpus::sync::corpus_search_missing,
+            corpus::sync::corpus_check_one,
             corpus::corpus_set_mine,
             corpus::corpus_set_summary,
             corpus::corpus_recall,

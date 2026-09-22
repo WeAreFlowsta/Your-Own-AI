@@ -60,6 +60,8 @@ export const KnowledgeSection = component$<KnowledgeSectionProps>((props) => {
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async ({ cleanup }) => {
     ready.value = await isEmbeddingModelReady();
+    // Opening the list is when a moved or edited file should be known.
+    void import('../utils/corpus').then((m) => m.lookAtDocumentsSoon());
     props.store.knowledgeDocs = await listKnowledgeDocuments(props.aiId);
     // Cards are written on the device in the background; rows refresh as
     // each one lands.

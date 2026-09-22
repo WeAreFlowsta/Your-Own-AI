@@ -93,6 +93,29 @@ export const DocumentsNeedingFiles = component$<{
 
   // One folder, walked: every record that needs its file and matches a file
   // in it (by name and size) is filled.
+  // Walks the home folder and the well-known places; a find is proven by
+  // its words. Slower than Locate, says so, and never touches a drive the
+  // person did not pick.
+  const search = $(async () => {
+    busy.value = 'search';
+    result.value = '';
+    try {
+      const { corpusSearchMissing } = await import('../utils/corpus');
+      const r = await corpusSearchMissing();
+      const parts = [
+        r.relinked ? `Found ${plural(r.relinked, 'document', 'documents')}` : '',
+        r.still_missing ? `${r.still_missing} not found on this computer's own folders - try Find them in a folder for another drive` : '',
+        r.failed.length ? `could not read ${r.failed.map((f) => f.file).join(', ')}` : '',
+      ].filter(Boolean);
+      result.value = parts.join(' · ') || 'Nothing to look for.';
+    } catch (e) {
+      result.value = typeof e === 'string' ? e : 'The search could not run.';
+    } finally {
+      busy.value = '';
+      await props.onDone$();
+    }
+  });
+
   const choose = $(async () => {
     const { open } = await import('@tauri-apps/plugin-dialog');
     const picked = await open({ directory: true, multiple: true, title: 'Choose a folder the files may be in' });
@@ -148,6 +171,10 @@ export const DocumentsNeedingFiles = component$<{
       {bulk && (
         <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[var(--text-secondary)]">
           <span>{needing.length} documents need their files</span>
+          <button type="button" disabled={busy.value !== ''} onClick$={search} class={link} title="Looks through your home folder and the usual places on this computer; a file counts only when its words match">
+            {busy.value === 'search' ? <LuLoader2 class="w-3.5 h-3.5 animate-spin" /> : <LuFolderSearch class="w-3.5 h-3.5" />}
+            {busy.value === 'search' ? 'Searching this computer...' : 'Search for them'}
+          </button>
           <button type="button" disabled={busy.value !== ''} onClick$={choose} class={link}>
             {busy.value === 'choose' ? <LuLoader2 class="w-3.5 h-3.5 animate-spin" /> : <LuFolderOpen class="w-3.5 h-3.5" />}
             {busy.value === 'choose' ? 'Looking...' : 'Find them in a folder'}

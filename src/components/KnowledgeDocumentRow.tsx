@@ -66,6 +66,27 @@ export const KnowledgeDocumentRow = component$<{
     }
   });
 
+  // The file may be back where it was (moved out and back, a drive
+  // plugged in): look, without a picker.
+  const checkAgain = $(async () => {
+    busy.value = true;
+    note.value = '';
+    try {
+      const { corpusCheckOne } = await import('../utils/corpus');
+      const readIn = await corpusCheckOne(doc.docId);
+      note.value = readIn ? 'Found and read again.' : 'Found - the same words, linked again.';
+      if (readIn) {
+        const lib = await import('../utils/documentSummaries');
+        void lib.summarizePendingDocuments().then(() => lib.refreshLibraryPortrait());
+      }
+    } catch (e) {
+      note.value = `${doc.filename} ${typeof e === 'string' ? e : 'could not be checked.'}`;
+    } finally {
+      busy.value = false;
+      await props.onChanged$?.();
+    }
+  });
+
   const readAgain = $(async () => {
     busy.value = true;
     note.value = '';
@@ -141,6 +162,10 @@ export const KnowledgeDocumentRow = component$<{
           <span class={state.kind === 'online' ? 'text-[var(--text-muted)]' : 'text-amber-600 dark:text-amber-400'}>{state.text}</span>
           {state.kind !== 'online' && (
             <>
+              <button type="button" onClick$={checkAgain} disabled={busy.value} class={action} title="Look for the file where it was">
+                {busy.value ? <LuLoader2 class="w-3.5 h-3.5 animate-spin" /> : <LuRefreshCw class="w-3.5 h-3.5" />}
+                Check again
+              </button>
               <button type="button" onClick$={relink} disabled={busy.value} class={action}>
                 {busy.value ? <LuLoader2 class="w-3.5 h-3.5 animate-spin" /> : <LuLink class="w-3.5 h-3.5" />}
                 {busy.value ? 'Reading...' : 'Relink'}

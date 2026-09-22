@@ -2648,7 +2648,7 @@ mod corpus_budget_tests {
     #[test]
     fn fit_corpus_records_drops_cards_oldest_first() {
         let card = "x".repeat(200);
-        let mut r = CorpusRecords { version: 1, documents: (1..=5).map(|i| doc(i, &card)).collect() };
+        let mut r = CorpusRecords { version: 1, documents: (1..=5).map(|i| doc(i, &card)).collect(), folders: Vec::new() };
         let full = serde_json::to_vec(&r).unwrap().len();
         assert_eq!(fit_corpus_records(&mut r, full), 0);
         let dropped = fit_corpus_records(&mut r, full - 300);

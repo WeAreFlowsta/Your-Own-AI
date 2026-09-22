@@ -71,6 +71,8 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async () => {
     ready.value = await isEmbeddingModelReady();
+    // Opening the list is when a moved or edited file should be known.
+    void import('../utils/corpus').then((m) => m.lookAtDocumentsSoon());
   });
 
   // eslint-disable-next-line qwik/no-use-visible-task
