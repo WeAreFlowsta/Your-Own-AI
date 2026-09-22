@@ -331,6 +331,13 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   from now on.
 
 ### Records
+- Search inside your conversations. The Memory page's filter box now finds
+  words inside every conversation of that AI, your own and imported, not
+  only titles: the best match per conversation with the matching stretch
+  marked, opening on the message it found. The first search reads the
+  conversations for search once (a progress line says how far, and it can
+  be stopped); every message after that joins as it is recorded. The words
+  are kept in an encrypted cache on this computer, never in the clear.
 - Your records are read a page at a time. A long list of conversations,
   or one very long conversation, no longer has to arrive in a single
   read: the drawer, opening a conversation, backup to your Vault, restore

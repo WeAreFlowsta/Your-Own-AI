@@ -131,6 +131,7 @@ export async function loadConversationMessages(
     if (e.role === "user") {
       return {
         id: uuidv4(),
+        sequence: e.sequence,
         role: "user",
         content: e.content,
         model: "user",
@@ -156,6 +157,7 @@ export async function loadConversationMessages(
     }
     return {
       id: uuidv4(),
+      sequence: e.sequence,
       role: "assistant",
       content,
       model: ai.id,

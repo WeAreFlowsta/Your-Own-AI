@@ -49,6 +49,7 @@ import AiKnowledge from "../../components/AiKnowledge";
 import { RememberEntryButton } from "../../components/RememberEntryButton";
 import AiKnowledgeDocuments from "../../components/AiKnowledgeDocuments";
 import { Callout } from "../../components/Callout";
+import ConversationSearch from "../../components/ConversationSearch";
 import { emptyMayBeWarmup, noteRecordsSeen, readThroughWarmup, WARMUP_POLL_MS } from "../../utils/recordsWarmup";
 
 /**
@@ -599,7 +600,7 @@ export default component$(() => {
                 <input
                   type="text"
                   value={filterText.value}
-                  placeholder="Find by title"
+                  placeholder="Find by title or by the words inside"
                   onInput$={(_, el) => (filterText.value = el.value)}
                   class="min-w-[12rem] flex-1 bg-[var(--bg-input)] border border-[var(--border-input)] rounded-lg px-3 py-1.5 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)]"
                 />
@@ -665,8 +666,25 @@ export default component$(() => {
                   </div>
                 )}
               </div>
+              {/* The words half of the search: inside the conversations,
+                  best match first, opening on the message it found. */}
+              <ConversationSearch
+                agentKey={agentKey.value}
+                query={filterText.value}
+                onOpen$={$((hit) => {
+                  try {
+                    sessionStorage.setItem(
+                      "resume-conversation",
+                      JSON.stringify({ hash: hit.hash, agentKey: agentKey.value, title: hit.title ?? undefined, seq: hit.seq }),
+                    );
+                  } catch {
+                    /* handoff unavailable */
+                  }
+                  nav("/chat/");
+                })}
+              />
               {shown.value.length === 0 && (
-                <p class="py-6 text-center text-sm text-[var(--text-muted)]">No conversations match.</p>
+                <p class="py-6 text-center text-sm text-[var(--text-muted)]">No conversations match by title.</p>
               )}
               {shown.value.map((conv) => (
                 <div

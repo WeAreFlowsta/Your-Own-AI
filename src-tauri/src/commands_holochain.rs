@@ -515,6 +515,7 @@ pub async fn record_transcript_entry(
     let raw_bytes = hex::decode(&conversation_hash)
         .map_err(|e| format!("Invalid conversation hash hex: {}", e))?;
     let conv_hash = ActionHash::from_raw_39(raw_bytes);
+    let (seq_for_search, role_for_search, content_for_search) = (sequence, role.clone(), content.clone());
 
     let manager = hc_state.get()?;
 
@@ -599,7 +600,10 @@ pub async fn record_transcript_entry(
 
     crate::vault_escrow::schedule_full_backup(&app);
     // The conversation was just continued: it moves to the top of the list.
-    crate::conversation_cache::touch(&app, &conversation_hash, now_micros());
+    let at = now_micros();
+    crate::conversation_cache::touch(&app, &conversation_hash, at);
+    // Search sees the turn now, without a rebuild.
+    crate::transcript_search::note_recorded(&app, &conversation_hash, seq_for_search, &role_for_search, &content_for_search, at);
     Ok(hex::encode(hash.get_raw_39()))
 }
 

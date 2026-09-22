@@ -427,7 +427,7 @@ export default component$(() => {
 
   const resumeGeneration = useSignal(0);
   const resumeConversation = $(
-    async (target: { hash: string; agentKey: string; aiId?: string; title?: string }) => {
+    async (target: { hash: string; agentKey: string; aiId?: string; title?: string; seq?: number }) => {
       const who = `${target.agentKey.slice(0, 8)}../${target.hash.slice(0, 12)}..`;
       if (chatState.isLoading) {
         console.warn("[Resume] ignored: a reply is still in flight");
@@ -508,8 +508,18 @@ export default component$(() => {
       chatState.conversationHash = target.hash;
       chatState.cacheKey = target.hash;
       chatState.messageSequence = nextSequence;
-      // Land on the last message - it's where continuing happens.
-      jumpToLatest();
+      // Land on the last message - it's where continuing happens; a search
+      // hit lands on the message it found instead.
+      if (typeof target.seq === "number") {
+        const seq = target.seq;
+        setTimeout(() => {
+          const el = document.querySelector(`[data-seq="${seq}"]`);
+          if (el) el.scrollIntoView({ block: "center" });
+          else jumpToLatest();
+        }, 150);
+      } else {
+        jumpToLatest();
+      }
       const firstUser = messages.find((m) => m.role === "user");
       rememberLastConversation({
         hash: target.hash,

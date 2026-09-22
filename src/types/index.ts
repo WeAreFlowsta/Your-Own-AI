@@ -126,6 +126,8 @@ export interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  /** The records sequence of a resumed turn - a search hit scrolls to it. */
+  sequence?: number;
   /** Data-URL images attached to a user turn — shown in the bubble and kept in
    *  the conversation so follow-up questions can still reference them. */
   images?: string[];

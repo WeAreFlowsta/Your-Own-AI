@@ -512,7 +512,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
           : `${props.aiName} is thinking..`;
 
   return (
-    <div class="generic-container my-2 rounded-2xl pl-9 md:pl-10 lg:pl-10">
+    <div class="generic-container my-2 rounded-2xl pl-9 md:pl-10 lg:pl-10" data-seq={props.message.sequence}>
       <div class="text-sm text-[var(--text-secondary)] px-2 py-1 w-full flex items-center rounded-2xl min-h-[30px]">
         {/* Status indicator (left-aligned, shown during loading) */}
         {showStatus && (
