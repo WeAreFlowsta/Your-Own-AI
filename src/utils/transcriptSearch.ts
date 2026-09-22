@@ -25,6 +25,8 @@ export interface SearchAnswer {
   /** Nothing read for this AI yet: offer to read its conversations. */
   needs_read: boolean;
   building: boolean;
+  /** The records are not answering yet (just after launch): the panel waits and asks again. */
+  warming?: boolean;
 }
 
 export interface SearchProgress {
@@ -34,8 +36,9 @@ export interface SearchProgress {
   cancelled: boolean;
 }
 
-export function transcriptSearch(agentKey: string, query: string, limit?: number): Promise<SearchAnswer> {
-  return invoke<SearchAnswer>('transcript_search', { agentKey, query, limit: limit ?? null });
+/** Search one AI's conversations (every agent generation of it). */
+export function transcriptSearch(aiId: string, agentKey: string, query: string, limit?: number): Promise<SearchAnswer> {
+  return invoke<SearchAnswer>('transcript_search', { aiId, agentKey, query, limit: limit ?? null });
 }
 
 /** Read this AI's conversations into the search cache (background; progress on `transcript-search-progress`). */

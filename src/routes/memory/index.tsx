@@ -669,6 +669,7 @@ export default component$(() => {
               {/* The words half of the search: inside the conversations,
                   best match first, opening on the message it found. */}
               <ConversationSearch
+                aiId={aiId.value}
                 agentKey={agentKey.value}
                 query={filterText.value}
                 onOpen$={$((hit) => {

@@ -9,6 +9,9 @@ function when(timestamp: number): string {
 }
 
 export interface ConversationSearchProps {
+  /** The AI whose conversations are searched. */
+  aiId: string;
+  /** Its current agent key - what "Read them now" lists by. */
   agentKey: string;
   /** What the person typed in the conversations filter box. */
   query: string;
@@ -28,22 +31,37 @@ export const ConversationSearch = component$<ConversationSearchProps>((props) =>
   const searching = useSignal(false);
   const progress = useSignal<SearchProgress | null>(null);
   const error = useSignal('');
+  const warming = useSignal(false);
 
-  const search = $(async (agentKey: string, query: string) => {
-    if (query.trim().length < 3 || !agentKey) {
+  const search = $(async (aiId: string, agentKey: string, query: string) => {
+    if (query.trim().length < 3 || !aiId) {
       hits.value = [];
       needsRead.value = false;
       return;
     }
     searching.value = true;
+    error.value = '';
     try {
       const { transcriptSearch } = await import('../utils/transcriptSearch');
-      const a = await transcriptSearch(agentKey, query, 30);
+      const { WARMUP_POLL_MS } = await import('../utils/recordsWarmup');
+      // Just after launch the records take a moment: the same wait the
+      // page shows, then the search runs on its own.
+      const deadline = Date.now() + 5 * 60_000;
+      let a = await transcriptSearch(aiId, agentKey, query, 30);
+      while (a.warming && Date.now() < deadline) {
+        warming.value = true;
+        await new Promise((r) => setTimeout(r, WARMUP_POLL_MS));
+        a = await transcriptSearch(aiId, agentKey, query, 30);
+      }
+      warming.value = false;
       hits.value = a.hits;
       needsRead.value = a.needs_read;
       if (a.building && !progress.value) progress.value = { done: 0, total: 0, finished: false, cancelled: false };
     } catch (e) {
-      error.value = String(e);
+      const text = String(e);
+      // Not an error: the records are not answering yet - say so, in the app's words.
+      error.value = text.includes('still starting') ? '' : text;
+      warming.value = text.includes('still starting');
     } finally {
       searching.value = false;
     }
@@ -52,8 +70,9 @@ export const ConversationSearch = component$<ConversationSearchProps>((props) =>
   // Debounced: typing narrows as it goes without a search per keystroke.
   useTask$(({ track, cleanup }) => {
     const q = track(() => props.query);
+    const id = track(() => props.aiId);
     const k = track(() => props.agentKey);
-    const t = setTimeout(() => void search(k, q), 250);
+    const t = setTimeout(() => void search(id, k, q), 250);
     cleanup(() => clearTimeout(t));
   });
 
@@ -74,7 +93,7 @@ export const ConversationSearch = component$<ConversationSearchProps>((props) =>
     const { listen } = await import('@tauri-apps/api/event');
     const un = await listen<SearchProgress>('transcript-search-progress', (e) => {
       progress.value = e.payload.finished ? null : e.payload;
-      if (e.payload.finished) void search(props.agentKey, props.query);
+      if (e.payload.finished) void search(props.aiId, props.agentKey, props.query);
     });
     cleanup(() => un());
   });
@@ -89,7 +108,21 @@ export const ConversationSearch = component$<ConversationSearchProps>((props) =>
           In the conversations
           {hits.value.length ? ` - ${hits.value.length}${hits.value.length === 30 ? '+' : ''}` : ''}
         </span>
+        {!needsRead.value && !progress.value && !warming.value && (
+          <button type="button" class="ml-auto text-[var(--text-link)] hover:underline" onClick$={readNow} title="Ask the records what changed: new and continued conversations are read, deleted ones leave">
+            Refresh
+          </button>
+        )}
       </div>
+      {warming.value && (
+        <div class="flex items-center gap-3 py-2">
+          <div class="w-5 h-5 border-2 border-[var(--border-subtle)] border-t-[var(--bg-button-primary)] rounded-full animate-spin"></div>
+          <div>
+            <p class="text-sm text-[var(--text-primary)]">Your records are warming up</p>
+            <p class="text-xs text-[var(--text-secondary)]">Just after launch, your conversations take a moment to be ready - the search runs as soon as they are.</p>
+          </div>
+        </div>
+      )}
       {progress.value && (
         <p class="text-xs text-[var(--text-secondary)]">
           Reading your conversations for search
@@ -114,7 +147,7 @@ export const ConversationSearch = component$<ConversationSearchProps>((props) =>
         </p>
       )}
       {error.value && <p class="text-xs text-red-500">{error.value}</p>}
-      {!needsRead.value && !searching.value && !progress.value && hits.value.length === 0 && (
+      {!needsRead.value && !searching.value && !progress.value && !warming.value && hits.value.length === 0 && (
         <p class="text-xs text-[var(--text-muted)]">No messages match.</p>
       )}
       {hits.value.map((h) => (
