@@ -28,6 +28,15 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   replies, the memory portrait and document cards. See *Models*.
 
 ### Models
+- On a small computer the first reply no longer takes twice as long. After
+  a model loads, the app reads the AI's instructions once so the first
+  question only pays for its own words; a question sent during that read
+  used to be processed side by side with it on the same few cores, both
+  slow, one thrown away (a 2-core Mac: three minutes to the first word).
+  Now the question waits for the read to finish and starts from it.
+- Background work that rides the chat model when the small helper is not
+  installed - remembering what you said - now waits until your reply has
+  finished instead of competing with it.
 - The small helper model takes 1.3 GB less memory when it runs on the
   processor, at the same speed. The processor engine keeps a faster,
   repacked copy of a model; the app also kept the original mapped from the

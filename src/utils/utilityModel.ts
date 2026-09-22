@@ -78,6 +78,10 @@ export async function runUtilityTask(
       false,
       fallbackModel,
       grammar,
+      undefined,
+      undefined,
+      undefined,
+      true, // background: yields to the person's turns
     )) {
       if (chunk.type === "text") out += chunk.content;
     }

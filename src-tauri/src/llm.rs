@@ -3892,6 +3892,32 @@ async fn ensure_utility_server(
 
 /// One-shot generation on the utility server → the full text (non-streamed).
 /// Lazily starts the server with `model` (the utility GGUF filename). An optional
+/// Held for the whole of a warm-up. A real turn takes it for an instant
+/// before it sends, so it WAITS for the warm-up and then hits the cache
+/// instead of racing it: on a 2-core Mac the two processed the same 481
+/// tokens side by side, 90 s each, and the warm-up's work was thrown away
+/// (task 0 cancelled) - the first reply took three minutes.
+static WARM_IN_FLIGHT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Turns of the PERSON running on the local chat server right now.
+/// Background work that rides the chat model (memory extraction when no
+/// helper model is installed) waits for zero: side by side they share the
+/// same few cores and both crawl (a 965-token extraction ran 233 s beside
+/// a reply on a 2-core Mac).
+static FOREGROUND_TURNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+struct ForegroundTurn;
+impl ForegroundTurn {
+    fn start() -> Self {
+        FOREGROUND_TURNS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        ForegroundTurn
+    }
+}
+impl Drop for ForegroundTurn {
+    fn drop(&mut self) {
+        FOREGROUND_TURNS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// Warm the chat server's prompt cache with an AI's instructions right
 /// after a load, so the first real question only pays for its own words.
 /// A one-token request straight to llama-server (not the streaming path,
@@ -3913,6 +3939,13 @@ pub async fn warm_chat_prompt(state: State<'_, LLMState>, system: String) -> Res
         "stream": false,
         "cache_prompt": true
     });
+    // A turn already running: its own prefix is being computed - do not
+    // add a second copy of the same work beside it.
+    if FOREGROUND_TURNS.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+        log::info!("[LLM] warm-up skipped - a turn is already running");
+        return Ok(0);
+    }
+    let _warming = WARM_IN_FLIGHT.lock().await;
     let started = std::time::Instant::now();
     let resp = local_http()
         .post(format!("http://localhost:{}/v1/chat/completions", CHAT_PORT)).bearer_auth(local_api_key())
@@ -5289,6 +5322,9 @@ pub async fn stream_chat_completion(
     // Per-AI generation settings (FINE_TUNE_PANEL layer 3): only overridden
     // fields arrive; the constants below stay the fallback.
     sampling: Option<SamplingParams>,
+    // Work nobody is waiting on (memory extraction riding the chat model
+    // when no helper is installed): it yields to the person's turns.
+    background: Option<bool>,
 ) -> Result<(), String> {
     // Online models ("online:<id>") route to the YOAI proxy with the
     // Flowsta (Vault-grant) token; external models ("external:<id>") post to
@@ -5332,6 +5368,36 @@ pub async fn stream_chat_completion(
             }
         }
     }
+
+    // Local turns take their place in line here. A person's turn waits for
+    // an in-flight warm-up (then uses its cache); background work waits for
+    // every person's turn to finish, up to five minutes, then goes anyway.
+    let is_local = online_model.is_none() && external_model.is_none();
+    let _foreground = if is_local && !background.unwrap_or(false) {
+        {
+            let waited = std::time::Instant::now();
+            let held = WARM_IN_FLIGHT.try_lock().is_err();
+            let _g = WARM_IN_FLIGHT.lock().await;
+            if held {
+                log::info!("[LLM] the turn waited {} ms for the warm-up, so it starts from the cached instructions", waited.elapsed().as_millis());
+            }
+        }
+        Some(ForegroundTurn::start())
+    } else {
+        if is_local {
+            let waited = std::time::Instant::now();
+            while FOREGROUND_TURNS.load(std::sync::atomic::Ordering::SeqCst) > 0
+                && waited.elapsed() < std::time::Duration::from_secs(300)
+                && !stop.is_stopped()
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+            if waited.elapsed().as_millis() > 50 {
+                log::info!("[LLM] background work waited {} ms for the person's turn to finish", waited.elapsed().as_millis());
+            }
+        }
+        None
+    };
 
     // Build messages with system prompt if provided
     let mut all_messages = Vec::new();
