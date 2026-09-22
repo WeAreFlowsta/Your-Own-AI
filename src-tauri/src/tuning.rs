@@ -405,6 +405,12 @@ pub async fn bench_one(
             args.push(n.to_string());
         }
     }
+    // The bench loads the way the app will: weights that stay in main
+    // memory are read into it, not mapped (see the chat load in llm.rs).
+    let force_cpu = gpu_args.windows(2).any(|w| (w[0] == "-ngl" && w[1] == "0") || (w[0] == "--device" && w[1] == "none"));
+    if force_cpu || arm.moe_cpu_layers.map(|n| n > 0).unwrap_or(false) || cfg!(target_os = "macos") {
+        args.push("--no-mmap".into());
+    }
     if arm.draft {
         if let Some((dt, df)) = &draft_file {
             args.push("--spec-type".into());

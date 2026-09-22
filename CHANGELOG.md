@@ -35,10 +35,19 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   4.0 GB down to 2.7 GB, 35 tokens a second either way). On a 16 GB computer
   the old figure pushed other programs out to the swap file, felt as short
   freezes.
+- Models whose weights stay in main memory - a model running on the
+  processor, a large mixture-of-experts model split between the graphics
+  card and main memory, and every model on a Mac - are read straight into
+  memory too. Measured: a 4B model on the processor 4.8 GB down to 3.3 GB
+  at the same speed, ready in 6 seconds instead of 14; a split 8B model
+  reads prompts 67% faster. A model that fits on the graphics card whole is
+  loaded as before.
 - What a helper holds on the processor is now measured after it starts, the
   way a graphics-card placement always was, and the app checks that figure
   against free memory before starting one: with too little room the helper
-  waits instead of squeezing everything else.
+  waits instead of squeezing everything else. The same measurement is
+  taken for a chat model whose weights are in main memory, so the fit
+  figures come from what the machine holds.
 - "Fine-tune" now means one thing: how a model runs on this computer -
   speed, context, memory. The sliders for how replies are written
   (creativity, word variety, rare-word floor, repetition brake) moved out

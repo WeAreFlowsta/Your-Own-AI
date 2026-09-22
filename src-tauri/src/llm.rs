@@ -2932,6 +2932,27 @@ pub async fn start_llama_server(
         }
     }
 
+    // Where the model's weights really live decides HOW the file is loaded.
+    // A full card load: the mapped file drains to the card and costs
+    // nothing after - keep the map (and the page cache between restarts).
+    // Weights that stay in main memory - a processor load, a split MoE
+    // load with expert layers on the CPU, every load on Apple unified
+    // memory - are read into memory instead: the processor engine repacks
+    // them into a faster layout (a second copy) and the mapped original
+    // then sits resident, never read again. Measured 2026-09-22 on the dev
+    // box: a dense 4B on the processor 4.8 GB -> 3.3 GB at the same speed,
+    // ready in 5.7 s instead of 13.6; a split 8B MoE (experts on the
+    // processor) the same size but 67% faster reading, its experts in
+    // pinned memory the card reads directly. On a 16 GB Mac a 9B model's
+    // dead copy is ~5 GB - the "free 18.6 of 16.0 GB" a tester saw.
+    let weights_in_ram = args_force_cpu(&args)
+        || moe_plan.is_some()
+        || cfg!(target_os = "macos");
+    if weights_in_ram {
+        args.push("--no-mmap".to_string());
+        log::info!("[LLM] weights stay in main memory for this load - read into memory, not mapped");
+    }
+
     // Start the chat server on the active engine backend (downloaded CUDA
     // build when installed, else the bundled sidecar). Clear the death-flag
     // first so the wait below reads THIS load's outcome (ready vs
@@ -2989,6 +3010,7 @@ pub async fn start_llama_server(
             return Err(msg);
         }
     };
+    let chat_pid = child.pid();
 
     *state.server_process.lock().await = Some(child);
     *is_running = true;
@@ -3147,6 +3169,39 @@ pub async fn start_llama_server(
                                 });
                             }
                         }
+                    });
+                }
+                // What the process holds in MAIN memory, by pid, for every
+                // load whose weights live there - the fit figures then come
+                // from what the machine holds, not an estimate (a processor
+                // load was never measured before; on Apple unified memory
+                // this is the whole load).
+                if let (true, Some(model)) = (weights_in_ram, loading_name.clone()) {
+                    let app = app_handle.clone();
+                    let moe_n = moe_plan.map(|(n, _, _)| n);
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+                        let pid = sysinfo::Pid::from_u32(chat_pid);
+                        let mut sys = sysinfo::System::new();
+                        sys.refresh_processes_specifics(
+                            sysinfo::ProcessesToUpdate::Some(&[pid]),
+                            true,
+                            sysinfo::ProcessRefreshKind::nothing().with_memory(),
+                        );
+                        let Some(bytes) = sys.process(pid).map(|p| p.memory()).filter(|b| *b > 0) else { return };
+                        let actual = bytes as f64 / 1024f64.powi(3);
+                        log::info!(
+                            "[LLM] main memory held: '{model}' at {ctx_size}{}: {actual:.2} GB resident (by pid)",
+                            match moe_n { Some(n) => format!(", {n} expert layers on CPU"), None => String::new() }
+                        );
+                        load_calibration_write(&app, &processor_record_key(&model), LoadCalibration {
+                            ctx: ctx_size,
+                            kv_q8: kv_q8_now,
+                            moe_cpu_layers: moe_n,
+                            predicted_gb: 0.0,
+                            actual_gb: actual,
+                            at: chrono_now_secs(),
+                        });
                     });
                 }
                 return Ok(());
