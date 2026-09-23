@@ -247,7 +247,7 @@ export default component$(() => {
             }
             agentState.folderPath = status.folder;
             agentState.mode = isTools ? "tools" : "project";
-            if (isTools) agentState.sessionAiId = selectedAi.value.aiConfig?.id ?? null;
+            agentState.sessionAiId = selectedAi.value.aiConfig?.id ?? null;
             // Mid-startup remount keeps the starting state; the hook's own
             // agent-ready listener flips it live.
             agentState.status = status.running
@@ -1150,11 +1150,18 @@ export default component$(() => {
     if (id && id !== "__placeholder__") {
       localStorage.setItem("lastAiId", id);
     }
-    // A tools session belongs to one AI. Switching to another ends it -
-    // the next tool-carrying turn starts its own.
+    // A session belongs to one AI. Switching to another: a tools session
+    // ends (the next tool-carrying turn starts its own); a project session
+    // reopens the same folder for the new AI, so its turns run on the new
+    // AI's model and tools, never through the old AI's session.
     const aiId = selectedAi.value.aiConfig?.id;
-    if (agentState.mode === "tools" && aiId && agentState.sessionAiId && agentState.sessionAiId !== aiId && !chatState.isLoading) {
-      closeFolder$();
+    if (aiId && agentState.sessionAiId && agentState.sessionAiId !== aiId && !chatState.isLoading) {
+      if (agentState.mode === "tools") {
+        closeFolder$();
+      } else if (agentState.mode === "project" && agentState.folderPath) {
+        const folder = agentState.folderPath;
+        closeFolder$().then(() => openFolder$(folder));
+      }
     }
   });
 

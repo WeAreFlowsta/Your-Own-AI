@@ -897,6 +897,11 @@ export function useAgentSession(props: UseAgentSessionProps) {
     }
     state.folderPath = path;
     state.mode = "project";
+    // The session is started for THIS AI (its model, its tools). Recorded
+    // so a later switch of AI reopens the session for the new one instead
+    // of sending the new AI's turns through the old AI's session (Eric,
+    // 09-23: Teresa's turn ran in Veebo's session with Obsidian).
+    state.sessionAiId = props.selectedAi.value.aiConfig?.id ?? null;
     state.status = "starting";
     state.statusNote = "Starting the agent...";
     state.touchedFiles = [];
