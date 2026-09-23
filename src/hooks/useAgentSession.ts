@@ -28,6 +28,7 @@ import {
   rememberLastConversation,
 } from "../utils/conversationResume";
 import type {
+  AgentAction,
   AgentActionDiff,
   AgentPermission,
   Message,
@@ -1324,10 +1325,20 @@ export function useAgentSession(props: UseAgentSessionProps) {
       }
     });
 
+    // Helper (subagent) sessions. The harness streams a helper's own tool
+    // calls, text and thoughts under the CHILD session id, on the same
+    // connection. Its steps nest under the helper's row; its text and
+    // thoughts are never the AI's own (the AI's reply carries the helper's
+    // result when the helper returns). Child session id -> helper tool-call id.
+    const helperSessions = new Map<string, string>();
+
     const unUpdate = await listen<any>("agent-update", (e) => {
       const update = e.payload?.params?.update;
       if (!update) return;
       const kind = update.sessionUpdate;
+      const fromSession = typeof e.payload?.params?.sessionId === "string" ? e.payload.params.sessionId : undefined;
+      const helperOf = fromSession ? helperSessions.get(fromSession) : undefined;
+      if (helperOf && kind !== "tool_call" && kind !== "tool_call_update") return;
 
       if (kind === "retry_state") {
         // The agent retries failed model calls with backoff (up to 15x) -
@@ -1379,6 +1390,64 @@ export function useAgentSession(props: UseAgentSessionProps) {
             log[log.length - 1] = { ...last, text: last.text + text };
           } else {
             log.push({ id: uuidv4(), type: "thought", text, at: Date.now() });
+          }
+          return { ...m, agentLog: log };
+        });
+      } else if (kind === "subagent_spawned" || kind === "subagent_progress" || kind === "subagent_finished") {
+        // The harness's word on a helper: started (with its session id, so
+        // its steps can nest), a progress tick every couple of seconds, and
+        // the end with its result. All ride the parent session.
+        const helperId = String(update.subagent_id ?? "");
+        uiLog(`[rail] ${kind} ${helperId}${update.child_session_id ? ` session ${update.child_session_id}` : ""}${update.status ? ` ${update.status}` : ""}`);
+        if (!helperId) return;
+        mutateTurn((m) => {
+          const log = [...(m.agentLog ?? [])];
+          let idx = -1;
+          if (kind === "subagent_spawned") {
+            // The newest helper row not yet tied to a helper, by preference
+            // the one whose brief matches the description.
+            const brief = String(update.description ?? "").trim().slice(0, 40);
+            for (let i = log.length - 1; i >= 0; i--) {
+              const it = log[i];
+              if (it.type !== "action" || it.action.icon !== "helper" || it.action.helperId) continue;
+              if (idx < 0) idx = i;
+              if (brief && (it.action.label ?? "").includes(brief)) {
+                idx = i;
+                break;
+              }
+            }
+          } else {
+            idx = log.findIndex((it) => it.type === "action" && it.action.helperId === helperId);
+          }
+          if (idx < 0) return m;
+          const item = log[idx] as { id: string; type: "action"; action: AgentAction };
+          const a = item.action;
+          if (kind === "subagent_spawned") {
+            if (typeof update.child_session_id === "string") helperSessions.set(update.child_session_id, a.toolCallId);
+            log[idx] = { ...item, action: { ...a, helperId, status: "in_progress", endedAt: undefined, liveLine: "Starting" } };
+          } else if (kind === "subagent_progress") {
+            const n = Number(update.tool_call_count ?? 0);
+            log[idx] = { ...item, action: { ...a, liveLine: n ? `${n} tool call${n === 1 ? "" : "s"} so far` : a.liveLine } };
+          } else {
+            const stopped = update.status === "cancelled";
+            const failed = update.status !== "completed" && !stopped;
+            const n = Number(update.tool_calls ?? 0);
+            const firstLine = typeof update.output === "string"
+              ? update.output.split("\n").map((l: string) => l.trim()).find((l: string) => l)
+              : undefined;
+            const reason = typeof update.error === "string" && update.error.trim() ? update.error.trim().slice(0, 500) : "The helper failed.";
+            log[idx] = {
+              ...item,
+              action: {
+                ...a,
+                helperDone: true,
+                status: failed ? "failed" : "completed",
+                endedAt: a.endedAt ?? Date.now(),
+                liveLine: undefined,
+                lastLine: stopped ? "Stopped" : firstLine?.slice(0, 200) ?? (n ? `${n} tool call${n === 1 ? "" : "s"}` : a.lastLine),
+                error: failed ? a.error ?? reason : a.error,
+              },
+            };
           }
           return { ...m, agentLog: log };
         });
@@ -1609,7 +1678,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         const status = refused ? "failed" : update.status;
         const error = refused ? out.output!.slice(0, 500) : errorOf(update);
         const finished = status === "completed" || status === "failed";
-        uiLog(`[rail] ${kind} ${human.name ?? update.name ?? "?"} ${status ?? "-"} ${toolCallId}${taskId ? ` task ${taskId}` : ""}`);
+        uiLog(`[rail] ${kind} ${human.name ?? update.name ?? "?"} ${status ?? "-"} ${toolCallId}${taskId ? ` task ${taskId}` : ""}${helperOf ? ` in helper ${helperOf}` : ""}`);
         if (!status || status === "in_progress" || status === "pending") {
           state.liveStatus = `${human.label}..`;
         } else {
@@ -1643,7 +1712,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
               const a = it.action;
               const open = a.status === "in_progress" || a.status === "pending";
               const outlives = !!a.taskId || !!a.waitFor?.length || a.icon === "helper" || a.icon === "wait";
-              if (open && !outlives) {
+              const sameRun = (a.parent ?? "") === (helperOf ?? "");
+              if (open && !outlives && sameRun) {
                 log[i] = { ...it, action: { ...a, status: "completed", endedAt: a.endedAt ?? Date.now() } };
               }
             }
@@ -1655,11 +1725,16 @@ export function useAgentSession(props: UseAgentSessionProps) {
             // specific: a wait named after its task never gives way to a
             // bare "Background Task", and a title never beats the table.
             const upgrade = human.specificity >= (prev.specificity ?? 0);
+            // A helper the harness has already announced keeps running after
+            // its start call returns (a backgrounded helper's call answers
+            // "started"); its row ends on the harness's finished event.
+            const holdHelper = prev.icon === "helper" && !!prev.helperId && !prev.helperDone && status === "completed";
             log[idx] = {
               ...prevItem,
               action: {
                 ...prev,
-                status: status || prev.status,
+                status: holdHelper ? prev.status : status || prev.status,
+                parent: prev.parent ?? helperOf,
                 kind: upgrade ? human.kind : prev.kind,
                 taskId: taskId ?? prev.taskId,
                 icon: upgrade ? human.icon : prev.icon,
@@ -1674,7 +1749,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
                 outputLines: out.outputLines ?? prev.outputLines,
                 diff: diff ?? prev.diff,
                 waitFor: human.waitFor ?? prev.waitFor,
-                endedAt: finished ? prev.endedAt ?? Date.now() : prev.endedAt,
+                endedAt: finished && !holdHelper ? prev.endedAt ?? Date.now() : prev.endedAt,
                 error: error ?? prev.error,
               },
             };
@@ -1697,6 +1772,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
                 diff,
                 waitFor: human.waitFor,
                 taskId,
+                parent: helperOf,
                 startedAt: Date.now(),
                 endedAt: finished ? Date.now() : undefined,
                 error,

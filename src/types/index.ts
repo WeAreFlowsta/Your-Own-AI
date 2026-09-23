@@ -299,6 +299,10 @@ export interface AgentAction {
   error?: string;
   /** The helper (subagent) this step ran inside, when it did. */
   parent?: string;
+  /** For a helper step: the harness's id for the helper it started, once
+   *  the helper's session is known, and whether that helper has finished. */
+  helperId?: string;
+  helperDone?: boolean;
   /** For a backgrounded command: the task id the harness printed in its
    *  result; waits and kills name the task by this id. */
   taskId?: string;
