@@ -1,5 +1,9 @@
 /** @type {import('tailwindcss').Config} */
 export default {
+  // The app sets its own theme class on <html>; Tailwind's dark: must
+  // follow THAT, not the OS, or a light theme on a dark desktop shows
+  // dark-theme text on light surfaces (the diff block, 2026-09-23).
+  darkMode: ["selector", ".theme-dark"],
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",

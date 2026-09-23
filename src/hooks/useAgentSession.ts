@@ -19,6 +19,7 @@ import { skillNameFromPath } from "../utils/skills";
 import { describeAction, subjectOfLabel, errorOf } from "../utils/actionLabels";
 import { MCP_PRESETS } from "../utils/mcp";
 import { summaryOf } from "../utils/agentSummary";
+import { uiLog } from "../utils/uiLog";
 import { $, useSignal, useStore, useVisibleTask$, type Signal } from "@builder.io/qwik";
 import { v4 as uuidv4 } from "uuid";
 import { startConversation, recordMessage, waitForHolochainReady } from "../utils/holochainTranscripts";
@@ -782,12 +783,18 @@ export function useAgentSession(props: UseAgentSessionProps) {
       // Execute steps by their own id, plus every id a wait step is
       // blocked on (the awaited task IS an execute step, possibly from a
       // previous turn) - both read the same terminal log.
+      // A wait names a TASK id; the log on disk is named by the tool-call
+      // id of the command that owns it. Translate through `taskId`.
+      const owner: Record<string, string> = {};
+      for (const b of bubbles) for (const i of b.agentLog ?? []) {
+        if (i.type === "action" && i.action.taskId) owner[i.action.taskId] = i.action.toolCallId;
+      }
       const ids = Array.from(new Set(bubbles
         .flatMap((b) => b.agentLog ?? [])
         .flatMap((i) => {
           if (i.type !== "action") return [];
           if (i.action.kind === "execute") return [i.action.toolCallId];
-          if (i.action.waitFor?.length) return i.action.waitFor;
+          if (i.action.waitFor?.length) return i.action.waitFor.map((w) => owner[w] ?? w);
           return [];
         })
         .filter(Boolean))).slice(-8);
@@ -823,7 +830,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
               // A wait step reads the log of the task it is blocked on - of
               // several, the one still growing, else the last named; an
               // execute step reads its own.
-              const waits = i.action.waitFor ?? [];
+              const waits = (i.action.waitFor ?? []).map((w) => owner[w] ?? w);
               const logId = waits.length
                 ? waits.find((w) => alive.has(w)) ?? waits.filter((w) => logs[w] !== undefined).pop() ?? waits[0]
                 : i.action.toolCallId;
@@ -1397,7 +1404,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
             for (const r of rows) {
               for (let i = 0; i < log.length; i++) {
                 const item = log[i];
-                if (item.type !== "action" || item.action.toolCallId !== r.task_id) continue;
+                if (item.type !== "action" || (item.action.toolCallId !== r.task_id && item.action.taskId !== r.task_id)) continue;
                 const a = item.action;
                 const done = r.status === "completed" || r.status === "failed";
                 const lastLine = typeof r.output === "string" && r.output.trim()
@@ -1565,7 +1572,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         const turnLog = props.chatState.messages.find((m) => m.id === turnId.value)?.agentLog ?? [];
         const subjectOf = (id: string) => {
           for (const item of turnLog) {
-            if (item.type === "action" && item.action.toolCallId === id) {
+            if (item.type === "action" && (item.action.toolCallId === id || item.action.taskId === id)) {
               return subjectOfLabel(item.action.labelDone ?? item.action.label);
             }
           }
@@ -1588,9 +1595,18 @@ export function useAgentSession(props: UseAgentSessionProps) {
         if (kind === "tool_call") state.sessionToolCalls += 1;
         const out = actionOutput(update);
         const diff = extractDiff(update.content);
-        const error = errorOf(update);
-        const finished = update.status === "completed" || update.status === "failed";
-        if (!update.status || update.status === "in_progress" || update.status === "pending") {
+        // A backgrounded command's result names its task: "<task-id>…</task-id>".
+        // Waits and kills refer to that id, and the tailer reads the log of
+        // the step that owns it.
+        const taskId = out.output ? /<task-id>\s*([^<\s]+)\s*<\/task-id>/.exec(out.output)?.[1] : undefined;
+        // A call the harness refused ("Tool `x` was not executed: …") is a
+        // failed step whatever status rode the update.
+        const refused = !!out.output && /was not executed/i.test(out.output);
+        const status = refused ? "failed" : update.status;
+        const error = refused ? out.output!.slice(0, 500) : errorOf(update);
+        const finished = status === "completed" || status === "failed";
+        uiLog(`[rail] ${kind} ${human.name ?? update.name ?? "?"} ${status ?? "-"} ${toolCallId}${taskId ? ` task ${taskId}` : ""}`);
+        if (!status || status === "in_progress" || status === "pending") {
           state.liveStatus = `${human.label}..`;
         } else {
           state.liveStatus = "Thinking..";
@@ -1611,6 +1627,23 @@ export function useAgentSession(props: UseAgentSessionProps) {
               break;
             }
           }
+          if (idx < 0 && kind === "tool_call") {
+            // The agent runs its tools one after another: a new call means
+            // every earlier step still marked running is over, unless it is
+            // a backgrounded command, a wait or a helper (those outlive the
+            // call that started them). A completion update that never came
+            // must not leave a glyph breathing for the rest of the turn.
+            for (let i = 0; i < log.length; i++) {
+              const it = log[i];
+              if (it.type !== "action") continue;
+              const a = it.action;
+              const open = a.status === "in_progress" || a.status === "pending";
+              const outlives = !!a.taskId || !!a.waitFor?.length || a.icon === "helper" || a.icon === "wait";
+              if (open && !outlives) {
+                log[i] = { ...it, action: { ...a, status: "completed", endedAt: a.endedAt ?? Date.now() } };
+              }
+            }
+          }
           if (idx >= 0) {
             const prevItem = log[idx] as { id: string; type: "action"; action: any };
             const prev = prevItem.action;
@@ -1622,8 +1655,9 @@ export function useAgentSession(props: UseAgentSessionProps) {
               ...prevItem,
               action: {
                 ...prev,
-                status: update.status || prev.status,
+                status: status || prev.status,
                 kind: upgrade ? human.kind : prev.kind,
+                taskId: taskId ?? prev.taskId,
                 icon: upgrade ? human.icon : prev.icon,
                 label: upgrade ? human.label : prev.label,
                 labelDone: upgrade ? human.labelDone : prev.labelDone,
@@ -1653,11 +1687,12 @@ export function useAgentSession(props: UseAgentSessionProps) {
                 specificity: human.specificity,
                 name: human.name,
                 server: human.server,
-                status: update.status || "in_progress",
+                status: status || "in_progress",
                 locations,
                 detail: human.detail,
                 diff,
                 waitFor: human.waitFor,
+                taskId,
                 startedAt: Date.now(),
                 endedAt: finished ? Date.now() : undefined,
                 error,
@@ -1861,6 +1896,21 @@ export function useAgentSession(props: UseAgentSessionProps) {
           mode: typeof ev.permission_mode === "string" ? ev.permission_mode : prev.mode,
         };
         let agentLog = m.agentLog;
+        if (String(ev.decision) !== "allow" && typeof ev.tool_id === "string") {
+          // Auto stopped this call. The step ends red and says why, so a
+          // glyph never breathes on for a call that was never run.
+          const why =
+            reason === "auto_classifier_block"
+              ? "Auto stopped here: not ordinary project work. Allow it if you want it run."
+              : reason === "auto_outside_workspace"
+                ? "Auto stopped here: this touches something outside the project folder."
+                : `Not allowed to run here${reason ? ` (${reason.replace(/_/g, " ")})` : ""}.`;
+          agentLog = (agentLog ?? []).map((i) =>
+            i.type === "action" && i.action.toolCallId === ev.tool_id && i.action.status !== "completed"
+              ? { ...i, action: { ...i.action, status: "failed" as const, error: i.action.error ?? why, endedAt: i.action.endedAt ?? Date.now() } }
+              : i,
+          );
+        }
         if (autoApproved && !prompted && String(ev.decision) === "allow") {
           const toolCallId = typeof ev.tool_id === "string" ? ev.tool_id : undefined;
           const requestId = -1 - (prev.total + 1); // negative: never collides with ACP ids

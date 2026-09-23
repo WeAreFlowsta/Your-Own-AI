@@ -299,6 +299,9 @@ export interface AgentAction {
   error?: string;
   /** The helper (subagent) this step ran inside, when it did. */
   parent?: string;
+  /** For a backgrounded command: the task id the harness printed in its
+   *  result; waits and kills name the task by this id. */
+  taskId?: string;
   /** How specific the label is (actionLabels.ts); live only, never saved. */
   specificity?: number;
 }

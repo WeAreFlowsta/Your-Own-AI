@@ -341,10 +341,12 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
     /** A wait's live line and elapsed belong to the step it waits on when
      *  Simple hides the wait row. */
     const waitLines = useComputed$(() => {
+      const owner: Record<string, string> = {};
+      for (const item of log) if (item.type === "action" && item.action.taskId) owner[item.action.taskId] = item.action.toolCallId;
       const m: Record<string, string> = {};
       for (const item of log) {
         if (item.type === "action" && item.action.waitFor?.length && item.action.liveLine) {
-          for (const id of item.action.waitFor) m[id] = item.action.liveLine;
+          for (const id of item.action.waitFor) m[owner[id] ?? id] = item.action.liveLine;
         }
       }
       return m;
@@ -352,7 +354,11 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
 
     const knownIds = useComputed$(() => {
       const s = new Set<string>();
-      for (const item of log) if (item.type === "action") s.add(item.action.toolCallId);
+      for (const item of log) {
+        if (item.type !== "action") continue;
+        s.add(item.action.toolCallId);
+        if (item.action.taskId) s.add(item.action.taskId);
+      }
       return s;
     });
 
@@ -389,8 +395,8 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
         }
       }
       if (detailed.value && last?.type === "thought") {
-        const tail = last.text.trim().slice(-140);
-        return `Thinking: ${tail}`;
+        const tail = last.text.replace(/CONTEXT_OVERFLOW[A-Z_]*/g, "").trim().slice(-140);
+        if (tail) return `Thinking: ${tail}`;
       }
       return "Thinking";
     });
