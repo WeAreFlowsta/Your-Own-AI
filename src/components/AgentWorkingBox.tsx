@@ -770,10 +770,8 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                                 onToggle$={() => {
                                   openOutputs.value = { ...openOutputs.value, [a.toolCallId]: !openOutputs.value[a.toolCallId] };
                                 }}
-                                elapsed={elapsedOf(a, false, now.value)}
-                                {...stepState(a, working)}
-                                live={false}
-                                line={undefined}
+                                working={working}
+                                now={now.value}
                               />
                             ))}
                           </div>
@@ -796,12 +794,9 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                       onToggle$={() => {
                         openOutputs.value = { ...openOutputs.value, [a.toolCallId]: !open };
                       }}
-                      elapsed={elapsedOf(a, st.running, now.value)}
-                      failed={st.failed}
-                      running={st.running}
-                      still={st.still}
-                      live={a.liveLine !== undefined && (working || st.still)}
-                      line={a.liveLine ?? row.line ?? (!working && (a.taskId || a.icon === "helper") ? a.lastLine : undefined)}
+                      working={working}
+                      now={now.value}
+                      waitLine={row.line}
                       steps={childrenOf.value[a.toolCallId]}
                       openChildren={openOutputs.value}
                       onToggleChild$={(id: string) => {
@@ -852,18 +847,21 @@ interface ActionRowProps {
   steps?: AgentAction[];
   openChildren?: Record<string, boolean>;
   onToggleChild$?: QRL<(id: string) => void>;
-  elapsed?: string;
-  failed: boolean;
-  running: boolean;
-  /** Finished turn, task still writing. */
-  still: boolean;
-  live: boolean;
-  line?: string;
+  /** The turn is running (the bubble is loading). */
+  working: boolean;
+  /** The rail's clock, for elapsed times. */
+  now: number;
+  /** The line a wait step borrows from the task it waits on. */
+  waitLine?: string;
 }
 
 /** One step: `[icon] label … what it touched · elapsed · status ›`, and
  *  under it, when open, the diff, the output or the live log. */
-const ActionRow = component$<ActionRowProps>(({ action: a, open, onToggle$, elapsed, failed, running, still, live, line, steps, openChildren, onToggleChild$ }) => {
+const ActionRow = component$<ActionRowProps>(({ action: a, open, onToggle$, working, now, waitLine, steps, openChildren, onToggleChild$ }) => {
+  const { failed, running, still } = stepState(a, working);
+  const elapsed = elapsedOf(a, running, now);
+  const live = a.liveLine !== undefined && (working || still);
+  const line = a.liveLine ?? waitLine ?? (!working && (a.taskId || a.icon === "helper") ? a.lastLine : undefined);
   const hasDiff = !!a.diff?.lines?.length;
   const hasOutput = !!a.output || hasDiff || (failed && !!a.error) || !!a.detail;
   const label = a.status === "completed" && !still && a.labelDone ? a.labelDone : a.label;
@@ -1002,11 +1000,9 @@ const ActionRow = component$<ActionRowProps>(({ action: a, open, onToggle$, elap
               action={c}
               open={!!openChildren?.[c.toolCallId]}
               onToggle$={() => onToggleChild$?.(c.toolCallId)}
-              failed={c.status === "failed"}
-              running={c.status === "in_progress" || c.status === "pending"}
-              still={false}
-              live={false}
-              line={c.lastLine}
+              working={working}
+              now={now}
+              waitLine={c.lastLine}
             />
           ))}
         </div>

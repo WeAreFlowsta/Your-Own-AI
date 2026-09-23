@@ -2296,6 +2296,24 @@ export function useAgentSession(props: UseAgentSessionProps) {
           });
           uiLog(`[rail] 8 s after the end: bubble ${m.id.slice(0, 8)} loading=${!!m.isLoading} ${m.id === id ? "(this turn)" : ""} rows: ${rows.join(" | ")}`);
         }
+        // The DOM's own word: what is still animating, and on what.
+        try {
+          const running = Array.from(document.querySelectorAll(".action-icon-running")).map((el) => {
+            const row = el.closest("button") ?? el.parentElement;
+            return (row?.textContent ?? "").trim().slice(0, 40);
+          });
+          uiLog(`[rail] 8 s after the end: ${running.length} icon(s) carry the running class: ${running.join(" | ")}`);
+          const anims = (document.getAnimations?.() ?? []).map((an) => {
+            const eff = an.effect as KeyframeEffect | null;
+            const t = eff?.target as Element | null;
+            const name = (an as CSSAnimation).animationName ?? an.id ?? "?";
+            const row = t?.closest?.("button") ?? t?.parentElement;
+            return `${name} on <${t?.tagName?.toLowerCase() ?? "?"} class="${(t?.getAttribute?.("class") ?? "").slice(0, 60)}"> "${(row?.textContent ?? "").trim().slice(0, 30)}"`;
+          });
+          uiLog(`[rail] 8 s after the end: ${anims.length} animation(s): ${anims.join(" || ")}`);
+        } catch (e) {
+          uiLog(`[rail] 8 s after the end: DOM check failed: ${String(e)}`);
+        }
       }, 8000);
       state.liveStatus = "";
       state.retryStatus = "";
