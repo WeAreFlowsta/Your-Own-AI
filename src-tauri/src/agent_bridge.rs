@@ -24,6 +24,13 @@ use tokio::sync::Mutex;
 /// holds a local load to it when the model switches for an agent turn, so
 /// the agent's compaction and the server's window agree.
 pub static AGENT_WINDOW: AtomicU64 = AtomicU64::new(0);
+/// The window a local model is asked to hold for an agent session. The
+/// harness's own instructions and tool schemas take ~14k tokens before any
+/// work (measured 09-23: 13.9k with two tools); below ~32k it condenses on
+/// every step - each one a full model call, 20-140 s on a 4B model - and
+/// the project is unusable. Clamped to the model's trained context by the
+/// loader; a fine-tune pin still wins.
+pub const AGENT_ROOM: u64 = 32_768;
 
 /// Milliseconds since the current agent process spawned (0 if unknown).
 fn startup_ms(app: &AppHandle) -> u128 {
@@ -447,51 +454,55 @@ pub async fn start_build_agent(
         // reading room BEFORE the window is written into the agent's
         // config: reload at the rung that holds it when the machine can
         // afford it; say so plainly when it cannot.
-        let carries_tools = mcp_names.as_ref().map(|m| !m.is_empty()).unwrap_or(false);
-        if carries_tools {
-            const TOOLS_ROOM: u32 = 24_576;
-            let room = crate::llm::ensure_context(
-                app_handle.clone(),
-                app_handle.state::<crate::llm::LLMState>(),
-                TOOLS_ROOM,
-            )
-            .await;
-            let short = match &room {
-                Ok(r) if r.grew => {
-                    log::info!("[agent] tools session: context grown to {} for the tool schemas", r.ctx);
-                    None
-                }
-                Ok(r) if r.model.is_some() && r.ctx < TOOLS_ROOM => Some(r.ctx),
-                Ok(_) => None,
-                Err(e) => {
-                    log::warn!("[agent] tools session: could not grow the context: {e}");
-                    Some(crate::llm::current_ctx_size())
-                }
-            };
-            if let Some(ctx) = short {
-                // Say WHY the window is small and where to fix it: a pin in
-                // Fine-tune is the person's own setting (Eric's 4k pin on
-                // Phi-4-mini, 09-22); a machine that cannot afford more is a
-                // different answer.
-                let pinned = room
-                    .as_ref()
-                    .ok()
-                    .and_then(|r| r.model.as_deref())
-                    .map(|m| crate::tuning::get(&app_handle, m).context.is_some())
-                    .unwrap_or(false);
-                let text = if pinned {
-                    format!(
-                        "This model's context is pinned at {}k in its Fine-tune settings, and the tools this AI carries take about 10k of it - a session can run out of room mid-task. Set the context back to Auto in Fine-tune (Offline Models), or pick a bigger size.",
-                        ctx / 1024
-                    )
-                } else {
-                    format!(
-                        "This model gets a {}k-token window on your computer, and the tools this AI carries take about 10k of it - a session can run out of room mid-task. A model with a bigger window, or fewer tools on this AI, gives it more to work with.",
-                        ctx / 1024
-                    )
+        // Every agent session needs reading room (AGENT_ROOM). The model
+        // that serves the turns is grown now when it is the loaded one;
+        // otherwise the switch to it holds the room (inference_server).
+        // Say plainly when the machine, or a pin, keeps it short.
+        {
+            let serving = crate::router::local_agent_serving_model(&app_handle, ai_model.as_deref().unwrap_or("")).await;
+            let loaded = app_handle.state::<crate::llm::LLMState>().current_model.lock().await.clone();
+            if serving.is_some() && serving == loaded {
+                let room = crate::llm::ensure_context(
+                    app_handle.clone(),
+                    app_handle.state::<crate::llm::LLMState>(),
+                    AGENT_ROOM as u32,
+                )
+                .await;
+                let short = match &room {
+                    Ok(r) if r.grew => {
+                        log::info!("[agent] session: context grown to {} for the session's own instructions and tools", r.ctx);
+                        None
+                    }
+                    Ok(r) if r.model.is_some() && (r.ctx as u64) < AGENT_ROOM => Some(r.ctx),
+                    Ok(_) => None,
+                    Err(e) => {
+                        log::warn!("[agent] session: could not grow the context: {e}");
+                        Some(crate::llm::current_ctx_size())
+                    }
                 };
-                log::warn!("[agent] tools session on a {ctx}-token window - tight{}", if pinned { " (pinned in Fine-tune)" } else { "" });
-                let _ = app_handle.emit("agent-hint", json!({ "kind": "context-room", "sticky": true, "text": text }));
+                if let Some(ctx) = short {
+                    let pinned = room
+                        .as_ref()
+                        .ok()
+                        .and_then(|r| r.model.as_deref())
+                        .map(|m| crate::tuning::get(&app_handle, m).context.is_some())
+                        .unwrap_or(false);
+                    let text = if pinned {
+                        format!(
+                            "This model's context is pinned at {}k in its Fine-tune settings, and a project session's own instructions and tools take about 14k of it - it can run out of room mid-task. Set the context back to Auto in Fine-tune (Offline Models), or pick a bigger size.",
+                            ctx / 1024
+                        )
+                    } else {
+                        format!(
+                            "This model gets a {}k-token window on your computer, and a project session's own instructions and tools take about 14k of it - it can run out of room mid-task. A model with a bigger window gives it more to work with.",
+                            ctx / 1024
+                        )
+                    };
+                    log::warn!("[agent] session on a {ctx}-token window - tight{}", if pinned { " (pinned in Fine-tune)" } else { "" });
+                    let _ = app_handle.emit("agent-hint", json!({ "kind": "context-room", "sticky": true, "text": text }));
+                }
+            } else if let Some(s) = &serving {
+                log::info!("[agent] agent turns load '{s}' - asked to hold a {AGENT_ROOM}-token window at the switch");
             }
         }
         let eag = eagerness.as_deref().unwrap_or("balanced");

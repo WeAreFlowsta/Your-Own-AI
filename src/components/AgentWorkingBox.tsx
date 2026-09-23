@@ -362,6 +362,12 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
       return s;
     });
 
+    /** The harness is condensing the session's notes: a model call of its
+     *  own, so seconds without an update are expected, not "quiet". */
+    const condensing = useComputed$(() =>
+      log.some((i) => i.type === "action" && i.action.kind === "compact" && i.action.status === "in_progress"),
+    );
+
     /** A helper's steps (recorded with `parent` = the helper's tool-call
      *  id) nest under its row instead of running loose in the list. */
     const childrenOf = useComputed$(() => {
@@ -744,12 +750,11 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                   }
                   const a = row.action;
                   const st = stepState(a, working);
-                  const hasDiff = !!a.diff?.lines?.length;
                   const explicit = openOutputs.value[a.toolCallId];
-                  const open =
-                    explicit !== undefined
-                      ? explicit
-                      : (st.failed && !!a.error) || (detailed.value && (hasDiff || a.liveLine !== undefined));
+                  // Detailed shows every step open (its file or command, its
+                  // output as it comes); a failed step opens in both views.
+                  // A click on the row overrides either way.
+                  const open = explicit !== undefined ? explicit : (st.failed && !!a.error) || detailed.value;
                   return (
                     <ActionRow
                       key={row.id}
@@ -763,7 +768,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                       running={st.running}
                       still={st.still}
                       live={a.liveLine !== undefined && (working || st.still)}
-                      line={a.liveLine ?? row.line ?? (!working ? a.lastLine : undefined)}
+                      line={a.liveLine ?? row.line ?? (!working && (a.taskId || a.icon === "helper") ? a.lastLine : undefined)}
                       steps={childrenOf.value[a.toolCallId]}
                       openChildren={openOutputs.value}
                       onToggleChild$={(id: string) => {
@@ -793,7 +798,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
             <span class="h-2 w-2 shrink-0 rounded-full bg-[var(--text-link)] animate-pulse" />
             <span class="min-w-0 flex-grow truncate whitespace-nowrap">
               {shownStatus.value}
-              {stillSecs.value > 0 ? ` · ${stillSecs.value} s quiet` : ""}
+              {stillSecs.value > 0 && !condensing.value ? ` · ${stillSecs.value} s quiet` : ""}
             </span>
             <span class="shrink-0 text-[var(--text-muted)]">
               {turnElapsed.value ?? ""}

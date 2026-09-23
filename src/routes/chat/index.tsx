@@ -172,6 +172,7 @@ export default component$(() => {
     openToolsSession$,
     closeFolder$,
     sendPrompt$: sendAgentPrompt$,
+    prepareTurn$: prepareAgentTurn$,
     cancelTurn$,
     respondPermission$,
     answerPermissionByReply$,
@@ -1302,8 +1303,9 @@ export default component$(() => {
       // Document text goes to the model as context; the bubble shows file
       // chips - never the extracted text (a PDF used to land wholesale in
       // the user's bubble on this path).
-      const given = await sessionContext(fileContext, finalInput);
       dropReplacedTurn();
+      await prepareAgentTurn$(finalInput, attachedFiles.value.map((f) => f.filename));
+      const given = await sessionContext(fileContext, finalInput);
       sendAgentPrompt$(finalInput, {
         context: given.context,
         library: given.library,
@@ -1322,8 +1324,9 @@ export default component$(() => {
     // when the session cannot start (Build not installed, no agent-ready
     // model) - the AI then says tools need Projects.
     if (wantsTools && (await openToolsSession$())) {
-      const given = await sessionContext(fileContext, finalInput);
       dropReplacedTurn();
+      await prepareAgentTurn$(finalInput, attachedFiles.value.map((f) => f.filename));
+      const given = await sessionContext(fileContext, finalInput);
       sendAgentPrompt$(finalInput, {
         context: given.context,
         library: given.library,

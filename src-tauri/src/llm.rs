@@ -2059,29 +2059,30 @@ pub(crate) async fn window_if_loaded(app: &AppHandle, filename: &str) -> Option<
     if loaded.as_deref() == Some(filename) && *state.is_server_running.lock().await {
         return Some((current_ctx_size() as u64, true));
     }
-    let path = get_models_dir(app).ok()?.join(filename);
+    let dir = get_models_dir(app).ok()?;
+    let path = dir.join(filename);
     let meta = crate::gguf::read_meta(&path).ok()?;
     let size = crate::fit::model_bytes_on_disk(&path, &meta);
-    let sys = sysinfo::System::new_with_specifics(
-        sysinfo::RefreshKind::nothing().with_memory(sysinfo::MemoryRefreshKind::everything()),
-    );
-    let total_ram_gb = sys.total_memory() as f64 / (1024.0 * 1024.0 * 1024.0);
-    let free_vram_gb = available_vram_mib(app).await.map(|mib| mib as f64 / 1024.0);
-    Some((crate::fit::pinned_or_chosen_ctx(app, filename, &meta, size, total_ram_gb, free_vram_gb), false))
+    // Sized AS IF the chat slot were free: loading this model evicts the
+    // one on the card now. Read against the free figure with the incumbent
+    // still in place, a 4B model that loads at 16k came out as 4k (09-23),
+    // and the session was told a window a quarter of what served it.
+    let f = crate::fit::figures_slot_free(app, &dir).await;
+    Some((crate::fit::pinned_or_chosen_ctx(app, filename, &meta, size, f.total_ram_gb, f.free_vram_gb), false))
 }
 
 /// Before a load that will serve an agent session: ask the loader for at
 /// least the window the session was told, when this reading says the
 /// machine holds it for `filename`. Says in the log either way.
 pub(crate) async fn hold_window_for_next_load(app: &AppHandle, filename: &str, want: u64) -> Option<u64> {
-    let path = get_models_dir(app).ok()?.join(filename);
+    let dir = get_models_dir(app).ok()?;
+    let path = dir.join(filename);
     let meta = crate::gguf::read_meta(&path).ok()?;
     let size = crate::fit::model_bytes_on_disk(&path, &meta);
-    let sys = sysinfo::System::new_with_specifics(
-        sysinfo::RefreshKind::nothing().with_memory(sysinfo::MemoryRefreshKind::everything()),
-    );
-    let total_ram_gb = sys.total_memory() as f64 / (1024.0 * 1024.0 * 1024.0);
-    let free_vram_gb = available_vram_mib(app).await.map(|mib| mib as f64 / 1024.0);
+    // The load this prepares evicts the model on the card: judge the room
+    // as if the slot were free.
+    let f = crate::fit::figures_slot_free(app, &dir).await;
+    let (total_ram_gb, free_vram_gb) = (f.total_ram_gb, f.free_vram_gb);
     match crate::fit::ctx_for_need(&meta, size, total_ram_gb, free_vram_gb, want) {
         Some(rung) => {
             MIN_CTX_NEXT_LOAD.store(rung as u32, std::sync::atomic::Ordering::SeqCst);

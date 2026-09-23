@@ -1115,6 +1115,19 @@ fn select_online_agent_slot(
 /// a pinned local file, else the agent pick for this kind of work (the
 /// same pick the first agent turn makes), sized the way the loader will
 /// size it. The running window only when that model is the loaded one.
+/// The local file that will serve this AI's agent turns (a pinned local
+/// file, else the agent pick for code work); None for an online AI.
+pub async fn local_agent_serving_model(app: &AppHandle, ai_model: &str) -> Option<String> {
+    if ai_model.starts_with("online:") {
+        return None;
+    }
+    if ai_model.ends_with(".gguf") {
+        Some(ai_model.to_string())
+    } else {
+        pick_offline(app, "code", "balanced", true).await.ok()
+    }
+}
+
 async fn local_agent_window(app: &AppHandle, ai_model: &str, plan: bool) -> u64 {
     let running = crate::llm::current_ctx_size() as u64;
     let serving = if ai_model.ends_with(".gguf") {

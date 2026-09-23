@@ -643,6 +643,19 @@ export function useAgentSession(props: UseAgentSessionProps) {
     recordUserTurn(userText).catch(() => {});
   });
 
+  /** The turn's bubble goes up the moment the person sends, before the
+   *  documents search that rides with the prompt (an embedding model cold
+   *  start plus the search took ~3 s on 09-23 with nothing on screen, while
+   *  a direct chat moves at once). sendPrompt$ then fills in the rest. */
+  const prepared = useSignal(false);
+  const prepareTurn$ = $(async (text: string, files?: string[]) => {
+    if (state.status === "working") return; // mid-turn: sendPrompt$ interjects
+    if (!text.trim()) return;
+    await startTurnBubble(text, files);
+    prepared.value = true;
+    state.liveStatus = "Looking through documents..";
+  });
+
   /** Send a prompt into the live session (session must be ready). */
   const dispatchPrompt = $(async (text: string) => {
     state.status = "working";
@@ -728,7 +741,18 @@ export function useAgentSession(props: UseAgentSessionProps) {
       );
       return;
     }
-    await startTurnBubble(text, extra?.files, extra?.library);
+    if (prepared.value) {
+      prepared.value = false;
+      // The bubble is up already (prepareTurn$): add the documents that
+      // rode along, so Sources can name them.
+      if (extra?.library?.length) {
+        const id = turnId.value;
+        const library = extra.library;
+        props.chatState.messages = props.chatState.messages.map((m) => (m.id === id ? { ...m, library } : m));
+      }
+    } else {
+      await startTurnBubble(text, extra?.files, extra?.library);
+    }
     if (state.status === "ready") {
       await dispatchPrompt(wire);
     } else {
@@ -1750,6 +1774,9 @@ export function useAgentSession(props: UseAgentSessionProps) {
                 diff: diff ?? prev.diff,
                 waitFor: human.waitFor ?? prev.waitFor,
                 endedAt: finished && !holdHelper ? prev.endedAt ?? Date.now() : prev.endedAt,
+                // A finished step's live line is over: what a command
+                // printed stays behind the row, not under it.
+                liveLine: finished ? undefined : prev.liveLine,
                 error: error ?? prev.error,
               },
             };
@@ -2422,6 +2449,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     openFolder$,
     closeFolder$,
     sendPrompt$,
+    prepareTurn$,
     cancelTurn$,
     respondPermission$,
     answerPermissionByReply$,

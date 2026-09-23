@@ -986,8 +986,11 @@ async fn chat_completions(
                 // The session was told a window at open; the model that
                 // serves its turns must hold it, or the agent compacts
                 // too late and the server refuses the turn.
-                let want = crate::agent_bridge::AGENT_WINDOW.load(std::sync::atomic::Ordering::SeqCst);
-                if want > 0 {
+                let told = crate::agent_bridge::AGENT_WINDOW.load(std::sync::atomic::Ordering::SeqCst);
+                if told > 0 {
+                    // At least what the session was told, and the room every
+                    // session needs (the loader clamps to the trained context).
+                    let want = told.max(crate::agent_bridge::AGENT_ROOM);
                     crate::llm::hold_window_for_next_load(&app, &ai.model, want).await;
                 }
             }
@@ -1048,6 +1051,12 @@ async fn chat_completions(
         || model.trim().ends_with(":agent-device")
         || model.trim().ends_with(":summary")
         || header_str(&headers, "x-your-own-ai-mode").as_deref() == Some("agent");
+    // Every locally served agent reply carries the window that served it,
+    // in the header the harness reads (`x-grok-context-window`): it takes an
+    // upgrade from it and ignores a downgrade, so a session told the sizing
+    // figure at open learns the loaded size on its first reply. Read after
+    // any model switch below, so it is the switched-to model's window.
+    let says_served_window = agent_mode;
 
 
     // Agent mode injects memory by DEFAULT; a caller can opt out — e.g. to keep
@@ -1357,9 +1366,7 @@ async fn chat_completions(
             let reply = parse_sse_content(&raw);
             spawn_record(rec, reply);
         };
-        Response::builder()
-            .status(status)
-            .header(header::CONTENT_TYPE, content_type)
+        with_served_window(Response::builder().status(status).header(header::CONTENT_TYPE, content_type), says_served_window && online_id.is_none())
             .body(Body::from_stream(body_stream))
             .unwrap_or_else(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}"), "internal_error"))
     } else {
@@ -1369,9 +1376,7 @@ async fn chat_completions(
             Err(e) => return err(StatusCode::BAD_GATEWAY, &format!("upstream read: {e}"), "upstream_error"),
         };
         spawn_record(rec, parse_json_content(&bytes));
-        Response::builder()
-            .status(status)
-            .header(header::CONTENT_TYPE, content_type)
+        with_served_window(Response::builder().status(status).header(header::CONTENT_TYPE, content_type), says_served_window && online_id.is_none())
             .body(Body::from(bytes))
             .unwrap_or_else(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}"), "internal_error"))
     }
@@ -1392,6 +1397,16 @@ struct RecordCtx {
     /// Agent mode: skip episodic indexing (agent scaffolding / tool turns would
     /// pollute the AI's recall). The signed transcript is still recorded.
     agent: bool,
+}
+
+/// The served context window on a local agent reply (see `says_served_window`).
+fn with_served_window(b: axum::http::response::Builder, on: bool) -> axum::http::response::Builder {
+    let ctx = crate::llm::current_ctx_size() as u64;
+    if on && ctx > 0 {
+        b.header("x-grok-context-window", ctx.to_string())
+    } else {
+        b
+    }
 }
 
 fn header_str(h: &HeaderMap, name: &str) -> Option<String> {
