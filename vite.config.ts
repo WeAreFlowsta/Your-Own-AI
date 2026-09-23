@@ -37,6 +37,11 @@ export default defineConfig((): UserConfig => ({
       "@tauri-apps/plugin-store",
       "@tauri-apps/plugin-dialog",
       "@tauri-apps/plugin-opener",
+      // Every dynamically imported plugin goes here: one discovered at
+      // runtime makes the dev server re-bundle and reload under a page
+      // the webview keeps, and every lazy click after that resolves its
+      // saved state against the wrong modules (2026-09-23).
+      "@tauri-apps/plugin-notification",
       "@paper-design/shaders",
       "highlight.js",
       "uuid",
