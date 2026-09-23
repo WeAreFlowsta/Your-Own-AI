@@ -947,3 +947,20 @@ main {
 .animate-fade-in {
   animation: yoai-fade-in 400ms ease-in;
 }
+
+/* A step that is running: a soft ring breathing around its icon box.
+   Color only ever means status on the rail. */
+@keyframes action-icon-ring {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.25); }
+  50% { box-shadow: 0 0 0 4px rgba(129, 140, 248, 0.55); }
+}
+@keyframes action-icon-ring-light {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.25); }
+  50% { box-shadow: 0 0 0 4px rgba(2, 132, 199, 0.5); }
+}
+.action-icon-running {
+  animation: action-icon-ring 1.6s ease-in-out infinite;
+}
+.theme-light .action-icon-running {
+  animation: action-icon-ring-light 1.6s ease-in-out infinite;
+}

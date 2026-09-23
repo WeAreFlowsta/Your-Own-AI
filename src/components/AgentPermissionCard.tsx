@@ -5,16 +5,11 @@ import {
   type QRL,
 } from "@builder.io/qwik";
 import {
-  LuTerminal,
-  LuPencil,
-  LuFileText,
-  LuGlobe,
-  LuTrash2,
-  LuWrench,
   LuCheck,
   LuX,
 } from "@qwikest/icons/lucide";
 import LiquidMetalButton from "./LiquidMetalButton";
+import { ActionIcon } from "./ActionIcon";
 import { AgentDiffBlock } from "./AgentDiffBlock";
 import type { AgentPermission } from "../types";
 
@@ -105,19 +100,6 @@ export const AgentPermissionCard = component$<AgentPermissionCardProps>(
       ? "Don't ask again for edits this session"
       : "Don't ask again for this in this project";
 
-    const Icon =
-      permission.kind === "execute"
-        ? LuTerminal
-        : permission.kind === "edit"
-          ? LuPencil
-          : permission.kind === "delete"
-            ? LuTrash2
-            : permission.kind === "fetch"
-              ? LuGlobe
-              : permission.kind === "read"
-                ? LuFileText
-                : LuWrench;
-
     const expired = permission.state === "expired";
     const allowed =
       permission.receipt?.startsWith("Allowed") ??
@@ -157,7 +139,7 @@ export const AgentPermissionCard = component$<AgentPermissionCardProps>(
       <div class="max-w-4xl mx-auto w-full" ref={rootRef} data-agent-permission-card>
         <div class="rounded-xl border border-[var(--border-primary)] bg-[var(--bg-card)] p-4 space-y-3">
           <div class="flex items-center gap-2 text-sm font-medium text-[var(--text-primary)]">
-            <Icon class="h-4 w-4 shrink-0" />
+            <ActionIcon kind={permission.kind} />
             {verbFor(permission.kind)}
             {autoStopReason(permission.promptReason) && (
               <span

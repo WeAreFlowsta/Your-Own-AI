@@ -17,6 +17,7 @@ import {
 } from "@qwikest/icons/lucide";
 import { AgentPermissionCard } from "./AgentPermissionCard";
 import { AgentDiffBlock } from "./AgentDiffBlock";
+import { ActionIcon, formatElapsed } from "./ActionIcon";
 import { renderMarkdown } from "../utils/renderMarkdown";
 import type {
   AgentAction,
@@ -122,6 +123,17 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
   ({ log, working, tipHere = true, railOpen, durationMs, retryStatus, waitingOn, onPermissionRespond$, onPermissionOffscreen$, onUndoTurn$, undone = false }) => {
     const showThoughts = useSignal(true);
     const openOutputs = useSignal<Record<string, boolean>>({});
+    // A clock for the elapsed time on running rows: ticks once a second
+    // while the turn works, stops when it does not.
+    const now = useSignal(Date.now());
+    // eslint-disable-next-line qwik/no-use-visible-task
+    useVisibleTask$(({ track, cleanup }) => {
+      track(() => working);
+      if (!working) return;
+      now.value = Date.now();
+      const t = setInterval(() => (now.value = Date.now()), 1000);
+      cleanup(() => clearInterval(t));
+    });
 
     // eslint-disable-next-line qwik/no-use-visible-task
     useVisibleTask$(() => {
@@ -392,12 +404,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
               );
             }
             return (
-              <div key={el.id} class="relative pl-7 my-1.5">
-                {/* The thread. */}
-                <div
-                  class="absolute left-[8px] top-1 bottom-1 w-[2px] rounded-full opacity-50"
-                  style={{ background: METAL }}
-                />
+              <div key={el.id} class="my-1.5 flex flex-col gap-0.5">
                 {el.items.map((row) => {
                   if (row.kind === "plan") {
                     // The agent's live checklist on the thread: entries tick
@@ -412,7 +419,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                             class="relative flex items-baseline gap-2 py-0.5 font-mono text-xs"
                           >
                             <span
-                              class={`absolute -left-[22.5px] top-[5px] w-[7px] h-[7px] rounded-full border-2 border-[var(--bg-main)] ${
+                              class={`inline-block shrink-0 self-center w-[7px] h-[7px] rounded-full border-2 border-[var(--bg-main)] ${
                                 en.status === "completed"
                                   ? "bg-green-600 dark:bg-green-400"
                                   : en.status === "in_progress"
@@ -448,17 +455,28 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                   }
                   const a = row.action;
                   const hasDiff = !!a.diff?.lines?.length;
-                  const hasOutput = !!a.output || hasDiff;
+                  const failed = a.status === "failed";
+                  const hasOutput = !!a.output || hasDiff || (failed && !!a.error);
                   // Full view shows the substance UNASKED: edit diffs and
-                  // running background logs open by default; a click still
-                  // collapses (the explicit choice wins). Simple view keeps
-                  // everything behind the click.
+                  // running background logs open by default; a failed step
+                  // opens itself in both views; a click still collapses (the
+                  // explicit choice wins). Simple view keeps the rest behind
+                  // the click.
                   const explicit = openOutputs.value[a.toolCallId];
                   const open =
                     explicit !== undefined
                       ? explicit
-                      : showThoughts.value && (hasDiff || a.liveLine !== undefined);
+                      : (failed && !!a.error) || (showThoughts.value && (hasDiff || a.liveLine !== undefined));
                   const isLiveLog = a.liveLine !== undefined;
+                  const running = a.status === "in_progress" || a.status === "pending";
+                  const label = a.status === "completed" && a.labelDone ? a.labelDone : a.label;
+                  const elapsedMs =
+                    a.startedAt != null
+                      ? (a.endedAt ?? (running ? now.value : undefined)) != null
+                        ? (a.endedAt ?? now.value) - a.startedAt
+                        : undefined
+                      : undefined;
+                  const elapsed = elapsedMs != null && elapsedMs >= 10_000 ? formatElapsed(elapsedMs) : undefined;
                   return (
                     <div key={row.id} class="overflow-hidden">
                       <button
@@ -469,47 +487,62 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                             [a.toolCallId]: !open,
                           };
                         }}
-                        // block + inner flex div, NOT a flex button: see
-                        // the folded-stub comment above (WebKitGTK never
-                        // shrinks a flex button's children, so truncate on
-                        // long command labels silently fails). The thread
-                        // dot stays a direct child - the inner div clips,
-                        // the button must not, or the dot vanishes.
-                        class={`relative block w-full max-w-full py-0.5 text-left font-mono text-xs text-[var(--text-muted)] bg-transparent border-none ${hasOutput ? "hover:text-[var(--text-secondary)] cursor-pointer" : "cursor-default"}`}
+                        // block + inner flex div, NOT a flex button (WebKitGTK
+                        // never shrinks a flex button's children, so truncate
+                        // on long labels silently fails).
+                        class={`block w-full max-w-full rounded-lg px-2 py-1 text-left text-[13px] bg-transparent border-none ${
+                          running ? "bg-[var(--text-link)]/[0.06]" : ""
+                        } ${hasOutput ? "hover:bg-[var(--text-primary)]/[0.04] cursor-pointer" : "cursor-default"}`}
                       >
-                        {/* Node on the thread - class flips only, never
-                            element swaps, in this streaming list. */}
-                        <span
-                          class={`absolute -left-[22.5px] top-[6px] w-[7px] h-[7px] rounded-full border-2 border-[var(--bg-main)] ${
-                            a.status === "completed"
-                              ? "bg-green-600 dark:bg-green-400"
-                              : a.status === "failed"
-                                ? "bg-red-500"
-                                : "bg-[var(--text-link)] animate-pulse"
-                          }`}
-                        />
-                        <div class="flex min-w-0 max-w-full overflow-hidden items-baseline gap-2">
-                        <span class="min-w-0 truncate whitespace-nowrap">
-                          {a.status === "completed" && a.labelDone ? a.labelDone : a.label}
-                        </span>
-                        {a.diff ? (
-                          <span class="shrink-0">
-                            <span class="text-green-600 dark:text-green-400">+{a.diff.added}</span>
-                            {a.diff.removed > 0 && (
-                              <span class="text-red-500 dark:text-red-400"> -{a.diff.removed}</span>
-                            )}
+                        <div class="flex min-w-0 max-w-full overflow-hidden items-center gap-2.5">
+                          <ActionIcon icon={a.icon} kind={a.kind} status={a.status} />
+                          <span
+                            class={`min-w-0 truncate whitespace-nowrap ${
+                              failed
+                                ? "text-red-500 dark:text-red-400"
+                                : running
+                                  ? "text-[var(--text-primary)]"
+                                  : "text-[var(--text-secondary)]"
+                            }`}
+                          >
+                            {label}
                           </span>
-                        ) : a.outputLines ? (
-                          <span class="shrink-0 opacity-50">{a.outputLines} lines</span>
-                        ) : null}
-                        {hasOutput && (
-                          <span class="ml-auto shrink-0 opacity-40">
-                            <LuChevronRight class={`h-3 w-3 ${open ? "hidden" : ""}`} />
-                            <LuChevronDown class={`h-3 w-3 ${open ? "" : "hidden"}`} />
-                          </span>
-                        )}
+                          {a.diff ? (
+                            <span class="shrink-0 font-mono text-xs">
+                              <span class="text-green-600 dark:text-green-400">+{a.diff.added}</span>
+                              {a.diff.removed > 0 && (
+                                <span class="text-red-500 dark:text-red-400"> -{a.diff.removed}</span>
+                              )}
+                            </span>
+                          ) : a.outputLines && !failed ? (
+                            <span class="shrink-0 text-xs text-[var(--text-muted)]">{a.outputLines} lines</span>
+                          ) : null}
+                          {failed && (
+                            <span class="shrink-0 text-xs text-red-500 dark:text-red-400">
+                              {elapsed ? `Failed after ${elapsed}` : "Failed"}
+                            </span>
+                          )}
+                          {!failed && elapsed && (
+                            <span class="shrink-0 text-xs text-[var(--text-muted)]">{elapsed}</span>
+                          )}
+                          {hasOutput && (
+                            <span class="ml-auto shrink-0 text-[var(--text-muted)] opacity-60">
+                              <LuChevronRight class={`h-3.5 w-3.5 ${open ? "hidden" : ""}`} />
+                              <LuChevronDown class={`h-3.5 w-3.5 ${open ? "" : "hidden"}`} />
+                            </span>
+                          )}
                         </div>
+                        {running && a.liveLine && !open && (
+                          <div class="ml-8 mt-0.5 truncate whitespace-nowrap font-mono text-xs text-[var(--text-muted)]">
+                            {a.liveLine}
+                          </div>
+                        )}
                       </button>
+                      {open && failed && a.error && (
+                        <pre class="ml-8 mt-1 mb-1.5 max-h-40 overflow-auto whitespace-pre-wrap rounded-md border border-red-500/30 bg-[var(--bg-main)] px-2.5 py-2 font-mono text-xs text-[var(--text-secondary)]">
+                          {a.error}
+                        </pre>
+                      )}
                       {open && hasDiff && (
                         <div class="mt-1 mb-1.5 max-h-64 overflow-y-auto">
                           <AgentDiffBlock lines={a.diff!.lines!} />

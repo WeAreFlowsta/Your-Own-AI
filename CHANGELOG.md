@@ -157,6 +157,14 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   a label with one at least as specific. Finished steps read in the past
   tense ("Read package.json"). A build check holds the table to events
   captured from real sessions, so this cannot quietly regress.
+- Rail steps have a face. Each row carries one grey glyph for what it
+  is (a file, a folder, a search, a pencil, a terminal, the web, a
+  helper, an hourglass, a plug for a tool, a sparkle for a skill) in a
+  small box, the label in the app's own font, and its time once it has
+  run past ten seconds. Color means status only: a soft ring breathes
+  around a running step, and a failed one turns red, says how long it
+  ran, and opens itself with the error text. The permission cards use
+  the same glyphs.
 - The record of a turn keeps more of the truth: each step's tool name,
   server, start and end times, the last line a background task printed,
   and why a failed step failed. The size ladder now keeps the AI's spoken
