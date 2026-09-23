@@ -211,9 +211,10 @@ function aiModelSlug(ai: SelectedAiModel): string {
 /** A thought that is still open ends the moment anything else arrives -
  *  its row then says how long it took. */
 function closeThought(log: AgentLogItem[]): AgentLogItem[] {
-  const last = log[log.length - 1];
-  if (last?.type === "thought" && last.endedAt == null) {
-    log[log.length - 1] = { ...last, endedAt: Date.now() };
+  const now = Date.now();
+  for (let i = 0; i < log.length; i++) {
+    const it = log[i];
+    if (it.type === "thought" && it.endedAt == null) log[i] = { ...it, endedAt: now };
   }
   return log;
 }
@@ -1476,6 +1477,23 @@ export function useAgentSession(props: UseAgentSessionProps) {
           }
           return { ...m, agentLog: log };
         });
+      } else if (kind === "task_backgrounded") {
+        const callId = String(update.tool_call_id ?? "");
+        const taskId = String(update.task_id ?? "");
+        uiLog(`[rail] task_backgrounded ${callId} task ${taskId}`);
+        if (callId && taskId) {
+          mutateTurn((m) => {
+            const log = closeThought([...(m.agentLog ?? [])]);
+            const i = log.findIndex((it) => it.type === "action" && it.action.toolCallId === callId);
+            if (i < 0) return m;
+            const item = log[i] as { id: string; type: "action"; action: AgentAction };
+            log[i] = {
+              ...item,
+              action: { ...item.action, taskId, status: "in_progress", endedAt: undefined, liveLine: item.action.liveLine ?? "Running in the background" },
+            };
+            return { ...m, agentLog: log };
+          });
+        }
       } else if (kind === "background_tasks" || kind === "task_completed") {
         // The harness's own word on background tasks (v0.4.0): a durable
         // list snapshot, or one task's completion with its output tail.
@@ -1618,7 +1636,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
           const active = entries.find((en: any) => en.status === "in_progress");
           state.liveStatus = active ? `${active.content}..` : "Planning..";
           mutateTurn((m) => {
-            const log = [...(m.agentLog ?? [])];
+            const log = closeThought([...(m.agentLog ?? [])]);
             const idx = log.findIndex((i) => i.type === "plan");
             if (idx >= 0) {
               log[idx] = { ...log[idx], type: "plan", entries };
@@ -1752,6 +1770,9 @@ export function useAgentSession(props: UseAgentSessionProps) {
             // specific: a wait named after its task never gives way to a
             // bare "Background Task", and a title never beats the table.
             const upgrade = human.specificity >= (prev.specificity ?? 0);
+            const wasOver = prev.status === "completed" || prev.status === "failed";
+            const nowOpen = status === "in_progress" || status === "pending";
+            if (wasOver && nowOpen) uiLog(`[rail] REOPENED ${toolCallId} "${prev.label}" by ${kind} ${status}`);
             // A helper the harness has already announced keeps running after
             // its start call returns (a backgrounded helper's call answers
             // "started"); its row ends on the harness's finished event.
@@ -2201,7 +2222,14 @@ export function useAgentSession(props: UseAgentSessionProps) {
       void stampChecks(turnId.value, state.folderPath);
       notifyIfAway(turnId.value, !!errorText);
       mutateTurn((m) => {
-        let log = (m.agentLog ?? []).map((i) => {
+        for (const i of m.agentLog ?? []) {
+          if (i.type === "action" && (i.action.status === "in_progress" || i.action.status === "pending")) {
+            uiLog(`[rail] turn end: open ${i.action.toolCallId} "${i.action.label}" task=${i.action.taskId ?? "-"} helper=${i.action.helperId ?? "-"}`);
+          } else if (i.type === "thought" && i.endedAt == null) {
+            uiLog(`[rail] turn end: open thought ${i.id}`);
+          }
+        }
+        let log = closeThought([...(m.agentLog ?? [])]).map((i) => {
           if (i.type !== "action") return i;
           const open = i.action.status === "in_progress" || i.action.status === "pending";
           // A turn that died mid-command: its foreground steps are over,
