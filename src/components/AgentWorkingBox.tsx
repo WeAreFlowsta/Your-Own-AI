@@ -146,6 +146,76 @@ function joinParts(parts: string[]): string {
   return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
 }
 
+/** The rows of one group as a view shows them. Pure: nothing here may be
+ *  captured by a closure, so it takes the view and the maps as arguments. */
+function rowsFor(items: GroupItem[], simple: boolean, waitLines: Record<string, string>, knownIds: Set<string>): RailRow[] {
+  const rows: RailRow[] = [];
+  let run: { family: string; actions: AgentAction[]; id: string } | null = null;
+  const flush = () => {
+    if (!run) return;
+    if (run.actions.length >= 2) {
+      const { label, icon } = familyLabel(run.family, run.actions);
+      let added = 0, removed = 0;
+      for (const a of run.actions) {
+        added += a.diff?.added ?? 0;
+        removed += a.diff?.removed ?? 0;
+      }
+      rows.push({ kind: "family", id: `family-${run.id}`, family: { id: run.id, icon, label, actions: run.actions, added, removed } });
+    } else {
+      for (const a of run.actions) rows.push({ kind: "action", id: `action-${a.toolCallId}`, action: a, line: waitLines[a.toolCallId] });
+    }
+    run = null;
+  };
+  for (const it of items) {
+    if (it.kind === "thought") {
+      if (simple) continue;
+      flush();
+      rows.push(it);
+      continue;
+    }
+    if (it.kind === "plan") {
+      flush();
+      rows.push(it);
+      continue;
+    }
+    const a = it.action;
+    if (a.parent && knownIds.has(a.parent)) continue; // shown under its helper
+    if (simple && a.icon === "wait" && a.waitFor?.some((id) => knownIds.has(id))) {
+      // The wait folds into the step it waits on.
+      continue;
+    }
+    const fam = simple ? familyOf(a) : null;
+    const settled = a.status === "completed" && a.liveLine === undefined;
+    if (fam && settled) {
+      if (run && run.family === fam) run.actions.push(a);
+      else {
+        flush();
+        run = { family: fam, actions: [a], id: a.toolCallId };
+      }
+      continue;
+    }
+    flush();
+    rows.push({ kind: "action", id: `action-${a.toolCallId}`, action: a, line: waitLines[a.toolCallId] });
+  }
+  flush();
+  return rows;
+}
+
+function stepState(a: AgentAction, working: boolean) {
+  const failed = a.status === "failed";
+  const running = a.status === "in_progress" || a.status === "pending";
+  const still = !working && a.liveLine !== undefined && !failed;
+  return { failed, running: running || still, still };
+}
+
+function elapsedOf(a: AgentAction, running: boolean, now: number): string | undefined {
+  if (a.startedAt == null) return undefined;
+  const end = a.endedAt ?? (running ? now : undefined);
+  if (end == null) return undefined;
+  const ms = end - a.startedAt;
+  return ms >= 10_000 ? formatElapsed(ms) : undefined;
+}
+
 /** A task log that follows its own tail: full scrollback, pinned to the
  *  bottom while streaming - scrolling up unpins (read history in peace),
  *  scrolling back down re-pins. */
@@ -298,60 +368,6 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
       return m;
     });
 
-    /** The rows of one group as the current view shows them. */
-    const rowsOf = (items: GroupItem[]): RailRow[] => {
-      const rows: RailRow[] = [];
-      const simple = !detailed.value;
-      let run: { family: string; actions: AgentAction[]; id: string } | null = null;
-      const flush = () => {
-        if (!run) return;
-        if (run.actions.length >= 2) {
-          const { label, icon } = familyLabel(run.family, run.actions);
-          let added = 0, removed = 0;
-          for (const a of run.actions) {
-            added += a.diff?.added ?? 0;
-            removed += a.diff?.removed ?? 0;
-          }
-          rows.push({ kind: "family", id: `family-${run.id}`, family: { id: run.id, icon, label, actions: run.actions, added, removed } });
-        } else {
-          for (const a of run.actions) rows.push({ kind: "action", id: `action-${a.toolCallId}`, action: a, line: waitLines.value[a.toolCallId] });
-        }
-        run = null;
-      };
-      for (const it of items) {
-        if (it.kind === "thought") {
-          if (simple) continue;
-          flush();
-          rows.push(it);
-          continue;
-        }
-        if (it.kind === "plan") {
-          flush();
-          rows.push(it);
-          continue;
-        }
-        const a = it.action;
-        if (a.parent && knownIds.value.has(a.parent)) continue; // shown under its helper
-        if (simple && a.icon === "wait" && a.waitFor?.some((id) => knownIds.value.has(id))) {
-          // The wait folds into the step it waits on.
-          continue;
-        }
-        const fam = simple ? familyOf(a) : null;
-        const settled = a.status === "completed" && a.liveLine === undefined;
-        if (fam && settled) {
-          if (run && run.family === fam) run.actions.push(a);
-          else {
-            flush();
-            run = { family: fam, actions: [a], id: a.toolCallId };
-          }
-          continue;
-        }
-        flush();
-        rows.push({ kind: "action", id: `action-${a.toolCallId}`, action: a, line: waitLines.value[a.toolCallId] });
-      }
-      flush();
-      return rows;
-    };
 
     const status = useComputed$(() => {
       if (retryStatus) return retryStatus;
@@ -451,25 +467,11 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
       for (const item of log) if (item.type === "action" && item.action.diff) outputs.push(item.action.toolCallId);
       for (const el of flow.value) {
         if (el.kind !== "group") continue;
-        for (const r of rowsOf(el.items)) if (r.kind === "family" && r.family.added + r.family.removed > 0) families.push(r.family.id);
+        for (const r of rowsFor(el.items, !detailed.value, waitLines.value, knownIds.value)) if (r.kind === "family" && r.family.added + r.family.removed > 0) families.push(r.family.id);
       }
       return { outputs, families };
     });
 
-    const stepsFor = (a: AgentAction) => {
-      const failed = a.status === "failed";
-      const running = a.status === "in_progress" || a.status === "pending";
-      const still = !working && a.liveLine !== undefined && !failed;
-      return { failed, running: running || still, still };
-    };
-
-    const elapsedOf = (a: AgentAction, running: boolean): string | undefined => {
-      if (a.startedAt == null) return undefined;
-      const end = a.endedAt ?? (running ? now.value : undefined);
-      if (end == null) return undefined;
-      const ms = end - a.startedAt;
-      return ms >= 10_000 ? formatElapsed(ms) : undefined;
-    };
 
     return (
       <div class="my-1 rounded-xl border border-[var(--border-divider)] bg-[var(--bg-main)] px-3 pt-2 pb-2">
@@ -606,7 +608,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                 />
               );
             }
-            const rows = rowsOf(el.items);
+            const rows = rowsFor(el.items, !detailed.value, waitLines.value, knownIds.value);
             return (
               <div key={el.id} class="flex flex-col gap-0.5 py-0.5">
                 {rows.map((row) => {
@@ -723,8 +725,8 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                                 onToggle$={() => {
                                   openOutputs.value = { ...openOutputs.value, [a.toolCallId]: !openOutputs.value[a.toolCallId] };
                                 }}
-                                elapsed={elapsedOf(a, false)}
-                                {...stepsFor(a)}
+                                elapsed={elapsedOf(a, false, now.value)}
+                                {...stepState(a, working)}
                                 live={false}
                                 line={undefined}
                               />
@@ -735,7 +737,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                     );
                   }
                   const a = row.action;
-                  const st = stepsFor(a);
+                  const st = stepState(a, working);
                   const hasDiff = !!a.diff?.lines?.length;
                   const explicit = openOutputs.value[a.toolCallId];
                   const open =
@@ -750,7 +752,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                       onToggle$={() => {
                         openOutputs.value = { ...openOutputs.value, [a.toolCallId]: !open };
                       }}
-                      elapsed={elapsedOf(a, st.running)}
+                      elapsed={elapsedOf(a, st.running, now.value)}
                       failed={st.failed}
                       running={st.running}
                       still={st.still}
