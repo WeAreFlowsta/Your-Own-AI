@@ -120,6 +120,7 @@ export const ContentEditor = component$<ContentEditorProps>((props) => {
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(({ track }) => {
     const currentInput = track(() => props.input.value);
+    const norm = (t: string) => t.replace(/\u200B/g, '').replace(/\r/g, '').replace(/\n+$/, '');
 
     const el = contentEditableRef.value;
     if (!el) return;
@@ -128,10 +129,19 @@ export const ContentEditor = component$<ContentEditorProps>((props) => {
       el.innerHTML = '';
       hasContent.value = false;
       setTimeout(() => { el.focus(); }, 0);
-    } else if (currentInput !== '' && (el.textContent ?? '').replace(/\u200B/g, '') !== currentInput) {
+    } else if (currentInput !== '' && norm(el.innerText ?? '') !== norm(currentInput)) {
       // Text set from outside (a queued message put back): show it. Typing
       // never lands here - the input signal is written FROM this element.
-      el.textContent = currentInput;
+      // Compared through innerText, the same reader the element is written
+      // from: textContent has no "\n" for a <br>, so a pasted multi-line
+      // prompt read as "different" and was rewritten as one text node with
+      // raw newlines - rendered as ONE line (Eric, 09-24). Lines go in as
+      // <br>, the way paste and Shift+Enter put them.
+      el.innerHTML = '';
+      currentInput.split('\n').forEach((line, i) => {
+        if (i > 0) el.appendChild(document.createElement('br'));
+        if (line) el.appendChild(document.createTextNode(line));
+      });
       hasContent.value = true;
     }
     lastSyncedInput.value = currentInput;
@@ -297,7 +307,7 @@ export const ContentEditor = component$<ContentEditorProps>((props) => {
                 onInput$={onContentChange}
                 onDrop$={onDrop}
                 onKeyDown$={handleEditorKeyDown}
-                class="w-full h-full focus:outline-none text-xs sm:text-base pl-0 pr-2 py-1 text-left break-words leading-[1.4] sm:leading-[1.4] text-[var(--text-main)] caret-[var(--text-main)]"
+                class="w-full h-full focus:outline-none text-xs sm:text-base pl-0 pr-2 py-1 text-left break-words whitespace-pre-wrap leading-[1.4] sm:leading-[1.4] text-[var(--text-main)] caret-[var(--text-main)]"
               />
             </div>
           </div>
