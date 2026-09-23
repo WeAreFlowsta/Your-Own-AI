@@ -1380,8 +1380,9 @@ export function useAgentSession(props: UseAgentSessionProps) {
         }
         return;
       }
-      // Any real progress means the retry resolved.
+      // Any real progress means the retry resolved, and the prompt is in.
       if (state.retryStatus) state.retryStatus = "";
+      if (state.liveStatus.startsWith("Taking in ")) state.liveStatus = "Thinking..";
 
       if (kind === "user_message_chunk") {
         // The agent echoes our prompt with the number it gave this turn -
@@ -1814,6 +1815,18 @@ export function useAgentSession(props: UseAgentSessionProps) {
 
     // Which model the local server just routed an agent call to - the
     // pearl names online waits after it ("Waiting on gpt-5.6-sol..").
+    // The model server taking a long prompt in (the harness's instructions
+    // and tools are ~10k tokens; on a small card that is a silent minute):
+    // the pearl says how far along it is instead of "Thinking..".
+    const unProgress = await listen<any>("llm-prompt-progress", (e) => {
+      if (state.status !== "working") return;
+      const tokens = Number(e.payload?.tokens);
+      const progress = Number(e.payload?.progress);
+      if (!(tokens >= 1500) || !Number.isFinite(progress)) return;
+      if (state.liveStatus === "Thinking.." || state.liveStatus.startsWith("Taking in ")) {
+        state.liveStatus = `Taking in the project so far · ${Math.round(progress * 100)}%`;
+      }
+    });
     const unTiming = await listen<any>("agent-call-timing", (e) => {
       const tps = Number(e.payload?.tokens_per_second);
       state.lastCallTps = Number.isFinite(tps) && tps > 0 ? tps : 0;
@@ -2399,6 +2412,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       unHint();
       unRoute();
       unTiming();
+      unProgress();
       unTurn();
       unLog();
       unExit();

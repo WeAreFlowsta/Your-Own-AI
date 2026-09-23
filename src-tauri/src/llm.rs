@@ -2708,6 +2708,17 @@ pub fn is_model_rejected(filename: String) -> bool {
 /// start must be llama.cpp even when an MLX artifact exists (v1 rule:
 /// MLX serves chat turns only). Loads are single-slot serialized, so a
 /// one-shot flag is race-safe in practice.
+/// The server's own progress line while it takes a prompt in:
+/// `... prompt processing, n_tokens =   8192, progress = 0.60, ...`.
+pub(crate) fn prompt_progress(line: &str) -> Option<(u64, f64)> {
+    let i = line.find("prompt processing, n_tokens =")?;
+    let rest = &line[i + "prompt processing, n_tokens =".len()..];
+    let tokens: u64 = rest.trim_start().split(',').next()?.trim().parse().ok()?;
+    let j = rest.find("progress =")?;
+    let progress: f64 = rest[j + "progress =".len()..].trim_start().split(',').next()?.trim().parse().ok()?;
+    Some((tokens, progress.clamp(0.0, 1.0)))
+}
+
 pub static FORCE_GGUF_NEXT_LOAD: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -3269,6 +3280,7 @@ pub async fn start_llama_server(
     println!("[LLM] llama-server started on port {} ({:?} engine)", CHAT_PORT, backend);
     
     // Spawn a task to monitor server output
+    let progress_app = app_handle.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
             match event {
@@ -3291,6 +3303,13 @@ pub async fn start_llama_server(
                     // ggml_vulkan device lines + model load) to stderr.
                     let text = String::from_utf8_lossy(&line);
                     log::info!("[llama-server] {}", text.trim_end());
+                    // "prompt processing, n_tokens = 8192, progress = 0.60":
+                    // a long prompt going in is the one silent minute a
+                    // project turn has - the rail says how far along it is.
+                    if let Some((tokens, progress)) = prompt_progress(&text) {
+                        use tauri::Emitter as _;
+                        let _ = progress_app.emit("llm-prompt-progress", serde_json::json!({ "tokens": tokens, "progress": progress }));
+                    }
                     if looks_like_oom(&text) {
                         CHAT_LOAD_OOM.store(true, std::sync::atomic::Ordering::SeqCst);
                     }

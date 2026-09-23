@@ -31,6 +31,14 @@ pub static AGENT_WINDOW: AtomicU64 = AtomicU64::new(0);
 /// the project is unusable. Clamped to the model's trained context by the
 /// loader; a fine-tune pin still wins.
 pub const AGENT_ROOM: u64 = 32_768;
+/// Built-in tools removed from every session before the model sees them.
+/// The tool schemas are the bulk of what a turn costs before any work
+/// (09-23: 36.6 KB of schemas, ~9k tokens, of a 14k baseline); these five
+/// are xAI's own workflow scripting, its feedback channel and its job
+/// scheduler - not part of a project here, and ~12.7 KB of the schemas.
+/// The system prompt is templated on the tools present, so it shrinks with
+/// them. Helpers, plan mode, monitors and questions stay.
+pub const DROPPED_TOOLS: &str = "workflow,send_feedback,scheduler_create,scheduler_list,scheduler_delete";
 
 /// Milliseconds since the current agent process spawned (0 if unknown).
 fn startup_ms(app: &AppHandle) -> u128 {
@@ -502,7 +510,21 @@ pub async fn start_build_agent(
                     let _ = app_handle.emit("agent-hint", json!({ "kind": "context-room", "sticky": true, "text": text }));
                 }
             } else if let Some(s) = &serving {
-                log::info!("[agent] agent turns load '{s}' - asked to hold a {AGENT_ROOM}-token window at the switch");
+                // Load it NOW, in the background, at the room a session needs:
+                // the switch on the first turn cost 18 s of blank screen
+                // (09-23), while the person is still typing the question.
+                // The proxy waits for a load in flight (inference_server).
+                log::info!("[agent] agent turns load '{s}' - loading it now at a {AGENT_ROOM}-token window");
+                let app = app_handle.clone();
+                let file = s.clone();
+                tauri::async_runtime::spawn(async move {
+                    crate::llm::hold_window_for_next_load(&app, &file, AGENT_ROOM).await;
+                    crate::llm::FORCE_GGUF_NEXT_LOAD.store(true, Ordering::SeqCst);
+                    let state = app.state::<crate::llm::LLMState>();
+                    if let Err(e) = crate::llm::load_model(app.clone(), state, file.clone(), false, "agent-session".to_string()).await {
+                        log::warn!("[agent] could not pre-load '{file}' for the session: {e} - the first turn loads it");
+                    }
+                });
             }
         }
         let eag = eagerness.as_deref().unwrap_or("balanced");
@@ -558,7 +580,7 @@ pub async fn start_build_agent(
     let mut command = app_handle
         .shell()
         .command(&binary)
-        .args(["agent", "stdio"])
+        .args(["--disallowed-tools", DROPPED_TOOLS, "agent", "stdio"])
         .current_dir(std::path::PathBuf::from(&cwd));
     if let Some(cap) = tool_result_cap {
         // The harness's env tier for its MCP inline cap (above the user

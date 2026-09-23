@@ -1040,6 +1040,19 @@ async fn chat_completions(
                 }
             }
         }
+        // A load started elsewhere (the session open pre-loads the coding
+        // model) can still be coming up: wait for it rather than hand the
+        // harness a refused connection it would retry with backoff.
+        if !matches!(crate::llm::is_llama_server_ready().await, Ok(true)) {
+            let t0 = std::time::Instant::now();
+            for _ in 0..240 {
+                if matches!(crate::llm::is_llama_server_ready().await, Ok(true)) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+            log::info!("[inference] waited {:.1} s for the model to come up", t0.elapsed().as_secs_f32());
+        }
     }
 
     // Agent mode (model "<ai>:agent", or the X-Your-Own-AI-Mode header): the
