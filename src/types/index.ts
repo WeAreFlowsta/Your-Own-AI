@@ -199,6 +199,8 @@ export interface Message {
    *  ChatMessage's per-bubble min-height reservation - the agent turn
    *  reserves scroll space with one turn-scoped spacer instead. */
   agentTurn?: boolean;
+  /** Which surface the turn ran on: a project folder, or a tools session in chat. */
+  agentSurface?: 'project' | 'tools';
   /** The agent turn's working log, rendered as the work rail inside the
    *  reply bubble (steps + narration + thoughts + permissions, in true
    *  order). `content` holds only the text the AI is currently saying -
@@ -230,14 +232,14 @@ export type AgentLogItem = { id: string } & (
   | { type: 'action'; action: AgentAction }
   /** Text the AI said mid-work, superseded by later activity - shown muted
    *  inside the box, without bubble chrome. */
-  | { type: 'narration'; text: string }
+  | { type: 'narration'; text: string; at?: number }
   /** An app-side note about the work that must stay readable after the
    *  rail folds (e.g. a picture the model could not look at, and why).
    *  Shown in the flow and under the collapsed stub; kept in the record. */
   | { type: 'notice'; text: string }
   /** Model reasoning (agent_thought_chunk). Shown only when the user turns
    *  on the thinking view. */
-  | { type: 'thought'; text: string }
+  | { type: 'thought'; text: string; at?: number; endedAt?: number }
   /** A permission ask at its true position in the work. Pending = the full
    *  card; answered = its receipt line. */
   | { type: 'permission'; permission: AgentPermission }

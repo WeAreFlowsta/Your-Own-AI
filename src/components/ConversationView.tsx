@@ -14,6 +14,8 @@ interface ConversationViewProps {
   /** Live retry text for the active agent turn. */
   agentRetryStatus?: string;
   agentWaitingOn?: string;
+  /** The open project folder, for the rail header while working. */
+  agentFolderName?: string;
   /** Undo the file changes of a finished agent turn. */
   onUndoTurn$?: QRL<(messageId: string) => void>;
   /** True while a folder-agent turn is streaming. Reserves scroll space once
@@ -48,6 +50,7 @@ export default component$<ConversationViewProps>(({
   onOpenTerminal$,
   agentRetryStatus,
   agentWaitingOn,
+  agentFolderName,
   onUndoTurn$,
   agentStreaming,
   tipRef,
@@ -77,6 +80,7 @@ export default component$<ConversationViewProps>(({
           onOpenTerminal$={onOpenTerminal$}
           agentRetryStatus={agentRetryStatus}
           agentWaitingOn={agentWaitingOn}
+          agentFolderName={agentFolderName}
           onUndoTurn$={onUndoTurn$}
           onRetry$={message.id ? $(() => retry$(message.id!)) : undefined}
           onRouteRetry$={message.id ? $((target: 'online' | 'device' | 'tools') => retry$(message.id!, target)) : undefined}

@@ -1,4 +1,5 @@
 import { component$ } from "@builder.io/qwik";
+import { brandIconFor } from "../utils/brandIcons";
 import {
   LuFileText,
   LuFolder,
@@ -49,6 +50,9 @@ interface ActionIconProps {
   icon?: string;
   kind?: string;
   status?: string;
+  /** An MCP server id or a model maker: its own mark when we have one,
+   *  monochrome like every other glyph. */
+  brand?: string;
   /** Extra classes on the box. */
   class?: string;
 }
@@ -66,12 +70,15 @@ export const ActionIcon = component$<ActionIconProps>((props) => {
   const box = `inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-md ${
     failed
       ? "bg-red-500/15 text-red-500 dark:text-red-400"
-      : "bg-[var(--text-primary)]/[0.06] text-[var(--text-secondary)]"
+      : "bg-[var(--bg-card)] text-[var(--text-secondary)]"
   } ${running ? "action-icon-running" : ""} ${props.class ?? ""}`;
   const g = "h-3.5 w-3.5";
+  const brand = brandIconFor(props.brand);
   return (
     <span class={box} aria-hidden="true">
-      {name === "read" ? <LuFileText class={g} />
+      {brand ? (
+        <svg class={g} viewBox="0 0 24 24" fill="currentColor"><path d={brand} /></svg>
+      ) : name === "read" ? <LuFileText class={g} />
         : name === "folder" ? <LuFolder class={g} />
         : name === "search" ? <LuSearch class={g} />
         : name === "edit" ? <LuPencil class={g} />

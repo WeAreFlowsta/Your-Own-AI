@@ -1,4 +1,5 @@
 import { loadedModelNow } from "../../utils/loadedModel";
+import { getAgentView, setAgentView } from "../../utils/agentView";
 import {
   component$,
   useSignal,
@@ -306,9 +307,12 @@ export default component$(() => {
   const medicalPickerOpen = useSignal(false);
   const groundDocumentsAuto = useSignal(false);
   const smartModeDetection = useSignal(true);
-  // Same key the working box's brain icon toggles - one setting, two doors.
-  // Only shown when the Build agent is actually installed.
-  const agentSimpleView = useSignal(false);
+  // The rail's view per surface (utils/agentView.ts) - the same setting the
+  // Simple | Detailed control on a rail changes. Only shown when the Build
+  // agent is actually installed.
+  const agentDetailedProjects = useSignal(true);
+  const agentDetailedTools = useSignal(false);
+  const agentNotify = useSignal(true);
   const buildInstalled = useSignal(false);
   // "Run in your terminal" behavior: default = pre-filled, Enter to run.
   const terminalRunImmediately = useSignal(false);
@@ -410,9 +414,9 @@ export default component$(() => {
       localStorage.getItem("groundDocumentsAuto") === "true";
     smartModeDetection.value =
       localStorage.getItem("smartModeDetection") !== "false"; // default ON
-    // "Simple project view" INVERTS the stored key: absent/"1" = full
-    // detail (the default - the living rail is the product); "0" = simple.
-    agentSimpleView.value = localStorage.getItem("agent-show-thoughts") === "0";
+    agentDetailedProjects.value = getAgentView("project") === "detailed";
+    agentDetailedTools.value = getAgentView("tools") === "detailed";
+    agentNotify.value = localStorage.getItem("agent-notify") !== "off";
     terminalRunImmediately.value =
       localStorage.getItem("terminal-run-immediately") === "true";
     // Async: reveal the Build settings once the agent binary is confirmed.
@@ -619,9 +623,17 @@ export default component$(() => {
     );
   });
 
-  const toggleAgentSimpleView = $(() => {
-    agentSimpleView.value = !agentSimpleView.value;
-    localStorage.setItem("agent-show-thoughts", agentSimpleView.value ? "0" : "1");
+  const toggleAgentDetailedProjects = $(() => {
+    agentDetailedProjects.value = !agentDetailedProjects.value;
+    setAgentView("project", agentDetailedProjects.value ? "detailed" : "simple");
+  });
+  const toggleAgentNotify = $(() => {
+    agentNotify.value = !agentNotify.value;
+    localStorage.setItem("agent-notify", agentNotify.value ? "on" : "off");
+  });
+  const toggleAgentDetailedTools = $(() => {
+    agentDetailedTools.value = !agentDetailedTools.value;
+    setAgentView("tools", agentDetailedTools.value ? "detailed" : "simple");
   });
 
   const toggleGroundDocuments = $(() => {
@@ -958,16 +970,36 @@ export default component$(() => {
                     execute the moment you click instead.
                   </SettingToggle>
                   {buildInstalled.value && (
-                    <SettingToggle
-                      title="Simple project view"
-                      checked={agentSimpleView}
-                      onToggle$={toggleAgentSimpleView}
-                    >
-                      Show just the steps, asks, and plan while your AI works -
-                      without the running thoughts and live task logs (expanding
-                      a step still shows its log). Everything keeps moving either
-                      way. Same switch as the brain icon on the working steps.
-                    </SettingToggle>
+                    <>
+                      <SettingToggle
+                        title="Detailed view in projects"
+                        checked={agentDetailedProjects}
+                        onToggle$={toggleAgentDetailedProjects}
+                      >
+                        Every step, thought and live log as it happens. Off, the
+                        rail tells the story in Simple: steps of a kind fold into
+                        one row and thoughts stay out of the way. The Simple |
+                        Detailed control on any rail changes this too, and Ctrl+O
+                        flips it.
+                      </SettingToggle>
+                      <SettingToggle
+                        title="Detailed view in chat with tools"
+                        checked={agentDetailedTools}
+                        onToggle$={toggleAgentDetailedTools}
+                      >
+                        The same choice for a chat turn that uses a tool. Simple
+                        by default: a chat is about the answer.
+                      </SettingToggle>
+                      <SettingToggle
+                        title="Tell me when a project finishes"
+                        checked={agentNotify}
+                        onToggle$={toggleAgentNotify}
+                      >
+                        A desktop notification when a project turn that ran
+                        longer than half a minute ends while you are in another
+                        window: the AI's name and what it did, never the reply.
+                      </SettingToggle>
+                    </>
                   )}
                 </div>
               </section>

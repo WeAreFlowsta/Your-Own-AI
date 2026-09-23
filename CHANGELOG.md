@@ -157,6 +157,39 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   a label with one at least as specific. Finished steps read in the past
   tense ("Read package.json"). A build check holds the table to events
   captured from real sessions, so this cannot quietly regress.
+- The rail tells the story, in two views. Every agent turn, running or
+  reopened, shows the AI's words and between them the steps it took, in
+  the order they happened; a finished turn no longer folds behind a
+  "Steps" button. A Simple | Detailed control sits in the rail header:
+  Simple folds steps of a kind into one row ("Read 4 files and searched
+  twice", "Ran 3 commands"), folds a wait into the step it waits for and
+  keeps thoughts out of the way; Detailed shows every row, thought and
+  live line as it arrives. The choice is per surface, projects Detailed
+  and chat with tools Simple by default, changeable on any rail, in
+  Settings, or with Ctrl+O. The brain icon is gone. Esc stops a running
+  turn.
+- Thoughts are rows. "Thought for 12 s" with a brain glyph, opening to
+  the text, instead of italic paragraphs between steps.
+- The header of a finished turn sums it up: "Read 4 files, ran 3
+  commands, edited 2 files · 6 m 20 s · 4.7k tokens", with a "2 files
+  changed +52 -9" chip that opens every diff. While it runs the header
+  says who is working where, and the line under the rail says what is
+  happening now, how long, and how much.
+- A background task that outlives the turn stays as its own row, "still
+  running", with its latest line and its clock, until it ends; the last
+  line it printed is kept in the record, so a reopened turn still says
+  it. The agent's own word on background tasks (0.4.0) ends such rows
+  properly, red with the exit code when they fail.
+- The plan shrinks to the current item with a "3 of 7" count; click for
+  the rest. A command row copies its command; a file row opens the file;
+  a failed row offers Try again. A helper's steps nest under its row.
+- Your tools carry their marks. Obsidian, Logseq and Blender show their
+  own logos, monochrome like every other glyph, on the Tools page, on the
+  rail, on permission cards and in the activity tray; the activity tray's
+  rows use the same glyphs as the rail.
+- A desktop notification when a project turn that ran longer than half a
+  minute ends while you are in another window: the AI's name and what it
+  did, never the reply. Off in Settings.
 - Rail steps have a face. Each row carries one grey glyph for what it
   is (a file, a folder, a search, a pencil, a terminal, the web, a
   helper, an hourglass, a plug for a tool, a sparkle for a skill) in a

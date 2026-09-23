@@ -73,6 +73,8 @@ import ModelTuneDialog from './ModelTuneDialog';
 import CustomModelModal from './CustomModelModal';
 import EngineCannotStartCallout from './EngineCannotStartCallout';
 import { useAiData, useAiDataActions } from '../contexts/AiDataContext';
+import { ActionIcon } from './ActionIcon';
+import { brandIconFor } from '../utils/brandIcons';
 
 /** Shape persisted to localStorage while a download is in progress */
 interface ActiveDownload {
@@ -1405,7 +1407,10 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
           {/* Header: name on its own line, badges wrapping on a row below - so a long
               name never squishes the badges or pushes them off the card. */}
           <div>
-            <h3 class="text-lg font-semibold text-[var(--text-primary)] leading-tight">{family.name}</h3>
+            <h3 class="flex items-center gap-2 text-lg font-semibold text-[var(--text-primary)] leading-tight">
+              {brandIconFor(family.name.split(/[\s-]/)[0]) && <ActionIcon icon="tool" brand={family.name.split(/[\s-]/)[0]} />}
+              {family.name}
+            </h3>
             <div class="flex flex-wrap gap-1 mt-2.5">
               {fitBadge && (
                 <span

@@ -76,6 +76,7 @@ percent-encoding = "2"
 tauri-plugin-single-instance = "2.4.3"
 tauri-plugin-deep-link = "2"
 blake3 = "1.8"
+tauri-plugin-notification = "2.4.0"
 
 # ML inference (OCR via ocrs/rten) is unusably slow in an unoptimised debug build —
 # a single scanned page took ~2 min. Compile just the ML crates with optimisations

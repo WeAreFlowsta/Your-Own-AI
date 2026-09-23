@@ -18,6 +18,7 @@
 import { skillNameFromPath } from "../utils/skills";
 import { describeAction, subjectOfLabel, errorOf } from "../utils/actionLabels";
 import { MCP_PRESETS } from "../utils/mcp";
+import { summaryOf } from "../utils/agentSummary";
 import { $, useSignal, useStore, useVisibleTask$, type Signal } from "@builder.io/qwik";
 import { v4 as uuidv4 } from "uuid";
 import { startConversation, recordMessage, waitForHolochainReady } from "../utils/holochainTranscripts";
@@ -32,6 +33,7 @@ import type {
   PermissionLedger,
   SelectedAiModel,
   LibraryDocGiven,
+  AgentLogItem,
 } from "../types";
 import {
   buildSupportsAutoPermissions,
@@ -202,6 +204,16 @@ function aiModelSlug(ai: SelectedAiModel): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+}
+
+/** A thought that is still open ends the moment anything else arrives -
+ *  its row then says how long it took. */
+function closeThought(log: AgentLogItem[]): AgentLogItem[] {
+  const last = log[log.length - 1];
+  if (last?.type === "thought" && last.endedAt == null) {
+    log[log.length - 1] = { ...last, endedAt: Date.now() };
+  }
+  return log;
 }
 
 /** MCP tool names arrive as "<server>__<tool>" - never show that raw.
@@ -602,6 +614,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         aiImageUrl: props.selectedAi.value.imageUrl || undefined,
         isLoading: true,
         agentTurn: true,
+        agentSurface: state.mode === "tools" ? "tools" : "project",
         // The AI's own documents whose passages rode with this prompt
         // (shown under Sources, recorded with the turn as names and counts).
         ...(library?.length ? { library } : {}),
@@ -807,21 +820,28 @@ export function useAgentSession(props: UseAgentSessionProps) {
             ...m,
             agentLog: (m.agentLog ?? []).map((i) => {
               if (i.type !== "action") return i;
-              // A wait step reads the log of the task it is blocked on; an
+              // A wait step reads the log of the task it is blocked on - of
+              // several, the one still growing, else the last named; an
               // execute step reads its own.
-              const logId = i.action.waitFor?.length ? i.action.waitFor[0] : i.action.toolCallId;
+              const waits = i.action.waitFor ?? [];
+              const logId = waits.length
+                ? waits.find((w) => alive.has(w)) ?? waits.filter((w) => logs[w] !== undefined).pop() ?? waits[0]
+                : i.action.toolCallId;
               const tail = logs[logId];
               if (tail === undefined) return i;
               const lines = tail.split("\n").map((l) => l.trim()).filter(Boolean);
+              const last = lines[lines.length - 1];
               // liveLine only while the log is still growing: a finished
               // task's last line must not sit in the pearl as if current.
+              // lastLine is what it printed last, kept for the record.
               return {
                 ...i,
                 action: {
                   ...i.action,
                   output: tail.trim(),
                   outputLines: lines.length,
-                  liveLine: alive.has(logId) ? lines[lines.length - 1] : undefined,
+                  liveLine: alive.has(logId) ? last : undefined,
+                  lastLine: last ? last.slice(0, 200) : i.action.lastLine,
                 },
               };
             }),
@@ -1330,12 +1350,12 @@ export function useAgentSession(props: UseAgentSessionProps) {
         // demote-and-clear design duplicated text on screen.
         const text = update.content?.text ?? "";
         mutateTurn((m) => {
-          const log = [...(m.agentLog ?? [])];
+          const log = closeThought([...(m.agentLog ?? [])]);
           const last = log[log.length - 1];
           if (last?.type === "narration") {
             log[log.length - 1] = { ...last, text: last.text + text };
           } else {
-            log.push({ id: uuidv4(), type: "narration", text });
+            log.push({ id: uuidv4(), type: "narration", text, at: Date.now() });
           }
           return { ...m, agentLog: log };
         });
@@ -1344,13 +1364,65 @@ export function useAgentSession(props: UseAgentSessionProps) {
         mutateTurn((m) => {
           const log = [...(m.agentLog ?? [])];
           const last = log[log.length - 1];
-          if (last?.type === "thought") {
+          if (last?.type === "thought" && last.endedAt == null) {
             log[log.length - 1] = { ...last, text: last.text + text };
           } else {
-            log.push({ id: uuidv4(), type: "thought", text });
+            log.push({ id: uuidv4(), type: "thought", text, at: Date.now() });
           }
           return { ...m, agentLog: log };
         });
+      } else if (kind === "background_tasks" || kind === "task_completed") {
+        // The harness's own word on background tasks (v0.4.0): a durable
+        // list snapshot, or one task's completion with its output tail.
+        // Rows keyed by the task id (the tool-call id of the backgrounded
+        // command) take the status, the end time and the last line from
+        // it, so a task that outlives the turn still ends on screen.
+        const rows: any[] = kind === "background_tasks"
+          ? (update.tasks ?? [])
+          : update.task_snapshot
+            ? [{
+                task_id: update.task_snapshot.task_id,
+                status: update.task_snapshot.exit_code === 0 || (!update.task_snapshot.exit_code && !update.task_snapshot.signal) ? "completed" : "failed",
+                ended_at: update.task_snapshot.end_time ?? null,
+                exit_code: update.task_snapshot.exit_code ?? null,
+                signal: update.task_snapshot.signal ?? null,
+                output: typeof update.task_snapshot.output === "string" ? update.task_snapshot.output : undefined,
+                explicitly_killed: !!update.task_snapshot.explicitly_killed,
+              }]
+            : [];
+        if (rows.length) {
+          mutateTurn((m) => {
+            const log = [...(m.agentLog ?? [])];
+            let changed = false;
+            for (const r of rows) {
+              for (let i = 0; i < log.length; i++) {
+                const item = log[i];
+                if (item.type !== "action" || item.action.toolCallId !== r.task_id) continue;
+                const a = item.action;
+                const done = r.status === "completed" || r.status === "failed";
+                const lastLine = typeof r.output === "string" && r.output.trim()
+                  ? r.output.trim().split("\n").pop()!.slice(0, 200)
+                  : undefined;
+                const failed = r.status === "failed" && !r.explicitly_killed;
+                log[i] = {
+                  ...item,
+                  action: {
+                    ...a,
+                    status: failed ? "failed" : done ? "completed" : a.status,
+                    endedAt: done ? a.endedAt ?? Date.now() : a.endedAt,
+                    lastLine: lastLine ?? a.lastLine,
+                    liveLine: done ? undefined : a.liveLine,
+                    error: failed
+                      ? a.error ?? (r.exit_code != null ? `exit code ${r.exit_code}` : r.signal ? `stopped by ${r.signal}` : "The task failed.")
+                      : a.error,
+                  },
+                };
+                changed = true;
+              }
+            }
+            return changed ? { ...m, agentLog: log } : m;
+          });
+        }
       } else if (kind === "turn_completed") {
         // The agent narrates its own turn stats - stamp them so the action
         // bar (Tokens, Model) and the collapsed stub can be honest instead
@@ -1501,6 +1573,11 @@ export function useAgentSession(props: UseAgentSessionProps) {
         };
         const serverLabel = (server: string) => MCP_PRESETS.find((m) => m.id === server)?.title;
         const human = describeAction(update, { subjectOf, skillNameFromPath, serverLabel });
+        if (human.specificity === 0 && kind === "tool_call") {
+          // A tool the table does not know: say so in the log, so the next
+          // fixture can be added (the label falls back to the agent's title).
+          console.warn("[rail] unknown tool, title used:", human.name ?? update.name, update.kind, update.title);
+        }
         // The agent's plan tool call (todo_write, kind "plan") is the same
         // information as the ACP plan update that renders the checklist -
         // a bare "Plan" action row on top of it is noise.
@@ -1525,7 +1602,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
           if (!state.touchedFiles.includes(p)) state.touchedFiles = [...state.touchedFiles, p];
         }
         mutateTurn((m) => {
-          const log = [...(m.agentLog ?? [])];
+          const log = closeThought([...(m.agentLog ?? [])]);
           let idx = -1;
           for (let i = log.length - 1; i >= 0; i--) {
             const item = log[i];
@@ -1899,11 +1976,55 @@ export function useAgentSession(props: UseAgentSessionProps) {
       }
     };
 
+    /** A project turn that ran over 30 s and ended while the window was
+     *  not in front: the desktop's own popup, name and summary, never the
+     *  reply text. Off with the Settings switch. */
+    const notifyIfAway = (id: string | null, failed: boolean) => {
+      if (!id || state.mode !== "project") return;
+      try {
+        if (localStorage.getItem("agent-notify") === "off") return;
+        if (document.hasFocus() && !document.hidden) return;
+      } catch {
+        return;
+      }
+      setTimeout(async () => {
+        const m = props.chatState.messages.find((x) => x.id === id);
+        if (!m) return;
+        const log = m.agentLog ?? [];
+        let first: number | undefined, last: number | undefined;
+        for (const item of log) {
+          const at = item.type === "action" ? item.action.startedAt : (item as any).at;
+          const end = item.type === "action" ? item.action.endedAt : (item as any).endedAt;
+          if (typeof at === "number" && (first === undefined || at < first)) first = at;
+          if (typeof end === "number" && (last === undefined || end > last)) last = end;
+        }
+        const ms = first !== undefined ? (last ?? Date.now()) - first : 0;
+        if (ms < 30_000) return;
+        const ai = props.selectedAi.value.aiConfig?.name ?? "Your AI";
+        const folder = (state.folderPath ?? "").split(/[\\/]/).filter(Boolean).pop();
+        const mins = Math.round(ms / 60000);
+        const took = mins >= 1 ? `${mins} min` : `${Math.round(ms / 1000)} s`;
+        try {
+          const n = await import("@tauri-apps/plugin-notification");
+          let ok = await n.isPermissionGranted();
+          if (!ok) ok = (await n.requestPermission()) === "granted";
+          if (!ok) return;
+          n.sendNotification({
+            title: failed ? `${ai} stopped in ${folder ?? "the project"}` : `${ai} finished in ${folder ?? "the project"}`,
+            body: `${summaryOf(log) || "Done"} · ${took}`,
+          });
+        } catch {
+          /* no notifications here */
+        }
+      }, 0);
+    };
+
     const finishTurn = (errorText?: string) => {
       // Once per turn: turn_completed (with the informative error) and the
       // RPC response (with a generic "Internal error") both land here.
       if (!props.chatState.isLoading) return;
       void stampChecks(turnId.value, state.folderPath);
+      notifyIfAway(turnId.value, !!errorText);
       mutateTurn((m) => {
         let log = (m.agentLog ?? []).map((i) => {
           if (i.type !== "action") return i;
@@ -2037,6 +2158,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
               aiImageUrl: props.selectedAi.value.imageUrl || undefined,
               isLoading: true,
               agentTurn: true,
+              agentSurface: state.mode === "tools" ? "tools" : "project",
               agentLog: [],
             },
           ];

@@ -8,6 +8,7 @@
  */
 import { component$, useSignal, useStore, useVisibleTask$, $ } from "@builder.io/qwik";
 import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
+import { ActionIcon } from "../../../components/ActionIcon";
 import { LuWrench, LuTrash2, LuChevronLeft, LuAlertTriangle, LuCheck, LuChevronDown } from "@qwikest/icons/lucide";
 import AppHeader from "../../../components/AppHeader";
 import { useHeaderWorkspace } from "../../../hooks/useHeaderWorkspace";
@@ -504,7 +505,10 @@ export default component$(() => {
                       <div key={s.name} id={`tool-${s.name}`} class={`p-4 transition-shadow ${store.focus === s.name ? "ring-2 ring-[var(--text-link)] rounded-2xl" : ""}`}>
                         <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                           <div class="min-w-0">
-                            <h3 class="font-medium text-[var(--text-primary)]">{card?.title ?? s.name}</h3>
+                            <h3 class="flex items-center gap-2 font-medium text-[var(--text-primary)]">
+                              <ActionIcon icon="mcp" brand={s.source?.split(":")[1] ?? s.name} />
+                              {card?.title ?? s.name}
+                            </h3>
                             {s.description && <p class="text-sm text-[var(--text-secondary)]">{s.description}</p>}
                             <p class={`mt-1 flex items-center gap-1.5 text-xs ${status.ok ? "text-[var(--text-secondary)]" : "text-amber-600 dark:text-amber-400"}`}>
                               {status.ok ? <LuCheck class="h-3.5 w-3.5 shrink-0 text-emerald-500" /> : <LuAlertTriangle class="h-3.5 w-3.5 shrink-0" />}
@@ -574,7 +578,10 @@ export default component$(() => {
               return (
                 <div key={p.id} id={`addon-${p.id}`} class={`rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4 flex flex-col gap-3 transition-shadow ${store.focus === p.id ? "ring-2 ring-[var(--text-link)]" : ""}`}>
                   <div>
-                    <h3 class="font-medium text-[var(--text-primary)]">{p.title}</h3>
+                    <h3 class="flex items-center gap-2 font-medium text-[var(--text-primary)]">
+                      <ActionIcon icon="mcp" brand={p.id} />
+                      {p.title}
+                    </h3>
                     <p class="mt-1 text-sm text-[var(--text-secondary)]">{p.blurb}</p>
                   </div>
                   <p class="text-xs text-[var(--text-muted)]">{p.notes}</p>

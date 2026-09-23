@@ -21,6 +21,7 @@ import { component$, useStore, useSignal, useVisibleTask$, $ } from "@builder.io
 import { listen } from "@tauri-apps/api/event";
 import { useVisionDownload } from "../contexts/VisionDownloadContext";
 import { useAiData } from "../contexts/AiDataContext";
+import { ActionIcon } from "./ActionIcon";
 import { ACTIVITY_EVENT, labelForFile, formatBytes, type ActivityNote } from "../utils/activity";
 import { firstModelInFlight } from "../utils/firstModel";
 import type { CorpusProgress } from "../utils/corpus";
@@ -291,9 +292,10 @@ export const ActivityTray = component$(() => {
         <div key={r.id}>
           <div class="flex items-start justify-between gap-2">
             <div class="min-w-0 flex items-center gap-2">
-              {r.state === "running" && (
-                <span class="inline-block w-2 h-2 flex-shrink-0 rounded-full bg-[var(--bg-button-primary)] animate-pulse" />
-              )}
+              <ActionIcon
+                icon={r.kind === "download" ? "web" : r.kind === "read" ? "read" : r.kind === "cards" ? "edit" : "tool"}
+                status={r.state === "running" ? "in_progress" : r.state === "error" ? "failed" : "completed"}
+              />
               <span class={`text-sm font-medium truncate ${r.state === "error" ? "text-red-400" : "text-[var(--text-primary)]"}`}>
                 {r.title}
               </span>

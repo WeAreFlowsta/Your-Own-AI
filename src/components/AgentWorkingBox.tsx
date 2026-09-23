@@ -8,17 +8,25 @@ import {
   type Signal,
 } from "@builder.io/qwik";
 import {
-  LuCheck,
   LuChevronRight,
   LuChevronDown,
-  LuBrain,
   LuInfo,
   LuRotateCcw,
+  LuCopy,
+  LuExternalLink,
 } from "@qwikest/icons/lucide";
 import { AgentPermissionCard } from "./AgentPermissionCard";
 import { AgentDiffBlock } from "./AgentDiffBlock";
-import { ActionIcon, formatElapsed } from "./ActionIcon";
+import { ActionIcon, formatElapsed, iconForKind } from "./ActionIcon";
 import { renderMarkdown } from "../utils/renderMarkdown";
+import { summaryOf } from "../utils/agentSummary";
+import {
+  AGENT_VIEW_EVENT,
+  getAgentView,
+  setAgentView,
+  type AgentSurface,
+  type AgentView,
+} from "../utils/agentView";
 import type {
   AgentAction,
   AgentLogItem,
@@ -30,52 +38,50 @@ interface AgentWorkingBoxProps {
   log: AgentLogItem[];
   /** True while the turn is streaming - the rail is open with a live pearl. */
   working: boolean;
-  /** Only the LAST bubble carries the pearl - one point of life. A queued
-   *  follow-up mounts loading while the previous turn still streams; two
-   *  pearls (and two brain toggles) is one too many. */
+  /** Only the LAST bubble carries the pearl - one point of life. */
   tipHere?: boolean;
-  /** Collapsed-stub expansion, owned by ChatMessage so the action bar's
-   *  Steps button and the stub itself toggle the same state. */
-  railOpen: Signal<boolean>;
-  /** apiDurationMs from the turn's usage - shown on the stub. */
+  /** Kept for the message component; the rail no longer folds whole. */
+  railOpen?: Signal<boolean>;
+  /** apiDurationMs from the turn's usage - shown on the summary line. */
   durationMs?: number;
+  /** The turn's token count, when known - shown on the pearl and summary. */
+  tokens?: number;
   /** Undo this turn's file changes (the last finished turn only). */
   onUndoTurn$?: QRL<() => void>;
-  /** This turn's changes were undone - the stub says so instead of offering it. */
+  /** This turn's changes were undone - the summary says so instead of offering it. */
   undone?: boolean;
   /** Live retry text ("Retrying (7/15) - context size exceeded..") - wins
-   *  over everything on the pearl: a retry loop must never look like a
-   *  hang behind a stale action label. */
+   *  over everything on the pearl. */
   retryStatus?: string;
   /** Bare id of the online model the current call is waiting on, if online. */
   waitingOn?: string;
+  /** Which surface this turn ran on: projects default to Detailed, chat
+   *  with tools to Simple. */
+  surface?: AgentSurface;
+  /** For the header: "Teresa is working in Website". */
+  aiName?: string;
+  folderName?: string;
   onPermissionRespond$?: QRL<
     (requestId: number, decision: "allow" | "reject", always: boolean) => void
   >;
   onPermissionOffscreen$?: QRL<(offscreen: boolean) => void>;
 }
 
-const SHOW_THOUGHTS_KEY = "agent-show-thoughts";
-const METAL = "linear-gradient(180deg, #cfd8dc 0%, #59c9ff 45%, #7e99a6 100%)";
-const METAL_H = "linear-gradient(90deg, #cfd8dc 0%, #59c9ff 45%, #7e99a6 100%)";
-
 /**
  * THE WORK RAIL - how an agent turn shows its work.
  *
- * Two registers: the AI SPEAKS (full-size, unboxed text) and the AI WORKS
- * (a thin liquid-metal thread down an indented column; steps are nodes
- * with humanized labels and expandable real results; thoughts grow on the
- * same thread when the thinking dial is on). One point of life: the aqua
- * pearl at the thread's tip with the current action. Permission cards are
- * the only loud machinery and interrupt the thread at full width.
- *
- * When the turn ends the whole story folds into one stub line - check,
- * thread, "6 steps - 5 files - 40s" - leaving only the final answer full
- * size. The stub (and the action bar's Steps button) reopens the flow.
+ * The turn is a story: the AI SPEAKS (full-size, unboxed text) and between
+ * its paragraphs the AI WORKS - one row per step with a grey glyph, a
+ * plain label, what it touched, its time. Simple folds consecutive steps
+ * of one family into one row ("Read 4 files and searched twice") and
+ * hides thoughts; Detailed shows every row, thought and live line as it
+ * arrives. Live and reopened render the same list, so a turn reads the
+ * same later. Color means status only: a ring while a step runs, red
+ * when it failed. Permission cards stay in place, full width.
  */
 type GroupItem =
   | { kind: "action"; id: string; action: AgentAction }
-  | { kind: "thought"; id: string; text: string }
+  | { kind: "thought"; id: string; text: string; at?: number; endedAt?: number }
   | { kind: "plan"; id: string; entries: AgentPlanEntry[] };
 
 type FlowElement =
@@ -84,11 +90,60 @@ type FlowElement =
   | { kind: "permission"; id: string; permission: AgentPermission }
   | { kind: "notice"; id: string; text: string };
 
-function formatDuration(ms?: number): string | null {
-  if (!ms || ms <= 0) return null;
-  const s = Math.round(ms / 1000);
-  if (s < 60) return `${s}s`;
-  return `${Math.floor(s / 60)}m ${s % 60}s`;
+/** A folded family of steps in Simple view. */
+type Family = { id: string; icon: string; label: string; actions: AgentAction[]; added: number; removed: number };
+
+type RailRow =
+  | { kind: "action"; id: string; action: AgentAction; line?: string }
+  | { kind: "family"; id: string; family: Family }
+  | { kind: "thought"; id: string; text: string; at?: number; endedAt?: number }
+  | { kind: "plan"; id: string; entries: AgentPlanEntry[] };
+
+const familyOf = (a: AgentAction): string | null => {
+  const icon = a.icon ?? iconForKind(a.kind);
+  if (icon === "read" || icon === "folder" || icon === "search") return "explore";
+  if (icon === "edit" || icon === "delete") return "edit";
+  if (icon === "run") return "run";
+  if (icon === "web") return "web";
+  return null;
+};
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+const times = (n: number) => (n === 1 ? "once" : n === 2 ? "twice" : `${n} times`);
+
+/** "Read 4 files and searched twice" for a run of explore steps, etc. */
+function familyLabel(family: string, actions: AgentAction[]): { label: string; icon: string } {
+  const icons = actions.map((a) => a.icon ?? iconForKind(a.kind));
+  if (family === "explore") {
+    const files = icons.filter((i) => i === "read").length;
+    const folders = icons.filter((i) => i === "folder").length;
+    const searches = icons.filter((i) => i === "search").length;
+    const parts: string[] = [];
+    if (files) parts.push(`Read ${plural(files, "file", "files")}`);
+    if (folders) parts.push(`${parts.length ? "looked" : "Looked"} through ${plural(folders, "folder", "folders")}`);
+    if (searches) parts.push(`${parts.length ? "searched" : "Searched"} ${times(searches)}`);
+    return { label: joinParts(parts), icon: files ? "read" : folders ? "folder" : "search" };
+  }
+  if (family === "edit") {
+    const edits = icons.filter((i) => i === "edit").length;
+    const dels = icons.filter((i) => i === "delete").length;
+    const parts: string[] = [];
+    if (edits) parts.push(`Edited ${plural(edits, "file", "files")}`);
+    if (dels) parts.push(`${parts.length ? "deleted" : "Deleted"} ${plural(dels, "file", "files")}`);
+    return { label: joinParts(parts), icon: edits ? "edit" : "delete" };
+  }
+  if (family === "run") return { label: `Ran ${plural(actions.length, "command", "commands")}`, icon: "run" };
+  const searches = actions.filter((a) => /^Searched the web/.test(a.labelDone ?? a.label)).length;
+  const pages = actions.length - searches;
+  const parts: string[] = [];
+  if (searches) parts.push(`Searched the web ${times(searches)}`);
+  if (pages) parts.push(`${parts.length ? "read" : "Read"} ${plural(pages, "page", "pages")}`);
+  return { label: joinParts(parts), icon: "web" };
+}
+
+function joinParts(parts: string[]): string {
+  if (parts.length <= 1) return parts[0] ?? "";
+  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
 }
 
 /** A task log that follows its own tail: full scrollback, pinned to the
@@ -119,31 +174,62 @@ const LiveLogPanel = component$<{ text: string; live: boolean }>(({ text, live }
   );
 });
 
+const SEG_ON =
+  "rounded-full px-3 py-[3px] text-[11px] font-medium text-[var(--text-primary)] bg-[var(--bg-main)] shadow-[inset_0_0_0_1px_var(--border-input)] cursor-pointer border-none";
+const SEG_OFF =
+  "rounded-full px-3 py-[3px] text-[11px] text-[var(--text-muted)] bg-transparent hover:text-[var(--text-secondary)] cursor-pointer border-none";
+
 export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
-  ({ log, working, tipHere = true, railOpen, durationMs, retryStatus, waitingOn, onPermissionRespond$, onPermissionOffscreen$, onUndoTurn$, undone = false }) => {
-    const showThoughts = useSignal(true);
+  ({
+    log,
+    working,
+    tipHere = true,
+    durationMs,
+    tokens,
+    retryStatus,
+    waitingOn,
+    surface = "project",
+    aiName,
+    folderName,
+    onPermissionRespond$,
+    onPermissionOffscreen$,
+    onUndoTurn$,
+    undone = false,
+  }) => {
+    const view = useSignal<AgentView>("detailed");
     const openOutputs = useSignal<Record<string, boolean>>({});
-    // A clock for the elapsed time on running rows: ticks once a second
-    // while the turn works, stops when it does not.
+    const openFamilies = useSignal<Record<string, boolean>>({});
+    const openThoughts = useSignal<Record<string, boolean>>({});
+    const planOpen = useSignal(false);
     const now = useSignal(Date.now());
+
+    // The view for THIS surface, and every change made anywhere (the
+    // header control, Settings, Ctrl+O) lands here at once.
+    // eslint-disable-next-line qwik/no-use-visible-task
+    useVisibleTask$(({ cleanup }) => {
+      view.value = getAgentView(surface);
+      const onChange = (ev: Event) => {
+        const d = (ev as CustomEvent).detail as { surface: AgentSurface; view: AgentView };
+        if (d?.surface === surface) view.value = d.view;
+      };
+      window.addEventListener(AGENT_VIEW_EVENT, onChange);
+      cleanup(() => window.removeEventListener(AGENT_VIEW_EVENT, onChange));
+    });
+
+    const detailed = useComputed$(() => view.value === "detailed");
+
+    // A background task from this turn may still be writing after the
+    // turn: its row keeps its clock while its line is fresh.
+    const hasLive = useComputed$(() => log.some((i) => i.type === "action" && i.action.liveLine !== undefined));
+
+    // A clock for elapsed times: ticks once a second while anything moves.
     // eslint-disable-next-line qwik/no-use-visible-task
     useVisibleTask$(({ track, cleanup }) => {
-      track(() => working);
-      if (!working) return;
+      const active = track(() => working || hasLive.value);
+      if (!active) return;
       now.value = Date.now();
       const t = setInterval(() => (now.value = Date.now()), 1000);
       cleanup(() => clearInterval(t));
-    });
-
-    // eslint-disable-next-line qwik/no-use-visible-task
-    useVisibleTask$(() => {
-      try {
-        // Full detail is the DEFAULT (absent = on): the living rail is the
-        // product. "0" = the simple view - same liveness, less verbosity.
-        showThoughts.value = localStorage.getItem(SHOW_THOUGHTS_KEY) !== "0";
-      } catch {
-        showThoughts.value = true;
-      }
     });
 
     // While working, the trailing narration streams in a stable element at
@@ -167,7 +253,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
         } else {
           const row: GroupItem =
             item.type === "thought"
-              ? { kind: "thought", id: item.id, text: item.text }
+              ? { kind: "thought", id: item.id, text: item.text, at: (item as any).at, endedAt: (item as any).endedAt }
               : item.type === "plan"
                 ? { kind: "plan", id: item.id, entries: item.entries }
                 : { kind: "action", id: item.id, action: item.action };
@@ -182,160 +268,289 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
       return out;
     });
 
+    /** A wait's live line and elapsed belong to the step it waits on when
+     *  Simple hides the wait row. */
+    const waitLines = useComputed$(() => {
+      const m: Record<string, string> = {};
+      for (const item of log) {
+        if (item.type === "action" && item.action.waitFor?.length && item.action.liveLine) {
+          for (const id of item.action.waitFor) m[id] = item.action.liveLine;
+        }
+      }
+      return m;
+    });
+
+    const knownIds = useComputed$(() => {
+      const s = new Set<string>();
+      for (const item of log) if (item.type === "action") s.add(item.action.toolCallId);
+      return s;
+    });
+
+    /** A helper's steps (recorded with `parent` = the helper's tool-call
+     *  id) nest under its row instead of running loose in the list. */
+    const childrenOf = useComputed$(() => {
+      const m: Record<string, AgentAction[]> = {};
+      for (const item of log) {
+        if (item.type === "action" && item.action.parent) {
+          (m[item.action.parent] ??= []).push(item.action);
+        }
+      }
+      return m;
+    });
+
+    /** The rows of one group as the current view shows them. */
+    const rowsOf = (items: GroupItem[]): RailRow[] => {
+      const rows: RailRow[] = [];
+      const simple = !detailed.value;
+      let run: { family: string; actions: AgentAction[]; id: string } | null = null;
+      const flush = () => {
+        if (!run) return;
+        if (run.actions.length >= 2) {
+          const { label, icon } = familyLabel(run.family, run.actions);
+          let added = 0, removed = 0;
+          for (const a of run.actions) {
+            added += a.diff?.added ?? 0;
+            removed += a.diff?.removed ?? 0;
+          }
+          rows.push({ kind: "family", id: `family-${run.id}`, family: { id: run.id, icon, label, actions: run.actions, added, removed } });
+        } else {
+          for (const a of run.actions) rows.push({ kind: "action", id: `action-${a.toolCallId}`, action: a, line: waitLines.value[a.toolCallId] });
+        }
+        run = null;
+      };
+      for (const it of items) {
+        if (it.kind === "thought") {
+          if (simple) continue;
+          flush();
+          rows.push(it);
+          continue;
+        }
+        if (it.kind === "plan") {
+          flush();
+          rows.push(it);
+          continue;
+        }
+        const a = it.action;
+        if (a.parent && knownIds.value.has(a.parent)) continue; // shown under its helper
+        if (simple && a.icon === "wait" && a.waitFor?.some((id) => knownIds.value.has(id))) {
+          // The wait folds into the step it waits on.
+          continue;
+        }
+        const fam = simple ? familyOf(a) : null;
+        const settled = a.status === "completed" && a.liveLine === undefined;
+        if (fam && settled) {
+          if (run && run.family === fam) run.actions.push(a);
+          else {
+            flush();
+            run = { family: fam, actions: [a], id: a.toolCallId };
+          }
+          continue;
+        }
+        flush();
+        rows.push({ kind: "action", id: `action-${a.toolCallId}`, action: a, line: waitLines.value[a.toolCallId] });
+      }
+      flush();
+      return rows;
+    };
+
     const status = useComputed$(() => {
       if (retryStatus) return retryStatus;
       const last = log[log.length - 1];
       if (last?.type === "permission" && last.permission.state === "pending") {
-        return "Waiting for you..";
+        return "Waiting for you";
       }
       for (let i = log.length - 1; i >= 0; i--) {
         const item = log[i];
         if (item.type === "action" && (item.action.status === "in_progress" || item.action.status === "pending")) {
-          // A wait step that has the awaited task's live line shows THAT
-          // (in full detail) - the script's own last line is what the
-          // reader wants, not "Waiting for a background task..".
-          if (item.action.liveLine && showThoughts.value) return item.action.liveLine.slice(0, 120);
-          return `${item.action.label}..`;
+          if (item.action.liveLine && detailed.value) return item.action.liveLine.slice(0, 120);
+          return item.action.label;
         }
       }
-      // A background task that is still writing beats a bare "Thinking.." -
-      // the step completed instantly (backgrounded) but the work is right
-      // here, and for a ten-minute script "Thinking.." is a lie. Simple view
-      // names the step ("Running generate-articles.."); full detail shows
-      // the live line itself.
       for (let i = log.length - 1; i >= 0; i--) {
         const item = log[i];
         if (item.type === "action" && item.action.liveLine) {
-          return showThoughts.value
-            ? item.action.liveLine.slice(0, 120)
-            : `${item.action.label}..`;
+          return detailed.value ? item.action.liveLine.slice(0, 120) : item.action.label;
         }
       }
-      if (showThoughts.value && last?.type === "thought") {
+      if (detailed.value && last?.type === "thought") {
         const tail = last.text.trim().slice(-140);
-        return `Thinking.. ${tail}`;
+        return `Thinking: ${tail}`;
       }
-      return "Thinking..";
+      return "Thinking";
     });
 
     // Silent stretches are real (a reasoning model can think 30-50s before
     // its summary lands) - the pearl counts them up so stillness reads as
     // work, not a hang. Resets whenever anything new arrives.
     const lastChangeAt = useSignal(0);
-    const nowTick = useSignal(0);
     useTask$(({ track }) => {
       track(() => status.value);
       track(() => log.length);
       lastChangeAt.value = Date.now();
     });
-    // eslint-disable-next-line qwik/no-use-visible-task
-    useVisibleTask$(({ track, cleanup }) => {
-      const active = track(() => working);
-      if (!active) return;
-      const t = setInterval(() => (nowTick.value = Date.now()), 1000);
-      cleanup(() => clearInterval(t));
-    });
     const stillSecs = useComputed$(() => {
       if (!working || !lastChangeAt.value) return 0;
-      const s = Math.floor((nowTick.value - lastChangeAt.value) / 1000);
+      const s = Math.floor((now.value - lastChangeAt.value) / 1000);
       return s >= 6 ? s : 0;
     });
-    // Silence on an ONLINE call is not thinking we can see - it is a
-    // provider that has not answered yet. Say so after 15s, so a stalled
-    // request (which the agent retries on its own) is not mistaken for deep
-    // work. Derived AFTER stillSecs and never fed back into lastChangeAt,
-    // so crossing the threshold cannot reset the counter it depends on.
     const shownStatus = useComputed$(() => {
-      if (status.value === "Thinking.." && waitingOn && stillSecs.value >= 15) {
-        return `Waiting on ${waitingOn} - no reply yet..`;
+      if (status.value === "Thinking" && waitingOn && stillSecs.value >= 15) {
+        return `Waiting on ${waitingOn} - no reply yet`;
       }
       return status.value;
     });
 
-    const stats = useComputed$(() => {
-      let steps = 0;
-      const files = new Set<string>();
+    /** When the turn began: the earliest recorded time in the log. */
+    const startedAt = useComputed$(() => {
+      let t: number | undefined;
       for (const item of log) {
-        if (item.type === "action") {
-          steps++;
-          for (const p of item.action.locations ?? []) files.add(p);
+        const at = item.type === "action" ? item.action.startedAt : (item as any).at;
+        if (typeof at === "number" && (t === undefined || at < t)) t = at;
+      }
+      return t;
+    });
+    const turnElapsed = useComputed$(() => {
+      if (durationMs && !working) return formatElapsed(durationMs);
+      if (startedAt.value === undefined) return null;
+      let end = now.value;
+      if (!working) {
+        end = startedAt.value;
+        for (const item of log) {
+          const e = item.type === "action" ? item.action.endedAt : (item as any).endedAt;
+          if (typeof e === "number" && e > end) end = e;
         }
       }
-      return { steps, files: files.size };
+      const ms = end - startedAt.value;
+      return ms >= 1000 ? formatElapsed(ms) : null;
     });
 
-    // A backgrounded task from this turn that is still writing after the
-    // turn ended: the tailer keeps its liveLine fresh while the log grows
-    // and clears it when the log goes quiet, so "still running" here is
-    // never a stale claim. The folded stub must say so - the agent's
-    // closing words ("the run is underway") are otherwise the only sign.
-    const stillRunning = useComputed$(() => {
-      for (let i = log.length - 1; i >= 0; i--) {
-        const item = log[i];
-        if (item.type === "action" && item.action.liveLine) {
-          // Labels for terminal actions carry the whole command - cap it,
-          // the layout guards below are the second line of defense only.
-          const label = item.action.waitFor?.length
-            ? "background task"
-            : item.action.label.replace(/^Running /, "").slice(0, 70);
-          return { label, line: item.action.liveLine.slice(0, 90) };
+    const changed = useComputed$(() => {
+      const files = new Set<string>();
+      let added = 0, removed = 0;
+      for (const item of log) {
+        if (item.type !== "action") continue;
+        const a = item.action;
+        if (a.diff) {
+          files.add(a.diff.path || a.toolCallId);
+          added += a.diff.added;
+          removed += a.diff.removed;
+        } else if ((a.icon ?? iconForKind(a.kind)) === "edit") {
+          for (const p of a.locations ?? []) files.add(p);
         }
       }
-      return null;
+      return { files: files.size, added, removed };
     });
 
-    const expanded = working || railOpen.value;
-    // Notes that must stay readable once the rail folds (no-vision etc.).
-    const notices = useComputed$(() => log.filter((i) => i.type === "notice"));
+    const summary = useComputed$(() => summaryOf(log));
+
+    /** What "show every change" opens: each edit row, and the family it
+     *  may be folded into. */
+    const changeTargets = useComputed$(() => {
+      const outputs: string[] = [];
+      const families: string[] = [];
+      for (const item of log) if (item.type === "action" && item.action.diff) outputs.push(item.action.toolCallId);
+      for (const el of flow.value) {
+        if (el.kind !== "group") continue;
+        for (const r of rowsOf(el.items)) if (r.kind === "family" && r.family.added + r.family.removed > 0) families.push(r.family.id);
+      }
+      return { outputs, families };
+    });
+
+    const stepsFor = (a: AgentAction) => {
+      const failed = a.status === "failed";
+      const running = a.status === "in_progress" || a.status === "pending";
+      const still = !working && a.liveLine !== undefined && !failed;
+      return { failed, running: running || still, still };
+    };
+
+    const elapsedOf = (a: AgentAction, running: boolean): string | undefined => {
+      if (a.startedAt == null) return undefined;
+      const end = a.endedAt ?? (running ? now.value : undefined);
+      if (end == null) return undefined;
+      const ms = end - a.startedAt;
+      return ms >= 10_000 ? formatElapsed(ms) : undefined;
+    };
 
     return (
-      <>
-        {/* Collapsed stub - the finished turn's one-line audit trail. */}
-        {!working && (
-          <button
-            onClick$={() => (railOpen.value = !railOpen.value)}
-            // block + inner flex div, NOT a flex button: WebKitGTK's
-            // anonymous box on <button> flex containers never lets children
-            // shrink, so truncate on the spans silently fails and long
-            // "still running" commands run past the window edge.
-            class="block w-full max-w-full overflow-hidden py-1 mb-1 text-left font-mono text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] bg-transparent border-none cursor-pointer"
-          >
-            <div class="flex min-w-0 items-center gap-2.5">
-            {stillRunning.value ? (
-              <span
-                class="inline-block h-3 w-3 shrink-0 rounded-full border-2 border-[var(--border-subtle)] border-t-[var(--text-secondary)] animate-spin"
-                title="A background task from this turn is still running"
-              />
-            ) : (
-              <LuCheck class="h-3.5 w-3.5 shrink-0 text-green-600 dark:text-green-400" />
-            )}
-            <span
-              class="inline-block w-6 h-[2px] rounded-full opacity-60 shrink-0"
-              style={{ background: METAL_H }}
-            />
-            <span class="min-w-0 truncate">
-              {stats.value.steps} step{stats.value.steps === 1 ? "" : "s"}
-              {stats.value.files > 0 &&
-                ` - ${stats.value.files} file${stats.value.files === 1 ? "" : "s"}`}
-              {formatDuration(durationMs) ? ` - ${formatDuration(durationMs)}` : ""}
-              {stillRunning.value && (
-                <span class="text-[var(--text-secondary)]">
-                  {" - still running: "}{stillRunning.value.label}
-                  <span class="text-[var(--text-muted)]">{" · "}{stillRunning.value.line}</span>
+      <div class="my-1 rounded-xl border border-[var(--border-divider)] bg-[var(--bg-main)] px-3 pt-2 pb-2">
+        {/* Header: who is working where (live), or the turn's summary
+            (finished); the view control on the right. */}
+        <div class="flex items-center justify-between gap-3 text-xs text-[var(--text-secondary)]">
+          <div class="flex min-w-0 items-center gap-2">
+            {working ? (
+              <>
+                <span class="h-2 w-2 shrink-0 rounded-full bg-[var(--text-link)] animate-pulse" />
+                <span class="min-w-0 truncate">
+                  {aiName ? `${aiName} is working` : "Working"}
+                  {folderName ? (
+                    <>
+                      {" in "}
+                      <span class="text-[var(--text-primary)]">{folderName}</span>
+                    </>
+                  ) : null}
                 </span>
-              )}
-            </span>
-            <span class="shrink-0 text-[var(--text-link)]">
-              <LuChevronRight class={`h-3 w-3 ${railOpen.value ? "hidden" : ""}`} />
-              <LuChevronDown class={`h-3 w-3 ${railOpen.value ? "" : "hidden"}`} />
-            </span>
+              </>
+            ) : (
+              <span class="min-w-0 truncate text-[var(--text-muted)]">
+                {summary.value || "No steps"}
+                {turnElapsed.value ? ` · ${turnElapsed.value}` : ""}
+                {tokens ? ` · ${tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : tokens} tokens` : ""}
+              </span>
+            )}
+          </div>
+          <div class="flex shrink-0 items-center gap-2">
+            {!working && changed.value.files > 0 && (
+              <button
+                type="button"
+                title="Show every change"
+                onClick$={() => {
+                  const open: Record<string, boolean> = { ...openOutputs.value };
+                  const fams: Record<string, boolean> = { ...openFamilies.value };
+                  for (const id of changeTargets.value.outputs) open[id] = true;
+                  for (const id of changeTargets.value.families) fams[id] = true;
+                  openOutputs.value = open;
+                  openFamilies.value = fams;
+                }}
+                class="flex items-center gap-1.5 rounded-full border-none bg-transparent px-2 py-[2px] text-[11px] text-[var(--text-muted)] hover:text-[var(--text-secondary)] cursor-pointer"
+              >
+                {plural(changed.value.files, "file changed", "files changed")}
+                {changed.value.added + changed.value.removed > 0 && (
+                  <span class="font-mono">
+                    <span class="text-green-600 dark:text-green-400">+{changed.value.added}</span>
+                    {changed.value.removed > 0 && <span class="text-red-500 dark:text-red-400"> -{changed.value.removed}</span>}
+                  </span>
+                )}
+              </button>
+            )}
+            <div
+              class="flex items-center gap-[2px] rounded-full border border-[var(--border-subtle)] p-[2px]"
+              role="group"
+              aria-label="How much to show"
+              title="Ctrl+O switches"
+            >
+              <button
+                type="button"
+                class={view.value === "simple" ? SEG_ON : SEG_OFF}
+                aria-pressed={view.value === "simple"}
+                onClick$={() => setAgentView(surface, "simple")}
+              >
+                Simple
+              </button>
+              <button
+                type="button"
+                class={view.value === "detailed" ? SEG_ON : SEG_OFF}
+                aria-pressed={view.value === "detailed"}
+                onClick$={() => setAgentView(surface, "detailed")}
+              >
+                Detailed
+              </button>
             </div>
-          </button>
-        )}
-        {/* Undo: the whole turn's file changes back to how they were -
-            edits reverted, new files removed, deleted files restored. */}
-        {!working && stats.value.files > 0 && (undone || onUndoTurn$) && (
-          <div class="mb-2 flex items-center gap-2 text-xs text-[var(--text-muted)]">
+          </div>
+        </div>
+
+        {/* Undo: the whole turn's file changes back to how they were. */}
+        {!working && changed.value.files > 0 && (undone || onUndoTurn$) && (
+          <div class="mt-1.5 flex items-center gap-2 text-xs text-[var(--text-muted)]">
             {undone ? (
               <span>This turn's file changes were undone.</span>
             ) : (
@@ -343,43 +558,31 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                 type="button"
                 onClick$={() => onUndoTurn$?.()}
                 class="btn-liquid-metal btn-secondary-metal flex items-center gap-1.5 px-3 py-1 text-xs"
-                title="Put every file this turn changed back the way it was"
+                title="Put every file this turn changed back how it was"
               >
-                <LuRotateCcw class="h-3.5 w-3.5" />
-                Undo this turn's changes
+                <span class="shader-inner-fill" />
+                <span class="btn-content flex items-center gap-1.5">
+                  <LuRotateCcw class="h-3 w-3" />
+                  Undo this turn's changes
+                </span>
               </button>
             )}
           </div>
         )}
-        {!expanded &&
-          notices.value.map((n) =>
-            n.type === "notice" ? (
-              <div
-                key={n.id}
-                class="flex items-start gap-2 mb-2 text-sm leading-snug text-[var(--text-secondary)]"
-              >
-                <LuInfo class="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                <span class="min-w-0 break-words">{n.text}</span>
-              </div>
-            ) : null,
-          )}
 
-        {expanded &&
-          flow.value.map((el) => {
+        {/* The story: speech and work in the order they happened. Detailed
+            caps the height so the reply below stays in reach. */}
+        <div class={`mt-2 flex flex-col gap-1 ${detailed.value && working ? "max-h-[70vh] overflow-y-auto" : ""}`}>
+          {flow.value.map((el) => {
             if (el.kind === "notice") {
               return (
-                <div
-                  key={el.id}
-                  class="flex items-start gap-2 py-1.5 text-sm leading-snug text-[var(--text-secondary)]"
-                >
+                <div key={el.id} class="flex items-start gap-2 py-1 text-sm leading-snug text-[var(--text-secondary)]">
                   <LuInfo class="mt-0.5 h-3.5 w-3.5 shrink-0" />
                   <span class="min-w-0 break-words">{el.text}</span>
                 </div>
               );
             }
             if (el.kind === "text") {
-              // The AI speaking - full size, unboxed. Same register as the
-              // final answer, so nothing ever resizes.
               return (
                 <div
                   key={el.id}
@@ -403,227 +606,365 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                 />
               );
             }
+            const rows = rowsOf(el.items);
             return (
-              <div key={el.id} class="my-1.5 flex flex-col gap-0.5">
-                {el.items.map((row) => {
+              <div key={el.id} class="flex flex-col gap-0.5 py-0.5">
+                {rows.map((row) => {
                   if (row.kind === "plan") {
-                    // The agent's live checklist on the thread: entries tick
-                    // pending -> in progress -> done via class flips (the
-                    // whole list is replaced each update - keys are the
-                    // entry text, which is stable while statuses change).
+                    const entries = row.entries;
+                    const doneCount = entries.filter((e) => e.status === "completed").length;
+                    const current = entries.find((e) => e.status === "in_progress") ?? entries.find((e) => e.status === "pending");
+                    const shown = planOpen.value || !current ? entries : [current];
                     return (
-                      <div key={row.id} class="py-0.5">
-                        {row.entries.map((en) => (
-                          <div
-                            key={en.content}
-                            class="relative flex items-baseline gap-2 py-0.5 font-mono text-xs"
-                          >
-                            <span
-                              class={`inline-block shrink-0 self-center w-[7px] h-[7px] rounded-full border-2 border-[var(--bg-main)] ${
-                                en.status === "completed"
-                                  ? "bg-green-600 dark:bg-green-400"
-                                  : en.status === "in_progress"
-                                    ? "bg-[var(--text-link)] animate-pulse"
-                                    : "bg-[var(--border-subtle)]"
-                              }`}
-                            />
-                            <span
-                              class={`min-w-0 truncate whitespace-nowrap ${
-                                en.status === "in_progress"
-                                  ? "text-[var(--text-secondary)]"
-                                  : en.status === "completed"
-                                    ? "text-[var(--text-muted)]"
-                                    : "text-[var(--text-muted)] opacity-60"
-                              }`}
-                            >
-                              {en.content}
+                      <div key={row.id} class="rounded-lg px-2 py-1">
+                        <button
+                          type="button"
+                          onClick$={() => (planOpen.value = !planOpen.value)}
+                          class="block w-full max-w-full bg-transparent border-none p-0 text-left cursor-pointer"
+                        >
+                          <div class="flex min-w-0 items-center gap-2.5 text-[13px]">
+                            <ActionIcon icon="plan" />
+                            <span class="min-w-0 truncate text-[var(--text-secondary)]">
+                              {current ? current.content : "Plan done"}
+                            </span>
+                            <span class="shrink-0 text-xs text-[var(--text-muted)]">
+                              {doneCount} of {entries.length}
+                            </span>
+                            <span class="ml-auto shrink-0 text-[var(--text-muted)] opacity-60">
+                              <LuChevronRight class={`h-3.5 w-3.5 ${planOpen.value ? "hidden" : ""}`} />
+                              <LuChevronDown class={`h-3.5 w-3.5 ${planOpen.value ? "" : "hidden"}`} />
                             </span>
                           </div>
-                        ))}
+                        </button>
+                        {planOpen.value && (
+                          <div class="ml-8 mt-1 flex flex-col gap-0.5">
+                            {shown.map((en) => (
+                              <div key={en.content} class="flex items-center gap-2 text-xs">
+                                <span
+                                  class={`inline-block h-[7px] w-[7px] shrink-0 rounded-full ${
+                                    en.status === "completed"
+                                      ? "bg-green-600 dark:bg-green-400"
+                                      : en.status === "in_progress"
+                                        ? "bg-[var(--text-link)]"
+                                        : "bg-[var(--border-subtle)]"
+                                  }`}
+                                />
+                                <span class={en.status === "completed" ? "text-[var(--text-muted)]" : "text-[var(--text-secondary)]"}>{en.content}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     );
                   }
                   if (row.kind === "thought") {
-                    return showThoughts.value ? (
-                      <div
-                        key={row.id}
-                        class="relative text-xs italic text-[var(--text-muted)] opacity-80 leading-relaxed py-0.5 max-w-[56ch] break-words overflow-hidden"
-                      >
-                        {row.text}
+                    const isOpen = !!openThoughts.value[row.id];
+                    const end = row.endedAt ?? (working ? now.value : undefined);
+                    const secs = row.at != null && end != null ? Math.max(1, Math.round((end - row.at) / 1000)) : null;
+                    const live = working && row.endedAt == null;
+                    return (
+                      <div key={row.id} class="rounded-lg px-2 py-1">
+                        <button
+                          type="button"
+                          onClick$={() => (openThoughts.value = { ...openThoughts.value, [row.id]: !isOpen })}
+                          class="block w-full max-w-full bg-transparent border-none p-0 text-left cursor-pointer"
+                        >
+                          <div class="flex min-w-0 items-center gap-2.5 text-[13px]">
+                            <ActionIcon icon="think" status={live ? "in_progress" : "completed"} />
+                            <span class="min-w-0 truncate text-[var(--text-muted)]">
+                              {live ? "Thinking" : secs != null ? `Thought for ${secs} s` : "Thought"}
+                            </span>
+                            <span class="ml-auto shrink-0 text-[var(--text-muted)] opacity-60">
+                              <LuChevronRight class={`h-3.5 w-3.5 ${isOpen ? "hidden" : ""}`} />
+                              <LuChevronDown class={`h-3.5 w-3.5 ${isOpen ? "" : "hidden"}`} />
+                            </span>
+                          </div>
+                        </button>
+                        {isOpen && (
+                          <div class="ml-8 mt-1 mb-1 max-h-64 overflow-y-auto text-xs italic leading-relaxed text-[var(--text-muted)] break-words">
+                            {row.text}
+                          </div>
+                        )}
                       </div>
-                    ) : null;
+                    );
+                  }
+                  if (row.kind === "family") {
+                    const f = row.family;
+                    const isOpen = !!openFamilies.value[f.id];
+                    return (
+                      <div key={row.id} class="overflow-hidden">
+                        <button
+                          type="button"
+                          onClick$={() => (openFamilies.value = { ...openFamilies.value, [f.id]: !isOpen })}
+                          class="block w-full max-w-full rounded-lg px-2 py-1 text-left text-[13px] bg-transparent border-none hover:bg-[var(--bg-card)] cursor-pointer"
+                        >
+                          <div class="flex min-w-0 max-w-full overflow-hidden items-center gap-2.5">
+                            <ActionIcon icon={f.icon} status="completed" />
+                            <span class="min-w-0 truncate text-[var(--text-secondary)]">{f.label}</span>
+                            {f.added + f.removed > 0 && (
+                              <span class="shrink-0 font-mono text-xs">
+                                <span class="text-green-600 dark:text-green-400">+{f.added}</span>
+                                {f.removed > 0 && <span class="text-red-500 dark:text-red-400"> -{f.removed}</span>}
+                              </span>
+                            )}
+                            <span class="ml-auto shrink-0 text-[var(--text-muted)] opacity-60">
+                              <LuChevronRight class={`h-3.5 w-3.5 ${isOpen ? "hidden" : ""}`} />
+                              <LuChevronDown class={`h-3.5 w-3.5 ${isOpen ? "" : "hidden"}`} />
+                            </span>
+                          </div>
+                        </button>
+                        {isOpen && (
+                          <div class="ml-4 flex flex-col gap-0.5 border-l border-[var(--border-divider)] pl-2">
+                            {f.actions.map((a) => (
+                              <ActionRow
+                                key={a.toolCallId}
+                                action={a}
+                                open={!!openOutputs.value[a.toolCallId]}
+                                onToggle$={() => {
+                                  openOutputs.value = { ...openOutputs.value, [a.toolCallId]: !openOutputs.value[a.toolCallId] };
+                                }}
+                                elapsed={elapsedOf(a, false)}
+                                {...stepsFor(a)}
+                                live={false}
+                                line={undefined}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
                   }
                   const a = row.action;
+                  const st = stepsFor(a);
                   const hasDiff = !!a.diff?.lines?.length;
-                  const failed = a.status === "failed";
-                  const hasOutput = !!a.output || hasDiff || (failed && !!a.error);
-                  // Full view shows the substance UNASKED: edit diffs and
-                  // running background logs open by default; a failed step
-                  // opens itself in both views; a click still collapses (the
-                  // explicit choice wins). Simple view keeps the rest behind
-                  // the click.
                   const explicit = openOutputs.value[a.toolCallId];
                   const open =
                     explicit !== undefined
                       ? explicit
-                      : (failed && !!a.error) || (showThoughts.value && (hasDiff || a.liveLine !== undefined));
-                  const isLiveLog = a.liveLine !== undefined;
-                  const running = a.status === "in_progress" || a.status === "pending";
-                  const label = a.status === "completed" && a.labelDone ? a.labelDone : a.label;
-                  const elapsedMs =
-                    a.startedAt != null
-                      ? (a.endedAt ?? (running ? now.value : undefined)) != null
-                        ? (a.endedAt ?? now.value) - a.startedAt
-                        : undefined
-                      : undefined;
-                  const elapsed = elapsedMs != null && elapsedMs >= 10_000 ? formatElapsed(elapsedMs) : undefined;
+                      : (st.failed && !!a.error) || (detailed.value && (hasDiff || a.liveLine !== undefined));
                   return (
-                    <div key={row.id} class="overflow-hidden">
-                      <button
-                        disabled={!hasOutput}
-                        onClick$={() => {
-                          openOutputs.value = {
-                            ...openOutputs.value,
-                            [a.toolCallId]: !open,
-                          };
-                        }}
-                        // block + inner flex div, NOT a flex button (WebKitGTK
-                        // never shrinks a flex button's children, so truncate
-                        // on long labels silently fails).
-                        class={`block w-full max-w-full rounded-lg px-2 py-1 text-left text-[13px] bg-transparent border-none ${
-                          running ? "bg-[var(--text-link)]/[0.06]" : ""
-                        } ${hasOutput ? "hover:bg-[var(--text-primary)]/[0.04] cursor-pointer" : "cursor-default"}`}
-                      >
-                        <div class="flex min-w-0 max-w-full overflow-hidden items-center gap-2.5">
-                          <ActionIcon icon={a.icon} kind={a.kind} status={a.status} />
-                          <span
-                            class={`min-w-0 truncate whitespace-nowrap ${
-                              failed
-                                ? "text-red-500 dark:text-red-400"
-                                : running
-                                  ? "text-[var(--text-primary)]"
-                                  : "text-[var(--text-secondary)]"
-                            }`}
-                          >
-                            {label}
-                          </span>
-                          {a.diff ? (
-                            <span class="shrink-0 font-mono text-xs">
-                              <span class="text-green-600 dark:text-green-400">+{a.diff.added}</span>
-                              {a.diff.removed > 0 && (
-                                <span class="text-red-500 dark:text-red-400"> -{a.diff.removed}</span>
-                              )}
-                            </span>
-                          ) : a.outputLines && !failed ? (
-                            <span class="shrink-0 text-xs text-[var(--text-muted)]">{a.outputLines} lines</span>
-                          ) : null}
-                          {failed && (
-                            <span class="shrink-0 text-xs text-red-500 dark:text-red-400">
-                              {elapsed ? `Failed after ${elapsed}` : "Failed"}
-                            </span>
-                          )}
-                          {!failed && elapsed && (
-                            <span class="shrink-0 text-xs text-[var(--text-muted)]">{elapsed}</span>
-                          )}
-                          {hasOutput && (
-                            <span class="ml-auto shrink-0 text-[var(--text-muted)] opacity-60">
-                              <LuChevronRight class={`h-3.5 w-3.5 ${open ? "hidden" : ""}`} />
-                              <LuChevronDown class={`h-3.5 w-3.5 ${open ? "" : "hidden"}`} />
-                            </span>
-                          )}
-                        </div>
-                        {running && a.liveLine && !open && (
-                          <div class="ml-8 mt-0.5 truncate whitespace-nowrap font-mono text-xs text-[var(--text-muted)]">
-                            {a.liveLine}
-                          </div>
-                        )}
-                      </button>
-                      {open && failed && a.error && (
-                        <pre class="ml-8 mt-1 mb-1.5 max-h-40 overflow-auto whitespace-pre-wrap rounded-md border border-red-500/30 bg-[var(--bg-main)] px-2.5 py-2 font-mono text-xs text-[var(--text-secondary)]">
-                          {a.error}
-                        </pre>
-                      )}
-                      {open && hasDiff && (
-                        <div class="mt-1 mb-1.5 max-h-64 overflow-y-auto">
-                          <AgentDiffBlock lines={a.diff!.lines!} />
-                        </div>
-                      )}
-                      {open && !hasDiff && a.output && (
-                        <LiveLogPanel
-                          text={
-                            isLiveLog
-                              ? a.output
-                              : (a.detail && a.detail !== a.output ? `${a.detail}\n\n` : "") +
-                                a.output
-                          }
-                          live={isLiveLog && working}
-                        />
-                      )}
-                    </div>
+                    <ActionRow
+                      key={row.id}
+                      action={a}
+                      open={open}
+                      onToggle$={() => {
+                        openOutputs.value = { ...openOutputs.value, [a.toolCallId]: !open };
+                      }}
+                      elapsed={elapsedOf(a, st.running)}
+                      failed={st.failed}
+                      running={st.running}
+                      still={st.still}
+                      live={a.liveLine !== undefined && (working || st.still)}
+                      line={a.liveLine ?? row.line ?? (!working ? a.lastLine : undefined)}
+                      steps={childrenOf.value[a.toolCallId]}
+                      openChildren={openOutputs.value}
+                      onToggleChild$={(id: string) => {
+                        openOutputs.value = { ...openOutputs.value, [id]: !openOutputs.value[id] };
+                      }}
+                    />
                   );
                 })}
               </div>
             );
           })}
 
-        {/* The words being said right now - same register as settled text
-            and the final answer. The streaming innerHTML node lives inside
-            its OWN stable wrapper: Qwik's diffing of a churning innerHTML
-            node corrupts SIBLINGS (the long-standing duplicated brain-
-            toggle sightings on the pearl row) - the wrapper absorbs the
-            churn so nothing outside it is ever that node's neighbor. */}
-        <div key="trailing-narration-wrap">
           {trailingNarration.value && (
-            <div
-              class="markdown-content text-[var(--text-primary)] text-base leading-relaxed py-1.5 break-words overflow-hidden"
-              dangerouslySetInnerHTML={renderMarkdown(trailingNarration.value.text)}
-            />
+            <div key="trailing-narration-wrap">
+              <div
+                key="trailing-narration"
+                class="markdown-content text-[var(--text-primary)] text-base leading-relaxed py-1.5 break-words overflow-hidden"
+                dangerouslySetInnerHTML={renderMarkdown(trailingNarration.value.text)}
+              />
+            </div>
           )}
         </div>
-        {/* The pearl - the turn's one point of life. Its OWN element at the
-            very END of the flow - after streaming speech too - so it is
-            always at the visible tip no matter what the rail ends with. It
-            used to render BEFORE the trailing narration: once the agent
-            finished a paragraph and went into a long think, the only life
-            was a small dot buried above text already read, and the turn
-            looked dead exactly when the model was working hardest. */}
+
+        {/* The pearl: what is happening right now, how long, how much. */}
         {working && tipHere && (
-          <div key="live-pearl" class="relative pl-7 my-1.5">
-            <div
-              class="absolute left-[8px] top-0 bottom-1 w-[2px] rounded-full opacity-50"
-              style={{ background: METAL }}
-            />
-            <div class="relative flex items-center gap-2 py-1">
-              <span
-                class="absolute -left-[23.5px] top-[7px] w-[9px] h-[9px] rounded-full bg-[var(--text-link)] animate-pulse"
-                style={{ boxShadow: "0 0 10px 1px rgba(89,201,255,0.55)" }}
-              />
-              <span class="min-w-0 truncate whitespace-nowrap font-mono text-xs font-semibold animate-pulse-text status-text-gradient">
-                {shownStatus.value}
-                {stillSecs.value > 0 ? ` ${stillSecs.value}s` : ""}
-              </span>
-              <button
-                onClick$={() => {
-                  showThoughts.value = !showThoughts.value;
-                  try {
-                    localStorage.setItem(
-                      SHOW_THOUGHTS_KEY,
-                      showThoughts.value ? "1" : "0",
-                    );
-                  } catch {
-                    /* not persisted */
-                  }
-                }}
-                title={showThoughts.value ? "Simple view - just the steps and asks" : "Full detail - thoughts and live logs"}
-                class={`ml-1 shrink-0 bg-transparent border-none cursor-pointer ${showThoughts.value ? "text-[var(--text-secondary)]" : "text-[var(--text-muted)] opacity-40 hover:opacity-100"}`}
-              >
-                <LuBrain class="h-3.5 w-3.5" />
-              </button>
-            </div>
+          <div key="live-pearl" class="mt-2 flex items-center gap-2 border-t border-[var(--border-divider)] pt-2 text-xs text-[var(--text-secondary)]">
+            <span class="h-2 w-2 shrink-0 rounded-full bg-[var(--text-link)] animate-pulse" />
+            <span class="min-w-0 flex-grow truncate whitespace-nowrap">
+              {shownStatus.value}
+              {stillSecs.value > 0 ? ` · ${stillSecs.value} s quiet` : ""}
+            </span>
+            <span class="shrink-0 text-[var(--text-muted)]">
+              {turnElapsed.value ?? ""}
+              {tokens ? ` · ${tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : tokens} tokens` : ""}
+            </span>
           </div>
         )}
-
-      </>
+      </div>
     );
   },
 );
+
+interface ActionRowProps {
+  action: AgentAction;
+  open: boolean;
+  onToggle$: QRL<() => void>;
+  /** A helper's own steps, shown under it. */
+  steps?: AgentAction[];
+  openChildren?: Record<string, boolean>;
+  onToggleChild$?: QRL<(id: string) => void>;
+  elapsed?: string;
+  failed: boolean;
+  running: boolean;
+  /** Finished turn, task still writing. */
+  still: boolean;
+  live: boolean;
+  line?: string;
+}
+
+/** One step: `[icon] label … what it touched · elapsed · status ›`, and
+ *  under it, when open, the diff, the output or the live log. */
+const ActionRow = component$<ActionRowProps>(({ action: a, open, onToggle$, elapsed, failed, running, still, live, line, steps, openChildren, onToggleChild$ }) => {
+  const hasDiff = !!a.diff?.lines?.length;
+  const hasOutput = !!a.output || hasDiff || (failed && !!a.error) || !!a.detail;
+  const label = a.status === "completed" && !still && a.labelDone ? a.labelDone : a.label;
+  const icon = a.icon ?? iconForKind(a.kind);
+  const isFile = icon === "read" || icon === "edit" || icon === "delete";
+  const path = isFile ? (a.locations?.[0] ?? (a.detail && /[\\/]/.test(a.detail) ? a.detail : undefined)) : undefined;
+  return (
+    <div class="overflow-hidden">
+      <button
+        type="button"
+        disabled={!hasOutput}
+        onClick$={onToggle$}
+        class={`block w-full max-w-full rounded-lg px-2 py-1 text-left text-[13px] bg-transparent border-none ${
+          running ? "bg-[var(--bg-user-message)]" : ""
+        } ${hasOutput ? "hover:bg-[var(--bg-card)] cursor-pointer" : "cursor-default"}`}
+      >
+        <div class="flex min-w-0 max-w-full items-center gap-2.5">
+          <ActionIcon icon={a.icon} kind={a.kind} brand={a.server} status={failed ? "failed" : running ? "in_progress" : "completed"} />
+          <span
+            class={`min-w-0 truncate whitespace-nowrap ${
+              failed ? "text-red-500 dark:text-red-400" : running ? "text-[var(--text-primary)]" : "text-[var(--text-secondary)]"
+            }`}
+          >
+            {label}
+          </span>
+          {a.diff ? (
+            <span class="shrink-0 font-mono text-xs">
+              <span class="text-green-600 dark:text-green-400">+{a.diff.added}</span>
+              {a.diff.removed > 0 && <span class="text-red-500 dark:text-red-400"> -{a.diff.removed}</span>}
+            </span>
+          ) : a.outputLines && !failed ? (
+            <span class="shrink-0 text-xs text-[var(--text-muted)]">{a.outputLines} lines</span>
+          ) : null}
+          {failed && (
+            <span class="shrink-0 text-xs text-red-500 dark:text-red-400">{elapsed ? `Failed after ${elapsed}` : "Failed"}</span>
+          )}
+          {!failed && elapsed && <span class="shrink-0 text-xs text-[var(--text-muted)]">{elapsed}</span>}
+          {still && <span class="shrink-0 text-xs text-[var(--text-muted)]">still running</span>}
+          {hasOutput && (
+            <span class="ml-auto shrink-0 text-[var(--text-muted)] opacity-60">
+              <LuChevronRight class={`h-3.5 w-3.5 ${open ? "hidden" : ""}`} />
+              <LuChevronDown class={`h-3.5 w-3.5 ${open ? "" : "hidden"}`} />
+            </span>
+          )}
+        </div>
+        {line && !open && (
+          <div class="ml-8 mt-0.5 truncate whitespace-nowrap font-mono text-xs text-[var(--text-muted)]">{line}</div>
+        )}
+      </button>
+      {open && (
+        <div class="ml-8 mb-1.5">
+          {(a.detail || path) && (
+            <div class="mt-1 flex items-center gap-2 text-xs text-[var(--text-muted)]">
+              <span class="min-w-0 truncate font-mono">{path ?? a.detail}</span>
+              {icon === "run" && a.detail && (
+                <button
+                  type="button"
+                  title="Copy the command"
+                  onClick$={async () => {
+                    try {
+                      await navigator.clipboard.writeText(a.detail ?? "");
+                    } catch {
+                      /* no clipboard */
+                    }
+                  }}
+                  class="shrink-0 rounded-md border-none bg-transparent p-1 text-[var(--text-muted)] hover:text-[var(--text-secondary)] cursor-pointer"
+                >
+                  <LuCopy class="h-3.5 w-3.5" />
+                </button>
+              )}
+              {path && (
+                <button
+                  type="button"
+                  title="Open this file"
+                  onClick$={async () => {
+                    try {
+                      const { openPath } = await import("@tauri-apps/plugin-opener");
+                      await openPath(path);
+                    } catch {
+                      /* not on this computer */
+                    }
+                  }}
+                  class="shrink-0 rounded-md border-none bg-transparent p-1 text-[var(--text-muted)] hover:text-[var(--text-secondary)] cursor-pointer"
+                >
+                  <LuExternalLink class="h-3.5 w-3.5" />
+                </button>
+              )}
+              {failed && (
+                <button
+                  type="button"
+                  onClick$={() => {
+                    try {
+                      window.dispatchEvent(
+                        new CustomEvent("yoai-agent-interject", {
+                          detail: { text: `The step "${label}" failed. Try it again.` },
+                        }),
+                      );
+                    } catch {
+                      /* not in a window */
+                    }
+                  }}
+                  class="ml-auto btn-liquid-metal btn-secondary-metal flex shrink-0 items-center gap-1.5 px-3 py-[3px] text-[11px]"
+                >
+                  <span class="shader-inner-fill" />
+                  <span class="btn-content flex items-center gap-1.5">
+                    <LuRotateCcw class="h-3 w-3" />
+                    Try again
+                  </span>
+                </button>
+              )}
+            </div>
+          )}
+          {failed && a.error && (
+            <pre class="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded-md border border-red-500/30 bg-[var(--bg-main)] px-2.5 py-2 font-mono text-xs text-[var(--text-secondary)]">
+              {a.error}
+            </pre>
+          )}
+          {hasDiff && (
+            <div class="mt-1 max-h-64 overflow-y-auto">
+              <AgentDiffBlock lines={a.diff!.lines!} />
+            </div>
+          )}
+          {!hasDiff && a.output && (
+            <LiveLogPanel text={a.output} live={live} />
+          )}
+          {!hasDiff && !a.output && !failed && line && (
+            <div class="mt-1 font-mono text-xs text-[var(--text-muted)]">{line}</div>
+          )}
+        </div>
+      )}
+      {steps && steps.length > 0 && (
+        <div class="ml-4 flex flex-col gap-0.5 border-l border-[var(--border-divider)] pl-2">
+          {steps.map((c) => (
+            <ActionRow
+              key={c.toolCallId}
+              action={c}
+              open={!!openChildren?.[c.toolCallId]}
+              onToggle$={() => onToggleChild$?.(c.toolCallId)}
+              failed={c.status === "failed"}
+              running={c.status === "in_progress" || c.status === "pending"}
+              still={false}
+              live={false}
+              line={c.lastLine}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+});

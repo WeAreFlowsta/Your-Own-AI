@@ -141,6 +141,7 @@ interface ChatMessageProps {
   agentRetryStatus?: string;
   /** Online model the agent's current call is waiting on (bare id), if any. */
   agentWaitingOn?: string;
+  agentFolderName?: string;
   isDesktop: boolean;
   theme: 'light' | 'dark';
   isSidePanelVisible: boolean;
@@ -419,8 +420,9 @@ const ActionBar = component$<ActionBarProps>((props) => {
   const severalKinds = [hasSources, hasGrounded || !!props.message.groundingNote, hasLibrary].filter(Boolean).length > 1;
   const canGround = !!props.onGround$ && !hasGrounded && !props.message.groundingPending;
   const hasModelInfo = props.message.role === 'assistant' && !!props.message.servedBy;
-  const hasSteps =
-    !!props.railOpen && !!props.message.agentLog && props.message.agentLog.length > 0 && !props.message.isLoading;
+  // The rail no longer folds whole: its header carries the summary and
+  // the Simple | Detailed control, so the action bar has no Steps button.
+  const hasSteps = false;
   const hasButtons = hasSteps || hasTokens || hasThoughts || hasSources || hasGrounded || hasLibrary || canGround || !!props.message.groundingPending || !!props.message.groundingNote || hasModelInfo;
   const showStatus = props.isLoading && !props.message.error;
 
@@ -1491,6 +1493,10 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
                     retryStatus={props.isLast ? props.agentRetryStatus : undefined}
                     waitingOn={props.isLast ? props.agentWaitingOn : undefined}
                     durationMs={props.message.agentStats?.durationMs}
+                    tokens={props.message.tokens?.total_tokens}
+                    surface={props.message.agentSurface ?? "project"}
+                    aiName={getSenderName()}
+                    folderName={props.message.isLoading ? props.agentFolderName : undefined}
                     undone={!!props.message.undone}
                     onUndoTurn$={
                       props.isLast && props.onUndoTurn$ && !props.message.undone

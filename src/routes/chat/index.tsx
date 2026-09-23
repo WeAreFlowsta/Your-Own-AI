@@ -1,4 +1,5 @@
 import { lastKnownEntitled } from "../../utils/entitlement";
+import { toggleAgentView } from "../../utils/agentView";
 /**
  * Chat Page (Qwik City route) - Main conversation interface
  * Migrated from React ChatPage.tsx
@@ -613,6 +614,32 @@ export default component$(() => {
         lastConversation.value = readLastConversation();
       }
     }
+  });
+
+  // Keyboard: Ctrl+O (Cmd+O on a Mac) flips Simple | Detailed for the
+  // surface in use; Esc stops a running turn. Neither fires while typing
+  // in a field, except Esc, which a person expects to work anywhere.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ cleanup }) => {
+    const onKey = (ev: KeyboardEvent) => {
+      const inField =
+        ev.target instanceof HTMLElement &&
+        (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA" || ev.target.isContentEditable);
+      if ((ev.ctrlKey || ev.metaKey) && !ev.shiftKey && !ev.altKey && ev.key.toLowerCase() === "o") {
+        if (inField && ev.target instanceof HTMLTextAreaElement) {
+          /* the composer: still ours - nothing else uses Ctrl+O in the app */
+        }
+        ev.preventDefault();
+        toggleAgentView(agentState.mode === "tools" ? "tools" : "project");
+        return;
+      }
+      if (ev.key === "Escape" && chatState.isLoading) {
+        ev.preventDefault();
+        void cancelTurn$();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    cleanup(() => window.removeEventListener("keydown", onKey));
   });
 
   // eslint-disable-next-line qwik/no-use-visible-task
@@ -1758,6 +1785,11 @@ export default component$(() => {
               liveStatus={agentState.liveStatus}
               agentRetryStatus={agentState.retryStatus || undefined}
               agentWaitingOn={agentState.waitingOn || undefined}
+              agentFolderName={
+                agentState.mode === "project" && agentState.folderPath
+                  ? agentState.folderPath.split(/[\\/]/).filter(Boolean).pop()
+                  : undefined
+              }
               onUndoTurn$={undoTurn$}
               onPermissionJump$={$(() => {
                 // Jump to the CARD, not the bottom of the chat - content
