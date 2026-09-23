@@ -310,6 +310,31 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
       return working && last?.type === "narration" ? last : null;
     });
 
+    // Detailed while working caps the rail's height with its own scroller.
+    // The page's own scroll follows the pearl (ChatContainer), but a nested
+    // scroller does not follow on its own: the newest rows sat out of view
+    // and the jump pill could not reach them (Eric, 09-23). It follows its
+    // bottom until the person scrolls up inside it; the pill re-arms it.
+    const railRef = useSignal<HTMLElement>();
+    const railFollow = useSignal(true);
+    // eslint-disable-next-line qwik/no-use-visible-task
+    useVisibleTask$(({ track, cleanup }) => {
+      track(() => flow.value);
+      const el = railRef.value;
+      if (el && railFollow.value) {
+        requestAnimationFrame(() => {
+          el.scrollTop = el.scrollHeight;
+        });
+      }
+      const onJump = () => {
+        railFollow.value = true;
+        const r = railRef.value;
+        if (r) r.scrollTop = r.scrollHeight;
+      };
+      window.addEventListener("yoai-rail-jump", onJump);
+      cleanup(() => window.removeEventListener("yoai-rail-jump", onJump));
+    });
+
     const flow = useComputed$<FlowElement[]>(() => {
       const items = trailingNarration.value ? log.slice(0, -1) : log;
       const out: FlowElement[] = [];
@@ -586,7 +611,13 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
 
         {/* The story: speech and work in the order they happened. Detailed
             caps the height so the reply below stays in reach. */}
-        <div class={`mt-2 flex flex-col gap-1 ${detailed.value && working ? "max-h-[70vh] overflow-y-auto" : ""}`}>
+        <div
+          ref={railRef}
+          class={`mt-2 flex flex-col gap-1 ${detailed.value && working ? "max-h-[70vh] overflow-y-auto" : ""}`}
+          onScroll$={(_, el) => {
+            railFollow.value = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+          }}
+        >
           {flow.value.map((el) => {
             if (el.kind === "notice") {
               return (

@@ -130,6 +130,9 @@ export default component$<ChatContainerProps>((props) => {
 
   const jumpToTip = $(() => {
     tipAttached.value = true;
+    // The rail's own scroller (Detailed while working) jumps to its newest
+    // row too, or the page lands on the pearl with the rows still hidden.
+    window.dispatchEvent(new CustomEvent("yoai-rail-jump"));
     tipRef.value?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   });
 
