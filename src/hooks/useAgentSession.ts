@@ -1090,12 +1090,16 @@ export function useAgentSession(props: UseAgentSessionProps) {
           : always
             ? ["reject_always", "reject_once"]
             : ["reject_once", "reject_always"];
+      // A desktop-class client is offered one extra option first: switch
+      // the whole session to approve-everything. Never pick it here - the
+      // card's "always" is a grant for THIS action, nothing wider.
+      const choices = perm.options.filter((o) => o.optionId !== "enable-always-approve");
       let option = undefined as (typeof perm.options)[number] | undefined;
       for (const k of wantKinds) {
-        option = perm.options.find((o) => o.kind === k);
+        option = choices.find((o) => o.kind === k);
         if (option) break;
       }
-      option ??= perm.options[0];
+      option ??= choices[0];
       if (!option) return;
 
       const scoped = option.kind?.endsWith("always");

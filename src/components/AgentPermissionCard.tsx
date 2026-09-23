@@ -95,7 +95,7 @@ export const AgentPermissionCard = component$<AgentPermissionCardProps>(
       });
     });
 
-    const alwaysOption = permission.options.find((o) => o.kind === "allow_always");
+    const alwaysOption = permission.options.find((o) => o.kind === "allow_always" && o.optionId !== "enable-always-approve");
     const alwaysLabel = alwaysOption?.name.toLowerCase().includes("session")
       ? "Don't ask again for edits this session"
       : "Don't ask again for this in this project";
