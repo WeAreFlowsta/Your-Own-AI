@@ -207,6 +207,15 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   downloaded, and then could not run.
 
 ### Tools
+- Your Own AI Build 0.4.0. The agent behind projects and tools is
+  rebuilt on the latest upstream: sessions open faster because model and
+  tool connections start in the background, the first reply comes sooner,
+  background commands report as live tasks with streaming output, helpers
+  (subagents) carry their own label and can be messaged, tool results
+  from MCP servers arrive as structured data, and waits on long tasks
+  allow up to an hour instead of ten minutes. Nothing about what the
+  agent sends anywhere changed: it still talks only to this app's local
+  server.
 - "Add your own" asks for a few things you would say to use the tool
   (optional, one per line), so a chat message that sounds like one reaches
   it and small talk does not; a tool without them is judged by its
