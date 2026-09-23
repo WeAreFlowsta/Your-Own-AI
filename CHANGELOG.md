@@ -146,6 +146,22 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   to set.
 
 ### Projects
+- Every step in the rail is named after what it is. A wait says what it
+  waits for ("Waiting for generate-articles.sh"), a stop names the task
+  it stopped, a helper is "Started a helper: <its task>", a web search
+  carries its query and a web page its address, a tool from Obsidian or
+  Logseq says so, a skill names itself, and a command the AI described is
+  labelled by that description. "Waiting for a background task" is gone:
+  the label is decided by a table keyed by the tool's own name, with the
+  agent's title as the last fallback, and a later update can only replace
+  a label with one at least as specific. Finished steps read in the past
+  tense ("Read package.json"). A build check holds the table to events
+  captured from real sessions, so this cannot quietly regress.
+- The record of a turn keeps more of the truth: each step's tool name,
+  server, start and end times, the last line a background task printed,
+  and why a failed step failed. The size ladder now keeps the AI's spoken
+  words when a very long turn has to be trimmed; only the steps in the
+  middle go.
 - When a tools session warns that the model's window is small, it now says
   why: a context pinned in Fine-tune is named as the cause, with where to
   change it; a machine that cannot afford more gets the other advice

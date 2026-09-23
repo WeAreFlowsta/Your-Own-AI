@@ -279,6 +279,26 @@ export interface AgentAction {
   /** For a wait step: the tool-call ids of the backgrounded tasks it is
    *  blocked on - the terminal logs the tailer should read for it. */
   waitFor?: string[];
+  /** The label once the step is done: "Read package.json". */
+  labelDone?: string;
+  /** The rail's icon kind (actionLabels.ts). */
+  icon?: string;
+  /** The tool's wire name, kept so the icon table works on reopen. */
+  name?: string;
+  /** The MCP server behind a `use_tool` call. */
+  server?: string;
+  /** Wall-clock start and end, ms since the epoch. */
+  startedAt?: number;
+  endedAt?: number;
+  /** The last line a background task printed - kept in the record (200
+   *  chars) so a reopened turn still says what the task last did. */
+  lastLine?: string;
+  /** Why a failed step failed, from what the agent returned (500 chars). */
+  error?: string;
+  /** The helper (subagent) this step ran inside, when it did. */
+  parent?: string;
+  /** How specific the label is (actionLabels.ts); live only, never saved. */
+  specificity?: number;
 }
 
 export interface AgentActionDiff {

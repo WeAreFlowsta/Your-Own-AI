@@ -490,7 +490,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                         />
                         <div class="flex min-w-0 max-w-full overflow-hidden items-baseline gap-2">
                         <span class="min-w-0 truncate whitespace-nowrap">
-                          {a.label}
+                          {a.status === "completed" && a.labelDone ? a.labelDone : a.label}
                         </span>
                         {a.diff ? (
                           <span class="shrink-0">

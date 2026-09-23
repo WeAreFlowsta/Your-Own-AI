@@ -16,6 +16,8 @@
  */
 
 import { skillNameFromPath } from "../utils/skills";
+import { describeAction, subjectOfLabel, errorOf } from "../utils/actionLabels";
+import { MCP_PRESETS } from "../utils/mcp";
 import { $, useSignal, useStore, useVisibleTask$, type Signal } from "@builder.io/qwik";
 import { v4 as uuidv4 } from "uuid";
 import { startConversation, recordMessage, waitForHolochainReady } from "../utils/holochainTranscripts";
@@ -272,92 +274,6 @@ function extractDiff(content: unknown): AgentActionDiff | undefined {
   };
 }
 
-const basename = (p: string) => p.split("/").filter(Boolean).pop() || p;
-
-/** Humanized step label + expandable detail from the tool call's real
- *  input (the `x.ai/tool` meta carries name/kind/label/input; rawInput is
- *  the fallback). "List `.`" becomes "Looking through the folder". */
-function humanizeAction(update: any): { label: string; kind?: string; detail?: string; waitFor?: string[] } {
-  const meta = update?._meta?.["x.ai/tool"] ?? {};
-  const input = { ...(update.rawInput ?? {}), ...(meta.input ?? {}) };
-  const kind: string | undefined = meta.kind || update.kind;
-  const path = input.path || input.target_file || input.file;
-  const dir = input.directory || input.target_directory;
-  const cmd = input.command;
-  const term = input.query || input.pattern || input.regex;
-  switch (kind) {
-    case "list":
-      return {
-        kind,
-        label:
-          dir && dir !== "." ? `Looking through ${basename(dir)}/` : "Looking through the project",
-        detail: dir,
-      };
-    case "read": {
-      // A file inside an installed skill: say which skill is in use.
-      const skill = skillNameFromPath(path);
-      if (skill) return { kind, label: `Using skill: ${skill} (${basename(path)})`, detail: path };
-      return { kind, label: path ? `Reading ${basename(path)}` : "Reading files", detail: path };
-    }
-    case "edit":
-    case "write":
-      return { kind, label: path ? `Editing ${basename(path)}` : "Editing files", detail: path };
-    case "delete":
-      return { kind, label: path ? `Deleting ${basename(path)}` : "Deleting files", detail: path };
-    case "search":
-    case "grep":
-      return {
-        kind,
-        label: term ? `Searching for "${term}"` : "Searching the project",
-        detail: term,
-      };
-    case "execute":
-      return {
-        kind,
-        label: cmd ? `Running ${cmd.length > 48 ? cmd.slice(0, 45) + "..." : cmd}` : "Running a command",
-        detail: cmd,
-      };
-    case "fetch":
-      return { kind, label: input.url ? `Fetching ${input.url}` : "Fetching from the web", detail: input.url };
-    default: {
-      // The agent's "get output / wait" step (title "Background Task") is
-      // the WAIT, not the command: it blocks on task_ids that are the
-      // tool-call ids of earlier backgrounded execute steps - and those ids
-      // are exactly the terminal log filenames. Name it as a wait and carry
-      // the ids so the tailer can show the awaited task's live line HERE,
-      // where the eye is, instead of a bare "Background Task..".
-      const taskIds: string[] = Array.isArray(input.task_ids)
-        ? input.task_ids.filter((t: unknown) => typeof t === "string")
-        : typeof input.task_id === "string" ? [input.task_id] : [];
-      if (taskIds.length) {
-        return {
-          kind: "wait",
-          label: "Waiting for a background task",
-          detail: taskIds.length > 1 ? `${taskIds.length} tasks` : undefined,
-          waitFor: taskIds,
-        };
-      }
-      // `use_tool` is the agent's dispatch for MCP tools: the real tool
-      // lives in input.tool_name ("project-memory__remember_for_project"),
-      // while the title is just "Use Tool" - which the rail showed verbatim,
-      // hiding the one thing that mattered. Name the real tool; keep its
-      // arguments as the expandable detail.
-      const mcpName: string | undefined =
-        typeof input.tool_name === "string" ? input.tool_name : undefined;
-      if (mcpName) {
-        let detail: string | undefined;
-        try {
-          detail = input.tool_input && Object.keys(input.tool_input).length
-            ? JSON.stringify(input.tool_input, null, 1).slice(0, 400)
-            : undefined;
-        } catch { /* unserializable input - label alone */ }
-        return { kind: "mcp", label: humanizeMcpName(mcpName), detail };
-      }
-      const raw = meta.label || update.title || "Working...";
-      return { kind, label: raw.includes("__") ? humanizeMcpName(raw) : raw };
-    }
-  }
-}
 
 /** Pull the step's real result out of a completion update - directory
  *  trees, file text, command output - for the expandable view. */
@@ -550,13 +466,16 @@ export function useAgentSession(props: UseAgentSessionProps) {
     // not bulk), and a size ladder below guarantees the write fits.
     let items = (bubble.agentLog ?? []).map((i) => {
       if (i.type === "action") {
-        const { output: _output, diff, liveLine: _live, ...action } = i.action;
+        const { output: _output, diff, liveLine, specificity: _s, ...action } = i.action as any;
+        // The task's last printed line survives (200 chars) so a reopened
+        // turn still says what it last did; the full log stays on disk.
+        const lastLine = action.lastLine ?? (liveLine ? String(liveLine).slice(0, 200) : undefined);
         return {
           ...i,
           action: diff
             ? // Keep the receipt (path + counts), drop the heavy lines.
-              { ...action, diff: { path: diff.path, added: diff.added, removed: diff.removed } }
-            : action,
+              { ...action, lastLine, diff: { path: diff.path, added: diff.added, removed: diff.removed } }
+            : { ...action, lastLine },
         };
       }
       if (i.type === "thought" && i.text.length > 2000) {
@@ -599,18 +518,19 @@ export function useAgentSession(props: UseAgentSessionProps) {
       );
     }
     if (jsonSize(items) > LOG_BUDGET && items.length > 80) {
-      // Permission decisions are the audit trail - they survive the trim
-      // wherever they sat; only steps/narration in the middle are dropped.
+      // Permission decisions are the audit trail and narration is the
+      // spoken story - both survive the trim wherever they sat; only the
+      // steps in the middle are dropped.
       const head = items.slice(0, 40);
       const tail = items.slice(-40);
-      const middlePerms = items.slice(40, -40).filter((i) => i.type === "permission");
+      const middleKept = items.slice(40, -40).filter((i) => i.type === "permission" || i.type === "narration");
       items = [
         ...head,
-        ...middlePerms,
+        ...middleKept,
         {
           id: "log-trimmed",
           type: "narration" as const,
-          text: `.. ${items.length - 80 - middlePerms.length} steps trimmed to fit the transcript ..`,
+          text: `.. ${items.length - 80 - middleKept.length} steps trimmed to fit the transcript ..`,
         },
         ...tail,
       ];
@@ -1568,7 +1488,19 @@ export function useAgentSession(props: UseAgentSessionProps) {
         }));
       } else if (kind === "tool_call" || kind === "tool_call_update") {
         const toolCallId = update.toolCallId || uuidv4();
-        const human = humanizeAction(update);
+        // The subject of an earlier step in this turn, so a wait or a stop
+        // is named after the task it concerns ("Waiting for generate.sh").
+        const turnLog = props.chatState.messages.find((m) => m.id === turnId.value)?.agentLog ?? [];
+        const subjectOf = (id: string) => {
+          for (const item of turnLog) {
+            if (item.type === "action" && item.action.toolCallId === id) {
+              return subjectOfLabel(item.action.labelDone ?? item.action.label);
+            }
+          }
+          return undefined;
+        };
+        const serverLabel = (server: string) => MCP_PRESETS.find((m) => m.id === server)?.title;
+        const human = describeAction(update, { subjectOf, skillNameFromPath, serverLabel });
         // The agent's plan tool call (todo_write, kind "plan") is the same
         // information as the ACP plan update that renders the checklist -
         // a bare "Plan" action row on top of it is noise.
@@ -1579,6 +1511,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
         if (kind === "tool_call") state.sessionToolCalls += 1;
         const out = actionOutput(update);
         const diff = extractDiff(update.content);
+        const error = errorOf(update);
+        const finished = update.status === "completed" || update.status === "failed";
         if (!update.status || update.status === "in_progress" || update.status === "pending") {
           state.liveStatus = `${human.label}..`;
         } else {
@@ -1603,21 +1537,30 @@ export function useAgentSession(props: UseAgentSessionProps) {
           if (idx >= 0) {
             const prevItem = log[idx] as { id: string; type: "action"; action: any };
             const prev = prevItem.action;
+            // A later update replaces the label only with one at least as
+            // specific: a wait named after its task never gives way to a
+            // bare "Background Task", and a title never beats the table.
+            const upgrade = human.specificity >= (prev.specificity ?? 0);
             log[idx] = {
               ...prevItem,
               action: {
                 ...prev,
                 status: update.status || prev.status,
-                kind: human.kind ?? prev.kind,
-                // The first update often has the best label; only upgrade
-                // when the new one is more specific than the fallback.
-                label: human.label !== "Working..." ? human.label : prev.label,
+                kind: upgrade ? human.kind : prev.kind,
+                icon: upgrade ? human.icon : prev.icon,
+                label: upgrade ? human.label : prev.label,
+                labelDone: upgrade ? human.labelDone : prev.labelDone,
+                specificity: Math.max(human.specificity, prev.specificity ?? 0),
+                name: human.name ?? prev.name,
+                server: human.server ?? prev.server,
                 detail: human.detail ?? prev.detail,
                 locations: locations.length ? locations : prev.locations,
                 output: out.output ?? prev.output,
                 outputLines: out.outputLines ?? prev.outputLines,
                 diff: diff ?? prev.diff,
                 waitFor: human.waitFor ?? prev.waitFor,
+                endedAt: finished ? prev.endedAt ?? Date.now() : prev.endedAt,
+                error: error ?? prev.error,
               },
             };
           } else {
@@ -1627,12 +1570,20 @@ export function useAgentSession(props: UseAgentSessionProps) {
               action: {
                 toolCallId,
                 label: human.label,
+                labelDone: human.labelDone,
                 kind: human.kind,
+                icon: human.icon,
+                specificity: human.specificity,
+                name: human.name,
+                server: human.server,
                 status: update.status || "in_progress",
                 locations,
                 detail: human.detail,
                 diff,
                 waitFor: human.waitFor,
+                startedAt: Date.now(),
+                endedAt: finished ? Date.now() : undefined,
+                error,
                 ...out,
               },
             });
