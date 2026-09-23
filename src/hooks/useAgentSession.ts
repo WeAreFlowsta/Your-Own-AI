@@ -872,7 +872,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
                   ...i.action,
                   output: tail.trim(),
                   outputLines: lines.length,
-                  liveLine: alive.has(logId) ? last : undefined,
+                  liveLine: alive.has(logId) && i.action.status !== "completed" && i.action.status !== "failed" ? last : undefined,
                   lastLine: last ? last.slice(0, 200) : i.action.lastLine,
                 },
               };
@@ -1514,6 +1514,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
                   action: {
                     ...a,
                     status: failed ? "failed" : done ? "completed" : a.status,
+                    taskDone: done ? true : a.taskDone,
                     endedAt: done ? a.endedAt ?? Date.now() : a.endedAt,
                     lastLine: lastLine ?? a.lastLine,
                     liveLine: done ? undefined : a.liveLine,
@@ -1670,8 +1671,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
         const turnLog = props.chatState.messages.find((m) => m.id === turnId.value)?.agentLog ?? [];
         const subjectOf = (id: string) => {
           for (const item of turnLog) {
-            if (item.type === "action" && (item.action.toolCallId === id || item.action.taskId === id)) {
-              return subjectOfLabel(item.action.labelDone ?? item.action.label);
+            if (item.type === "action" && (item.action.toolCallId === id || item.action.taskId === id || item.action.helperId === id)) {
+              return item.action.helperId === id ? "the helper" : subjectOfLabel(item.action.labelDone ?? item.action.label);
             }
           }
           return undefined;
@@ -1725,6 +1726,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
               break;
             }
           }
+          if (idx < 0 && kind === "tool_call_update" && human.specificity === 0) return m;
           if (idx < 0 && kind === "tool_call") {
             // The agent runs its tools one after another: a new call means
             // every earlier step still marked running is over, unless it is
@@ -1754,11 +1756,14 @@ export function useAgentSession(props: UseAgentSessionProps) {
             // its start call returns (a backgrounded helper's call answers
             // "started"); its row ends on the harness's finished event.
             const holdHelper = prev.icon === "helper" && !!prev.helperId && !prev.helperDone && status === "completed";
+            // A backgrounded command's start call answers at once with its
+            // task id; the row runs until the harness reports the task ended.
+            const holdTask = !!(taskId ?? prev.taskId) && !prev.taskDone && status === "completed" && !refused;
             log[idx] = {
               ...prevItem,
               action: {
                 ...prev,
-                status: holdHelper ? prev.status : status || prev.status,
+                status: holdHelper || holdTask ? prev.status : status || prev.status,
                 parent: prev.parent ?? helperOf,
                 kind: upgrade ? human.kind : prev.kind,
                 taskId: taskId ?? prev.taskId,
@@ -1774,7 +1779,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
                 outputLines: out.outputLines ?? prev.outputLines,
                 diff: diff ?? prev.diff,
                 waitFor: human.waitFor ?? prev.waitFor,
-                endedAt: finished && !holdHelper ? prev.endedAt ?? Date.now() : prev.endedAt,
+                endedAt: finished && !holdHelper && !holdTask ? prev.endedAt ?? Date.now() : prev.endedAt,
                 // A finished step's live line is over: what a command
                 // printed stays behind the row, not under it.
                 liveLine: finished ? undefined : prev.liveLine,
@@ -2205,6 +2210,16 @@ export function useAgentSession(props: UseAgentSessionProps) {
           // their line; the tailer clears it when the log goes quiet.
           const dropLive = !!errorText && !i.action.waitFor?.length && i.action.liveLine !== undefined;
           if (!open && !dropLive) return i;
+          // What the harness has not ended outlives the turn: a backgrounded
+          // task, a helper. Their rows keep running until its word comes
+          // (or the turn died, when everything ends).
+          const outlives =
+            (!!i.action.taskId && !i.action.taskDone) ||
+            (i.action.icon === "helper" && !!i.action.helperId && !i.action.helperDone);
+          if (open && outlives && !errorText) {
+            uiLog(`[rail] turn end: ${i.action.toolCallId} outlives the turn (${i.action.taskId ? "task" : "helper"})`);
+            return i;
+          }
           return {
             ...i,
             action: {

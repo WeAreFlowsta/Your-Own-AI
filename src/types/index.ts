@@ -303,6 +303,8 @@ export interface AgentAction {
    *  the helper's session is known, and whether that helper has finished. */
   helperId?: string;
   helperDone?: boolean;
+  /** For a backgrounded command: the harness reported the task ended. */
+  taskDone?: boolean;
   /** For a backgrounded command: the task id the harness printed in its
    *  result; waits and kills name the task by this id. */
   taskId?: string;

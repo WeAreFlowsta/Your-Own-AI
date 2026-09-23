@@ -204,8 +204,10 @@ function rowsFor(items: GroupItem[], simple: boolean, waitLines: Record<string, 
 function stepState(a: AgentAction, working: boolean) {
   const failed = a.status === "failed";
   const running = a.status === "in_progress" || a.status === "pending";
-  const still = !working && a.liveLine !== undefined && !failed;
-  return { failed, running: running || still, still };
+  // Still running after the turn: only what the harness has not ended
+  // (a backgrounded task, a helper). A leftover live line is not a status.
+  const still = !working && running;
+  return { failed, running, still };
 }
 
 function elapsedOf(a: AgentAction, running: boolean, now: number): string | undefined {
