@@ -462,11 +462,26 @@ pub async fn start_build_agent(
         // reading room BEFORE the window is written into the agent's
         // config: reload at the rung that holds it when the machine can
         // afford it; say so plainly when it cannot.
-        // Every agent session needs reading room (AGENT_ROOM). The model
-        // that serves the turns is grown now when it is the loaded one;
-        // otherwise the switch to it holds the room (inference_server).
-        // Say plainly when the machine, or a pin, keeps it short.
-        {
+        let eag = eagerness.as_deref().unwrap_or("balanced");
+        let (agent_ctx, plan_ctx, local_window) = match ai_model.as_deref() {
+            Some(m) => {
+                let (a, local) = crate::router::agent_serving_window(&app_handle, m, eag, false).await;
+                let (p, _) = crate::router::agent_serving_window(&app_handle, m, eag, true).await;
+                (a, p, local)
+            }
+            None => {
+                let l = crate::llm::current_ctx_size() as u64;
+                (l, l, true)
+            }
+        };
+        // Every LOCALLY served session needs reading room (AGENT_ROOM). The
+        // model that serves the turns is grown now when it is the loaded
+        // one, else loaded now in the background. Say plainly when the
+        // machine, or a pin, keeps it short. An online-routed AI is not
+        // sized here (its window is the catalog's; 09-23 the "tight" hint
+        // fired on a million-token session).
+        let mut agent_ctx = agent_ctx;
+        if local_window {
             let serving = crate::router::local_agent_serving_model(&app_handle, ai_model.as_deref().unwrap_or("")).await;
             let loaded = app_handle.state::<crate::llm::LLMState>().current_model.lock().await.clone();
             if serving.is_some() && serving == loaded {
@@ -479,13 +494,15 @@ pub async fn start_build_agent(
                 let short = match &room {
                     Ok(r) if r.grew => {
                         log::info!("[agent] session: context grown to {} for the session's own instructions and tools", r.ctx);
+                        agent_ctx = r.ctx as u64;
                         None
                     }
                     Ok(r) if r.model.is_some() && (r.ctx as u64) < AGENT_ROOM => Some(r.ctx),
                     Ok(_) => None,
                     Err(e) => {
                         log::warn!("[agent] session: could not grow the context: {e}");
-                        Some(crate::llm::current_ctx_size())
+                        let have = crate::llm::current_ctx_size();
+                        if (have as u64) < AGENT_ROOM { Some(have) } else { None }
                     }
                 };
                 if let Some(ctx) = short {
@@ -527,18 +544,6 @@ pub async fn start_build_agent(
                 });
             }
         }
-        let eag = eagerness.as_deref().unwrap_or("balanced");
-        let (agent_ctx, plan_ctx, local_window) = match ai_model.as_deref() {
-            Some(m) => {
-                let (a, local) = crate::router::agent_serving_window(&app_handle, m, eag, false).await;
-                let (p, _) = crate::router::agent_serving_window(&app_handle, m, eag, true).await;
-                (a, p, local)
-            }
-            None => {
-                let l = crate::llm::current_ctx_size() as u64;
-                (l, l, true)
-            }
-        };
         AGENT_WINDOW.store(if local_window { agent_ctx } else { 0 }, Ordering::SeqCst);
         let device_workers = crate::router::device_subagents_enabled(&app_handle).await;
         // The AI's own model setting is the consent to go online: a pinned
