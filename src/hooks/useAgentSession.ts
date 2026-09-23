@@ -2218,7 +2218,10 @@ export function useAgentSession(props: UseAgentSessionProps) {
     const finishTurn = (errorText?: string) => {
       // Once per turn: turn_completed (with the informative error) and the
       // RPC response (with a generic "Internal error") both land here.
-      if (!props.chatState.isLoading) return;
+      if (!props.chatState.isLoading) {
+        uiLog("[rail] finishTurn skipped: loading already false");
+        return;
+      }
       void stampChecks(turnId.value, state.folderPath);
       notifyIfAway(turnId.value, !!errorText);
       mutateTurn((m) => {
@@ -2278,6 +2281,22 @@ export function useAgentSession(props: UseAgentSessionProps) {
       );
       recordTurnOnce(id);
       props.chatState.isLoading = false;
+      // Diagnostic (09-24): what every bubble holds once the dust settles -
+      // anything a row could still breathe from.
+      setTimeout(() => {
+        for (const m of props.chatState.messages) {
+          if (m.role !== "assistant" || !(m.agentLog ?? []).length) continue;
+          const rows = (m.agentLog ?? []).map((i) => {
+            if (i.type === "action") {
+              const a = i.action;
+              return `${a.status}:${(a.labelDone ?? a.label).slice(0, 24)}${a.liveLine !== undefined ? "+live" : ""}${a.taskId ? "+task" : ""}${a.parent ? "+child" : ""}`;
+            }
+            if (i.type === "thought") return `thought:${i.endedAt == null ? "OPEN" : "closed"}`;
+            return i.type;
+          });
+          uiLog(`[rail] 8 s after the end: bubble ${m.id.slice(0, 8)} loading=${!!m.isLoading} ${m.id === id ? "(this turn)" : ""} rows: ${rows.join(" | ")}`);
+        }
+      }, 8000);
       state.liveStatus = "";
       state.retryStatus = "";
       if (state.status === "working") state.status = "ready";
