@@ -1719,8 +1719,24 @@ export function useAgentSession(props: UseAgentSessionProps) {
         // A call the harness refused ("Tool `x` was not executed: …") is a
         // failed step whatever status rode the update.
         const refused = !!out.output && /was not executed/i.test(out.output);
-        const status = refused ? "failed" : update.status;
-        const error = refused ? out.output!.slice(0, 500) : errorOf(update);
+        // The harness reports a command that exited non-zero, timed out or
+        // was killed as a COMPLETED call with the facts in its raw output
+        // (`exit_code`, `timed_out`, `signal`; 09-24: `exit 3` read as done).
+        // That is a failed step, with what it printed as the reason.
+        const ro = update.rawOutput;
+        const exitCode = ro && typeof ro === "object" && typeof ro.exit_code === "number" ? (ro.exit_code as number) : undefined;
+        const timedOut = !!(ro && typeof ro === "object" && ro.timed_out);
+        const signal = ro && typeof ro === "object" && typeof ro.signal === "string" ? (ro.signal as string) : undefined;
+        const commandFailed = (exitCode !== undefined && exitCode !== 0) || timedOut || !!signal;
+        const status = refused || commandFailed ? "failed" : update.status;
+        const error = refused
+          ? out.output!.slice(0, 500)
+          : commandFailed
+            ? [
+                (out.output ?? "").trim().split("\n").filter(Boolean).slice(-3).join("\n"),
+                timedOut ? "The command timed out." : signal ? `Stopped by ${signal}.` : `Exit code ${exitCode}.`,
+              ].filter(Boolean).join("\n").slice(0, 500)
+            : errorOf(update);
         const finished = status === "completed" || status === "failed";
         uiLog(`[rail] ${kind} ${human.name ?? update.name ?? "?"} ${status ?? "-"} ${toolCallId}${taskId ? ` task ${taskId}` : ""}${helperOf ? ` in helper ${helperOf}` : ""}`);
         if (!status || status === "in_progress" || status === "pending") {
@@ -2281,40 +2297,6 @@ export function useAgentSession(props: UseAgentSessionProps) {
       );
       recordTurnOnce(id);
       props.chatState.isLoading = false;
-      // Diagnostic (09-24): what every bubble holds once the dust settles -
-      // anything a row could still breathe from.
-      setTimeout(() => {
-        for (const m of props.chatState.messages) {
-          if (m.role !== "assistant" || !(m.agentLog ?? []).length) continue;
-          const rows = (m.agentLog ?? []).map((i) => {
-            if (i.type === "action") {
-              const a = i.action;
-              return `${a.status}:${(a.labelDone ?? a.label).slice(0, 24)}${a.liveLine !== undefined ? "+live" : ""}${a.taskId ? "+task" : ""}${a.parent ? "+child" : ""}`;
-            }
-            if (i.type === "thought") return `thought:${i.endedAt == null ? "OPEN" : "closed"}`;
-            return i.type;
-          });
-          uiLog(`[rail] 8 s after the end: bubble ${m.id.slice(0, 8)} loading=${!!m.isLoading} ${m.id === id ? "(this turn)" : ""} rows: ${rows.join(" | ")}`);
-        }
-        // The DOM's own word: what is still animating, and on what.
-        try {
-          const running = Array.from(document.querySelectorAll(".action-icon-running")).map((el) => {
-            const row = el.closest("button") ?? el.parentElement;
-            return (row?.textContent ?? "").trim().slice(0, 40);
-          });
-          uiLog(`[rail] 8 s after the end: ${running.length} icon(s) carry the running class: ${running.join(" | ")}`);
-          const anims = (document.getAnimations?.() ?? []).map((an) => {
-            const eff = an.effect as KeyframeEffect | null;
-            const t = eff?.target as Element | null;
-            const name = (an as CSSAnimation).animationName ?? an.id ?? "?";
-            const row = t?.closest?.("button") ?? t?.parentElement;
-            return `${name} on <${t?.tagName?.toLowerCase() ?? "?"} class="${(t?.getAttribute?.("class") ?? "").slice(0, 60)}"> "${(row?.textContent ?? "").trim().slice(0, 30)}"`;
-          });
-          uiLog(`[rail] 8 s after the end: ${anims.length} animation(s): ${anims.join(" || ")}`);
-        } catch (e) {
-          uiLog(`[rail] 8 s after the end: DOM check failed: ${String(e)}`);
-        }
-      }, 8000);
       state.liveStatus = "";
       state.retryStatus = "";
       if (state.status === "working") state.status = "ready";
