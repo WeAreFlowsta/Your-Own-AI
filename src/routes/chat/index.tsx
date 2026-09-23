@@ -1663,6 +1663,8 @@ export default component$(() => {
             agentState.status === "idle" || agentState.mode === "tools" ? undefined : agentState.status
           }
           onCloseFolder$={handleCloseFolder}
+          folderWaiting={agentState.mode !== "tools" && !!agentState.pendingPermissionId}
+          folderDone={agentState.mode !== "tools" && agentState.status === "ready" && !!agentState.lastFinishedAt}
           permissionMode={agentState.permissionMode}
           onSetPermissionMode$={setPermissionMode$}
           autoPermissionsSupported={agentState.autoPermissionsSupported}

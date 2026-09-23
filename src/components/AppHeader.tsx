@@ -83,6 +83,10 @@ interface AppHeaderProps {
   folderPath?: string | null;
   /** Agent session status while a folder is open. */
   folderStatus?: 'starting' | 'ready' | 'working' | 'stopped';
+  /** A permission card is waiting for the person's answer. */
+  folderWaiting?: boolean;
+  /** The last turn finished and nothing has been sent since. */
+  folderDone?: boolean;
   /** Close the workspace (the route confirms first if the agent is mid-task). */
   onCloseFolder$?: QRL<() => void>;
   /** This project's permission mode (ask = default; auto = ordinary project
@@ -135,6 +139,8 @@ export default component$<AppHeaderProps>(
     showModelWidget = false,
     folderPath = null,
     folderStatus,
+    folderWaiting = false,
+    folderDone = false,
     onCloseFolder$,
     permissionMode = 'ask',
     onSetPermissionMode$,
@@ -348,13 +354,34 @@ export default component$<AppHeaderProps>(
                   class={`w-2 h-2 rounded-full shrink-0 ${
                     folderStatus === 'stopped'
                       ? 'bg-red-500'
-                      : folderStatus === 'starting'
-                        ? 'bg-orange-500 animate-pulse'
-                        : folderStatus === 'working'
-                          ? 'bg-green-500 animate-pulse'
-                          : 'bg-green-500'
+                      : folderWaiting
+                        ? 'bg-orange-500'
+                        : folderStatus === 'starting'
+                          ? 'bg-orange-500 animate-pulse'
+                          : folderStatus === 'working'
+                            ? 'bg-green-500 animate-pulse'
+                            : 'bg-green-500'
                   }`}
                 />
+                {/* The word for the dot: what the project is doing right now,
+                    readable from across the room. Nothing while idle. */}
+                {(folderWaiting || folderStatus === 'working' || folderStatus === 'starting' || folderStatus === 'stopped' || folderDone) && (
+                  <span
+                    class={`shrink-0 text-[10px] uppercase tracking-wide ${
+                      folderWaiting ? 'text-[var(--text-link)]' : 'text-[var(--text-muted)]'
+                    }`}
+                  >
+                    {folderWaiting
+                      ? 'waiting for you'
+                      : folderStatus === 'working'
+                        ? 'running'
+                        : folderStatus === 'starting'
+                          ? 'starting'
+                          : folderStatus === 'stopped'
+                            ? 'stopped'
+                            : 'done'}
+                  </span>
+                )}
                 {/* Full path when there's room, keeping the leaf end when
                     there isn't (rtl clip = ellipsis at the start). */}
                 <span

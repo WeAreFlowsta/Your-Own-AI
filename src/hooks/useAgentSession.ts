@@ -63,6 +63,9 @@ export interface AgentSessionState {
   mode: "project" | "tools" | null;
   /** The AI a tools session belongs to - another AI's turns never ride it. */
   sessionAiId: string | null;
+  /** When the last turn finished cleanly; null once the next one is sent.
+   *  The folder chip says "done" while it is set. */
+  lastFinishedAt: number | null;
   /** The tool set the open tools session started with (joined names) - a
    *  changed set opens a fresh session, since the harness fixes tools at start. */
   sessionTools: string;
@@ -320,6 +323,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     folderPath: null,
     mode: null,
     sessionAiId: null,
+    lastFinishedAt: null,
     sessionTools: "",
     sessionToolsSig: "",
     sessionToolCalls: 0,
@@ -660,6 +664,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
   /** Send a prompt into the live session (session must be ready). */
   const dispatchPrompt = $(async (text: string) => {
     state.status = "working";
+    state.lastFinishedAt = null;
     state.liveStatus = "Thinking..";
     props.chatState.isLoading = true;
     // A turn in flight is lost if the chat page unmounts (its listeners go
@@ -1037,6 +1042,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.folderPath = null;
     state.mode = null;
     state.sessionAiId = null;
+    state.lastFinishedAt = null;
     state.sessionTools = "";
     state.sessionToolsSig = "";
     state.sessionToolCalls = 0;
@@ -2306,6 +2312,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       state.retryStatus = "";
       if (state.status === "working") state.status = "ready";
       if (!errorText) {
+        state.lastFinishedAt = Date.now();
         sessionTurns.value++;
         sessionDigest.value = buildResumeDigest(props.chatState.messages);
         // Quit-proof: keep the digest on disk as we go. A cancel or app
