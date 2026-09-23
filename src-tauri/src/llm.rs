@@ -1287,6 +1287,127 @@ fn helper_has_ram_room(app: &AppHandle, file: &str, ctx: u64, what: &'static str
 static EMBED_NO_ROOM_SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static UTIL_NO_ROOM_SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Linux only: the kernel's own memory-pressure figure, the share of the
+/// last ten seconds in which EVERY task was stalled on memory (swapping,
+/// page-cache thrash). Elsewhere `None`: those systems decide on free
+/// memory alone.
+fn memory_pressure_full_avg10() -> Option<f64> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    parse_pressure_full_avg10(&std::fs::read_to_string("/proc/pressure/memory").ok()?)
+}
+
+/// The `full avg10=` figure of a `/proc/pressure/memory` text.
+fn parse_pressure_full_avg10(text: &str) -> Option<f64> {
+    let line = text.lines().find(|l| l.starts_with("full"))?;
+    line.split_whitespace()
+        .find_map(|kv| kv.strip_prefix("avg10="))
+        .and_then(|v| v.parse::<f64>().ok())
+}
+
+#[cfg(test)]
+mod pressure_tests {
+    #[test]
+    fn reads_the_full_line_only() {
+        let text = "some avg10=5.04 avg60=22.84 avg300=20.77 total=205240675
+full avg10=4.82 avg60=21.13 avg300=19.31 total=191466652
+";
+        assert_eq!(super::parse_pressure_full_avg10(text), Some(4.82));
+        assert_eq!(super::parse_pressure_full_avg10("some avg10=1.0
+"), None);
+        assert_eq!(super::parse_pressure_full_avg10(""), None);
+    }
+}
+
+/// Below this much free memory, for two readings in a row, the machine is
+/// short (the same margin a helper must leave when it starts).
+const GIVE_BACK_FREE_GB: f64 = HELPER_RAM_MARGIN_GB;
+/// Above this share of stalled time the machine is thrashing, whatever the
+/// free figure says (the dev box read 21 with the swap full, 2 at rest).
+const GIVE_BACK_PRESSURE: f64 = 10.0;
+/// A helper worth giving back: the memory model holds ~0.2 GB and is
+/// asked for on every turn, so it stays; the helper model holds ~2.7.
+const GIVE_BACK_MIN_GB: f64 = 0.5;
+
+/// The verdict from one reading: short when free memory has sat under the
+/// margin for two readings in a row, or when the kernel reports the machine
+/// stalled on memory. Returns the verdict and the updated low-reading count.
+fn machine_is_short(free_gb: f64, pressure: Option<f64>, low_readings: u8) -> (bool, u8) {
+    let low = if free_gb < GIVE_BACK_FREE_GB { low_readings.saturating_add(1) } else { 0 };
+    (low >= 2 || pressure.map(|p| p >= GIVE_BACK_PRESSURE).unwrap_or(false), low)
+}
+
+#[cfg(test)]
+mod give_back_tests {
+    use super::machine_is_short;
+    #[test]
+    fn two_low_readings_or_kernel_pressure() {
+        assert_eq!(machine_is_short(8.0, Some(2.0), 0), (false, 0));
+        assert_eq!(machine_is_short(0.5, Some(2.0), 0), (false, 1), "one low reading is not yet short");
+        assert_eq!(machine_is_short(0.5, Some(2.0), 1), (true, 2), "two in a row are");
+        assert_eq!(machine_is_short(3.0, Some(21.0), 0), (true, 0), "the kernel's stall figure alone is enough");
+        assert_eq!(machine_is_short(3.0, None, 1), (false, 0), "a good reading resets the count");
+        assert_eq!(machine_is_short(0.5, None, 5), (true, 6));
+    }
+}
+
+/// A helper that had room when it started keeps its memory while the rest
+/// of the machine runs short (the dev box 2026-09-23: the browser grew,
+/// the swap filled, the chat model's weights were paged out and read back
+/// on every reply). This watch reads the machine every ten seconds and,
+/// under pressure, stops an IDLE helper on the processor and says so; it
+/// starts again on demand, through the same room check as any start.
+pub(crate) fn start_memory_pressure_watch(app: &AppHandle) {
+    use std::sync::atomic::Ordering::SeqCst;
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut low_readings = 0u8;
+        let mut last_gave_back: Option<std::time::Instant> = None;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            let free_gb = available_memory_bytes() as f64 / 1024f64.powi(3);
+            let pressure = memory_pressure_full_avg10();
+            let short;
+            (short, low_readings) = machine_is_short(free_gb, pressure, low_readings);
+            if !short {
+                continue;
+            }
+            if last_gave_back.map(|t| t.elapsed().as_secs() < 60).unwrap_or(false) {
+                continue;
+            }
+            let st = app.state::<LLMState>();
+            let Some(util_file) = st.util_model.lock().await.clone() else { continue };
+            if !*st.util_running.lock().await || *st.util_place.lock().await != HelperPlace::Cpu {
+                continue;
+            }
+            let held = helper_ram_need_gb(&app, &util_file, UTIL_CTX).unwrap_or(0.0);
+            if held < GIVE_BACK_MIN_GB {
+                continue;
+            }
+            // Under the start lock so a start in progress finishes first and
+            // a request arriving now waits for the stop, then restarts it
+            // through the room check.
+            let _startup = st.util_startup.lock().await;
+            if UTIL_INFLIGHT.load(SeqCst) > 0 || !*st.util_running.lock().await {
+                continue;
+            }
+            stop_utility_server_inner(&st).await;
+            drop(_startup);
+            last_gave_back = Some(std::time::Instant::now());
+            low_readings = 0;
+            log::warn!(
+                "[helpers] helper model stopped to give back {held:.2} GB: {free_gb:.2} GB of memory was free{} - it starts again when needed and there is room",
+                pressure.map(|p| format!(", {p:.0}% of the last ten seconds stalled on memory")).unwrap_or_default()
+            );
+            let _ = app.emit(
+                "helper-gave-back",
+                serde_json::json!({ "what": "helper model", "held_gb": held, "free_gb": free_gb }),
+            );
+        }
+    });
+}
+
 /// A helper that came up on the processor: record what it holds, read from
 /// the OS by pid (resident memory - the same figure a task manager shows).
 /// A card placement has been measured since the first build; a processor

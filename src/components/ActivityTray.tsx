@@ -174,6 +174,19 @@ export const ActivityTray = component$(() => {
       linger(`note:${n.id}`, n.ttlMs ?? 0);
     };
     window.addEventListener(ACTIVITY_EVENT, onNote);
+    // A helper on the processor gave its memory back because the computer
+    // ran short; it returns on its own when there is room.
+    const unGaveBack = await listen<{ what: string; held_gb: number; free_gb: number }>("helper-gave-back", (e) => {
+      const p = e.payload;
+      upsert("note:helper-gave-back", {
+        kind: "note",
+        title: "Helper model paused",
+        detail: `Memory ran short (${p.free_gb.toFixed(1)} GB free), so it gave back ${p.held_gb.toFixed(1)} GB. It returns when there is room.`,
+        state: "done",
+        percent: null,
+      });
+      linger("note:helper-gave-back", LINGER_MS * 2);
+    });
 
     cleanup(() => {
       unProgress();
@@ -182,6 +195,7 @@ export const ActivityTray = component$(() => {
       unCorpus();
       unCards();
       window.removeEventListener(ACTIVITY_EVENT, onNote);
+      unGaveBack();
       for (const t of timers.values()) clearTimeout(t);
     });
   });

@@ -28,6 +28,14 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   replies, the memory portrait and document cards. See *Models*.
 
 ### Models
+- A helper on the processor gives its memory back when the computer runs
+  short. A helper checked for room only when it started; if the rest of
+  the machine grew afterwards, it kept its memory while the system swapped
+  (the chat model's own weights were paged out and read back on every
+  reply). The app now reads free memory every ten seconds, and on Linux
+  the kernel's pressure figure too, and under sustained pressure stops an
+  idle helper model, says so in the activity tray, and starts it again on
+  demand once there is room.
 - Two requests no longer trip over each other on a local model. Each
   local server takes one request at a time - the reply included - so a
   request always has the whole context window; two together used to fail
