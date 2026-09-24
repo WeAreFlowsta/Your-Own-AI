@@ -1804,6 +1804,14 @@ pub fn set_agent_online_override(model: Option<String>) {
     }
 }
 
+/// The local model agent work would run on right now (quality first among
+/// the models that run here) - so a turn that struggled on a PINNED smaller
+/// model can name the better one this computer already has.
+#[tauri::command]
+pub async fn agent_best_local(app: AppHandle) -> Option<String> {
+    agent_local_pick(&app, "code", "balanced").await
+}
+
 #[derive(serde::Serialize)]
 pub struct AgentAlternate {
     /// What agent routing picks right now (the model that just failed).

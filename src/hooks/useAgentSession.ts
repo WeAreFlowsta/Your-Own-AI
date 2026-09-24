@@ -20,6 +20,7 @@ import { describeAction, subjectOfLabel, errorOf } from "../utils/actionLabels";
 import { MCP_PRESETS } from "../utils/mcp";
 import { summaryOf } from "../utils/agentSummary";
 import { uiLog } from "../utils/uiLog";
+import { lastKnownEntitled } from "../utils/entitlement";
 import { $, useSignal, useStore, useVisibleTask$, type Signal } from "@builder.io/qwik";
 import { v4 as uuidv4 } from "uuid";
 import { startConversation, recordMessage, waitForHolochainReady } from "../utils/holochainTranscripts";
@@ -108,6 +109,8 @@ export interface AgentSessionState {
   waitingOn: string;
   /** The last route event said the person's own server serves this turn. */
   lastRouteServer: boolean;
+  /** The struggle notice has been shown this session (once is enough). */
+  struggleShown: boolean;
   /** Why routing picked the serving model (from the agent-route event). */
   routeReason: string;
   /** Generation tok/s of the latest model call, from the engine's own timings. */
@@ -343,6 +346,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     retryStatus: "",
     waitingOn: "",
     lastRouteServer: false,
+    struggleShown: false,
     routeReason: "",
     /** Generation tok/s of the latest model call, from the engine's own timings. */
     lastCallTps: 0,
@@ -660,6 +664,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
    *  start plus the search took ~3 s on 09-23 with nothing on screen, while
    *  a direct chat moves at once). sendPrompt$ then fills in the rest. */
   const prepared = useSignal(false);
+  /** A turn that struggled on a pinned local model, awaiting the better name. */
+  const strugglePinned = useSignal<{ turnId: string; model: string } | null>(null);
   /** Skill name (lower case) -> glyph name, from the installed skills. */
   const skillGlyphs = useSignal<Record<string, string>>({});
   const prepareTurn$ = $(async (text: string, files?: string[]) => {
@@ -794,6 +800,11 @@ export function useAgentSession(props: UseAgentSessionProps) {
 
   const dismissOverloadOffer$ = $(() => {
     state.overloadOffer = null;
+  });
+
+  /** Send the last prompt again (after a setting changed what serves it). */
+  const resendLast$ = $(async () => {
+    if (lastPrompt.value && state.status === "ready") await sendPrompt$(lastPrompt.value);
   });
 
   // Live background-task visibility. The terminal log is the truth and it
@@ -1066,6 +1077,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.sessionAiId = null;
     state.lastFinishedAt = null;
     state.smallCoder = false;
+    state.struggleShown = false;
     state.sessionTools = "";
     state.sessionToolsSig = "";
     state.sessionToolCalls = 0;
@@ -2343,6 +2355,60 @@ export function useAgentSession(props: UseAgentSessionProps) {
             },
           };
         });
+        // A small model struggling shows on the record: two or more steps
+        // that ended red (our own faults excluded - a refusal, a server
+        // away, a tool that never started), or a tools turn that never got
+        // one tool call to work. Said once per session, in plain words,
+        // with the way up (Eric, 09-24). The pinned-smaller case is filled
+        // in below, once the best local model is known.
+        if (!state.struggleShown && !state.smallCoder) {
+          const ourFault = (e: string | undefined) =>
+            !!e && /was not executed|did not answer|stopped answering|didn't start|not connected/i.test(e);
+          let red = 0;
+          let toolOk = false;
+          for (const i of log) {
+            if (i.type !== "action") continue;
+            if (i.action.status === "failed" && !ourFault(i.action.error)) red++;
+            if (i.action.icon === "mcp" && i.action.status === "completed") toolOk = true;
+          }
+          const toolsTurn = state.mode === "tools" && !!state.sessionTools;
+          const struggled = red >= 2 || (toolsTurn && !toolOk);
+          const aiModel = props.selectedAi.value.aiConfig?.model || "";
+          const offline = aiModel === "auto:offline" || aiModel === "auto:my-hardware" || aiModel.toLowerCase().endsWith(".gguf");
+          if (struggled && offline) {
+            state.struggleShown = true;
+            let entitled: "yes" | "no" | null = null;
+            try {
+              entitled = lastKnownEntitled();
+            } catch {
+              /* unknown */
+            }
+            const pinned = aiModel.toLowerCase().endsWith(".gguf");
+            if (pinned) {
+              // Filled in below: the better local model, if there is one.
+              strugglePinned.value = { turnId: m.id, model: aiModel };
+            } else if (entitled === "yes") {
+              log = [
+                ...log,
+                {
+                  id: `hint-struggle-online-${m.id}`,
+                  type: "notice" as const,
+                  text: "Your AI found this hard on the models this computer can run. Your plan's online models handle tasks like this in one go.",
+                },
+              ];
+            } else {
+              log = [
+                ...log,
+                {
+                  id: `hint-struggle-door-${m.id}`,
+                  type: "notice" as const,
+                  text: "Your AI found this hard. Tasks like this need more than the models this computer can run. Online models do them in one go. They are an optional paid service, and everything offline stays free.",
+                },
+              ];
+            }
+            uiLog(`[rail] struggle: ${red} red step(s), tools turn ${toolsTurn} ok ${toolOk}, ai ${aiModel}, entitled ${entitled}`);
+          }
+        }
         if (errorText && state.smallCoder) {
           // The door again, on the failure itself (the rail draws it under
           // any notice whose id starts with hint-small-coder).
@@ -2376,6 +2442,32 @@ export function useAgentSession(props: UseAgentSessionProps) {
       );
       recordTurnOnce(id);
       props.chatState.isLoading = false;
+      // The pinned-smaller case: name the better model this computer has.
+      if (strugglePinned.value) {
+        const { turnId: tid, model } = strugglePinned.value;
+        strugglePinned.value = null;
+        invokeTauri("agent_best_local")
+          .then((best) => {
+            if (typeof best !== "string" || !best || best.toLowerCase() === model.toLowerCase()) return;
+            const pretty = (f: string) => f.replace(/\.gguf$/i, "").replace(/-Q\d[^-]*$/i, "");
+            props.chatState.messages = props.chatState.messages.map((mm) =>
+              mm.id === tid
+                ? {
+                    ...mm,
+                    agentLog: [
+                      ...(mm.agentLog ?? []),
+                      {
+                        id: `hint-struggle-local-${tid}`,
+                        type: "notice" as const,
+                        text: `Your AI found this hard. It is set to ${pretty(model)}; ${pretty(best)} on this computer does better at tasks like this.`,
+                      },
+                    ],
+                  }
+                : mm,
+            );
+          })
+          .catch(() => {});
+      }
       state.liveStatus = "";
       state.retryStatus = "";
       if (state.status === "working") state.status = "ready";
@@ -2607,6 +2699,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     closeFolder$,
     sendPrompt$,
     prepareTurn$,
+    resendLast$,
     cancelTurn$,
     respondPermission$,
     answerPermissionByReply$,

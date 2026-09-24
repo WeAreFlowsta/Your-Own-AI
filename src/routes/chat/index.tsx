@@ -174,6 +174,7 @@ export default component$(() => {
     closeFolder$,
     sendPrompt$: sendAgentPrompt$,
     prepareTurn$: prepareAgentTurn$,
+    resendLast$: resendAgentLast$,
     cancelTurn$,
     respondPermission$,
     answerPermissionByReply$,
@@ -182,6 +183,26 @@ export default component$(() => {
     setPermissionMode$,
     undoTurn$,
   } = useAgentSession({ chatState, selectedAi });
+
+  // "Use online models for this AI" on a struggle notice: the AI's model
+  // setting becomes Auto - Online and Offline (the person's click is the
+  // consent, the same setting they would make in Edit) and the last
+  // prompt goes again.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ cleanup }) => {
+    const onGoOnline = async () => {
+      const id = selectedAi.value.aiConfig?.id;
+      if (!id) return;
+      try {
+        await updateCustomAi(id, { model: "auto:online-offline" });
+      } catch {
+        return;
+      }
+      await resendAgentLast$();
+    };
+    window.addEventListener("yoai-go-online", onGoOnline);
+    cleanup(() => window.removeEventListener("yoai-go-online", onGoOnline));
+  });
 
   // The permission the agent waits on right now, from the turn's own
   // record - shown above the input field by ChatContainer.

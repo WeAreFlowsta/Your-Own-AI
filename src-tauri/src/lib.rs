@@ -616,6 +616,7 @@ pub fn run() {
             engine::external_engine_info,
             engine::remove_external_engine,
             router::route_model,
+            router::agent_best_local,
             router::is_medical_query,
             router::routing_specialist_tasks,
             router::routing_defaults,
