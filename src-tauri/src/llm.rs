@@ -5958,7 +5958,10 @@ pub async fn stream_chat_completion(
             .json(&request_body)
             .send()
             .await
-            .map_err(|e| format!("Failed to reach your external engine: {}", e))?
+            .map_err(|e| {
+                crate::engine::mark_external_failed();
+                format!("Your server did not answer ({e}). It is set aside for a minute - send again to use this computer.")
+            })?
     } else {
         client
             .post(format!("http://localhost:{}/v1/chat/completions", CHAT_PORT)).bearer_auth(local_api_key())

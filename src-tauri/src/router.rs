@@ -1118,7 +1118,7 @@ fn select_online_agent_slot(
 /// The local file that will serve this AI's agent turns (a pinned local
 /// file, else the agent pick for code work); None for an online AI.
 pub async fn local_agent_serving_model(app: &AppHandle, ai_model: &str) -> Option<String> {
-    if ai_model.starts_with("online:") {
+    if ai_model.starts_with("online:") || ai_model.starts_with("external:") {
         return None;
     }
     if ai_model.ends_with(".gguf") {
@@ -1174,8 +1174,13 @@ pub async fn agent_serving_window(
         }
         return (local, true);
     }
+    if ai_model.starts_with("external:") {
+        // The person's server: its window is its own; the harness's
+        // overflow handling covers a server that holds less.
+        return (crate::engine::EXTERNAL_CTX_DEFAULT, false);
+    }
     let Some(mode) = ai_model.strip_prefix("auto:") else {
-        return (local, true); // pinned local model (or external server): local truth
+        return (local, true); // pinned local model: local truth
     };
     if mode != "online-offline" {
         return (local, true);
@@ -1952,6 +1957,10 @@ async fn route_core(
 ) -> Result<RouteResult, String> {
     let share_owned = effective_share(app, share);
     let share = share_owned.as_str();
+    // The old "My Hardware" mode (this computer plus the person's server,
+    // never online) is gone: a connected server is offline hardware in BOTH
+    // Auto modes (09-24). AIs still set to it behave as Offline Only.
+    let mode: &str = if mode == "my-hardware" { "offline" } else { mode };
     // One embedding per decision. The chat path hands its vector in; API
     // callers and the preview/battery did not, and the three gates (health,
     // cue, semantic freshness) each embedded the query again - three round
@@ -1959,7 +1968,7 @@ async fn route_core(
     // hit the leg's time cap at 1,043 decisions).
     let embedded_here: Option<Vec<f32>> = match query_vec {
         Some(v) if !v.is_empty() => None,
-        _ if mode == "online-offline" || mode == "my-hardware" || !agent => {
+        _ if mode == "online-offline" || !agent => {
             let qtext = format!("{QUERY_INSTRUCTION}{query}");
             embed_guarded(app, vec![qtext]).await.ok().and_then(|mut v| v.pop())
         }
@@ -2282,53 +2291,6 @@ async fn route_core(
             }
         }
     }
-    // "My hardware": the local pick may hand off to the user's connected
-    // server when the scan shows a clearly stronger (or, on the speed lean,
-    // faster) RECOGNIZED model there. Never the online proxy in this mode;
-    // an unreachable server falls through to local at request time.
-    if mode == "my-hardware" {
-        let (ext_models, ext_tps) = crate::engine::external_models_cached(app);
-        if !ext_models.is_empty() {
-            let local = pick_offline_for(app, task, lean, false, turn_tokens).await.ok();
-            let local_cap = local
-                .as_deref()
-                .map(|m| crate::model_caps::caps_for(m).by_task(task));
-            // Only hand a chat to the server when it answers RIGHT NOW —
-            // otherwise fall through to the local pick, same graceful shape
-            // as the online fallthrough.
-            let want_external = best_external(&ext_models, task)
-                .filter(|(_, cap)| {
-                    external_beats_local(lean, local_cap, Some(*cap), ext_tps, None)
-                })
-                .map(|(id, _)| id)
-                .or_else(|| {
-                    if local.is_none() {
-                        ext_models.first().cloned() // rescue: nothing local runs
-                    } else {
-                        None
-                    }
-                });
-            if let Some(ext_id) = want_external {
-                if crate::engine::external_reachable(app).await {
-                    let why = if local.is_some() {
-                        "your server — stronger for this task"
-                    } else {
-                        "your server — no local model fits"
-                    };
-                    return Ok(RouteResult {
-                        think: None,
-                        model: format!("external:{}", ext_id),
-                        reason: why.to_string(),
-                    });
-                }
-                log::warn!("[Router] external engine unreachable — using the local pick");
-            }
-            if let Some(local) = local {
-                return Ok(RouteResult { think: None, model: local, reason: "offline".to_string() });
-            }
-        }
-        // No server connected (or nothing usable) — behave like offline-only.
-    }
 
     // Offline Only: a follow-up stays with the model that answered (a
     // coding thread keeps the coder even when the hint reads "general").
@@ -2337,25 +2299,87 @@ async fn route_core(
             return Ok(r);
         }
     }
-    let model = pick_offline_for(app, task, lean, false, turn_tokens).await?;
-    let reason = if medical {
+    // This computer or the person's own server: one offline hardware pool,
+    // weighed by the grade rule, whichever Auto mode (a health question may
+    // go to the person's own server - it is their hardware).
+    let pick = pick_device_or_server(app, task, lean, turn_tokens).await?;
+    let model = pick.model;
+    let reason = if model.starts_with("external:") {
+        pick.reason
+    } else if medical {
         // The visible promise: this is the receipt line users see. Name the
         // specialist when one took the question.
         if model.to_lowercase().contains("medgemma") {
-            "a health question — kept on your device, answered by your medical model"
+            "a health question — kept on your device, answered by your medical model".to_string()
         } else {
-            "a health question — kept on your device"
+            "a health question — kept on your device".to_string()
         }
     } else if mode == "online-offline" {
-        "offline — no fresh info needed"
+        "offline — no fresh info needed".to_string()
     } else {
-        "offline"
+        "offline".to_string()
     };
-    Ok(RouteResult {
-        think: None,
-        model,
-        reason: reason.to_string(),
-    })
+    Ok(RouteResult { think: None, model, reason })
+}
+
+/// The offline hardware pool: this computer, or the person's own server
+/// (Settings > Engines) when it holds a clearly stronger recognized model
+/// for the task (or, on the speed lean, a faster one), or when nothing
+/// local runs. Only when the server answers right now - otherwise the
+/// local pick, the same graceful shape as the online fallthrough.
+pub(crate) async fn pick_device_or_server(
+    app: &AppHandle,
+    task: &str,
+    lean: &str,
+    turn_tokens: Option<u32>,
+) -> Result<RouteResult, String> {
+    let local = pick_offline_for(app, task, lean, false, turn_tokens).await;
+    let (ext_models, ext_tps) = crate::engine::external_models_cached(app);
+    if !ext_models.is_empty() {
+        let local_cap = local
+            .as_deref()
+            .ok()
+            .map(|m| crate::model_caps::caps_for(m).by_task(task));
+        let want_external = best_external(&ext_models, task)
+            .filter(|(_, cap)| external_beats_local(lean, local_cap, Some(*cap), ext_tps, None))
+            .map(|(id, _)| id)
+            .or_else(|| if local.is_err() { ext_models.first().cloned() } else { None });
+        if let Some(ext_id) = want_external {
+            if crate::engine::external_reachable(app).await {
+                let why = if local.is_ok() {
+                    "your server — stronger for this task"
+                } else {
+                    "your server — no local model fits"
+                };
+                return Ok(RouteResult { think: None, model: format!("external:{ext_id}"), reason: why.to_string() });
+            }
+            log::warn!("[Router] your server is unreachable — using the local pick");
+        }
+    }
+    local.map(|model| RouteResult { think: None, model, reason: "offline".to_string() })
+}
+
+/// Settings > Routing "Project work runs on": the person's word over the
+/// grade rule, for agent turns only. "device" = never the server;
+/// "server" = the server's best recognized model whenever it answers;
+/// anything else = what the grade rule chose.
+pub(crate) async fn apply_project_server_pref(app: &AppHandle, model: String, task: &str, lean: &str) -> String {
+    match store_pref(app, "projectServerPref").as_deref() {
+        Some("device") if model.starts_with("external:") => {
+            pick_offline_for(app, task, lean, true, None).await.unwrap_or(model)
+        }
+        Some("server") if !model.starts_with("external:") && !model.starts_with("online:") => {
+            let (ext_models, _) = crate::engine::external_models_cached(app);
+            let choice = best_external(&ext_models, task).map(|(id, _)| id).or_else(|| ext_models.first().cloned());
+            if let Some(id) = choice {
+                if crate::engine::external_reachable(app).await {
+                    return format!("external:{id}");
+                }
+            }
+            model
+        }
+        _ => model,
+    }
 }
 
 /// Which routing tasks would actually change the offline pick — i.e. some runnable

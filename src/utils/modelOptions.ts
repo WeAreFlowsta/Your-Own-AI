@@ -25,13 +25,9 @@ export function autoOptions(args: {
   const opts: AutoOption[] = [
     { id: 'auto:offline', label: 'Auto — Offline Only', hint: 'best of your offline models' },
   ];
-  if (args.hasExternal || args.currentModel === 'auto:my-hardware') {
-    opts.push({
-      id: 'auto:my-hardware',
-      label: 'Auto — My Hardware',
-      hint: 'your device + your connected server',
-    });
-  }
+  // A connected server is part of Offline Only (and of Online and
+  // Offline): no third mode since 09-24. An AI still set to the old
+  // "auto:my-hardware" behaves as Offline Only.
   if (
     args.hasOnlineModels &&
     (args.onlineEntitled || args.currentModel === 'auto:online-offline')

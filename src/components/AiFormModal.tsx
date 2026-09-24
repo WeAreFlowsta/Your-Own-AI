@@ -1038,7 +1038,7 @@ const AiFormModal = component$<AiFormModalProps>(
                             : store.model === 'auto:online-offline'
                               ? 'Auto — Online and Offline'
                               : store.model === 'auto:my-hardware'
-                                ? 'Auto — My Hardware'
+                                ? 'Auto — Offline Only'
                                 : store.model.startsWith('online:')
                                 ? `${store.onlineModels.find((m) => m.id === store.model)?.display_name || store.model.slice(7)} (online)`
                                 : store.model.startsWith('external:')

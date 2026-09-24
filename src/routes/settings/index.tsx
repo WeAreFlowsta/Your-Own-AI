@@ -332,6 +332,7 @@ export default component$(() => {
   // Project cost levers (router reads the store mirror at session start).
   const projectDeviceSubagents = useSignal(true);
   const projectThrifty = useSignal(false);
+  const projectServerPref = useSignal("auto");
   const routingExplainerOpen = useSignal(false);
   const routingDecisions = useSignal<{ at_ms: number; model: string; reason: string; think?: boolean | null; adjusted?: boolean }[]>([]);
   const feedbackReset = useSignal(false);
@@ -450,6 +451,7 @@ export default component$(() => {
     projectDeviceSubagents.value =
       localStorage.getItem("routingProjectDeviceSubagents") !== "0";
     projectThrifty.value = localStorage.getItem("routingProjectThrifty") === "1";
+    projectServerPref.value = localStorage.getItem("projectServerPref") || "auto";
     onlinePlanning.value = localStorage.getItem("routingOnlinePlanning") || "";
     import("@tauri-apps/api/core")
       .then(({ invoke }) =>
@@ -1568,6 +1570,34 @@ export default component$(() => {
                           private. Otherwise they go online as usual.
                         </span>
                       </span>
+                    </label>
+                    <label class="flex items-start gap-3 mt-3 select-none">
+                      <span class="min-w-0">
+                        <span class="block text-sm text-[var(--text-primary)]">Project work runs on</span>
+                        <span class="block text-xs text-[var(--text-secondary)]">
+                          With a server connected (Engines), Auto lets the stronger model win; or keep project
+                          work on this computer, or send it to your server whenever it answers. Chat keeps the
+                          Auto rule.
+                        </span>
+                      </span>
+                      <select
+                        value={projectServerPref.value}
+                        onChange$={async (_, el) => {
+                          projectServerPref.value = el.value;
+                          localStorage.setItem("projectServerPref", el.value);
+                          try {
+                            const { Store } = await import("@tauri-apps/plugin-store");
+                            const store = await Store.load("settings.json");
+                            await store.set("projectServerPref", el.value);
+                            await store.save();
+                          } catch { /* store mirror is best-effort */ }
+                        }}
+                        class="ml-auto shrink-0 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-input)] px-3 py-1 text-sm text-[var(--text-primary)]"
+                      >
+                        <option value="auto">Auto</option>
+                        <option value="device">This computer</option>
+                        <option value="server">Your server</option>
+                      </select>
                     </label>
                   </>
                 )}

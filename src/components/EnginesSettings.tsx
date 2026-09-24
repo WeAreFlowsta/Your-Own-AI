@@ -582,6 +582,12 @@ export default component$(() => {
                       : `- unreachable${external.value.error ? ` (${external.value.error})` : ""}`}
                   </span>
                 </p>
+                <p class="mt-1 text-xs text-[var(--text-muted)]">
+                  Its models join your offline ones: an AI on Auto uses the server when it holds the stronger
+                  model for the job, and project work can run there too (Settings › Routing). Its context, threads
+                  and speed-up are set on that computer - Fine-tune here does not reach it. If it stops answering,
+                  the next steps run on this computer.
+                </p>
               </div>
             ) : (
               <div class="mt-2 flex gap-2">

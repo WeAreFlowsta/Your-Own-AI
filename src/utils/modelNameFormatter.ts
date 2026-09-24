@@ -86,7 +86,7 @@ export function richModelName(filename: string): string {
  */
 export function formatModelForCard(model: string | undefined | null): string {
   if (!model || model === 'auto:offline') return 'Auto - Offline Only';
-  if (model === 'auto:my-hardware') return 'Auto - My Hardware';
+  if (model === 'auto:my-hardware') return 'Auto - Offline Only';
   if (model === 'auto:online-offline') return 'Auto - Online and Offline';
   if (model.startsWith('online:')) return formatModelDisplayName(model.slice(7));
   if (model.startsWith('external:')) return formatModelDisplayName(model.slice(9));

@@ -589,8 +589,34 @@ pub async fn external_engine_info(app: AppHandle) -> ExternalEngineInfo {
 /// Quick reachability check on the connected external server - a short
 /// probe so routing can fall back to a local model instead of handing a
 /// chat to a server that's off. Two-second budget: routing latency matters.
+/// The window a session is told for a server-served model. Not every engine
+/// reports its own; a llama.cpp overflow answer is caught by the harness's
+/// compact-and-resubmit path, so a generous default is safe.
+pub const EXTERNAL_CTX_DEFAULT: u64 = 32_768;
+
+static EXTERNAL_FAILED_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// A request to the server failed: it is set aside for a minute, so the
+/// next routes use this computer without waiting on a probe.
+pub fn mark_external_failed() {
+    EXTERNAL_FAILED_AT.store(now_secs(), std::sync::atomic::Ordering::SeqCst);
+    log::warn!("[Engine] your server did not answer - set aside for a minute");
+}
+
+fn external_recently_failed() -> bool {
+    let t = EXTERNAL_FAILED_AT.load(std::sync::atomic::Ordering::SeqCst);
+    t > 0 && now_secs().saturating_sub(t) < 60
+}
+
 pub async fn external_reachable(app: &AppHandle) -> bool {
     let Some(url) = external_engine_url(app) else { return false };
+    if external_recently_failed() {
+        return false;
+    }
     reqwest::Client::new()
         .get(format!("{}/v1/models", url))
         .timeout(std::time::Duration::from_secs(2))

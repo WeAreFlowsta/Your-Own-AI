@@ -900,10 +900,23 @@ async fn chat_completions(
                     use tauri::Emitter as _;
                     let _ = app.emit(
                         "agent-route",
-                        json!({ "ai": ai.name, "model": r.model, "online": r.model.starts_with("online:"), "reason": r.reason }),
+                        json!({ "ai": ai.name, "model": r.model, "online": r.model.starts_with("online:"), "server": r.model.starts_with("external:"), "reason": r.reason }),
                     );
                 }
-                ai.model = r.model;
+                // Settings > Routing "Project work runs on" has the last word
+                // for agent turns.
+                let routed = if agent_routing {
+                    crate::router::apply_project_server_pref(&app, r.model.clone(), task, lean).await
+                } else {
+                    r.model.clone()
+                };
+                if routed != r.model {
+                    log::info!(
+                        "[inference] project work runs on {} by your setting",
+                        if routed.starts_with("external:") { "your server" } else { "this computer" }
+                    );
+                }
+                ai.model = routed;
             }
             Err(e) => {
                 return err(
@@ -959,9 +972,12 @@ async fn chat_completions(
     // Online models ("online:<id>") route to the Flowsta proxy with the
     // Vault-grant token; offline models run on the local llama-server.
     let online_id: Option<String> = ai.model.strip_prefix("online:").map(str::to_string);
+    // The person's own server (Settings > Engines): forwarded like the
+    // online proxy, never loaded here.
+    let external_id: Option<String> = ai.model.strip_prefix("external:").map(str::to_string);
 
     // Offline: ensure the AI's model is the one loaded. Online: nothing local.
-    if online_id.is_none() {
+    if online_id.is_none() && external_id.is_none() {
         let state = app.state::<crate::llm::LLMState>();
         let current = state.current_model.lock().await.clone();
         // v1 MLX rule: agent/project turns are served by llama.cpp even
@@ -1237,7 +1253,7 @@ async fn chat_completions(
     }
     // Offline: llama-server keys off the loaded model. Online: the proxy needs
     // the bare provider id (no "online:" prefix).
-    body["model"] = json!(online_id.clone().unwrap_or_else(|| ai.model.clone()));
+    body["model"] = json!(online_id.clone().or_else(|| external_id.clone()).unwrap_or_else(|| ai.model.clone()));
 
     // Recording context: the exchange is recorded to the signed transcript once
     // we have the assistant's reply (grouped by an optional caller-supplied
@@ -1288,6 +1304,16 @@ async fn chat_completions(
             .json(&body)
             .send()
             .await
+    } else if external_id.is_some() {
+        let Some(base) = crate::engine::external_engine_url(&app) else {
+            return err(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Your server is not connected any more (Settings > Engines).",
+                "external_engine_not_configured",
+            );
+        };
+        log::info!("[inference] {} served by your server for {}{}", body["model"], ai.name, if agent_mode { " (project work)" } else { "" });
+        client.post(format!("{base}/v1/chat/completions")).json(&body).send().await
     } else {
         // One request at a time on the chat server: an agent's parallel
         // calls used to overflow the shared window together.
@@ -1296,6 +1322,24 @@ async fn chat_completions(
     };
     let upstream = match send {
         Ok(r) => r,
+        Err(e) if external_id.is_some() => {
+            // The server went away mid-session: set it aside for a minute so
+            // the next route lands on this computer, and say so on the turn.
+            crate::engine::mark_external_failed();
+            if agent_mode {
+                use tauri::Emitter as _;
+                let _ = app.emit("agent-hint", json!({
+                    "kind": "server-away",
+                    "sticky": false,
+                    "text": "Your server did not answer, so the next steps run on this computer."
+                }));
+            }
+            return err(
+                StatusCode::SERVICE_UNAVAILABLE,
+                &format!("Your server did not answer ({e}) - the next call runs on this computer."),
+                "external_engine_unreachable",
+            );
+        }
         Err(e) => {
             return err(
                 StatusCode::BAD_GATEWAY,
@@ -1379,7 +1423,7 @@ async fn chat_completions(
             let reply = parse_sse_content(&raw);
             spawn_record(rec, reply);
         };
-        with_served_window(Response::builder().status(status).header(header::CONTENT_TYPE, content_type), says_served_window && online_id.is_none())
+        with_served_window(Response::builder().status(status).header(header::CONTENT_TYPE, content_type), says_served_window && online_id.is_none() && external_id.is_none())
             .body(Body::from_stream(body_stream))
             .unwrap_or_else(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}"), "internal_error"))
     } else {
@@ -1389,7 +1433,7 @@ async fn chat_completions(
             Err(e) => return err(StatusCode::BAD_GATEWAY, &format!("upstream read: {e}"), "upstream_error"),
         };
         spawn_record(rec, parse_json_content(&bytes));
-        with_served_window(Response::builder().status(status).header(header::CONTENT_TYPE, content_type), says_served_window && online_id.is_none())
+        with_served_window(Response::builder().status(status).header(header::CONTENT_TYPE, content_type), says_served_window && online_id.is_none() && external_id.is_none())
             .body(Body::from(bytes))
             .unwrap_or_else(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e}"), "internal_error"))
     }

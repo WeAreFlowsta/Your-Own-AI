@@ -715,9 +715,7 @@ export function useChat(props: UseChatProps) {
         const requestedMode =
           preferredModel === "auto:online-offline"
             ? "online-offline"
-            : preferredModel === "auto:my-hardware"
-              ? "my-hardware"
-              : "offline";
+            : "offline";
         const mode =
           requestedMode === "online-offline" && hasAttachment && !attachmentsMayGoOnline
             ? "offline"

@@ -1924,7 +1924,13 @@ export function useAgentSession(props: UseAgentSessionProps) {
     });
     const unRoute = await listen<any>("agent-route", (e) => {
       const model = typeof e.payload?.model === "string" ? e.payload.model : "";
-      state.waitingOn = e.payload?.online ? model.replace(/^online:/, "") : "";
+      // The pearl names what the turn waits on: an online model, or the
+      // person's own server (Settings > Engines) serving the turn.
+      state.waitingOn = e.payload?.online
+        ? model.replace(/^online:/, "")
+        : e.payload?.server
+          ? "your server"
+          : "";
       // Why routing picked it - shown on the turn's Model button (e.g.
       // "online by default (Ornith on your device is as capable)").
       state.routeReason = typeof e.payload?.reason === "string" ? e.payload.reason : "";
