@@ -1471,6 +1471,100 @@ export const modelFamilies: ModelFamily[] = [
       }
     ]
   },
+  {
+    // Altworld's everyday-writing tune of Qwen 3.8 27B (2026-09-20):
+    // messages, emails, the note you keep rewriting - it gives the text,
+    // not a memo. CC BY-NC 4.0, the catalog's first non-commercial model;
+    // the license gate says so before the download. Bartowski's GGUF (the
+    // quant repo's Apache tag is the quantizer's, not the model's - the
+    // license was read on the base repo). Pre-flighted + LOADS on b10809,
+    // 2026-09-25. The source carries an MTP head but no draft GGUF exists.
+    id: 'hemmingway-1',
+    maker: 'Altworld',
+    quantizedBy: 'Bartowski',
+    derivedFrom: 'Qwen 3.8 27B, trained for everyday writing',
+    community: true,
+    contextWindow: 262144,
+    released: '2026-09-20',
+    name: 'Hemmingway 1',
+    description:
+      'Writes like a person. Built on Qwen 3.8 for the writing you do every day - messages, emails, the awkward note to a colleague - and gives you the text, not three options and a preamble. Free for personal use; business use needs an agreement with Altworld.',
+    category: 'quality',
+    recommended: false,
+    capabilities: ['writing', 'chat', 'long-context'],
+    traits: ['new'],
+    license: {
+      id: 'cc-by-nc-4.0-hemmingway',
+      name: 'Creative Commons BY-NC 4.0',
+      url: 'https://creativecommons.org/licenses/by-nc/4.0/',
+      notice:
+        'Hemmingway-1 is free for personal, research and other non-commercial use under CC BY-NC 4.0. Download it, run it, fine-tune it and share it, as long as you credit Hemmingway-1.',
+      points: [
+        'Personal, research and other non-commercial use only. Using it for paid or business work needs an agreement with Altworld.',
+        'Credit Hemmingway-1 when you share it, or anything you build from it.',
+        'These same terms pass to anyone you share the model with.',
+      ],
+    },
+    variants: [
+      {
+        parameterCount: '27B',
+        size: 17.4,
+        minRAM: 32,
+        downloadUrl:
+          'https://huggingface.co/bartowski/Altworld_Hemmingway-1-GGUF/resolve/a742c10e5367b8dd94e7e9f42be0041044495639/Altworld_Hemmingway-1-Q4_K_M.gguf',
+        filename: 'Hemmingway-1-Q4_K_M.gguf',
+        sha256: 'c029ba6cc24bc022a65d00e4d81796ff0bd678e371a36c9a7d1119a0acc7085e',
+        // MLX artifact (preview): revision-pinned; verified via the
+        // model-addition pre-flight 2026-09-25.
+        artifacts: {
+          mlx: {
+            filename: 'mlx-Hemmingway-1-OptiQ-4bit',
+            downloadUrl: 'https://huggingface.co/mlx-community/Hemmingway-1-OptiQ-4bit',
+            hfRepo: 'mlx-community/Hemmingway-1-OptiQ-4bit',
+            revision: '2394cafca71c3b8cfd0f1e23f1310e2c93e3f4cd',
+            sizeGb: 18.7,
+            quantization: '4-bit',
+          },
+        },
+        quantization: 'Q4_K_M'
+      }
+    ]
+  },
+  {
+    // TheDrummer's Skyfall 31B v4.2 (2026-02-13): a creative-writing and
+    // roleplay tune of Mistral's Magistral Small (Apache-2.0 base; the
+    // GGUF repos carry no license tag - read on the base repo). Built to
+    // need no alignment: long, vivid, in-character replies, no refusals.
+    // The author's own Q4_K_M ("v4y" in the file name is the author's
+    // working name for this release). Mistral v7 Tekken template.
+    // Pre-flighted + LOADS on b10809, 2026-09-25.
+    id: 'skyfall-31b',
+    maker: 'TheDrummer',
+    quantizedBy: 'TheDrummer',
+    derivedFrom: 'Mistral Magistral Small, tuned for creative writing and roleplay',
+    community: true,
+    contextWindow: 131072,
+    released: '2026-02-13',
+    name: 'Skyfall 31B',
+    description:
+      'A creative-writing and roleplay model built on Mistral\'s Magistral Small. Vivid, in-character storytelling that keeps long scenes and many characters straight. No content filtering or refusals.',
+    category: 'specialist',
+    recommended: false,
+    capabilities: ['writing', 'chat'],
+    traits: ['new', 'uncensored'],
+    variants: [
+      {
+        parameterCount: '31B',
+        size: 19.0,
+        minRAM: 32,
+        downloadUrl:
+          'https://huggingface.co/TheDrummer/Skyfall-31B-v4.2-GGUF/resolve/05513b60729c07f7e21ba872d3f57215238a9c11/Skyfall-31B-v4y-Q4_K_M.gguf',
+        filename: 'Skyfall-31B-v4.2-Q4_K_M.gguf',
+        sha256: '08bb044187e85404abefd6311ff6939b393ad87937af29cc7ebd2408469bb5b3',
+        quantization: 'Q4_K_M'
+      }
+    ]
+  },
 ];
 
 // ─── Category metadata for UI ──────────────────────────────────────────────

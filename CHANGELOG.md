@@ -168,6 +168,13 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   that size, so sliding back to auto returns to Automatic and Save clears
   the entry, instead of leaving a pinned context the person did not mean
   to set.
+- Two writing models join the offline catalog, both for computers with
+  32 GB of memory. **Hemmingway 1** (Altworld, built on Qwen 3.8) writes
+  the everyday things - messages, emails, the note you keep rewriting -
+  and gives you the text rather than a memo. It is free for personal use
+  and not for business use, and the app says so before the download.
+  **Skyfall 31B** (TheDrummer, built on Mistral's Magistral Small) is a
+  creative-writing and roleplay model with no content filtering.
 
 ### Projects
 - Every step in the rail is named after what it is. A wait says what it

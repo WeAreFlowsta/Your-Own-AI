@@ -85,6 +85,17 @@ pub fn known_caps(model_name: &str) -> Option<Caps> {
     if n.contains("qwythos") {
         return Some(Caps { overall: 7, coding: 5, reasoning: 7, math: 5, vision: 7, medical: 3 });
     }
+    // Writing tunes (2026-09 catalog adds) - everyday prose and stories,
+    // deliberately BELOW their bases at coding/math so Auto never hands
+    // them a coding turn. Hemmingway 1 = Qwen 3.8 27B tuned for messages
+    // and emails; Skyfall 31B = Magistral Small tuned for stories and
+    // roleplay. Before the coder and base-family arms.
+    if n.contains("hemmingway") {
+        return Some(Caps { overall: 7, coding: 4, reasoning: 6, math: 5, vision: 0, medical: 3 });
+    }
+    if n.contains("skyfall") {
+        return Some(Caps { overall: 6, coding: 3, reasoning: 5, math: 4, vision: 0, medical: 3 });
+    }
     // Coding specialists + agentic coders (Qwen-Coder, Codestral, Devstral, …).
     if n.contains("coder") || n.contains("-code") || n.contains("codestral") || n.contains("devstral") {
         return Some(Caps { overall: 7, coding: 9, reasoning: 6, math: 6, vision: 0, medical: 3 });
@@ -202,6 +213,14 @@ pub fn agent_caps(model_name: &str) -> u8 {
     }
     if n.contains("ministral") || n.contains("mistral") {
         return 5;
+    }
+    // Writing tunes: not for driving tools (Hemmingway keeps Qwen 3.8's
+    // tool format but was trained to write, Skyfall to tell stories).
+    if n.contains("hemmingway") {
+        return 5;
+    }
+    if n.contains("skyfall") {
+        return 4;
     }
     if n.contains("medgemma") {
         return 1;
