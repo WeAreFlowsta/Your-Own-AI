@@ -111,6 +111,8 @@ export interface AgentSessionState {
   lastRouteServer: boolean;
   /** The struggle notice has been shown this session (once is enough). */
   struggleShown: boolean;
+  /** The struggle the person is being told about right now (a modal). */
+  struggle: { text: string; bigger?: string; entitled: boolean } | null;
   /** Why routing picked the serving model (from the agent-route event). */
   routeReason: string;
   /** Generation tok/s of the latest model call, from the engine's own timings. */
@@ -347,6 +349,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     waitingOn: "",
     lastRouteServer: false,
     struggleShown: false,
+    struggle: null,
     routeReason: "",
     /** Generation tok/s of the latest model call, from the engine's own timings. */
     lastCallTps: 0,
@@ -664,8 +667,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
    *  start plus the search took ~3 s on 09-23 with nothing on screen, while
    *  a direct chat moves at once). sendPrompt$ then fills in the rest. */
   const prepared = useSignal(false);
-  /** A turn that struggled on a pinned local model, awaiting the better name. */
-  const strugglePinned = useSignal<{ turnId: string; model: string } | null>(null);
+  /** A turn that struggled, to be told once the turn is over. */
+  const strugglePending = useSignal<{ turnId: string; model: string; pinned: boolean; entitled: boolean } | null>(null);
   /** Skill name (lower case) -> glyph name, from the installed skills. */
   const skillGlyphs = useSignal<Record<string, string>>({});
   const prepareTurn$ = $(async (text: string, files?: string[], surface?: "project" | "tools", status?: string) => {
@@ -824,6 +827,11 @@ export function useAgentSession(props: UseAgentSessionProps) {
 
   const dismissOverloadOffer$ = $(() => {
     state.overloadOffer = null;
+  });
+
+  /** The struggle modal was answered or waved away. */
+  const dismissStruggle$ = $(() => {
+    state.struggle = null;
   });
 
   /** Send the last prompt again (after a setting changed what serves it). */
@@ -2401,35 +2409,16 @@ export function useAgentSession(props: UseAgentSessionProps) {
           const offline = aiModel === "auto:offline" || aiModel === "auto:my-hardware" || aiModel.toLowerCase().endsWith(".gguf");
           if (struggled && offline) {
             state.struggleShown = true;
-            let entitled: "yes" | "no" | null = null;
+            let entitled = false;
             try {
-              entitled = lastKnownEntitled();
+              entitled = lastKnownEntitled() === "yes";
             } catch {
-              /* unknown */
+              /* unknown = no plan */
             }
-            const pinned = aiModel.toLowerCase().endsWith(".gguf");
-            if (pinned) {
-              // Filled in below: the better local model, if there is one.
-              strugglePinned.value = { turnId: m.id, model: aiModel };
-            } else if (entitled === "yes") {
-              log = [
-                ...log,
-                {
-                  id: `hint-struggle-online-${m.id}`,
-                  type: "notice" as const,
-                  text: "Your AI found this hard on the models this computer can run. Your plan's online models handle tasks like this in one go.",
-                },
-              ];
-            } else {
-              log = [
-                ...log,
-                {
-                  id: `hint-struggle-door-${m.id}`,
-                  type: "notice" as const,
-                  text: "Your AI found this hard. Tasks like this need more than the models this computer can run. Online models do them in one go. They are an optional paid service, and everything offline stays free.",
-                },
-              ];
-            }
+            // Told as a modal the person cannot miss (a line inside a folded
+            // rail went unseen, 09-25). The pinned-smaller case waits for the
+            // better model's name below; the rest is said now.
+            strugglePending.value = { turnId: m.id, model: aiModel, pinned: aiModel.toLowerCase().endsWith(".gguf"), entitled };
             uiLog(`[rail] struggle: ${red} red step(s), tools turn ${toolsTurn} ok ${toolOk}, ai ${aiModel}, entitled ${entitled}`);
           }
         }
@@ -2466,31 +2455,29 @@ export function useAgentSession(props: UseAgentSessionProps) {
       );
       recordTurnOnce(id);
       props.chatState.isLoading = false;
-      // The pinned-smaller case: name the better model this computer has.
-      if (strugglePinned.value) {
-        const { turnId: tid, model } = strugglePinned.value;
-        strugglePinned.value = null;
-        invokeTauri("agent_best_local")
-          .then((best) => {
-            if (typeof best !== "string" || !best || best.toLowerCase() === model.toLowerCase()) return;
-            const pretty = (f: string) => f.replace(/\.gguf$/i, "").replace(/-Q\d[^-]*$/i, "");
-            props.chatState.messages = props.chatState.messages.map((mm) =>
-              mm.id === tid
-                ? {
-                    ...mm,
-                    agentLog: [
-                      ...(mm.agentLog ?? []),
-                      {
-                        id: `hint-struggle-local-${tid}`,
-                        type: "notice" as const,
-                        text: `Your AI found this hard. It is set to ${pretty(model)}; ${pretty(best)} on this computer does better at tasks like this.`,
-                      },
-                    ],
-                  }
-                : mm,
-            );
-          })
-          .catch(() => {});
+      // The struggle, said once the turn is over: which model on this
+      // computer does better (when the AI is pinned to a weaker one), and
+      // the plan's online models when the account has them.
+      if (strugglePending.value) {
+        const { model, pinned, entitled } = strugglePending.value;
+        strugglePending.value = null;
+        const pretty = (f: string) => f.replace(/\.gguf$/i, "").replace(/-Q\d[^-]*$/i, "");
+        const online = entitled
+          ? " Your plan's online models do them in one go."
+          : " Online models do them in one go. They are an optional paid service, and everything offline stays free.";
+        const say = (bigger?: string) => {
+          const text = bigger
+            ? `Tasks like this are hard for ${pretty(model)}, the model this AI is set to. ${pretty(bigger)} on this computer does better at them.${online}`
+            : `Tasks like this need more than the models this computer can run.${online}`;
+          state.struggle = { text, bigger, entitled };
+        };
+        if (pinned) {
+          invokeTauri("agent_best_local")
+            .then((best) => say(typeof best === "string" && best && best.toLowerCase() !== model.toLowerCase() ? best : undefined))
+            .catch(() => say(undefined));
+        } else {
+          say(undefined);
+        }
       }
       state.liveStatus = "";
       state.retryStatus = "";
@@ -2725,6 +2712,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     prepareTurn$,
     discardPreparedTurn$,
     resendLast$,
+    dismissStruggle$,
     cancelTurn$,
     respondPermission$,
     answerPermissionByReply$,

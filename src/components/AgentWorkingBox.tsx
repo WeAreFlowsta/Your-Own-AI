@@ -665,8 +665,8 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
               // A turn that struggled on a small model: the way up, in the
               // person's words. Door = see the page; online = the plan's
               // models, one click to switch this AI and send again.
-              const struggleDoor = el.id.startsWith("hint-struggle-door");
-              const struggleOnline = el.id.startsWith("hint-struggle-online");
+              const struggleDoor = false;
+              const struggleOnline = false;
               return (
                 <div key={el.id} class="flex flex-col gap-1 py-1 text-sm leading-snug text-[var(--text-secondary)]">
                   <div class="flex items-start gap-2">

@@ -51,6 +51,7 @@ import { useVisionDownload } from "../../contexts/VisionDownloadContext";
 
 import ChatContainer from "../../components/ChatContainer";
 import CodePanel from "../../components/CodePanel";
+import StruggleModal, { type StruggleAction } from "../../components/StruggleModal";
 import AppHeader from "../../components/AppHeader";
 import {
   firstModelInFlight,
@@ -176,6 +177,7 @@ export default component$(() => {
     prepareTurn$: prepareAgentTurn$,
     discardPreparedTurn$: discardPreparedAgentTurn$,
     resendLast$: resendAgentLast$,
+    dismissStruggle$,
     cancelTurn$,
     respondPermission$,
     answerPermissionByReply$,
@@ -2591,6 +2593,34 @@ export default component$(() => {
         onCancel$={() => {
           resumeFolderAsk.value = null;
         }}
+      />
+
+      {/* A small model struggled: the way up, where it cannot be missed. */}
+      <StruggleModal
+        struggle={agentState.struggle}
+        onAction$={$(async (action: StruggleAction) => {
+          const s = agentState.struggle;
+          await dismissStruggle$();
+          if (!s) return;
+          const id = selectedAi.value.aiConfig?.id;
+          if (action === "see-online") {
+            await nav("/online-models");
+          } else if (action === "go-online" && id) {
+            try {
+              await updateCustomAi(id, { model: "auto:online-offline" });
+            } catch {
+              return;
+            }
+            await resendAgentLast$();
+          } else if (action === "switch-local" && id && s.bigger) {
+            try {
+              await updateCustomAi(id, { model: s.bigger });
+            } catch {
+              return;
+            }
+            await resendAgentLast$();
+          }
+        })}
       />
 
       {/* Closing the folder mid-task is the one destructive gesture here -
