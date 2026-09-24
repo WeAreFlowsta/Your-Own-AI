@@ -668,12 +668,28 @@ export function useAgentSession(props: UseAgentSessionProps) {
   const strugglePinned = useSignal<{ turnId: string; model: string } | null>(null);
   /** Skill name (lower case) -> glyph name, from the installed skills. */
   const skillGlyphs = useSignal<Record<string, string>>({});
-  const prepareTurn$ = $(async (text: string, files?: string[]) => {
+  const prepareTurn$ = $(async (text: string, files?: string[], surface?: "project" | "tools") => {
     if (state.status === "working") return; // mid-turn: sendPrompt$ interjects
     if (!text.trim()) return;
-    await startTurnBubble(text, files);
+    await startTurnBubble(text, files, undefined, surface);
     prepared.value = true;
-    state.liveStatus = "Looking through documents..";
+    // Before the session exists, the wait is the session (its tool servers
+    // starting, a model loading); once it is up, the documents search.
+    state.liveStatus = state.status === "ready" ? "Looking through documents.." : "Getting your tools ready..";
+  });
+
+  /** The bubble raised by prepareTurn$ was for a session that did not open:
+   *  take it down again so the direct chat path can speak instead. */
+  const discardPreparedTurn$ = $(() => {
+    if (!prepared.value) return;
+    prepared.value = false;
+    const id = turnId.value;
+    turnId.value = null;
+    props.chatState.isLoading = false;
+    state.liveStatus = "";
+    const msgs = props.chatState.messages;
+    const at = msgs.findIndex((m) => m.id === id);
+    props.chatState.messages = at > 0 ? [...msgs.slice(0, at - 1), ...msgs.slice(at + 1)] : msgs.filter((m) => m.id !== id);
   });
 
   /** Send a prompt into the live session (session must be ready). */
@@ -2699,6 +2715,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     closeFolder$,
     sendPrompt$,
     prepareTurn$,
+    discardPreparedTurn$,
     resendLast$,
     cancelTurn$,
     respondPermission$,

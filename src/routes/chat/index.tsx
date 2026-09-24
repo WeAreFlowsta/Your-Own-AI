@@ -174,6 +174,7 @@ export default component$(() => {
     closeFolder$,
     sendPrompt$: sendAgentPrompt$,
     prepareTurn$: prepareAgentTurn$,
+    discardPreparedTurn$: discardPreparedAgentTurn$,
     resendLast$: resendAgentLast$,
     cancelTurn$,
     respondPermission$,
@@ -1390,16 +1391,25 @@ export default component$(() => {
     // the printer work right here in chat. Falls back to a direct answer
     // when the session cannot start (Build not installed, no agent-ready
     // model) - the AI then says tools need Projects.
-    if (wantsTools && (await openToolsSession$())) {
+    if (wantsTools) {
+      // The turn goes on screen NOW, on the tools surface, and the session
+      // opens behind it (its tool servers, sometimes a model load: 15 s of
+      // a blank page on 09-25). The pearl says what it waits for.
       dropReplacedTurn();
       const files = attachedFiles.value.map((f) => f.filename);
-      await prepareAgentTurn$(finalInput, files);
+      await prepareAgentTurn$(finalInput, files, "tools");
       input.value = "";
       selectedAction.value = null;
       attachedFiles.value = [];
-      const given = await sessionContext(fileContext, finalInput);
-      sendAgentPrompt$(finalInput, { context: given.context, library: given.library, files });
-      return;
+      if (await openToolsSession$()) {
+        const given = await sessionContext(fileContext, finalInput);
+        sendAgentPrompt$(finalInput, { context: given.context, library: given.library, files });
+        return;
+      }
+      // No session (Build not installed, no agent-ready model): the direct
+      // chat answers instead, with the prompt back in hand.
+      await discardPreparedAgentTurn$();
+      input.value = finalInput;
     }
 
     const images = attachedImages.value.map((i) => i.dataUrl);
