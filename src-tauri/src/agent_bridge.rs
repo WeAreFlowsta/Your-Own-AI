@@ -481,6 +481,25 @@ pub async fn start_build_agent(
         // sized here (its window is the catalog's; 09-23 the "tight" hint
         // fired on a million-token session).
         let mut agent_ctx = agent_ctx;
+        let mut plan_ctx = plan_ctx;
+        // Project work set to the person's server: the session is told the
+        // SERVER's window when that is the smaller one, so the harness
+        // condenses at the right size there and the server is not refused
+        // for holding less than this computer (09-24: a 128k local window
+        // against a 32k server kept every turn here).
+        if local_window && crate::router::store_pref(&app_handle, "projectServerPref").as_deref() == Some("server") {
+            if let Some(server_ctx) = crate::engine::external_ctx_cached(&app_handle) {
+                if server_ctx < agent_ctx {
+                    log::info!(
+                        "[agent] project work is set to your server: the session is told its {}k window (this computer holds {}k)",
+                        server_ctx / 1024,
+                        agent_ctx / 1024
+                    );
+                    agent_ctx = server_ctx;
+                    plan_ctx = plan_ctx.min(server_ctx);
+                }
+            }
+        }
         if local_window {
             let serving = crate::router::local_agent_serving_model(&app_handle, ai_model.as_deref().unwrap_or("")).await;
             let loaded = app_handle.state::<crate::llm::LLMState>().current_model.lock().await.clone();

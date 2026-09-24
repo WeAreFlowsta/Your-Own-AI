@@ -1275,7 +1275,7 @@ pub(crate) fn store_pref_bool(app: &AppHandle, key: &str) -> bool {
     }
 }
 
-fn store_pref(app: &AppHandle, key: &str) -> Option<String> {
+pub(crate) fn store_pref(app: &AppHandle, key: &str) -> Option<String> {
     use tauri_plugin_store::StoreExt;
     let store = app.store("settings.json").ok()?;
     store
