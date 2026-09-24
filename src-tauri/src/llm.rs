@@ -5203,13 +5203,13 @@ pub fn clear_load_sentinel(app_handle: &AppHandle) {
     }
 }
 
-#[tauri::command]
 /// A load in flight announced to the screen (`model-load` events), so any
 /// path that loads - a project turn's switch, the vision sidecar, the
 /// session's pre-load - shows in the header chip and the action bar the
 /// way chat's own loads always did (Eric, 09-24).
 static LOAD_ANNOUNCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+#[tauri::command]
 pub async fn load_model(
     app_handle: AppHandle,
     state: State<'_, LLMState>,
