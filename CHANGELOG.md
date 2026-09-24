@@ -168,6 +168,14 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   that size, so sliding back to auto returns to Automatic and Save clears
   the entry, instead of leaving a pinned context the person did not mean
   to set.
+- New online models, with no app update needed for the catalog: GPT-6 Sol
+  and GPT-6 Luna (OpenAI, at half the GPT-5.6 rates) and Grok 4.7 (xAI, at
+  the same rates as 4.6). GPT-6 Luna now takes Everyday questions and
+  Grok 4.7 (Web) takes questions that need current information; GPT-6
+  Astra keeps the hard questions, agent work and planning. Grok 4.6 leaves
+  the catalog, and GPT-5.6 Sol is billed at OpenAI's new lower rate. The
+  Online Models page marks the Auto picks from the catalog itself, so a
+  slot that moves shows on the right card at once.
 - Two writing models join the offline catalog, both for computers with
   32 GB of memory. **Hemmingway 1** (Altworld, built on Qwen 3.8) writes
   the everyday things - messages, emails, the note you keep rewriting -

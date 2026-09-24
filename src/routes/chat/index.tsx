@@ -2537,7 +2537,7 @@ export default component$(() => {
               ? `${folderGuard.value.currentLabel} routes offline only, and your project-capable models don't fit comfortably on this hardware - project work may load very slowly or fail. A smaller model marked "Agentic", or a mode that can use online models, will work much better.`
             : folderGuard.value?.suggestion
               ? `${folderGuard.value.currentLabel}'s model isn't built for tool work, so project tasks may stall or fail. ${folderGuard.value.suggestion.label} can drive them properly - switch this project to ${folderGuard.value.suggestion.label}? To stay offline instead, pick a model marked "Agentic" on the Offline Models page.`
-              : `${folderGuard.value?.currentLabel ?? "This AI"}'s model isn't built for tool work, so project tasks may stall or fail. An online model like GPT-5.6 Sol works best - or to stay offline, download a model marked "Agentic" from the Offline Models page.`
+              : `${folderGuard.value?.currentLabel ?? "This AI"}'s model isn't built for tool work, so project tasks may stall or fail. An online model like GPT-6 Astra works best - or to stay offline, download a model marked "Agentic" from the Offline Models page.`
         }
         confirmLabel={
           folderGuard.value?.suggestion

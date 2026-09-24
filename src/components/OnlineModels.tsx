@@ -60,6 +60,9 @@ interface OnlineModel {
   categories?: string[]; // every shelf this model belongs to (newer catalogs)
   released?: string; // ISO date the provider shipped it - drives "Newest"
   pricing?: OnlinePricing; // USD, margin applied - what the user pays
+  /** The catalog's routing block: the slots this model is the Auto default
+   *  for (everyday | fresh | hard_code | hard_general | agent | plan). */
+  routing?: { slots?: string[] } | null;
 }
 
 const SORT_OPTIONS = [
@@ -94,15 +97,35 @@ function modelGroupKeys(m: OnlineModel): string[] {
   return [...new Set(keys)];
 }
 
-// The Auto router's recommended per-slot defaults (must mirror router.rs
-// DEFAULT_FRESH / DEFAULT_HARD_CODE / DEFAULT_HARD_GENERAL - keep in sync).
-// Surfaced as a badge so the page answers "which of these does Auto already
-// use for me?" without the user opening Settings.
-const AUTO_DEFAULTS: Record<string, string> = {
-  'online:grok-4.6-search': 'Auto pick · fresh info',
-  'online:gpt-5.6-sol': 'Auto pick · hard coding',
-  'online:gpt-5.6-terra': 'Auto pick · hard questions',
+// The Auto router's per-slot defaults, read from the catalog's own routing
+// block so a slot that moves (GPT-6 Luna took Everyday, Grok 4.7 (Web) took
+// Fresh, 2026-09-25) shows on the right card without an app release.
+// Surfaced as badges so the page answers "which of these does Auto already
+// use for me?" without the user opening Settings. The baked map is the
+// floor for an older catalog with no routing block (mirrors router.rs).
+const SLOT_LABELS: Record<string, string> = {
+  everyday: 'Auto pick · everyday questions',
+  fresh: 'Auto pick · fresh info',
+  hard_code: 'Auto pick · hard coding',
+  hard_general: 'Auto pick · hard questions',
+  agent: 'Auto pick · project work',
+  plan: 'Auto pick · planning',
 };
+const BAKED_SLOTS: Record<string, string[]> = {
+  'online:gpt-6-luna': ['everyday'],
+  'online:grok-4.7-search': ['fresh'],
+  'online:gpt-6-astra': ['hard_code', 'hard_general', 'agent', 'plan'],
+};
+/** The Auto badges for a card: the catalog's slots, else the baked floor. */
+function autoBadges(m: OnlineModel): string[] {
+  const slots = m.routing?.slots?.length ? m.routing.slots : (BAKED_SLOTS[m.id] ?? []);
+  // Astra's two Hard slots read as one badge.
+  const seen = new Set<string>();
+  return slots
+    .map((s) => (s === 'hard_general' && slots.includes('hard_code') ? 'hard_code' : s))
+    .map((s) => SLOT_LABELS[s])
+    .filter((l): l is string => !!l && !seen.has(l) && !!seen.add(l));
+}
 
 const VAULT_DOWNLOAD_URL = 'https://flowsta.com/vault/?from=app&app=your-own-ai';
 
@@ -607,14 +630,15 @@ export const OnlineModels = component$(() => {
                     </p>
 
                     <div class="space-y-2">
-                      {AUTO_DEFAULTS[model.id] && (
+                      {autoBadges(model).map((label) => (
                         <span
+                          key={label}
                           class="inline-block px-2 py-0.5 mr-1.5 rounded-full bg-emerald-900/50 text-emerald-300 text-[10px] font-semibold whitespace-nowrap"
                           title="When an AI is set to Auto, this is the model the router picks for this kind of question (changeable in Settings - Routing)"
                         >
-                          {AUTO_DEFAULTS[model.id]}
+                          {label}
                         </span>
-                      )}
+                      ))}
                       {ctx && (
                         <span class="inline-block px-2 py-0.5 bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] rounded text-xs text-[var(--text-primary)]">
                           {ctx}

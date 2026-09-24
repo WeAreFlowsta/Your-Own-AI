@@ -971,19 +971,23 @@ fn catalog_slot_default(models: &[crate::flowsta::OnlineModel], slot: &str) -> O
 /// is missing (the catalog moved on) selection falls back to the capability
 /// registry, so routing never breaks. The Settings page names these same
 /// models as "Recommended" - keep the two in sync.
-pub(crate) const DEFAULT_FRESH: &str = "online:grok-4.6-search";
+/// These mirror the catalog's slots as seeded 2026-09-25 (Grok 4.7 (Web)
+/// took Fresh, GPT-6 Luna took Everyday, GPT-6 Astra holds the four hard
+/// slots since 2026-09-05). The catalog wins whenever it speaks; these are
+/// the floor for an older catalog.
+pub(crate) const DEFAULT_FRESH: &str = "online:grok-4.7-search";
 /// The Everyday slot: frontier-class quality at the lowest price in the
 /// catalog - what an ordinary question gets in Online and Offline mode.
-pub(crate) const DEFAULT_EVERYDAY: &str = "online:gpt-5.6-luna";
-const DEFAULT_HARD_CODE: &str = "online:gpt-5.6-sol";
-const DEFAULT_HARD_GENERAL: &str = "online:gpt-5.6-terra";
-/// The agent slot: the strongest proven tool-driver. Sol runs tools
-/// through the Responses passthrough (forced-tool calls measured ~1.7s
-/// with zero reasoning tokens on simple steps - it scales thinking to
-/// the step), so the flagship drives projects by default.
-const DEFAULT_AGENT: &str = "online:gpt-5.6-sol";
+pub(crate) const DEFAULT_EVERYDAY: &str = "online:gpt-6-luna";
+const DEFAULT_HARD_CODE: &str = "online:gpt-6-astra";
+const DEFAULT_HARD_GENERAL: &str = "online:gpt-6-astra";
+/// The agent slot: the strongest proven tool-driver, through the Responses
+/// passthrough (forced-tool calls measured ~1.7s with zero reasoning tokens
+/// on simple steps - it scales thinking to the step), so the flagship
+/// drives projects by default.
+const DEFAULT_AGENT: &str = "online:gpt-6-astra";
 /// Planning leans reasoning; must still drive tools (planners read files).
-const DEFAULT_PLAN: &str = "online:gpt-5.6-sol";
+const DEFAULT_PLAN: &str = "online:gpt-6-astra";
 
 /// Pick an online model for one routing decision. Order: the user's explicit
 /// choice for this slot (when still in the catalog) → the recommended default
@@ -2762,9 +2766,10 @@ mod tests {
 
     fn catalog() -> Vec<crate::flowsta::OnlineModel> {
         vec![
-            om("grok-4.6", "Grok 4.6", "xAI's frontier model", None),
-            om("grok-4.6-search", "Grok 4.6 (Web)", "live web search", Some(0.005)),
-            om("gpt-5.6-sol", "GPT-5.6 Sol", "OpenAI's flagship", None),
+            om("grok-4.7", "Grok 4.7", "xAI's frontier model", None),
+            om("grok-4.7-search", "Grok 4.7 (Web)", "live web search", Some(0.005)),
+            om("gpt-6-astra", "GPT-6 Astra", "OpenAI's newest flagship", None),
+            om("gpt-5.6-sol", "GPT-5.6 Sol", "OpenAI's previous flagship", None),
             om("gpt-5.6-terra", "GPT-5.6 Terra", "balanced flagship", None),
             om("sonar", "Sonar", "Perplexity search", Some(0.005)),
         ]
@@ -2843,8 +2848,8 @@ mod tests {
         let mut models = catalog();
         models.push(om("kimi-k2.6", "Kimi K2.6", "value tool-driver", None));
         models.push(om("kimi-k3", "Kimi K3", "flagship", None));
-        // No pref -> the Sol default, never the alphabetical fallback.
-        assert_eq!(select_online_agent(&models, None).unwrap(), "online:gpt-5.6-sol");
+        // No pref -> the Astra default, never the alphabetical fallback.
+        assert_eq!(select_online_agent(&models, None).unwrap(), "online:gpt-6-astra");
         // Raw pref matches prefixed ids.
         assert_eq!(
             select_online_agent(&models, Some("kimi-k2.6")).unwrap(),
@@ -2858,16 +2863,16 @@ mod tests {
         // Unknown pref falls back to the default, not to silence.
         assert_eq!(
             select_online_agent(&models, Some("online:claude-nope")).unwrap(),
-            "online:gpt-5.6-sol"
+            "online:gpt-6-astra"
         );
         // Default missing from the catalog -> capability fallback, which
         // must never hand agents a tools-blind model (sonar scores 1).
-        let no_sol: Vec<_> = models
+        let no_astra: Vec<_> = models
             .iter()
-            .filter(|m| !m.id.contains("sol"))
+            .filter(|m| !m.id.contains("astra"))
             .cloned()
             .collect();
-        let fb = select_online_agent(&no_sol, None).unwrap();
+        let fb = select_online_agent(&no_astra, None).unwrap();
         assert!(!fb.contains("sonar"), "agents must never get a search-only model, got {fb}");
     }
 
@@ -2902,13 +2907,13 @@ mod tests {
     fn select_online_defaults_per_slot() {
         let models = catalog();
         // Fresh → the web-search default.
-        assert_eq!(select_online(&models, "general", true, None).unwrap(), "online:grok-4.6-search");
+        assert_eq!(select_online(&models, "general", true, None).unwrap(), "online:grok-4.7-search");
         // Hard code / math / reasoning → the flagship.
         for task in ["code", "math", "reasoning"] {
-            assert_eq!(select_online(&models, task, false, None).unwrap(), "online:gpt-5.6-sol");
+            assert_eq!(select_online(&models, task, false, None).unwrap(), "online:gpt-6-astra");
         }
-        // Hard general → the balanced tier.
-        assert_eq!(select_online(&models, "general", false, None).unwrap(), "online:gpt-5.6-terra");
+        // Hard general → the same flagship (Astra holds both Hard slots).
+        assert_eq!(select_online(&models, "general", false, None).unwrap(), "online:gpt-6-astra");
     }
 
     #[test]
@@ -2922,7 +2927,7 @@ mod tests {
         // A pref no longer in the catalog is ignored → default applies.
         assert_eq!(
             select_online(&models, "code", false, Some("online:retired-model")).unwrap(),
-            "online:gpt-5.6-sol"
+            "online:gpt-6-astra"
         );
     }
 
@@ -2944,18 +2949,19 @@ mod tests {
     fn agent_catalog() -> Vec<crate::flowsta::OnlineModel> {
         vec![
             om("kimi-k2.6", "Kimi K2.6", "tool-driving flagship", None),
-            om("gpt-5.6-sol", "GPT-5.6 Sol", "OpenAI's flagship", None),
+            om("gpt-6-astra", "GPT-6 Astra", "OpenAI's newest flagship", None),
             om("sonar", "Sonar", "Perplexity search", Some(0.005)),
         ]
     }
 
     #[test]
-    fn select_agent_default_is_sol() {
+    fn select_agent_default_is_the_flagship() {
         // The flagship drives projects by default (Eric's call, 2026-08-06;
-        // measured fast on simple tool steps - it scales thinking to need).
+        // measured fast on simple tool steps - it scales thinking to need;
+        // Astra since 2026-09-05).
         assert_eq!(
             select_online_agent(&agent_catalog(), None).unwrap(),
-            "online:gpt-5.6-sol"
+            "online:gpt-6-astra"
         );
     }
 
@@ -2969,7 +2975,7 @@ mod tests {
         // A pref no longer in the catalog is ignored → default applies.
         assert_eq!(
             select_online_agent(&agent_catalog(), Some("online:retired")).unwrap(),
-            "online:gpt-5.6-sol"
+            "online:gpt-6-astra"
         );
     }
 
@@ -2977,15 +2983,15 @@ mod tests {
     fn agent_override_set_get_clear() {
         // The overload offer's session pick: set wins, empty = clear, and
         // select_online_agent honors it only while it exists in the catalog.
-        set_agent_online_override(Some("online:gpt-5.6-sol".into()));
-        assert_eq!(agent_online_override().as_deref(), Some("online:gpt-5.6-sol"));
+        set_agent_online_override(Some("online:gpt-6-astra".into()));
+        assert_eq!(agent_online_override().as_deref(), Some("online:gpt-6-astra"));
         assert_eq!(
             select_online_agent(&agent_catalog(), agent_online_override().as_deref()).unwrap(),
-            "online:gpt-5.6-sol"
+            "online:gpt-6-astra"
         );
         set_agent_online_override(Some(String::new()));
         assert_eq!(agent_online_override(), None);
-        set_agent_online_override(Some("online:gpt-5.6-sol".into()));
+        set_agent_online_override(Some("online:gpt-6-astra".into()));
         clear_agent_online_override();
         assert_eq!(agent_online_override(), None);
     }
