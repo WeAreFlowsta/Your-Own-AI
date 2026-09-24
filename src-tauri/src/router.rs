@@ -752,7 +752,12 @@ async fn pick_offline_detail(app: &AppHandle, task: &str, lean: &str, agent_only
             shifted(crate::model_caps::caps_for(name).by_task(task), adj.family(name))
         }
     };
-    let lean = if agent_only { "balanced" } else { lean };
+    // Agent work ranks QUALITY first among the models that run here
+    // (Eric, 09-24: "quality really matters, it's the difference between
+    // working or not"): capability, then size, then fit. The balanced
+    // order put a fully-on-card 2B above a partly-offloaded 4B of the same
+    // grade, and the 2B mangled tool paths the 4B handles.
+    let lean = if agent_only { "quality" } else { lean };
 
     // Prefer models that actually run (green/yellow); fall back to red only if
     // every model is red (better to try than to refuse). Models that already
@@ -861,7 +866,15 @@ async fn pick_offline_detail(app: &AppHandle, task: &str, lean: &str, agent_only
                 .state::<crate::agent_bridge::AgentBridgeState>()
                 .has_open_folder()
                 .await;
-            if keep_loaded(cap(&cf.name), cap(&best.name), tier(cf), tier(best), folder_open, best.load_secs) {
+            // Agent work: the loaded model stays only when it is at least as
+            // good as the best by the quality order - a weaker loaded model
+            // gives way, whatever the reload costs (one reload per session).
+            let keep = if agent_only {
+                offline_ordering("quality", rank(cf), rank(best)) != std::cmp::Ordering::Less
+            } else {
+                keep_loaded(cap(&cf.name), cap(&best.name), tier(cf), tier(best), folder_open, best.load_secs)
+            };
+            if keep {
                 return Ok(OfflinePick { name: cur.clone(), fast: cf.fit.is_fast(), cap: cap(&cf.name) });
             }
         }
