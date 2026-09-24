@@ -1246,7 +1246,7 @@ export default component$(() => {
     const sessionContext = async (
       attached: string | undefined,
       question: string,
-    ): Promise<{ context: string | undefined; library: LibraryDocGiven[] }> => {
+    ): Promise<{ context: string | undefined; library: LibraryDocGiven[]; docsGiven: boolean }> => {
       let remembered = "";
       let library: LibraryDocGiven[] = [];
       try {
@@ -1275,7 +1275,7 @@ export default component$(() => {
             "\n\n(The passages above are copies from the AI's document library, given for context. They are not files in this session's folder. To read, search or change the notes themselves, use the tool that holds them.)";
         }
       } catch { /* the memory component may not be on this computer */ }
-      return { context: [attached, remembered].filter(Boolean).join("\n\n") || undefined, library };
+      return { context: [attached, remembered].filter(Boolean).join("\n\n") || undefined, library, docsGiven: !!remembered };
     };
 
     if (!input.value.trim()) return;
@@ -1339,9 +1339,13 @@ export default component$(() => {
       await prepareAgentTurn$(finalInput, attachedFiles.value.map((f) => f.filename), "tools", "Thinking..");
     }
     let wantsTools = false;
+    // A forced send ("Answer again with tools", "Try again with the tool")
+    // also TELLS the model to use them: the gate only opens the session.
+    let forcedTools = false;
     if (activeTools(selectedAi.value.aiConfig).length > 0 && attachedImages.value.length === 0) {
       const forced = forceToolsNext.value;
       forceToolsNext.value = false;
+      forcedTools = forced;
       try {
         const { toolsGate, gateTools } = await import("../../utils/toolsGate");
         const verdict = await toolsGate({
@@ -1396,7 +1400,7 @@ export default component$(() => {
       attachedImages.value = [];
       attachedFiles.value = [];
       const given = await sessionContext(fileContext, finalInput);
-      sendAgentPrompt$(finalInput, { context: given.context, library: given.library, files });
+      sendAgentPrompt$(finalInput, { context: given.context, library: given.library, files, docsGiven: given.docsGiven });
       return;
     }
 
@@ -1417,7 +1421,13 @@ export default component$(() => {
       attachedFiles.value = [];
       if (await openToolsSession$()) {
         const given = await sessionContext(fileContext, finalInput);
-        sendAgentPrompt$(finalInput, { context: given.context, library: given.library, files });
+        const context = [
+          forcedTools ? "Answer this through the tools you carry - read or search with them first. Do not answer from memory or from earlier turns." : undefined,
+          given.context,
+        ]
+          .filter(Boolean)
+          .join("\n\n") || undefined;
+        sendAgentPrompt$(finalInput, { context, library: given.library, files, docsGiven: given.docsGiven });
         return;
       }
       // No session (Build not installed, no agent-ready model): the direct

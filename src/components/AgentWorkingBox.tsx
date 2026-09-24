@@ -68,6 +68,9 @@ interface AgentWorkingBoxProps {
   /** Passages from the AI's documents rode with the prompt: a turn with no
    *  steps answered from them, and the summary line says so. */
   fromDocuments?: boolean;
+  /** Send the question again with the AI told to use its tools (a tools
+   *  turn that used none). */
+  onRetryWithTool$?: QRL<() => void>;
   onPermissionRespond$?: QRL<
     (requestId: number, decision: "allow" | "reject", always: boolean) => void
   >;
@@ -269,6 +272,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
     waitingOn,
     surface = "project",
     fromDocuments = false,
+    onRetryWithTool$,
     aiName,
     folderName,
     onPermissionRespond$,
@@ -547,10 +551,25 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
             onClick$={() => (compactOpen.value = !compactOpen.value)}
             class="flex items-center gap-1.5 rounded-md border-none bg-transparent px-0 py-1 text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] cursor-pointer"
           >
-            <span class="truncate">{summary.value || (fromDocuments ? "Answered from its documents" : "No steps")}</span>
+            <span class="truncate">
+              {summary.value || (fromDocuments ? "Answered from its documents" : "Answered without using its tools")}
+            </span>
             {changed.value.files > 0 && <span>· {plural(changed.value.files, "file changed", "files changed")}</span>}
-            <LuChevronRight class={`h-3 w-3 shrink-0 ${compactOpen.value ? "hidden" : ""}`} />
-            <LuChevronDown class={`h-3 w-3 shrink-0 ${compactOpen.value ? "" : "hidden"}`} />
+            {!!summary.value && <LuChevronRight class={`h-3 w-3 shrink-0 ${compactOpen.value ? "hidden" : ""}`} />}
+            {!!summary.value && <LuChevronDown class={`h-3 w-3 shrink-0 ${compactOpen.value ? "" : "hidden"}`} />}
+          </button>
+        )}
+        {/* No tool touched: one click sends the question again with the AI
+            told to use them (a small model answering from earlier turns
+            listed two notes of three, 09-25). */}
+        {compact && !working && !summary.value && !fromDocuments && onRetryWithTool$ && (
+          <button
+            type="button"
+            onClick$={() => onRetryWithTool$()}
+            class="-mt-1 mb-1 flex items-center gap-1 rounded-md border-none bg-transparent px-0 py-0.5 text-xs text-[var(--text-link)] hover:underline cursor-pointer"
+          >
+            <LuRotateCcw class="h-3 w-3" />
+            Try again with the tool
           </button>
         )}
         {/* Header: who is working where (live), or the turn's summary

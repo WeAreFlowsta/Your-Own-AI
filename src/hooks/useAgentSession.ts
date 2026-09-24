@@ -771,7 +771,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
    *  bubble shows a chip per `extra.files` name instead. Same split as the
    *  resume digest in dispatchPrompt: what the model reads vs what the
    *  user sees are different strings. */
-  const sendPrompt$ = $(async (text: string, extra?: { context?: string; files?: string[]; library?: LibraryDocGiven[] }) => {
+  const sendPrompt$ = $(async (text: string, extra?: { context?: string; files?: string[]; library?: LibraryDocGiven[]; docsGiven?: boolean }) => {
     if (!text.trim() && !extra?.context) return;
     const wire = extra?.context ? `${extra.context}\n\n${text}` : text;
     lastPrompt.value = wire;
@@ -798,10 +798,13 @@ export function useAgentSession(props: UseAgentSessionProps) {
       prepared.value = false;
       // The bubble is up already (prepareTurn$): add the documents that
       // rode along, so Sources can name them.
-      if (extra?.library?.length) {
+      if (extra?.library?.length || extra?.docsGiven) {
         const id = turnId.value;
-        const library = extra.library;
-        props.chatState.messages = props.chatState.messages.map((m) => (m.id === id ? { ...m, library } : m));
+        const library = extra.library?.length ? extra.library : undefined;
+        const docsGiven = !!extra.docsGiven;
+        props.chatState.messages = props.chatState.messages.map((m) =>
+          m.id === id ? { ...m, ...(library ? { library } : {}), docsGiven } : m,
+        );
       }
     } else {
       await startTurnBubble(text, extra?.files, extra?.library);

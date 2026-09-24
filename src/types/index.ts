@@ -160,6 +160,9 @@ export interface Message {
    *  themselves, kept in memory for this session only; the record keeps
    *  names and counts. */
   library?: LibraryDocGiven[];
+  /** The AI's document listing (names, one-line descriptions) rode with the
+   *  prompt, whether or not any passage text did. Live only. */
+  docsGiven?: boolean;
   /** Source-grounding: an answer's claims anchored to document quotes/spans (+
    *  image links), computed after the reply and shown in this message's Sources
    *  panel. Same shape recorded in the transcript provenance. */

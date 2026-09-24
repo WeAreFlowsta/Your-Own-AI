@@ -1496,7 +1496,12 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
                 <div class="pl-0 md:pl-10 lg:pl-10 mt-1 mb-1">
                   <AgentWorkingBox
                     log={props.message.agentLog ?? []}
-                    fromDocuments={!!props.message.library?.length}
+                    fromDocuments={!!props.message.library?.length || !!props.message.docsGiven}
+                    onRetryWithTool$={
+                      props.isLast && props.onRouteRetry$ && !props.message.isLoading
+                        ? $(() => props.onRouteRetry$!("tools"))
+                        : undefined
+                    }
                     working={!!props.message.isLoading}
                     tipHere={props.isLast !== false}
                     railOpen={agentRailOpen}
