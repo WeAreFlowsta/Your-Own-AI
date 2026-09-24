@@ -1559,11 +1559,16 @@ export function useAgentSession(props: UseAgentSessionProps) {
                 const item = log[i];
                 if (item.type !== "action" || (item.action.toolCallId !== r.task_id && item.action.taskId !== r.task_id)) continue;
                 const a = item.action;
+                // A task the harness has already ended is settled: a later
+                // list snapshot (status "failed", signal "killed", nothing
+                // more) must not repaint a stopped row as failed.
+                if (a.taskDone) continue;
                 const done = r.status === "completed" || r.status === "failed";
                 const lastLine = typeof r.output === "string" && r.output.trim()
                   ? r.output.trim().split("\n").pop()!.slice(0, 200)
                   : undefined;
-                const failed = r.status === "failed" && !r.explicitly_killed;
+                const stopped = !!r.explicitly_killed || r.signal === "killed";
+                const failed = r.status === "failed" && !stopped;
                 log[i] = {
                   ...item,
                   action: {
@@ -1571,7 +1576,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
                     status: failed ? "failed" : done ? "completed" : a.status,
                     taskDone: done ? true : a.taskDone,
                     endedAt: done ? a.endedAt ?? Date.now() : a.endedAt,
-                    lastLine: lastLine ?? a.lastLine,
+                    lastLine: stopped ? "Stopped" : lastLine ?? a.lastLine,
                     liveLine: done ? undefined : a.liveLine,
                     error: failed
                       ? a.error ?? (r.exit_code != null ? `exit code ${r.exit_code}` : r.signal ? `stopped by ${r.signal}` : "The task failed.")

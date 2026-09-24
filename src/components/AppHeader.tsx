@@ -83,10 +83,10 @@ interface AppHeaderProps {
   folderPath?: string | null;
   /** Agent session status while a folder is open. */
   folderStatus?: 'starting' | 'ready' | 'working' | 'stopped';
-  /** A permission card is waiting for the person's answer. */
-  folderWaiting?: boolean;
-  /** The last turn finished and nothing has been sent since. */
-  folderDone?: boolean;
+  /** The pending permission request's id, when a card waits for the person. */
+  folderPendingPermission?: string | null;
+  /** When the last turn finished cleanly, null once the next one is sent. */
+  folderLastFinishedAt?: number | null;
   /** Close the workspace (the route confirms first if the agent is mid-task). */
   onCloseFolder$?: QRL<() => void>;
   /** This project's permission mode (ask = default; auto = ordinary project
@@ -139,8 +139,8 @@ export default component$<AppHeaderProps>(
     showModelWidget = false,
     folderPath = null,
     folderStatus,
-    folderWaiting = false,
-    folderDone = false,
+    folderPendingPermission = null,
+    folderLastFinishedAt = null,
     onCloseFolder$,
     permissionMode = 'ask',
     onSetPermissionMode$,
@@ -354,7 +354,7 @@ export default component$<AppHeaderProps>(
                   class={`w-2 h-2 rounded-full shrink-0 ${
                     folderStatus === 'stopped'
                       ? 'bg-red-500'
-                      : folderWaiting
+                      : folderPendingPermission
                         ? 'bg-orange-500'
                         : folderStatus === 'starting'
                           ? 'bg-orange-500 animate-pulse'
@@ -365,13 +365,13 @@ export default component$<AppHeaderProps>(
                 />
                 {/* The word for the dot: what the project is doing right now,
                     readable from across the room. Nothing while idle. */}
-                {(folderWaiting || folderStatus === 'working' || folderStatus === 'starting' || folderStatus === 'stopped' || folderDone) && (
+                {(!!folderPendingPermission || folderStatus === 'working' || folderStatus === 'starting' || folderStatus === 'stopped' || (folderStatus === 'ready' && !!folderLastFinishedAt)) && (
                   <span
                     class={`shrink-0 text-[10px] uppercase tracking-wide ${
-                      folderWaiting ? 'text-[var(--text-link)]' : 'text-[var(--text-muted)]'
+                      folderPendingPermission ? 'text-[var(--text-link)]' : 'text-[var(--text-muted)]'
                     }`}
                   >
-                    {folderWaiting
+                    {folderPendingPermission
                       ? 'waiting for you'
                       : folderStatus === 'working'
                         ? 'running'
