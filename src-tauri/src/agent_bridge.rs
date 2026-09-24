@@ -986,6 +986,28 @@ pub async fn agent_interject(state: State<'_, AgentBridgeState>, text: String) -
     Ok(())
 }
 
+/// Stop a background task or a helper the agent started - the rail's Stop
+/// on a still-running row. A task: `x.ai/task/kill` (the harness ends it,
+/// reports it as explicitly killed, and the AI hears so when it next
+/// waits on it). A helper: `x.ai/subagent/cancel`.
+#[tauri::command]
+pub async fn agent_stop_task(state: State<'_, AgentBridgeState>, task_id: String, helper: bool) -> Result<(), String> {
+    let session_id = state.session_id.lock().await.clone().ok_or("agent session is not ready")?;
+    let (method, params) = if helper {
+        ("_x.ai/subagent/cancel", json!({ "subagentId": task_id }))
+    } else {
+        ("_x.ai/task/kill", json!({ "sessionId": session_id, "taskId": task_id, "source": "clientUi" }))
+    };
+    let reply = request_reply(&state, method, params, std::time::Duration::from_secs(15)).await?;
+    if let Some(err) = reply.get("error") {
+        let why = err.get("message").and_then(Value::as_str).unwrap_or("unknown error");
+        log::warn!("[agent] stop {} {task_id}: {why}", if helper { "helper" } else { "task" });
+        return Err(format!("could not stop it: {why}"));
+    }
+    log::info!("[agent] stopped {} {task_id}", if helper { "helper" } else { "task" });
+    Ok(())
+}
+
 /// Undo every file change the agent made in one turn (`prompt_index` as
 /// the agent numbers prompts, from 0): edits reverted, created files
 /// removed, deleted files restored - the hunk tracker's per-turn reject.

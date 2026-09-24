@@ -900,6 +900,22 @@ const ActionRow = component$<ActionRowProps>(({ action: a, open, onToggle$, work
           )}
           {!failed && elapsed && <span class="shrink-0 text-xs text-[var(--text-muted)]">{elapsed}</span>}
           {still && <span class="shrink-0 text-xs text-[var(--text-muted)]">still running</span>}
+          {running && !failed && ((a.taskId && !a.taskDone) || (a.icon === "helper" && a.helperId && !a.helperDone)) && (
+            <span
+              role="button"
+              tabIndex={0}
+              title={a.taskId ? "Stop this task" : "Stop this helper"}
+              onClick$={(e) => {
+                e.stopPropagation();
+                window.dispatchEvent(
+                  new CustomEvent("yoai-agent-stop-task", { detail: { id: a.taskId ?? a.helperId, helper: !a.taskId } }),
+                );
+              }}
+              class="shrink-0 rounded-md border border-[var(--border-subtle)] px-1.5 text-[11px] text-[var(--text-muted)] hover:text-red-500 hover:border-red-500/50 cursor-pointer"
+            >
+              Stop
+            </span>
+          )}
           {hasOutput && (
             <span class="ml-auto shrink-0 text-[var(--text-muted)] opacity-60">
               <LuChevronRight class={`h-3.5 w-3.5 ${open ? "hidden" : ""}`} />

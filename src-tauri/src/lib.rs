@@ -677,6 +677,7 @@ pub fn run() {
             agent_bridge::path_is_file,
             agent_bridge::agent_undo_turn,
             agent_bridge::agent_interject,
+            agent_bridge::agent_stop_task,
             mcp::mcp_tools_signature,
             mcp::mcp_readiness,
             mcp::mcp_check_port,

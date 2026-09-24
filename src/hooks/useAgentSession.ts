@@ -1291,6 +1291,20 @@ export function useAgentSession(props: UseAgentSessionProps) {
       }
     };
     window.addEventListener("yoai-agent-interject", onInterject);
+    // Stop on a still-running row: a background task or a helper. The
+    // harness ends it and says so (task_completed / subagent_finished), so
+    // the row closes on its word, not ours.
+    const onStopTask = async (ev: Event) => {
+      const { id, helper } = (ev as CustomEvent).detail as { id: string; helper: boolean };
+      if (!id) return;
+      uiLog(`[rail] stop ${helper ? "helper" : "task"} ${id}`);
+      try {
+        await invokeTauri("agent_stop_task", { taskId: id, helper });
+      } catch (e) {
+        uiLog(`[rail] stop failed: ${String(e)}`);
+      }
+    };
+    window.addEventListener("yoai-agent-stop-task", onStopTask);
 
     const unReady = await listen<{ sessionId: string }>("agent-ready", async () => {
       state.status = "ready";
@@ -2494,6 +2508,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
 
     cleanup(() => {
       window.removeEventListener("yoai-agent-interject", onInterject);
+      window.removeEventListener("yoai-agent-stop-task", onStopTask);
       unReady();
       unUpdate();
       unPermission();
