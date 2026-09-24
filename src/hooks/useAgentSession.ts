@@ -668,14 +668,22 @@ export function useAgentSession(props: UseAgentSessionProps) {
   const strugglePinned = useSignal<{ turnId: string; model: string } | null>(null);
   /** Skill name (lower case) -> glyph name, from the installed skills. */
   const skillGlyphs = useSignal<Record<string, string>>({});
-  const prepareTurn$ = $(async (text: string, files?: string[], surface?: "project" | "tools") => {
+  const prepareTurn$ = $(async (text: string, files?: string[], surface?: "project" | "tools", status?: string) => {
     if (state.status === "working") return; // mid-turn: sendPrompt$ interjects
     if (!text.trim()) return;
+    // Before the session exists, the wait is the session (its tool servers
+    // starting, a model loading); once it is up, the documents search. A
+    // caller that only knows "something is coming" passes its own word.
+    const word = status ?? (state.status === "ready" ? "Looking through documents.." : "Getting your tools ready..");
+    if (prepared.value) {
+      // Raised already (on the keystroke, before the tools gate): only the
+      // word changes.
+      state.liveStatus = word;
+      return;
+    }
     await startTurnBubble(text, files, undefined, surface);
     prepared.value = true;
-    // Before the session exists, the wait is the session (its tool servers
-    // starting, a model loading); once it is up, the documents search.
-    state.liveStatus = state.status === "ready" ? "Looking through documents.." : "Getting your tools ready..";
+    state.liveStatus = word;
   });
 
   /** The bubble raised by prepareTurn$ was for a session that did not open:

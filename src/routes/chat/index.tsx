@@ -1098,6 +1098,9 @@ export default component$(() => {
       // cache so the first fact this session isn't a cold ~22s wait. CPU-only,
       // never touches the chat model (GPU); no-op if the model isn't installed.
       void prewarmExtractionModel();
+      // The tools gate and the documents search both embed the question:
+      // warm that small model now, not on the first keystroke.
+      void import("../../utils/embeddings").then((m) => m.embedTexts(["warm up"]).catch(() => {}));
       // A late, quiet consolidation pass catches changes from the previous
       // session (hash-gated no-op when nothing changed).
       setTimeout(() => {
@@ -1324,6 +1327,15 @@ export default component$(() => {
     // it names one, sounds like what one does, the conversation has already
     // used one, or the person asked for the tools. Anything else is an
     // ordinary answer - "thanks" does not start a session.
+    // The page changes on the keystroke: the turn goes up BEFORE the tools
+    // gate decides where it runs (the gate's embedding call is a second
+    // warm, two or three cold - Eric, 09-25). Should the gate choose the
+    // direct chat, the bubble comes down again before that path speaks.
+    const mayGate = activeTools(selectedAi.value.aiConfig).length > 0 && attachedImages.value.length === 0;
+    if (mayGate && agentState.status !== "working" && !chatState.isLoading) {
+      dropReplacedTurn();
+      await prepareAgentTurn$(finalInput, attachedFiles.value.map((f) => f.filename), "tools", "Thinking..");
+    }
     let wantsTools = false;
     if (activeTools(selectedAi.value.aiConfig).length > 0 && attachedImages.value.length === 0) {
       const forced = forceToolsNext.value;
@@ -1413,6 +1425,9 @@ export default component$(() => {
     }
 
     const images = attachedImages.value.map((i) => i.dataUrl);
+    // A bubble raised on the keystroke for a session that is not happening
+    // comes down here; the direct chat raises its own.
+    await discardPreparedAgentTurn$();
     dropReplacedTurn();
     sendMessage(finalInput, selectedAction.value, fileContext, images);
     input.value = "";
