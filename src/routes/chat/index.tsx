@@ -1325,17 +1325,17 @@ export default component$(() => {
       // chips - never the extracted text (a PDF used to land wholesale in
       // the user's bubble on this path).
       dropReplacedTurn();
-      await prepareAgentTurn$(finalInput, attachedFiles.value.map((f) => f.filename));
-      const given = await sessionContext(fileContext, finalInput);
-      sendAgentPrompt$(finalInput, {
-        context: given.context,
-        library: given.library,
-        files: attachedFiles.value.map((f) => f.filename),
-      });
+      const files = attachedFiles.value.map((f) => f.filename);
+      await prepareAgentTurn$(finalInput, files);
+      // The field is the person's again the moment the turn is on screen -
+      // not after the documents search that rides with the prompt (the
+      // prompt sat in the field for a second or two, Eric 09-24).
       input.value = "";
       selectedAction.value = null;
       attachedImages.value = [];
       attachedFiles.value = [];
+      const given = await sessionContext(fileContext, finalInput);
+      sendAgentPrompt$(finalInput, { context: given.context, library: given.library, files });
       return;
     }
 
@@ -1346,16 +1346,13 @@ export default component$(() => {
     // model) - the AI then says tools need Projects.
     if (wantsTools && (await openToolsSession$())) {
       dropReplacedTurn();
-      await prepareAgentTurn$(finalInput, attachedFiles.value.map((f) => f.filename));
-      const given = await sessionContext(fileContext, finalInput);
-      sendAgentPrompt$(finalInput, {
-        context: given.context,
-        library: given.library,
-        files: attachedFiles.value.map((f) => f.filename),
-      });
+      const files = attachedFiles.value.map((f) => f.filename);
+      await prepareAgentTurn$(finalInput, files);
       input.value = "";
       selectedAction.value = null;
       attachedFiles.value = [];
+      const given = await sessionContext(fileContext, finalInput);
+      sendAgentPrompt$(finalInput, { context: given.context, library: given.library, files });
       return;
     }
 
