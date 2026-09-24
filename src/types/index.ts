@@ -460,7 +460,7 @@ export interface HolochainTranscriptEntry {
   routing_task?: string | null;
   /** Agent turn: the working log ({ items, stats }) - restores the rail on
    *  resume. Client-side schema; old entries read back null. */
-  agent_log?: { items?: AgentLogItem[]; stats?: Message['agentStats'] } | null;
+  agent_log?: { items?: AgentLogItem[]; stats?: Message['agentStats']; surface?: 'project' | 'tools' } | null;
   /** Workspace folder the turn worked in. */
   folder_path?: string | null;
 }

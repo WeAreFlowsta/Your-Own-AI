@@ -596,8 +596,12 @@ export function useAgentSession(props: UseAgentSessionProps) {
           }
         : undefined,
       {
-        agentLog: items.length || bubble.permissionLedger
-          ? { items, stats: bubble.agentStats, permissions: bubble.permissionLedger }
+        // Every agent turn gets a record, steps or not (a tools turn that
+        // answered from its documents made none, and came back from the
+        // drawer as a plain reply with "Answer again with tools" - 09-25),
+        // and the record says which surface it ran on.
+        agentLog: items.length || bubble.permissionLedger || bubble.agentTurn
+          ? { items, stats: bubble.agentStats, permissions: bubble.permissionLedger, surface: bubble.agentSurface }
           : undefined,
         folderPath: state.folderPath ?? undefined,
       },
@@ -2404,7 +2408,11 @@ export function useAgentSession(props: UseAgentSessionProps) {
             if (i.action.icon === "mcp" && i.action.status === "completed") toolOk = true;
           }
           const toolsTurn = state.mode === "tools" && !!state.sessionTools;
-          const struggled = red >= 2 || (toolsTurn && !toolOk);
+          // A tools turn that TRIED a tool and never got one to work is a
+          // struggle; one that answered from what it already had (the
+          // documents, the conversation) and never went red is not (09-25:
+          // a clean summary from the library copies raised the dialog).
+          const struggled = red >= 2 || (toolsTurn && !toolOk && red >= 1);
           const aiModel = props.selectedAi.value.aiConfig?.model || "";
           const offline = aiModel === "auto:offline" || aiModel === "auto:my-hardware" || aiModel.toLowerCase().endsWith(".gguf");
           if (struggled && offline) {

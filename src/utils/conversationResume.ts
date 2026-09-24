@@ -199,7 +199,10 @@ export async function loadConversationMessages(
       // Agent turns come back whole: the rail's stub renders from the
       // stored working log, expandable to the full story (step outputs
       // are not persisted - those rows simply are not expandable).
-      agentTurn: e.agent_log?.items?.length ? true : undefined,
+      // Any agent record makes it an agent turn, steps or not; the surface
+      // it ran on comes back with it (older records: the folder tells).
+      agentTurn: e.agent_log ? true : undefined,
+      agentSurface: e.agent_log?.surface ?? (typeof (e as any).folder_path === 'string' && /[\\/]tool-sessions[\\/]/.test((e as any).folder_path) ? 'tools' : e.agent_log ? 'project' : undefined),
       agentLog: logItems,
       agentStats: e.agent_log?.stats ?? undefined,
     };
