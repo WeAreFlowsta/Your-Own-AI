@@ -84,7 +84,7 @@ interface AppHeaderProps {
   /** Agent session status while a folder is open. */
   folderStatus?: 'starting' | 'ready' | 'working' | 'stopped';
   /** The pending permission request's id, when a card waits for the person. */
-  folderPendingPermission?: string | null;
+  folderPendingPermission?: string | number | null;
   /** When the last turn finished cleanly, null once the next one is sent. */
   folderLastFinishedAt?: number | null;
   /** Close the workspace (the route confirms first if the agent is mid-task). */
