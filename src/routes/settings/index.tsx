@@ -1571,47 +1571,46 @@ export default component$(() => {
                         </span>
                       </span>
                     </label>
-                    <label class="flex items-start gap-3 mt-3 select-none">
-                      <span class="min-w-0">
-                        <span class="block text-sm text-[var(--text-primary)]">Project work runs on</span>
-                        <span class="block text-xs text-[var(--text-secondary)]">
-                          With a server connected (Engines), Auto lets the stronger model win; or keep project
-                          work on this computer, or send it to your server whenever it answers. Chat keeps the
-                          Auto rule.
-                        </span>
-                      </span>
-                      <span class="ml-auto inline-flex shrink-0 rounded-full border border-[var(--border-subtle)] p-0.5">
-                        {(
-                          [
-                            ["auto", "Auto"],
-                            ["device", "This computer"],
-                            ["server", "Your server"],
-                          ] as const
-                        ).map(([value, label]) => (
+                    <div class="mt-4">
+                      <div class="text-sm text-[var(--text-primary)]">Project work runs on</div>
+                      <p class="text-xs text-[var(--text-secondary)] mt-1 mb-2">
+                        With a server connected (Engines): let the stronger model win, keep project work
+                        here, or send it to your server whenever it answers. Chat keeps the Auto rule.
+                      </p>
+                      <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        {[
+                          { id: "auto", label: "Auto", hint: "The stronger model for the job wins" },
+                          { id: "device", label: "This computer", hint: "Never the server" },
+                          { id: "server", label: "Your server", hint: "Whenever it answers and its window fits the session" },
+                        ].map((opt) => (
                           <button
-                            key={value}
+                            key={opt.id}
                             type="button"
                             onClick$={async () => {
-                              projectServerPref.value = value;
-                              localStorage.setItem("projectServerPref", value);
+                              projectServerPref.value = opt.id;
+                              localStorage.setItem("projectServerPref", opt.id);
                               try {
                                 const { Store } = await import("@tauri-apps/plugin-store");
                                 const store = await Store.load("settings.json");
-                                await store.set("projectServerPref", value);
+                                await store.set("projectServerPref", opt.id);
                                 await store.save();
                               } catch { /* store mirror is best-effort */ }
                             }}
-                            class={`rounded-full px-3 py-[3px] text-[12px] border-none cursor-pointer ${
-                              projectServerPref.value === value
-                                ? "bg-[var(--bg-card)] text-[var(--text-primary)]"
-                                : "bg-transparent text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                            class={`text-left rounded-xl p-3 border transition-colors ${
+                              projectServerPref.value === opt.id
+                                ? "bg-[var(--bg-button-primary)] text-[var(--text-button-primary)] border-[var(--border-subtle)]"
+                                : "bg-[var(--bg-main)] text-[var(--text-primary)] border-[var(--border-subtle)] hover:opacity-90"
                             }`}
+                            aria-pressed={projectServerPref.value === opt.id}
                           >
-                            {label}
+                            <div class="font-semibold text-sm">{opt.label}</div>
+                            <div class={`text-xs mt-1 ${projectServerPref.value === opt.id ? "" : "text-[var(--text-secondary)]"}`}>
+                              {opt.hint}
+                            </div>
                           </button>
                         ))}
-                      </span>
-                    </label>
+                      </div>
+                    </div>
                   </>
                 )}
                 </>

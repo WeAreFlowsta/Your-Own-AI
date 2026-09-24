@@ -106,6 +106,8 @@ export interface AgentSessionState {
    *  named for what it is: waiting on a provider, not local thinking. Empty
    *  for offline picks. */
   waitingOn: string;
+  /** The last route event said the person's own server serves this turn. */
+  lastRouteServer: boolean;
   /** Why routing picked the serving model (from the agent-route event). */
   routeReason: string;
   /** Generation tok/s of the latest model call, from the engine's own timings. */
@@ -340,6 +342,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     liveStatus: "",
     retryStatus: "",
     waitingOn: "",
+    lastRouteServer: false,
     routeReason: "",
     /** Generation tok/s of the latest model call, from the engine's own timings. */
     lastCallTps: 0,
@@ -671,6 +674,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
   const dispatchPrompt = $(async (text: string) => {
     state.status = "working";
     state.lastFinishedAt = null;
+    state.lastRouteServer = false;
     state.liveStatus = "Thinking..";
     props.chatState.isLoading = true;
     // A turn in flight is lost if the chat page unmounts (its listeners go
@@ -1623,11 +1627,15 @@ export function useAgentSession(props: UseAgentSessionProps) {
           // server on a pinned-online OR Auto AI is an online pick (Auto
           // routing kimi showed "on device" when this read the setting).
           const aiModel = props.selectedAi.value.aiConfig?.model || "";
+          // The person's own server is neither: the route event said so,
+          // or the AI is pinned to one of its models.
+          const servedServer = state.lastRouteServer || aiModel.startsWith("external:");
           const servedOnline =
-            aiModel.startsWith("online:") ||
-            (aiModel.startsWith("auto:") &&
-              !!modelKey &&
-              !modelKey.toLowerCase().endsWith(".gguf"));
+            !servedServer &&
+            (aiModel.startsWith("online:") ||
+              (aiModel.startsWith("auto:") &&
+                !!modelKey &&
+                !modelKey.toLowerCase().endsWith(".gguf")));
           // The folder's own name, on either path separator; a tools session
           // runs in a hidden workspace whose path (and account name) is not
           // for the screen - it is named for what it is.
@@ -1654,9 +1662,11 @@ export function useAgentSession(props: UseAgentSessionProps) {
               ...(state.lastCallTps > 0 ? { tokens_per_second: state.lastCallTps } : {}),
             },
             servedBy: modelKey
-              ? servedOnline
-                ? `online:${modelKey}`
-                : modelKey
+              ? servedServer
+                ? `external:${modelKey}`
+                : servedOnline
+                  ? `online:${modelKey}`
+                  : modelKey
               : m.servedBy,
             routingReason: state.routeReason ? `${where} - ${state.routeReason}` : where,
             agentStats: {
@@ -1931,6 +1941,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         : e.payload?.server
           ? "your server"
           : "";
+      state.lastRouteServer = !!e.payload?.server;
       // Why routing picked it - shown on the turn's Model button (e.g.
       // "online by default (Ornith on your device is as capable)").
       state.routeReason = typeof e.payload?.reason === "string" ? e.payload.reason : "";

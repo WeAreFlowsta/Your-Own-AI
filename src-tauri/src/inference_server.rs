@@ -946,6 +946,24 @@ async fn chat_completions(
                     routed
                 };
                 ai.model = routed;
+                // The screen hears the FINAL decision when a setting or the
+                // server's window changed the router's pick (09-24: the
+                // turn read "agent work on your device" while the server
+                // served it).
+                if ai.model != r.model {
+                    use tauri::Emitter as _;
+                    let server = ai.model.starts_with("external:");
+                    let _ = app.emit(
+                        "agent-route",
+                        json!({
+                            "ai": ai.name,
+                            "model": ai.model,
+                            "online": false,
+                            "server": server,
+                            "reason": if server { "your server — by your setting" } else { "this computer — your server's window is too small for this session" }
+                        }),
+                    );
+                }
             }
             Err(e) => {
                 return err(
