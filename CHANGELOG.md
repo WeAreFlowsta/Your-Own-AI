@@ -274,6 +274,42 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   your server chosen, the session is told the server's window, and a
   server whose window is smaller than the session's keeps project work
   here and says why.
+- Chat with tools has its own shape. No box and no Simple or Detailed:
+  while it runs, each action is its own collapsed row with its glyph and
+  name; once it is done, one grey line such as "Read 2 files, ran 1
+  command" that opens to the rows; the AI's words are plain chat text.
+  The Simple and Detailed control, the setting and Ctrl+O belong to
+  projects only.
+- The page changes on the keystroke. For an AI that carries tools, your
+  message and a "Thinking.." line go up before the app decides whether
+  the message needs a tool and before the session opens; the line then
+  says "Getting your tools ready.." and "Looking through documents.." as
+  it goes. On a small card an offline send used to sit on the empty
+  view for fifteen seconds first.
+- Quality first for agent work. Project and tools sessions now pick the
+  most capable model that runs on this computer, by capability, then
+  size, then fit, and a weaker model already loaded gives way, one reload
+  per session. A fully-on-card 2B used to beat a partly-offloaded 4B of
+  the same grade, and the 2B could not drive the Obsidian tool.
+- When a small model struggles, the turn says so in plain words: two or
+  more steps that ended red, or a tools turn that never got a tool call
+  to work, on an AI kept offline, once per session. Without a plan it
+  reads "Your AI found this hard. Tasks like this need more than the
+  models this computer can run. Online models do them in one go. They
+  are an optional paid service, and everything offline stays free.",
+  with a link to the Online Models page; with a plan, one button sets the
+  AI to Auto - Online and Offline and sends the message again; and an AI
+  pinned to a smaller model is told which model on this computer does
+  better, with no door. Never on our own faults, and never when Online
+  and Offline was already on.
+- A tools session is told where a tool's things live: the folder it runs
+  in is empty scratch space, notes and scenes exist only inside the tool,
+  and their paths are the tool's own, as listed. Passages from the AI's
+  documents that came from a synced vault say they are library copies.
+- The "Opening …" note shows while a conversation chosen from the drawer
+  loads, whatever the Continue line setting; a session whose model already
+  holds its window never asks the loader for more (a failed grow used to
+  unload the model and turn the header chip red).
 ### Models, continued
 - On an NVIDIA card, free graphics memory is read from the driver's own
   count, which sees every process on Windows as well as Linux. The
