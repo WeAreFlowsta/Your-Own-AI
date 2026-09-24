@@ -1527,6 +1527,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
               ...item,
               action: { ...item.action, taskId, status: "in_progress", endedAt: undefined, liveLine: item.action.liveLine ?? "Running in the background" },
             };
+            uiLog(`[rail] ${callId} runs in the background as task ${taskId} - Stop is on its row`);
             return { ...m, agentLog: log };
           });
         }
@@ -1800,24 +1801,6 @@ export function useAgentSession(props: UseAgentSessionProps) {
             }
           }
           if (idx < 0 && kind === "tool_call_update" && human.specificity === 0) return m;
-          if (idx < 0 && kind === "tool_call") {
-            // The agent runs its tools one after another: a new call means
-            // every earlier step still marked running is over, unless it is
-            // a backgrounded command, a wait or a helper (those outlive the
-            // call that started them). A completion update that never came
-            // must not leave a glyph breathing for the rest of the turn.
-            for (let i = 0; i < log.length; i++) {
-              const it = log[i];
-              if (it.type !== "action") continue;
-              const a = it.action;
-              const open = a.status === "in_progress" || a.status === "pending";
-              const outlives = !!a.taskId || !!a.waitFor?.length || a.icon === "helper" || a.icon === "wait";
-              const sameRun = (a.parent ?? "") === (helperOf ?? "");
-              if (open && !outlives && sameRun) {
-                log[i] = { ...it, action: { ...a, status: "completed", endedAt: a.endedAt ?? Date.now() } };
-              }
-            }
-          }
           if (idx >= 0) {
             const prevItem = log[idx] as { id: string; type: "action"; action: any };
             const prev = prevItem.action;
@@ -1835,6 +1818,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
             // A backgrounded command's start call answers at once with its
             // task id; the row runs until the harness reports the task ended.
             const holdTask = !!(taskId ?? prev.taskId) && !prev.taskDone && status === "completed" && !refused;
+            if (holdTask) uiLog(`[rail] hold ${toolCallId} running: task ${taskId ?? prev.taskId} not ended yet`);
             log[idx] = {
               ...prevItem,
               action: {

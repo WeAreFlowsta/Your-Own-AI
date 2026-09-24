@@ -9,6 +9,7 @@ import {
   type Signal,
 } from "@builder.io/qwik";
 import {
+  LuSquare,
   LuChevronRight,
   LuChevronDown,
   LuInfo,
@@ -918,8 +919,9 @@ const ActionRow = component$<ActionRowProps>(({ action: a, open, onToggle$, work
                   new CustomEvent("yoai-agent-stop-task", { detail: { id: a.taskId ?? a.helperId, helper: !a.taskId } }),
                 );
               }}
-              class="shrink-0 rounded-md border border-[var(--border-subtle)] px-1.5 text-[11px] text-[var(--text-muted)] hover:text-red-500 hover:border-red-500/50 cursor-pointer"
+              class="inline-flex shrink-0 items-center gap-1 rounded-md border border-red-500/40 px-2 py-[1px] text-xs text-red-500 hover:bg-red-500/10 cursor-pointer dark:text-red-400"
             >
+              <LuSquare class="h-3 w-3" />
               Stop
             </span>
           )}
