@@ -1,3 +1,4 @@
+import OnlineModelsDoor from "./OnlineModelsDoor";
 import {
   component$,
   useComputed$,
@@ -622,10 +623,16 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
         >
           {flow.value.map((el) => {
             if (el.kind === "notice") {
+              // The small-coder notice carries the online door under it:
+              // the one sentence that says where a bigger model lives.
+              const door = el.id.startsWith("hint-small-coder");
               return (
-                <div key={el.id} class="flex items-start gap-2 py-1 text-sm leading-snug text-[var(--text-secondary)]">
-                  <LuInfo class="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                  <span class="min-w-0 break-words">{el.text}</span>
+                <div key={el.id} class="flex flex-col gap-1 py-1 text-sm leading-snug text-[var(--text-secondary)]">
+                  <div class="flex items-start gap-2">
+                    <LuInfo class="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span class="min-w-0 break-words">{el.text}</span>
+                  </div>
+                  {door && <OnlineModelsDoor class="ml-[22px] text-sm text-[var(--text-secondary)]" />}
                 </div>
               );
             }

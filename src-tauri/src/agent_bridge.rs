@@ -553,6 +553,23 @@ pub async fn start_build_agent(
             .as_deref()
             .map(|m| m.starts_with("online:") || m == "auto:online-offline")
             .unwrap_or(false);
+        // An offline-only AI whose coding pick is a small model: project
+        // work is slow and weaker there (Eric, 09-23: with online routing
+        // "it worked much better"). One line on the turn, with the online
+        // door under it - said once per session, never on our own faults.
+        if local_window && !web_allowed {
+            if let Some(s) = crate::router::local_agent_serving_model(&app_handle, ai_model.as_deref().unwrap_or("")).await {
+                let grade = crate::model_caps::agent_caps(&s);
+                if grade < 6 {
+                    log::info!("[agent] small coder for an offline-only AI: '{s}' grades {grade} - the online door goes on the turn");
+                    let _ = app_handle.emit("agent-hint", json!({
+                        "kind": "small-coder",
+                        "sticky": true,
+                        "text": "Project work is slow and weaker on the small models this computer runs. Online routing lets the AI hand the hard steps to a bigger model, and keeps the rest here."
+                    }));
+                }
+            }
+        }
         log::info!(
             "[agent] model entries for {}: agent ctx {} / planning ctx {} / device workers {} / web {}",
             slug,
