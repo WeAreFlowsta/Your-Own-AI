@@ -879,7 +879,7 @@ const ActionRow = component$<ActionRowProps>(({ action: a, open, onToggle$, work
         } ${hasOutput ? "hover:bg-[var(--bg-card)] cursor-pointer" : "cursor-default"}`}
       >
         <div class="flex min-w-0 max-w-full items-center gap-2.5">
-          <ActionIcon icon={a.icon} kind={a.kind} brand={a.server} status={failed ? "failed" : running ? "in_progress" : "completed"} />
+          <ActionIcon icon={a.icon} kind={a.kind} brand={a.server} glyph={a.glyph} status={failed ? "failed" : running ? "in_progress" : "completed"} />
           <span
             class={`min-w-0 truncate whitespace-nowrap ${
               failed ? "text-red-500 dark:text-red-400" : running ? "text-[var(--text-primary)]" : "text-[var(--text-secondary)]"

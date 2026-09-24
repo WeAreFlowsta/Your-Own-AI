@@ -1,3 +1,4 @@
+import { Glyph, knownGlyph } from "../../../utils/glyphs";
 import { loadedModelNow } from "../../../utils/loadedModel";
 /**
  * Add-ons > Skills - what your AIs know how to do.
@@ -482,7 +483,12 @@ export default component$(() => {
                     >
                       <div class="flex items-start justify-between gap-2">
                         <div class="min-w-0">
-                          <h2 class="truncate font-medium text-[var(--text-primary)]">{s.name}</h2>
+                          <h2 class="flex min-w-0 items-center gap-2 font-medium text-[var(--text-primary)]">
+                            <span class="inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-md bg-[var(--bg-main)] text-[var(--text-secondary)]">
+                              {knownGlyph(s.icon) ? <Glyph name={s.icon!} /> : <LuPuzzle class="h-3.5 w-3.5" />}
+                            </span>
+                            <span class="truncate">{s.name}</span>
+                          </h2>
                           <p class="mt-0.5 text-sm text-[var(--text-secondary)] line-clamp-3">{s.description || "No description in SKILL.md."}</p>
                         </div>
                         <LiquidMetalButton

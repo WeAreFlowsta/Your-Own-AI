@@ -653,6 +653,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
    *  start plus the search took ~3 s on 09-23 with nothing on screen, while
    *  a direct chat moves at once). sendPrompt$ then fills in the rest. */
   const prepared = useSignal(false);
+  /** Skill name (lower case) -> glyph name, from the installed skills. */
+  const skillGlyphs = useSignal<Record<string, string>>({});
   const prepareTurn$ = $(async (text: string, files?: string[]) => {
     if (state.status === "working") return; // mid-turn: sendPrompt$ interjects
     if (!text.trim()) return;
@@ -1293,6 +1295,15 @@ export function useAgentSession(props: UseAgentSessionProps) {
     const unReady = await listen<{ sessionId: string }>("agent-ready", async () => {
       state.status = "ready";
       state.statusNote = "";
+      // The installed skills' own icons, for the rail's skill steps.
+      try {
+        const { listSkills } = await import("../utils/skills");
+        const m: Record<string, string> = {};
+        for (const s of await listSkills()) if (s.icon) m[s.name.toLowerCase()] = s.icon;
+        skillGlyphs.value = m;
+      } catch {
+        /* no skills listing */
+      }
       // A session that comes up with history already on screen is a resume
       // (or a mid-conversation reopen) - the agent itself starts blank, so
       // the next prompt must carry the restored-context digest.
@@ -1721,6 +1732,9 @@ export function useAgentSession(props: UseAgentSessionProps) {
           return;
         }
         if (kind === "tool_call") state.sessionToolCalls += 1;
+        // A skill step wears the skill's own glyph when its SKILL.md names one.
+        const skillName = human.kind === "skill" ? human.label.replace(/^Using skill: /, "").trim().toLowerCase() : "";
+        const glyph = skillName ? skillGlyphs.value[skillName] : undefined;
         const out = actionOutput(update);
         const diff = extractDiff(update.content);
         // A backgrounded command's result names its task: "<task-id>…</task-id>".
@@ -1821,6 +1835,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
                 specificity: Math.max(human.specificity, prev.specificity ?? 0),
                 name: human.name ?? prev.name,
                 server: human.server ?? prev.server,
+                glyph: glyph ?? prev.glyph,
                 detail: human.detail ?? prev.detail,
                 locations: locations.length ? locations : prev.locations,
                 output: out.output ?? prev.output,
@@ -1847,6 +1862,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
                 specificity: human.specificity,
                 name: human.name,
                 server: human.server,
+                glyph,
                 status: status || "in_progress",
                 locations,
                 detail: human.detail,

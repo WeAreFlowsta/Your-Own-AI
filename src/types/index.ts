@@ -305,6 +305,8 @@ export interface AgentAction {
   helperDone?: boolean;
   /** For a backgrounded command: the harness reported the task ended. */
   taskDone?: boolean;
+  /** A named glyph for the icon (a skill's own), when the step has one. */
+  glyph?: string;
   /** For a backgrounded command: the task id the harness printed in its
    *  result; waits and kills name the task by this id. */
   taskId?: string;

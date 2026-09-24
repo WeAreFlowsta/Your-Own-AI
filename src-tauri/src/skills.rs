@@ -58,6 +58,9 @@ pub struct SkillInfo {
     pub tokens: u64,
     pub runs_programs: bool,
     pub source: Option<SkillSource>,
+    /// `icon:` in the front matter - a Lucide glyph name ("book-open");
+    /// the app draws the ones it knows, the puzzle piece otherwise.
+    pub icon: Option<String>,
 }
 
 /// `~/.your-own-ai-build/skills` - created on first use.
@@ -110,6 +113,28 @@ pub(crate) fn parse_front_matter(text: &str) -> (Option<String>, Option<String>)
         }
     }
     (name, description)
+}
+
+/// `icon:` from the front matter, when the skill names one.
+pub(crate) fn front_matter_icon(text: &str) -> Option<String> {
+    let mut lines = text.lines();
+    if lines.next().map(str::trim) != Some("---") {
+        return None;
+    }
+    for line in lines {
+        if line.trim() == "---" {
+            break;
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            if k.trim() == "icon" {
+                let v = v.trim().trim_matches('"').trim_matches('\'').trim().to_lowercase();
+                if !v.is_empty() && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+                    return Some(v);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// SKILL.md without its front matter - what the chat path hands the model.
@@ -235,6 +260,7 @@ async fn info_for(dir: &Path) -> Option<SkillInfo> {
         tokens,
         runs_programs,
         source: read_sidecar(dir),
+        icon: front_matter_icon(&skill_md),
     })
 }
 

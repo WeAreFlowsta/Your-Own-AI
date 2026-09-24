@@ -1,5 +1,6 @@
 import { component$ } from "@builder.io/qwik";
 import { brandIconFor } from "../utils/brandIcons";
+import { Glyph, knownGlyph } from "../utils/glyphs";
 import {
   LuFileText,
   LuFolder,
@@ -53,6 +54,8 @@ interface ActionIconProps {
   /** An MCP server id or a model maker: its own mark when we have one,
    *  monochrome like every other glyph. */
   brand?: string;
+  /** A named glyph (a skill's own, from its front matter); wins over kind. */
+  glyph?: string;
   /** Extra classes on the box. */
   class?: string;
 }
@@ -78,7 +81,8 @@ export const ActionIcon = component$<ActionIconProps>((props) => {
     <span class={box} aria-hidden="true">
       {brand ? (
         <svg class={g} viewBox="0 0 24 24" fill="currentColor"><path d={brand} /></svg>
-      ) : name === "read" ? <LuFileText class={g} />
+      ) : knownGlyph(props.glyph) ? <Glyph name={props.glyph!} class={g} />
+        : name === "read" ? <LuFileText class={g} />
         : name === "folder" ? <LuFolder class={g} />
         : name === "search" ? <LuSearch class={g} />
         : name === "edit" ? <LuPencil class={g} />

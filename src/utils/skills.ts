@@ -27,6 +27,8 @@ export interface SkillInfo {
   /** Ships scripts, hooks or MCP servers (text-only skills never run anything). */
   runs_programs: boolean;
   source: SkillSource | null;
+  /** `icon:` from the front matter - a glyph name (utils/glyphs.tsx). */
+  icon?: string | null;
 }
 
 /** Above this a skill takes a real bite out of a small model's context. */
