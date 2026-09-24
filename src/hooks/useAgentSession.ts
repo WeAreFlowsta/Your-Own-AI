@@ -611,7 +611,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
 
   /** The turn's single reply bubble, pushed at Enter. Mounting it anchors
    *  the question to the top and shows the avatar + action bar instantly. */
-  const startTurnBubble = $((userText: string, attachedFiles?: string[], library?: LibraryDocGiven[]) => {
+  const startTurnBubble = $((userText: string, attachedFiles?: string[], library?: LibraryDocGiven[], surface?: "project" | "tools") => {
     const id = uuidv4();
     turnId.value = id;
     props.chatState.messages = [
@@ -632,7 +632,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         aiImageUrl: props.selectedAi.value.imageUrl || undefined,
         isLoading: true,
         agentTurn: true,
-        agentSurface: state.mode === "tools" ? "tools" : "project",
+        agentSurface: surface ?? (state.mode === "tools" ? "tools" : "project"),
         // The AI's own documents whose passages rode with this prompt
         // (shown under Sources, recorded with the turn as names and counts).
         ...(library?.length ? { library } : {}),
