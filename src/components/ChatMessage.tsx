@@ -1485,10 +1485,18 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
               )}
               {/* Agent work rail: the turn's story (speech, thread, cards),
                   live while working, folded to a stub when done. */}
-              {props.message.agentLog && props.message.agentLog.length > 0 && (
+              {/* Live: the rail is there from the first moment (its pearl says
+                  what the turn waits for) even before any step; finished: a
+                  project turn with steps, or a tools turn (its one grey line
+                  says "Answered from its documents" when no tool was needed). */}
+              {props.message.agentTurn &&
+                (props.message.isLoading ||
+                  (props.message.agentLog?.length ?? 0) > 0 ||
+                  props.message.agentSurface === "tools") && (
                 <div class="pl-0 md:pl-10 lg:pl-10 mt-1 mb-1">
                   <AgentWorkingBox
-                    log={props.message.agentLog}
+                    log={props.message.agentLog ?? []}
+                    fromDocuments={!!props.message.library?.length}
                     working={!!props.message.isLoading}
                     tipHere={props.isLast !== false}
                     railOpen={agentRailOpen}
