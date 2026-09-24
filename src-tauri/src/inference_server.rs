@@ -1418,6 +1418,12 @@ async fn chat_completions(
         let mut online_guard = online_request_id
             .clone()
             .map(|id| crate::llm::OnlineReplyGuard::new(app.clone(), client.clone(), id));
+        // A reply from the person's server that breaks off mid-stream is a
+        // server failure too (09-24: the kill test broke a stream, not a
+        // connect): set it aside and say so, the harness retries here.
+        let stream_from_server = external_id.is_some();
+        let stream_is_agent = agent_mode;
+        let stream_app = app.clone();
         let body_stream = async_stream::stream! {
             let _turn = local_permit; // released when the stream ends
             let mut s = upstream.bytes_stream();
@@ -1440,6 +1446,17 @@ async fn chat_completions(
                         }
                     }
                     Err(e) => {
+                        if stream_from_server {
+                            crate::engine::mark_external_failed();
+                            if stream_is_agent {
+                                use tauri::Emitter as _;
+                                let _ = stream_app.emit("agent-hint", json!({
+                                    "kind": "server-away",
+                                    "sticky": false,
+                                    "text": "Your server stopped answering mid-reply, so the next steps run on this computer."
+                                }));
+                            }
+                        }
                         yield Err(std::io::Error::new(std::io::ErrorKind::Other, e));
                         break;
                     }
