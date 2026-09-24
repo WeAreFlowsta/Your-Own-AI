@@ -66,6 +66,9 @@ export interface AgentSessionState {
   /** When the last turn finished cleanly; null once the next one is sent.
    *  The folder chip says "done" while it is set. */
   lastFinishedAt: number | null;
+  /** This session's coder is a small local model on an offline-only AI
+   *  (the bridge said so at open): a failed turn gets the online door. */
+  smallCoder: boolean;
   /** The tool set the open tools session started with (joined names) - a
    *  changed set opens a fresh session, since the harness fixes tools at start. */
   sessionTools: string;
@@ -324,6 +327,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     mode: null,
     sessionAiId: null,
     lastFinishedAt: null,
+    smallCoder: false,
     sessionTools: "",
     sessionToolsSig: "",
     sessionToolCalls: 0,
@@ -948,6 +952,12 @@ export function useAgentSession(props: UseAgentSessionProps) {
         // Tools this AI carries (Add-ons > Tools) - the bridge resolves them.
         mcpNames: activeTools(props.selectedAi.value.aiConfig),
       });
+      // Warm the embedding model now, while the person types: the
+      // documents search that rides with the first prompt paid the
+      // model's cold start at send (~2 s of nothing on screen, 09-23).
+      import("../utils/embeddings")
+        .then(({ embedTexts }) => embedTexts(["warm up"]).catch(() => {}))
+        .catch(() => {});
     } catch (err) {
       state.status = "idle";
       state.folderPath = null;
@@ -1027,6 +1037,12 @@ export function useAgentSession(props: UseAgentSessionProps) {
         mcpNames: names,
       });
       return true;
+      // Warm the embedding model now, while the person types: the
+      // documents search that rides with the first prompt paid the
+      // model's cold start at send (~2 s of nothing on screen, 09-23).
+      import("../utils/embeddings")
+        .then(({ embedTexts }) => embedTexts(["warm up"]).catch(() => {}))
+        .catch(() => {});
     } catch (err) {
       state.status = "idle";
       state.folderPath = null;
@@ -1045,6 +1061,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.mode = null;
     state.sessionAiId = null;
     state.lastFinishedAt = null;
+    state.smallCoder = false;
     state.sessionTools = "";
     state.sessionToolsSig = "";
     state.sessionToolCalls = 0;
@@ -1919,6 +1936,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       const text = typeof e.payload?.text === "string" ? e.payload.text : "";
       if (!text) return;
       const kind = String(e.payload?.kind ?? "");
+      if (kind === "small-coder") state.smallCoder = true;
       // Before any turn exists (a session-start notice): keep it for the
       // first turn's bubble instead of dropping it on the floor.
       if (!turnId.value) {
@@ -2306,6 +2324,18 @@ export function useAgentSession(props: UseAgentSessionProps) {
             },
           };
         });
+        if (errorText && state.smallCoder) {
+          // The door again, on the failure itself (the rail draws it under
+          // any notice whose id starts with hint-small-coder).
+          log = [
+            ...log,
+            {
+              id: `hint-small-coder-fail-${m.id}`,
+              type: "notice" as const,
+              text: "That failed on the small model running on this computer. Online routing would hand a step like this to a bigger model.",
+            },
+          ];
+        }
         // The turn's last words ARE the answer: promote the last spoken
         // passage into the bubble body (content goes "" -> answer exactly
         // once - it must never shrink). WHEREVER it sits: a turn that speaks

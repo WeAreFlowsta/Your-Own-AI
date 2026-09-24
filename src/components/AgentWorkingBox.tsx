@@ -360,7 +360,18 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                 : { kind: "action", id: item.id, action: item.action };
           const last = out[out.length - 1];
           if (last?.kind === "group") {
-            last.items = [...last.items, row];
+            const prev = last.items[last.items.length - 1];
+            if (row.kind === "thought" && prev?.kind === "thought") {
+              // Thoughts with nothing between them are one thought: one
+              // row, one clock (a chain of "Thought for 1 s" rows read as
+              // noise, 09-24).
+              last.items = [
+                ...last.items.slice(0, -1),
+                { ...prev, text: prev.text ? `${prev.text}\n\n${row.text}` : row.text, endedAt: row.endedAt },
+              ];
+            } else {
+              last.items = [...last.items, row];
+            }
           } else {
             out.push({ kind: "group", id: item.id, items: [row] });
           }
