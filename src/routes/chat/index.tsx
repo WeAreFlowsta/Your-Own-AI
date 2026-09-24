@@ -662,7 +662,7 @@ export default component$(() => {
           /* the composer: still ours - nothing else uses Ctrl+O in the app */
         }
         ev.preventDefault();
-        toggleAgentView(agentState.mode === "tools" ? "tools" : "project");
+        if (agentState.mode !== "tools") toggleAgentView("project");
         return;
       }
       if (ev.key === "Escape" && chatState.isLoading) {

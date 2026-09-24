@@ -293,6 +293,13 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
     });
 
     const detailed = useComputed$(() => view.value === "detailed");
+    // Chat with tools is its own view (Eric, 09-24): no box, no Simple or
+    // Detailed, every action its own collapsed row with its glyph and name
+    // while it runs, one grey summary line once it is done that opens to
+    // the rows on a click, and the AI's words as plain chat text - the
+    // part a voice would read. The Claude chat shape.
+    const compact = surface === "tools";
+    const compactOpen = useSignal(false);
 
     // A background task from this turn may still be writing after the
     // turn: its row keeps its clock while its line is fresh.
@@ -528,10 +535,23 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
 
 
     return (
-      <div class="my-1 rounded-xl border border-[var(--border-divider)] bg-[var(--bg-main)] px-3 pt-2 pb-2">
+      <div class={compact ? "my-1" : "my-1 rounded-xl border border-[var(--border-divider)] bg-[var(--bg-main)] px-3 pt-2 pb-2"}>
+        {/* Chat with tools, finished: one line that opens to the rows. */}
+        {compact && !working && (
+          <button
+            type="button"
+            onClick$={() => (compactOpen.value = !compactOpen.value)}
+            class="flex items-center gap-1.5 rounded-md border-none bg-transparent px-0 py-1 text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] cursor-pointer"
+          >
+            <span class="truncate">{summary.value || "No steps"}</span>
+            {changed.value.files > 0 && <span>· {plural(changed.value.files, "file changed", "files changed")}</span>}
+            <LuChevronRight class={`h-3 w-3 shrink-0 ${compactOpen.value ? "hidden" : ""}`} />
+            <LuChevronDown class={`h-3 w-3 shrink-0 ${compactOpen.value ? "" : "hidden"}`} />
+          </button>
+        )}
         {/* Header: who is working where (live), or the turn's summary
             (finished); the view control on the right. */}
-        <div class="flex items-center justify-between gap-3 text-xs text-[var(--text-secondary)]">
+        <div class={`flex items-center justify-between gap-3 text-xs text-[var(--text-secondary)] ${compact ? "hidden" : ""}`}>
           <div class="flex min-w-0 items-center gap-2">
             {working ? (
               <>
@@ -630,7 +650,9 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
             caps the height so the reply below stays in reach. */}
         <div
           ref={railRef}
-          class={`mt-2 flex flex-col gap-1 ${detailed.value && working ? "max-h-[70vh] overflow-y-auto" : ""}`}
+          class={`flex flex-col gap-1 ${compact ? "mt-1" : "mt-2"} ${detailed.value && working && !compact ? "max-h-[70vh] overflow-y-auto" : ""} ${
+            compact && !working && !compactOpen.value ? "hidden" : ""
+          }`}
           onScroll$={(_, el) => {
             railFollow.value = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
           }}
@@ -702,7 +724,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                 />
               );
             }
-            const rows = rowsFor(el.items, !detailed.value, waitLines.value, knownIds.value);
+            const rows = rowsFor(el.items, !detailed.value && !compact, waitLines.value, knownIds.value);
             return (
               <div key={el.id} class="flex flex-col gap-0.5 py-0.5">
                 {rows.map((row) => {
@@ -754,6 +776,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                     );
                   }
                   if (row.kind === "thought") {
+                    if (compact) return null;
                     const isOpen = !!openThoughts.value[row.id];
                     const end = row.endedAt ?? (working ? now.value : undefined);
                     const secs = row.at != null && end != null ? Math.max(1, Math.round((end - row.at) / 1000)) : null;
@@ -834,7 +857,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                   // Detailed shows every step open (its file or command, its
                   // output as it comes); a failed step opens in both views.
                   // A click on the row overrides either way.
-                  const open = explicit !== undefined ? explicit : (st.failed && !!a.error) || detailed.value;
+                  const open = explicit !== undefined ? explicit : (st.failed && !!a.error) || (detailed.value && !compact);
                   return (
                     <ActionRow
                       key={row.id}
@@ -871,7 +894,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
 
         {/* The pearl: what is happening right now, how long, how much. */}
         {working && tipHere && (
-          <div key="live-pearl" class="mt-2 flex items-center gap-2 border-t border-[var(--border-divider)] pt-2 text-xs text-[var(--text-secondary)]">
+          <div key="live-pearl" class={`mt-2 flex items-center gap-2 text-xs text-[var(--text-secondary)] ${compact ? "" : "border-t border-[var(--border-divider)] pt-2"}`}>
             <span class="h-2 w-2 shrink-0 rounded-full bg-[var(--text-link)] animate-pulse" />
             <span class="min-w-0 flex-grow truncate whitespace-nowrap">
               {shownStatus.value}

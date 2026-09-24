@@ -311,7 +311,6 @@ export default component$(() => {
   // Simple | Detailed control on a rail changes. Only shown when the Build
   // agent is actually installed.
   const agentDetailedProjects = useSignal(true);
-  const agentDetailedTools = useSignal(false);
   const agentNotify = useSignal(true);
   const buildInstalled = useSignal(false);
   // "Run in your terminal" behavior: default = pre-filled, Enter to run.
@@ -416,7 +415,6 @@ export default component$(() => {
     smartModeDetection.value =
       localStorage.getItem("smartModeDetection") !== "false"; // default ON
     agentDetailedProjects.value = getAgentView("project") === "detailed";
-    agentDetailedTools.value = getAgentView("tools") === "detailed";
     agentNotify.value = localStorage.getItem("agent-notify") !== "off";
     terminalRunImmediately.value =
       localStorage.getItem("terminal-run-immediately") === "true";
@@ -633,11 +631,6 @@ export default component$(() => {
     agentNotify.value = !agentNotify.value;
     localStorage.setItem("agent-notify", agentNotify.value ? "on" : "off");
   });
-  const toggleAgentDetailedTools = $(() => {
-    agentDetailedTools.value = !agentDetailedTools.value;
-    setAgentView("tools", agentDetailedTools.value ? "detailed" : "simple");
-  });
-
   const toggleGroundDocuments = $(() => {
     groundDocumentsAuto.value = !groundDocumentsAuto.value;
     localStorage.setItem(
@@ -983,14 +976,6 @@ export default component$(() => {
                         one row and thoughts stay out of the way. The Simple |
                         Detailed control on any rail changes this too, and Ctrl+O
                         flips it.
-                      </SettingToggle>
-                      <SettingToggle
-                        title="Detailed view in chat with tools"
-                        checked={agentDetailedTools}
-                        onToggle$={toggleAgentDetailedTools}
-                      >
-                        The same choice for a chat turn that uses a tool. Simple
-                        by default: a chat is about the answer.
                       </SettingToggle>
                       <SettingToggle
                         title="Tell me when a project finishes"
