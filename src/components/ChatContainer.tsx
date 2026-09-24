@@ -1,6 +1,7 @@
 import { component$, useSignal, useVisibleTask$, type Signal, type QRL, $ } from '@builder.io/qwik';
 import type { AgentPermissionMode } from '../utils/agentPermissions';
-import type { UserDefinedAI } from '../types';
+import type { UserDefinedAI, AgentPermission } from '../types';
+import { AgentPermissionCard } from './AgentPermissionCard';
 import InitialView from './InitialView';
 import ConversationView from './ConversationView';
 import SelectionRemember from './SelectionRemember';
@@ -47,6 +48,11 @@ interface ChatContainerProps {
   onPermissionOffscreen$?: QRL<(offscreen: boolean) => void>;
   /** True while a permission card is pending AND scrolled out of view. */
   showPermissionPill?: boolean;
+  /** The permission the agent is waiting on right now. It is shown above
+   *  the input field - where the person is - so answering never needs a
+   *  scroll or a click (Eric, 09-24). The rail keeps its own card as the
+   *  record of the decision. */
+  pendingPermission?: AgentPermission | null;
   /** True while a folder-agent turn is streaming (turn-scoped scroll space). */
   agentStreaming?: boolean;
   /** Passed to the input bar: the tools this AI carries, and the one thing in the way if any. */
@@ -214,7 +220,7 @@ export default component$<ChatContainerProps>((props) => {
           must never sit unseen); otherwise, while the user is scrolled away
           from a working turn's tip, it carries the current action and jumps
           back on click. */}
-      {(props.showPermissionPill ||
+      {((props.showPermissionPill && !props.pendingPermission) ||
         (props.agentStreaming && !tipAttached.value)) && (
         <div class="relative">
           <button
@@ -229,6 +235,20 @@ export default component$<ChatContainerProps>((props) => {
         </div>
       )}
       <div class="shrink-0 px-4 py-2 sm:py-4 border-t border-[var(--border-subtle)]">
+        {props.pendingPermission && (
+          <div class="mx-auto mb-3 w-full max-w-3xl">
+            <AgentPermissionCard
+              key={`composer-perm-${props.pendingPermission.requestId}`}
+              permission={props.pendingPermission}
+              onRespond$={
+                props.onPermissionRespond$ &&
+                // eslint-disable-next-line qwik/valid-lexical-scope
+                ((decision: 'allow' | 'reject', always: boolean) =>
+                  props.onPermissionRespond$!(props.pendingPermission!.requestId, decision, always))
+              }
+            />
+          </div>
+        )}
         <ChatInputBar
           carry={props.carry}
           onCarryChanged$={props.onCarryChanged$}

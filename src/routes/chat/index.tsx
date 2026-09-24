@@ -6,6 +6,7 @@ import { toggleAgentView } from "../../utils/agentView";
  */
 
 import {
+  useComputed$,
   component$,
   useSignal,
   useContext,
@@ -181,6 +182,19 @@ export default component$(() => {
     setPermissionMode$,
     undoTurn$,
   } = useAgentSession({ chatState, selectedAi });
+
+  // The permission the agent waits on right now, from the turn's own
+  // record - shown above the input field by ChatContainer.
+  const pendingPermission = useComputed$(() => {
+    const id = agentState.pendingPermissionId;
+    if (id === null) return null;
+    for (let i = chatState.messages.length - 1; i >= 0; i--) {
+      for (const it of chatState.messages[i].agentLog ?? []) {
+        if (it.type === "permission" && it.permission.requestId === id) return it.permission;
+      }
+    }
+    return null;
+  });
   const showCloseFolderConfirm = useSignal(false);
   // The header workspace slot: exists only when Build is installed.
   const buildInstalled = useSignal(false);
@@ -1746,6 +1760,7 @@ export default component$(() => {
                 agentState.pendingPermissionId !== null &&
                 agentState.pendingCardOffscreen
               }
+              pendingPermission={pendingPermission.value}
               agentStreaming={
                 agentState.folderPath !== null && chatState.isLoading
               }
