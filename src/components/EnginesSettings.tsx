@@ -24,6 +24,7 @@ interface ExternalEngineInfo {
   models_info: { id: string; overall: number | null }[];
   /** Measured at connect time with a one-shot mini-generation. */
   tps: number | null;
+  ctx?: number | null;
   error: string | null;
 }
 
@@ -578,15 +579,16 @@ export default component$(() => {
                     {external.value.healthy
                       ? `- ${external.value.models.length} model${external.value.models.length === 1 ? "" : "s"}${
                           external.value.tps ? ` · ~${Math.round(external.value.tps)} tok/s measured` : ""
+                        }${
+                          external.value.ctx ? ` · ${Math.round(external.value.ctx / 1024)}k window` : ""
                         }`
                       : `- unreachable${external.value.error ? ` (${external.value.error})` : ""}`}
                   </span>
                 </p>
                 <p class="mt-1 text-xs text-[var(--text-muted)]">
-                  Its models join your offline ones: an AI on Auto uses the server when it holds the stronger
-                  model for the job, and project work can run there too (Settings › Routing). Its context, threads
-                  and speed-up are set on that computer - Fine-tune here does not reach it. If it stops answering,
-                  the next steps run on this computer.
+                  Its models count as offline models: on either Auto mode the server takes a job when it holds the
+                  stronger model, and project work can run there too (Settings › Routing). Its window and threads
+                  are set on that computer; Fine-tune here does not reach it. If it stops answering, work carries on here.
                 </p>
               </div>
             ) : (

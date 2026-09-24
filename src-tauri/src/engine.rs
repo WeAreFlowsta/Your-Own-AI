@@ -509,6 +509,9 @@ async fn bench_external(base: &str, model_id: &str) -> Option<f64> {
 pub struct ExternalEngineInfo {
     pub url: Option<String>,
     pub healthy: bool,
+    /// The server's context window per slot, when it reports one
+    /// (llama.cpp `/props`); None for engines that do not say.
+    pub ctx: Option<u64>,
     pub models: Vec<String>,
     /// Per-model capability match from the registry (same order as `models`).
     pub models_info: Vec<ExternalModelInfo>,
@@ -532,23 +535,47 @@ pub async fn set_external_engine(app: AppHandle, url: String) -> Result<External
         Some(first) => bench_external(&base, first).await,
         None => None,
     };
+    let ctx = probe_external_ctx(&base).await;
     let path = external_engine_path(&app).ok_or("no app data dir")?;
     // Models are cached alongside the url so ROUTING can consider the
     // server without a network probe per request; the status read
     // refreshes this cache whenever the server answers.
     std::fs::write(
         &path,
-        serde_json::json!({ "url": base, "tps": tps, "models": models }).to_string(),
+        serde_json::json!({ "url": base, "tps": tps, "models": models, "ctx": ctx }).to_string(),
     )
     .map_err(|e| format!("could not save: {}", e))?;
     log::info!(
-        "[Engine] external engine connected: {} ({} models{})",
+        "[Engine] external engine connected: {} ({} models{}{})",
         base,
         models.len(),
-        tps.map(|t| format!(", ~{:.0} tok/s", t)).unwrap_or_default()
+        tps.map(|t| format!(", ~{:.0} tok/s", t)).unwrap_or_default(),
+        ctx.map(|c| format!(", {}k window", c / 1024)).unwrap_or_default()
     );
     let models_info = scan_models(&models);
-    Ok(ExternalEngineInfo { url: Some(base), healthy: true, models, models_info, tps, error: None })
+    Ok(ExternalEngineInfo { url: Some(base), healthy: true, ctx, models, models_info, tps, error: None })
+}
+
+/// The server's context window per slot, from llama.cpp's `/props`
+/// (`default_generation_settings.n_ctx`). Other engines say nothing.
+async fn probe_external_ctx(base: &str) -> Option<u64> {
+    let resp = reqwest::Client::new()
+        .get(format!("{}/props", base))
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let v: serde_json::Value = resp.json().await.ok()?;
+    v["default_generation_settings"]["n_ctx"].as_u64().filter(|c| *c > 0)
+}
+
+/// The cached window of the connected server (routing reads this; no network).
+pub fn external_ctx_cached(app: &AppHandle) -> Option<u64> {
+    let raw = std::fs::read_to_string(external_engine_path(app)?).ok()?;
+    serde_json::from_str::<serde_json::Value>(&raw).ok()?["ctx"].as_u64().filter(|c| *c > 0)
 }
 
 /// Cached bench result from the connect-time scan.
@@ -564,24 +591,25 @@ fn stored_external_tps(app: &AppHandle) -> Option<f64> {
 pub async fn external_engine_info(app: AppHandle) -> ExternalEngineInfo {
     let Some(url) = external_engine_url(&app) else {
         return ExternalEngineInfo {
-            url: None, healthy: false, models: vec![], models_info: vec![], tps: None, error: None,
+            url: None, healthy: false, ctx: None, models: vec![], models_info: vec![], tps: None, error: None,
         };
     };
     let tps = stored_external_tps(&app);
     match probe_external(&url).await {
         Ok(models) => {
+            let ctx = probe_external_ctx(&url).await.or_else(|| external_ctx_cached(&app));
             // Keep the routing cache current with what the server reports.
             if let Some(p) = external_engine_path(&app) {
                 let _ = std::fs::write(
                     &p,
-                    serde_json::json!({ "url": &url, "tps": tps, "models": &models }).to_string(),
+                    serde_json::json!({ "url": &url, "tps": tps, "models": &models, "ctx": ctx }).to_string(),
                 );
             }
             let models_info = scan_models(&models);
-            ExternalEngineInfo { url: Some(url), healthy: true, models, models_info, tps, error: None }
+            ExternalEngineInfo { url: Some(url), healthy: true, ctx, models, models_info, tps, error: None }
         }
         Err(e) => ExternalEngineInfo {
-            url: Some(url), healthy: false, models: vec![], models_info: vec![], tps, error: Some(e),
+            url: Some(url), healthy: false, ctx: external_ctx_cached(&app), models: vec![], models_info: vec![], tps, error: Some(e),
         },
     }
 }

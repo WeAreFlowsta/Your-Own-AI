@@ -916,6 +916,35 @@ async fn chat_completions(
                         if routed.starts_with("external:") { "your server" } else { "this computer" }
                     );
                 }
+                // A session was told a window at open; a server holding less
+                // would fail its first big call (09-24: the condensing call
+                // overflowed an 8k test server). Such a server does not take
+                // project work; the turn says why, once.
+                let routed = if agent_routing && routed.starts_with("external:") {
+                    let told = crate::agent_bridge::AGENT_WINDOW.load(std::sync::atomic::Ordering::SeqCst);
+                    match crate::engine::external_ctx_cached(&app) {
+                        Some(ctx) if told > 0 && ctx < told => {
+                            use tauri::Emitter as _;
+                            log::warn!(
+                                "[inference] your server's window ({}k) is smaller than this session's ({}k) - project work stays on this computer",
+                                ctx / 1024,
+                                told / 1024
+                            );
+                            let _ = app.emit("agent-hint", json!({
+                                "kind": "server-small",
+                                "sticky": true,
+                                "text": format!(
+                                    "Your server holds a {}k window and this project session needs {}k, so project work stays on this computer. Give the server a bigger window to use it here.",
+                                    ctx / 1024, told / 1024
+                                )
+                            }));
+                            crate::router::agent_local_pick(&app, task, lean).await.unwrap_or(routed)
+                        }
+                        _ => routed,
+                    }
+                } else {
+                    routed
+                };
                 ai.model = routed;
             }
             Err(e) => {

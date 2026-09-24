@@ -1175,9 +1175,9 @@ pub async fn agent_serving_window(
         return (local, true);
     }
     if ai_model.starts_with("external:") {
-        // The person's server: its window is its own; the harness's
-        // overflow handling covers a server that holds less.
-        return (crate::engine::EXTERNAL_CTX_DEFAULT, false);
+        // The person's server: the window it reported at connect, else a
+        // default the harness's overflow handling can live with.
+        return (crate::engine::external_ctx_cached(app).unwrap_or(crate::engine::EXTERNAL_CTX_DEFAULT), false);
     }
     let Some(mode) = ai_model.strip_prefix("auto:") else {
         return (local, true); // pinned local model: local truth
@@ -2345,18 +2345,33 @@ pub(crate) async fn pick_device_or_server(
             .map(|(id, _)| id)
             .or_else(|| if local.is_err() { ext_models.first().cloned() } else { None });
         if let Some(ext_id) = want_external {
-            if crate::engine::external_reachable(app).await {
+            // A turn the server's window cannot hold stays here (the window
+            // is what the server reported at connect; unknown = trusted).
+            let fits = match (turn_tokens, crate::engine::external_ctx_cached(app)) {
+                (Some(need), Some(ctx)) => (need as u64) * 10 <= ctx * 9,
+                _ => true,
+            };
+            if !fits {
+                log::warn!("[Router] your server's window cannot hold this turn — using the local pick");
+            } else if crate::engine::external_reachable(app).await {
                 let why = if local.is_ok() {
                     "your server — stronger for this task"
                 } else {
                     "your server — no local model fits"
                 };
                 return Ok(RouteResult { think: None, model: format!("external:{ext_id}"), reason: why.to_string() });
+            } else {
+                log::warn!("[Router] your server is unreachable — using the local pick");
             }
-            log::warn!("[Router] your server is unreachable — using the local pick");
         }
     }
     local.map(|model| RouteResult { think: None, model, reason: "offline".to_string() })
+}
+
+/// The local model that would take an agent turn (tool-capable, sized for
+/// the session) - the fallback when the server cannot take it.
+pub(crate) async fn agent_local_pick(app: &AppHandle, task: &str, lean: &str) -> Option<String> {
+    pick_offline_for(app, task, lean, true, None).await.ok()
 }
 
 /// Settings > Routing "Project work runs on": the person's word over the

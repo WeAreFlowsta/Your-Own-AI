@@ -1580,24 +1580,37 @@ export default component$(() => {
                           Auto rule.
                         </span>
                       </span>
-                      <select
-                        value={projectServerPref.value}
-                        onChange$={async (_, el) => {
-                          projectServerPref.value = el.value;
-                          localStorage.setItem("projectServerPref", el.value);
-                          try {
-                            const { Store } = await import("@tauri-apps/plugin-store");
-                            const store = await Store.load("settings.json");
-                            await store.set("projectServerPref", el.value);
-                            await store.save();
-                          } catch { /* store mirror is best-effort */ }
-                        }}
-                        class="ml-auto shrink-0 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-input)] px-3 py-1 text-sm text-[var(--text-primary)]"
-                      >
-                        <option value="auto">Auto</option>
-                        <option value="device">This computer</option>
-                        <option value="server">Your server</option>
-                      </select>
+                      <span class="ml-auto inline-flex shrink-0 rounded-full border border-[var(--border-subtle)] p-0.5">
+                        {(
+                          [
+                            ["auto", "Auto"],
+                            ["device", "This computer"],
+                            ["server", "Your server"],
+                          ] as const
+                        ).map(([value, label]) => (
+                          <button
+                            key={value}
+                            type="button"
+                            onClick$={async () => {
+                              projectServerPref.value = value;
+                              localStorage.setItem("projectServerPref", value);
+                              try {
+                                const { Store } = await import("@tauri-apps/plugin-store");
+                                const store = await Store.load("settings.json");
+                                await store.set("projectServerPref", value);
+                                await store.save();
+                              } catch { /* store mirror is best-effort */ }
+                            }}
+                            class={`rounded-full px-3 py-[3px] text-[12px] border-none cursor-pointer ${
+                              projectServerPref.value === value
+                                ? "bg-[var(--bg-card)] text-[var(--text-primary)]"
+                                : "bg-transparent text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </span>
                     </label>
                   </>
                 )}
