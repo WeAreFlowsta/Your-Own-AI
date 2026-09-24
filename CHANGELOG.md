@@ -27,7 +27,32 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - **Clean endings.** A model's own end-of-turn marker stays out of its
   replies, the memory portrait and document cards. See *Models*.
 
+- **Your own server, part of the pool.** A computer you run yourself,
+  connected in Settings › Engines, now counts as offline hardware: on
+  either Auto mode the AI uses it when it holds the stronger model, and
+  project work can run there too. If it stops answering, work carries
+  on here. See *Models* and *Projects*.
+- **Auto permissions ask instead of refusing.** When Auto stops at a
+  step it will not run on its own, you get a card above the input field,
+  where you are, and answer it there. See *Projects*.
+- **Projects start faster and stay out of the way.** The coding model
+  loads when the project opens, the first call carries fewer tool
+  definitions, and the rail says how far the model is through reading
+  the project instead of sitting silent. See *Projects*.
 ### Models
+- A server you run yourself (Settings › Engines) is part of your offline
+  models. The old "Auto - My Hardware" choice is gone: on Offline Only
+  and on Online and Offline alike, the server takes a job when it holds
+  the clearly stronger model for it, and stays out of it otherwise. An AI
+  still set to the old choice behaves as Offline Only. The card shows the
+  server's window, its speed and its models, and says plainly that
+  Fine-tune does not reach a server: its window and threads are set on
+  that computer. A turn served by the server says so on the turn, and a
+  server that stops answering, on connect or halfway through a reply, is
+  set aside for a minute and picked up again on its own.
+- Every model load shows in the header chip and the action bar,
+  whichever path started it: a project turn's switch, the session's own
+  pre-load, the vision sidecar.
 - A helper on the processor gives its memory back when the computer runs
   short. A helper checked for room only when it started; if the rest of
   the machine grew afterwards, it kept its memory while the system swapped
@@ -214,6 +239,42 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   the window the server has. A turn that ends on an error no longer
   shows its last command as still running.
 
+- Auto permissions ask. A step Auto would not run on its own used to be
+  refused with "the system blocked" and the AI asking in text; it now
+  comes to you as a card. The card sits above the input field while it
+  waits, so there is no scrolling or clicking to find it, and the rail
+  keeps the decision as a one-line receipt. Build 0.4.1.
+- Faster to the first step. The coding model loads in the background the
+  moment a project opens, five tools the AI never used no longer ride
+  every call, the embedding model warms before your first question, and
+  the field clears the instant you send. While the model reads the
+  project in, the rail says "Taking in the project so far · 60%".
+- Condensing only when it must. A session was being told a window a
+  quarter of the size its model actually ran at, so it condensed its
+  notes after every step; every local session now gets a 32k window and
+  learns the served size from the engine itself.
+- Helpers on the rail. A helper's own steps nest under its row, its
+  progress shows as the row's line, a wait on it reads "Waiting for the
+  helper", and its text never lands in the AI's reply. A command the AI
+  runs in the background takes its task from the agent's own word, keeps
+  running on its row until the agent ends it, and a wait on it is named
+  after it. A running task or helper has a Stop button; a stopped task
+  reads "Stopped", not failed. A command that exits with an error is a
+  red step with its last lines and the exit code as the reason.
+- Detailed opens every step by itself and the rail follows its newest
+  row, so the jump pill reaches it; a chain of tiny thoughts reads as one
+  row; the folder chip says what the project is doing (starting, running,
+  waiting for you, done); switching AI with a project open reopens the
+  session for the new AI; pasted text keeps its line breaks in the field
+  and in your bubble; skills carry their own icon from an `icon:` line
+  in their SKILL.md, and a hand-added tool can fetch its site's icon on
+  request. An offline-only AI whose coding model is a small one gets one
+  line on the turn saying so, with the online door under it.
+- Project work runs on your server when you say so: Settings › Routing
+  has "Project work runs on" (Auto, this computer, your server). With
+  your server chosen, the session is told the server's window, and a
+  server whose window is smaller than the session's keeps project work
+  here and says why.
 ### Models, continued
 - On an NVIDIA card, free graphics memory is read from the driver's own
   count, which sees every process on Windows as well as Linux. The
