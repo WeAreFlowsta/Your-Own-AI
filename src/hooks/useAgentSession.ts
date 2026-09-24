@@ -1326,6 +1326,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
     const unReady = await listen<{ sessionId: string }>("agent-ready", async () => {
       state.status = "ready";
       state.statusNote = "";
+      // Fetched tool icons, for the rail's tool steps.
+      import("../utils/toolIcons").then((m) => m.loadToolIcons()).catch(() => {});
       // The installed skills' own icons, for the rail's skill steps.
       try {
         const { listSkills } = await import("../utils/skills");

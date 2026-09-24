@@ -1,6 +1,7 @@
 import { component$ } from "@builder.io/qwik";
 import { brandIconFor } from "../utils/brandIcons";
 import { Glyph, knownGlyph } from "../utils/glyphs";
+import { toolImage } from "../utils/toolIcons";
 import {
   LuFileText,
   LuFolder,
@@ -77,10 +78,14 @@ export const ActionIcon = component$<ActionIconProps>((props) => {
   } ${running ? "action-icon-running" : ""} ${props.class ?? ""}`;
   const g = "h-3.5 w-3.5";
   const brand = brandIconFor(props.brand);
+  // A hand-added tool's fetched site icon, drawn monochrome like the rest.
+  const image = !brand ? toolImage(props.brand) : undefined;
   return (
     <span class={box} aria-hidden="true">
       {brand ? (
         <svg class={g} viewBox="0 0 24 24" fill="currentColor"><path d={brand} /></svg>
+      ) : image ? (
+        <img src={image} alt="" width={14} height={14} class={`${g} rounded-sm grayscale opacity-80`} />
       ) : knownGlyph(props.glyph) ? <Glyph name={props.glyph!} class={g} />
         : name === "read" ? <LuFileText class={g} />
         : name === "folder" ? <LuFolder class={g} />

@@ -9,6 +9,8 @@
 import { component$, useSignal, useStore, useVisibleTask$, $ } from "@builder.io/qwik";
 import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
 import { ActionIcon } from "../../../components/ActionIcon";
+import { brandIconFor } from "../../../utils/brandIcons";
+import { fetchToolIcon, loadToolIcons, toolImage } from "../../../utils/toolIcons";
 import { LuWrench, LuTrash2, LuChevronLeft, LuAlertTriangle, LuCheck, LuChevronDown } from "@qwikest/icons/lucide";
 import AppHeader from "../../../components/AppHeader";
 import { useHeaderWorkspace } from "../../../hooks/useHeaderWorkspace";
@@ -73,6 +75,8 @@ export default component$(() => {
   const store = useStore({
     /** Card named by an incoming yourownai:// link - ringed until it fades. */
     focus: "" as string,
+    /** Bumps when a tool icon is fetched, so its card redraws. */
+    iconTick: 0,
     servers: [] as McpServer[],
     presets: [] as McpPreset[],
     loading: true,
@@ -126,6 +130,7 @@ export default component$(() => {
     try { store.fetched[name] = (await toolReadiness(name)).fetched; } catch { /* no line */ }
   });
   const load = $(async () => {
+    await loadToolIcons();
     store.servers = await listMcpServers();
     store.loading = false;
     for (const s of store.servers) {
@@ -506,8 +511,25 @@ export default component$(() => {
                         <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                           <div class="min-w-0">
                             <h3 class="flex items-center gap-2 font-medium text-[var(--text-primary)]">
-                              <ActionIcon icon="mcp" brand={s.source?.split(":")[1] ?? s.name} />
+                              <ActionIcon key={`${s.name}-${store.iconTick}`} icon="mcp" brand={s.source?.split(":")[1] ?? s.name} />
                               {card?.title ?? s.name}
+                              {s.transport === "http" && !brandIconFor(s.source?.split(":")[1] ?? s.name) && !toolImage(s.name) && store.iconTick >= 0 && (
+                                <button
+                                  type="button"
+                                  title="Fetch this tool's icon from its website, once, and keep it on this computer"
+                                  onClick$={async () => {
+                                    try {
+                                      await fetchToolIcon(s.name);
+                                      store.iconTick++;
+                                    } catch (e) {
+                                      store.error = String(e);
+                                    }
+                                  }}
+                                  class="ml-1 rounded-md border border-[var(--border-subtle)] bg-transparent px-1.5 text-[11px] font-normal text-[var(--text-muted)] hover:text-[var(--text-secondary)] cursor-pointer"
+                                >
+                                  Get its icon
+                                </button>
+                              )}
                             </h3>
                             {s.description && <p class="text-sm text-[var(--text-secondary)]">{s.description}</p>}
                             <p class={`mt-1 flex items-center gap-1.5 text-xs ${status.ok ? "text-[var(--text-secondary)]" : "text-amber-600 dark:text-amber-400"}`}>

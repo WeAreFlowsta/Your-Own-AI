@@ -1092,3 +1092,152 @@ mod entry_tests {
         assert!(entry_for(&s, &secrets).unwrap_err().contains("not on this computer"));
     }
 }
+
+
+// ── Tool icons ────────────────────────────────────────────────────────────
+// A hand-added tool has no mark of its own. On the person's click (the
+// consent), its site's icon is fetched once - the apple-touch-icon, else
+// what the homepage names, else the favicon - and kept in the app's data
+// folder, never in mcp-servers.json (the harness reads that file). Served
+// to the page as a data URL.
+
+fn icons_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("cannot resolve app data dir: {e}"))?
+        .join("tool-icons");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create tool-icons: {e}"))?;
+    Ok(dir)
+}
+
+fn icon_mime(ext: &str) -> &'static str {
+    match ext {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "svg" => "image/svg+xml",
+        "webp" => "image/webp",
+        _ => "image/x-icon",
+    }
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(T[(n >> 18) as usize & 63] as char);
+        out.push(T[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { T[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+fn icon_file_name(name: &str) -> String {
+    name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect()
+}
+
+fn data_url(path: &std::path::Path) -> Option<String> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    let bytes = std::fs::read(path).ok()?;
+    Some(format!("data:{};base64,{}", icon_mime(&ext), base64_encode(&bytes)))
+}
+
+/// Every fetched tool icon, by tool name, as data URLs.
+#[tauri::command]
+pub async fn mcp_icons(app: AppHandle) -> Result<HashMap<String, String>, String> {
+    let dir = icons_dir(&app)?;
+    let mut out = HashMap::new();
+    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+        let path = entry.path();
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else { continue };
+        if let Some(url) = data_url(&path) {
+            out.insert(stem.to_string(), url);
+        }
+    }
+    Ok(out)
+}
+
+/// Fetch a tool's site icon (its `url`'s origin) and keep it. Returns the
+/// data URL. The click on "Get its icon" is the consent.
+#[tauri::command]
+pub async fn mcp_fetch_icon(app: AppHandle, name: String) -> Result<String, String> {
+    let list = load(&app)?;
+    let server = list.iter().find(|s| s.name == name).ok_or("tool not found")?;
+    let url = server.url.clone().ok_or("this tool has no web address to fetch an icon from")?;
+    let parsed = reqwest::Url::parse(&url).map_err(|e| format!("not a web address: {e}"))?;
+    let origin = format!(
+        "{}://{}{}",
+        parsed.scheme(),
+        parsed.host_str().ok_or("no host in the address")?,
+        parsed.port().map(|p| format!(":{p}")).unwrap_or_default()
+    );
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .user_agent("Your Own AI")
+        .build()
+        .map_err(|e| e.to_string())?;
+    const MAX: usize = 512 * 1024;
+    let mut candidates = vec![
+        format!("{origin}/apple-touch-icon.png"),
+        format!("{origin}/apple-touch-icon-precomposed.png"),
+    ];
+    // What the homepage names, if it names one.
+    if let Ok(resp) = client.get(format!("{origin}/")).send().await {
+        if let Ok(html) = resp.text().await {
+            let head: String = html.chars().take(200_000).collect();
+            for tag in head.split('<').filter(|t| t.starts_with("link")) {
+                let tag = tag.split('>').next().unwrap_or("");
+                let lower = tag.to_ascii_lowercase();
+                if lower.contains("apple-touch-icon") || lower.contains("rel=\"icon\"") || lower.contains("rel='icon'") || lower.contains("rel=\"shortcut icon\"") {
+                    if let Some(i) = lower.find("href=") {
+                        let rest = &tag[i + 5..];
+                        let quote = rest.chars().next().unwrap_or('"');
+                        let href: String = rest.chars().skip(1).take_while(|c| *c != quote).collect();
+                        if let Ok(abs) = parsed.join(&href) {
+                            let s = abs.to_string();
+                            if lower.contains("apple-touch-icon") { candidates.insert(0, s) } else { candidates.push(s) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    candidates.push(format!("{origin}/favicon.ico"));
+    for cand in candidates {
+        let Ok(resp) = client.get(&cand).send().await else { continue };
+        if !resp.status().is_success() {
+            continue;
+        }
+        let ctype = resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("").to_ascii_lowercase();
+        let Ok(bytes) = resp.bytes().await else { continue };
+        if bytes.is_empty() || bytes.len() > MAX {
+            continue;
+        }
+        let ext = if ctype.contains("png") || bytes.starts_with(b"\x89PNG") {
+            "png"
+        } else if ctype.contains("jpeg") || ctype.contains("jpg") || bytes.starts_with(&[0xFF, 0xD8]) {
+            "jpg"
+        } else if ctype.contains("svg") || bytes.starts_with(b"<svg") || bytes.starts_with(b"<?xml") {
+            "svg"
+        } else if ctype.contains("webp") {
+            "webp"
+        } else if ctype.contains("icon") || bytes.starts_with(&[0, 0, 1, 0]) {
+            "ico"
+        } else {
+            continue;
+        };
+        let dir = icons_dir(&app)?;
+        // One icon per tool: drop an older one of another type.
+        for old in ["png", "jpg", "svg", "webp", "ico"] {
+            let _ = std::fs::remove_file(dir.join(format!("{}.{old}", icon_file_name(&name))));
+        }
+        let path = dir.join(format!("{}.{ext}", icon_file_name(&name)));
+        std::fs::write(&path, &bytes).map_err(|e| format!("cannot keep the icon: {e}"))?;
+        log::info!("[mcp] icon for '{name}' from {cand} ({} bytes)", bytes.len());
+        return data_url(&path).ok_or("cannot read the icon back".to_string());
+    }
+    Err(format!("no icon found at {origin}"))
+}

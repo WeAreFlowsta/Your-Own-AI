@@ -770,6 +770,8 @@ pub fn run() {
             skills::skills_in_folder,
             mcp::mcp_list,
             mcp::mcp_add,
+            mcp::mcp_icons,
+            mcp::mcp_fetch_icon,
             mcp::mcp_remove,
             mcp::mcp_which,
             mcp::mcp_fetch_git,
