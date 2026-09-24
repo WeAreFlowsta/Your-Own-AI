@@ -9,6 +9,8 @@ import {
   type Signal,
 } from "@builder.io/qwik";
 import {
+  LuCheck,
+  LuX,
   LuSquare,
   LuChevronRight,
   LuChevronDown,
@@ -647,6 +649,34 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
               );
             }
             if (el.kind === "permission") {
+              // Answered or expired: the receipt is drawn HERE, by the rail
+              // itself. The card kept showing its buttons after an answer
+              // given on the composer's copy (09-24) - a component inside
+              // this map does not reliably see a replaced prop object, the
+              // same lesson as the rows - so the branch changes instead.
+              const pm = el.permission;
+              if (pm.state !== "pending") {
+                const expired = pm.state === "expired";
+                const allowed = pm.receipt?.startsWith("Allowed") ?? pm.decision === "allow";
+                return (
+                  <div key={el.id} class="max-w-4xl mx-auto w-full">
+                    <div class="flex items-center gap-2 px-4 py-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] text-sm text-[var(--text-muted)]">
+                      {expired ? (
+                        <LuX class="h-4 w-4 shrink-0 opacity-60" />
+                      ) : allowed ? (
+                        <LuCheck class="h-4 w-4 shrink-0 text-green-600 dark:text-green-400" />
+                      ) : (
+                        <LuX class="h-4 w-4 shrink-0 text-red-500 dark:text-red-400" />
+                      )}
+                      <span class="truncate">
+                        {expired
+                          ? `This request expired - the agent stopped. (${pm.command || pm.title})`
+                          : pm.receipt || `${allowed ? "Allowed" : "Declined"}: ${pm.command || pm.title}`}
+                      </span>
+                    </div>
+                  </div>
+                );
+              }
               return (
                 <AgentPermissionCard
                   key={el.id}
