@@ -7,382 +7,43 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 
 ### Highlights
 
-- **Your graphics card, read right.** On an NVIDIA card the app now
-  takes free graphics memory from the driver's own count, which sees
-  every process on Windows as well as Linux. The models page, the
-  loader, Fine-tune and project sessions all size from that one figure,
-  and every load records what it really took, so a grade and "runs at"
-  match what loads. See *Models*.
-- **Helper models on the card when there is room.** After your chat
-  model loads, the memory model and the helper model move onto the
-  graphics card when the measured room allows, and give it back before
-  a model switch. Automatic, with one choice in Settings › Engines. See
-  *Models*.
-- **Projects keep their window.** A project session's context follows
-  the model that actually serves its turns, so long sessions compact when
-  they should. See *Projects*.
-- **Conversations open on the first click.** A conversation chosen from
-  the drawer opens on the first click after launch, and every open is
-  written to the log end to end. See *Records*.
-- **Clean endings.** A model's own end-of-turn marker stays out of its
-  replies, the memory portrait and document cards. See *Models*.
-- **Your own server, part of the pool.** A computer you run yourself,
-  connected in Settings › Engines, now counts as offline hardware: on
-  either Auto mode the AI uses it when it holds the stronger model, and
-  project work can run there too. If it stops answering, work carries
-  on here. See *Models* and *Projects*.
-- **Auto permissions ask instead of refusing.** When Auto stops at a
-  step it will not run on its own, you get a card above the input field,
-  where you are, and answer it there. See *Projects*.
-- **Projects start faster and stay out of the way.** The coding model
-  loads when the project opens, the first call carries fewer tool
-  definitions, and the rail says how far the model is through reading
-  the project instead of sitting silent. See *Projects*.
-### Models
-- A server you run yourself (Settings › Engines) is part of your offline
-  models. The old "Auto - My Hardware" choice is gone: on Offline Only
-  and on Online and Offline alike, the server takes a job when it holds
-  the clearly stronger model for it, and stays out of it otherwise. An AI
-  still set to the old choice behaves as Offline Only. The card shows the
-  server's window, its speed and its models, and says plainly that
-  Fine-tune does not reach a server: its window and threads are set on
-  that computer. A turn served by the server says so on the turn, and a
-  server that stops answering, on connect or halfway through a reply, is
-  set aside for a minute and picked up again on its own.
-- Every model load shows in the header chip and the action bar,
-  whichever path started it: a project turn's switch, the session's own
-  pre-load, the vision sidecar.
-- A helper on the processor gives its memory back when the computer runs
-  short. A helper checked for room only when it started; if the rest of
-  the machine grew afterwards, it kept its memory while the system swapped
-  (the chat model's own weights were paged out and read back on every
-  reply). The app now reads free memory every ten seconds, and on Linux
-  the kernel's pressure figure too, and under sustained pressure stops an
-  idle helper model, says so in the activity tray, and starts it again on
-  demand once there is room.
-- Two requests no longer trip over each other on a local model. Each
-  local server takes one request at a time - the reply included - so a
-  request always has the whole context window; two together used to fail
-  with "context size exceeded" when their sizes added up past it (an AI's
-  two parallel calls in a project session; three memory extractions at
-  once on the small helper).
-- Several graphics cards: a model now runs on the biggest card alone when
-  it fits there (pooling is always slower - a token passes through every
-  card in turn) and is pooled across all cards only when it does not fit.
-  Fine-tune gains a "Graphics cards" row on such computers: Auto, Biggest
-  card only, or Pool all cards (more memory and a larger context, slower),
-  and its bench measures the pooled case so the row shows real numbers.
-  Model sizes are graded against the biggest card, not a pooled total.
-- A bigger micro-batch the bench kept counts its own card memory (about
-  200 MB) in a model's estimate.
-- A computer whose only graphics is integrated now gets a measured choice:
-  Fine-tune's bench tries the processor against the integrated graphics and
-  keeps the processor when it reads and writes at least 10% faster (an
-  Intel UHD 630 read at 29 tokens a second and wrote at 5.6; the same
-  machine's processor did 52 and 9.1). A modern integrated GPU that wins
-  keeps the model.
-- On the bundled graphics engine with a graphics card, the bench also tries
-  bigger batches and keeps them per model where they read faster.
-- Long prompts read faster on a split model. Fine-tune's bench now tries a
-  bigger batch for a mixture-of-experts model whose expert layers sit in
-  main memory, and keeps it where it read at least 15% faster (measured on
-  a 4 GB card: an 8,000-token prompt 501 to 699 tokens a second, for about
-  200 MB of graphics memory). A model that fits on the card whole gains
-  nothing from it and is left alone.
-- The truth-matrix report says what its speed figures measure: writing at
-  a near-empty context, and reading a short prompt where start-up cost
-  dominates; the bench leg reads a long prompt too and labels both.
-- A computer with several different graphics cards is described truthfully:
-  each card by name with its size, biggest first (a box with an RTX PRO
-  6000, an RTX 4090 and an RTX 5060 Ti read "2× RTX 5060 Ti (128.9GB)").
-  The figure models are sized against is the biggest card's, not a pooled
-  sum: a model runs on one card, and that is what the welcome pick and the
-  system line now say.
-- The diagnostics report says how much memory is available now, the figure
-  models are graded against, instead of a "used" figure that did not add up.
-- Without the small memory model installed the log said so once and moved
-  on; it used to write two warnings about a "failure" on every routing
-  decision, which hid everything else in a diagnostics report.
-- On a small computer the first reply no longer takes twice as long. After
-  a model loads, the app reads the AI's instructions once so the first
-  question only pays for its own words; a question sent during that read
-  used to be processed side by side with it on the same few cores, both
-  slow, one thrown away (a 2-core Mac: three minutes to the first word).
-  Now the question waits for the read to finish and starts from it.
-- Background work that rides the chat model when the small helper is not
-  installed - remembering what you said - now waits until your reply has
-  finished instead of competing with it.
-- The small helper model takes 1.3 GB less memory when it runs on the
-  processor, at the same speed. The processor engine keeps a faster,
-  repacked copy of a model; the app also kept the original mapped from the
-  file, never read again. It is now read straight into memory (measured:
-  4.0 GB down to 2.7 GB, 35 tokens a second either way). On a 16 GB computer
-  the old figure pushed other programs out to the swap file, felt as short
-  freezes.
-- Models whose weights stay in main memory - a model running on the
-  processor, a large mixture-of-experts model split between the graphics
-  card and main memory, and every model on a Mac - are read straight into
-  memory too. Measured: a 4B model on the processor 4.8 GB down to 3.3 GB
-  at the same speed, ready in 6 seconds instead of 14; a split 8B model
-  reads prompts 67% faster. A model that fits on the graphics card whole is
-  loaded as before.
-- What a helper holds on the processor is now measured after it starts, the
-  way a graphics-card placement always was, and the app checks that figure
-  against free memory before starting one: with too little room the helper
-  waits instead of squeezing everything else. The same measurement is
-  taken for a chat model whose weights are in main memory, so the fit
-  figures come from what the machine holds: on a computer without a
-  graphics card the grade uses that measured figure, a split model's main
-  memory side does too, and the free memory credited back for the loaded
-  model can no longer read past the machine's total (a Mac reported
-  "free 18.6 of 16.0 GB").
-- "Fine-tune" now means one thing: how a model runs on this computer -
-  speed, context, memory. The sliders for how replies are written
-  (creativity, word variety, rare-word floor, repetition brake) moved out
-  of "Fine-tune this computer" into their own section in Settings, "Reply
-  style for every AI", and the same sliders in an AI's form are now
-  "Reply style for this AI". Nothing you had set changes.
-- The helper models dropdown in Settings now follows the light and dark
-  theme like every other dropdown. When the helper models are not
-  installed, that spot offers the download instead of a choice with
-  nothing to place.
-- The Offline Models page grades its rows and picks again once a
-  downloaded model has finished loading, so a new download's row and its
-  card on Best for this computer are right without a page refresh. The
-  log records the figures each grading pass read.
-- Fine-tune measures the context the model runs at, so the status line
-  shows Automatic's speed as soon as the measurement finishes. The run
-  reads the card's free memory fresh after the chat model has left it,
-  and the slider opens on the stop nearest the current setup. When the
-  exact setup was not timed, the line names the nearest measured stop.
-- Back up now while a backup is already running (the launch pass or a
-  Vault unlock fires one first) now says so and clears itself when that
-  backup finishes, instead of reporting "did not complete" and leaving the
-  note on screen after the backup succeeded.
-- "Search for them" on missing documents writes one log line with what it
-  found, what is still missing and what could not be read.
-- Manage plan and Sign out on the Flowsta account panel sit on their own
-  lines.
-- Fine-tune's measured slider no longer pins the context when it lands on
-  the "auto" stop. The automatics already take the measured winners at
-  that size, so sliding back to auto returns to Automatic and Save clears
-  the entry, instead of leaving a pinned context the person did not mean
-  to set.
-- New online models, with no app update needed for the catalog: GPT-6 Sol
-  and GPT-6 Luna (OpenAI, at half the GPT-5.6 rates) and Grok 4.7 (xAI, at
-  the same rates as 4.6). GPT-6 Luna now takes Everyday questions and
-  Grok 4.7 (Web) takes questions that need current information; GPT-6
-  Astra keeps the hard questions, agent work and planning. Grok 4.6 leaves
-  the catalog, and GPT-5.6 Sol is billed at OpenAI's new lower rate. The
-  Online Models page marks the Auto picks from the catalog itself, so a
-  slot that moves shows on the right card at once.
-- Two writing models join the offline catalog, both for computers with
-  32 GB of memory. **Hemmingway 1** (Altworld, built on Qwen 3.8) writes
-  the everyday things - messages, emails, the note you keep rewriting -
-  and gives you the text rather than a memo. It is free for personal use
-  and not for business use, and the app says so before the download.
-  **Skyfall 31B** (TheDrummer, built on Mistral's Magistral Small) is a
-  creative-writing and roleplay model with no content filtering.
-
-### Projects
-- Every step in the rail is named after what it is. A wait says what it
-  waits for ("Waiting for generate-articles.sh"), a stop names the task
-  it stopped, a helper is "Started a helper: <its task>", a web search
-  carries its query and a web page its address, a tool from Obsidian or
-  Logseq says so, a skill names itself, and a command the AI described is
-  labelled by that description. "Waiting for a background task" is gone:
-  the label is decided by a table keyed by the tool's own name, with the
-  agent's title as the last fallback, and a later update can only replace
-  a label with one at least as specific. Finished steps read in the past
-  tense ("Read package.json"). A build check holds the table to events
-  captured from real sessions, so this cannot quietly regress.
-- The rail tells the story, in two views. Every agent turn, running or
-  reopened, shows the AI's words and between them the steps it took, in
-  the order they happened; a finished turn no longer folds behind a
-  "Steps" button. A Simple | Detailed control sits in the rail header:
-  Simple folds steps of a kind into one row ("Read 4 files and searched
-  twice", "Ran 3 commands"), folds a wait into the step it waits for and
-  keeps thoughts out of the way; Detailed shows every row, thought and
-  live line as it arrives. The choice is per surface, projects Detailed
-  and chat with tools Simple by default, changeable on any rail, in
-  Settings, or with Ctrl+O. The brain icon is gone. Esc stops a running
-  turn.
-- Thoughts are rows. "Thought for 12 s" with a brain glyph, opening to
-  the text, instead of italic paragraphs between steps.
-- The header of a finished turn sums it up: "Read 4 files, ran 3
-  commands, edited 2 files · 6 m 20 s · 4.7k tokens", with a "2 files
-  changed +52 -9" chip that opens every diff. While it runs the header
-  says who is working where, and the line under the rail says what is
-  happening now, how long, and how much.
-- A background task that outlives the turn stays as its own row, "still
-  running", with its latest line and its clock, until it ends; the last
-  line it printed is kept in the record, so a reopened turn still says
-  it. The agent's own word on background tasks (0.4.0) ends such rows
-  properly, red with the exit code when they fail.
-- The plan shrinks to the current item with a "3 of 7" count; click for
-  the rest. A command row copies its command; a file row opens the file;
-  a failed row offers Try again. A helper's steps nest under its row.
-- Your tools carry their marks. Obsidian, Logseq and Blender show their
-  own logos, monochrome like every other glyph, on the Tools page, on the
-  rail, on permission cards and in the activity tray; the activity tray's
-  rows use the same glyphs as the rail.
-- A desktop notification when a project turn that ran longer than half a
-  minute ends while you are in another window: the AI's name and what it
-  did, never the reply. Off in Settings.
-- Rail steps have a face. Each row carries one grey glyph for what it
-  is (a file, a folder, a search, a pencil, a terminal, the web, a
-  helper, an hourglass, a plug for a tool, a sparkle for a skill) in a
-  small box, the label in the app's own font, and its time once it has
-  run past ten seconds. Color means status only: a soft ring breathes
-  around a running step, and a failed one turns red, says how long it
-  ran, and opens itself with the error text. The permission cards use
-  the same glyphs.
-- The record of a turn keeps more of the truth: each step's tool name,
-  server, start and end times, the last line a background task printed,
-  and why a failed step failed. The size ladder now keeps the AI's spoken
-  words when a very long turn has to be trimmed; only the steps in the
-  middle go.
-- When a tools session warns that the model's window is small, it now says
-  why: a context pinned in Fine-tune is named as the cause, with where to
-  change it; a machine that cannot afford more gets the other advice
-  (a bigger-window model, or fewer tools on the AI).
-- A project session's context window is the window of the model that
-  serves its agent turns, sized the way the loader sizes it, and a model
-  switch for an agent turn loads with at least that window when the
-  machine holds it. The log shows the window the session was told and
-  the window the server has. A turn that ends on an error no longer
-  shows its last command as still running.
-
-- Auto permissions ask. A step Auto would not run on its own used to be
-  refused with "the system blocked" and the AI asking in text; it now
-  comes to you as a card. The card sits above the input field while it
-  waits, so there is no scrolling or clicking to find it, and the rail
-  keeps the decision as a one-line receipt. Build 0.4.1.
-- Faster to the first step. The coding model loads in the background the
-  moment a project opens, five tools the AI never used no longer ride
-  every call, the embedding model warms before your first question, and
-  the field clears the instant you send. While the model reads the
-  project in, the rail says "Taking in the project so far · 60%".
-- Condensing only when it must. A session was being told a window a
-  quarter of the size its model actually ran at, so it condensed its
-  notes after every step; every local session now gets a 32k window and
-  learns the served size from the engine itself.
-- Helpers on the rail. A helper's own steps nest under its row, its
-  progress shows as the row's line, a wait on it reads "Waiting for the
-  helper", and its text never lands in the AI's reply. A command the AI
-  runs in the background takes its task from the agent's own word, keeps
-  running on its row until the agent ends it, and a wait on it is named
-  after it. A running task or helper has a Stop button; a stopped task
-  reads "Stopped", not failed. A command that exits with an error is a
-  red step with its last lines and the exit code as the reason.
-- Detailed opens every step by itself and the rail follows its newest
-  row, so the jump pill reaches it; a chain of tiny thoughts reads as one
-  row; the folder chip says what the project is doing (starting, running,
-  waiting for you, done); switching AI with a project open reopens the
-  session for the new AI; pasted text keeps its line breaks in the field
-  and in your bubble; skills carry their own icon from an `icon:` line
-  in their SKILL.md, and a hand-added tool can fetch its site's icon on
-  request. An offline-only AI whose coding model is a small one gets one
-  line on the turn saying so, with the online door under it.
-- Project work runs on your server when you say so: Settings › Routing
-  has "Project work runs on" (Auto, this computer, your server). With
-  your server chosen, the session is told the server's window, and a
-  server whose window is smaller than the session's keeps project work
-  here and says why.
-- Chat with tools has its own shape. No box and no Simple or Detailed:
-  while it runs, each action is its own collapsed row with its glyph and
-  name; once it is done, one grey line such as "Read 2 files, ran 1
-  command" that opens to the rows; the AI's words are plain chat text.
-  The Simple and Detailed control, the setting and Ctrl+O belong to
-  projects only.
-- The page changes on the keystroke. For an AI that carries tools, your
-  message and a "Thinking.." line go up before the app decides whether
-  the message needs a tool and before the session opens; the line then
-  says "Getting your tools ready.." and "Looking through documents.." as
-  it goes. On a small card an offline send used to sit on the empty
-  view for fifteen seconds first.
-- Quality first for agent work. Project and tools sessions now pick the
-  most capable model that runs on this computer, by capability, then
-  size, then fit, and a weaker model already loaded gives way, one reload
-  per session. A fully-on-card 2B used to beat a partly-offloaded 4B of
-  the same grade, and the 2B could not drive the Obsidian tool.
-- When a small model struggles, the turn says so in plain words: two or
-  more steps that ended red, or a tools turn that never got a tool call
-  to work, on an AI kept offline, once per session. Without a plan it
-  reads "Your AI found this hard. Tasks like this need more than the
-  models this computer can run. Online models do them in one go. They
-  are an optional paid service, and everything offline stays free.",
-  with a link to the Online Models page; with a plan, one button sets the
-  AI to Auto - Online and Offline and sends the message again; and an AI
-  pinned to a smaller model is told which model on this computer does
-  better, with no door. Never on our own faults, and never when Online
-  and Offline was already on.
-- A tools session is told where a tool's things live: the folder it runs
-  in is empty scratch space, notes and scenes exist only inside the tool,
-  and their paths are the tool's own, as listed. Passages from the AI's
-  documents that came from a synced vault say they are library copies.
-- The "Opening …" note shows while a conversation chosen from the drawer
-  loads, whatever the Continue line setting; a session whose model already
-  holds its window never asks the loader for more (a failed grow used to
-  unload the model and turn the header chip red).
-### Models, continued
-- The app no longer ends itself when a helper model moves to the graphics
-  card. Before a helper restarts, the app clears its port of any earlier
-  copy; that sweep also counted the app's own connection to the helper
-  and could end the app in the same breath, with no crash report. The
-  sweep now names only what is listening on the port and never the app.
-- On a Mac, the memory the running model holds is handed back to the fit
-  figures once, not twice; an 8 GB Mac used to grade as if all 8 GB were
-  free.
-- On an NVIDIA card, free graphics memory is read from the driver's own
-  count, which sees every process on Windows as well as Linux. The
-  models page, the loader, the fine-tune run and project sessions all
-  size from that one figure, and every healthy load records what it
-  really took on the card, so grades and "runs at" match what loads.
-- The memory model and the helper model use the graphics card when there
-  is room. After a chat model loads, the app reads the card's free memory,
-  keeps a margin for the chat model, and starts each helper on the card
-  when its measured footprint fits, or on the processor when it does not.
-  Before a model switch the helpers give the card back, and the decision
-  is taken again once the new model is ready. A helper that fails to
-  come up on the card runs on the processor and the machine remembers
-  that. Settings › Engines has one choice, Automatic or Keep on the
-  processor. The log says where each helper runs.
-- A model's own end-of-turn marker, read from its chat template, joins
-  the stop list for every local request, the memory portrait and
-  document cards included, so a marker the engine does not treat as an
-  end token no longer appears as text. One already in stored text is
-  trimmed on display.
-- Offline models run on older Macs. The Mac AI engine was built for the
-  newest macOS only, so on an older macOS it never started and a model
-  would not load. The Intel engine is now built for macOS 12 and later,
-  and no longer uses a part of macOS that older releases lack, which
-  made it stop on its first answer there. On Apple Silicon the engine is
-  supported from macOS 13.3: on an older macOS the app says so on the
-  start view and above the Offline Models list, before anything is
-  downloaded. Where an operating system cannot run the engine at all,
-  the app says that too, and a load reports it instead of "too slow" or
-  "crashed". If the engine stops part way through an answer, the chat
-  says so in plain words. The engine line in a report names what the
-  bundled engine runs on: Metal, Vulkan, or the processor on Intel Macs.
-- When this computer cannot run a model - too large for it, too slow to
-  load, a graphics card the engine cannot use - the chat now shows one
-  card that says so, offers the Offline Models page for a smaller model,
-  and adds a single line that online models run at full speed on any
-  computer and are an optional paid service. Someone with a plan is told
-  how to use it instead. The line never appears on a fault of ours.
-- The app responds on macOS 12 and earlier. On those Macs the window is
-  drawn by the system's own, older browser engine, and one line of the
-  app's code was written in a form it could not read, so buttons, the
-  Settings menu item, the chat box and the diagnostics report did
-  nothing while plain links still worked. The line is rewritten, the app
-  is now built for that older engine, and every build is checked against
-  it.
-- The MLX engine preview is offered only on macOS 14 and later, the
-  oldest release it can start on. On an older macOS it was offered,
-  downloaded, and then could not run.
+- **Your notes, in your AI.** New Obsidian and Logseq tools: your AI
+  searches and reads your notes and, when you allow it, writes them. One
+  switch also keeps those notes among the AI's documents, so it remembers
+  them in every chat. See *Tools*.
+- **Documents that keep up.** Keep any folder in sync: new files are
+  read, edited ones read again, deleted ones leave. A document that moves
+  is found again by its words, and one whose file is gone keeps answering
+  with Check again, Relink and Remove on its row. Sources under a reply
+  shows exactly which passages the AI was given. See *Your documents*.
+- **Talk while it works.** Press Enter while your AI is still answering:
+  it finishes its sentence and your message goes next. In a project,
+  your message reaches the agent at its next step without stopping the
+  work. See *Everyday comfort*.
+- **Projects you can watch.** Every step is named after what it is, with
+  its own glyph; background tasks keep their own row with a Stop button;
+  when Auto will not take a step on its own, the question comes as a card
+  above the input field. Sessions start faster and say how far they are
+  through reading the project. See *Projects*.
+- **Tools that feel like chat.** An AI with a tool uses it only when a
+  message calls for it. A tools turn looks like chat: one grey line above
+  the reply opens to the steps, and the page moves the moment you press
+  Enter. See *Tools* and *Projects*.
+- **Your own server is your own hardware.** A computer you run yourself
+  counts as your offline models in both Auto modes, takes a question when
+  it holds the stronger model, and can run project work. If it stops
+  answering, work carries on here. See *Models*.
+- **Search inside your conversations.** The Memory page finds words
+  inside every conversation, not only titles, and opens on the message it
+  found. The words are kept encrypted on this computer. See *Records*.
+- **Runs better on the machine you have.** Graphics memory read from the
+  driver on NVIDIA cards, the small helper models on the card when there
+  is room, less memory used on small computers, offline models on older
+  Macs, and one plain card when a computer cannot run a model, with the
+  way forward. See *Models*.
 
 ### Tools
+
 - Your Own AI Build 0.4.0. The agent behind projects and tools is
   rebuilt on the latest upstream: sessions open faster because model and
   tool connections start in the background, the first reply comes sooner,
@@ -447,29 +108,6 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   and keeps them in sync, so the AI remembers your notes in every chat, not
   only while a tool is running. Needs Node.js 20 or newer; the first
   session fetches the tool itself (a few MB).
-- Sources shows the AI's own documents. When a reply was given passages
-  from documents you have given that AI, the Sources button under the
-  reply lists them - which documents, how many passages, and the passages
-  themselves as the AI saw them. It works in an ordinary chat and when the
-  AI is using a tool or working in a project. These are the passages the
-  AI was given, not proof it used them; Verify sources still ties a claim
-  to a quote. The list is kept in your records (names and counts), in the
-  transcript export and on the Records page.
-- Sources come back when you reopen a conversation. Web links and quoted
-  sources were always recorded, but a reopened conversation had no Sources
-  button. It has one now.
-- Only passages that fit the question are given to your AI. A question
-  that matched one document used to arrive padded with passages from
-  unrelated ones, because every slot was filled. Now a passage has to score
-  close to the best match, and when nothing in your documents fits the
-  question, no passages are given at all - your AI still knows which
-  documents it has. Less for the model to read, nothing irrelevant to be
-  led by, and no private text sent to an online model for a question it
-  has nothing to do with.
-- Follow-up questions find the right document. A short message that
-  leans on the conversation ("and the updated figure?") is matched to your
-  documents together with the question before it, not only on its own
-  words.
 - An AI that carries a tool remembers its documents. A chat that runs
   through a tools session, and a project session, are now given the
   passages of the AI's own documents that match the question, the same
@@ -493,6 +131,30 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   filled in.
 
 ### Your documents
+
+- Sources shows the AI's own documents. When a reply was given passages
+  from documents you have given that AI, the Sources button under the
+  reply lists them - which documents, how many passages, and the passages
+  themselves as the AI saw them. It works in an ordinary chat and when the
+  AI is using a tool or working in a project. These are the passages the
+  AI was given, not proof it used them; Verify sources still ties a claim
+  to a quote. The list is kept in your records (names and counts), in the
+  transcript export and on the Records page.
+- Sources come back when you reopen a conversation. Web links and quoted
+  sources were always recorded, but a reopened conversation had no Sources
+  button. It has one now.
+- Only passages that fit the question are given to your AI. A question
+  that matched one document used to arrive padded with passages from
+  unrelated ones, because every slot was filled. Now a passage has to score
+  close to the best match, and when nothing in your documents fits the
+  question, no passages are given at all - your AI still knows which
+  documents it has. Less for the model to read, nothing irrelevant to be
+  led by, and no private text sent to an online model for a question it
+  has nothing to do with.
+- Follow-up questions find the right document. A short message that
+  leans on the conversation ("and the updated figure?") is matched to your
+  documents together with the question before it, not only on its own
+  words.
 - A document that went offline and turns up in a synced folder - moved or
   renamed into it - is recognized by its words and pointed at the file.
   Its card, who can read it and its history stay; it is never added a
@@ -578,7 +240,313 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   passage is never cut in the middle of a word. Applies to documents read
   from now on.
 
+### Projects
+
+- Every step in the rail is named after what it is. A wait says what it
+  waits for ("Waiting for generate-articles.sh"), a stop names the task
+  it stopped, a helper is "Started a helper: <its task>", a web search
+  carries its query and a web page its address, a tool from Obsidian or
+  Logseq says so, a skill names itself, and a command the AI described is
+  labelled by that description. "Waiting for a background task" is gone:
+  the label is decided by a table keyed by the tool's own name, with the
+  agent's title as the last fallback, and a later update can only replace
+  a label with one at least as specific. Finished steps read in the past
+  tense ("Read package.json"). A build check holds the table to events
+  captured from real sessions, so this cannot quietly regress.
+- The rail tells the story, in two views. Every agent turn, running or
+  reopened, shows the AI's words and between them the steps it took, in
+  the order they happened; a finished turn no longer folds behind a
+  "Steps" button. A Simple | Detailed control sits in the rail header:
+  Simple folds steps of a kind into one row ("Read 4 files and searched
+  twice", "Ran 3 commands"), folds a wait into the step it waits for and
+  keeps thoughts out of the way; Detailed shows every row, thought and
+  live line as it arrives. The choice is per surface, projects Detailed
+  and chat with tools Simple by default, changeable on any rail, in
+  Settings, or with Ctrl+O. The brain icon is gone. Esc stops a running
+  turn.
+- Thoughts are rows. "Thought for 12 s" with a brain glyph, opening to
+  the text, instead of italic paragraphs between steps.
+- The header of a finished turn sums it up: "Read 4 files, ran 3
+  commands, edited 2 files · 6 m 20 s · 4.7k tokens", with a "2 files
+  changed +52 -9" chip that opens every diff. While it runs the header
+  says who is working where, and the line under the rail says what is
+  happening now, how long, and how much.
+- A background task that outlives the turn stays as its own row, "still
+  running", with its latest line and its clock, until it ends; the last
+  line it printed is kept in the record, so a reopened turn still says
+  it. The agent's own word on background tasks (0.4.0) ends such rows
+  properly, red with the exit code when they fail.
+- The plan shrinks to the current item with a "3 of 7" count; click for
+  the rest. A command row copies its command; a file row opens the file;
+  a failed row offers Try again. A helper's steps nest under its row.
+- Your tools carry their marks. Obsidian, Logseq and Blender show their
+  own logos, monochrome like every other glyph, on the Tools page, on the
+  rail, on permission cards and in the activity tray; the activity tray's
+  rows use the same glyphs as the rail.
+- A desktop notification when a project turn that ran longer than half a
+  minute ends while you are in another window: the AI's name and what it
+  did, never the reply. Off in Settings.
+- Rail steps have a face. Each row carries one grey glyph for what it
+  is (a file, a folder, a search, a pencil, a terminal, the web, a
+  helper, an hourglass, a plug for a tool, a sparkle for a skill) in a
+  small box, the label in the app's own font, and its time once it has
+  run past ten seconds. Color means status only: a soft ring breathes
+  around a running step, and a failed one turns red, says how long it
+  ran, and opens itself with the error text. The permission cards use
+  the same glyphs.
+- The record of a turn keeps more of the truth: each step's tool name,
+  server, start and end times, the last line a background task printed,
+  and why a failed step failed. The size ladder now keeps the AI's spoken
+  words when a very long turn has to be trimmed; only the steps in the
+  middle go.
+- When a tools session warns that the model's window is small, it now says
+  why: a context pinned in Fine-tune is named as the cause, with where to
+  change it; a machine that cannot afford more gets the other advice
+  (a bigger-window model, or fewer tools on the AI).
+- A project session's context window is the window of the model that
+  serves its agent turns, sized the way the loader sizes it, and a model
+  switch for an agent turn loads with at least that window when the
+  machine holds it. The log shows the window the session was told and
+  the window the server has. A turn that ends on an error no longer
+  shows its last command as still running.
+- Auto permissions ask. A step Auto would not run on its own used to be
+  refused with "the system blocked" and the AI asking in text; it now
+  comes to you as a card. The card sits above the input field while it
+  waits, so there is no scrolling or clicking to find it, and the rail
+  keeps the decision as a one-line receipt. Build 0.4.1.
+- Faster to the first step. The coding model loads in the background the
+  moment a project opens, five tools the AI never used no longer ride
+  every call, the embedding model warms before your first question, and
+  the field clears the instant you send. While the model reads the
+  project in, the rail says "Taking in the project so far · 60%".
+- Condensing only when it must. A session was being told a window a
+  quarter of the size its model actually ran at, so it condensed its
+  notes after every step; every local session now gets a 32k window and
+  learns the served size from the engine itself.
+- Helpers on the rail. A helper's own steps nest under its row, its
+  progress shows as the row's line, a wait on it reads "Waiting for the
+  helper", and its text never lands in the AI's reply. A command the AI
+  runs in the background takes its task from the agent's own word, keeps
+  running on its row until the agent ends it, and a wait on it is named
+  after it. A running task or helper has a Stop button; a stopped task
+  reads "Stopped", not failed. A command that exits with an error is a
+  red step with its last lines and the exit code as the reason.
+- Detailed opens every step by itself and the rail follows its newest
+  row, so the jump pill reaches it; a chain of tiny thoughts reads as one
+  row; the folder chip says what the project is doing (starting, running,
+  waiting for you, done); switching AI with a project open reopens the
+  session for the new AI; pasted text keeps its line breaks in the field
+  and in your bubble; skills carry their own icon from an `icon:` line
+  in their SKILL.md, and a hand-added tool can fetch its site's icon on
+  request. An offline-only AI whose coding model is a small one gets one
+  line on the turn saying so, with the online door under it.
+- Project work runs on your server when you say so: Settings › Routing
+  has "Project work runs on" (Auto, this computer, your server). With
+  your server chosen, the session is told the server's window, and a
+  server whose window is smaller than the session's keeps project work
+  here and says why.
+- Chat with tools has its own shape. No box and no Simple or Detailed:
+  while it runs, each action is its own collapsed row with its glyph and
+  name; once it is done, one grey line such as "Read 2 files, ran 1
+  command" that opens to the rows; the AI's words are plain chat text.
+  The Simple and Detailed control, the setting and Ctrl+O belong to
+  projects only.
+- The page changes on the keystroke. For an AI that carries tools, your
+  message and a "Thinking.." line go up before the app decides whether
+  the message needs a tool and before the session opens; the line then
+  says "Getting your tools ready.." and "Looking through documents.." as
+  it goes. On a small card an offline send used to sit on the empty
+  view for fifteen seconds first.
+- Quality first for agent work. Project and tools sessions now pick the
+  most capable model that runs on this computer, by capability, then
+  size, then fit, and a weaker model already loaded gives way, one reload
+  per session. A fully-on-card 2B used to beat a partly-offloaded 4B of
+  the same grade, and the 2B could not drive the Obsidian tool.
+- When a small model struggles, the turn says so in plain words: two or
+  more steps that ended red, or a tools turn that never got a tool call
+  to work, on an AI kept offline, once per session. Without a plan it
+  reads "Your AI found this hard. Tasks like this need more than the
+  models this computer can run. Online models do them in one go. They
+  are an optional paid service, and everything offline stays free.",
+  with a link to the Online Models page; with a plan, one button sets the
+  AI to Auto - Online and Offline and sends the message again; and an AI
+  pinned to a smaller model is told which model on this computer does
+  better, with no door. Never on our own faults, and never when Online
+  and Offline was already on.
+- A tools session is told where a tool's things live: the folder it runs
+  in is empty scratch space, notes and scenes exist only inside the tool,
+  and their paths are the tool's own, as listed. Passages from the AI's
+  documents that came from a synced vault say they are library copies.
+
+### Models
+
+- A server you run yourself (Settings › Engines) is part of your offline
+  models. The old "Auto - My Hardware" choice is gone: on Offline Only
+  and on Online and Offline alike, the server takes a job when it holds
+  the clearly stronger model for it, and stays out of it otherwise. An AI
+  still set to the old choice behaves as Offline Only. The card shows the
+  server's window, its speed and its models, and says plainly that
+  Fine-tune does not reach a server: its window and threads are set on
+  that computer. A turn served by the server says so on the turn, and a
+  server that stops answering, on connect or halfway through a reply, is
+  set aside for a minute and picked up again on its own.
+- Every model load shows in the header chip and the action bar,
+  whichever path started it: a project turn's switch, the session's own
+  pre-load, the vision sidecar.
+- A helper on the processor gives its memory back when the computer runs
+  short. A helper checked for room only when it started; if the rest of
+  the machine grew afterwards, it kept its memory while the system swapped
+  (the chat model's own weights were paged out and read back on every
+  reply). The app now reads free memory every ten seconds, and on Linux
+  the kernel's pressure figure too, and under sustained pressure stops an
+  idle helper model, says so in the activity tray, and starts it again on
+  demand once there is room.
+- Two requests no longer trip over each other on a local model. Each
+  local server takes one request at a time - the reply included - so a
+  request always has the whole context window; two together used to fail
+  with "context size exceeded" when their sizes added up past it (an AI's
+  two parallel calls in a project session; three memory extractions at
+  once on the small helper).
+- Several graphics cards: a model now runs on the biggest card alone when
+  it fits there (pooling is always slower - a token passes through every
+  card in turn) and is pooled across all cards only when it does not fit.
+  Fine-tune gains a "Graphics cards" row on such computers: Auto, Biggest
+  card only, or Pool all cards (more memory and a larger context, slower),
+  and its bench measures the pooled case so the row shows real numbers.
+  Model sizes are graded against the biggest card, not a pooled total.
+- A computer whose only graphics is integrated now gets a measured choice:
+  Fine-tune's bench tries the processor against the integrated graphics and
+  keeps the processor when it reads and writes at least 10% faster (an
+  Intel UHD 630 read at 29 tokens a second and wrote at 5.6; the same
+  machine's processor did 52 and 9.1). A modern integrated GPU that wins
+  keeps the model.
+- On the bundled graphics engine with a graphics card, the bench also tries
+  bigger batches and keeps them per model where they read faster.
+- Long prompts read faster on a split model. Fine-tune's bench now tries a
+  bigger batch for a mixture-of-experts model whose expert layers sit in
+  main memory, and keeps it where it read at least 15% faster (measured on
+  a 4 GB card: an 8,000-token prompt 501 to 699 tokens a second, for about
+  200 MB of graphics memory). A model that fits on the card whole gains
+  nothing from it and is left alone.
+- A computer with several different graphics cards is described truthfully:
+  each card by name with its size, biggest first (a box with an RTX PRO
+  6000, an RTX 4090 and an RTX 5060 Ti read "2× RTX 5060 Ti (128.9GB)").
+  The figure models are sized against is the biggest card's, not a pooled
+  sum: a model runs on one card, and that is what the welcome pick and the
+  system line now say.
+- On a small computer the first reply no longer takes twice as long. After
+  a model loads, the app reads the AI's instructions once so the first
+  question only pays for its own words; a question sent during that read
+  used to be processed side by side with it on the same few cores, both
+  slow, one thrown away (a 2-core Mac: three minutes to the first word).
+  Now the question waits for the read to finish and starts from it.
+- Background work that rides the chat model when the small helper is not
+  installed - remembering what you said - now waits until your reply has
+  finished instead of competing with it.
+- The small helper model takes 1.3 GB less memory when it runs on the
+  processor, at the same speed. The processor engine keeps a faster,
+  repacked copy of a model; the app also kept the original mapped from the
+  file, never read again. It is now read straight into memory (measured:
+  4.0 GB down to 2.7 GB, 35 tokens a second either way). On a 16 GB computer
+  the old figure pushed other programs out to the swap file, felt as short
+  freezes.
+- Models whose weights stay in main memory - a model running on the
+  processor, a large mixture-of-experts model split between the graphics
+  card and main memory, and every model on a Mac - are read straight into
+  memory too. Measured: a 4B model on the processor 4.8 GB down to 3.3 GB
+  at the same speed, ready in 6 seconds instead of 14; a split 8B model
+  reads prompts 67% faster. A model that fits on the graphics card whole is
+  loaded as before.
+- What a helper holds on the processor is now measured after it starts, the
+  way a graphics-card placement always was, and the app checks that figure
+  against free memory before starting one: with too little room the helper
+  waits instead of squeezing everything else. The same measurement is
+  taken for a chat model whose weights are in main memory, so the fit
+  figures come from what the machine holds: on a computer without a
+  graphics card the grade uses that measured figure, a split model's main
+  memory side does too, and the free memory credited back for the loaded
+  model can no longer read past the machine's total (a Mac reported
+  "free 18.6 of 16.0 GB").
+- "Fine-tune" now means one thing: how a model runs on this computer -
+  speed, context, memory. The sliders for how replies are written
+  (creativity, word variety, rare-word floor, repetition brake) moved out
+  of "Fine-tune this computer" into their own section in Settings, "Reply
+  style for every AI", and the same sliders in an AI's form are now
+  "Reply style for this AI". Nothing you had set changes.
+- The Offline Models page grades its rows and picks again once a
+  downloaded model has finished loading, so a new download's row and its
+  card on Best for this computer are right without a page refresh. The
+  log records the figures each grading pass read.
+- Fine-tune measures the context the model runs at, so the status line
+  shows Automatic's speed as soon as the measurement finishes. The run
+  reads the card's free memory fresh after the chat model has left it,
+  and the slider opens on the stop nearest the current setup. When the
+  exact setup was not timed, the line names the nearest measured stop.
+- New online models, with no app update needed for the catalog: GPT-6 Sol
+  and GPT-6 Luna (OpenAI, at half the GPT-5.6 rates) and Grok 4.7 (xAI, at
+  the same rates as 4.6). GPT-6 Luna now takes Everyday questions and
+  Grok 4.7 (Web) takes questions that need current information; GPT-6
+  Astra keeps the hard questions, agent work and planning. Grok 4.6 leaves
+  the catalog, and GPT-5.6 Sol is billed at OpenAI's new lower rate. The
+  Online Models page marks the Auto picks from the catalog itself, so a
+  slot that moves shows on the right card at once.
+- Two writing models join the offline catalog, both for computers with
+  32 GB of memory. **Hemmingway 1** (Altworld, built on Qwen 3.8) writes
+  the everyday things - messages, emails, the note you keep rewriting -
+  and gives you the text rather than a memo. It is free for personal use
+  and not for business use, and the app says so before the download.
+  **Skyfall 31B** (TheDrummer, built on Mistral's Magistral Small) is a
+  creative-writing and roleplay model with no content filtering.
+- On an NVIDIA card, free graphics memory is read from the driver's own
+  count, which sees every process on Windows as well as Linux. The
+  models page, the loader, the fine-tune run and project sessions all
+  size from that one figure, and every healthy load records what it
+  really took on the card, so grades and "runs at" match what loads.
+- The memory model and the helper model use the graphics card when there
+  is room. After a chat model loads, the app reads the card's free memory,
+  keeps a margin for the chat model, and starts each helper on the card
+  when its measured footprint fits, or on the processor when it does not.
+  Before a model switch the helpers give the card back, and the decision
+  is taken again once the new model is ready. A helper that fails to
+  come up on the card runs on the processor and the machine remembers
+  that. Settings › Engines has one choice, Automatic or Keep on the
+  processor. The log says where each helper runs.
+- A model's own end-of-turn marker, read from its chat template, joins
+  the stop list for every local request, the memory portrait and
+  document cards included, so a marker the engine does not treat as an
+  end token no longer appears as text. One already in stored text is
+  trimmed on display.
+- Offline models run on older Macs. The Mac AI engine was built for the
+  newest macOS only, so on an older macOS it never started and a model
+  would not load. The Intel engine is now built for macOS 12 and later,
+  and no longer uses a part of macOS that older releases lack, which
+  made it stop on its first answer there. On Apple Silicon the engine is
+  supported from macOS 13.3: on an older macOS the app says so on the
+  start view and above the Offline Models list, before anything is
+  downloaded. Where an operating system cannot run the engine at all,
+  the app says that too, and a load reports it instead of "too slow" or
+  "crashed". If the engine stops part way through an answer, the chat
+  says so in plain words. The engine line in a report names what the
+  bundled engine runs on: Metal, Vulkan, or the processor on Intel Macs.
+- When this computer cannot run a model - too large for it, too slow to
+  load, a graphics card the engine cannot use - the chat now shows one
+  card that says so, offers the Offline Models page for a smaller model,
+  and adds a single line that online models run at full speed on any
+  computer and are an optional paid service. Someone with a plan is told
+  how to use it instead. The line never appears on a fault of ours.
+- The app responds on macOS 12 and earlier. On those Macs the window is
+  drawn by the system's own, older browser engine, and one line of the
+  app's code was written in a form it could not read, so buttons, the
+  Settings menu item, the chat box and the diagnostics report did
+  nothing while plain links still worked. The line is rewritten, the app
+  is now built for that older engine, and every build is checked against
+  it.
+- The MLX engine preview is offered only on macOS 14 and later, the
+  oldest release it can start on. On an older macOS it was offered,
+  downloaded, and then could not run.
+
 ### Records
+
 - Search inside your conversations. The Memory page's filter box now finds
   words inside every conversation of that AI, your own and imported, not
   only titles: the best match per conversation with the matching stretch
@@ -595,13 +563,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - A conversation opened from the drawer stays open: the chat is cleared
   before the records are read, never after them, so the first open after
   launch shows its messages like every later one.
-- Opening a conversation from the drawer is written to the app log end to
-  end: which AI it matched and how, what the records answered (entries,
-  records read, anything skipped, the time taken), and what the page
-  did with it. An empty answer says which of its causes it was. The
-  diagnostics report carries these lines.
 
 ### Everyday comfort
+
 - The activity card's download row keeps its text current: the percent
   and "x of y" move with the bar. Writing a document's card shows its
   progress through the parts of a long document.
@@ -618,6 +582,41 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   behind.
 - Stop on an online model's reply now ends it at the provider too, so a
   stopped reply is metered for what you received, as an estimate.
+
+### Smaller fixes
+
+- A bigger micro-batch the bench kept counts its own card memory (about
+  200 MB) in a model's estimate.
+- The truth-matrix report says what its speed figures measure: writing at
+  a near-empty context, and reading a short prompt where start-up cost
+  dominates; the bench leg reads a long prompt too and labels both.
+- The diagnostics report says how much memory is available now, the figure
+  models are graded against, instead of a "used" figure that did not add up.
+- Without the small memory model installed the log said so once and moved
+  on; it used to write two warnings about a "failure" on every routing
+  decision, which hid everything else in a diagnostics report.
+- The helper models dropdown in Settings now follows the light and dark
+  theme like every other dropdown. When the helper models are not
+  installed, that spot offers the download instead of a choice with
+  nothing to place.
+- Back up now while a backup is already running (the launch pass or a
+  Vault unlock fires one first) now says so and clears itself when that
+  backup finishes, instead of reporting "did not complete" and leaving the
+  note on screen after the backup succeeded.
+- "Search for them" on missing documents writes one log line with what it
+  found, what is still missing and what could not be read.
+- Manage plan and Sign out on the Flowsta account panel sit on their own
+  lines.
+- Fine-tune's measured slider no longer pins the context when it lands on
+  the "auto" stop. The automatics already take the measured winners at
+  that size, so sliding back to auto returns to Automatic and Save clears
+  the entry, instead of leaving a pinned context the person did not mean
+  to set.
+- Opening a conversation from the drawer is written to the app log end to
+  end: which AI it matched and how, what the records answered (entries,
+  records read, anything skipped, the time taken), and what the page
+  did with it. An empty answer says which of its causes it was. The
+  diagnostics report carries these lines.
 
 ## [0.7.2] - 2026-09-09
 
