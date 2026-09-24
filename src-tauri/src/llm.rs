@@ -5204,7 +5204,39 @@ pub fn clear_load_sentinel(app_handle: &AppHandle) {
 }
 
 #[tauri::command]
+/// A load in flight announced to the screen (`model-load` events), so any
+/// path that loads - a project turn's switch, the vision sidecar, the
+/// session's pre-load - shows in the header chip and the action bar the
+/// way chat's own loads always did (Eric, 09-24).
+static LOAD_ANNOUNCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub async fn load_model(
+    app_handle: AppHandle,
+    state: State<'_, LLMState>,
+    filename: String,
+    with_vision: bool,
+    reason: String,
+) -> Result<(), String> {
+    use tauri::Emitter as _;
+    let announce_app = app_handle.clone();
+    let announced_file = filename.clone();
+    let announced_reason = reason.clone();
+    let result = load_model_inner(app_handle, state, filename, with_vision, reason).await;
+    if LOAD_ANNOUNCED.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        let _ = announce_app.emit(
+            "model-load",
+            serde_json::json!({
+                "state": if result.is_ok() { "ready" } else { "failed" },
+                "model": announced_file,
+                "reason": announced_reason,
+                "error": result.as_ref().err().cloned(),
+            }),
+        );
+    }
+    result
+}
+
+async fn load_model_inner(
     app_handle: AppHandle,
     state: State<'_, LLMState>,
     filename: String,
@@ -5241,6 +5273,15 @@ pub async fn load_model(
             log::info!("[LLM] '{}' already loaded and healthy - nothing to do", filename);
             return Ok(());
         }
+    }
+    // A real load follows: say so (the wrapper says how it ended).
+    {
+        use tauri::Emitter as _;
+        LOAD_ANNOUNCED.store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = app_handle.emit(
+            "model-load",
+            serde_json::json!({ "state": "loading", "model": filename, "reason": reason }),
+        );
     }
 
     let models_dir = get_models_dir(&app_handle)?;

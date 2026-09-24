@@ -237,6 +237,23 @@ export default component$(() => {
       listen("build-install-done", () => { buildInstalled.value = true; buildInstalling.value = false; });
       listen("build-install-failed", () => { buildInstalling.value = false; });
       listen("build-uninstalled", () => (buildInstalled.value = false));
+      // Every model load, whichever path starts it (a project turn's
+      // switch, the session pre-load, the vision sidecar): the chip pulses
+      // with the name and the bar shows the load, as chat's own loads do.
+      listen<{ state?: string; model?: string; error?: string }>("model-load", (e) => {
+        const model = typeof e.payload?.model === "string" ? e.payload.model : "";
+        if (e.payload?.state === "loading") {
+          isModelLoading.value = true;
+          if (model) currentModel.value = model;
+          modelIssue.value = "";
+        } else if (e.payload?.state === "ready") {
+          isModelLoading.value = false;
+          if (model) currentModel.value = model;
+        } else if (e.payload?.state === "failed") {
+          isModelLoading.value = false;
+          if (typeof e.payload?.error === "string" && e.payload.error && !modelIssue.value) modelIssue.value = e.payload.error;
+        }
+      });
       listen<{ filename?: string; percent?: number }>("model-download-progress", (e) => {
         if (typeof e.payload?.filename === "string" && e.payload.filename.startsWith("your-own-ai-build-")) {
           buildInstalling.value = true;
