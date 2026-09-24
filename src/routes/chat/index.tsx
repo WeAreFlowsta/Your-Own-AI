@@ -1239,6 +1239,14 @@ export default component$(() => {
         );
         remembered = recalled.text;
         library = recalled.used;
+        // A vault kept in sync with the AI's documents shows up here too,
+        // and a session read "your documents" as files in its folder (09-24:
+        // a list and a search of empty scratch, then an answer from the
+        // passages). Say what these are and where the real notes live.
+        if (remembered && activeTools(selectedAi.value.aiConfig).length > 0) {
+          remembered +=
+            "\n\n(The passages above are copies from the AI's document library, given for context. They are not files in this session's folder. To read, search or change the notes themselves, use the tool that holds them.)";
+        }
       } catch { /* the memory component may not be on this computer */ }
       return { context: [attached, remembered].filter(Boolean).join("\n\n") || undefined, library };
     };
