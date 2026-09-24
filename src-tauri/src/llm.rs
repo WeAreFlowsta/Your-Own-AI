@@ -3620,15 +3620,28 @@ struct EmbeddingDatum {
 /// server orphaned by a dev hot-reload (cargo hard-kills the app, skipping the
 /// clean-exit handler, so the old server keeps holding 8091 and the new one
 /// can't bind it).
+/// Kill whatever is LISTENING on a local port - an orphaned helper server
+/// from an earlier run - so ours can bind it. Only listeners, and never
+/// this process: the app keeps keep-alive client connections to its own
+/// servers, and a "every pid on this port" sweep (`lsof -ti :port`, a
+/// netstat line grep) lists the client end too. On 2026-09-24 the memory
+/// model moved from the processor to the card on an 8 GB Mac two seconds
+/// after the app had used it, the sweep returned the app's own pid, and
+/// the app killed itself - no crash report, three orphaned children.
 fn free_port(port: &str) {
+    let me = std::process::id().to_string();
     #[cfg(unix)]
     {
         use std::process::Command;
+        // -sTCP:LISTEN keeps the client end of our own connections out.
         if let Ok(out) = Command::new("lsof")
-            .args(["-ti", &format!(":{}", port)])
+            .args(["-nP", "-t", &format!("-iTCP:{}", port), "-sTCP:LISTEN"])
             .output()
         {
             for pid in String::from_utf8_lossy(&out.stdout).split_whitespace() {
+                if pid == me {
+                    continue;
+                }
                 let _ = Command::new("kill").args(["-9", pid]).output();
             }
         }
@@ -3638,13 +3651,35 @@ fn free_port(port: &str) {
         use std::process::Command;
         if let Ok(out) = Command::new("netstat").args(["-ano"]).output() {
             let s = String::from_utf8_lossy(&out.stdout);
-            for line in s.lines().filter(|l| l.contains(&format!(":{}", port))) {
-                if let Some(pid) = line.split_whitespace().last() {
-                    let _ = Command::new("taskkill").args(["/F", "/PID", pid]).output();
+            for pid in netstat_listening_pids(&s, port) {
+                if pid == me {
+                    continue;
                 }
+                let _ = Command::new("taskkill").args(["/F", "/PID", &pid]).output();
             }
         }
     }
+}
+
+/// The pids LISTENING on `port` in `netstat -ano` output: the local
+/// address must end in `:port` and the state must be LISTENING. A line
+/// whose FOREIGN address is the port is one of our own client
+/// connections and is left alone.
+fn netstat_listening_pids(text: &str, port: &str) -> Vec<String> {
+    let suffix = format!(":{port}");
+    text.lines()
+        .filter_map(|line| {
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            // Proto  Local  Foreign  State  PID
+            if cols.len() < 5 || cols[0] != "TCP" {
+                return None;
+            }
+            if !cols[1].ends_with(&suffix) || cols[3] != "LISTENING" {
+                return None;
+            }
+            Some(cols[4].to_string())
+        })
+        .collect()
 }
 
 async fn embed_server_ready() -> bool {
@@ -6784,6 +6819,25 @@ pub(crate) static LIVE_MATRIX_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new
 #[cfg(test)]
 mod stop_chain_tests {
     use super::*;
+
+    /// The port sweep must name the LISTENER only: the app's own client
+    /// connection to the port (foreign address = the port) is not a
+    /// holder of it, and killing that pid kills the app (Mac beta.2).
+    #[test]
+    fn netstat_port_sweep_names_listeners_not_our_client_end() {
+        let text = "\
+Active Connections\r\n\
+\r\n\
+  Proto  Local Address          Foreign Address        State           PID\r\n\
+  TCP    127.0.0.1:8091         0.0.0.0:0              LISTENING       4120\r\n\
+  TCP    127.0.0.1:8091         127.0.0.1:52411        ESTABLISHED     4120\r\n\
+  TCP    127.0.0.1:52411        127.0.0.1:8091         ESTABLISHED     3300\r\n\
+  TCP    127.0.0.1:52412        127.0.0.1:8091         CLOSE_WAIT      3300\r\n\
+  TCP    127.0.0.1:18091        0.0.0.0:0              LISTENING       9999\r\n\
+  UDP    127.0.0.1:8091         *:*                                    7777\r\n";
+        assert_eq!(netstat_listening_pids(text, "8091"), vec!["4120".to_string()]);
+        assert!(netstat_listening_pids(text, "8092").is_empty());
+    }
 
     /// The full runtime chain the leak escaped through: models-dir memo ->
     /// header read -> template marker -> stop list. Skips when the model

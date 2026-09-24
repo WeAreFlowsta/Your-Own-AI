@@ -525,7 +525,12 @@ pub(crate) fn reclaim_adjust(
 ) -> (Option<f64>, f64) {
     let (vram, ram_credit) = match free_vram_gb {
         Some(free) => (Some(free + incumbent_vram_gb.max(0.0)), incumbent_ram_gb.max(0.0)),
-        None => (None, (incumbent_vram_gb + incumbent_ram_gb).max(0.0)),
+        // No card figure (a Mac, a processor machine): the model's whole
+        // footprint is in main memory, so hand back ONE figure for it -
+        // the larger of the estimate and the measured record, never their
+        // sum (an 8 GB Mac read "free RAM 8.0 of 8.0" from 4.1 + 3.7 + 0.8,
+        // 2026-09-24).
+        None => (None, incumbent_vram_gb.max(incumbent_ram_gb).max(0.0)),
     };
     let ram = if total_ram_gb > 0.0 { (free_ram_gb + ram_credit).min(total_ram_gb) } else { free_ram_gb + ram_credit };
     (vram, ram)
@@ -668,7 +673,8 @@ pub async fn figures_slot_free(app: &AppHandle, dir: &std::path::Path) -> Machin
         total_ram_gb
     );
     if reclaim_ram_gb > 0.0 {
-        log::info!("[fit] free RAM {raw_ram:.1} + {reclaim_ram_gb:.1} credited for what the running model holds in main memory (measured) = {free_ram_gb:.1} of {total_ram_gb:.1} GB");
+        let applied = (free_ram_gb - raw_ram).max(0.0);
+        log::info!("[fit] free RAM {raw_ram:.1} + {applied:.1} credited for what the running model holds in main memory ({reclaim_ram_gb:.1} measured) = {free_ram_gb:.1} of {total_ram_gb:.1} GB");
     }
     MachineFigures { total_ram_gb, avail_ram_gb: free_ram_gb, free_vram_gb }
 }
@@ -1042,6 +1048,10 @@ mod tests {
         assert_eq!(reclaim_adjust(None, 12.0, 16.0, 6.6, 0.0), (None, 16.0));
         // Total unknown (0): no cap.
         assert_eq!(reclaim_adjust(None, 12.0, 0.0, 6.6, 0.0), (None, 18.6));
+        // A Mac with a measured record: the estimate and the measured figure
+        // describe the same weights - credit the larger once, not both.
+        assert_eq!(reclaim_adjust(None, 4.1, 8.0, 3.7, 0.8), (None, 7.8));
+        assert_eq!(reclaim_adjust(None, 4.1, 8.0, 0.8, 3.7), (None, 7.8));
     }
 
     /// The 0.4.0-beta.1 field case (4060 Ti, balanced lean): with a ~7 GB

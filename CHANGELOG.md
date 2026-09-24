@@ -326,6 +326,14 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   holds its window never asks the loader for more (a failed grow used to
   unload the model and turn the header chip red).
 ### Models, continued
+- The app no longer ends itself when a helper model moves to the graphics
+  card. Before a helper restarts, the app clears its port of any earlier
+  copy; that sweep also counted the app's own connection to the helper
+  and could end the app in the same breath, with no crash report. The
+  sweep now names only what is listening on the port and never the app.
+- On a Mac, the memory the running model holds is handed back to the fit
+  figures once, not twice; an 8 GB Mac used to grade as if all 8 GB were
+  free.
 - On an NVIDIA card, free graphics memory is read from the driver's own
   count, which sees every process on Windows as well as Linux. The
   models page, the loader, the fine-tune run and project sessions all
