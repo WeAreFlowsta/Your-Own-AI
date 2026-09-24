@@ -231,7 +231,10 @@ export async function toolsGuidanceBlock(names: string[] | undefined, inChat = f
   const voice = inChat
     ? "\nThis is a conversation, not a project. Before you act, say in one plain sentence what you are about to do. When done, answer in two or three spoken sentences - what changed and what you noticed - with no code, tool names or step lists; the steps are recorded on their own.\n"
     : "";
-  return `<tools_you_carry>\nThese tool servers are attached to this session. Do the work through their tools, not terminal workarounds (no python, pip or app binaries from the shell to reach what a tool already reaches) - the tools act where the person is looking.\n${lines.join("\n")}${voice}</tools_you_carry>\n\n`;
+  // Small local models reached for read_file / list_dir / grep on the
+  // session's folder to find notes that live inside a tool (09-24: six
+  // "does not exist" reads in a row), so the block says where things are.
+  return `<tools_you_carry>\nThese tool servers are attached to this session. Do the work through their tools, not terminal workarounds (no python, pip or app binaries from the shell to reach what a tool already reaches) - the tools act where the person is looking.\nThe folder this session runs in is empty scratch space: nothing the person owns is in it. Notes, scenes, pages and files that belong to a tool exist only inside that tool - reach them with the tool's own read and search calls, never with read_file, list_dir or grep on the folder.\n${lines.join("\n")}${voice}</tools_you_carry>\n\n`;
 }
 
 /** One line of what a server is, for lists. */
