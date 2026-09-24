@@ -20,6 +20,8 @@ export interface StruggleInfo {
 export type StruggleAction = "see-online" | "go-online" | "switch-local" | "close";
 
 const pretty = (f: string) => f.replace(/\.gguf$/i, "").replace(/-Q\d[^-]*$/i, "");
+/** The short name for a button: family and size ("Qwen3.5-4B"). */
+const short = (f: string) => pretty(f).split("-").slice(0, 2).join("-");
 
 export default component$<{ struggle: StruggleInfo | null; onAction$: QRL<(action: StruggleAction) => void> }>(
   ({ struggle, onAction$ }) => {
@@ -27,7 +29,7 @@ export default component$<{ struggle: StruggleInfo | null; onAction$: QRL<(actio
     return (
       <div class="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50" onClick$={() => onAction$("close")}>
         <div
-          class="bg-[var(--bg-header-footer)] p-6 md:p-7 rounded-xl shadow-2xl w-full max-w-md relative"
+          class="bg-[var(--bg-header-footer)] p-6 md:p-7 rounded-xl shadow-2xl w-full max-w-lg relative"
           onClick$={(e: MouseEvent) => e.stopPropagation()}
         >
           <div class="flex items-start gap-4 mb-6">
@@ -39,26 +41,33 @@ export default component$<{ struggle: StruggleInfo | null; onAction$: QRL<(actio
               <p class="text-sm text-[var(--text-secondary)] mt-1">{struggle.text}</p>
             </div>
           </div>
-          {/* Secondary first in DOM; the primary sits on the right. */}
-          <div class="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
-            <LiquidMetalButton variant="secondary" onClick$={() => onAction$("close")} class="px-4 py-2 text-sm">
+          {/* The app's usual pill size, on one row, the primary on the right;
+              three long labels used to stack into full-width blocks. */}
+          <div class="flex flex-wrap items-center justify-end gap-2">
+            <LiquidMetalButton variant="secondary" onClick$={() => onAction$("close")} class="px-3 py-1.5 text-xs">
               Not now
             </LiquidMetalButton>
             {struggle.bigger && (
               <LiquidMetalButton
                 variant={struggle.entitled ? "secondary" : "primary"}
                 onClick$={() => onAction$("switch-local")}
-                class="px-4 py-2 text-sm"
+                class="px-3 py-1.5 text-xs"
+                title={`Set this AI to ${pretty(struggle.bigger)} and send the message again`}
               >
-                Switch to {pretty(struggle.bigger)}
+                Switch to {short(struggle.bigger)}
               </LiquidMetalButton>
             )}
             {struggle.entitled ? (
-              <LiquidMetalButton variant="primary" onClick$={() => onAction$("go-online")} class="px-4 py-2 text-sm">
-                Use online models for this AI
+              <LiquidMetalButton
+                variant="primary"
+                onClick$={() => onAction$("go-online")}
+                class="px-3 py-1.5 text-xs"
+                title="Set this AI to Auto - Online and Offline and send the message again"
+              >
+                Use online models
               </LiquidMetalButton>
             ) : (
-              <LiquidMetalButton variant="primary" onClick$={() => onAction$("see-online")} class="px-4 py-2 text-sm">
+              <LiquidMetalButton variant="primary" onClick$={() => onAction$("see-online")} class="px-3 py-1.5 text-xs">
                 See online models
               </LiquidMetalButton>
             )}
