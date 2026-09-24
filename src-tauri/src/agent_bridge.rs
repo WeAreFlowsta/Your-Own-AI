@@ -503,11 +503,21 @@ pub async fn start_build_agent(
         if local_window {
             let serving = crate::router::local_agent_serving_model(&app_handle, ai_model.as_deref().unwrap_or("")).await;
             let loaded = app_handle.state::<crate::llm::LLMState>().current_model.lock().await.clone();
-            if serving.is_some() && serving == loaded {
+            // A model already at the room is left alone: `ensure_context`
+            // adds its own reply margin to what it is asked for, so asking
+            // for AGENT_ROOM of a model at exactly AGENT_ROOM meant "grow",
+            // the next rung did not fit the card, and the failed load left
+            // the model UNLOADED (09-25: "too big" in the header after a
+            // session open). Below the room, ask for the room less that
+            // margin, so the answer is the room itself.
+            let held = crate::llm::current_ctx_size() as u64;
+            if serving.is_some() && serving == loaded && held >= AGENT_ROOM {
+                log::info!("[agent] session: '{}' already holds {}k - nothing to grow", loaded.as_deref().unwrap_or("?"), held / 1024);
+            } else if serving.is_some() && serving == loaded {
                 let room = crate::llm::ensure_context(
                     app_handle.clone(),
                     app_handle.state::<crate::llm::LLMState>(),
-                    AGENT_ROOM as u32,
+                    (AGENT_ROOM - 1024) as u32,
                 )
                 .await;
                 let short = match &room {
