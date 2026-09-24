@@ -4,7 +4,8 @@
 import { readFileSync } from "node:fs";
 import { transformSync } from "esbuild";
 
-const src = readFileSync("src/utils/mcp.ts", "utf8");
+// Windows checkouts carry CRLF; the function is cut out by its "\n}\n" end.
+const src = readFileSync("src/utils/mcp.ts", "utf8").replace(/\r\n/g, "\n");
 const start = src.indexOf("export function unsavedSettings(");
 const end = src.indexOf("\n}\n", start) + 3;
 const js = transformSync(src.slice(start, end).replace("export ", ""), { loader: "ts" }).code;
