@@ -26,7 +26,6 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   written to the log end to end. See *Records*.
 - **Clean endings.** A model's own end-of-turn marker stays out of its
   replies, the memory portrait and document cards. See *Models*.
-
 - **Your own server, part of the pool.** A computer you run yourself,
   connected in Settings › Engines, now counts as offline hardware: on
   either Auto mode the AI uses it when it holds the stronger model, and
