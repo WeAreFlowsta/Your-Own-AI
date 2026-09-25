@@ -38,3 +38,15 @@ jobs:
       - name: Fail the run when a URL is broken
         if: steps.sweep.outcome == 'failure'
         run: exit 1
+
+  online:
+    # The online catalog and the app agree on who does each routing job
+    # (the catalog changes without an app release).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Every routing job has one enabled model; the app's floors exist
+        run: node scripts/check-online-catalog.mjs

@@ -6839,6 +6839,45 @@ pub(crate) static LIVE_MATRIX_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new
 mod stop_chain_tests {
     use super::*;
 
+    /// Live (headless matrix): the helper-port sweep ends the LISTENER and
+    /// never the process connected to it. 0.8.0-beta.2 killed itself on an
+    /// 8 GB Mac: the sweep listed every pid on the port, the app's own
+    /// keep-alive connection included, and SIGKILLed them all. If this
+    /// sweep ever names the test process again, the run dies here.
+    #[test]
+    #[ignore]
+    #[cfg(unix)]
+    fn live_matrix_port_sweep_spares_the_client() {
+        let port = 18199u16;
+        let script = format!(
+            "import socket,time\ns=socket.socket()\ns.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)\ns.bind(('127.0.0.1',{port}))\ns.listen(4)\nc,_=s.accept()\ntime.sleep(60)"
+        );
+        let mut listener = std::process::Command::new("python3").args(["-c", &script]).spawn().expect("python3 to run a listener");
+        let mut client = None;
+        for _ in 0..50 {
+            if let Ok(c) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+                client = Some(c);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let _client = client.expect("connected to the listener");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        free_port(&port.to_string());
+        let mut ended = false;
+        for _ in 0..50 {
+            if listener.try_wait().expect("listener state").is_some() {
+                ended = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        if !ended {
+            let _ = listener.kill();
+        }
+        assert!(ended, "the process listening on the port should have been ended");
+    }
+
     /// The port sweep must name the LISTENER only: the app's own client
     /// connection to the port (foreign address = the port) is not a
     /// holder of it, and killing that pid kills the app (Mac beta.2).
