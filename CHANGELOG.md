@@ -3,7 +3,7 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
-## [0.8.0] - 2026-09-24
+## [0.8.0] - 2026-09-25
 
 ### Highlights
 
