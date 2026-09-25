@@ -358,6 +358,24 @@ export default component$(() => {
     document.addEventListener("click", onClick, true);
     cleanup(() => document.removeEventListener("click", onClick, true));
   });
+  // The Vault moved to another Flowsta identity while the app runs: this
+  // window still shows the previous identity's AIs; a restart opens the new
+  // one's. Asked on mount too - the event may have fired before we listened.
+  const identitySwitched = useSignal(false);
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async ({ cleanup }) => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const { listen } = await import("@tauri-apps/api/event");
+      const un = await listen("vault-identity-switched", () => {
+        identitySwitched.value = true;
+      });
+      cleanup(() => un());
+      if (await invoke<boolean>("identity_switched").catch(() => false)) identitySwitched.value = true;
+    } catch {
+      /* not inside Tauri */
+    }
+  });
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async ({ cleanup }) => {
     try {
@@ -426,6 +444,22 @@ export default component$(() => {
               if (href) await nav(href);
             }}
             onCancel$={() => { leaveAsk.value = null; }}
+          />
+          <ConfirmModal
+            isOpen={identitySwitched.value}
+            title="Your Flowsta Vault changed identity"
+            message="Your Vault is now open as a different Flowsta identity. Your Own AI is still showing the AIs and conversations of the identity it opened with, so online models and Vault backups are paused for it. Restart to open the identity your Vault holds now. Nothing is lost - switch back and restart to return."
+            confirmLabel="Restart Your Own AI"
+            cancelLabel="Later"
+            onConfirm$={async () => {
+              try {
+                const { invoke } = await import("@tauri-apps/api/core");
+                await invoke("restart_after_identity_switch");
+              } catch {
+                /* the card stays; the person can quit and reopen */
+              }
+            }}
+            onCancel$={() => { identitySwitched.value = false; }}
           />
         </VisionDownloadProvider>
       </AiDataProvider>

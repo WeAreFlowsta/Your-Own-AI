@@ -6004,6 +6004,10 @@ pub async fn stream_chat_completion(
     // Local: one request at a time on the chat server (see CHAT_ONE_AT_A_TIME);
     // held through the streamed reply below.
     let _turn = if is_local { Some(CHAT_ONE_AT_A_TIME.acquire().await.map_err(|e| e.to_string())?) } else { None };
+    // The token this online reply started with: its Stop is sent with it.
+    // After an identity switch the session check refuses a fresh one, and a
+    // stop that cannot reach the service leaves the old identity metered.
+    let mut online_token: Option<String> = None;
     let response = if online_model.is_some() {
         let token = crate::flowsta::get_access_token(&app).await.map_err(|_| {
             // Structured error so the UI can raise the sign-in modal.
@@ -6020,7 +6024,10 @@ pub async fn stream_chat_completion(
             .header("Content-Type", "application/json")
             // The id Stop names, so the service can end the provider call.
             .header("x-yoai-request-id", &request_id)
-            .bearer_auth(token)
+            .bearer_auth({
+                online_token = Some(token.clone());
+                token
+            })
             .json(&request_body)
             .send()
             .await
@@ -6131,6 +6138,8 @@ pub async fn stream_chat_completion(
         }
     };
 
+    // An online reply stops on an identity switch too (identity_watch).
+    let _online_live = online_token.as_ref().map(|_| crate::identity_watch::OnlineChat::register(&request_id));
     loop {
         // Stop is heard at once, not at the next chunk: a model thinking
         // quietly (or a stalled engine) would otherwise ignore it.
@@ -6142,7 +6151,7 @@ pub async fn stream_chat_completion(
         let Some(waited) = waited else {
             log::info!("[LLM] reply {} stopped by the person", request_id);
             if online_model.is_some() {
-                stop_online_reply(app.clone(), client.clone(), request_id.clone());
+                stop_online_reply(app.clone(), client.clone(), request_id.clone(), online_token.clone());
             }
             let _ = app.emit(&format!("chat-stream-{}", request_id), StreamChunkData {
                 chunk: "[DONE]".to_string(),
@@ -6166,7 +6175,7 @@ pub async fn stream_chat_completion(
         if stop.is_stopped() {
             log::info!("[LLM] reply {} stopped by the person", request_id);
             if online_model.is_some() {
-                stop_online_reply(app.clone(), client.clone(), request_id.clone());
+                stop_online_reply(app.clone(), client.clone(), request_id.clone(), online_token.clone());
             }
             let _ = app.emit(&format!("chat-stream-{}", request_id), StreamChunkData {
                 chunk: "[DONE]".to_string(),
@@ -6451,10 +6460,20 @@ pub async fn stream_chat_completion(
 /// Tell the online-model service to end a reply the person stopped. Dropping
 /// the connection is not enough: the service's host does not report it, so
 /// the provider would write (and meter) the whole reply. Best effort, off the
-/// stream's path.
-pub(crate) fn stop_online_reply(app: tauri::AppHandle, client: reqwest::Client, request_id: String) {
+/// stream's path. `token` = the one the reply started with; a fresh fetch is
+/// only the fallback, since after an identity switch it is refused.
+pub(crate) fn stop_online_reply(app: tauri::AppHandle, client: reqwest::Client, request_id: String, token: Option<String>) {
     tauri::async_runtime::spawn(async move {
-        let Ok(token) = crate::flowsta::get_access_token(&app).await else { return };
+        let token = match token {
+            Some(t) => t,
+            None => match crate::flowsta::get_access_token(&app).await {
+                Ok(t) => t,
+                Err(_) => {
+                    log::warn!("[LLM] online reply {} - no token to end it at the service with", request_id);
+                    return;
+                }
+            },
+        };
         let sent = client
             .post(format!("{}/v1/chat/cancel", crate::flowsta::proxy_url()))
             .bearer_auth(token)
@@ -6485,12 +6504,12 @@ pub async fn cancel_chat_completion(
 /// the shape of a caller that went away mid-reply (an agent turn cancelled,
 /// an outside tool that closed its connection). Disarm when the reply ends.
 pub(crate) struct OnlineReplyGuard {
-    armed: Option<(tauri::AppHandle, reqwest::Client, String)>,
+    armed: Option<(tauri::AppHandle, reqwest::Client, String, Option<String>)>,
 }
 
 impl OnlineReplyGuard {
-    pub(crate) fn new(app: tauri::AppHandle, client: reqwest::Client, request_id: String) -> Self {
-        Self { armed: Some((app, client, request_id)) }
+    pub(crate) fn new(app: tauri::AppHandle, client: reqwest::Client, request_id: String, token: Option<String>) -> Self {
+        Self { armed: Some((app, client, request_id, token)) }
     }
     pub(crate) fn disarm(&mut self) {
         self.armed = None;
@@ -6499,8 +6518,8 @@ impl OnlineReplyGuard {
 
 impl Drop for OnlineReplyGuard {
     fn drop(&mut self) {
-        if let Some((app, client, id)) = self.armed.take() {
-            stop_online_reply(app, client, id);
+        if let Some((app, client, id, token)) = self.armed.take() {
+            stop_online_reply(app, client, id, token);
         }
     }
 }

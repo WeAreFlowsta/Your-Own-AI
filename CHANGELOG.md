@@ -546,6 +546,17 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   downloaded, and then could not run.
 
 ### Records
+- Each Flowsta identity has its own set of AIs, conversations and memory.
+  The first start of this version moves what is already here into the
+  folder of the identity in your Vault; after that, Your Own AI opens
+  whichever identity your Vault holds when it starts. With one identity,
+  nothing changes.
+- If your Flowsta Vault changes to another identity while Your Own AI is
+  open, the app stops acting for the one it opened with at once: online
+  models pause (a reply already running is ended, so nothing more is
+  billed to that identity) and Vault backups wait. A card offers to
+  restart into the identity the Vault holds now. Nothing is signed out
+  or lost - switch back and restart to return.
 
 - Search inside your conversations. The Memory page's filter box now finds
   words inside every conversation of that AI, your own and imported, not

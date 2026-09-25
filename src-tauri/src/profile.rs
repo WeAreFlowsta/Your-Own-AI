@@ -371,7 +371,13 @@ pub fn store_path(app: &tauri::AppHandle, name: &str) -> PathBuf {
 
 /// Record that the current profile belongs to `agent_pub_key` (first
 /// sign-in, first escrow contact, or a restore that adopts an identity).
+/// Frozen after an identity switch: the profile belongs to the previous
+/// identity until the app restarts.
 pub fn bind(app: &tauri::AppHandle, agent_pub_key: &str) {
+    if crate::identity_watch::switched() {
+        log::warn!("[profile] not rebinding this profile after an identity switch");
+        return;
+    }
     let (Ok(device), Ok(current)) = (device_root(app), root(app)) else { return };
     if current.parent() != Some(&profiles_dir(&device)) { return; } // legacy root: nothing to record
     let Some(folder) = current.file_name().map(|f| f.to_string_lossy().to_string()) else { return };
@@ -380,6 +386,17 @@ pub fn bind(app: &tauri::AppHandle, agent_pub_key: &str) {
     profiles.touch(&folder, Some(agent_pub_key));
     if let Err(e) = profiles.save(&device) { log::warn!("[profile] profiles.json not saved: {}", e); }
     if !already { log::info!("[profile] profile {} bound to the signed-in identity", folder); }
+}
+
+/// The identity recorded for the current profile, if any. None for a
+/// profile nobody has signed into yet, and for the legacy root.
+pub fn bound_identity(app: &tauri::AppHandle) -> Option<String> {
+    let (Ok(device), Ok(current)) = (device_root(app), root(app)) else { return None };
+    if current.parent() != Some(&profiles_dir(&device)) {
+        return None;
+    }
+    let folder = current.file_name()?.to_string_lossy().to_string();
+    Profiles::load(&device).profiles.get(&folder).and_then(|p| p.identity.clone())
 }
 
 /// Frontend access to a store inside the profile (the AI configs).

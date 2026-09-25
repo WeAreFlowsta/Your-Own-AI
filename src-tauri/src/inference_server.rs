@@ -1330,6 +1330,9 @@ async fn chat_completions(
         format!("api-{}-{:08x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0), rand::thread_rng().gen::<u32>())
     });
     let mut local_permit: Option<tokio::sync::SemaphorePermit<'static>> = None;
+    // The token an online reply starts with - its stop is sent with it
+    // (after an identity switch a fresh one is refused).
+    let mut online_token: Option<String> = None;
     let send = if online_id.is_some() {
         let token = match crate::flowsta::get_access_token(&app).await {
             Ok(t) => t,
@@ -1344,6 +1347,7 @@ async fn chat_completions(
                 )
             }
         };
+        online_token = Some(token.clone());
         client
             .post(format!("{}/v1/chat/completions", crate::flowsta::proxy_url()))
             .header("x-yoai-request-id", online_request_id.as_deref().unwrap_or_default())
@@ -1417,7 +1421,9 @@ async fn chat_completions(
         // then record the exchange once the stream completes.
         let mut online_guard = online_request_id
             .clone()
-            .map(|id| crate::llm::OnlineReplyGuard::new(app.clone(), client.clone(), id));
+            .map(|id| crate::llm::OnlineReplyGuard::new(app.clone(), client.clone(), id, online_token.clone()));
+        // An online reply ends on an identity switch (identity_watch).
+        let switch_watch = online_request_id.is_some();
         // A reply from the person's server that breaks off mid-stream is a
         // server failure too (09-24: the kill test broke a stream, not a
         // connect): set it aside and say so, the harness retries here.
@@ -1430,7 +1436,21 @@ async fn chat_completions(
             let mut raw: Vec<u8> = Vec::new();      // full body (incl. <think>) → recording
             let mut pending: Vec<u8> = Vec::new();  // bytes not yet split into events
             let mut stripper = ThinkStripper::default();
-            while let Some(item) = s.next().await {
+            loop {
+                let next = tokio::select! {
+                    biased;
+                    _ = crate::identity_watch::wait_switched(), if switch_watch => None,
+                    item = s.next() => Some(item),
+                };
+                let Some(next) = next else {
+                    // The Vault holds another identity now: end this reply at
+                    // the service with the token it started with (the armed
+                    // guard does that as it drops) and tell the caller.
+                    drop(online_guard.take());
+                    yield Err(std::io::Error::new(std::io::ErrorKind::Other, "the Flowsta identity in your Vault changed"));
+                    break;
+                };
+                let Some(item) = next else { break };
                 match item {
                     Ok(bytes) => {
                         raw.extend_from_slice(&bytes);

@@ -35,7 +35,7 @@ const ESCROW_LABEL: &str = "recovery";
 #[derive(Serialize, Clone)]
 pub struct EscrowStatus {
     /// "synced" | "conflict" | "unlinked" | "vault_unavailable" |
-    /// "vault_locked" | "identity_mismatch" | "error"
+    /// "vault_locked" | "identity_mismatch" | "identity_switched" | "error"
     pub state: String,
     /// Raw conversation-record count across local agents; only filled when
     /// it matters (state == "conflict").
@@ -216,6 +216,11 @@ pub(crate) async fn escrow_port(
     app: &tauri::AppHandle,
     require_owner_match: bool,
 ) -> Result<u16, EscrowStatus> {
+    // The Vault moved to another identity while the app runs: this profile's
+    // data belongs to the previous one. Nothing is written until a restart.
+    if crate::identity_watch::switched() {
+        return Err(EscrowStatus::state("identity_switched"));
+    }
     let store = app.store(crate::profile::store_path(&app, AUTH_STORE))
         .map_err(|e| EscrowStatus::error(e.to_string()))?;
     if !store.get("link_done").and_then(|v| v.as_bool()).unwrap_or(false) {
@@ -1946,7 +1951,7 @@ pub async fn write_full_backup(app: &tauri::AppHandle) -> Result<serde_json::Val
         }
         // Not-linked / Vault-away / already-running are idle states, not
         // refusals - no notice for those.
-        Err(e) if e == "unlinked" || e == "vault_unavailable" || e == "backup_in_progress" => {}
+        Err(e) if e == "unlinked" || e == "vault_unavailable" || e == "backup_in_progress" || e == "identity_switched" => {}
         Err(e) => {
             record_backup_outcome(
                 app,
@@ -2086,7 +2091,7 @@ pub fn schedule_full_backup(app: &tauri::AppHandle) {
         }
         match write_full_backup(&app).await {
             Ok(_) => {}
-            Err(e) if e == "unlinked" || e == "vault_unavailable" || e == "backup_in_progress" => {
+            Err(e) if e == "unlinked" || e == "vault_unavailable" || e == "backup_in_progress" || e == "identity_switched" => {
                 log::debug!("[escrow] full backup skipped: {}", e);
             }
             Err(e) if e == "vault_locked" => {
@@ -2160,7 +2165,7 @@ pub fn start_daily_backup_check(app: &tauri::AppHandle) {
                     log::warn!("[escrow] daily check: backup held ({})", v["skipped"].as_str().unwrap_or("?"))
                 }
                 Ok(_) => log::info!("[escrow] daily check: backup written"),
-                Err(e) if e == "unlinked" || e == "vault_unavailable" || e == "backup_in_progress" => {}
+                Err(e) if e == "unlinked" || e == "vault_unavailable" || e == "backup_in_progress" || e == "identity_switched" => {}
                 Err(e) if e == "vault_locked" => backup_when_vault_unlocks(&app),
                 Err(e) => log::warn!("[escrow] daily check: backup failed: {}", e),
             }

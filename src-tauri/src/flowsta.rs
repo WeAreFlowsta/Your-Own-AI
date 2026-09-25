@@ -113,38 +113,59 @@ fn cached_port() -> &'static std::sync::Mutex<Option<u16>> {
     PORT.get_or_init(|| std::sync::Mutex::new(None))
 }
 
+/// The Vault's three ports (it moves up when 27777 is taken).
+const VAULT_PORTS: [u16; 3] = [27777, 27778, 27779];
+
+/// Every Vault answering on this computer: (port, status JSON). All three
+/// ports are asked at once. A Mac was seen with THREE Vault copies running
+/// (27777, 27778, 27779, 2026-09-25): the first answer is not the right one.
+async fn probe_vaults(timeout: std::time::Duration) -> Vec<(u16, serde_json::Value)> {
+    let client = http();
+    let one = |port: u16| {
+        let client = client.clone();
+        async move {
+            let resp = client
+                .get(format!("http://127.0.0.1:{}/status", port))
+                .timeout(timeout)
+                .send()
+                .await
+                .ok()?;
+            let v = resp.json::<serde_json::Value>().await.ok()?;
+            Some((port, v))
+        }
+    };
+    let (a, b, c) = tokio::join!(one(VAULT_PORTS[0]), one(VAULT_PORTS[1]), one(VAULT_PORTS[2]));
+    [a, b, c].into_iter().flatten().collect()
+}
+
+/// The Vault to talk to: an unlocked one first (it is the one the person is
+/// using), then one that is set up, then the lowest port that answered.
+fn pick_vault(answers: &[(u16, serde_json::Value)]) -> Option<&(u16, serde_json::Value)> {
+    answers
+        .iter()
+        .find(|(_, v)| v["unlocked"].as_bool().unwrap_or(false))
+        .or_else(|| answers.iter().find(|(_, v)| v["initialized"].as_bool().unwrap_or(true)))
+        .or_else(|| answers.first())
+}
+
 /// Probe localhost for a running Vault.
 pub async fn find_vault() -> VaultStatus {
-    let client = http();
-    let cached = *cached_port().lock().unwrap();
-    let order: Vec<u16> = match cached {
-        Some(p) => std::iter::once(p)
-            .chain([27777u16, 27778, 27779].into_iter().filter(|x| *x != p))
-            .collect(),
-        None => vec![27777, 27778, 27779],
-    };
-    for port in order {
-        let url = format!("http://127.0.0.1:{}/status", port);
-        // Short per-probe timeout so a dead port fails fast.
-        if let Ok(resp) = client
-            .get(&url)
-            .timeout(std::time::Duration::from_secs(4))
-            .send()
-            .await
-        {
-            if let Ok(v) = resp.json::<serde_json::Value>().await {
-                *cached_port().lock().unwrap() = Some(port);
-                return VaultStatus {
-                    installed: true,
-                    unlocked: v["unlocked"].as_bool().unwrap_or(false),
-                    port: Some(port),
-                    agent_pub_key: v["agent_pub_key"].as_str().map(String::from),
-                };
+    let answers = probe_vaults(std::time::Duration::from_secs(4)).await;
+    match pick_vault(&answers) {
+        Some((port, v)) => {
+            *cached_port().lock().unwrap() = Some(*port);
+            VaultStatus {
+                installed: true,
+                unlocked: v["unlocked"].as_bool().unwrap_or(false),
+                port: Some(*port),
+                agent_pub_key: v["agent_pub_key"].as_str().map(String::from),
             }
         }
+        None => {
+            *cached_port().lock().unwrap() = None;
+            VaultStatus::default()
+        }
     }
-    *cached_port().lock().unwrap() = None;
-    VaultStatus::default()
 }
 
 #[tauri::command]
@@ -254,6 +275,14 @@ async fn fetch_vault_profile(
 
 #[tauri::command]
 pub async fn flowsta_sign_in(app: tauri::AppHandle) -> Result<FlowstaSession, String> {
+    // After a switch this profile still belongs to the previous identity;
+    // signing in here would put the new identity's session in the old
+    // identity's folder. The restart opens the right one.
+    if crate::identity_watch::switched() {
+        use tauri::Emitter as _;
+        let _ = app.emit("vault-identity-switched", serde_json::json!({}));
+        return Err("identity_switched".into());
+    }
     let vault = find_vault().await;
     let port = vault.port.ok_or("vault_not_found")?;
     if !vault.unlocked {
@@ -660,6 +689,7 @@ async fn fetch_online_models() -> Result<Vec<OnlineModel>, String> {
 /// the Vault-side link is also gone in that case (Vault was reset, or it's
 /// another user), so `link_done`/`app_link_key` must clear too for a clean
 /// re-link on the next sign-in.
+#[allow(dead_code)]
 const SESSION_KEYS_FULL: [&str; 10] = [
     "access_token",
     "refresh_token",
@@ -687,12 +717,15 @@ const SESSION_KEYS_FULL: [&str; 10] = [
 /// same-identity reconnect keeps working untouched: the key is deterministic,
 /// so it matches.
 async fn session_identity_ok(app: &tauri::AppHandle) -> bool {
+    // After a switch nothing is authorised for this profile until a restart
+    // opens the new identity's profile. Nothing is wiped.
+    if crate::identity_watch::switched() {
+        return false;
+    }
     // 60s positive cache: this guard runs before EVERY online request and
-    // its Vault /status probe can stall up to 1.5s. Identity switches are
-    // rare and still invalidate within a minute - a mis-billed request
-    // window of seconds, against a probe on the hot path of every turn.
-    static LAST_OK: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
-    if let Ok(guard) = LAST_OK.lock() {
+    // its Vault /status probe can stall up to 1.5s. A switch clears it
+    // (`clear_identity_cache`); the watcher sees one within ten seconds.
+    if let Ok(guard) = IDENTITY_OK_AT.lock() {
         if let Some(t) = *guard {
             if t.elapsed() < std::time::Duration::from_secs(60) {
                 return true;
@@ -701,7 +734,7 @@ async fn session_identity_ok(app: &tauri::AppHandle) -> bool {
     }
     let ok = session_identity_ok_uncached(app).await;
     if ok {
-        if let Ok(mut guard) = LAST_OK.lock() {
+        if let Ok(mut guard) = IDENTITY_OK_AT.lock() {
             *guard = Some(std::time::Instant::now());
         }
     }
@@ -725,36 +758,50 @@ async fn session_identity_ok_uncached(app: &tauri::AppHandle) -> bool {
     // online models are designed to keep working off the proxy JWT without a
     // live Vault, so we must NOT block or log out on an unreachable Vault.
     match vault_identity_quick().await {
-        Some((true, Some(ref vault_key))) if vault_key != &stored => {
-            for key in SESSION_KEYS_FULL {
-                store.delete(key);
-            }
-            let _ = store.save();
+        Some((true, Some(ref vault_key))) if !crate::identity_watch::same_identity(vault_key, &stored) => {
+            // The Vault holds another identity. This session (and this
+            // profile) belong to `stored`: refuse, and hand over to the
+            // switch path - which keeps the session for when `stored` comes
+            // back. It used to be wiped, which signed the old identity out
+            // for good.
+            crate::identity_watch::note_switch(app, Some(&stored), vault_key);
             false
         }
         _ => true,
     }
 }
 
-/// Fast single-probe read of Vault's `(unlocked, agent_pub_key)` for the
-/// identity guard. Unlike `find_vault`, it never scans all three ports: it hits
-/// the last-known port (or the default 27777 on a cold start) with a short
-/// timeout. The guard only needs an answer when Vault is genuinely up; a
-/// down/slow Vault yields `None` ("can't tell"), so the caller keeps the cached
-/// session instead of stalling online use behind a multi-port scan.
+/// Fast read of the Vault's `(unlocked, agent_pub_key)` for the identity
+/// guard and the launch-time profile pick: all three ports at once with a
+/// short timeout, the unlocked Vault first (one probe used to hit 27777
+/// only, and at launch the cache is empty - a locked stray copy there hid
+/// the unlocked Vault on 27778). A down/slow Vault yields `None` ("can't
+/// tell"), so the caller keeps the cached session instead of stalling.
 pub(crate) async fn vault_identity_quick() -> Option<(bool, Option<String>)> {
-    let port = (*cached_port().lock().unwrap()).unwrap_or(27777);
-    let resp = http()
-        .get(format!("http://127.0.0.1:{}/status", port))
-        .timeout(std::time::Duration::from_millis(1500))
-        .send()
-        .await
-        .ok()?;
-    let v = resp.json::<serde_json::Value>().await.ok()?;
+    let answers = probe_vaults(std::time::Duration::from_millis(1500)).await;
+    let (port, v) = pick_vault(&answers)?;
+    *cached_port().lock().unwrap() = Some(*port);
     Some((
         v["unlocked"].as_bool().unwrap_or(false),
         v["agent_pub_key"].as_str().map(String::from),
     ))
+}
+
+/// The identity of the Flowsta session stored in this profile, if any.
+pub(crate) fn stored_session_key(app: &tauri::AppHandle) -> Option<String> {
+    let store = app.store(crate::profile::store_path(app, AUTH_STORE)).ok()?;
+    store.get("agent_pub_key").and_then(|v| v.as_str().map(String::from))
+}
+
+/// The identity guard's positive cache (see `session_identity_ok`).
+static IDENTITY_OK_AT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+/// Forget the positive cache - a switch must be felt on the next request,
+/// not up to a minute later.
+pub(crate) fn clear_identity_cache() {
+    if let Ok(mut g) = IDENTITY_OK_AT.lock() {
+        *g = None;
+    }
 }
 
 /// One launch-time reconcile pass. Returns `true` when there's nothing more to

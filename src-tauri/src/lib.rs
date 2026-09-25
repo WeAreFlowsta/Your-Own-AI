@@ -35,6 +35,7 @@ mod router;               // Auto-mode model routing (offline / online+offline)
 mod gguf;                  // minimal GGUF header reader (model metadata for fit)
 mod fit;                   // VRAM/RAM fit grading per downloaded model
 mod profile;               // identity profiles: one data set per Flowsta identity
+mod identity_watch;        // the Vault's identity changing under a running app
 mod reset;                 // factory reset (wipe local AIs/transcripts/memory, relaunch)
 mod vault_escrow;          // transcript-key escrow in the user's Flowsta Vault
 mod vault_restore;         // replay conversations from the Vault backup onto this device
@@ -572,6 +573,8 @@ pub fn run() {
         .manage(agent_bridge::AgentBridgeState::new())
         .invoke_handler(tauri::generate_handler![
             profile::profile_store_path,
+            identity_watch::identity_switched,
+            identity_watch::restart_after_identity_switch,
             inference_server::lan_access_status,
             inference_server::lan_access_set,
             inference_server::lan_access_regenerate_key,
@@ -867,6 +870,9 @@ pub fn run() {
             // was reset): re-link so YOAI reappears in Vault's connected apps,
             // matching ProofPoll. No-op when signed out; retries briefly so an
             // unlock shortly after launch still reconnects.
+            // The Vault's identity changing under the running app.
+            identity_watch::spawn(app.handle().clone());
+
             let link_app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 flowsta::reconcile_vault_link_on_launch(link_app_handle.clone()).await;
