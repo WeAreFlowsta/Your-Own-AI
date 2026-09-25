@@ -545,7 +545,8 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   oldest release it can start on. On an older macOS it was offered,
   downloaded, and then could not run.
 
-### Records
+### Your Flowsta identities
+
 - Each Flowsta identity has its own set of AIs, conversations and memory.
   The first start of this version moves what is already here into the
   folder of the identity in your Vault; after that, Your Own AI opens
@@ -562,6 +563,7 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   a second Vault build) on the same computer used to answer first, so a
   sign-in could wait on a Vault whose window you could not see.
 
+### Records
 - Search inside your conversations. The Memory page's filter box now finds
   words inside every conversation of that AI, your own and imported, not
   only titles: the best match per conversation with the matching stretch
