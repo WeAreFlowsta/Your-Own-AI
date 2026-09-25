@@ -6,8 +6,8 @@ import { transformSync } from "esbuild";
 const src = readFileSync("src/utils/toolsGate.ts", "utf8");
 const cut = src.slice(src.indexOf("export const CONTRAST_LINE"), src.indexOf("/** The carried tools as the gate reads them"));
 const js = transformSync(cut.replace(/export /g, ""), { loader: "ts" }).code;
-const { namedTool, decide, CONTRAST_LINE, DESCRIPTION_BAR, ORDINARY_CHAT } = new Function(
-  `${js}; return { namedTool, decide, CONTRAST_LINE, DESCRIPTION_BAR, ORDINARY_CHAT };`,
+const { namedTool, decide, aboutMyThings, CONTRAST_LINE, DESCRIPTION_BAR, ORDINARY_CHAT } = new Function(
+  `${js}; return { namedTool, decide, aboutMyThings, CONTRAST_LINE, DESCRIPTION_BAR, ORDINARY_CHAT };`,
 )();
 
 const tools = [
@@ -48,6 +48,17 @@ eq("forced beats everything", r({ forced: true, sticky: false, named: null, scor
 eq("no memory model: the old behavior", r({ ...base, scores: null }), "session:blind:");
 eq("no memory model, but named", r({ ...base, named: "blender", scores: null }), "session:named:blender");
 eq("no tools scored", r({ ...base, scores: [] }), "direct:direct:");
+// The world right now skips the tools; the person's own things do not.
+eq("live web beats a close call", r({ ...base, liveWeb: true, scores: [c("obsidian", 0.04)] }), "direct:live-web:obsidian");
+eq("naming the tool beats live web", r({ ...base, liveWeb: true, named: "obsidian", scores: [c("obsidian", 0.04)] }), "session:named:obsidian");
+eq("a tool conversation beats live web", r({ ...base, liveWeb: true, sticky: true, scores: [c("obsidian", 0.04)] }), "session:sticky:obsidian");
+eq("forced beats live web", r({ forced: true, sticky: false, named: null, liveWeb: true, scores: [c("obsidian", 0.04)] }), "session:forced:obsidian");
+eq("the world: not mine", aboutMyThings("what's the latest in the middle east?"), false);
+eq("tell me is not mine", aboutMyThings("tell me the headlines tonight"), false);
+eq("my notes are mine", aboutMyThings("what did I add to my notes today?"), true);
+eq("a journal page is mine", aboutMyThings("read me today's journal page"), true);
+eq("a daily note is mine", aboutMyThings("put this in today's daily note"), true);
+eq("inside another word does not count", aboutMyThings("is Miami sunny right now?"), false);
 
 if (bad) process.exit(1);
 console.log(`tools gate check: ${n} cases pass`);

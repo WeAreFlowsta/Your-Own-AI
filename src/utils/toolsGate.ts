@@ -110,7 +110,7 @@ export interface GateTool {
   examples: string[];
 }
 
-export type GateReason = "forced" | "named" | "sticky" | "blind" | "similar" | "direct";
+export type GateReason = "forced" | "named" | "sticky" | "live-web" | "blind" | "similar" | "direct";
 
 export interface GateVerdict {
   session: boolean;
@@ -126,6 +126,28 @@ export interface GateScore {
   tool: string;
   kind: "contrast" | "description";
   score: number;
+}
+
+/** Words that make a message about the person's OWN things. A message with
+ *  the router's live-web cue ("latest", "today", "right now"...) and none of
+ *  these is about the world: it skips the tools session and takes the
+ *  ordinary path, which sends it to web search (field case 2026-09-25: "what's
+ *  the latest in the middle east?" with the Obsidian tool on searched the
+ *  notes). Measured (build-docs guides/tools/gate-matrix-4.mjs, -5.mjs): no
+ *  likeness threshold separates the two ("share price of Apple right now"
+ *  +0.057, "what did I write in my diary today?" +0.045); this rule got 19 of
+ *  20 of an unseen set right, the one miss being "me" ("tell me the
+ *  headlines tonight"), removed after that run. Whole words only. */
+export const PERSONAL_MARKERS = ["my", "mine", "i", "i've", "i'd", "i'm", "we", "our", "note", "notes", "journal", "diary", "todo", "to-do", "list", "page", "graph", "vault", "saved", "wrote", "written", "jot", "jotted", "logged"];
+
+/** The message speaks of the person's own things (see PERSONAL_MARKERS). */
+export function aboutMyThings(message: string): boolean {
+  return message
+    .toLowerCase()
+    .replace(/[^a-z0-9'\- ]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .some((w) => PERSONAL_MARKERS.includes(w) || PERSONAL_MARKERS.includes(w.replace(/'s$/, "")));
 }
 
 /** The tool a message names, by the tool's own name or title as a whole word. */
@@ -155,6 +177,10 @@ export function decide(input: {
   forced: boolean;
   sticky: boolean;
   named: string | null;
+  /** A question about the world right now (the router's live-web cue, and
+   *  nothing about the person's own things): it goes the ordinary way, to
+   *  web search, unless the tool is named or already in use. */
+  liveWeb?: boolean;
   /** null = nothing could be scored (no memory model). */
   scores: GateScore[] | null;
 }): GateVerdict {
@@ -169,6 +195,7 @@ export function decide(input: {
   if (input.forced) return { session: true, reason: "forced", ...seen };
   if (input.named) return { session: true, reason: "named", best: seen.best, tool: input.named };
   if (input.sticky) return { session: true, reason: "sticky", ...seen };
+  if (input.liveWeb) return { session: false, reason: "live-web", ...seen };
   if (input.scores === null) return { session: true, reason: "blind", best: 0, tool: "" };
   if (top && isRequest(top)) return { session: true, reason: "similar", ...seen };
   return { session: false, reason: "direct", ...seen };
@@ -238,7 +265,18 @@ export async function toolsGate(input: {
   } catch {
     scores = null; // no memory model, or it is busy: decide blind
   }
-  const verdict = decide({ forced: input.forced, sticky: input.sticky, named, scores });
+  // The live-web cue comes from the router (one list); without an answer
+  // the rule simply does not apply.
+  let liveWeb = false;
+  if (!aboutMyThings(input.message)) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      liveWeb = await invoke<boolean>("live_web_cue", { text: input.message });
+    } catch {
+      liveWeb = false;
+    }
+  }
+  const verdict = decide({ forced: input.forced, sticky: input.sticky, named, liveWeb, scores });
   // Scores only - never the message, never a note's words.
   const sign = verdict.best >= 0 ? "+" : "";
   const line = `tools gate: best ${sign}${verdict.best.toFixed(2)}${verdict.tool ? ` (${verdict.tool})` : ""}, line ${CONTRAST_LINE}, ${input.toolCalls ?? 0} tool call${(input.toolCalls ?? 0) === 1 ? "" : "s"} so far - ${verdict.session ? "session" : "direct"} (${verdict.reason})`;

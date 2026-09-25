@@ -568,6 +568,13 @@ pub(crate) fn looks_small_talk(query: &str) -> bool {
     opens && !asks_world.iter().any(|w| q.contains(w))
 }
 
+/// The router's live-web cue, for the chat's tools gate: one list, used by
+/// both (utils/toolsGate.ts asks this rather than keeping a copy).
+#[tauri::command]
+pub fn live_web_cue(text: String) -> bool {
+    looks_time_sensitive(&text)
+}
+
 fn looks_time_sensitive(query: &str) -> bool {
     let q = query.to_lowercase();
     const CUES: &[&str] = &[

@@ -620,6 +620,7 @@ pub fn run() {
             engine::remove_external_engine,
             router::route_model,
             router::agent_best_local,
+            router::live_web_cue,
             router::is_medical_query,
             router::routing_specialist_tasks,
             router::routing_defaults,

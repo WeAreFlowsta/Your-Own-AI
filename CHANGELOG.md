@@ -75,6 +75,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   is a line with its own button like everything else. Tools you
   added yourself get the same Set up list, which replaces the separate
   settings window and the "Used by" list.
+- A question about the world right now - the latest news, today's
+  weather, a price at this moment - goes to web search even when the AI
+  carries a notes tool, instead of being looked up in your notes. It stays
+  with the tool when it is about your own things ("what did I add to my
+  notes today?"), names the tool, or the conversation is already using it.
 - Tools only when a message needs them. An AI that carries a tool used to
   answer every message through a tools session - slower to start, and more
   paid tokens on an online model - even for "thanks". Now a message goes
