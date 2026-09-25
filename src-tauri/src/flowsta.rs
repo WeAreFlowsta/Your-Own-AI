@@ -135,7 +135,187 @@ async fn probe_vaults(timeout: std::time::Duration) -> Vec<(u16, serde_json::Val
         }
     };
     let (a, b, c) = tokio::join!(one(VAULT_PORTS[0]), one(VAULT_PORTS[1]), one(VAULT_PORTS[2]));
-    [a, b, c].into_iter().flatten().collect()
+    let mut mine = Vec::new();
+    for (port, v) in [a, b, c].into_iter().flatten() {
+        if vault_is_mine(port).await {
+            mine.push((port, v));
+        }
+    }
+    mine
+}
+
+/// Is the Vault answering on `port` running as THIS OS user? Loopback ports
+/// are shared by every account on a computer: on 2026-09-25 a Mac had the
+/// production Vault of ANOTHER user account on 27777 and a staging build on
+/// 27778, and this app (and the login page) talked to them - a sign-in whose
+/// dialog could never appear, and, with the unlocked-first pick, a false
+/// "your Vault changed identity" card. Another user's Vault is ignored.
+/// When the owner cannot be read (a tool missing, a localized netstat), the
+/// Vault is kept: never lose the person's own Vault to a failed check.
+/// The verdict is cached per port for a minute.
+async fn vault_is_mine(port: u16) -> bool {
+    use std::time::{Duration, Instant};
+    static CACHE: std::sync::Mutex<Vec<(u16, bool, Instant)>> = std::sync::Mutex::new(Vec::new());
+    if let Ok(c) = CACHE.lock() {
+        if let Some((_, v, _)) = c.iter().find(|(p, _, at)| *p == port && at.elapsed() < Duration::from_secs(60)) {
+            return *v;
+        }
+    }
+    let read = tokio::task::spawn_blocking(move || listener_is_mine(port)).await.ok().flatten();
+    let mine = read.unwrap_or(true);
+    if let Ok(mut c) = CACHE.lock() {
+        let said_before = c.iter().any(|(p, v, _)| *p == port && !*v);
+        c.retain(|(p, _, _)| *p != port);
+        c.push((port, mine, Instant::now()));
+        if !mine && !said_before {
+            log::info!("[vault] the Vault on port {port} runs as another user of this computer - ignored");
+        }
+    }
+    mine
+}
+
+/// Some(true/false) when the owner of the process listening on `port` could
+/// be read, None when it could not.
+#[cfg(target_os = "linux")]
+fn listener_is_mine(port: u16) -> Option<bool> {
+    use std::os::unix::fs::MetadataExt;
+    let me = std::fs::metadata("/proc/self").ok()?.uid();
+    let mut seen: Option<bool> = None;
+    for f in ["/proc/net/tcp", "/proc/net/tcp6"] {
+        if let Ok(text) = std::fs::read_to_string(f) {
+            for uid in proc_net_listen_uids(&text, port) {
+                if uid == me {
+                    return Some(true);
+                }
+                seen = Some(false);
+            }
+        }
+    }
+    seen
+}
+
+#[cfg(target_os = "macos")]
+fn listener_is_mine(port: u16) -> Option<bool> {
+    use std::os::unix::fs::MetadataExt;
+    // This user's uid: the owner of their home folder.
+    let me = std::fs::metadata(std::env::var_os("HOME")?).ok()?.uid();
+    let out = std::process::Command::new("/usr/sbin/lsof")
+        .args(["-nP", &format!("-iTCP:{port}"), "-sTCP:LISTEN", "-Fu"])
+        .output()
+        .ok()?;
+    let uids = lsof_uids(&String::from_utf8_lossy(&out.stdout));
+    if uids.contains(&me) {
+        return Some(true);
+    }
+    if !uids.is_empty() {
+        return Some(false);
+    }
+    // Unprivileged lsof does not list other users' processes: a Vault that
+    // answers on the port but is not listed runs as someone else. lsof says
+    // "nothing found" with exit 1 and no error text.
+    if out.status.code() == Some(1) && out.stderr.is_empty() {
+        return Some(false);
+    }
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn listener_is_mine(port: u16) -> Option<bool> {
+    use std::os::windows::process::CommandExt;
+    const NO_WINDOW: u32 = 0x0800_0000;
+    let out = std::process::Command::new("netstat")
+        .args(["-ano", "-p", "TCP"])
+        .creation_flags(NO_WINDOW)
+        .output()
+        .ok()?;
+    let pid = crate::llm::netstat_listening_pids(&String::from_utf8_lossy(&out.stdout), &port.to_string())
+        .into_iter()
+        .next()?;
+    let list = std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/V", "/FO", "CSV", "/NH"])
+        .creation_flags(NO_WINDOW)
+        .output()
+        .ok()?;
+    let user = tasklist_user(&String::from_utf8_lossy(&list.stdout))?;
+    let name = std::env::var("USERNAME").ok()?;
+    let domain = std::env::var("USERDOMAIN").unwrap_or_default();
+    // Another user's process reads "N/A" (in the system's language) to an
+    // unelevated caller - so anything but our own name is someone else.
+    let me_full = format!("{domain}\\{name}");
+    Some(user.eq_ignore_ascii_case(&me_full) || user.eq_ignore_ascii_case(&name))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn listener_is_mine(_port: u16) -> Option<bool> {
+    None
+}
+
+/// uids of the processes LISTENING on `port` in a /proc/net/tcp(6) table.
+#[allow(dead_code)]
+pub(crate) fn proc_net_listen_uids(text: &str, port: u16) -> Vec<u32> {
+    text.lines()
+        .skip(1)
+        .filter_map(|line| {
+            let c: Vec<&str> = line.split_whitespace().collect();
+            // sl local_address rem_address st tx:rx tr:when retrnsmt uid ...
+            if c.len() < 8 || c[3] != "0A" {
+                return None; // 0A = LISTEN
+            }
+            let p = u16::from_str_radix(c[1].rsplit(':').next()?, 16).ok()?;
+            if p != port {
+                return None;
+            }
+            c[7].parse().ok()
+        })
+        .collect()
+}
+
+/// uids in `lsof -Fu` output (lines "u<uid>").
+#[allow(dead_code)]
+pub(crate) fn lsof_uids(text: &str) -> Vec<u32> {
+    text.lines().filter_map(|l| l.strip_prefix('u')?.trim().parse().ok()).collect()
+}
+
+/// The "User Name" column of one `tasklist /V /FO CSV /NH` line.
+#[allow(dead_code)]
+pub(crate) fn tasklist_user(text: &str) -> Option<String> {
+    let line = text.lines().find(|l| l.starts_with('"'))?;
+    let cols: Vec<&str> = line.trim().trim_matches('"').split("\",\"").collect();
+    // Image, PID, Session name, Session#, Mem usage, Status, User name, ...
+    cols.get(6).map(|s| s.to_string())
+}
+
+#[cfg(test)]
+mod vault_owner_tests {
+    use super::*;
+
+    #[test]
+    fn proc_net_names_the_listener_uid_for_the_port() {
+        // 27777 = 0x6C81, 127.0.0.1 = 0100007F; state 0A = LISTEN, 01 = ESTABLISHED.
+        let text = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:6C81 00000000:0000 0A 00000000:00000000 00:00000000 00000000   501        0 11111 1
+   1: 0100007F:6C82 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 22222 1
+   2: 0100007F:D1F4 0100007F:6C81 01 00000000:00000000 00:00000000 00000000  1000        0 33333 1
+";
+        assert_eq!(proc_net_listen_uids(text, 27777), vec![501]);
+        assert_eq!(proc_net_listen_uids(text, 27778), vec![1000]);
+        assert!(proc_net_listen_uids(text, 27779).is_empty());
+    }
+
+    #[test]
+    fn lsof_fu_lists_uids() {
+        assert_eq!(lsof_uids("p4120\nu501\nf12\n"), vec![501]);
+        assert!(lsof_uids("").is_empty());
+    }
+
+    #[test]
+    fn tasklist_user_is_the_seventh_column() {
+        let mine = "\"Flowsta Vault.exe\",\"4120\",\"Console\",\"1\",\"120,332 K\",\"Running\",\"DESKTOP-1\\eric\",\"0:00:05\",\"Flowsta Vault\"\r\n";
+        assert_eq!(tasklist_user(mine).as_deref(), Some("DESKTOP-1\\eric"));
+        let other = "\"Flowsta Vault.exe\",\"5000\",\"Console\",\"2\",\"98,000 K\",\"Unknown\",\"N/A\",\"0:00:00\",\"N/A\"\r\n";
+        assert_eq!(tasklist_user(other).as_deref(), Some("N/A"));
+        assert_eq!(tasklist_user("INFO: No tasks are running."), None);
+    }
 }
 
 /// The Vault to talk to: an unlocked one first (it is the one the person is

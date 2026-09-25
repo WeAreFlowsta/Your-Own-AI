@@ -3665,7 +3665,7 @@ fn free_port(port: &str) {
 /// address must end in `:port` and the state must be LISTENING. A line
 /// whose FOREIGN address is the port is one of our own client
 /// connections and is left alone.
-fn netstat_listening_pids(text: &str, port: &str) -> Vec<String> {
+pub(crate) fn netstat_listening_pids(text: &str, port: &str) -> Vec<String> {
     let suffix = format!(":{port}");
     text.lines()
         .filter_map(|line| {

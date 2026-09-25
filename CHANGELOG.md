@@ -557,6 +557,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   billed to that identity) and Vault backups wait. A card offers to
   restart into the identity the Vault holds now. Nothing is signed out
   or lost - switch back and restart to return.
+- On a computer with several user accounts, Your Own AI talks only to the
+  Flowsta Vault running in your own account. Another account's Vault (or
+  a second Vault build) on the same computer used to answer first, so a
+  sign-in could wait on a Vault whose window you could not see.
 
 - Search inside your conversations. The Memory page's filter box now finds
   words inside every conversation of that AI, your own and imported, not
