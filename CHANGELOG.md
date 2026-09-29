@@ -3,6 +3,18 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [Unreleased]
+
+### Fixed
+- **Windows: no more flashing terminal windows.** Every model load and
+  the tool installers (Git, Blender, the shell steps) opened a console
+  window for a moment. Those helpers now run without one; the engine and
+  the identity sidecars already did.
+- **The identity switch notice stays until you restart.** Clicking beside
+  the card closed it for the session while online models and backups stayed
+  paused. Later now leaves a strip at the bottom of the window with the
+  Restart button until the app restarts.
+
 ## [0.8.0] - 2026-09-25
 
 ### Highlights

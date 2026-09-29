@@ -3648,14 +3648,26 @@ fn free_port(port: &str) {
     }
     #[cfg(target_os = "windows")]
     {
+        use std::os::windows::process::CommandExt;
         use std::process::Command;
-        if let Ok(out) = Command::new("netstat").args(["-ano"]).output() {
+        // The app is a GUI process: netstat and taskkill each get a console
+        // window of their own unless told otherwise, and every model load
+        // flashed them across the screen.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        if let Ok(out) = Command::new("netstat")
+            .args(["-ano"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+        {
             let s = String::from_utf8_lossy(&out.stdout);
             for pid in netstat_listening_pids(&s, port) {
                 if pid == me {
                     continue;
                 }
-                let _ = Command::new("taskkill").args(["/F", "/PID", &pid]).output();
+                let _ = Command::new("taskkill")
+                    .args(["/F", "/PID", &pid])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .output();
             }
         }
     }

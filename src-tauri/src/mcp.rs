@@ -478,6 +478,18 @@ pub async fn mcp_which(program: String) -> Result<Option<String>, String> {
     Ok(which_sync(&program))
 }
 
+/// A tool call (git, powershell, cmd, Blender) that must not flash a console
+/// window on Windows: the app is a GUI process, so every console child gets
+/// a window of its own unless told otherwise.
+fn quiet(cmd: &mut std::process::Command) -> &mut std::process::Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
 pub(crate) fn which_sync(program: &str) -> Option<String> {
     let p = program.trim();
     if p.is_empty() {
@@ -552,9 +564,9 @@ pub async fn mcp_fetch_git(app: AppHandle, url: String, dest: String) -> Result<
     // the same lookup that gave the green tick finds it.
     let git = which_sync("git").ok_or("git was not found - install it, then try again")?;
     let out = if target.join(".git").is_dir() {
-        std::process::Command::new(&git).args(["-C", &target_s, "pull", "--ff-only"]).output()
+        quiet(std::process::Command::new(&git).args(["-C", &target_s, "pull", "--ff-only"])).output()
     } else {
-        std::process::Command::new(&git).args(["clone", "--depth", "1", &url, &target_s]).output()
+        quiet(std::process::Command::new(&git).args(["clone", "--depth", "1", &url, &target_s])).output()
     }
     .map_err(|e| format!("git could not run: {e}"))?;
     if !out.status.success() {
@@ -645,9 +657,9 @@ pub async fn mcp_requirement_install(program: String) -> Result<String, String> 
             // same command the person was shown.
             if let Some(rest) = plan.command.strip_prefix("powershell ") {
                 let args: Vec<String> = shell_words(rest);
-                std::process::Command::new("powershell").args(args).output()
+                quiet(std::process::Command::new("powershell").args(args)).output()
             } else {
-                std::process::Command::new("cmd").args(["/C", &plan.command]).output()
+                quiet(std::process::Command::new("cmd").args(["/C", &plan.command])).output()
             }
         } else {
             std::process::Command::new("sh").args(["-c", &plan.command]).output()
@@ -766,7 +778,7 @@ pub async fn mcp_source_check(app: AppHandle, name: String) -> Result<SourceStat
     tauri::async_runtime::spawn_blocking(move || {
         let git = which_sync("git").ok_or("git was not found")?;
         let run = |args: &[&str]| -> Result<String, String> {
-            let out = std::process::Command::new(&git).arg("-C").arg(&d).args(args).output().map_err(|e| format!("git could not run: {e}"))?;
+            let out = quiet(std::process::Command::new(&git).arg("-C").arg(&d).args(args)).output().map_err(|e| format!("git could not run: {e}"))?;
             if !out.status.success() {
                 return Err(format!("git failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
             }
@@ -788,11 +800,11 @@ pub async fn mcp_source_update(app: AppHandle, name: String) -> Result<String, S
     let d = dir.to_string_lossy().to_string();
     tauri::async_runtime::spawn_blocking(move || {
         let git = which_sync("git").ok_or("git was not found")?;
-        let out = std::process::Command::new(&git).args(["-C", &d, "pull", "--ff-only", "--quiet"]).output().map_err(|e| format!("git could not run: {e}"))?;
+        let out = quiet(std::process::Command::new(&git).args(["-C", &d, "pull", "--ff-only", "--quiet"])).output().map_err(|e| format!("git could not run: {e}"))?;
         if !out.status.success() {
             return Err(format!("update failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
         }
-        let head = std::process::Command::new(&git).args(["-C", &d, "rev-parse", "--short", "HEAD"]).output().map_err(|e| e.to_string())?;
+        let head = quiet(std::process::Command::new(&git).args(["-C", &d, "rev-parse", "--short", "HEAD"])).output().map_err(|e| e.to_string())?;
         Ok(String::from_utf8_lossy(&head.stdout).trim().to_string())
     })
     .await
@@ -946,7 +958,7 @@ pub async fn mcp_blender_addon_install(app: AppHandle) -> Result<String, String>
     let o = out_dir.to_string_lossy().to_string();
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
         let run = |args: &[&str]| -> Result<String, String> {
-            let out = std::process::Command::new(&blender).arg("-b").arg("--command").arg("extension").args(args).output().map_err(|e| format!("Blender could not run: {e}"))?;
+            let out = quiet(std::process::Command::new(&blender).arg("-b").arg("--command").arg("extension").args(args)).output().map_err(|e| format!("Blender could not run: {e}"))?;
             let text = format!("{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
             if !out.status.success() {
                 return Err(format!("Blender's installer failed: {}", text.lines().filter(|l| !l.trim().is_empty()).last().unwrap_or("").trim()));
@@ -965,12 +977,12 @@ pub async fn mcp_blender_addon_install(app: AppHandle) -> Result<String, String>
         log::info!("[blender] add-on installed; enabling + Allow Online Access + save prefs");
         // `--enable` in a headless run installs the files but the GUI does not
         // see the enabled flag until preferences are saved: enable + save.
-        let out = std::process::Command::new(&blender)
+        let out = quiet(std::process::Command::new(&blender)
             // Blender gates the add-on's LOCAL socket behind its own "Allow
             // Online Access" preference (off on a fresh install) - the add-on
             // refuses to start without it. The card says so before this runs.
             .args(["-b", "--python-expr", "import bpy; bpy.context.preferences.system.use_online_access = True; bpy.ops.preferences.addon_enable(module='bl_ext.user_default.mcp'); bpy.ops.wm.save_userpref()"])
-            .output()
+            ).output()
             .map_err(|e| format!("Blender could not run: {e}"))?;
         if !out.status.success() {
             return Err("the add-on installed but could not be enabled - enable MCP under Edit > Preferences > Extensions".into());
