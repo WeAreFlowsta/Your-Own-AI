@@ -1,4 +1,5 @@
 import {
+  $,
   component$,
   createContextId,
   Slot,
@@ -7,6 +8,7 @@ import {
   useVisibleTask$,
   type Signal,
 } from "@builder.io/qwik";
+import { LuInfo } from "@qwikest/icons/lucide";
 import { useNavigate } from "@builder.io/qwik-city";
 import { ModeProvider } from "../contexts/ModeContext";
 import { AiDataProvider } from "../contexts/AiDataContext";
@@ -16,6 +18,7 @@ import { FirstModelIndicator } from "../components/FirstModelIndicator";
 import { bumpLaunchCount } from "../utils/homeOffers";
 import { WorkspaceMemoryModal } from "../components/WorkspaceMemoryModal";
 import ConfirmModal from "../components/ConfirmModal";
+import LiquidMetalButton from "../components/LiquidMetalButton";
 import { prefetchModels } from "../utils/modelCache";
 import { mirrorPausedModels } from "../utils/modelPrefs";
 
@@ -361,7 +364,19 @@ export default component$(() => {
   // The Vault moved to another Flowsta identity while the app runs: this
   // window still shows the previous identity's AIs; a restart opens the new
   // one's. Asked on mount too - the event may have fired before we listened.
+  // "Later" on the card closes only the card: a strip with the restart
+  // button stays until the app restarts, because a click beside the card
+  // dismissed it before anyone read it (field 09-29).
   const identitySwitched = useSignal(false);
+  const identityCardDismissed = useSignal(false);
+  const restartForIdentity = $(async () => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("restart_after_identity_switch");
+    } catch {
+      /* the notice stays; the person can quit and reopen */
+    }
+  });
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async ({ cleanup }) => {
     try {
@@ -446,21 +461,36 @@ export default component$(() => {
             onCancel$={() => { leaveAsk.value = null; }}
           />
           <ConfirmModal
-            isOpen={identitySwitched.value}
+            isOpen={identitySwitched.value && !identityCardDismissed.value}
             title="Your Flowsta Vault changed identity"
             message="Your Vault is now open as a different Flowsta identity. Your Own AI is still showing the AIs and conversations of the identity it opened with, so online models and Vault backups are paused for it. Restart to open the identity your Vault holds now. Nothing is lost - switch back and restart to return."
             confirmLabel="Restart Your Own AI"
             cancelLabel="Later"
-            onConfirm$={async () => {
-              try {
-                const { invoke } = await import("@tauri-apps/api/core");
-                await invoke("restart_after_identity_switch");
-              } catch {
-                /* the card stays; the person can quit and reopen */
-              }
-            }}
-            onCancel$={() => { identitySwitched.value = false; }}
+            onConfirm$={restartForIdentity}
+            onCancel$={() => { identityCardDismissed.value = true; }}
           />
+          {identitySwitched.value && identityCardDismissed.value && (
+            <div
+              role="status"
+              class="fixed bottom-4 left-4 right-4 sm:left-1/2 sm:right-auto sm:w-[30rem] sm:max-w-[calc(100vw-2rem)] sm:-translate-x-1/2 z-[55] rounded-xl border border-amber-500/30 bg-[var(--bg-card)] shadow-2xl px-4 py-3 flex items-center gap-3"
+            >
+              <LuInfo class="w-4 h-4 flex-shrink-0 text-amber-300" />
+              <div class="min-w-0 flex-1 text-sm">
+                <p class="font-medium text-[var(--text-primary)]">
+                  Your Vault is open as a different identity
+                </p>
+                <p class="text-xs text-[var(--text-secondary)] mt-0.5">
+                  Online models and Vault backups stay paused until Your Own AI restarts.
+                </p>
+              </div>
+              <LiquidMetalButton
+                onClick$={restartForIdentity}
+                class="px-3 py-1.5 text-xs flex-shrink-0"
+              >
+                Restart Your Own AI
+              </LiquidMetalButton>
+            </div>
+          )}
         </VisionDownloadProvider>
       </AiDataProvider>
     </ModeProvider>
