@@ -8,7 +8,6 @@ import {
   useVisibleTask$,
   type Signal,
 } from "@builder.io/qwik";
-import { LuInfo } from "@qwikest/icons/lucide";
 import { useNavigate } from "@builder.io/qwik-city";
 import { ModeProvider } from "../contexts/ModeContext";
 import { AiDataProvider } from "../contexts/AiDataContext";
@@ -19,6 +18,7 @@ import { bumpLaunchCount } from "../utils/homeOffers";
 import { WorkspaceMemoryModal } from "../components/WorkspaceMemoryModal";
 import ConfirmModal from "../components/ConfirmModal";
 import LiquidMetalButton from "../components/LiquidMetalButton";
+import { Callout } from "../components/Callout";
 import { prefetchModels } from "../utils/modelCache";
 import { mirrorPausedModels } from "../utils/modelPrefs";
 
@@ -472,23 +472,23 @@ export default component$(() => {
           {identitySwitched.value && identityCardDismissed.value && (
             <div
               role="status"
-              class="fixed bottom-4 left-4 right-4 sm:left-1/2 sm:right-auto sm:w-[30rem] sm:max-w-[calc(100vw-2rem)] sm:-translate-x-1/2 z-[55] rounded-xl border border-amber-500/30 bg-[var(--bg-card)] shadow-2xl px-4 py-3 flex items-center gap-3"
+              class="fixed bottom-4 left-4 right-4 sm:left-1/2 sm:right-auto sm:w-[32rem] sm:max-w-[calc(100vw-2rem)] sm:-translate-x-1/2 z-[55] shadow-2xl rounded-lg bg-[var(--bg-main)]"
             >
-              <LuInfo class="w-4 h-4 flex-shrink-0 text-amber-300" />
-              <div class="min-w-0 flex-1 text-sm">
-                <p class="font-medium text-[var(--text-primary)]">
-                  Your Vault is open as a different identity
-                </p>
-                <p class="text-xs text-[var(--text-secondary)] mt-0.5">
+              {/* The Callout's amber tint is translucent; the wrapper keeps the page from showing through. */}
+              <Callout
+                intent="warning"
+                title="Your Vault is open as a different identity"
+              >
+                <p class="mb-2.5">
                   Online models and Vault backups stay paused until Your Own AI restarts.
                 </p>
-              </div>
-              <LiquidMetalButton
-                onClick$={restartForIdentity}
-                class="px-3 py-1.5 text-xs flex-shrink-0"
-              >
-                Restart Your Own AI
-              </LiquidMetalButton>
+                <LiquidMetalButton
+                  onClick$={restartForIdentity}
+                  class="px-3 py-1.5 text-xs"
+                >
+                  Restart Your Own AI
+                </LiquidMetalButton>
+              </Callout>
             </div>
           )}
         </VisionDownloadProvider>
