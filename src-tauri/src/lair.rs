@@ -63,14 +63,28 @@ pub fn start_lair_process(
         log::warn!("[lair] config not repointed: {e}");
     }
 
+    // A socket path over the platform limit is moved to the short runtime
+    // directory (macOS with a long username). Unix only.
+    #[cfg(not(windows))]
+    ensure_socket_fits(lair_dir, &config_path)?;
+
     // Read connection URL from config file.
     let connection_url = read_connection_url(&config_path)?;
 
-    // Clean up stale socket file from a previous run.
-    let socket_path = lair_dir.join("socket");
-    if socket_path.exists() {
-        log::info!("Removing stale lair socket: {:?}", socket_path);
-        let _ = std::fs::remove_file(&socket_path);
+    // Clean up stale socket files from a previous run, wherever the config
+    // puts the socket.
+    #[cfg(not(windows))]
+    {
+        let mut stale = vec![lair_dir.join("socket")];
+        if let Ok(p) = socket_path_from_url(&connection_url) {
+            if !stale.contains(&p) { stale.push(p); }
+        }
+        for socket_path in stale {
+            if socket_path.exists() {
+                log::info!("Removing stale lair socket: {:?}", socket_path);
+                let _ = std::fs::remove_file(&socket_path);
+            }
+        }
     }
 
     // Start the lair server.
@@ -131,7 +145,15 @@ pub(crate) fn repoint_config(lair_dir: &Path) -> Result<bool, String> {
                         .decode_utf8_lossy()
                         .to_string();
                     let expected = lair_dir.join("socket");
-                    if Path::new(&decoded) != expected {
+                    // The short runtime socket for THIS root (see
+                    // `ensure_socket_fits`) is where the config may already
+                    // point; that is correct and stays.
+                    #[cfg(not(windows))]
+                    let short_for_root = lair_dir.parent().map(crate::profile::short_socket_path);
+                    #[cfg(windows)]
+                    let short_for_root: Option<std::path::PathBuf> = None;
+                    let is_short = short_for_root.as_deref() == Some(Path::new(&decoded));
+                    if Path::new(&decoded) != expected && !is_short {
                         url.set_path(&expected.to_string_lossy());
                         out.push(format!("{indent}connectionUrl: {url}"));
                         changed = true;
@@ -166,6 +188,60 @@ pub(crate) fn repoint_config(lair_dir: &Path) -> Result<bool, String> {
     std::fs::rename(&tmp, &config_path).map_err(|e| e.to_string())?;
     log::info!("[lair] key store config repointed to {:?}", lair_dir);
     Ok(true)
+}
+
+/// The socket path a `unix://...` connection URL names (percent-decoded).
+pub(crate) fn socket_path_from_url(connection_url: &str) -> Result<std::path::PathBuf, String> {
+    let url = lair_keystore_api::dependencies::url::Url::parse(connection_url)
+        .map_err(|e| format!("Invalid lair connection URL: {}", e))?;
+    let decoded = percent_decode_str(url.path()).decode_utf8_lossy();
+    Ok(std::path::PathBuf::from(decoded.as_ref()))
+}
+
+/// Lair writes `connectionUrl: unix://<lair dir>/socket?k=...` at init. On
+/// macOS that path is over the Unix-socket limit for a profile under a
+/// longer username, and lair dies with "path must be shorter than SUN_LEN".
+/// When the in-directory socket does not fit, rewrite the URL's path to the
+/// short per-root socket in the runtime directory (`profile::short_socket_path`).
+/// Idempotent; a config already on the short path is left alone.
+#[cfg(not(windows))]
+pub(crate) fn ensure_socket_fits(lair_dir: &Path, config_path: &Path) -> Result<(), String> {
+    let url = read_connection_url(config_path)?;
+    let current = socket_path_from_url(&url)?;
+    if crate::profile::socket_fits(&current) {
+        return Ok(());
+    }
+    let root = lair_dir.parent().unwrap_or(lair_dir);
+    let short = crate::profile::short_socket_path(root);
+    if !crate::profile::socket_fits(&short) {
+        return Err(format!("no socket path short enough for the key store ({:?})", short));
+    }
+    if let Some(dir) = short.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("cannot create the socket directory {:?}: {}", dir, e))?;
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+    const KEEP: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+        .remove(b'/').remove(b'.').remove(b'-').remove(b'_');
+    let encoded = percent_encoding::utf8_percent_encode(&short.to_string_lossy(), KEEP).to_string();
+    let query = url.split_once('?').map(|(_, q)| format!("?{}", q)).unwrap_or_default();
+    let new_url = format!("unix://{}{}", encoded, query);
+    let content = std::fs::read_to_string(config_path)
+        .map_err(|e| format!("Failed to read lair config at {:?}: {}", config_path, e))?;
+    let rewritten: String = content
+        .lines()
+        .map(|l| if l.trim_start().starts_with("connectionUrl:") { format!("connectionUrl: {}", new_url) } else { l.to_string() })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    let tmp = config_path.with_extension("yaml.tmp");
+    std::fs::write(&tmp, rewritten).map_err(|e| format!("Failed to write lair config: {}", e))?;
+    std::fs::rename(&tmp, config_path).map_err(|e| format!("Failed to replace lair config: {}", e))?;
+    log::info!(
+        "[lair] socket moved to the runtime dir: {:?} ({} bytes; the in-directory path was {} bytes)",
+        short, short.as_os_str().len(), current.as_os_str().len()
+    );
+    Ok(())
 }
 
 fn read_connection_url(config_path: &Path) -> Result<String, String> {
@@ -291,6 +367,33 @@ mod tests {
         assert_eq!(repoint_config(&new), Ok(true));
         let url = read_connection_url(&new.join("lair-keystore-config.yaml")).unwrap();
         assert!(url.contains("profiles/local/lair/socket"), "{url}");
+    }
+
+    #[test]
+    #[cfg(not(windows))]
+    #[test]
+    fn a_too_long_socket_moves_to_the_runtime_dir_and_repoint_keeps_it() {
+        let base = tempfile::tempdir().unwrap();
+        // A profile root deep enough that <root>/lair/socket is over the limit.
+        let long = "p".repeat(90);
+        let root = base.path().join(long);
+        let lair = root.join("lair");
+        std::fs::create_dir_all(&lair).unwrap();
+        let cfg = lair.join("lair-keystore-config.yaml");
+        std::fs::write(&cfg, mac_style_config(&lair)).unwrap();
+        assert!(!crate::profile::in_root_socket_fits(&root));
+        ensure_socket_fits(&lair, &cfg).unwrap();
+        let url = read_connection_url(&cfg).unwrap();
+        let moved = socket_path_from_url(&url).unwrap();
+        assert_eq!(moved, crate::profile::short_socket_path(&root));
+        assert!(crate::profile::socket_fits(&moved));
+        // The per-start repoint accepts the moved socket instead of dragging
+        // it back under the too-long directory.
+        assert_eq!(repoint_config(&lair).unwrap(), false);
+        assert_eq!(socket_path_from_url(&read_connection_url(&cfg).unwrap()).unwrap(), moved);
+        // And a second ensure is a no-op.
+        ensure_socket_fits(&lair, &cfg).unwrap();
+        assert_eq!(socket_path_from_url(&read_connection_url(&cfg).unwrap()).unwrap(), moved);
     }
 
     #[test]

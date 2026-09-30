@@ -3,9 +3,17 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
-## [Unreleased]
+## [0.8.1] - 2026-09-30
 
 ### Fixed
+- **Mac: identities switch for every username.** The key store's socket
+  moves to a short runtime path when the profile folder is too long for
+  macOS, which a longer username alone could cause. Before, such a Mac
+  quietly stayed on one shared folder and could not switch identities.
+- **The restart into another identity comes to the front.** After
+  Restart on the identity switch notice, the new window appeared behind
+  the Vault; it now shows and takes focus at launch and again when the
+  network is ready.
 - **Windows: no more flashing terminal windows.** Every model load and
   the tool installers (Git, Blender, the shell steps) opened a console
   window for a moment. Those helpers now run without one; the engine and

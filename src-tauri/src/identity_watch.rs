@@ -169,10 +169,49 @@ pub fn identity_switched() -> bool {
     switched()
 }
 
+/// Set once per process when this launch is the relaunch that
+/// `restart_after_identity_switch` asked for: the window is brought to the
+/// front at setup and again when the conductor is ready.
+pub static RELAUNCHED_INTO_IDENTITY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn relaunch_marker_path(device_root: &std::path::Path) -> std::path::PathBuf {
+    device_root.join("relaunch-into-identity")
+}
+
+/// True once per relaunch that the restart asked for: the marker is
+/// consumed here so a later normal launch reads false.
+pub fn take_relaunch_marker(device_root: &std::path::Path) -> bool {
+    let p = relaunch_marker_path(device_root);
+    if p.exists() {
+        let _ = std::fs::remove_file(&p);
+        RELAUNCHED_INTO_IDENTITY.store(true, std::sync::atomic::Ordering::Relaxed);
+        true
+    } else {
+        false
+    }
+}
+
+/// Bring the main window to the front (the OS hands focus to whatever was
+/// behind the old window after a restart, usually the Vault).
+pub fn bring_to_front(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+    }
+}
+
 /// Relaunch into the identity the Vault holds now (`profile::init` picks it).
 #[tauri::command]
 pub fn restart_after_identity_switch(app: tauri::AppHandle) -> Result<(), String> {
     log::info!("[identity] restarting to open the Vault's identity");
+    // The relaunch reads this once and comes back to the front.
+    if let Ok(device_root) = crate::profile::device_root(&app) {
+        if let Err(e) = std::fs::write(relaunch_marker_path(&device_root), b"1") {
+            log::warn!("[identity] relaunch marker not written: {}", e);
+        }
+    }
     #[cfg(not(debug_assertions))]
     {
         app.restart()

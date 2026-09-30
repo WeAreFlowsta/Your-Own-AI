@@ -150,17 +150,74 @@ fn legacy_identity(device_root: &Path) -> Option<String> {
     v["escrow_owner"].as_str().or_else(|| v["agent_pub_key"].as_str()).map(String::from)
 }
 
-/// Whether the key store socket under this root fits the platform's Unix
-/// socket path limit (Linux 108, macOS 104, minus a margin; Windows named
-/// pipes always fit).
+/// The longest Unix socket path this platform binds (Linux 108, macOS 104)
+/// minus a margin for the terminating byte and lair's own suffixing.
+#[cfg(not(windows))]
+fn socket_path_budget() -> usize {
+    let limit: usize = if cfg!(target_os = "macos") { 104 } else { 108 };
+    limit.saturating_sub(4)
+}
+
+/// Whether a socket at `path` can be bound at all.
+#[cfg(not(windows))]
+pub fn socket_fits(path: &Path) -> bool { path.as_os_str().len() + 1 <= socket_path_budget() }
+
+/// Whether lair's default socket (inside its own directory under `root`)
+/// fits. On macOS `~/Library/Application Support/net.yourownai.app/profiles/
+/// <key>/lair/socket` is close to the 104 limit with a short username, so a
+/// longer username alone pushes it over.
+#[cfg(not(windows))]
+pub fn in_root_socket_fits(root: &Path) -> bool { socket_fits(&root.join("lair").join("socket")) }
+
+/// A short, per-user, private directory for key store sockets whose
+/// in-root path does not fit: macOS `$TMPDIR` (per-user, mode 700), Linux
+/// `$XDG_RUNTIME_DIR`, else `/tmp/fv-<uid>` (created mode 700). Shared
+/// with the Vault's and ProofPoll's sockets by design: one name per root.
+#[cfg(not(windows))]
+pub fn short_socket_dir() -> PathBuf {
+    let base = if cfg!(target_os = "macos") { std::env::var_os("TMPDIR") } else { std::env::var_os("XDG_RUNTIME_DIR") };
+    if let Some(b) = base {
+        let b = PathBuf::from(b);
+        if b.is_absolute() && b.is_dir() { return b.join("fv"); }
+    }
+    PathBuf::from(format!("/tmp/fv-{}", current_uid()))
+}
+
+/// The user's id, read off the home directory (no libc on macOS builds);
+/// a hash of $HOME if that cannot be read.
+#[cfg(not(windows))]
+fn current_uid() -> String {
+    use std::os::unix::fs::MetadataExt;
+    match std::env::var_os("HOME") {
+        Some(h) => match std::fs::metadata(&h) {
+            Ok(m) => m.uid().to_string(),
+            Err(_) => {
+                use sha2::{Digest, Sha256};
+                hex::encode(Sha256::digest(h.to_string_lossy().as_bytes()))[..8].to_string()
+            }
+        },
+        None => "u".to_string(),
+    }
+}
+
+/// The short socket path for the key store under `root`: one name per
+/// root (16 hex of sha256 over the root path), so two profiles, or this
+/// app and the Vault, never share a socket.
+#[cfg(not(windows))]
+pub fn short_socket_path(root: &Path) -> PathBuf {
+    use sha2::{Digest, Sha256};
+    let h = hex::encode(Sha256::digest(root.to_string_lossy().as_bytes()));
+    short_socket_dir().join(format!("{}.sock", &h[..16]))
+}
+
+/// Whether a key store under `root` can be started at all: its default
+/// socket fits, or the short runtime socket does (`lair::ensure_socket_fits`
+/// moves it there at start). Windows named pipes always fit.
 pub fn lair_socket_path_fits(root: &Path) -> bool {
     #[cfg(windows)]
     { let _ = root; true }
     #[cfg(not(windows))]
-    {
-        let limit: usize = if cfg!(target_os = "macos") { 104 } else { 108 };
-        root.join("lair").join("socket").as_os_str().len() + 1 <= limit.saturating_sub(4)
-    }
+    { in_root_socket_fits(root) || socket_fits(&short_socket_path(root)) }
 }
 
 fn profile_entries(root: &Path) -> Vec<PathBuf> {

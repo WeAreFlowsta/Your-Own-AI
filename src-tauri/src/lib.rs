@@ -805,6 +805,13 @@ pub fn run() {
                     .and_then(|(unlocked, key)| if unlocked { key } else { None });
                 let root = profile::init(&device_dir, live.as_deref());
                 log::info!("Profile root: {:?}", root);
+                // After "Restart" into another identity's profile the OS
+                // leaves focus behind the old window; come to the front now
+                // and again once the conductor is ready.
+                if identity_watch::take_relaunch_marker(&device_dir) {
+                    log::info!("[identity] relaunched into this profile - bringing the window to the front");
+                    identity_watch::bring_to_front(app.handle());
+                }
             }
 
             // yourownai:// links (Add to Your Own AI on the site). Registered
@@ -956,6 +963,9 @@ pub fn run() {
                         // Fill the OnceCell
                         let _ = hc_state.manager.set(manager);
                         log::info!("Holochain conductor ready");
+                        if identity_watch::RELAUNCHED_INTO_IDENTITY.load(std::sync::atomic::Ordering::Relaxed) {
+                            identity_watch::bring_to_front(&hc_app_handle);
+                        }
                     }
                     Err(e) => {
                         log::error!("Failed to start Holochain conductor: {}", e);
