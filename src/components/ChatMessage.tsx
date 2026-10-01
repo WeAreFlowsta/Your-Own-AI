@@ -688,6 +688,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
             {(hasSources || hasGrounded || hasLibrary || !!props.message.groundingNote) && (
               <LiquidMetalButton
                 onClick$={() => toggleSection$('sources')}
+                testId="reply-sources"
                 class="px-3 py-1 text-xs flex items-center"
                 aria-expanded={openSection.value === 'sources'}
               >
@@ -907,7 +908,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
               </div>
             )}
             {hasLibrary && (
-              <div>
+              <div data-testid="reply-library">
                 <div class="text-xs text-[var(--text-muted)] mb-1">
                   From this AI's documents - the passages it was given for this question
                 </div>
@@ -1414,6 +1415,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
       data-testid="chat-message"
       data-role={props.message.role}
       data-state={props.message.isLoading && !props.message.content ? "thinking" : props.message.isLoading ? "streaming" : "done"}
+      data-stopped={props.message.stopped ? "1" : undefined}
       {...(props.message.role === 'assistant' && props.message.content
         ? { 'data-remember-aiid': props.message.model }
         : {})}

@@ -678,7 +678,7 @@ export default component$(() => {
           Reply style in its form. Empty means the model's own default.
         </p>
         <div class="grid gap-4 sm:grid-cols-2">
-          <TuneSlider label="Creativity (temperature)" value={gTemp.value}
+          <TuneSlider label="Creativity (temperature)" testId="reply-temperature" value={gTemp.value}
             autoLabel={`Model default (${SAMPLING_DEFAULTS.temperature})`} autoValue={SAMPLING_DEFAULTS.temperature}
             min={SAMPLING_BOUNDS.temperature.min} max={SAMPLING_BOUNDS.temperature.max} step={SAMPLING_BOUNDS.temperature.step}
             onChange$={(v) => { gTemp.value = v; saveSoon(); }} />

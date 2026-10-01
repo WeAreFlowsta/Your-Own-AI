@@ -326,6 +326,7 @@ export const ContentEditor = component$<ContentEditorProps>((props) => {
               <LiquidMetalButton
                 variant="danger"
                 onClick$={props.stopChat$}
+                testId="chat-stop"
                 class="flex items-center gap-1 px-3 py-1 transition-colors cursor-pointer"
               >
                 <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
