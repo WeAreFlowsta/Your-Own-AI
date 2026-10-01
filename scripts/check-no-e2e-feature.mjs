@@ -1,5 +1,5 @@
 // The `e2e` cargo feature compiles an embedded WebDriver server into the
-// app (planning/UI_AUTOMATION.md). It must never reach a release: this
+// app (e2e/README.md). It must never reach a release: this
 // check fails the build if the feature is on by default or if any release
 // workflow passes it. `npm run e2e` is the only caller allowed to use it.
 import { readFileSync, readdirSync } from "node:fs";

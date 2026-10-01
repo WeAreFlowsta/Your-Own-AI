@@ -1,4 +1,4 @@
-// WebdriverIO against the REAL app (build-docs planning/UI_AUTOMATION.md).
+// WebdriverIO against the REAL app (see e2e/README.md).
 // `npm run e2e` builds the app with the `e2e` cargo feature (the embedded
 // WebDriver server, never in a release build), wipes the scratch profile,
 // and runs every spec in e2e/specs. Screenshots land in e2e/shots.

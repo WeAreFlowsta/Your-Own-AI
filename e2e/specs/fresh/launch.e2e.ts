@@ -1,4 +1,4 @@
-// Flow 1 (planning/UI_AUTOMATION.md): a fresh profile launches to the
+// Flow 1: a fresh profile launches to the
 // welcome screen and the hardware check names a model. The smallest proof
 // that the window, the webview, the front end and the Rust side all came
 // up - the test every release must pass first.
@@ -30,7 +30,6 @@ describe("launch", () => {
     await expect(download).toBeEnabled();
     await shot("02-recommendation");
     // The download itself is never started here: that is a multi-GB fetch
-    // and the person's choice, never a test's (feedback: no big downloads
-    // without consent).
+    // and the person's choice, never a test's.
   });
 });

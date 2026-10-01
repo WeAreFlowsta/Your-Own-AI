@@ -1,4 +1,4 @@
-// Flow 1b (planning/UI_AUTOMATION.md): with the installed models the app
+// Flow 1b: with the installed models the app
 // goes straight to the chat, the composer is ready, and the first local
 // reply arrives. Runs with YOAI_E2E_WITH_MODELS=1 (npm run e2e:models):
 // the scratch profile reads the person's real models folder - this spec

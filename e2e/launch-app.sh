@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Launches the e2e build of Your Own AI in an ISOLATED profile for the UI
-# tests (build-docs planning/UI_AUTOMATION.md). @wdio/tauri-service runs
+# tests (see e2e/README.md). @wdio/tauri-service runs
 # this instead of the binary, so the app never sees the person's own
 # profile: HOME points at e2e/profile (wiped by `npm run e2e`), and on the
 # dev box's Wayland desktop the window is an XWayland window so screen
@@ -13,8 +13,7 @@ export XDG_CONFIG_HOME="$HOME/.config"
 export XDG_DATA_HOME="$HOME/.local/share"
 export XDG_CACHE_HOME="$HOME/.cache"
 mkdir -p "$HOME"
-# Two launch modes (Eric 2026-10-01: "sometimes run it with the welcome
-# screen and others using the installed models"):
+# Two launch modes:
 #   fresh (default)        - empty profile: the welcome flow.
 #   YOAI_E2E_WITH_MODELS=1 - the scratch profile's settings point at the
 #                            person's REAL models folder (read as installed
@@ -26,8 +25,7 @@ if [ -n "${YOAI_E2E_WITH_MODELS:-}" ]; then
   printf '{"modelsDir":"%s"}\n' "$MODELS" > "$XDG_DATA_HOME/com.solar.yourowai/settings.json"
 fi
 # YOAI_E2E_NATIVE_WAYLAND=1 keeps the native Wayland window (no recording tools see it).
-# Engine scenarios (Eric 2026-10-01: "sometimes with cuda and sometimes
-# without"):
+# Engine scenarios:
 #   YOAI_E2E_CPU_ONLY=1  - the app's own FLOWSTA_CPU_ONLY switch: every layer
 #                          on the CPU, no GPU enumeration.
 #   YOAI_E2E_WITH_CUDA=1 - the person's installed CUDA engine folder is linked

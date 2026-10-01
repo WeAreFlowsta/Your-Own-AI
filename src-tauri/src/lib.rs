@@ -523,7 +523,7 @@ async fn get_context_window_size() -> Result<u64, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
-    // UI test harness (planning/UI_AUTOMATION.md): the embedded WebDriver
+    // UI test harness (e2e/README.md): the embedded WebDriver
     // server that @wdio/tauri-service drives. Compiled in ONLY with the
     // `e2e` feature - never in a release build.
     #[cfg(feature = "e2e")]

@@ -3,8 +3,7 @@
 These tests drive the real Your Own AI window through an embedded WebDriver
 server (`tauri-plugin-wdio-webdriver`, compiled in only with the `e2e`
 cargo feature; no release build carries it - `scripts/check-no-e2e-feature.mjs`
-proves that on every build). The plan and the findings behind every choice:
-build-docs `apps/your-own-ai/planning/UI_AUTOMATION.md`.
+proves that on every build).
 
 ## On any machine
 
@@ -43,8 +42,8 @@ Per platform:
 | `YOAI_E2E_WITH_CUDA=1` | the machine's installed CUDA engine folder linked in (`YOAI_E2E_ENGINES_DIR` overrides) |
 | `YOAI_E2E_NATIVE_WAYLAND=1` | keep the native Wayland window (default on Wayland is an XWayland window, which recorders can see) |
 
-Identity and online scenarios are planned, not built (UI_AUTOMATION.md §Launch
-modes): a dedicated test identity, a seeded session, the staging proxy.
+Identity and online scenarios are planned, not built: a dedicated test
+identity, a seeded session, a staging proxy.
 
 ## Writing a spec
 
