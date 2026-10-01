@@ -15,7 +15,9 @@ export default component$<{
   type?: 'button' | 'submit';
   variant?: 'primary' | 'secondary' | 'danger';
   title?: string;
-}>(({ onClick$, class: className, disabled = false, type = "button", variant = "primary", title }) => {
+  /** Stable hook for the UI tests (e2e/): rendered as data-testid. */
+  testId?: string;
+}>(({ onClick$, class: className, disabled = false, type = "button", variant = "primary", title, testId }) => {
   const variantClass =
     variant === "secondary" ? "btn-secondary-metal" :
     variant === "danger" ? "btn-danger-metal" :
@@ -27,6 +29,7 @@ export default component$<{
       onClick$={onClick$}
       disabled={disabled}
       title={title}
+      data-testid={testId}
       class={`btn-liquid-metal ${variantClass} ${className || ""}`}
     >
       <div class="shader-border" />

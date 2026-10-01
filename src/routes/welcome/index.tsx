@@ -325,7 +325,7 @@ export default component$(() => {
           {step.value === 1 && (
             <section class="pt-6 md:pt-14">
               <p class="text-sm uppercase tracking-widest text-[var(--text-muted)] mb-3">Step 1 of 3</p>
-              <h1 class="font-varela text-3xl md:text-5xl font-bold leading-tight mb-4">
+              <h1 data-testid="welcome-title" class="font-varela text-3xl md:text-5xl font-bold leading-tight mb-4">
                 Welcome. Let's get your first model.
               </h1>
               <p class="text-base md:text-lg text-[var(--text-secondary)] mb-8 max-w-2xl">
@@ -337,7 +337,7 @@ export default component$(() => {
                 <div class="flex items-start justify-between gap-4 flex-wrap">
                   <div>
                     <p class="text-xs uppercase tracking-widest text-[var(--text-muted)] mb-1">Recommended for this computer</p>
-                    <h2 class="font-varela text-2xl md:text-3xl font-bold">
+                    <h2 data-testid="welcome-recommended" data-pending={recommended.pending ? "1" : "0"} class="font-varela text-2xl md:text-3xl font-bold">
                       {recommended.pending ? "One moment.." : modelLabel}
                     </h2>
                   </div>
@@ -371,6 +371,7 @@ export default component$(() => {
                 <LiquidMetalButton
                   onClick$={downloadAndContinue$}
                   disabled={!!recommended.pending}
+                  testId="welcome-download"
                   class="px-6 py-3 font-semibold text-base flex items-center justify-center gap-2"
                 >
                   <LuHardDriveDownload class="w-5 h-5" />

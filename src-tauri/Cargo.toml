@@ -77,10 +77,19 @@ tauri-plugin-single-instance = "2.4.3"
 tauri-plugin-deep-link = "2"
 blake3 = "1.8"
 tauri-plugin-notification = "2.3"
+# UI test harness only (planning/UI_AUTOMATION.md): an embedded WebDriver
+# server inside the app. Behind the `e2e` feature, which no release build
+# carries - scripts/check-no-e2e-feature.mjs proves it.
+tauri-plugin-wdio-webdriver = { version = "1.4", optional = true }
 
 # ML inference (OCR via ocrs/rten) is unusably slow in an unoptimised debug build —
 # a single scanned page took ~2 min. Compile just the ML crates with optimisations
 # even in dev, so OCR runs at near-release speed while our own code stays debuggable.
+[features]
+default = []
+# Test builds only: `npm run e2e` builds with `--features e2e`.
+e2e = ["dep:tauri-plugin-wdio-webdriver"]
+
 [profile.dev.package.rten]
 opt-level = 3
 [profile.dev.package."rten-base"]

@@ -21,7 +21,8 @@ const CHECKS = [
   "check-action-labels.mjs",
 ];
 // Every check script must be listed here or named as skipped.
-const SKIPPED = ["check-webview-floor.mjs", "check-crlf.mjs", "check-catalog-urls.mjs", "check-online-catalog.mjs"];
+// check-no-e2e-feature reads Cargo.toml and the workflows, not source with line endings to normalise.
+const SKIPPED = ["check-webview-floor.mjs", "check-crlf.mjs", "check-catalog-urls.mjs", "check-online-catalog.mjs", "check-no-e2e-feature.mjs"];
 const all = readdirSync("scripts").filter((f) => /^check-.*\.mjs$/.test(f));
 const unlisted = all.filter((f) => !CHECKS.includes(f) && !SKIPPED.includes(f));
 if (unlisted.length) {

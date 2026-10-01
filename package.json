@@ -9,12 +9,14 @@
   "type": "module",
   "scripts": {
     "dev": "vite --mode ssr",
-    "build": "tsc --noEmit && node scripts/check-closure-order.mjs && vite build && vite build -c adapters/static/vite.config.ts && node scripts/check-webview-floor.mjs && node scripts/check-reply-boundary.mjs && node scripts/check-recall-margin.mjs && node scripts/check-unsaved-settings.mjs && node scripts/check-tools-gate.mjs && node scripts/check-action-labels.mjs && node scripts/check-crlf.mjs",
+    "build": "tsc --noEmit && node scripts/check-closure-order.mjs && vite build && vite build -c adapters/static/vite.config.ts && node scripts/check-webview-floor.mjs && node scripts/check-reply-boundary.mjs && node scripts/check-recall-margin.mjs && node scripts/check-unsaved-settings.mjs && node scripts/check-tools-gate.mjs && node scripts/check-action-labels.mjs && node scripts/check-crlf.mjs && node scripts/check-no-e2e-feature.mjs",
     "build.client": "vite build",
     "build.static": "vite build -c adapters/static/vite.config.ts",
     "preview": "vite preview",
     "qwik": "qwik",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "e2e:build": "tauri build --debug --no-bundle --features e2e",
+    "e2e": "wdio run e2e/wdio.conf.ts"
   },
   "dependencies": {
     "@builder.io/qwik": "^1.19.2",
@@ -41,12 +43,19 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2",
     "@types/uuid": "^10.0.0",
+    "@wdio/cli": "^9.32.0",
+    "@wdio/local-runner": "^9.32.0",
+    "@wdio/mocha-framework": "^9.32.0",
+    "@wdio/spec-reporter": "^9.32.0",
+    "@wdio/tauri-plugin": "^1.4.0",
+    "@wdio/tauri-service": "^1.4.0",
     "autoprefixer": "^10.4.21",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17",
     "typescript": "~5.8.3",
     "vite": "^6.4.2",
-    "vite-tsconfig-paths": "^6.1.1"
+    "vite-tsconfig-paths": "^6.1.1",
+    "webdriverio": "^9.32.0"
   },
   "overrides": {
     "picomatch": ">=4.0.4",

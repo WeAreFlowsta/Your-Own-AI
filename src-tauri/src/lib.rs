@@ -522,7 +522,13 @@ async fn get_context_window_size() -> Result<u64, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // UI test harness (planning/UI_AUTOMATION.md): the embedded WebDriver
+    // server that @wdio/tauri-service drives. Compiled in ONLY with the
+    // `e2e` feature - never in a release build.
+    #[cfg(feature = "e2e")]
+    let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+    builder
         // One instance only: two copies (e.g. a dev build beside the
         // installed release - same identifier, same models, same GPU, same
         // llama-server port) fight over everything; routing inside the
@@ -794,6 +800,21 @@ pub fn run() {
             flowsta::share_submit,
         ])
         .setup(|app| {
+            // UI test harness only: the driven window must be in front and
+            // focused, or the compositor withholds frame callbacks and the
+            // webview stops painting (no requestAnimationFrame, no
+            // IntersectionObserver, so Qwik's visible tasks never run).
+            #[cfg(feature = "e2e")]
+            {
+                use tauri::Manager;
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.set_always_on_top(true);
+                    let _ = w.unminimize();
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                    log::info!("[e2e] window raised: visible={:?} focused={:?} minimized={:?}", w.is_visible(), w.is_focused(), w.is_minimized());
+                }
+            }
             // Identity profiles: pick (or create) the profile for the Flowsta
             // identity the Vault has unlocked right now, else the last one
             // used; a pre-profiles install is moved into a profile first.
