@@ -16,7 +16,8 @@
     "qwik": "qwik",
     "tauri": "tauri",
     "e2e:build": "tauri build --debug --no-bundle --features e2e",
-    "e2e": "wdio run e2e/wdio.conf.ts"
+    "e2e": "wdio run e2e/wdio.conf.ts",
+    "e2e:models": "YOAI_E2E_WITH_MODELS=1 wdio run e2e/wdio.conf.ts"
   },
   "dependencies": {
     "@builder.io/qwik": "^1.19.2",

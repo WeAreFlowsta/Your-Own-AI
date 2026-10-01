@@ -313,6 +313,8 @@ export default component$<AppHeaderProps>(
             {/* Current Model Badge with Status Indicator */}
             {showModelWidget && currentModel && (
               <span
+                data-testid="header-model-chip"
+                data-state={modelTooBig ? "too-big" : isModelLoading ? "loading" : "loaded"}
                 class="text-xs text-[var(--text-secondary)] hidden md:flex items-center gap-2 px-3 h-9 bg-[var(--bg-dropdown)] rounded-full border border-[var(--border-subtle)]"
                 title="The model loaded on this device right now"
               >

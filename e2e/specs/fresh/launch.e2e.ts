@@ -3,7 +3,7 @@
 // that the window, the webview, the front end and the Rust side all came
 // up - the test every release must pass first.
 import { resolve } from "node:path";
-import { SHOTS } from "../wdio.conf";
+import { SHOTS } from "../../wdio.conf";
 
 const shot = (name: string) => browser.saveScreenshot(resolve(SHOTS, `${name}.png`));
 

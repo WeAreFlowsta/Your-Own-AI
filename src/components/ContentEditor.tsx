@@ -301,6 +301,7 @@ export const ContentEditor = component$<ContentEditorProps>((props) => {
               )}
               <div
                 ref={contentEditableRef}
+                data-testid="chat-input"
                 // Always editable: the next message can be written while a
                 // reply runs. Sending waits for the reply (handleSubmit).
                 contentEditable="true"
@@ -335,6 +336,7 @@ export const ContentEditor = component$<ContentEditorProps>((props) => {
             ) : (
               <LiquidMetalButton
                 type="submit"
+                testId="chat-send"
                 class="flex items-center gap-1.5 px-3 py-1.5 text-sm transition-all duration-150 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed"
                 disabled={props.isLoading || !props.input.value.trim()}
               >
