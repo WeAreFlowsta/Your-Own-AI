@@ -2,7 +2,7 @@
  * Which view an agent rail shows: "simple" (the story: folded families,
  * no thoughts) or "detailed" (every row, thought and live line as it
  * happens). One setting per SURFACE - projects default to Detailed, chat
- * with tools to Simple (Eric, 2026-09-23) - sticky in localStorage, and
+ * with tools to Simple (field, 2026-09-23) - sticky in localStorage, and
  * every open rail follows a change at once through a window event.
  */
 export type AgentSurface = "project" | "tools";

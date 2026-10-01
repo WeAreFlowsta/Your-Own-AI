@@ -672,7 +672,7 @@ impl LinkReport {
 /// moved - it is relinked, never added again beside itself. Not only the
 /// records already flagged offline: the folder pass runs before the linked
 /// documents are checked, so a file moved into the vault a minute ago is
-/// "new" to the folder while its old record still looks fine (Eric saw the
+/// "new" to the folder while its old record still looks fine (seen in the field: the
 /// boat survey twice, 2026-09-22). A same-words file whose old copy still
 /// exists is a copy in two places: a new document.
 fn by_content_id(conn: &Connection, key: &[u8; 32]) -> Result<HashMap<String, (String, Option<String>)>, String> {

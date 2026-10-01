@@ -181,7 +181,7 @@ fn threshold_for(share: &str) -> f32 {
 
 /// Does the device take an easy question instead of the Everyday online
 /// model? Frontier-first: only when the model that would answer here is
-/// genuinely BETTER on this task (Eric's rule: replace online where offline
+/// genuinely BETTER on this task (the rule: replace online where offline
 /// is genuinely better). Balanced: when it is as good. Local-first never
 /// decides on capability (freshness alone sends a question out).
 fn local_wins(share: &str, local_cap: u8, everyday_cap: u8) -> bool {
@@ -760,7 +760,7 @@ async fn pick_offline_detail(app: &AppHandle, task: &str, lean: &str, agent_only
         }
     };
     // Agent work ranks QUALITY first among the models that run here
-    // (Eric, 09-24: "quality really matters, it's the difference between
+    // (field, 2026-09-24: "quality really matters, it's the difference between
     // working or not"): capability, then size, then fit. The balanced
     // order put a fully-on-card 2B above a partly-offloaded 4B of the same
     // grade, and the 2B mangled tool paths the 4B handles.
@@ -2963,7 +2963,7 @@ mod tests {
 
     #[test]
     fn select_agent_default_is_the_flagship() {
-        // The flagship drives projects by default (Eric's call, 2026-08-06;
+        // The flagship drives projects by default (decided 2026-08-06;
         // measured fast on simple tool steps - it scales thinking to need;
         // Astra since 2026-09-05).
         assert_eq!(

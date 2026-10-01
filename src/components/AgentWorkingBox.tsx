@@ -301,7 +301,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
     });
 
     const detailed = useComputed$(() => view.value === "detailed");
-    // Chat with tools is its own view (Eric, 09-24): no box, no Simple or
+    // Chat with tools is its own view (field, 2026-09-24): no box, no Simple or
     // Detailed, every action its own collapsed row with its glyph and name
     // while it runs, one grey summary line once it is done that opens to
     // the rows on a click, and the AI's words as plain chat text - the
@@ -334,7 +334,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
     // Detailed while working caps the rail's height with its own scroller.
     // The page's own scroll follows the pearl (ChatContainer), but a nested
     // scroller does not follow on its own: the newest rows sat out of view
-    // and the jump pill could not reach them (Eric, 09-23). It follows its
+    // and the jump pill could not reach them (field, 2026-09-23). It follows its
     // bottom until the person scrolls up inside it; the pill re-arms it.
     const railRef = useSignal<HTMLElement>();
     const railFollow = useSignal(true);

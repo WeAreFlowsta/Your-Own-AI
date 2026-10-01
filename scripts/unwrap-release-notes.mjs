@@ -3,7 +3,7 @@
 // CHANGELOG.md is wrapped at ~76 columns (easy to read raw, clean diffs).
 // GitHub renders release bodies like comments, where a single newline is a
 // line break - so wrapped entries showed ragged breaks while single-line
-// ones flowed (0.7.0 release page, Eric 2026-09-04). This joins each
+// ones flowed (0.7.0 release page, field, 2026-09-04). This joins each
 // paragraph and list item back into one line; headings, blank lines,
 // tables and fenced code pass through untouched.
 //
@@ -29,7 +29,7 @@ for (const line of lines) {
 // A block that opens with "### Highlights" keeps the highlights in view and
 // folds everything after them: a stable's full entry is hundreds of lines,
 // and a release page that is all of it at once is harder to read than a
-// short list with the detail one click away (Eric, 0.7.0 release page).
+// short list with the detail one click away (0.7.0 release page).
 const text = out.join("\n");
 const hl = text.indexOf("### Highlights");
 let result = text;

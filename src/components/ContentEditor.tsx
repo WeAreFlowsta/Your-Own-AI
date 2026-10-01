@@ -135,7 +135,7 @@ export const ContentEditor = component$<ContentEditorProps>((props) => {
       // Compared through innerText, the same reader the element is written
       // from: textContent has no "\n" for a <br>, so a pasted multi-line
       // prompt read as "different" and was rewritten as one text node with
-      // raw newlines - rendered as ONE line (Eric, 09-24). Lines go in as
+      // raw newlines - rendered as ONE line (field, 2026-09-24). Lines go in as
       // <br>, the way paste and Shift+Enter put them.
       el.innerHTML = '';
       currentInput.split('\n').forEach((line, i) => {

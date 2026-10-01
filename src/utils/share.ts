@@ -2,7 +2,7 @@
  * Share an add-on to the directory - the one-button path. The app signs
  * with the Flowsta Vault (a share carries your name), then hands the
  * signed file and its listing to the share service, which opens the
- * directory pull request for you. See build-docs SKILLS.md.
+ * directory pull request for you.
  */
 import { invoke } from "@tauri-apps/api/core";
 import type { AiPack } from "./aiPack";

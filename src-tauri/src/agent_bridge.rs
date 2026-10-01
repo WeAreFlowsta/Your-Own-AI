@@ -583,7 +583,7 @@ pub async fn start_build_agent(
             .map(|m| m.starts_with("online:") || m == "auto:online-offline")
             .unwrap_or(false);
         // An offline-only AI whose coding pick is a small model: project
-        // work is slow and weaker there (Eric, 09-23: with online routing
+        // work is slow and weaker there (field, 2026-09-23: with online routing
         // "it worked much better"). One line on the turn, with the online
         // door under it - said once per session, never on our own faults.
         if local_window && !web_allowed {

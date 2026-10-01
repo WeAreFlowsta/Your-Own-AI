@@ -283,7 +283,7 @@ export default component$(() => {
   const bulkProgress = useSignal<{ done: number; total: number } | null>(null);
   // Derived signals, not consts computed in render: a handler that closed
   // over a render-time const kept its first value, so "select all shown"
-  // stopped following the search (Eric, 09-07).
+  // stopped following the search (field, 2026-09-07).
   const shown = useComputed$(() =>
     filterConversations(conversations.value, filterText.value, filterSource.value),
   );

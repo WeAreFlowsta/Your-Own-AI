@@ -386,7 +386,7 @@ pub fn note_recorded(app: &AppHandle, hash: &str, seq: u32, role: &str, content:
 
 /// A conversation deleted from the records leaves the cache and the loaded
 /// index at the same moment - a hit must never open a conversation whose
-/// records are gone (Eric found the deleted ones by searching, 09-22).
+/// records are gone (the deleted ones were found by searching, 2026-09-22).
 pub fn forget_conversation(app: &AppHandle, hash: &str) {
     let Ok(key) = data_key(app) else { return };
     let k = keyed(&key, hash);

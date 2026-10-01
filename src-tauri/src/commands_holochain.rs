@@ -1082,7 +1082,7 @@ pub async fn get_conversations(
     // A caller that already showed the cached list asks for a live read
     // only when the cache is older than this: the cache is write-through,
     // so a fresh one IS the list, and a thousand-conversation cell no
-    // longer pays a sixty-second read per page open (Eric's delete
+    // longer pays a sixty-second read per page open (a delete
     // session, 09-04: three zome timeouts).
     max_age_secs: Option<u64>,
 ) -> Result<Vec<ConversationInfo>, String> {

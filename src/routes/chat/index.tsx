@@ -799,7 +799,7 @@ export default component$(() => {
       // No held question: nothing to do here. The ready card at the bottom
       // of every page says so; appending "X is ready." as a message turned
       // the empty home page into an open chat and moved the user off it
-      // (Eric, fresh install 2026-09-04).
+      // (fresh install, 2026-09-04).
       void d;
     };
     window.addEventListener(FIRST_MODEL_READY, onReady);
@@ -1331,7 +1331,7 @@ export default component$(() => {
     // ordinary answer - "thanks" does not start a session.
     // The page changes on the keystroke: the turn goes up BEFORE the tools
     // gate decides where it runs (the gate's embedding call is a second
-    // warm, two or three cold - Eric, 09-25). Should the gate choose the
+    // warm, two or three cold - field, 2026-09-25). Should the gate choose the
     // direct chat, the bubble comes down again before that path speaks.
     const mayGate = activeTools(selectedAi.value.aiConfig).length > 0 && attachedImages.value.length === 0;
     if (mayGate && agentState.status !== "working" && !chatState.isLoading) {
@@ -1394,7 +1394,7 @@ export default component$(() => {
       await prepareAgentTurn$(finalInput, files);
       // The field is the person's again the moment the turn is on screen -
       // not after the documents search that rides with the prompt (the
-      // prompt sat in the field for a second or two, Eric 09-24).
+      // prompt sat in the field for a second or two, field, 2026-09-24).
       input.value = "";
       selectedAction.value = null;
       attachedImages.value = [];

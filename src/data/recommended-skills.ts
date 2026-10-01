@@ -5,7 +5,7 @@
  * "Add" installs exactly that version; the card's update check tells the
  * user when the source has moved on).
  *
- * Wave-1 rules (planning/SKILLS.md): permissive license, knowledge only
+ * Wave-1 rules: permissive license, knowledge only
  * (no scripts / hooks / MCP), SKILL.md small enough for a local model's
  * context, useful beyond the terminal, maintained. Reviewed 2026-08-27.
  */

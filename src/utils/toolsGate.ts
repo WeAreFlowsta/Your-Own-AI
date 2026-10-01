@@ -18,7 +18,7 @@
  *   direct   - clearly ordinary chat: an ordinary answer
  *
  * HOW LIKENESS IS MEASURED. Measured 2026-09-22 on 28 labeled messages
- * (build-docs apps/your-own-ai/guides/tools/gate-matrix.mjs):
+ * (measured on the gate matrix):
  *  - A message against a tool's DESCRIPTION cannot work with a small memory
  *    model: it cannot tell "about MY notes" from "about notes" ("how do I
  *    take better notes in meetings?" 0.61, "what did I write about the boat
@@ -133,7 +133,7 @@ export interface GateScore {
  *  these is about the world: it skips the tools session and takes the
  *  ordinary path, which sends it to web search (field case 2026-09-25: "what's
  *  the latest in the middle east?" with the Obsidian tool on searched the
- *  notes). Measured (build-docs guides/tools/gate-matrix-4.mjs, -5.mjs): no
+ *  notes). Measured on the gate matrix: no
  *  likeness threshold separates the two ("share price of Apple right now"
  *  +0.057, "what did I write in my diary today?" +0.045); this rule got 19 of
  *  20 of an unseen set right, the one miss being "me" ("tell me the

@@ -203,7 +203,7 @@ fn remember_models_dir(dir: &std::path::Path) {
 /// A canonical path in the form the disk list uses. On Windows
 /// `canonicalize` returns the verbatim form (`\\?\C:\Users\...`) while
 /// sysinfo reports the mount point as `C:\`, so no disk ever matched and
-/// Settings said "0 GB free on this drive" (Eric's box, 0.7.2-beta.4); the
+/// Settings said "0 GB free on this drive" (one box, 0.7.2-beta.4); the
 /// download's free-space check was skipped the same way. The prefix is
 /// stripped (`\\?\UNC\server\share` becomes `\\server\share`) and the
 /// comparison is case-insensitive there.
@@ -3036,7 +3036,7 @@ pub async fn start_llama_server(
             // go without it: the projector's ~1 GB tipped 6 GB models over on
             // 8 GB cards (Windows beta.17 matrix: gemma-4-E4B graded "too
             // large", ran at 67 tok/s), and the first image in a conversation
-            // pays one reload instead. Eric's call, 2026-09-03.
+            // pays one reload instead. Decided 2026-09-03.
             if let Some(projector) = find_projector_for(&models_dir, &filename).filter(|_| with_vision) {
                 let pname = projector
                     .file_name()
@@ -3967,7 +3967,7 @@ pub async fn embed_texts(
         Err(EmbedError::TooLarge(_)) | Err(EmbedError::Server(_)) => {
             // One input over the model's 512-token window fails the WHOLE
             // batch (a 900-char passage of dense mathematics is 540 tokens:
-            // Eric's diffusion-models PDF, 2026-09-08). Redo this batch one
+            // a real diffusion-models PDF, 2026-09-08). Redo this batch one
             // text at a time, shrinking any text the server still refuses
             // until it fits. The opening of a passage carries its meaning.
             let mut out = Vec::with_capacity(texts.len());
@@ -5270,7 +5270,7 @@ pub fn clear_load_sentinel(app_handle: &AppHandle) {
 /// A load in flight announced to the screen (`model-load` events), so any
 /// path that loads - a project turn's switch, the vision sidecar, the
 /// session's pre-load - shows in the header chip and the action bar the
-/// way chat's own loads always did (Eric, 09-24).
+/// way chat's own loads always did (field, 2026-09-24).
 static LOAD_ANNOUNCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[tauri::command]

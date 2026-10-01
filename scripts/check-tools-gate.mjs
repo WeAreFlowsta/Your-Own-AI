@@ -60,8 +60,8 @@ eq("a journal page is mine", aboutMyThings("read me today's journal page"), true
 eq("a daily note is mine", aboutMyThings("put this in today's daily note"), true);
 eq("inside another word does not count", aboutMyThings("is Miami sunny right now?"), false);
 
-// The live-web rule on every message it was measured with (build-docs
-// guides/tools/gate-matrix-4.mjs and -5.mjs, 2026-09-25): [message, keeps the
+// The live-web rule on every message it was measured with (measured on
+// the gate matrix, 2026-09-25): [message, keeps the
 // tool?]. The cue words are read from router.rs - the one list the app asks
 // (router::live_web_cue) - so editing either list re-runs all of these.
 const router = readFileSync("src-tauri/src/router.rs", "utf8");

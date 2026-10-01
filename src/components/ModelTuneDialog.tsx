@@ -22,7 +22,7 @@ interface TuneResult {
 /**
  * Fine-tune one model on this computer (FINE_TUNE_PANEL layer 2).
  *
- * Redesigned 2026-09-09 (Eric: "measure on this computer needs to be the
+ * Redesigned 2026-09-09 (field: "measure on this computer needs to be the
  * main deal"): the dialog opens on what the model runs at NOW and where
  * that came from, then the measurement as the main event - one sentence
  * that states the cost, one primary button, and afterwards a slider from

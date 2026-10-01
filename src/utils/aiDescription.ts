@@ -1,7 +1,7 @@
 /**
  * An AI's description is a small template, filled from the AI's live
  * settings wherever it is shown - so a change of personality or model never
- * leaves the words stale (Eric, 2026-09-05: the generated sentence went
+ * leaves the words stale (field, 2026-09-05: the generated sentence went
  * stale the moment the personality changed).
  *
  * Placeholders, all optional, in any order and any sentence:

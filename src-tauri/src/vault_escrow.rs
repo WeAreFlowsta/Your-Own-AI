@@ -1058,7 +1058,7 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
     // a conversation only if a FULL read has happened since the conversation
     // was last active: the marker below is written at the end of a pass
     // that left nothing unread. A month-old sync state with no such pass
-    // behind it proves nothing (Eric's Windows box, 09-06: entries from
+    // behind it proves nothing (a Windows box, 09-06: entries from
     // 08-05, conversations continued since, no full read).
     let full_read_at: Option<i64> = load_full_read_at(app);
     let mut carried: Vec<serde_json::Value> = Vec::new();
@@ -1552,7 +1552,7 @@ fn attach_extras(
         // The document library: records, summaries, flags and grants only.
         // Passages and vectors stay on the device - they are re-derivable
         // from the person's own files, and a library must never be the
-        // reason a backup fails (planning/KNOWLEDGE_CORPUS.md).
+        // reason a backup fails.
         match crate::corpus::records_for_backup(app, &key) {
             Ok(mut records) if !records.documents.is_empty() => {
                 let trimmed = fit_corpus_records(&mut records, CORPUS_RECORDS_BUDGET_BYTES);
@@ -2007,7 +2007,7 @@ async fn write_full_backup_inner(app: &tauri::AppHandle) -> Result<serde_json::V
     // Conversations listed without a read are local conversations too: the
     // empty-device gate below must see them, or a pass that skipped every
     // unchanged conversation reads as an empty device and refuses to write
-    // (Eric's Windows box, 09-06 21:57).
+    // (a Windows box, 09-06 21:57).
     let local_records: u64 = convs.iter().map(|c| c.records.len() as u64).sum::<u64>()
         + carried.iter().map(|c| c["records"].as_u64().unwrap_or(0)).sum::<u64>();
 
@@ -2106,7 +2106,7 @@ pub fn schedule_full_backup(app: &tauri::AppHandle) {
 /// A backup that found the Vault locked runs the moment it unlocks: poll
 /// the Vault every two minutes for up to a day, single-flight. Before this
 /// a write with the Vault locked was simply dropped, and a person who
-/// chats with the Vault closed could go weeks without a backup (Eric's
+/// chats with the Vault closed could go weeks without a backup (a person's
 /// Windows box, 2026-09-06: last backup 32 days old).
 pub fn backup_when_vault_unlocks(app: &tauri::AppHandle) {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -2318,7 +2318,7 @@ mod tests {
         let facts = serde_json::json!([
             { "id": "f1", "subject": "user", "predicate": "likes", "value": "sailing",
               "embedding": [0.1, 0.2, 0.3] },
-            { "id": "f2", "subject": "user", "predicate": "name", "value": "Eric" },
+            { "id": "f2", "subject": "user", "predicate": "name", "value": "Ada" },
         ]);
         let plain = serde_json::to_vec(&facts).unwrap();
         let (nonce, cipher) = crate::transcript_crypto::encrypt(&key, &plain).unwrap();
@@ -2329,7 +2329,7 @@ mod tests {
         let human = facts_human_readable(&key, &file).expect("decrypts");
         assert_eq!(human[0]["value"], "sailing");
         assert!(human[0].get("embedding").is_none()); // bulky vector stripped
-        assert_eq!(human[1]["value"], "Eric");
+        assert_eq!(human[1]["value"], "Ada");
         // Wrong key = None, never garbage.
         assert!(facts_human_readable(&[1u8; 32], &file).is_none());
     }

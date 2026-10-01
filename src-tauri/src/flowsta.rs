@@ -1218,7 +1218,7 @@ pub async fn vault_sign(
 }
 
 /// The add-ons share service (opens the directory pull request for the
-/// person; see build-docs SKILLS.md "Directory + sharing").
+/// person; see the skills directory notes).
 pub fn share_url() -> String {
     const PROD: &str = "https://yoai-share-386500392150.us-central1.run.app";
     #[cfg(debug_assertions)]

@@ -51,9 +51,9 @@ const check = (name, update, want) => {
 
 // --- the tools, as recorded ------------------------------------------------
 check("read_file",
-  call("read_file", "read", "Read", "Read `build-docs/ARTICLE_GENERATION_GUIDE.md`",
-    { target_file: "build-docs/ARTICLE_GENERATION_GUIDE.md", offset: 1, limit: 220 }),
-  { label: "Reading ARTICLE_GENERATION_GUIDE.md", done: "Read ARTICLE_GENERATION_GUIDE.md", icon: "read", kind: "read", specificity: 3 });
+  call("read_file", "read", "Read", "Read `docs/ARTICLE_GUIDE.md`",
+    { target_file: "docs/ARTICLE_GUIDE.md", offset: 1, limit: 220 }),
+  { label: "Reading ARTICLE_GUIDE.md", done: "Read ARTICLE_GUIDE.md", icon: "read", kind: "read", specificity: 3 });
 
 check("read_file inside a skill",
   call("read_file", "read", "Read", "Read `~/.your-own-ai-build/skills/release-notes/SKILL.md`",

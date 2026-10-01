@@ -1,7 +1,7 @@
 //! The corpus: the person's own document library, owned at the user level,
 //! with each AI granted access per document.
 //!
-//! Why this exists (audit 2026-09-05, planning/KNOWLEDGE_CORPUS.md): document
+//! Why this exists (audit 2026-09-05): document
 //! knowledge used to live inside each AI's encrypted embedding blob, which is
 //! decrypted and parsed whole on every chat turn and rewritten whole per
 //! document - fine for a few files, impossible for "ten years of articles".
@@ -378,7 +378,7 @@ fn norm_name(s: &str) -> String {
 
 /// Does the author field look like this person? Equal after normalising, or
 /// one of the person's names appears in it as whole words (a first name in
-/// "Eric Smith"; never "ann" inside "Hannah").
+/// "Ada Lovelace"; never "ann" inside "Hannah").
 pub fn looks_mine(author: &str, names: &[String]) -> bool {
     let a = norm_name(author);
     if a.is_empty() {
@@ -814,7 +814,7 @@ pub(crate) fn extract_text(path: &Path) -> Result<String, String> {
 /// Tags out, text in. Walks CHARS, not bytes: the byte walk it replaces
 /// sliced the string at byte offsets and panicked on the first multibyte
 /// character (a curly quote, an accent), which hung every EPUB or HTML
-/// import of real prose at "reading" (Eric's 10 MB EPUB, 2026-09-08).
+/// import of real prose at "reading" (a real 10 MB EPUB, 2026-09-08).
 /// Script and style bodies are skipped; the common entities are decoded.
 fn strip_tags(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
@@ -1917,8 +1917,8 @@ mod strip_tests {
 mod tests {
     #[test]
     fn xml_tag_text_reads_prefixed_tags() {
-        let xml = r#"<?xml version="1.0"?><cp:coreProperties xmlns:dc="x"><dc:title>A &amp; B</dc:title><dc:creator>Eric Smith</dc:creator><dc:description/></cp:coreProperties>"#;
-        assert_eq!(super::xml_tag_text(xml, "creator").as_deref(), Some("Eric Smith"));
+        let xml = r#"<?xml version="1.0"?><cp:coreProperties xmlns:dc="x"><dc:title>A &amp; B</dc:title><dc:creator>Ada Lovelace</dc:creator><dc:description/></cp:coreProperties>"#;
+        assert_eq!(super::xml_tag_text(xml, "creator").as_deref(), Some("Ada Lovelace"));
         assert_eq!(super::xml_tag_text(xml, "title").as_deref(), Some("A & B"));
         assert_eq!(super::xml_tag_text(xml, "description"), None);
         assert_eq!(super::xml_tag_text(xml, "subject"), None);
@@ -1926,11 +1926,11 @@ mod tests {
 
     #[test]
     fn looks_mine_matches_whole_words_only() {
-        let names = vec!["Eric".to_string(), "ericflowsta".to_string(), "ab".to_string()];
-        assert!(super::looks_mine("Eric Smith", &names));
-        assert!(super::looks_mine("eric", &names));
-        assert!(super::looks_mine("E. Smith, ericflowsta", &names));
-        assert!(!super::looks_mine("Frederic Jones", &names));
+        let names = vec!["Ada".to_string(), "adaflowsta".to_string(), "ab".to_string()];
+        assert!(super::looks_mine("Ada Lovelace", &names));
+        assert!(super::looks_mine("ada", &names));
+        assert!(super::looks_mine("A. Lovelace, adaflowsta", &names));
+        assert!(!super::looks_mine("Canada Jones", &names));
         assert!(!super::looks_mine("Hannah", &["ann".to_string()]));
         assert!(!super::looks_mine("Abner", &names));
         assert!(!super::looks_mine("", &names));
@@ -1938,11 +1938,11 @@ mod tests {
 
     #[test]
     fn pdf_info_strings_decode() {
-        let raw = b"%PDF-1.4\n1 0 obj << /Title (My \\(quoted\\) Book) /Author (Eric Smith) >> endobj";
-        assert_eq!(super::pdf_info_string(raw, b"/Author").as_deref(), Some("Eric Smith"));
+        let raw = b"%PDF-1.4\n1 0 obj << /Title (My \\(quoted\\) Book) /Author (Ada Lovelace) >> endobj";
+        assert_eq!(super::pdf_info_string(raw, b"/Author").as_deref(), Some("Ada Lovelace"));
         assert_eq!(super::pdf_info_string(raw, b"/Title").as_deref(), Some("My (quoted) Book"));
-        let utf16 = b"/Author (\xFE\xFF\x00E\x00r\x00i\x00c)";
-        assert_eq!(super::pdf_info_string(utf16, b"/Author").as_deref(), Some("Eric"));
+        let utf16 = b"/Author (\xFE\xFF\x00A\x00d\x00a)";
+        assert_eq!(super::pdf_info_string(utf16, b"/Author").as_deref(), Some("Ada"));
         assert_eq!(super::pdf_info_string(b"/Author <41>", b"/Author"), None);
     }
 
@@ -1961,7 +1961,7 @@ mod tests {
                 zip.write_all(body.as_bytes()).unwrap();
             };
             put("META-INF/container.xml", r#"<container><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#);
-            put("OEBPS/content.opf", r#"<package xmlns:dc="http://purl.org/dc/elements/1.1/"><metadata><dc:title>Tides</dc:title><dc:creator opf:role="aut">Eric Smith</dc:creator></metadata><manifest><item id="two" href="ch2.xhtml" media-type="application/xhtml+xml"/><item id="one" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="one"/><itemref idref="two"/></spine></package>"#);
+            put("OEBPS/content.opf", r#"<package xmlns:dc="http://purl.org/dc/elements/1.1/"><metadata><dc:title>Tides</dc:title><dc:creator opf:role="aut">Ada Lovelace</dc:creator></metadata><manifest><item id="two" href="ch2.xhtml" media-type="application/xhtml+xml"/><item id="one" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="one"/><itemref idref="two"/></spine></package>"#);
             put("OEBPS/ch2.xhtml", "<html><body><p>Second chapter.</p></body></html>");
             put("OEBPS/ch1.xhtml", "<html><head><style>p{}</style></head><body><h1>First</h1><p>chapter one.</p></body></html>");
             zip.finish().unwrap();
@@ -1970,7 +1970,7 @@ mod tests {
         assert!(text.starts_with("First chapter one."), "{text}");
         assert!(text.contains("Second chapter."));
         let info = super::doc_info(&path);
-        assert_eq!(info.author.as_deref(), Some("Eric Smith"));
+        assert_eq!(info.author.as_deref(), Some("Ada Lovelace"));
         assert_eq!(info.title.as_deref(), Some("Tides"));
         std::fs::remove_dir_all(&dir).ok();
     }

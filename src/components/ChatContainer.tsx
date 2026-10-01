@@ -50,7 +50,7 @@ interface ChatContainerProps {
   showPermissionPill?: boolean;
   /** The permission the agent is waiting on right now. It is shown above
    *  the input field - where the person is - so answering never needs a
-   *  scroll or a click (Eric, 09-24). The rail keeps its own card as the
+   *  scroll or a click (field, 2026-09-24). The rail keeps its own card as the
    *  record of the decision. */
   pendingPermission?: AgentPermission | null;
   /** True while a folder-agent turn is streaming (turn-scoped scroll space). */

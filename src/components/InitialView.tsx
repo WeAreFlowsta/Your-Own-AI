@@ -84,7 +84,7 @@ export default component$<InitialViewProps>((props) => {
       />
       {/* The Continue line is the person's choice; the opening note is not:
           a conversation chosen from the drawer takes seconds to land, and
-          with Continue off the view sat silent meanwhile (Eric, 09-25). */}
+          with Continue off the view sat silent meanwhile (field, 2026-09-25). */}
       {(showContinueLast.value || (!!props.continueState && props.continueState !== 'idle')) &&
         props.lastConversationTitle &&
         props.onContinueLast$ && (

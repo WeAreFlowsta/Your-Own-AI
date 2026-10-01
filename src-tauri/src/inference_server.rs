@@ -1159,7 +1159,7 @@ async fn chat_completions(
     // into its config. The app records each such session as ONE conversation
     // (useAgentSession: startConversation + recordMessage), so recording every
     // model call here too listed one "conversation" per step, titled with the
-    // last user message and badged API (Eric's records page, 2026-09-04: dozens
+    // last user message and badged API (a real records page, 2026-09-04: dozens
     // of identical entries seconds apart). External callers keep their record.
     let own_harness = agent_mode
         && header_str(&headers, "authorization")

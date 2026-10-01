@@ -65,7 +65,7 @@ export async function cudaOffer(): Promise<CudaOffer> {
  *  model (extraction, routing verdicts, document distilling) and the
  *  embedding model (memory recall, the freshness gate and the semantic
  *  half of the health gate - without it Frontier-first routing stays home
- *  by design). Never part of the first-run download (Eric, 2026-09-03). */
+ *  by design). Never part of the first-run download (field, 2026-09-03). */
 export async function helperFilesMissing(): Promise<{ filename: string; downloadUrl: string; size: number }[]> {
   const out: { filename: string; downloadUrl: string; size: number }[] = [];
   for (const m of [UTILITY_MODEL, EMBEDDING_MODEL]) {

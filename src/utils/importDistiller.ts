@@ -9,7 +9,7 @@
  *
  * Deliberately facts-only for now: per-AI episodic summaries and writing
  * imported conversations to the chain wait on the memory-hardening pass
- * (see build-docs CONVERSATION_IMPORT.md). Requires the on-device utility
+ *. Requires the on-device utility
  * model; if it isn't downloaded yet the cursor stays put and the run
  * resumes automatically on a later launch - same contract as the
  * post-restore re-embed walker.

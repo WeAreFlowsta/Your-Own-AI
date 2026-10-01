@@ -5,7 +5,7 @@
  * nothing for the free tier or signed out, so free users never see it) -
  * the person paying watches their spend from the first online turn. The
  * switch in Settings -> Your Flowsta Account turns it off. `usagePrefsChanged`
- * fires on toggle so the header reacts without a reload. (Eric, 09-03:
+ * fires on toggle so the header reacts without a reload. (field, 2026-09-03:
  * on by default once a plan exists.)
  */
 import { invoke } from '@tauri-apps/api/core';

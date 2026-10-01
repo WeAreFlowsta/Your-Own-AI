@@ -152,7 +152,7 @@ struct ClaudeContentSegment {
     text: Option<String>,
 }
 
-/// Perplexity's REAL account export (verified against Eric's own file,
+/// Perplexity's REAL account export (verified against a real export,
 /// 2026-08-11): `{"conversations": [{context_title, context_uuid,
 /// created_at, mode, entries: [{query, answer, created_at, ...}]}]}`.
 /// Each entry is a Q&A PAIR - one user query + one assistant answer
@@ -818,7 +818,7 @@ struct OpenCodePartData {
 }
 
 /// Open a source app's SQLite db READ-ONLY, in place. Never copies (real
-/// stores reach many GB - Eric's Cursor db is 7.1GB) and never write-locks
+/// stores reach many GB - a real Cursor db is 7.1GB) and never write-locks
 /// the owning app; a busy timeout rides out short write bursts, and the
 /// friendly error tells the user what to close if the db stays locked.
 fn open_sqlite_readonly(

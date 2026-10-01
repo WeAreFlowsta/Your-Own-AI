@@ -1102,7 +1102,7 @@ pub async fn leg_routing(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<Str
                     // it fires only when the registry scores the model that
                     // answers here above the Everyday model on that task (a
                     // coding specialist on the 4060 Ti box kept code home under
-                    // Frontier-first - correct by Eric's rule). The dev battery
+                    // Frontier-first - correct by the rule). The dev battery
                     // stays strict; the field leg accepts it.
                     if side == "device" && (reason.contains("could not run") || reason.contains("unavailable") || reason.contains("as good for this question")) { None } else { Some(format!("expected {expected_side}, got {side}")) }
                 } else if bucket == "long_turn" && side == "online" && !reason.contains("too long") {

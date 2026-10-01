@@ -1265,7 +1265,7 @@ const AiFormModal = component$<AiFormModalProps>(
             </div>
 
             {/* Advanced: how this AI samples its words - per AI, live.
-                EDIT ONLY: the create dialog stays lean (Eric 09-01) - new
+                EDIT ONLY: the create dialog stays lean (field, 2026-09-01) - new
                 settings land in Edit, never in Create. */}
             {editingAi && (
             <div>

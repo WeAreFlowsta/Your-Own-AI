@@ -964,7 +964,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.mode = "project";
     // The session is started for THIS AI (its model, its tools). Recorded
     // so a later switch of AI reopens the session for the new one instead
-    // of sending the new AI's turns through the old AI's session (Eric,
+    // of sending the new AI's turns through the old AI's session (field,
     // 09-23: Teresa's turn ran in Veebo's session with Obsidian).
     state.sessionAiId = props.selectedAi.value.aiConfig?.id ?? null;
     state.status = "starting";
@@ -2398,7 +2398,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         // that ended red (our own faults excluded - a refusal, a server
         // away, a tool that never started), or a tools turn that never got
         // one tool call to work. Said once per session, in plain words,
-        // with the way up (Eric, 09-24). The pinned-smaller case is filled
+        // with the way up (field, 2026-09-24). The pinned-smaller case is filled
         // in below, once the best local model is known.
         if (!state.struggleShown && !state.smallCoder) {
           const ourFault = (e: string | undefined) =>
