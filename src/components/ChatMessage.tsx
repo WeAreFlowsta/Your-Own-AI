@@ -1320,7 +1320,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
   if (props.message.role === 'user') {
     const images = props.message.images;
     return (
-      <div class="flex justify-end mb-4 items-start gap-2">
+      <div class="flex justify-end mb-4 items-start gap-2" data-testid="chat-message" data-role="user">
         <div class="bg-[var(--bg-user-message)] chat-bubble-border text-[var(--text-primary)] text-sm mt-1 py-1.5 px-4 leading-loose tracking-wide font-light max-w-[calc(100%)] rounded-2xl">
           {images && images.length > 0 && (
             <div class="flex flex-wrap gap-2 justify-end pt-1.5 pb-1">
@@ -1411,6 +1411,9 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
     <div
       ref={rootRef}
       class="relative mb-4 scroll-mt-4"
+      data-testid="chat-message"
+      data-role={props.message.role}
+      data-state={props.message.isLoading && !props.message.content ? "thinking" : props.message.isLoading ? "streaming" : "done"}
       {...(props.message.role === 'assistant' && props.message.content
         ? { 'data-remember-aiid': props.message.model }
         : {})}

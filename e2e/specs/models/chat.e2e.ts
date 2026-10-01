@@ -37,11 +37,16 @@ describe("chat with installed models", () => {
     await send.click();
     await shot("11-sent");
     // A model may need to load first (cold start on this card): give the
-    // reply up to three minutes, then expect the word in the page.
-    await browser.waitUntil(async () => (await browser.execute(() => document.body.innerText)).toLowerCase().includes("ready"), {
-      timeout: 180_000,
-      timeoutMsg: "no reply containing 'ready' within 3 minutes",
-    });
+    // reply up to three minutes. The ASSISTANT's finished message must carry
+    // the word - never the page as a whole, which also holds the question.
+    const reply = async () =>
+      browser.execute(() => {
+        const m = [...document.querySelectorAll('[data-testid="chat-message"][data-role="assistant"]')].pop() as HTMLElement | undefined;
+        return m ? { state: m.dataset.state, text: m.innerText } : null;
+      });
+    await browser.waitUntil(async () => (await reply())?.state === "done", { timeout: 180_000, timeoutMsg: "the assistant never finished within 3 minutes" });
+    const r = await reply();
     await shot("12-replied");
+    expect((r?.text || "").toLowerCase()).toContain("ready");
   });
 });
