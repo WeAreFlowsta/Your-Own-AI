@@ -850,6 +850,20 @@ pub(crate) fn model_thinks_on_request(model_name: &str) -> bool {
     .unwrap_or(false)
 }
 
+/// The engine's `--reasoning` flag for a model, from its own template:
+/// `off` for a model whose template declares a thinking switch (the app
+/// turns thinking on per request, report mode), `auto` for one that does
+/// not - that model thinks regardless, and only with `auto` does the engine
+/// extract its thoughts into reasoning_content instead of leaving them
+/// untagged in the reply (LFM2.5, 2026-10-01: the thinking and a restated
+/// system line appeared as the answer). Read from the file, never the name.
+pub(crate) fn reasoning_flag_for(model_name: Option<&str>) -> &'static str {
+    match model_name {
+        Some(name) if !model_thinks_on_request(name) => "auto",
+        _ => "off",
+    }
+}
+
 fn current_meta_flag_reasoning_strength(model_name: &str) -> bool {
     (|| {
         let dir = CURRENT_MODELS_DIR.lock().ok()?.clone()?;
@@ -2942,10 +2956,13 @@ pub async fn start_llama_server(
     );
 
     // Build args
-    // --reasoning off: disables native thinking by default for all models.
-    // Thinking models (Qwen 3.5, etc.) respond directly without internal reasoning.
-    // For report mode, thinking is enabled per-request via chat_template_kwargs.
-    // Non-thinking models (Phi-4, Gemma, etc.) ignore this flag entirely.
+    // --reasoning: `off` for a model whose template has a thinking switch
+    // (Qwen 3.5 etc.) - it answers directly, and report mode turns thinking
+    // on per request via chat_template_kwargs; `auto` for a model whose
+    // template has no switch, so whatever it thinks is extracted rather than
+    // left in the reply. Non-thinking models (Phi-4, Gemma) are unaffected.
+    // See reasoning_flag_for.
+    let reasoning_flag = reasoning_flag_for(model_filename.as_deref());
     let mut args = vec![
         "--port".to_string(),
         CHAT_PORT.to_string(),
@@ -2955,7 +2972,7 @@ pub async fn start_llama_server(
         local_api_key().to_string(),
         "--no-webui".to_string(),
         "--reasoning".to_string(),
-        "off".to_string(),
+        reasoning_flag.to_string(),
         "--ctx-size".to_string(),
         ctx_size.to_string(),
         // Disable the auto-fit-to-device-memory feature (new in recent llama.cpp).
@@ -4121,7 +4138,7 @@ async fn ensure_utility_server(
         "--ctx-size".to_string(),
         "4096".to_string(),
         "--reasoning".to_string(),
-        "off".to_string(),
+        reasoning_flag_for(Some(model_filename)).to_string(),
         "--no-webui".to_string(),
     ];
     let mut place = helper_verdict().1;
@@ -7033,6 +7050,32 @@ mod live_matrix {
             "RTX PRO 6000 (96 GB) + RTX 4090 (24 GB) + RTX 5060 Ti (16 GB)"
         );
     }
+
+    /// The engine's --reasoning flag follows each model's own template:
+    /// `auto` where the template has no thinking switch (the model thinks
+    /// regardless; `auto` makes the engine extract it), `off` where it
+    /// declares one. Reads the files in the dev box's models folder.
+    #[test]
+    #[ignore]
+    fn live_matrix_reasoning_flag_follows_the_template() {
+        let dir = models_dir();
+        super::remember_models_dir(&dir);
+        let mut seen = 0;
+        for entry in std::fs::read_dir(&dir).expect("models dir") {
+            let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+            if !name.ends_with(".gguf") || name.contains("mmproj") {
+                continue;
+            }
+            let meta = crate::gguf::read_meta(&dir.join(&name)).expect("gguf meta");
+            let flag = super::reasoning_flag_for(Some(&name));
+            let declares = meta.template_enable_thinking || meta.template_reasoning_strength || super::is_harmony_model(&name);
+            println!("{name}: switch={declares} -> --reasoning {flag}");
+            assert_eq!(flag, if declares { "off" } else { "auto" }, "{name}");
+            seen += 1;
+        }
+        assert!(seen > 0, "no models in {}", dir.display());
+    }
+
 
     #[test]
     fn a_helper_on_the_processor_is_read_into_memory_not_mapped() {
