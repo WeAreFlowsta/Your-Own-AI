@@ -2,9 +2,10 @@
 // `npm run e2e` builds the app with the `e2e` cargo feature (the embedded
 // WebDriver server, never in a release build), wipes the scratch profile,
 // and runs every spec in e2e/specs. Screenshots land in e2e/shots.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
+import { SevereServiceError } from "webdriverio";
 
 const here = resolve(import.meta.dirname ?? ".");
 export const SHOTS = resolve(here, "shots");
@@ -39,6 +40,58 @@ function reapSidecars() {
   }
 }
 
+/**
+ * The window must be ACTIVE on the desktop, or the compositor withholds
+ * frame callbacks: WebKit then produces no frames, requestAnimationFrame
+ * and IntersectionObserver never fire, and Qwik's visible tasks (the chat
+ * page's first-run check among them) never run. The app's own set_focus is
+ * refused by focus-stealing prevention; xdotool's activation is honored.
+ * The window can take a while to map on a cold debug build, so poll for it
+ * rather than `search --sync` with one long wait. Linux desktop only.
+ */
+function activateWindow() {
+  if (process.platform !== "linux" || !process.env.DISPLAY) return;
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    try {
+      const ids = execFileSync("xdotool", ["search", "--onlyvisible", "--name", "^Your Own AI$"], { encoding: "utf8", timeout: 5_000 }).trim().split("\n").filter(Boolean);
+      if (ids.length) {
+        execFileSync("xdotool", ["windowactivate", "--sync", ids[ids.length - 1]], { timeout: 10_000, stdio: "ignore" });
+        return;
+      }
+    } catch { /* not mapped yet, or search found nothing (exit 1) */ }
+    execFileSync("sleep", ["1"]);
+  }
+  console.warn("e2e: could not activate the app window (xdotool found no visible 'Your Own AI' window in 60 s)");
+}
+
+/**
+ * A locked or blanked screen gives the app no frames either (the same stall
+ * as an inactive window, found 2026-10-02: GNOME locked after its 5-minute
+ * idle delay mid-run and every later step hung). Refuse to start on a locked
+ * screen, and hold off the idle lock for as long as the run lasts. GNOME
+ * only; elsewhere both are no-ops.
+ */
+let idleInhibitor: ChildProcess | null = null;
+
+function screenLocked(): boolean {
+  if (process.platform !== "linux") return false;
+  try {
+    const out = execFileSync("gdbus", ["call", "--session", "--dest", "org.gnome.ScreenSaver", "--object-path", "/org/gnome/ScreenSaver", "--method", "org.gnome.ScreenSaver.GetActive"], { encoding: "utf8", timeout: 5_000 });
+    return out.includes("true");
+  } catch {
+    return false;
+  }
+}
+
+function holdIdleLock() {
+  if (process.platform !== "linux") return;
+  try {
+    idleInhibitor = spawn("gnome-session-inhibit", ["--inhibit", "idle", "--reason", "Your Own AI UI tests", "sleep", "infinity"], { stdio: "ignore" });
+    idleInhibitor.on("error", () => { idleInhibitor = null; });
+  } catch { /* not GNOME */ }
+}
+
 export const config: WebdriverIO.Config = {
   runner: "local",
   // Two spec sets, one per launch mode (see launch-app.sh): fresh profile
@@ -70,26 +123,22 @@ export const config: WebdriverIO.Config = {
   logLevel: "warn",
   waitforTimeout: 30_000,
   onPrepare() {
+    if (screenLocked()) throw new SevereServiceError("e2e: the screen is locked - the app gets no frames while it is. Unlock it and run again.");
+    holdIdleLock();
     reapSidecars();
     rmSync(PROFILE, { recursive: true, force: true });
     rmSync(SHOTS, { recursive: true, force: true });
     mkdirSync(SHOTS, { recursive: true });
   },
   before: async function () {
-    // The window must be ACTIVE on the desktop, or the compositor withholds
-    // frame callbacks: WebKit then produces no frames, requestAnimationFrame
-    // and IntersectionObserver never fire, and Qwik's visible tasks (the
-    // chat page's first-run check among them) never run. The app's own
-    // set_focus is refused by focus-stealing prevention; xdotool's
-    // activation is honored. Linux desktop only; harmless where absent.
-    if (process.platform === "linux" && process.env.DISPLAY) {
-      try {
-        const id = execFileSync("xdotool", ["search", "--sync", "--name", "^Your Own AI$"], { encoding: "utf8", timeout: 30_000 }).trim().split("\n")[0];
-        if (id) execFileSync("xdotool", ["windowactivate", "--sync", id], { timeout: 10_000, stdio: "ignore" });
-      } catch (e) {
-        console.warn("e2e: could not activate the app window (xdotool):", (e as Error).message);
-      }
-    }
+    activateWindow();
+  },
+  beforeTest: async function () {
+    // Something else on the desktop may have taken focus mid-run.
+    activateWindow();
+  },
+  onComplete() {
+    idleInhibitor?.kill();
   },
   afterSession() {
     reapSidecars();

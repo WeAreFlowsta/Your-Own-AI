@@ -1397,6 +1397,8 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
     return (
       <div
         key={family.id}
+        data-testid="catalog-family"
+        data-family={family.id}
         class={`generic-container rounded-2xl overflow-hidden flex flex-col justify-between transition-all hover:shadow-2xl transform hover:-translate-y-1 ${
           !isSuitable ? 'opacity-75' : ''
         }`}
@@ -1822,6 +1824,8 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
               the rich cards), collapsible header with the disk total. */}
           <button
             type="button"
+            data-testid="downloaded-models-toggle"
+            aria-expanded={store.inventoryOpen}
             onClick$={() => (store.inventoryOpen = !store.inventoryOpen)}
             class="flex w-full items-center justify-between mb-4 border-b border-[var(--border-subtle)] pb-2 bg-transparent border-x-0 border-t-0 cursor-pointer text-left"
           >
@@ -1856,7 +1860,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
               <span class="text-sm">Loading your models…</span>
             </div>
           ) : store.inventoryOpen && (
-          <div class="generic-container rounded-2xl divide-y divide-[var(--border-subtle)]">
+          <div data-testid="downloaded-models" class="generic-container rounded-2xl divide-y divide-[var(--border-subtle)]">
             {store.downloadedModels.map((model) => {
               const catalogMatch = modelFamilies.reduce<{ family: ModelFamily; variant: ModelVariant } | null>((found, family) => {
                 if (found) return found;
@@ -1944,6 +1948,8 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
               return (
                 <div
                   key={model.name}
+                  data-testid="downloaded-model"
+                  data-model={model.name}
                   class={`flex items-center gap-3 px-4 py-2.5 ${isPaused ? 'opacity-60' : ''}`}
                 >
                   <div class="min-w-0 flex-1">
@@ -1958,6 +1964,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                       )}
                       {fitBadge && (
                         <span
+                          data-testid="model-fit"
                           title={fitBadge.tip}
                           class={`shrink-0 px-2 py-0.5 border text-[10px] rounded-full font-semibold whitespace-nowrap ${fitBadge.cls}`}
                         >
@@ -1966,6 +1973,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                       )}
                     </div>
                     <p
+                      data-testid="model-detail"
                       class="text-xs text-[var(--text-muted)] truncate"
                       title="Trained context = what the model was built to handle. 'Runs at' = the context Your Own AI starts it with on this machine."
                     >
@@ -2026,6 +2034,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                       <LiquidMetalButton
                         variant="secondary"
                         class="mt-1 px-3 py-1 text-xs"
+                        testId="model-finetune"
                         onClick$={() => { store.tuneFor = model.name; }}
                         title="Fine-tune how this model runs on this computer: context size, expert offload, the speed-up file. Everything stays automatic unless you set a number."
                       >
@@ -2042,7 +2051,12 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                         autoMoeN={fitInfo?.moe_auto_pick ?? fitInfo?.moe_cpu_layers}
                         hasDraft={!!model.draft}
                         gpuCount={systemInfo?.gpu_count ?? 0}
-                        onClose$={() => { store.tuneFor = ''; }}
+                        onClose$={async () => {
+                          store.tuneFor = '';
+                          // The row's "runs at" and "fine-tuned" come from the fit
+                          // probe: read it again so a Save shows at once.
+                          await loadModels();
+                        }}
                       />
                     )}
                   </div>
@@ -2098,6 +2112,9 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
               <button
                 key={tab.key}
                 type="button"
+                data-testid="catalog-tab"
+                data-key={tab.key}
+                aria-pressed={isActive}
                 onClick$={() => { store.selectedTask = tab.key as any; }}
                 class={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all ${
                   isActive

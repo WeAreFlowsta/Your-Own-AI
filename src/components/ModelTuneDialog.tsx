@@ -278,19 +278,21 @@ export default component$<ModelTuneDialogProps>((props) => {
 
   return (
     <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div class="w-full max-w-md max-h-[calc(100vh-2rem)] overflow-y-auto rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-header-footer)] p-6 shadow-2xl">
+      <div data-testid="tune-dialog" class="w-full max-w-md max-h-[calc(100vh-2rem)] overflow-y-auto rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-header-footer)] p-6 shadow-2xl">
         <h3 class="text-base font-semibold text-[var(--text-primary)] break-all">{name}</h3>
         <p class="mt-1 text-sm text-[var(--text-secondary)]">Fine-tune how it runs on this computer.</p>
 
         {/* What it runs at now, and where that came from. */}
         <div class="mt-4 flex items-center justify-between gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2">
-          <p class="text-xs text-[var(--text-primary)] leading-relaxed">
+          <p data-testid="tune-current" class="text-xs text-[var(--text-primary)] leading-relaxed">
             {cur.ctx != null ? `${kTokens(cur.ctx)} context` : 'Automatic context'}
             {cur.tps != null ? ` · ${Math.round(cur.tps)} tok/s` : cur.near ? ` · ~${Math.round(cur.near.tps)} tok/s measured at ${kTokens(cur.near.ctx)}` : ''}
             {props.isMoe && cur.moe != null ? (cur.moe === 0 ? ' · all on the card' : ` · ${cur.moe} expert layers in RAM`) : ''}
             {cur.kv !== 'auto' ? (cur.kv === 'q8_0' ? ' · compact cache' : ' · standard cache') : ''}
           </p>
           <span
+            data-testid="tune-source"
+            data-source={cur.source}
             class={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] ${
               cur.source === 'Automatic'
                 ? 'border-[var(--border-subtle)] text-[var(--text-muted)]'
@@ -304,7 +306,7 @@ export default component$<ModelTuneDialogProps>((props) => {
         {/* Measure: the main event. */}
         <div class="mt-5">
           {tuning.value ? (
-            <div class="flex items-center gap-3 text-sm text-[var(--text-secondary)]">
+            <div data-testid="tune-progress" class="flex items-center gap-3 text-sm text-[var(--text-secondary)]">
               <span class="inline-block h-3.5 w-3.5 rounded-full border-2 border-[var(--border-subtle)] border-t-[var(--text-secondary)] animate-spin" />
               Measuring {tuning.value.done + 1} of {tuning.value.total}: {tuning.value.current}
               <button
@@ -321,7 +323,7 @@ export default component$<ModelTuneDialogProps>((props) => {
                 Loads it a few times with different setups and times each one. About three minutes,
                 and chats pause while it runs.
               </p>
-              <LiquidMetalButton class="mt-3 px-5 py-2 text-sm" onClick$={measure}>
+              <LiquidMetalButton class="mt-3 px-5 py-2 text-sm" testId="tune-measure" onClick$={measure}>
                 Measure on this computer
               </LiquidMetalButton>
             </>
@@ -333,6 +335,7 @@ export default component$<ModelTuneDialogProps>((props) => {
               </div>
               <input
                 type="range"
+                data-testid="tune-slider"
                 min={0}
                 max={positions.value.length - 1}
                 step={1}
@@ -351,7 +354,7 @@ export default component$<ModelTuneDialogProps>((props) => {
                 ))}
               </div>
               {pick && (
-                <div class="mt-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2 text-xs">
+                <div data-testid="tune-pick" data-ctx={pick.ctx} class="mt-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-main)] px-3 py-2 text-xs">
                   <p class="text-[var(--text-primary)]">
                     {kTokens(pick.ctx)} context, about {Math.max(1, Math.round(pick.ctx / TOKENS_PER_PAGE))} pages in view at once
                   </p>
@@ -370,11 +373,11 @@ export default component$<ModelTuneDialogProps>((props) => {
                 More room lets the AI hold more of a long chat or document at once. Faster answers come from less room.
               </p>
               {verdicts.value.length > 0 && (
-                <ul class="mt-2 space-y-1">
+                <ul data-testid="tune-verdicts" class="mt-2 space-y-1">
                   {verdicts.value.map((l) => <li key={l} class="text-[11px] text-[var(--text-muted)]">{l}</li>)}
                 </ul>
               )}
-              <button type="button" class="mt-2 text-xs text-[var(--text-link)] hover:underline" onClick$={measure}>
+              <button type="button" data-testid="tune-measure-again" class="mt-2 text-xs text-[var(--text-link)] hover:underline" onClick$={measure}>
                 Measure again
               </button>
             </>
@@ -385,6 +388,7 @@ export default component$<ModelTuneDialogProps>((props) => {
         <div class="mt-5 border-t border-[var(--border-subtle)] pt-3">
           <button
             type="button"
+            data-testid="tune-manual"
             class="flex w-full items-center gap-1.5 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
             aria-expanded={manualOpen.value}
             onClick$={() => (manualOpen.value = !manualOpen.value)}
@@ -396,6 +400,7 @@ export default component$<ModelTuneDialogProps>((props) => {
             <div class="mt-3 space-y-4">
               <TuneSlider
                 label="Context size"
+                testId="tune-context"
                 value={ctx.value}
                 autoLabel={props.autoCtx ? `Auto (${kTokens(props.autoCtx)})` : 'Auto'}
                 autoValue={props.autoCtx}
@@ -435,6 +440,9 @@ export default component$<ModelTuneDialogProps>((props) => {
                     <button
                       key={opt}
                       type="button"
+                      data-testid="tune-kv"
+                      data-value={opt}
+                      aria-pressed={kv.value === opt}
                       onClick$={() => { kv.value = opt; note.value = ''; }}
                       class={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
                         kv.value === opt
@@ -487,6 +495,7 @@ export default component$<ModelTuneDialogProps>((props) => {
               {(ctx.value != null || moeN.value != null || draftOff.value || kv.value !== 'auto') && (
                 <button
                   type="button"
+                  data-testid="tune-back-to-auto"
                   class="text-xs text-[var(--text-link)] hover:underline"
                   onClick$={() => { ctx.value = null; moeN.value = null; draftOff.value = false; kv.value = 'auto'; note.value = ''; }}
                 >
@@ -497,13 +506,14 @@ export default component$<ModelTuneDialogProps>((props) => {
           )}
         </div>
 
-        {note.value && <p class="mt-3 text-xs text-[var(--text-secondary)]">{note.value}</p>}
+        {note.value && <p data-testid="tune-note" class="mt-3 text-xs text-[var(--text-secondary)]">{note.value}</p>}
 
         <div class="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
           <LiquidMetalButton
             variant="secondary"
             class="mt-3 sm:mt-0 w-full sm:w-auto inline-flex justify-center px-6 py-2.5 text-base font-medium disabled:opacity-70"
             disabled={busy.value}
+            testId="tune-cancel"
             onClick$={props.onClose$}
           >
             Cancel
@@ -511,6 +521,7 @@ export default component$<ModelTuneDialogProps>((props) => {
           <LiquidMetalButton
             class="w-full sm:w-auto inline-flex justify-center items-center px-6 py-2.5 text-base font-medium disabled:opacity-70"
             disabled={busy.value}
+            testId="tune-save"
             onClick$={save}
           >
             {busy.value ? <LuLoader2 class="h-5 w-5 animate-spin mr-2" /> : <LuSave class="w-[18px] h-[18px] mr-2" />}

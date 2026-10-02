@@ -27,7 +27,9 @@ Per platform:
 - **Linux desktop (Wayland or X11):** `sudo apt install xdotool`. The window
   must be ACTIVE or the compositor withholds frame callbacks and the webview
   produces no frames (Qwik's visible tasks never run); `wdio.conf.ts`
-  activates it with xdotool. Not Xvfb on NVIDIA: WebKitGTK segfaults without
+  activates it with xdotool before every test. A locked screen stalls it the
+  same way: a run refuses to start on a locked screen and holds off GNOME's
+  idle lock while it lasts (`gnome-session-inhibit`). Not Xvfb on NVIDIA: WebKitGTK segfaults without
   DRI3. Mesa-based CI runners are untested.
 - **Windows:** `e2e/launch-app.cmd` is the launcher (written, not yet run);
   the service uses the embedded driver, so no Edge WebDriver is needed.

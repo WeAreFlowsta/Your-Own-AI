@@ -53,3 +53,10 @@ export async function waitForReplyDone(timeout = 180_000) {
 /** Tauri's invoke from inside the page (withGlobalTauri). */
 export const invoke = <T = unknown>(cmd: string, args: Record<string, unknown> = {}) =>
   browser.execute((c: string, a: Record<string, unknown>) => (window as any).__TAURI__.core.invoke(c, a) as Promise<T>, cmd, args) as Promise<T>;
+
+/** Scroll an element to the middle of the view, instantly. WebdriverIO's own
+ *  scrollIntoView waits on an async script that timed out (30 s per try) on
+ *  the models page; a plain DOM scroll needs no frame. */
+export async function scrollTo(sel: string) {
+  await browser.execute((s: string) => document.querySelector(s)?.scrollIntoView({ block: "center", behavior: "instant" as ScrollBehavior }), sel);
+}
