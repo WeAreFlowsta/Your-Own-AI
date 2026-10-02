@@ -7,7 +7,7 @@
 //
 // A new scripts/check-*.mjs joins by being listed below. check-webview-floor
 // reads the built output, not the source, and is left out.
-import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, existsSync } from "node:fs";
+import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -48,7 +48,8 @@ try {
   cpSync("src-tauri/src/router.rs", join(root, "src-tauri/src/router.rs"));
   toCrlf(join(root, "src"));
   toCrlf(join(root, "src-tauri"));
-  if (existsSync("node_modules")) symlinkSync(join(process.cwd(), "node_modules"), join(root, "node_modules"), "dir");
+  // A junction on Windows: a directory symlink there needs admin rights or Developer Mode.
+  if (existsSync("node_modules")) symlinkSync(join(process.cwd(), "node_modules"), join(root, "node_modules"), "junction");
   for (const c of CHECKS) {
     const r = spawnSync(process.execPath, [join("scripts", c)], { cwd: root, encoding: "utf8" });
     if (r.status !== 0) {
@@ -57,6 +58,8 @@ try {
     }
   }
 } finally {
+  // The link on its own first, so the delete never walks into the real node_modules.
+  try { unlinkSync(join(root, "node_modules")); } catch { /* never made */ }
   rmSync(root, { recursive: true, force: true });
 }
 if (bad) process.exit(1);
