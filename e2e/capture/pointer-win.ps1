@@ -4,7 +4,7 @@
 #   size <x> <y> <w> <h>    -> ok            (outer top-left at x,y; CLIENT area w x h; on top)
 #   rect                    -> <x> <y> <w> <h>  (client area on screen, physical pixels)
 #   screen                  -> <w> <h>       (primary screen, physical pixels)
-#   glide <x> <y> <ms>      -> ok            (eased move of the real cursor)
+#   glide <x> <y> <ms>      -> ok            (eased, slightly arced move of the real cursor; ms 0: by distance)
 #   down | up               -> ok            (left button)
 #   wheel <n>               -> ok            (n notches, + = up)
 #   front                   -> ok
@@ -35,12 +35,19 @@ public static class P {
   [DllImport("winmm.dll")] public static extern uint timeBeginPeriod(uint p);
   public static void Glide(int x, int y, int ms) {
     POINT s; GetCursorPos(out s);
+    double dx = x - s.X, dy = y - s.Y, dist = Math.Sqrt(dx * dx + dy * dy);
+    // ms 0: a hand's pace, longer for longer moves
+    if (ms <= 0) ms = (int)Math.Min(1300, Math.Max(450, 350 + dist * 0.45));
+    // a slight arc, as a wrist moves, never a ruler line
+    double bow = Math.Min(60, dist * 0.08);
+    double nx = dist > 0 ? -dy / dist : 0, ny = dist > 0 ? dx / dist : 0;
     var sw = Stopwatch.StartNew();
     while (true) {
       double t = Math.Min(1.0, sw.Elapsed.TotalMilliseconds / Math.Max(1, ms));
       // ease in-out cubic: a hand's start and stop
       double e = t < 0.5 ? 4 * t * t * t : 1 - Math.Pow(-2 * t + 2, 3) / 2;
-      SetCursorPos((int)Math.Round(s.X + (x - s.X) * e), (int)Math.Round(s.Y + (y - s.Y) * e));
+      double arc = Math.Sin(Math.PI * e) * bow;
+      SetCursorPos((int)Math.Round(s.X + dx * e + nx * arc), (int)Math.Round(s.Y + dy * e + ny * arc));
       if (t >= 1.0) break;
       Thread.Sleep(4);
     }

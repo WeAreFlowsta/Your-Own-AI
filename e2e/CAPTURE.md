@@ -185,9 +185,14 @@ from an interrupted run when the next one starts.
 - **The page never leaves the chat page:** a spec opened a
   `tauri://localhost/...` URL; on Windows pages are
   `http://tauri.localhost/...`. Use `appUrl()` from `wdio.conf.ts`.
-- **"Tauri core.invoke not available after 5s timeout" warnings:** the
-  service's window check; the app carries only the embedded driver, not
-  its page bridge. Each element lookup waits 5 s for it, then goes on.
+- **"Tauri core.invoke not available after 5s timeout" warnings, a take
+  standing still for 10 s before each move:** the service's window check
+  is back (the app carries only the embedded driver, not the page bridge
+  it needs). `wdio.conf.ts`'s `before` hook turns it off by choosing the
+  window; check that it still does.
+- **A notification in the frame:** toasts draw over every window,
+  pinned or not. Do not disturb on, and nothing else posting
+  notifications while the take records.
 - **Clicks land in the wrong place:** the pointer helper
   (`e2e/capture/pointer-win.ps1`) works in physical pixels and the page
   positions are CSS pixels x `devicePixelRatio`. If a run's moves are off

@@ -83,8 +83,11 @@ function reapSidecars() {
  * resolved: a debug build runs its sidecars from the source folder) or from
  * the scratch profile (the linked CUDA engine) whose parent is not a live
  * test app. The installed app's own processes live elsewhere and are left.
+ * At the end of a run (endOfRun) nothing of the run is live: the service
+ * ends the last test app only after onComplete, so it is ended here, and
+ * every sidecar with it.
  */
-function reapWindowsSidecars() {
+function reapWindowsSidecars(endOfRun = false) {
   try {
     const out = execFileSync("powershell.exe", ["-NoProfile", "-Command",
       "Get-CimInstance Win32_Process | Where-Object ExecutablePath | Select-Object ProcessId,ParentProcessId,ExecutablePath | ConvertTo-Json -Compress"], { encoding: "utf8" });
@@ -93,7 +96,9 @@ function reapWindowsSidecars() {
     const src = real(resolve(here, "..", "src-tauri")) + "\\";
     const profile = PROFILE.toLowerCase() + "\\";
     const app = real(launcher);
-    const liveApps = new Set(rows.filter((r) => real(r.ExecutablePath) === app).map((r) => r.ProcessId));
+    const apps = rows.filter((r) => real(r.ExecutablePath) === app).map((r) => r.ProcessId);
+    if (endOfRun) for (const pid of apps) { try { process.kill(pid); } catch { /* gone */ } }
+    const liveApps = new Set(endOfRun ? [] : apps);
     for (const r of rows) {
       const p = r.ExecutablePath.toLowerCase();
       const ours = real(r.ExecutablePath).startsWith(src) || p.startsWith(profile);
@@ -239,6 +244,11 @@ export const config: WebdriverIO.Config = {
   },
   before: async function () {
     activateWindow();
+    // The service otherwise checks window focus before every element
+    // lookup through a page bridge this app does not carry: 5 s each, which
+    // left 10 s of stillness before every move in a take. A switch to the
+    // window it is on tells the service the window is chosen.
+    await browser.switchToWindow(await browser.getWindowHandle());
   },
   beforeTest: async function () {
     // Something else on the desktop may have taken focus mid-run.
@@ -249,7 +259,8 @@ export const config: WebdriverIO.Config = {
     // The last session's servers outlive it by a moment (afterSession can run before the
     // service has ended the last app): none stays behind.
     await new Promise((r) => setTimeout(r, 3_000));
-    reapSidecars();
+    if (WIN) reapWindowsSidecars(true);
+    else reapSidecars();
   },
   afterSession() {
     reapSidecars();

@@ -86,6 +86,7 @@ async function x11Pointer(): Promise<Pointer> {
     screen: async () => { const [w, h] = xdo("getdisplaygeometry").split(" ").map(Number); return { w, h }; },
     glide: async (x, y, ms) => {
       const from = at, t0 = Date.now();
+      if (ms <= 0) ms = Math.min(1300, Math.max(450, 350 + Math.hypot(x - from.x, y - from.y) * 0.45));
       for (;;) {
         const t = Math.min(1, (Date.now() - t0) / Math.max(1, ms));
         const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
@@ -200,7 +201,7 @@ export class Take {
   async moveTo(sel: string, ms?: number) {
     if (!this.pointer) return;
     const c = await this.center(sel);
-    await this.pointer.glide(c.x, c.y, ms ?? 650);
+    await this.pointer.glide(c.x, c.y, ms ?? 0); // 0: paced by distance
     this.log("move", sel, c.x - this.area.x, c.y - this.area.y);
   }
 
@@ -253,19 +254,24 @@ export class Take {
     this.log("drag", sel, at(to) - this.area.x, y - this.area.y);
   }
 
-  /** A full-size still of the capture area, without the cursor. */
+  private grabs: Promise<unknown>[] = [];
+
+  /** A full-size still of the capture area, without the cursor. Grabbed
+   *  beside the take, which goes on moving: a still is no pause. */
   async still(name: string) {
     const file = resolve(this.dir, "stills", `${name}.png`);
+    this.log("still", name);
     if (!this.pointer) {
       await browser.saveScreenshot(file);
-    } else {
-      execFileSync("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", ...ffmpegInput(this.area, false), "-frames:v", "1", file], { timeout: 20_000 });
+      return;
     }
-    this.log("still", name);
+    const grab = spawn("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", ...ffmpegInput(this.area, false), "-frames:v", "1", file], { stdio: "ignore" });
+    this.grabs.push(new Promise((r) => { grab.on("exit", r); grab.on("error", r); }));
   }
 
   async stop() {
     await this.hold(1000);
+    await Promise.all(this.grabs);
     if (this.rec) {
       const done = new Promise((r) => this.rec!.on("exit", r));
       this.rec.stdin!.write("q"); // ffmpeg finishes the file cleanly on q
