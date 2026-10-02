@@ -48,10 +48,12 @@ const windowsAppEnv: Record<string, string> = WIN
  * sessions and the next spec's model had no room. Kill, by pid, every
  * process whose program lives in src-tauri/bin and whose parent is not a
  * live test app (the desktop's session manager adopts orphans, so a parent
- * of 1 is not the test). Linux and macOS; Windows later.
+ * of 1 is not the test). On Windows an orphan also keeps the app's
+ * inherited sockets, the WebDriver port among them, so the next session's
+ * app cannot open it.
  */
 function reapSidecars() {
-  if (process.platform === "win32") return;
+  if (WIN) return reapWindowsSidecars();
   try {
     const bin = resolve(here, "..", "src-tauri", "bin") + "/";
     // The CUDA engine runs from the scratch profile's engines folder
@@ -69,6 +71,34 @@ function reapSidecars() {
       const from = args.startsWith(bin) ? bin : args.startsWith(profileBin) && /llama-server|holochain|lair-keystore/.test(args.slice(profileBin.length).split(" ")[0]) ? profileBin : null;
       if (from && !liveApps.has(ppid)) {
         try { process.kill(Number(pid), "SIGTERM"); console.log(`e2e: reaped orphaned sidecar ${pid}: ${args.slice(from.length, from.length + 60)}`); } catch { /* gone */ }
+      }
+    }
+  } catch (e) {
+    console.warn("e2e: sidecar reap skipped:", (e as Error).message);
+  }
+}
+
+/**
+ * Windows: every process started from this checkout's src-tauri (links
+ * resolved: a debug build runs its sidecars from the source folder) or from
+ * the scratch profile (the linked CUDA engine) whose parent is not a live
+ * test app. The installed app's own processes live elsewhere and are left.
+ */
+function reapWindowsSidecars() {
+  try {
+    const out = execFileSync("powershell.exe", ["-NoProfile", "-Command",
+      "Get-CimInstance Win32_Process | Where-Object ExecutablePath | Select-Object ProcessId,ParentProcessId,ExecutablePath | ConvertTo-Json -Compress"], { encoding: "utf8" });
+    const rows = ([] as { ProcessId: number; ParentProcessId: number; ExecutablePath: string }[]).concat(JSON.parse(out || "[]"));
+    const real = (p: string) => { try { return realpathSync.native(p).toLowerCase(); } catch { return p.toLowerCase(); } };
+    const src = real(resolve(here, "..", "src-tauri")) + "\\";
+    const profile = PROFILE.toLowerCase() + "\\";
+    const app = real(launcher);
+    const liveApps = new Set(rows.filter((r) => real(r.ExecutablePath) === app).map((r) => r.ProcessId));
+    for (const r of rows) {
+      const p = r.ExecutablePath.toLowerCase();
+      const ours = real(r.ExecutablePath).startsWith(src) || p.startsWith(profile);
+      if (ours && real(r.ExecutablePath) !== app && !liveApps.has(r.ParentProcessId)) {
+        try { process.kill(r.ProcessId); console.log(`e2e: reaped orphaned sidecar ${r.ProcessId}: ${r.ExecutablePath.split("\\").pop()}`); } catch { /* gone */ }
       }
     }
   } catch (e) {
@@ -216,7 +246,8 @@ export const config: WebdriverIO.Config = {
   },
   async onComplete() {
     idleInhibitor?.kill();
-    // The last session's servers outlive it by a moment: none stays behind.
+    // The last session's servers outlive it by a moment (afterSession can run before the
+    // service has ended the last app): none stays behind.
     await new Promise((r) => setTimeout(r, 3_000));
     reapSidecars();
   },

@@ -38,7 +38,7 @@ Settings (environment variables):
 |---|---|
 | `YOAI_CAPTURE_MODEL` | the model a take uses (file name, e.g. `LFM2.5-8B-A1B-Q4_K_M.gguf`) |
 | `YOAI_CAPTURE_WIDTH` / `YOAI_CAPTURE_HEIGHT` | the client area, physical pixels (default 1920 x 1080) |
-| `YOAI_CAPTURE_ENCODER` | `nvenc` or `x264` (default: NVENC when ffmpeg lists it) |
+| `YOAI_CAPTURE_ENCODER` | `nvenc` or `x264` (default: NVENC when a test frame encodes) |
 | `YOAI_CAPTURE_DRY` | no recording, no real pointer: driver clicks and WebDriver screenshots, to check a take's steps on a machine that cannot record |
 | `YOAI_E2E_MODELS_DIR` / `YOAI_E2E_ENGINES_DIR` | override where the real models / engines are read from |
 
@@ -65,7 +65,8 @@ git --version; node --version; cargo --version; gh --version; ffmpeg -hide_banne
 ```
 
 `node` must be 20 or newer. The ffmpeg line should list `h264_nvenc` on an
-NVIDIA card. WebView2 ships with Windows 11. `gh auth login` once (the
+NVIDIA card; it encodes only with a driver as new as that ffmpeg needs
+(9.0 wants 610 or newer), else the take falls back to x264. WebView2 ships with Windows 11. `gh auth login` once (the
 engine download below uses it).
 
 ### 2. The repository and its downloaded parts
@@ -127,6 +128,13 @@ The take records a 1920x1080 client area, so the screen must be bigger than
 that plus the window's title bar: a 1440p or 4K monitor (a 1080p screen
 cannot fit it; the take stops and says so).
 
+On a 1080p screen, record the largest 16:9 area that clears the title bar
+and the taskbar, and scale it up in the edit (1.09x):
+
+```powershell
+$env:YOAI_CAPTURE_WIDTH = "1760"; $env:YOAI_CAPTURE_HEIGHT = "990"
+```
+
 Windows' display scale decides how the app LOOKS at that size:
 
 | Monitor / scale | App layout | Looks like |
@@ -159,9 +167,8 @@ $env:YOAI_CAPTURE_MODEL = "<model file name>"
 node e2e/run.mjs capture --spec e2e/capture/finetune.capture.ts
 ```
 
-Afterwards, check Task Manager for a leftover `llama-server` from
-`src-tauri\bin` (the sidecar cleanup between sessions runs on Linux and
-macOS only so far) and end it.
+A run ends the sidecars a finished session leaves behind, and any left
+from an interrupted run when the next one starts.
 
 ### If something fails
 

@@ -110,13 +110,20 @@ function ffmpegInput(r: Rect, mouse: boolean): string[] {
     : ["-f", "x11grab", "-framerate", "60", "-video_size", `${r.w}x${r.h}`, "-draw_mouse", mouse ? "1" : "0", "-i", `${process.env.DISPLAY ?? ":0"}+${r.x},${r.y}`];
 }
 
-/** NVENC when this ffmpeg has it (the 5080 box), else x264. Near-lossless
- *  either way: the edit compresses, the take should not. */
+/** NVENC when it encodes here (the 5080 box), else x264. Near-lossless
+ *  either way: the edit compresses, the take should not. Listed is not
+ *  enough: an ffmpeg newer than the NVIDIA driver lists h264_nvenc and
+ *  then cannot open it, so one frame is encoded to find out. */
 function encoderArgs(): string[] {
   const pick = process.env.YOAI_CAPTURE_ENCODER;
   let nvenc = pick === "nvenc";
   if (!pick) {
-    try { nvenc = execFileSync("ffmpeg", ["-hide_banner", "-encoders"], { encoding: "utf8" }).includes("h264_nvenc"); } catch { /* x264 */ }
+    try {
+      execFileSync("ffmpeg", ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=size=256x256", "-frames:v", "1", "-c:v", "h264_nvenc", "-f", "null", "-"], { stdio: "ignore", timeout: 20_000 });
+      nvenc = true;
+    } catch {
+      console.log("capture: NVENC does not encode here (an NVIDIA driver older than this ffmpeg needs?) - x264");
+    }
   }
   return nvenc
     ? ["-c:v", "h264_nvenc", "-preset", "p5", "-tune", "hq", "-rc", "vbr", "-cq", "16", "-b:v", "0", "-pix_fmt", "yuv420p"]

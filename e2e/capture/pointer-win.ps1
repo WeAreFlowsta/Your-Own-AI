@@ -1,7 +1,7 @@
 # The real Windows pointer for video captures (e2e/capture/_capture.ts).
 # Reads one command per line on stdin, answers one line on stdout:
 #   find <window title>     -> ok | err      (remembers the window)
-#   size <x> <y> <w> <h>    -> ok            (outer top-left at x,y; CLIENT area w x h)
+#   size <x> <y> <w> <h>    -> ok            (outer top-left at x,y; CLIENT area w x h; on top)
 #   rect                    -> <x> <y> <w> <h>  (client area on screen, physical pixels)
 #   screen                  -> <w> <h>       (primary screen, physical pixels)
 #   glide <x> <y> <ms>      -> ok            (eased move of the real cursor)
@@ -59,7 +59,8 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
   try {
     switch ($a[0]) {
       'find' {
-        $hwnd = [P]::FindWindow($null, ($a[1..($a.Length - 1)] -join ' '))
+        # [NullString]: PowerShell passes $null to a string parameter as "", a class name no window has.
+        $hwnd = [P]::FindWindow([NullString]::Value, ($a[1..($a.Length - 1)] -join ' '))
         if ($hwnd -eq [IntPtr]::Zero) { Say 'err no window' } else { Say 'ok' }
       }
       'size' {
@@ -67,7 +68,9 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
         $w = New-Object P+RECT; $c = New-Object P+RECT
         [void][P]::GetWindowRect($hwnd, [ref]$w); [void][P]::GetClientRect($hwnd, [ref]$c)
         $dw = ($w.R - $w.L) - ($c.R - $c.L); $dh = ($w.B - $w.T) - ($c.B - $c.T)
-        [void][P]::SetWindowPos($hwnd, [IntPtr]::Zero, [int]$a[1], [int]$a[2], [int]$a[3] + $dw, [int]$a[4] + $dh, 0x0004) # SWP_NOZORDER
+        # HWND_TOPMOST: Windows may refuse SetForegroundWindow to a background
+        # process, and a window left on top would be recorded and clicked.
+        [void][P]::SetWindowPos($hwnd, [IntPtr](-1), [int]$a[1], [int]$a[2], [int]$a[3] + $dw, [int]$a[4] + $dh, 0x0040) # SWP_SHOWWINDOW
         [void][P]::SetForegroundWindow($hwnd)
         Say 'ok'
       }
