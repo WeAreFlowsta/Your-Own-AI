@@ -3,7 +3,7 @@
 // WebDriver server, never in a release build), wipes the scratch profile,
 // and runs every spec in e2e/specs. Screenshots land in e2e/shots.
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { SevereServiceError } from "webdriverio";
 
@@ -92,11 +92,39 @@ function holdIdleLock() {
   } catch { /* not GNOME */ }
 }
 
+/**
+ * Windows: what launch-app.sh does per launch on Linux, done once per run
+ * (cmd cannot write JSON safely). The scratch profile reads the person's
+ * real models folder (their own settings' modelsDir, else the default) and,
+ * with YOAI_E2E_WITH_CUDA, links their installed engines folder (a
+ * junction: no admin rights needed). Nothing is downloaded or written there.
+ */
+function seedWindowsProfile() {
+  if (process.platform !== "win32" || !process.env.APPDATA) return;
+  const realData = resolve(process.env.APPDATA, "com.solar.yourowai");
+  const testData = resolve(PROFILE, "AppData", "Roaming", "com.solar.yourowai");
+  mkdirSync(testData, { recursive: true });
+  if (process.env.YOAI_E2E_WITH_MODELS) {
+    let models = process.env.YOAI_E2E_MODELS_DIR ?? "";
+    if (!models) {
+      try { models = JSON.parse(readFileSync(resolve(realData, "settings.json"), "utf8")).modelsDir ?? ""; } catch { /* no settings */ }
+    }
+    writeFileSync(resolve(testData, "settings.json"), JSON.stringify({ modelsDir: models || resolve(realData, "models") }));
+  }
+  if (process.env.YOAI_E2E_WITH_CUDA) {
+    const engines = process.env.YOAI_E2E_ENGINES_DIR ?? resolve(realData, "engines");
+    if (existsSync(engines)) symlinkSync(engines, resolve(testData, "engines"), "junction");
+    else console.warn(`e2e: no engines folder at ${engines} - the bundled engine runs (install CUDA in the app first)`);
+  }
+}
+
+const CAPTURE = !!process.env.YOAI_CAPTURE;
+
 export const config: WebdriverIO.Config = {
   runner: "local",
-  // Two spec sets, one per launch mode (see launch-app.sh): fresh profile
-  // (the welcome flow) or the installed models (the chat flows).
-  specs: [process.env.YOAI_E2E_WITH_MODELS ? "./specs/models/**/*.e2e.ts" : "./specs/fresh/**/*.e2e.ts"],
+  // Spec sets by launch mode (e2e/run.mjs): fresh profile (the welcome
+  // flow), the installed models (the chat flows), or the video captures.
+  specs: [CAPTURE ? "./capture/**/*.capture.ts" : process.env.YOAI_E2E_WITH_MODELS ? "./specs/models/**/*.e2e.ts" : "./specs/fresh/**/*.e2e.ts"],
   maxInstances: 1,
   capabilities: [
     {
@@ -118,7 +146,8 @@ export const config: WebdriverIO.Config = {
   ],
   framework: "mocha",
   // A cold model load plus a reply can take three minutes on a small card.
-  mochaOpts: { ui: "bdd", timeout: 300_000 },
+  // A capture take records whole flows, measurements included.
+  mochaOpts: { ui: "bdd", timeout: CAPTURE ? 1_800_000 : 300_000 },
   reporters: ["spec"],
   logLevel: "warn",
   waitforTimeout: 30_000,
@@ -129,6 +158,7 @@ export const config: WebdriverIO.Config = {
     rmSync(PROFILE, { recursive: true, force: true });
     rmSync(SHOTS, { recursive: true, force: true });
     mkdirSync(SHOTS, { recursive: true });
+    seedWindowsProfile();
   },
   before: async function () {
     activateWindow();
@@ -144,6 +174,7 @@ export const config: WebdriverIO.Config = {
     reapSidecars();
   },
   afterTest: async function (test, _context, { passed }) {
+    if (CAPTURE) return; // a take's stills are its own
     // One picture of where it ended, pass or fail - the thing Claude reads.
     const name = `${test.parent} - ${test.title}`.replace(/[^a-z0-9]+/gi, "_").slice(0, 80);
     await browser.saveScreenshot(resolve(SHOTS, `${passed ? "ok" : "FAIL"}_${name}.png`));

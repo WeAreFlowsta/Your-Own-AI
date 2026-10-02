@@ -44,3 +44,4 @@ watch-seen.json
 # UI test harness (e2e/): scratch profile and screenshots
 e2e/profile/
 e2e/shots/
+e2e/captures/

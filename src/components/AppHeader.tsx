@@ -830,6 +830,7 @@ export default component$<AppHeaderProps>(
             <div class="relative inline-block text-left">
               <LiquidMetalButton
                 onClick$={toggleMenu}
+                testId="header-menu"
                 class="flex items-center justify-center h-9 w-9 cursor-pointer"
                 title="Menu - Your AIs, memory, settings, and theme"
               >
@@ -929,6 +930,7 @@ export default component$<AppHeaderProps>(
                 </div>
                 <div class="py-1">
                   <button
+                    data-testid="menu-offline-models"
                     onClick$={() => {
                       menuOpen.value = false;
                       handleModelsClick$();
