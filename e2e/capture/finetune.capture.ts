@@ -3,13 +3,14 @@
 // included (cut in the edit), plus stills at each beat.
 // YOAI_CAPTURE_MODEL picks the model (file name); default: the largest
 // downloaded model with a Fine-tune button.
+import { appUrl } from "../wdio.conf";
 import { Take } from "./_capture";
 
 const row = (m: string) => `[data-testid="downloaded-model"][data-model="${m}"]`;
 
 describe("capture", () => {
   it("fine-tune", async () => {
-    await browser.url("tauri://localhost/chat/");
+    await browser.url(appUrl("/chat/"));
     await (await $('[data-testid="chat-input"]')).waitForDisplayed({ timeout: 60_000 });
 
     const take = await Take.start("finetune");

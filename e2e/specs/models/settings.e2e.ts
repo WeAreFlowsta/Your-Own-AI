@@ -1,12 +1,13 @@
 // Flow 3: a reply-style setting applies and survives a reload. The sliders
 // apply instantly (no Save on pages; Save lives in modals).
+import { appUrl } from "../../wdio.conf";
 import { shot } from "./_helpers";
 
 const slider = '[data-testid="reply-temperature"]';
 
 describe("settings", () => {
   it("moves the temperature slider and finds it kept after a reload", async () => {
-    await browser.url("tauri://localhost/settings/");
+    await browser.url(appUrl("/settings/"));
     const s = await $(slider);
     await s.waitForExist({ timeout: 60_000 });
     await s.scrollIntoView();
@@ -22,7 +23,7 @@ describe("settings", () => {
     }, slider, target);
     await browser.pause(1_000); // the 400 ms save debounce
     await shot("31-moved");
-    await browser.url("tauri://localhost/settings/");
+    await browser.url(appUrl("/settings/"));
     const again = await $(slider);
     await again.waitForExist({ timeout: 60_000 });
     // The section reads its saved values when it scrolls INTO VIEW (a Qwik

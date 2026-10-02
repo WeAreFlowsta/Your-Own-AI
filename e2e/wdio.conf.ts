@@ -3,14 +3,43 @@
 // WebDriver server, never in a release build), wipes the scratch profile,
 // and runs every spec in e2e/specs. Screenshots land in e2e/shots.
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { SevereServiceError } from "webdriverio";
 
 const here = resolve(import.meta.dirname ?? ".");
 export const SHOTS = resolve(here, "shots");
-const PROFILE = resolve(here, "profile");
-const launcher = resolve(here, process.platform === "win32" ? "launch-app.cmd" : "launch-app.sh");
+const WIN = process.platform === "win32";
+/** A page of the app: WebView2 serves it from http://tauri.localhost, WebKit from tauri://localhost. */
+export const appUrl = (path: string) => (WIN ? "http://tauri.localhost" : "tauri://localhost") + path;
+// YOAI_E2E_HOME moves it (launch-app.sh reads the same variable): on Windows
+// WebView2 and the keystore fail in a profile path near 260 characters.
+const PROFILE = resolve(process.env.YOAI_E2E_HOME || resolve(here, "profile"));
+/**
+ * Linux and macOS start the app through launch-app.sh. Windows starts the
+ * binary itself: Node will not spawn a .cmd without a shell (EINVAL), so
+ * the isolated profile is the environment the service passes to the app.
+ * Its real path, links resolved: the app finds its resources beside it, and
+ * Windows loads nothing from a path over 260 characters (a target folder
+ * linked to a short one keeps them under).
+ */
+const appExe = resolve(here, "..", "src-tauri", "target", "debug", "app.exe");
+const launcher = WIN ? (existsSync(appExe) ? realpathSync.native(appExe) : appExe) : resolve(here, "launch-app.sh");
+const windowsAppEnv: Record<string, string> = WIN
+  ? {
+      USERPROFILE: PROFILE,
+      APPDATA: resolve(PROFILE, "AppData", "Roaming"),
+      LOCALAPPDATA: resolve(PROFILE, "AppData", "Local"),
+      ...(process.env.YOAI_E2E_CPU_ONLY ? { FLOWSTA_CPU_ONLY: "1" } : {}),
+      // YOAI_E2E_ONLINE: the staging proxy and an unanswered Vault port (see launch-app.sh)
+      ...(process.env.YOAI_E2E_ONLINE
+        ? {
+            YOAI_PROXY_URL: process.env.YOAI_PROXY_URL || "https://yoai-model-proxy-staging-386500392150.us-central1.run.app",
+            YOAI_VAULT_PORT: process.env.YOAI_VAULT_PORT || "27990",
+          }
+        : {}),
+    }
+  : {};
 
 /**
  * Each spec file is its own session, and the service ends the app between
@@ -101,7 +130,7 @@ function holdIdleLock() {
 
 /**
  * Windows: what launch-app.sh does per launch on Linux, done once per run
- * (cmd cannot write JSON safely). The scratch profile reads the person's
+ * (the app is started directly, with no script around it). The scratch profile reads the person's
  * real models folder (their own settings' modelsDir, else the default) and,
  * with YOAI_E2E_WITH_CUDA, links their installed engines folder (a
  * junction: no admin rights needed). Nothing is downloaded or written there.
@@ -111,6 +140,7 @@ function seedWindowsProfile() {
   const realData = resolve(process.env.APPDATA, "com.solar.yourowai");
   const testData = resolve(PROFILE, "AppData", "Roaming", "com.solar.yourowai");
   mkdirSync(testData, { recursive: true });
+  mkdirSync(resolve(PROFILE, "AppData", "Local"), { recursive: true });
   if (process.env.YOAI_E2E_WITH_MODELS) {
     let models = process.env.YOAI_E2E_MODELS_DIR ?? "";
     if (!models) {
@@ -156,6 +186,7 @@ export const config: WebdriverIO.Config = {
         captureBackendLogs: true,
         captureFrontendLogs: true,
         startTimeout: 90_000,
+        env: windowsAppEnv,
       },
     ],
   ],

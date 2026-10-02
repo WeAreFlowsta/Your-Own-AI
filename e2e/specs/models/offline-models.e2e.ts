@@ -3,12 +3,13 @@
 // writes only to the scratch profile (model-tuning.json, tune-profiles.json
 // in app data); the models folder is read, never written.
 // YOAI_E2E_TUNE_MODEL picks the model (default: the smallest chat model).
+import { appUrl } from "../../wdio.conf";
 import { invoke, scrollTo, shot } from "./_helpers";
 
 const row = (model: string) => `[data-testid="downloaded-model"][data-model="${model}"]`;
 
 async function openModelsPage() {
-  await browser.url("tauri://localhost/setup/");
+  await browser.url(appUrl("/setup/"));
   await (await $('[data-testid="downloaded-models"]')).waitForDisplayed({ timeout: 60_000 });
 }
 

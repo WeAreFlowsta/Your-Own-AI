@@ -70,11 +70,19 @@ engine download below uses it).
 
 ### 2. The repository and its downloaded parts
 
+Clone to a short path such as `C:\code\Your-Own-AI`. The MSVC linker,
+WebView2 and Windows' process launch all stop at 260 characters, and the
+build, the scratch profile and the bundled programs all live under the
+checkout.
+
 ```powershell
 git clone https://github.com/WeAreFlowsta/Your-Own-AI.git
 cd Your-Own-AI
 npm ci
 ```
+
+npm 11 leaves out install scripts it has not been told to allow (esbuild,
+sharp, edgedriver, geckodriver); none is needed here.
 
 The bundled binaries are not in git; fetch the same ones the release build
 uses (the versions are in `.github/workflows/build-release.yml`: the llama
@@ -138,7 +146,7 @@ While a take records:
 
 ### 6. First run: prove the harness, then take
 
-The UI tests have not yet run on Windows. Run one spec first:
+Run one spec first, to prove the harness on this machine:
 
 ```powershell
 node e2e/run.mjs models --spec e2e/specs/models/offline-models.e2e.ts
@@ -157,11 +165,22 @@ macOS only so far) and end it.
 
 ### If something fails
 
-- **The app never starts / the service cannot launch the `.cmd`:**
-  `e2e/launch-app.cmd` has not run on Windows before. Check the WebdriverIO
-  log; the service may need `appBinaryPath` pointed at
-  `src-tauri\target\debug\app.exe` with the scratch-profile variables set
-  another way.
+- **`LNK1104: cannot open file`, "WebView2 error ... Catastrophic
+  failure", or "The system cannot find the path specified" for
+  `llama-server` / `lair-keystore` in the app's log
+  (`<profile>\AppData\Local\com.solar.yourowai\logs`):** a path past 260
+  characters. Move the checkout to a short path and rebuild. Where it
+  cannot move: build with `CARGO_TARGET_DIR` set to a short folder
+  linked from `src-tauri\target` (a junction), from a short junction to
+  the checkout (a debug build finds its programs in the source folder it
+  was built from), and set `YOAI_E2E_HOME` to a short folder for the
+  scratch profile.
+- **The page never leaves the chat page:** a spec opened a
+  `tauri://localhost/...` URL; on Windows pages are
+  `http://tauri.localhost/...`. Use `appUrl()` from `wdio.conf.ts`.
+- **"Tauri core.invoke not available after 5s timeout" warnings:** the
+  service's window check; the app carries only the embedded driver, not
+  its page bridge. Each element lookup waits 5 s for it, then goes on.
 - **Clicks land in the wrong place:** the pointer helper
   (`e2e/capture/pointer-win.ps1`) works in physical pixels and the page
   positions are CSS pixels x `devicePixelRatio`. If a run's moves are off

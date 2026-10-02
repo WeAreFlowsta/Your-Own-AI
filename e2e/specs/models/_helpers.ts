@@ -1,6 +1,6 @@
 // Shared helpers for the installed-models flows.
 import { resolve } from "node:path";
-import { SHOTS } from "../../wdio.conf";
+import { SHOTS, appUrl } from "../../wdio.conf";
 
 export const shot = (name: string) => browser.saveScreenshot(resolve(SHOTS, `${name}.png`));
 
@@ -27,7 +27,7 @@ export const lastReply = () =>
 export async function waitForChat() {
   // The app reopens on the page it was left on (the profile lives across
   // the specs of one run): go to the chat explicitly.
-  if ((await browser.execute(() => location.pathname)) !== "/chat/") await browser.url("tauri://localhost/chat/");
+  if ((await browser.execute(() => location.pathname)) !== "/chat/") await browser.url(appUrl("/chat/"));
   await browser.waitUntil(async () => (await browser.execute(() => location.pathname)) === "/chat/", { timeout: 60_000 });
   await (await $('[data-testid="chat-input"]')).waitForDisplayed({ timeout: 60_000 });
   // The profile lives across the specs of one run: a reply a failed spec left

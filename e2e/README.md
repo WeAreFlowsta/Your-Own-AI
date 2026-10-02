@@ -31,17 +31,22 @@ Per platform:
   same way: a run refuses to start on a locked screen and holds off GNOME's
   idle lock while it lasts (`gnome-session-inhibit`). Not Xvfb on NVIDIA: WebKitGTK segfaults without
   DRI3. Mesa-based CI runners are untested.
-- **Windows:** `e2e/launch-app.cmd` is the launcher (written, not yet run);
-  the service uses the embedded driver, so no Edge WebDriver is needed.
+- **Windows:** the service starts `src-tauri\target\debug\app.exe` itself
+  (Node cannot spawn a `.cmd`), with the scratch profile as its
+  `USERPROFILE` / `APPDATA` / `LOCALAPPDATA`; `wdio.conf.ts` seeds that
+  profile once per run. Pages are `http://tauri.localhost/...`
+  (`appUrl()` in `wdio.conf.ts`). The embedded driver, so no Edge
+  WebDriver is needed. Keep the checkout path short (see e2e/CAPTURE.md).
 - **macOS:** the embedded driver is auto-selected; untested so far.
 
-## Launch scenarios (environment variables, see `launch-app.sh`)
+## Launch scenarios (environment variables, see `launch-app.sh` and `wdio.conf.ts`)
 
 | Variable | Effect |
 |---|---|
 | `YOAI_E2E_WITH_MODELS=1` | the scratch profile reads the machine's real models folder (`YOAI_E2E_MODELS_DIR` overrides the path); specs must never delete or download |
 | `YOAI_E2E_CPU_ONLY=1` | the app's `FLOWSTA_CPU_ONLY` switch: every layer on the CPU |
 | `YOAI_E2E_WITH_CUDA=1` | the machine's installed CUDA engine folder linked in (`YOAI_E2E_ENGINES_DIR` overrides) |
+| `YOAI_E2E_HOME=<folder>` | the scratch profile's folder (default `e2e/profile`); every run wipes it, so a folder used for nothing else |
 | `YOAI_E2E_NATIVE_WAYLAND=1` | keep the native Wayland window (default on Wayland is an XWayland window, which recorders can see) |
 
 Identity and online scenarios are planned, not built: a dedicated test
