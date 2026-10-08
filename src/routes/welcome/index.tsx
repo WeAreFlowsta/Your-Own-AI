@@ -163,6 +163,7 @@ export default component$(() => {
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(({ track }) => {
     const ais = track(() => aiData.userDefinedAis);
+    track(() => ais.map((a) => a.id).join("\n"));
     if (ais.length === 0) return;
     if (slotIds.value.length > 0 && slotIds.value.every((id) => ais.some((a) => a.id === id))) return;
     const rank = (id: string) => {

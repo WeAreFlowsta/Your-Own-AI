@@ -243,6 +243,11 @@ export const AiDataProvider = component$(() => {
               ai.agentPubKey = pubKey;
             }
           }
+          // The ids changed in place: hand out a new array so anything that
+          // tracks the list (the welcome wizard's three slots) sees it. The
+          // chat page stops waiting for startup after 10 s and can land on
+          // the wizard while this is still running (2026-10-08).
+          state.userDefinedAis = [...state.userDefinedAis];
         } catch (e) {
           console.warn("[AiDataContext] Agent provisioning failed (non-fatal):", e);
         }
