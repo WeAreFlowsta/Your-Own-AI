@@ -84,11 +84,16 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
   useVisibleTask$(({ cleanup }) => {
     showModelChip.value = localStorage.getItem('showChatModelChip') !== 'false';
     showCarryChip.value = localStorage.getItem('showChatCarryChip') !== 'false';
+    // Shown once: on the Ask page, the first time after the plan activates.
+    // It used to sit above every chat view for up to 14 days until Got it
+    // (walkthrough 2026-10-08). Leaving the view where it showed clears it.
+    let shownHere = false;
     const checkUnlock = () => {
       if (onlineUnlockPending() && isHelpDismissed(ONLINE_UNLOCK_TIP_ID)) {
         clearOnlineUnlockPending();
       }
       onlineUnlocked.value = onlineUnlockPending();
+      if (onlineUnlocked.value && !isBottomBar) shownHere = true;
     };
     checkUnlock();
     window.addEventListener('entitlementChanged', checkUnlock);
@@ -108,6 +113,7 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
     window.addEventListener('settingsChanged', onSettings);
     window.addEventListener('memoryExtractionChanged', onMemory);
     cleanup(() => {
+      if (shownHere) clearOnlineUnlockPending();
       window.removeEventListener('settingsChanged', onSettings);
       window.removeEventListener('memoryExtractionChanged', onMemory);
       window.removeEventListener('entitlementChanged', checkUnlock);
@@ -129,22 +135,10 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
 
   return (
     <div class="max-w-4xl mx-auto w-full">
-      {onlineUnlocked.value && (
+      {onlineUnlocked.value && !isBottomBar && (
         <Callout intent="success" title="Your AIs can now go online" id={ONLINE_UNLOCK_TIP_ID} class="mb-3">
-          {showModelChip.value ? (
-            <>
-              Your plan is active. Tap the model chip at the end of the Ask row to
-              give this AI an online model, or let automatic routing use both online
-              and offline. The model line on every card in Your AIs switches too, and
-              Settings &gt; Routing decides when a question goes online.
-            </>
-          ) : (
-            <>
-              Your plan is active. Click the model line on any card in Your AIs to
-              give that AI an online model, or let automatic routing use both online
-              and offline. Settings &gt; Routing decides when a question goes online.
-            </>
-          )}
+          Change to Auto - Online and Offline to let the AI pick a model, or choose an
+          online model from the {showModelChip.value ? "list at the end of the Ask row" : "model list on each card in Your AIs"}.
         </Callout>
       )}
       <div class={isBottomBar ? 'mb-2' : 'mb-3'}>

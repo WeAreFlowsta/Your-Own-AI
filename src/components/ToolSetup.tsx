@@ -349,7 +349,7 @@ export const ToolSetup = component$<ToolSetupProps>((props) => {
                       {a.name}
                       {off && (
                         <span class="text-xs text-amber-600 dark:text-amber-400">
-                          - switched off in chat (the tools chip beside the message field)
+                          - switched off in chat (the tools button beside the message field)
                         </span>
                       )}
                     </label>

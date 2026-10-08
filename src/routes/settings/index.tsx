@@ -1012,7 +1012,7 @@ export default component$(() => {
                 <div class="space-y-5">
                   <RememberDestinationPicker
                     title="Remembering highlighted text"
-                    hint='The "Remember" chip that appears when you highlight part of a reply.'
+                    hint='The "Remember" button that appears when you highlight part of a reply.'
                     surface="selection"
                     scope={rememberScopeSelection}
                   />
@@ -1615,7 +1615,7 @@ export default component$(() => {
                 </h2>
                 <p class="text-sm text-[var(--text-secondary)] mb-4">
                   The default for projects you open from now on. Each project
-                  can choose its own from the project chip in the header - and
+                  can choose its own from the project name in the header - and
                   a project that has chosen keeps its choice, whatever changes
                   here.
                 </p>
@@ -1684,7 +1684,7 @@ export default component$(() => {
                     Show the current model name and loading status in the header
                   </SettingToggle>
                   <SettingToggle
-                    title="Model chip in chat"
+                    title="Model name in chat"
                     checked={showChatModelChip}
                     onToggle$={toggleChatModelChip}
                   >
@@ -1694,11 +1694,11 @@ export default component$(() => {
                     Your AIs page.
                   </SettingToggle>
                   <SettingToggle
-                    title="Tools and skills chip in chat"
+                    title="Tools and skills in chat"
                     checked={showChatCarryChip}
                     onToggle$={toggleChatCarryChip}
                   >
-                    The small chip beside the model chip - what the current AI
+                    The small button beside the model name - what the current AI
                     carries, each tool and skill on or off, and approvals for
                     tools. Turn off for a cleaner chat; tools and skills stay
                     on and can be changed from the AI's form.
