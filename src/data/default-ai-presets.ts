@@ -39,7 +39,7 @@ export const DEFAULT_AI_PRESET_LABELS: Record<DefaultAiPreset, { title: string; 
 };
 
 /** The personalities the wizard offers on the Change tile - a short, clear
- *  set. The full set of eighteen lives on the Your AIs page. */
+ *  set. The full set lives on the Your AIs page. */
 export const WIZARD_PERSONALITY_IDS = [
   'reeves',                 // Neutral
   'teresa',                 // Caregiver

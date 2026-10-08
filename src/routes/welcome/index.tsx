@@ -649,7 +649,7 @@ export default component$(() => {
             onClick$={(e) => e.stopPropagation()}
           >
             <h3 class="font-varela text-lg font-bold mb-1">Pick a personality</h3>
-            <p class="text-xs text-[var(--text-muted)] mb-4">Six to start with. All eighteen, and your own, live on the Your AIs page.</p>
+            <p class="text-xs text-[var(--text-muted)] mb-4">Six to start with. The rest, and your own, live on the Your AIs page.</p>
             <div class="grid gap-3 sm:grid-cols-2">
               {personalities.map((a) => {
                 const current = aiData.userDefinedAis.find((x) => x.id === personaPickerFor.value)?.baseArchetypeId === a.id;

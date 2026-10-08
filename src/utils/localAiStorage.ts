@@ -7,7 +7,7 @@
 
 import { UserDefinedAI, LengthDisposition } from '../types';
 import { Store } from '@tauri-apps/plugin-store';
-import { getDefaultPersonalities, getArchetypeById } from '../data/bundled-archetypes';
+import { getDefaultPersonalities, getArchetypeById, RETIRED_ARCHETYPE_IDS } from '../data/bundled-archetypes';
 import { MISSION_CORE } from '../data/missionCore';
 
 /**
@@ -290,7 +290,10 @@ export async function getLocalCustomAis(): Promise<UserDefinedAI[]> {
     
     console.log(`[LocalAiStorage] Retrieved ${ais.length} custom AIs`);
     // Migrate any legacy responseLengthId → lengthDisposition on read.
-    return ais.map(migrateAiDisposition);
+    return ais.map(migrateAiDisposition).map((ai) => {
+      const twin = RETIRED_ARCHETYPE_IDS[ai.baseArchetypeId];
+      return twin ? { ...ai, baseArchetypeId: twin } : ai;
+    });
   } catch (error) {
     console.error('[LocalAiStorage] Error getting custom AIs:', error);
     return [];
