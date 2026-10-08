@@ -463,9 +463,9 @@ export default component$(() => {
                           onChange$={() => commitName$(id)}
                         />
                       </label>
-                      <p class="text-xs text-[var(--text-secondary)] leading-relaxed min-h-[2.5rem]">{renderAiDescription(ai)}</p>
                       <button
                         type="button"
+                        data-testid="welcome-personality-change"
                         class="mt-auto flex items-center justify-between rounded-lg border border-[var(--border-subtle)] px-3 py-2 text-xs hover:border-[var(--text-muted)]"
                         onClick$={() => {
                           personaPickerFor.value = id;
@@ -645,6 +645,7 @@ export default component$(() => {
                   <button
                     key={a.id}
                     type="button"
+                    data-testid="welcome-personality-option"
                     onClick$={() => setPersona$(personaPickerFor.value!, a.id)}
                     class={`text-left rounded-xl border p-3 hover:border-[var(--text-primary)] ${
                       current ? "border-[var(--bg-button-primary)]" : "border-[var(--border-subtle)]"

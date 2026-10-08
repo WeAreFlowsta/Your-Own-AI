@@ -86,3 +86,30 @@ describe("step 2: meet your AIs", () => {
     for (const n of names) expect(n.length).toBeGreaterThan(0);
   });
 });
+
+describe("step 2: changing a personality", () => {
+  it("offers the personalities, each with a real description", async () => {
+    const change = await $('[data-testid="welcome-personality-change"]');
+    await change.waitForDisplayed({ timeout: 30_000 });
+    await change.click();
+    await browser.waitUntil(async () => (await $$('[data-testid="welcome-personality-option"]')).length >= 6, {
+      timeout: 15_000,
+      timeoutMsg: "the personality picker never showed its choices",
+    });
+    await shot("05-personality-picker");
+    const options = await browser.execute(() =>
+      [...document.querySelectorAll('[data-testid="welcome-personality-option"]')].map((b) => (b as HTMLElement).innerText.replace(/\s+/g, " ").trim()),
+    );
+    expect(options.length % 2).toBe(0); // a full grid, no hole
+    for (const text of options) {
+      expect(text.length).toBeGreaterThan(20);
+      expect(text.toLowerCase()).not.toContain("no description");
+    }
+    // Picking one changes the card's personality line.
+    const second = (await $$('[data-testid="welcome-personality-option"]'))[1];
+    const label = (await second.$("span").getText()).trim();
+    await second.click();
+    await browser.waitUntil(async () => (await change.getText()).includes(label), { timeout: 15_000, timeoutMsg: `the card never showed personality ${label}` });
+    await shot("06-personality-changed");
+  });
+});
