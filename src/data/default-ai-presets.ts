@@ -35,7 +35,7 @@ export const DEFAULT_AI_PRESETS: Record<DefaultAiPreset, DefaultAiSlot[]> = {
 
 export const DEFAULT_AI_PRESET_LABELS: Record<DefaultAiPreset, { title: string; blurb: string }> = {
   personal: { title: 'Personal', blurb: 'Three characters with their own voices, for life outside work.' },
-  work: { title: 'Work', blurb: 'An assistant, a coder and an analyst, all straight to the point.' },
+  work: { title: 'Work', blurb: 'Three focused helpers for getting work done, straight to the point.' },
 };
 
 /** The personalities the wizard offers on the Change tile - a short, clear

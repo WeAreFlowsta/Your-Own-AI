@@ -48,6 +48,7 @@ import { modelManager, type DownloadProgress } from "../../utils/modelManager";
 
 const SEED_ORDER = ["veebo", "teresa", "reeves"];
 
+
 /** Faces offered by the thumbnail picker: the three characters plus every
  *  distinct archetype face, named by the first archetype that carries it. */
 const FACES: { name: string; path: string }[] = (() => {
@@ -149,11 +150,21 @@ export default component$(() => {
     });
   });
 
-  // The three default AIs, in seed order, once the store has them.
+  // The three default AIs. Their order is fixed when the slots are first
+  // captured (seed order: Veebo, Teresa, Reeves - the store does not keep
+  // it) and kept from then on: ranking again by archetype or name would
+  // reshuffle the cards under the person's hands (the Work set gives all
+  // three the same personality) and send the next edit to the wrong AI
+  // (2026-10-08). The slots are recaptured only when an id vanishes - the
+  // context re-keys each AI in place to its agent key seconds after first
+  // launch, and a stale id finds no AI and renders nothing (the "no AIs to
+  // edit" walkthrough, same day). Nothing has been typed by then, but a
+  // typed name is carried by position all the same.
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(({ track }) => {
     const ais = track(() => aiData.userDefinedAis);
     if (ais.length === 0) return;
+    if (slotIds.value.length > 0 && slotIds.value.every((id) => ais.some((a) => a.id === id))) return;
     const rank = (id: string) => {
       const i = SEED_ORDER.indexOf(id);
       return i < 0 ? 99 : i;
@@ -162,14 +173,8 @@ export default component$(() => {
       .filter((a) => a.status === "active")
       .sort((a, b) => rank(a.baseArchetypeId) - rank(b.baseArchetypeId))
       .slice(0, 3);
-    const ids = three.map((a) => a.id);
-    if (ids.join("\n") === slotIds.value.join("\n")) return;
-    // An AI's id changes once its agent is provisioned (the context re-keys
-    // it to the agent key, seconds after first launch). The cards must
-    // follow: a stale id finds no AI and renders nothing - the "no AIs to
-    // edit" walkthrough (2026-10-08). Carry a typed name across by slot.
     const typed = slotIds.value.map((old) => names[old]);
-    slotIds.value = ids;
+    slotIds.value = three.map((a) => a.id);
     three.forEach((a, i) => {
       names[a.id] = typed[i] !== undefined && typed[i] !== "" ? typed[i] : a.name;
     });
@@ -224,12 +229,16 @@ export default component$(() => {
         const id = slotIds.value[i];
         const s = slots[i];
         const arch = bundledArchetypes.find((a) => a.id === s.archetypeId);
-        await editUserAi(id, {
+        const updated = await editUserAi(id, {
           name: s.name,
           description: s.description,
           baseArchetypeId: s.archetypeId,
           systemPrompt: `${MISSION_CORE}\n\n${arch?.systemPromptTemplate ?? ""}`,
         });
+        if (!updated) {
+          console.warn("[Welcome] preset edit found no AI for slot", i, id);
+          continue;
+        }
         names[id] = s.name;
         await saveThumb$(id, s.thumbnail);
       }
@@ -400,29 +409,33 @@ export default component$(() => {
               <p class="text-sm uppercase tracking-widest text-[var(--text-muted)] mb-3">Step 2 of 3</p>
               <h1 class="font-varela text-3xl md:text-5xl font-bold leading-tight mb-3">Meet your AIs.</h1>
               <p class="text-base md:text-lg text-[var(--text-secondary)] mb-6 max-w-2xl">
-                You start with three. Pick the kind that fits you, then change any name, picture or
-                personality right here - the names are yours to type over. All three share the model
-                that is downloading now.
+                You start with three. Which set?
               </p>
 
-              <div class="inline-flex rounded-full border border-[var(--border-subtle)] bg-[var(--bg-card)] p-1 mb-6">
-                {(["personal", "work"] as DefaultAiPreset[]).map((k) => (
-                  <button
-                    key={k}
-                    type="button"
-                    disabled={applying.value}
-                    onClick$={() => applyPreset$(k)}
-                    class={`px-4 py-1.5 rounded-full text-sm font-medium transition ${
-                      preset.value === k
-                        ? "bg-[var(--bg-button-primary)] text-[var(--text-button-primary)]"
-                        : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-                    }`}
-                  >
-                    {DEFAULT_AI_PRESET_LABELS[k].title}
-                  </button>
-                ))}
+              <div class="grid gap-3 sm:grid-cols-2 mb-6 max-w-2xl">
+                {(["personal", "work"] as DefaultAiPreset[]).map((k) => {
+                  const on = preset.value === k;
+                  return (
+                    <button
+                      key={k}
+                      type="button"
+                      disabled={applying.value}
+                      aria-pressed={on}
+                      data-testid="welcome-preset-option"
+                      onClick$={() => applyPreset$(k)}
+                      class={`text-left rounded-xl border-2 p-4 transition hover:border-[var(--text-primary)] ${
+                        on ? "border-[var(--bg-button-primary)] bg-[var(--bg-card)]" : "border-[var(--border-subtle)]"
+                      }`}
+                    >
+                      <div class="flex items-center justify-between">
+                        <span class="font-varela font-bold text-base">{DEFAULT_AI_PRESET_LABELS[k].title}</span>
+                        {on && <LuCheck class="w-5 h-5 text-green-500" />}
+                      </div>
+                      <p class="mt-1 text-sm text-[var(--text-secondary)]">{DEFAULT_AI_PRESET_LABELS[k].blurb}</p>
+                    </button>
+                  );
+                })}
               </div>
-              <p class="text-sm text-[var(--text-muted)] mb-6 -mt-3">{DEFAULT_AI_PRESET_LABELS[preset.value].blurb}</p>
 
               <div class="grid gap-4 sm:grid-cols-3">
                 {slotIds.value.map((id) => {
@@ -431,7 +444,7 @@ export default component$(() => {
                   const arch = bundledArchetypes.find((a) => a.id === ai.baseArchetypeId);
                   const thumb = aiData.thumbnailObjectUrls[id] || arch?.thumbnailPath || "/generic-ai-placeholder.svg";
                   return (
-                    <div key={id} data-testid="welcome-ai-card" class="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4 flex flex-col gap-3">
+                    <div key={id} data-testid="welcome-ai-card" data-ai-id={id} class="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4 flex flex-col gap-3">
                       <button
                         type="button"
                         class="relative group rounded-xl overflow-hidden aspect-square w-full"
@@ -485,8 +498,7 @@ export default component$(() => {
               </div>
 
               <p class="mt-6 text-sm text-[var(--text-muted)] max-w-2xl">
-                There's much more to shape on the Your AIs page later - a voice, a longer or shorter
-                style, skills, tools and more AIs whenever you want them.
+                Click Edit on the Your AIs page to change these and other options later.
               </p>
 
               <div class="mt-8 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-4">

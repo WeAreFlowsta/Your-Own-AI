@@ -85,6 +85,59 @@ describe("step 2: meet your AIs", () => {
     expect(names.length).toBe(3);
     for (const n of names) expect(n.length).toBeGreaterThan(0);
   });
+
+  it("offers Personal or Work as two choice cards and swaps the AIs on pick", async () => {
+    const cards = () =>
+      browser.execute(() =>
+        [...document.querySelectorAll('[data-testid="welcome-ai-card"]')].map((c) => ({
+          id: c.getAttribute("data-ai-id") ?? "",
+          name: (c.querySelector("input") as HTMLInputElement).value,
+          src: (c.querySelector("img") as HTMLImageElement).src,
+        })),
+      );
+    // Capture the app's console for the report: a lost edit warns there.
+    await browser.execute(() => {
+      const w = window as any;
+      w.__e2eLog = [];
+      for (const k of ["warn", "error"] as const) {
+        const orig = console[k];
+        console[k] = (...a: unknown[]) => { w.__e2eLog.push(`${k}: ${a.map(String).join(" ")}`); orig(...a); };
+      }
+    });
+    const choices = await $$('[data-testid="welcome-preset-option"]');
+    expect(choices.length).toBe(2);
+    expect(await choices[0].getAttribute("aria-pressed")).toBe("true");
+    const before = await cards();
+    await choices[1].click();
+    // Every card keeps its AI, gets its Work name and a new picture.
+    let after = before;
+    try {
+      await browser.waitUntil(
+        async () => {
+          after = await cards();
+          return after.every((c, i) => c.id === before[i].id && c.name !== before[i].name && c.src !== before[i].src);
+        },
+        { timeout: 30_000 },
+      );
+    } finally {
+      const log = await browser.execute(() => (window as any).__e2eLog as string[]);
+      console.log("[preset] before", JSON.stringify(before.map((c) => [c.id.slice(0, 8), c.name])));
+      console.log("[preset] after ", JSON.stringify(after.map((c) => [c.id.slice(0, 8), c.name, c.src.slice(0, 40)])));
+      console.log("[preset] app console:", JSON.stringify(log));
+    }
+    expect(after.map((c) => c.name)).toEqual(["Assistant", "Coder", "Analyst"]);
+    expect(await choices[1].getAttribute("aria-pressed")).toBe("true");
+    await shot("04b-work-set");
+    // Back to Personal so the personality spec sees the characters.
+    await choices[0].click();
+    await browser.waitUntil(
+      async () => {
+        const now = await cards();
+        return now.every((c, i) => c.id === before[i].id && c.name === before[i].name);
+      },
+      { timeout: 30_000, timeoutMsg: "picking Personal again never restored the three AIs" },
+    );
+  });
 });
 
 describe("step 2: changing a personality", () => {
