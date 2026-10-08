@@ -17,7 +17,7 @@ import { renderAiDescription } from '../../utils/aiDescription';
 import { component$, useSignal, useStore, useVisibleTask$, useContext, $ } from "@builder.io/qwik";
 import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emit } from "@tauri-apps/api/event";
 import { LuHardDriveDownload, LuCheck, LuAlertTriangle, LuPencil, LuArrowRight } from "@qwikest/icons/lucide";
 import LiquidMetalButton from "../../components/LiquidMetalButton";
 import { ThemeContext } from "../layout";
@@ -181,13 +181,39 @@ export default component$(() => {
     });
   });
 
+  // One download, however many times the button is pressed. Coming back to
+  // step 1 mid-download and pressing it again used to start a second
+  // download, which the app refuses - and the refusal was taken for a
+  // failure, which cleared the first-model marker while the real download
+  // ran on unwatched (walkthrough 2026-10-08). Now: already running means
+  // attach; already on disk means finish; only a fresh start can fail.
   const startDownload$ = $(async () => {
+    if (downloading.value || ready.value) return;
     const r = getRecommendedModel(systemInfo.value, gpuUnusable.value, catalogModes.value);
     if (r.pending) return;
     const label = `${r.familyName} ${r.variant.parameterCount}`;
     downloading.value = true;
     downloadLabel.value = label;
     error.value = null;
+    try {
+      const st = await modelManager.downloadStatus(r.variant.filename);
+      if (st.downloading) {
+        // Running already (a Try-again that raced the resume, a second
+        // press): reflect it; the root indicator carries it to the finish.
+        markFirstModelInFlight(r.variant.filename, label);
+        if (st.total_bytes > 0) {
+          progress.value = {
+            filename: r.variant.filename,
+            downloaded: st.downloaded_bytes,
+            total: st.total_bytes,
+            percent: Math.floor((st.downloaded_bytes / st.total_bytes) * 100),
+          };
+        }
+        return;
+      }
+    } catch {
+      /* no status is no download: start one */
+    }
     progress.value = null;
     markFirstModelInFlight(r.variant.filename, label);
     try {
@@ -197,6 +223,14 @@ export default component$(() => {
       // The root FirstModelIndicator loads it, assigns it to every AI and
       // announces FIRST_MODEL_READY - this page only reflects that.
     } catch (err) {
+      const msg = String((err as any)?.message ?? err);
+      if (msg.includes("already in progress")) return; // attached above or by the indicator
+      if (msg.includes("already downloaded")) {
+        // The file is complete on disk: let the indicator finish it (load,
+        // assign to the AIs, announce) exactly as a fresh download would.
+        await emit("model-download-complete", { filename: r.variant.filename });
+        return;
+      }
       console.error("[Welcome] download failed:", err);
       error.value = getUserFriendlyErrorMessage(err);
       downloading.value = false;
@@ -361,12 +395,30 @@ export default component$(() => {
                     </h2>
                   </div>
                   {!recommended.pending && (
-                    <span class="rounded-full bg-[var(--bg-main)] border border-[var(--border-subtle)] px-3 py-1 text-xs text-[var(--text-secondary)]">
-                      {recommended.variant.size} GB download
+                    <span
+                      data-testid="welcome-model-state"
+                      class={`rounded-full border px-3 py-1 text-xs ${
+                        ready.value
+                          ? "border-green-600/40 bg-green-500/10 text-green-500"
+                          : downloading.value
+                            ? "border-[var(--bg-button-primary)] bg-[var(--bg-main)] text-[var(--text-primary)]"
+                            : "border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--text-secondary)]"
+                      }`}
+                    >
+                      {ready.value
+                        ? "Ready"
+                        : downloading.value
+                          ? `Downloading${pct !== null ? ` · ${pct}%` : ""}`
+                          : `${recommended.variant.size} GB download`}
                     </span>
                   )}
                 </div>
                 <p class="mt-4 text-sm md:text-base text-[var(--text-secondary)] leading-relaxed">{recommended.reason}</p>
+                {downloading.value && pct !== null && (
+                  <div class="mt-4 w-full h-2 rounded-full bg-[var(--bg-main)] border border-[var(--border-subtle)] overflow-hidden">
+                    <div class="h-full bg-[var(--bg-button-primary)] transition-all duration-300" style={{ width: `${pct}%` }} />
+                  </div>
+                )}
                 {recommended.tight && (
                   <p class="mt-3 text-xs text-amber-500">
                     Expect slow answers on this machine. For fast ones, the optional plan adds GPT, Grok, Kimi,
@@ -393,8 +445,14 @@ export default component$(() => {
                   testId="welcome-download"
                   class="px-6 py-3 font-semibold text-base flex items-center justify-center gap-2"
                 >
-                  <LuHardDriveDownload class="w-5 h-5" />
-                  {recommended.pending ? "Checking what fits.." : "Download and continue"}
+                  {downloading.value || ready.value ? <LuArrowRight class="w-5 h-5" /> : <LuHardDriveDownload class="w-5 h-5" />}
+                  {recommended.pending
+                    ? "Checking what fits.."
+                    : downloading.value || ready.value
+                      ? "Continue"
+                      : error.value
+                        ? "Try the download again"
+                        : "Download and continue"}
                 </LiquidMetalButton>
               </div>
               <p class="mt-8 text-xs text-[var(--text-muted)] max-w-2xl">

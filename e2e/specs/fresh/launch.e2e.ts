@@ -63,7 +63,29 @@ describe("a download in flight on the wizard", () => {
       return { onTop: !!hit && b.contains(hit), hit: hit ? (hit as HTMLElement).tagName + "." + (hit as HTMLElement).className.toString().slice(0, 40) : null };
     });
     expect(covered.onTop).toBe(true);
+  });
+
+  it("step 1 says the model is downloading and continues without restarting it", async () => {
+    // Back on step 1 mid-download (the walkthrough's Back, Back): the card
+    // says so, the button is Continue, and pressing it starts nothing, so
+    // the in-flight marker survives and nothing reports a failure.
+    const state = await $('[data-testid="welcome-model-state"]');
+    await state.waitForExist({ timeout: 60_000 }); // appears once the hardware check has picked a model
+    await browser.waitUntil(async () => (await state.getText()).includes("Downloading"), { timeout: 10_000, timeoutMsg: "step 1 never said the model was downloading" });
+    expect(await state.getText()).toContain("42%");
+    const button = await $('[data-testid="welcome-download"]');
+    expect(await button.getText()).toContain("Continue");
+    await shot("03b-step1-mid-download");
+    await button.click();
+    await browser.waitUntil(async () => (await $$('[data-testid="welcome-ai-card"]')).length === 3, { timeout: 60_000, timeoutMsg: "Continue never reached step 2" });
+    expect(await browser.execute(() => localStorage.getItem("firstModelDownloading"))).not.toBeNull();
+    expect(await $("p*=Download failed").isExisting()).toBe(false);
+    // Back twice lands on step 1 again, still downloading, still Continue.
+    await (await $("button=Back")).click();
+    await browser.waitUntil(async () => (await $('[data-testid="welcome-download"]').getText()).includes("Continue"), { timeout: 10_000, timeoutMsg: "Back did not return to a step 1 that knows about the download" });
     await browser.execute(() => localStorage.removeItem("firstModelDownloading"));
+    await browser.url("tauri://localhost/welcome/");
+    await (await $('[data-testid="welcome-title"]')).waitForDisplayed({ timeout: 60_000 });
   });
 });
 
