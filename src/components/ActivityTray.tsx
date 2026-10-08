@@ -18,6 +18,7 @@
  * scrolls inside itself on a short window.
  */
 import { component$, useStore, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
+import { useLocation } from "@builder.io/qwik-city";
 import { listen } from "@tauri-apps/api/event";
 import { useVisionDownload } from "../contexts/VisionDownloadContext";
 import { useAiData } from "../contexts/AiDataContext";
@@ -44,6 +45,34 @@ const SHOWN = 3;
 export const ActivityTray = component$(() => {
   const store = useStore<{ rows: Row[] }>({ rows: [] });
   const expanded = useSignal(false);
+  const loc = useLocation();
+  // The tray never covers a page's own controls: a page with a bottom bar
+  // (the chat composer) marks it `data-bottom-bar`, and the tray floats
+  // above it by that bar's height. Measured while the tray is visible,
+  // re-measured when the route or the rows change (the composer appears
+  // only once a conversation has started).
+  const bottomInset = useSignal(0);
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track, cleanup }) => {
+    track(() => loc.url.pathname);
+    track(() => store.rows.length);
+    let ro: ResizeObserver | null = null;
+    const measure = () => {
+      const bar = document.querySelector<HTMLElement>("[data-bottom-bar]");
+      const h = bar ? Math.ceil(bar.getBoundingClientRect().height) : 0;
+      if (h !== bottomInset.value) bottomInset.value = h;
+      if (bar && !ro && typeof ResizeObserver !== "undefined") {
+        ro = new ResizeObserver(measure);
+        ro.observe(bar);
+      }
+    };
+    measure();
+    const t = setInterval(measure, 1000);
+    cleanup(() => {
+      clearInterval(t);
+      ro?.disconnect();
+    });
+  });
   const stopping = useSignal(false);
   const vision = useVisionDownload();
   const aiData = useAiData();
@@ -222,6 +251,10 @@ export const ActivityTray = component$(() => {
   const rows = store.rows.filter((r) => !(r.kind === "download" && visionFiles.has(r.id.slice(3))));
   const total = rows.length + (vis ? 1 : 0);
   if (total === 0) return null;
+  // The welcome wizard reports its own download in its header pill, and its
+  // primary buttons sit exactly where the tray would land at the default
+  // window size (seen on a Mac walkthrough, 2026-10-08): never show here.
+  if (loc.url.pathname.startsWith("/welcome")) return null;
 
   const hidden = !expanded.value && rows.length > SHOWN ? rows.length - SHOWN : 0;
   const shown = hidden ? rows.slice(rows.length - SHOWN) : rows;
@@ -229,7 +262,9 @@ export const ActivityTray = component$(() => {
 
   return (
     <div
-      class="fixed bottom-4 right-4 z-[60] w-80 max-w-[calc(100vw-2rem)] max-h-[calc(100vh-5rem)] overflow-y-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-lg p-3 space-y-3"
+      class="fixed right-4 z-[60] w-80 max-w-[calc(100vw-2rem)] max-h-[calc(100vh-5rem)] overflow-y-auto rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] shadow-lg p-3 space-y-3"
+      style={{ bottom: `calc(1rem + ${bottomInset.value}px)` }}
+      data-testid="activity-tray"
       role="status"
       aria-live="polite"
     >

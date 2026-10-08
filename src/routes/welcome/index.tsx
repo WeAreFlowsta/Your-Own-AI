@@ -153,7 +153,7 @@ export default component$(() => {
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(({ track }) => {
     const ais = track(() => aiData.userDefinedAis);
-    if (slotIds.value.length > 0 || ais.length === 0) return;
+    if (ais.length === 0) return;
     const rank = (id: string) => {
       const i = SEED_ORDER.indexOf(id);
       return i < 0 ? 99 : i;
@@ -162,8 +162,17 @@ export default component$(() => {
       .filter((a) => a.status === "active")
       .sort((a, b) => rank(a.baseArchetypeId) - rank(b.baseArchetypeId))
       .slice(0, 3);
-    slotIds.value = three.map((a) => a.id);
-    for (const a of three) names[a.id] = a.name;
+    const ids = three.map((a) => a.id);
+    if (ids.join("\n") === slotIds.value.join("\n")) return;
+    // An AI's id changes once its agent is provisioned (the context re-keys
+    // it to the agent key, seconds after first launch). The cards must
+    // follow: a stale id finds no AI and renders nothing - the "no AIs to
+    // edit" walkthrough (2026-10-08). Carry a typed name across by slot.
+    const typed = slotIds.value.map((old) => names[old]);
+    slotIds.value = ids;
+    three.forEach((a, i) => {
+      names[a.id] = typed[i] !== undefined && typed[i] !== "" ? typed[i] : a.name;
+    });
   });
 
   const startDownload$ = $(async () => {
@@ -300,7 +309,7 @@ export default component$(() => {
           })}
         </ol>
         {(downloading.value || ready.value) && (
-          <div class="flex items-center gap-2 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-1.5 text-xs">
+          <div data-testid="welcome-progress" class="flex items-center gap-2 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-1.5 text-xs">
             {ready.value ? (
               <>
                 <LuCheck class="w-3.5 h-3.5 text-green-500" />
@@ -422,7 +431,7 @@ export default component$(() => {
                   const arch = bundledArchetypes.find((a) => a.id === ai.baseArchetypeId);
                   const thumb = aiData.thumbnailObjectUrls[id] || arch?.thumbnailPath || "/generic-ai-placeholder.svg";
                   return (
-                    <div key={id} class="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4 flex flex-col gap-3">
+                    <div key={id} data-testid="welcome-ai-card" class="rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4 flex flex-col gap-3">
                       <button
                         type="button"
                         class="relative group rounded-xl overflow-hidden aspect-square w-full"

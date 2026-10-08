@@ -33,3 +33,56 @@ describe("launch", () => {
     // and the person's choice, never a test's.
   });
 });
+
+describe("a download in flight on the wizard", () => {
+  it("shows in the wizard's own pill and never covers its buttons", async () => {
+    // Pretend the first model is downloading (the marker the wizard restores
+    // on mount) and feed it a progress event the way the engine would -
+    // nothing is downloaded.
+    await browser.execute(() => {
+      localStorage.setItem("firstModelDownloading", JSON.stringify({ filename: "e2e-fake-model.gguf", label: "Test model" }));
+    });
+    await browser.url("tauri://localhost/welcome/");
+    const title = await $('[data-testid="welcome-title"]');
+    await title.waitForDisplayed({ timeout: 60_000 });
+    await browser.execute(async () => {
+      const t = (window as any).__TAURI__;
+      await t.event.emit("model-download-progress", { filename: "e2e-fake-model.gguf", downloaded: 1_100_000_000, total: 2_600_000_000, percent: 42 });
+    });
+    const pill = await $('[data-testid="welcome-progress"]');
+    await pill.waitForDisplayed({ timeout: 10_000 });
+    await browser.waitUntil(async () => (await pill.getText()).includes("42%"), { timeout: 10_000, timeoutMsg: "the wizard pill never showed the progress" });
+    await shot("03-wizard-download-in-flight");
+    // The activity tray must not be on this page at all.
+    expect(await $('[data-testid="activity-tray"]').isExisting()).toBe(false);
+    // And the primary button is the thing under its own centre.
+    const covered = await browser.execute(() => {
+      const b = document.querySelector('[data-testid="welcome-download"]') as HTMLElement;
+      const r = b.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return { onTop: !!hit && b.contains(hit), hit: hit ? (hit as HTMLElement).tagName + "." + (hit as HTMLElement).className.toString().slice(0, 40) : null };
+    });
+    expect(covered.onTop).toBe(true);
+    await browser.execute(() => localStorage.removeItem("firstModelDownloading"));
+  });
+});
+
+describe("step 2: meet your AIs", () => {
+  it("shows the three AIs to edit after Download and continue", async () => {
+    // Downloads are switched off for test launches (YOAI_BLOCK_MODEL_DOWNLOADS
+    // in launch-app.sh), so the click moves to step 2 and fetches nothing.
+    const download = await $('[data-testid="welcome-download"]');
+    await download.waitForEnabled({ timeout: 60_000 });
+    await download.click();
+    await browser.waitUntil(async () => (await $$('[data-testid="welcome-ai-card"]')).length === 3, {
+      timeout: 60_000,
+      timeoutMsg: "the three AI cards never appeared on step 2",
+    });
+    await shot("04-meet-your-ais");
+    const names = await browser.execute(() =>
+      [...document.querySelectorAll('[data-testid="welcome-ai-card"] input')].map((i) => (i as HTMLInputElement).value),
+    );
+    expect(names.length).toBe(3);
+    for (const n of names) expect(n.length).toBeGreaterThan(0);
+  });
+});

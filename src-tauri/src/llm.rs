@@ -4842,12 +4842,25 @@ pub async fn download_status(
  * failure `model-download-failed` - the activity tray draws all three on
  * every page, and a caller that navigated away still learns the outcome.
  */
+/// `YOAI_BLOCK_MODEL_DOWNLOADS=1` refuses every model download (managed
+/// installs; the UI test harness).
+pub(crate) fn downloads_blocked() -> bool {
+    std::env::var("YOAI_BLOCK_MODEL_DOWNLOADS").map(|v| v != "0").unwrap_or(false)
+}
+
 #[tauri::command]
 pub async fn download_model(
     app_handle: AppHandle,
     url: String,
     filename: String,
 ) -> Result<(), String> {
+    // A managed or test install can switch model downloads off entirely:
+    // the UI tests run a fresh profile that must never fetch gigabytes.
+    if downloads_blocked() {
+        let e = "Model downloads are switched off on this install.".to_string();
+        let _ = app_handle.emit("model-download-failed", serde_json::json!({ "filename": filename, "error": e }));
+        return Err(e);
+    }
     let result = download_model_inner(app_handle.clone(), url, filename.clone()).await;
     if let Err(e) = &result {
         let _ = app_handle.emit(

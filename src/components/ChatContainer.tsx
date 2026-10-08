@@ -234,7 +234,7 @@ export default component$<ChatContainerProps>((props) => {
           </button>
         </div>
       )}
-      <div class="shrink-0 px-4 py-2 sm:py-4 border-t border-[var(--border-subtle)]">
+      <div class="shrink-0 px-4 py-2 sm:py-4 border-t border-[var(--border-subtle)]" data-bottom-bar>
         {props.pendingPermission && (
           <div class="mx-auto mb-3 w-full max-w-3xl">
             <AgentPermissionCard
