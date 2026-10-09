@@ -729,6 +729,12 @@ pub async fn vault_restore_conversations(
         Ok(p) => p,
         Err(s) => return Err(s.error.unwrap_or(s.state)),
     };
+    // Another device of this identity holds the conversations: they arrive
+    // through the person's own network; a replay here would author every
+    // one of them again as new records.
+    if !vault_escrow::other_devices(port).await.unwrap_or_default().is_empty() {
+        return Err("siblings_hold_data".into());
+    }
     let backup = fetch_data_backup(port).await?;
     let missing_objects = backup["_missing_objects"]
         .as_array()

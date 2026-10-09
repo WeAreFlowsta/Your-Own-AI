@@ -115,7 +115,7 @@ export async function seedDefaultAisIfNeeded(): Promise<void> {
     const defaults = getDefaultPersonalities();
     const newAis: UserDefinedAI[] = [];
 
-    for (const archetype of defaults) {
+    for (const [slotIndex, archetype] of defaults.entries()) {
       // Check if we already have an AI based on this archetype
       const alreadyHas = existingAis.some(ai => ai.baseArchetypeId === archetype.id);
       if (alreadyHas) continue;
@@ -136,6 +136,7 @@ export async function seedDefaultAisIfNeeded(): Promise<void> {
         lengthDisposition: toDisposition(prefs.responseLengthId),
         defaultMode: 'chat',
         useEmojis: prefs.useEmojis ?? false,
+        seedSlot: (slotIndex + 1) as 1 | 2 | 3,
       };
 
       newAis.push(ai);
@@ -290,9 +291,21 @@ export async function getLocalCustomAis(): Promise<UserDefinedAI[]> {
     
     console.log(`[LocalAiStorage] Retrieved ${ais.length} custom AIs`);
     // Migrate any legacy responseLengthId → lengthDisposition on read.
+    const taken = new Set(ais.map((a) => a.seedSlot).filter(Boolean));
     return ais.map(migrateAiDisposition).map((ai) => {
       const twin = RETIRED_ARCHETYPE_IDS[ai.baseArchetypeId];
-      return twin ? { ...ai, baseArchetypeId: twin } : ai;
+      const out = twin ? { ...ai, baseArchetypeId: twin } : ai;
+      // Seeded before the slot stamp existed: a starter still on its seed
+      // personality takes that slot (best effort, read-only; an edited one
+      // stays unslotted and is treated as the person's own AI).
+      if (out.seedSlot === undefined) {
+        const slot = (DEFAULT_ARCHETYPE_IDS as readonly string[]).indexOf(out.baseArchetypeId) + 1;
+        if (slot > 0 && !taken.has(slot as 1 | 2 | 3)) {
+          taken.add(slot as 1 | 2 | 3);
+          return { ...out, seedSlot: slot as 1 | 2 | 3 };
+        }
+      }
+      return out;
     });
   } catch (error) {
     console.error('[LocalAiStorage] Error getting custom AIs:', error);

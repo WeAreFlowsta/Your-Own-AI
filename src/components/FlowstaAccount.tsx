@@ -219,7 +219,10 @@ export default component$<FlowstaAccountProps>((props) => {
       await refreshUserAis();
     } catch (e) {
       const msg = String(e);
-      if (msg.includes("key_mismatch")) {
+      if (msg.includes("siblings_hold_data")) {
+        error.value =
+          "Your conversations are on another of your devices and arrive from there by themselves - nothing to restore here.";
+      } else if (msg.includes("key_mismatch")) {
         error.value =
           "Your Vault backup was made by a different setup of this app. Restore from Vault first (above), then try again.";
       } else if (msg.includes("no_backup")) {

@@ -940,6 +940,11 @@ pub fn run() {
 
                 // Phase A: user data key + per-user network seed,
                 // generated on first launch (standalone — no account).
+                // A signed-in profile with no material yet joins the identity's
+                // network (the Vault knows it) rather than founding its own.
+                if vault_escrow::resolve_material_from_identity(&hc_app_handle, &data_dir).await.is_some() {
+                    log::info!("Transcript material comes from the identity");
+                }
                 let recovery = match transcript_crypto::ensure_recovery_material(&data_dir) {
                     Ok(r) => r,
                     Err(e) => {

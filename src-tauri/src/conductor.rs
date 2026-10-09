@@ -60,19 +60,72 @@ pub struct StartupResult {
     pub lair_client: LairClient,
 }
 
-/// Generate conductor-config.yaml for local-only use.
+/// Where this conductor meets the person's OTHER devices (build-docs
+/// MULTI_DEVICE.md). The network is private by construction - the seed is
+/// per identity (or per install) and every record is ciphertext under the
+/// person's data key before it reaches the DNA - so a reachable peer is
+/// only ever one of the person's own devices, and the rendezvous learns
+/// agent keys, a space hash and an address, never content or an identity.
 ///
-/// INVARIANT — this conductor must NEVER be networked. Transcript
-/// content is encrypted with the user's data key before it reaches the
-/// DNA (transcript_crypto), and the DNA's network seed is generated per
-/// user at first run (RecoveryMaterial) - so even a reachable peer would
-/// find an unjoinable network holding ciphertext. The black-hole
-/// localhost endpoints below are the third layer: nothing can discover
-/// or reach this node at all, so gossip simply never happens. If
-/// cross-device sync is ever needed, it goes through Flowsta Vault's
-/// encrypted per-app namespace, NOT by giving this conductor real
-/// bootstrap/signal/relay URLs. (Self-run nodes syncing a user's own
-/// records are possible in the open-source sense; not in the plan.)
+/// Bootstrap + signal URL and the per-app auth material are baked at build
+/// time (`FLOWSTA_BOOTSTRAP_URL`, `FLOWSTA_SIGNAL_URL`, `FLOWSTA_AUTH_MATERIAL`
+/// - the Vault's names) or set at run time for a dev box. Without auth
+/// material the conductor keeps the localhost black hole it always had:
+/// one device, no peers, nothing to reach - the bootstrap refuses
+/// unauthenticated clients anyway.
+struct Rendezvous {
+    bootstrap_url: String,
+    signal_url: String,
+    auth_material: Option<String>,
+}
+
+impl Rendezvous {
+    fn resolve() -> Self {
+        let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let auth_material = env("FLOWSTA_AUTH_MATERIAL")
+            .or_else(|| option_env!("FLOWSTA_AUTH_MATERIAL").filter(|m| !m.is_empty()).map(String::from));
+        let bootstrap_url = env("FLOWSTA_BOOTSTRAP_URL")
+            .or_else(|| option_env!("FLOWSTA_BOOTSTRAP_URL").map(String::from))
+            .unwrap_or_else(|| "https://bootstrap.flowsta.com".to_string());
+        let signal_url = env("FLOWSTA_SIGNAL_URL")
+            .or_else(|| option_env!("FLOWSTA_SIGNAL_URL").map(String::from))
+            .unwrap_or_else(|| bootstrap_url.replacen("https://", "wss://", 1));
+        Self { bootstrap_url, signal_url, auth_material }
+    }
+
+    /// The `network:` block. The relay URL is the bootstrap host with a
+    /// trailing dot (an absolute DNS name, the form the relay wants).
+    fn network_block(&self) -> String {
+        match &self.auth_material {
+            Some(m) => format!(
+                "network:\n  bootstrap_url: {b}\n  signal_url: {s}\n  relay_url: {r}\n  base64_auth_material_bootstrap: \"{m}\"\n  base64_auth_material_relay: \"{m}\"\n",
+                b = self.bootstrap_url,
+                s = self.signal_url,
+                r = relay_url_for(&self.bootstrap_url),
+                m = m,
+            ),
+            None => "network:\n  bootstrap_url: https://localhost/\n  signal_url: wss://localhost/\n  relay_url: https://localhost/\n".to_string(),
+        }
+    }
+}
+
+/// `https://host[:port]/...` → `https://host.[:port]/` (the Vault's rule).
+fn relay_url_for(bootstrap_url: &str) -> String {
+    let trimmed = bootstrap_url.trim_end_matches('/');
+    let Some((scheme, rest)) = trimmed.split_once("://") else {
+        return format!("{}./", trimmed.trim_end_matches('.'));
+    };
+    let (host, port) = match rest.rsplit_once(':') {
+        Some((h, p)) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => (h, Some(p)),
+        _ => (rest, None),
+    };
+    let host = host.trim_end_matches('.');
+    match port {
+        Some(p) => format!("{}://{}.:{}/", scheme, host, p),
+        None => format!("{}://{}./", scheme, host),
+    }
+}
+
 fn generate_conductor_config(
     conductor_dir: &Path,
     lair_connection_url: &str,
@@ -93,6 +146,12 @@ fn generate_conductor_config(
     // relay_url is new in Holochain 0.6.1 (Iroh transport); localhost
     // black-hole like bootstrap/signal — connection failures are
     // tolerated, gossip simply never happens.
+    let rendezvous = Rendezvous::resolve();
+    if rendezvous.auth_material.is_some() {
+        log::info!("[conductor] rendezvous {} (the person's own devices can meet)", rendezvous.bootstrap_url);
+    } else {
+        log::info!("[conductor] no rendezvous auth material - this conductor stays alone");
+    }
     let config = format!(
         r#"data_root_path: '{data_root}'
 keystore:
@@ -103,15 +162,12 @@ admin_interfaces:
     type: websocket
     port: {admin_port}
     allowed_origins: '*'
-network:
-  bootstrap_url: https://localhost/
-  signal_url: wss://localhost/
-  relay_url: https://localhost/
-db_sync_strategy: Resilient
+{network}db_sync_strategy: Resilient
 "#,
         data_root = data_root,
         admin_port = admin_port,
         lair_url = lair_url,
+        network = rendezvous.network_block(),
     );
 
     let config_path = conductor_dir.join("conductor-config.yaml");
@@ -398,4 +454,14 @@ pub async fn start_holochain(
         },
         lair_client,
     })
+}
+
+#[cfg(test)]
+mod rendezvous_tests {
+    #[test]
+    fn relay_url_is_the_bootstrap_host_as_an_absolute_name() {
+        assert_eq!(super::relay_url_for("https://bootstrap.flowsta.com"), "https://bootstrap.flowsta.com./");
+        assert_eq!(super::relay_url_for("https://bootstrap-staging.flowsta.com/"), "https://bootstrap-staging.flowsta.com./");
+        assert_eq!(super::relay_url_for("http://localhost:8787"), "http://localhost.:8787/");
+    }
 }

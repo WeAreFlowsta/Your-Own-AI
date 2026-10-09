@@ -155,6 +155,136 @@ async fn fetch_escrow(port: u16) -> Result<Option<RecoveryMaterial>, String> {
     }
 }
 
+/// The `recovery` label held from ANY of the person's devices (Vault 1.6.0+):
+/// the material and which device wrote it (`None` = this one).
+async fn fetch_escrow_across(port: u16) -> Result<Option<(RecoveryMaterial, Option<String>)>, String> {
+    let resp = http()
+        .post(format!("http://127.0.0.1:{}/backup/retrieve", port))
+        .header("Origin", VAULT_ORIGIN)
+        .json(&serde_json::json!({
+            "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
+            "label": ESCROW_LABEL,
+            "across": "devices",
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("vault unreachable: {}", e))?;
+    match resp.status() {
+        reqwest::StatusCode::NOT_FOUND => return Ok(None),
+        s if s.is_success() => {}
+        _ => {
+            let body: serde_json::Value = resp.json().await.unwrap_or_default();
+            return Err(body["error"].as_str().unwrap_or("retrieve_failed").to_string());
+        }
+    }
+    let v: serde_json::Value = resp.json().await.map_err(|e| format!("bad retrieve response: {}", e))?;
+    match parse_escrow(&v["data"]) {
+        Some(m) => Ok(Some((m, v["from_device"].as_str().map(String::from)))),
+        None => Err("escrow_unreadable".into()),
+    }
+}
+
+/// `POST /app-secret` (Vault 1.6.1+): 32 bytes for this app and label, the
+/// same on every device of the identity. `None` on a Vault that cannot
+/// answer (older, or no device-hosted seed).
+async fn fetch_app_secret(port: u16, label: &str) -> Result<Option<[u8; 32]>, String> {
+    let resp = http()
+        .post(format!("http://127.0.0.1:{}/app-secret", port))
+        .header("Origin", VAULT_ORIGIN)
+        .json(&serde_json::json!({ "label": label }))
+        .send()
+        .await
+        .map_err(|e| format!("vault unreachable: {}", e))?;
+    match resp.status() {
+        reqwest::StatusCode::NOT_FOUND => return Ok(None),
+        s if s.is_success() => {}
+        _ => {
+            let body: serde_json::Value = resp.json().await.unwrap_or_default();
+            let err = body["error"].as_str().unwrap_or("app_secret_failed").to_string();
+            return if err == "not_available" { Ok(None) } else { Err(err) };
+        }
+    }
+    let v: serde_json::Value = resp.json().await.map_err(|e| format!("bad app-secret response: {}", e))?;
+    let bytes = hex::decode(v["secret_hex"].as_str().unwrap_or_default()).map_err(|_| "app_secret_unreadable".to_string())?;
+    let secret: [u8; 32] = bytes.try_into().map_err(|_| "app_secret_unreadable".to_string())?;
+    Ok(Some(secret))
+}
+
+/// The other devices holding Your Own AI backups (`/backup/list`
+/// `other_devices`, Vault 1.6.0+) - ids only; empty on an older Vault.
+pub(crate) async fn other_devices(port: u16) -> Result<Vec<String>, String> {
+    let resp = http()
+        .get(format!("http://127.0.0.1:{}/backup/list", port))
+        .header("Origin", VAULT_ORIGIN)
+        .send()
+        .await
+        .map_err(|e| format!("vault unreachable: {}", e))?;
+    if !resp.status().is_success() {
+        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+        return Err(body["error"].as_str().unwrap_or("list_failed").to_string());
+    }
+    let v: serde_json::Value = resp.json().await.map_err(|e| format!("bad list response: {}", e))?;
+    Ok(v["other_devices"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|d| d["device"].as_str().map(String::from)).collect())
+        .unwrap_or_default())
+}
+
+/// Before the first conductor start on a profile with no material of its
+/// own: the identity's material, so a second device joins the person's
+/// network instead of founding one (build-docs MULTI_DEVICE.md §3.1). In
+/// order, so a secret never changes once an identity has one: this
+/// device's `recovery` slot, any other device's copy, two app secrets the
+/// Vault derives (1.6.1+; also escrowed so an older Vault elsewhere finds
+/// them). `None` = not signed in, the Vault is not reachable or locked, or
+/// nothing is known yet - the caller mints a random seed as it always has
+/// (and the escrow sync reconciles later).
+pub(crate) async fn resolve_material_from_identity(app: &tauri::AppHandle, data_dir: &std::path::Path) -> Option<RecoveryMaterial> {
+    if crate::transcript_crypto::has_recovery_material(data_dir) {
+        return None;
+    }
+    let port = match escrow_port(app, true).await {
+        Ok(p) => p,
+        Err(s) => {
+            log::info!("[escrow] no identity material to adopt before first start ({})", s.state);
+            return None;
+        }
+    };
+    let found = match fetch_escrow(port).await {
+        Ok(Some(m)) => Some((m, "this device's Vault")),
+        Ok(None) | Err(_) => match fetch_escrow_across(port).await {
+            Ok(Some((m, from))) => {
+                log::info!("[escrow] identity material found on another device ({})", from.as_deref().unwrap_or("?"));
+                Some((m, "another device"))
+            }
+            Ok(None) => None,
+            Err(e) => {
+                log::warn!("[escrow] across-devices lookup failed: {}", e);
+                None
+            }
+        },
+    };
+    let (material, source) = match found {
+        Some(x) => x,
+        None => {
+            let network = fetch_app_secret(port, "transcript-network").await.ok().flatten()?;
+            let data_key = fetch_app_secret(port, "transcript-data").await.ok().flatten()?;
+            (crate::transcript_crypto::material_from_app_secrets(&network, &data_key), "the identity (derived)")
+        }
+    };
+    if let Err(e) = crate::transcript_crypto::store_recovery_material(data_dir, &material) {
+        log::warn!("[escrow] could not store the identity's material: {}", e);
+        return None;
+    }
+    if source == "the identity (derived)" {
+        if let Err(e) = write_escrow(port, &material).await {
+            log::info!("[escrow] derived material not escrowed yet ({}); the sync will", e);
+        }
+    }
+    log::info!("[escrow] transcript material adopted from {} before first start", source);
+    Some(material)
+}
+
 async fn write_escrow(port: u16, recovery: &RecoveryMaterial) -> Result<(), String> {
     let resp = http()
         .post(format!("http://127.0.0.1:{}/backup", port))
@@ -385,6 +515,12 @@ pub async fn vault_escrow_restore(
     let local = local_recovery(&app)?;
     if escrowed == local {
         return Err("already in sync".into());
+    }
+    // Another device of this identity holds the data: a replay would author
+    // every conversation again as new records into the network that already
+    // has them. The conversations arrive from the other devices instead.
+    if !other_devices(port).await.unwrap_or_default().is_empty() {
+        return Err("siblings_hold_data".into());
     }
     if !accept_data_loss {
         let count = count_local_conversations(&app).await?;

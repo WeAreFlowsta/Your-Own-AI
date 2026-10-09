@@ -28,7 +28,7 @@ const RECOVERY_FILE: &str = "transcript-recovery.json";
 
 /// The user's transcript recovery material. Treat like a key: export it,
 /// escrow it (Vault), never log it.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct RecoveryMaterial {
     /// Per-user Holochain network seed for the transcript DNA.
     pub network_seed: String,
@@ -93,6 +93,40 @@ pub fn replace_recovery_material(
 }
 
 /// Load the recovery material, generating it on first launch.
+/// Material from two app secrets the Vault derived from the identity
+/// (`POST /app-secret`, labels `transcript-network` / `transcript-data`):
+/// the same on every one of the person's devices, so every device of an
+/// identity lands on one private network with nothing to copy.
+pub fn material_from_app_secrets(network: &[u8; 32], data_key: &[u8; 32]) -> RecoveryMaterial {
+    RecoveryMaterial {
+        network_seed: format!("yoai-user-{}", hex::encode(&network[..16])),
+        data_key_hex: hex::encode(data_key),
+        version: 1,
+    }
+}
+
+/// Write material into a profile that has none yet (the identity's, found
+/// through the Vault before the first conductor start).
+pub fn store_recovery_material(app_data_dir: &Path, material: &RecoveryMaterial) -> Result<(), String> {
+    let path = app_data_dir.join(RECOVERY_FILE);
+    if path.exists() {
+        return Err("recovery material already exists".into());
+    }
+    std::fs::create_dir_all(app_data_dir).map_err(|e| format!("Failed to create app data dir: {}", e))?;
+    let json = serde_json::to_string_pretty(material).map_err(|e| format!("Failed to serialize recovery material: {}", e))?;
+    std::fs::write(&path, &json).map_err(|e| format!("Failed to write recovery material: {}", e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+pub fn has_recovery_material(app_data_dir: &Path) -> bool {
+    app_data_dir.join(RECOVERY_FILE).exists()
+}
+
 pub fn ensure_recovery_material(app_data_dir: &Path) -> Result<RecoveryMaterial, String> {
     let path = app_data_dir.join(RECOVERY_FILE);
 
@@ -154,4 +188,19 @@ pub fn decrypt(key: &[u8; 32], nonce: &[u8], ciphertext: &[u8]) -> Result<Vec<u8
     cipher
         .decrypt(&nonce_arr.into(), ciphertext)
         .map_err(|_| "Decryption failed (wrong key or corrupted data)".to_string())
+}
+
+#[cfg(test)]
+mod derived_material_tests {
+    use super::*;
+
+    #[test]
+    fn derived_material_has_the_seed_shape_and_the_whole_data_key() {
+        let network = [0xabu8; 32];
+        let key = [0x11u8; 32];
+        let m = material_from_app_secrets(&network, &key);
+        assert_eq!(m.network_seed, format!("yoai-user-{}", "ab".repeat(16)));
+        assert_eq!(m.data_key_hex, "11".repeat(32));
+        assert_eq!(m, material_from_app_secrets(&network, &key), "the same secrets give the same material on every device");
+    }
 }
