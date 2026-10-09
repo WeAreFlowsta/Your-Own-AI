@@ -37,7 +37,7 @@ const HAPP_FILENAME: &str = "yourown_ai_transcript_v1_happ.happ";
 /// SEQUENCE RANGE only - v6/v7 asked for entries across the whole chain and
 /// the conductor loaded every entry before filtering (froze the dev box).
 /// v4-v7 never left the dev box).
-pub const COORDINATOR_VERSION: u32 = 8;
+pub const COORDINATOR_VERSION: u32 = 9; // 9: anchored listing + tombstones (one person's network across devices)
 /// The standalone coordinator wasm (in src-tauri/resources/), staged by
 /// dna/v1/build-coordinator.sh.
 const COORDINATOR_WASM_FILENAME: &str = "transcript_coordinator.wasm";

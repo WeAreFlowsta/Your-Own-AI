@@ -29,8 +29,20 @@ pub struct EncryptedInput {
 }
 
 /// Start a new conversation (encrypted metadata). Returns the action hash.
+/// Ciphertext for a new conversation, listed at `anchor` - the AI's founding
+/// key (its first agent's key, used as an address by every device of the
+/// person) - or at this cell's own agent when absent (every caller before
+/// coordinator 9).
+#[derive(Serialize, Deserialize, Debug)]
+pub struct StartConversationInput {
+    pub cipher: Vec<u8>,
+    pub nonce: Vec<u8>,
+    #[serde(default)]
+    pub anchor: Option<AgentPubKey>,
+}
+
 #[hdk_extern]
-pub fn start_conversation(input: EncryptedInput) -> ExternResult<ActionHash> {
+pub fn start_conversation(input: StartConversationInput) -> ExternResult<ActionHash> {
     let entry = EncryptedEntry {
         cipher: input.cipher,
         nonce: input.nonce,
@@ -39,10 +51,94 @@ pub fn start_conversation(input: EncryptedInput) -> ExternResult<ActionHash> {
         EntryTypes::EncryptedEntry(entry),
     ))?;
 
-    let agent = agent_anchor()?;
-    create_link(agent, hash.clone(), LinkTypes::AllConversations, ())?;
+    let anchor = match input.anchor {
+        Some(a) => a,
+        None => agent_anchor()?,
+    };
+    create_link(anchor, hash.clone(), LinkTypes::AllConversations, ())?;
 
     Ok(hash)
+}
+
+/// The tag that marks a list link as a tombstone: "this conversation was
+/// deleted" - written by whichever of the person's devices deleted it,
+/// since only the author can delete the entries themselves. Readers hide
+/// a conversation that has one. Hashes only in tags, never text.
+const TOMBSTONE_TAG: &[u8] = b"tomb";
+
+fn is_tombstone(link: &Link) -> bool {
+    link.tag.as_ref() == TOMBSTONE_TAG
+}
+
+/// Delete a conversation listed at `anchor` from any of the person's
+/// devices: its list link goes (any member may delete a link), a tombstone
+/// link at the anchor records the deletion for every reader, and the
+/// entries are deleted when this cell authored them (author-only in the
+/// integrity zome). Returns how many entries this call could delete.
+#[derive(Serialize, Deserialize, Debug)]
+pub struct DeleteAtInput {
+    pub conversation_hash: ActionHash,
+    pub anchor: Option<AgentPubKey>,
+}
+
+/// Did this cell author the action? Only the author may delete an entry
+/// (the integrity zome refuses the whole commit otherwise), so a delete
+/// from another device must leave the entries to the author.
+fn authored_here(hash: &ActionHash) -> bool {
+    let me = match agent_info() {
+        Ok(i) => i.agent_initial_pubkey,
+        Err(_) => return false,
+    };
+    match get(hash.clone(), GetOptions::default()) {
+        Ok(Some(record)) => *record.action().author() == me,
+        _ => false,
+    }
+}
+
+#[hdk_extern]
+pub fn delete_conversation_at(input: DeleteAtInput) -> ExternResult<u32> {
+    let anchor = match input.anchor {
+        Some(a) => a,
+        None => agent_anchor()?,
+    };
+    let mut deleted: u32 = 0;
+    let entry_links = get_links(
+        LinkQuery::try_new(input.conversation_hash.clone(), LinkTypes::ConversationToEntries)?,
+        GetStrategy::default(),
+    )?;
+    for link in entry_links {
+        if let Ok(entry_hash) = ActionHash::try_from(link.target.clone()) {
+            if authored_here(&entry_hash) && delete_entry(entry_hash).is_ok() {
+                deleted += 1;
+            }
+        }
+        if authored_here(&link.create_link_hash) {
+            let _ = delete_link(link.create_link_hash, GetOptions::default());
+        }
+    }
+    let conv_links = get_links(
+        LinkQuery::try_new(anchor.clone(), LinkTypes::AllConversations)?,
+        GetStrategy::default(),
+    )?;
+    let mut had_tombstone = false;
+    for link in conv_links {
+        if ActionHash::try_from(link.target.clone()).ok().as_ref() == Some(&input.conversation_hash) {
+            if is_tombstone(&link) {
+                had_tombstone = true;
+            } else if authored_here(&link.create_link_hash) {
+                let _ = delete_link(link.create_link_hash, GetOptions::default());
+            }
+        }
+    }
+    // The tombstone is what every device honours; it is written whether or
+    // not this cell could remove the author's own links.
+    if !had_tombstone {
+        create_link(anchor, input.conversation_hash.clone(), LinkTypes::AllConversations, TOMBSTONE_TAG.to_vec())?;
+    }
+    if authored_here(&input.conversation_hash) && delete_entry(input.conversation_hash).is_ok() {
+        deleted += 1;
+    }
+    Ok(deleted)
 }
 
 /// Input for recording an encrypted message.
@@ -280,10 +376,20 @@ pub fn get_conversations_page(input: ConversationsPageInput) -> ExternResult<Rec
         Some(a) => a,
         None => agent_anchor()?,
     };
-    let mut links = get_links(
+    let all = get_links(
         LinkQuery::try_new(anchor, LinkTypes::AllConversations)?,
         GetStrategy::default(),
     )?;
+    // A tombstone hides its conversation on every device, whoever deleted it.
+    let tombstoned: std::collections::HashSet<Vec<u8>> = all
+        .iter()
+        .filter(|l| is_tombstone(l))
+        .map(|l| l.target.get_raw_39().to_vec())
+        .collect();
+    let mut links: Vec<Link> = all
+        .into_iter()
+        .filter(|l| !is_tombstone(l) && !tombstoned.contains(l.target.get_raw_39()))
+        .collect();
     let total = links.len() as u32;
     links.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     if let Some(before) = input.before {

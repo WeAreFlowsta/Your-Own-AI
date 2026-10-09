@@ -186,6 +186,17 @@ mod tests {
         total: u32,
         missing: u32,
     }
+    #[derive(serde::Serialize, Debug)]
+    struct DeleteAtInput {
+        conversation_hash: ActionHash,
+        anchor: Option<AgentPubKey>,
+    }
+    #[derive(serde::Serialize, Debug)]
+    struct StartConversationInput {
+        cipher: Vec<u8>,
+        nonce: Vec<u8>,
+        anchor: Option<AgentPubKey>,
+    }
 
     /// (1) A conversation started on A is listed on B at A's agent key - the
     /// founding key works as an address with no private half involved;
@@ -244,6 +255,42 @@ mod tests {
                 .call("get_conversation_entries_page", EntriesPageInput { conversation_hash: h.clone(), after: None, limit: 10 })
                 .await;
             matches!(page, Ok(ref p) if p.total == 1 && p.missing == 0)
+        })
+        .await;
+
+        // (2) B starts a conversation AT A's key (the founding key as the
+        // address for a write), and A lists two at its own anchor.
+        let hash_b: ActionHash = b
+            .call("start_conversation", StartConversationInput { cipher: b"ciphertext-b".to_vec(), nonce: vec![8u8; 24], anchor: Some(a.agent.clone()) })
+            .await
+            .expect("B starts a conversation at A's key");
+        println!("  B started {} at A's key", hash_b);
+        let a_ref2 = &a;
+        eventually("A lists both conversations at its own key", 420, || async {
+            let page: Result<Page, String> = a_ref2
+                .call("get_conversations_page", ConversationsPageInput { anchor: None, before: None, limit: 10 })
+                .await;
+            matches!(page, Ok(ref p) if p.total == 2 && p.missing == 0)
+        })
+        .await;
+
+        // (3) B deletes A's conversation from A's list: the list link goes,
+        // a tombstone stays, and neither device lists it any more - the
+        // entries themselves stay A's (author-only) until A cleans up.
+        let deleted: u32 = b
+            .call("delete_conversation_at", DeleteAtInput { conversation_hash: hash.clone(), anchor: Some(a.agent.clone()) })
+            .await
+            .expect("B tombstones A's conversation");
+        println!("  B deleted {} entr{} of A's conversation (author-only: expected 0)", deleted, if deleted == 1 { "y" } else { "ies" });
+        let (a_ref3, b_ref3, a_key3) = (&a, &b, a.agent.clone());
+        eventually("neither device lists the tombstoned conversation", 420, || async {
+            let on_a: Result<Page, String> = a_ref3
+                .call("get_conversations_page", ConversationsPageInput { anchor: None, before: None, limit: 10 })
+                .await;
+            let on_b: Result<Page, String> = b_ref3
+                .call("get_conversations_page", ConversationsPageInput { anchor: Some(a_key3.clone()), before: None, limit: 10 })
+                .await;
+            matches!((on_a, on_b), (Ok(ref pa), Ok(ref pb)) if pa.total == 1 && pb.total == 1)
         })
         .await;
     }
