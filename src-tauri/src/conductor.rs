@@ -80,33 +80,114 @@ struct Rendezvous {
 }
 
 impl Rendezvous {
-    fn resolve() -> Self {
-        let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
-        let auth_material = env("FLOWSTA_AUTH_MATERIAL")
-            .or_else(|| option_env!("FLOWSTA_AUTH_MATERIAL").filter(|m| !m.is_empty()).map(String::from));
-        let bootstrap_url = env("FLOWSTA_BOOTSTRAP_URL")
+    fn env(k: &str) -> Option<String> {
+        std::env::var(k).ok().filter(|v| !v.is_empty())
+    }
+
+    /// Flowsta's own rendezvous, usable only with this app's auth material.
+    fn primary() -> Option<Self> {
+        let auth_material = Self::env("FLOWSTA_AUTH_MATERIAL")
+            .or_else(|| option_env!("FLOWSTA_AUTH_MATERIAL").filter(|m| !m.is_empty()).map(String::from))?;
+        let bootstrap_url = Self::env("FLOWSTA_BOOTSTRAP_URL")
             .or_else(|| option_env!("FLOWSTA_BOOTSTRAP_URL").map(String::from))
             .unwrap_or_else(|| "https://bootstrap.flowsta.com".to_string());
-        let signal_url = env("FLOWSTA_SIGNAL_URL")
+        let signal_url = Self::env("FLOWSTA_SIGNAL_URL")
             .or_else(|| option_env!("FLOWSTA_SIGNAL_URL").map(String::from))
             .unwrap_or_else(|| bootstrap_url.replacen("https://", "wss://", 1));
-        Self { bootstrap_url, signal_url, auth_material }
+        Some(Self { bootstrap_url, signal_url, auth_material: Some(auth_material) })
+    }
+
+    /// Open rendezvous for when Flowsta's is dark (community nodes): a
+    /// comma-separated list, https only (the conductor refuses a plaintext
+    /// relay), no auth material by design - the Vault's rule.
+    fn fallbacks() -> Vec<Self> {
+        let list = Self::env("FLOWSTA_BOOTSTRAP_FALLBACKS")
+            .or_else(|| option_env!("FLOWSTA_BOOTSTRAP_FALLBACKS").map(String::from))
+            .unwrap_or_default();
+        parse_fallbacks(&list)
+    }
+
+    /// The rendezvous for this conductor session: the primary when it
+    /// answers (or when there is nothing else to try); else the first live
+    /// fallback; with everything dark, the primary anyway - the conductor
+    /// works alone and reconnects when anything returns. `None` = no
+    /// material and no fallbacks: the localhost black hole, one device.
+    async fn resolve() -> Option<Self> {
+        let primary = Self::primary();
+        let fallbacks = Self::fallbacks();
+        if fallbacks.is_empty() {
+            return primary;
+        }
+        if let Some(p) = &primary {
+            if bootstrap_alive(&p.bootstrap_url).await {
+                return primary;
+            }
+            log::warn!("[conductor] rendezvous {} unreachable - trying {} fallback(s)", p.bootstrap_url, fallbacks.len());
+        }
+        for f in &fallbacks {
+            if bootstrap_alive(&f.bootstrap_url).await {
+                log::info!("[conductor] using open rendezvous {}", f.bootstrap_url);
+                return Some(f.clone());
+            }
+        }
+        log::warn!("[conductor] every rendezvous is dark - starting alone, reconnecting when one returns");
+        primary.or_else(|| fallbacks.into_iter().next())
     }
 
     /// The `network:` block. The relay URL is the bootstrap host with a
     /// trailing dot (an absolute DNS name, the form the relay wants).
-    fn network_block(&self) -> String {
-        match &self.auth_material {
-            Some(m) => format!(
-                "network:\n  bootstrap_url: {b}\n  signal_url: {s}\n  relay_url: {r}\n  base64_auth_material_bootstrap: \"{m}\"\n  base64_auth_material_relay: \"{m}\"\n",
-                b = self.bootstrap_url,
-                s = self.signal_url,
-                r = relay_url_for(&self.bootstrap_url),
-                m = m,
-            ),
+    fn network_block(this: Option<&Self>) -> String {
+        match this {
+            Some(r) => {
+                let auth = match &r.auth_material {
+                    Some(m) => format!("  base64_auth_material_bootstrap: \"{m}\"\n  base64_auth_material_relay: \"{m}\"\n"),
+                    None => String::new(),
+                };
+                format!(
+                    "network:\n  bootstrap_url: {b}\n  signal_url: {s}\n  relay_url: {r}\n{auth}",
+                    b = r.bootstrap_url,
+                    s = r.signal_url,
+                    r = relay_url_for(&r.bootstrap_url),
+                )
+            }
             None => "network:\n  bootstrap_url: https://localhost/\n  signal_url: wss://localhost/\n  relay_url: https://localhost/\n".to_string(),
         }
     }
+}
+
+impl Clone for Rendezvous {
+    fn clone(&self) -> Self {
+        Self { bootstrap_url: self.bootstrap_url.clone(), signal_url: self.signal_url.clone(), auth_material: self.auth_material.clone() }
+    }
+}
+
+fn parse_fallbacks(list: &str) -> Vec<Rendezvous> {
+    list.split(',')
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+        .filter(|u| {
+            let ok = u.starts_with("https://");
+            if !ok {
+                log::error!("[conductor] ignoring non-https fallback {} - the conductor forbids plaintext relays", u);
+            }
+            ok
+        })
+        .map(|u| {
+            let bootstrap_url = u.trim_end_matches('/').to_string();
+            let host = bootstrap_url.trim_start_matches("https://").to_string();
+            Rendezvous { bootstrap_url, signal_url: format!("wss://{}", host), auth_material: None }
+        })
+        .collect()
+}
+
+/// Is a bootstrap server answering? kitsune2-bootstrap-srv serves
+/// GET /health (200, no auth); community nodes run the same binary.
+async fn bootstrap_alive(url: &str) -> bool {
+    let health = format!("{}/health", url.trim_end_matches('/'));
+    let Ok(client) = reqwest::Client::builder().timeout(std::time::Duration::from_millis(2500)).build() else {
+        return false;
+    };
+    matches!(client.get(&health).send().await, Ok(r) if r.status().is_success())
 }
 
 /// `https://host[:port]/...` → `https://host.[:port]/` (the Vault's rule).
@@ -130,6 +211,7 @@ fn generate_conductor_config(
     conductor_dir: &Path,
     lair_connection_url: &str,
     admin_port: u16,
+    rendezvous: Option<&Rendezvous>,
 ) -> Result<PathBuf, String> {
     std::fs::create_dir_all(conductor_dir)
         .map_err(|e| format!("Failed to create conductor directory: {}", e))?;
@@ -146,11 +228,9 @@ fn generate_conductor_config(
     // relay_url is new in Holochain 0.6.1 (Iroh transport); localhost
     // black-hole like bootstrap/signal — connection failures are
     // tolerated, gossip simply never happens.
-    let rendezvous = Rendezvous::resolve();
-    if rendezvous.auth_material.is_some() {
-        log::info!("[conductor] rendezvous {} (the person's own devices can meet)", rendezvous.bootstrap_url);
-    } else {
-        log::info!("[conductor] no rendezvous auth material - this conductor stays alone");
+    match rendezvous {
+        Some(r) => log::info!("[conductor] rendezvous {} (the person's own devices can meet)", r.bootstrap_url),
+        None => log::info!("[conductor] no rendezvous - this conductor stays alone"),
     }
     let config = format!(
         r#"data_root_path: '{data_root}'
@@ -167,7 +247,7 @@ admin_interfaces:
         data_root = data_root,
         admin_port = admin_port,
         lair_url = lair_url,
-        network = rendezvous.network_block(),
+        network = Rendezvous::network_block(rendezvous),
     );
 
     let config_path = conductor_dir.join("conductor-config.yaml");
@@ -382,7 +462,8 @@ pub async fn start_holochain(
         },
     );
     let conductor_dir = data_dir.join("conductor");
-    let config_path = match generate_conductor_config(&conductor_dir, &connection_url, ADMIN_WS_PORT) {
+    let rendezvous = Rendezvous::resolve().await;
+    let config_path = match generate_conductor_config(&conductor_dir, &connection_url, ADMIN_WS_PORT, rendezvous.as_ref()) {
         Ok(p) => p,
         Err(e) => fail_with_lair_cleanup!(e),
     };
@@ -458,6 +539,18 @@ pub async fn start_holochain(
 
 #[cfg(test)]
 mod rendezvous_tests {
+    #[test]
+    fn fallbacks_are_https_only_open_and_in_order() {
+        let f = super::parse_fallbacks(" https://node1.example.com/, http://plain.example.com, https://node2.example.com:8443 ,");
+        assert_eq!(f.len(), 2, "the plaintext one is dropped");
+        assert_eq!(f[0].bootstrap_url, "https://node1.example.com");
+        assert_eq!(f[0].signal_url, "wss://node1.example.com");
+        assert!(f[0].auth_material.is_none(), "fallbacks are open by design");
+        assert_eq!(f[1].bootstrap_url, "https://node2.example.com:8443");
+        assert_eq!(super::relay_url_for(&f[1].bootstrap_url), "https://node2.example.com.:8443/");
+        assert!(super::parse_fallbacks("").is_empty());
+    }
+
     #[test]
     fn relay_url_is_the_bootstrap_host_as_an_absolute_name() {
         assert_eq!(super::relay_url_for("https://bootstrap.flowsta.com"), "https://bootstrap.flowsta.com./");
