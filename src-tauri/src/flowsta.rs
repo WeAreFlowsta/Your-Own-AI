@@ -134,6 +134,17 @@ async fn probe_vaults(timeout: std::time::Duration) -> Vec<(u16, serde_json::Val
             Some((port, v))
         }
     };
+    // A test launch pins one port (`YOAI_VAULT_PORT`) so a scratch profile
+    // talks to a test Vault only and can never pick the installed one.
+    if let Some(pinned) = std::env::var("YOAI_VAULT_PORT").ok().and_then(|p| p.parse::<u16>().ok()) {
+        let mut mine = Vec::new();
+        if let Some((port, v)) = one(pinned).await {
+            if vault_is_mine(port).await {
+                mine.push((port, v));
+            }
+        }
+        return mine;
+    }
     let (a, b, c) = tokio::join!(one(VAULT_PORTS[0]), one(VAULT_PORTS[1]), one(VAULT_PORTS[2]));
     let mut mine = Vec::new();
     for (port, v) in [a, b, c].into_iter().flatten() {
