@@ -444,6 +444,92 @@ async fn count_local_conversations(app: &tauri::AppHandle) -> Result<u64, String
 /// Reconcile the escrow with the Vault. Writes only into an empty slot;
 /// reports "conflict" (with the local record count) when the Vault holds
 /// different material. Safe to call repeatedly.
+
+/// Stop the conductor and key store, drop this device's cells, put the
+/// given material in place (the old one is kept as `transcript-recovery.
+/// replaced-<ts>.json`), adopt the live identity, drop the derived index
+/// files, and relaunch. The caller has already decided this is right.
+pub(crate) async fn swap_material_and_restart(
+    app: &tauri::AppHandle,
+    data_dir: &std::path::Path,
+    new_material: &RecoveryMaterial,
+) -> Result<(), String> {
+    if let Some(hc) = app.try_state::<Arc<HolochainState>>() {
+        if let Some(manager) = hc.manager.get() {
+            for pid in [
+                manager.handle.conductor_child.id(),
+                manager.handle.lair_child.id(),
+            ] {
+                crate::process_ext::stop_pid(pid);
+            }
+            log::info!("[escrow] signalled conductor + lair to stop for the material swap");
+        }
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+
+    for dir in ["conductor", "lair"] {
+        let p = data_dir.join(dir);
+        let mut last_err = String::new();
+        let mut removed = false;
+        for _ in 0..20 {
+            if !p.exists() {
+                removed = true;
+                break;
+            }
+            match std::fs::remove_dir_all(&p) {
+                Ok(_) => {
+                    removed = true;
+                    break;
+                }
+                Err(e) => {
+                    last_err = e.to_string();
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+            }
+        }
+        if !removed {
+            return Err(format!(
+                "Could not release this device's Holochain state for the restore \
+                 ({}: {}). Close and reopen Your Own AI, then try Restore again - \
+                 nothing has been changed.",
+                dir, last_err
+            ));
+        }
+    }
+    transcript_crypto::replace_recovery_material(data_dir, new_material)?;
+    match flowsta::find_vault().await.agent_pub_key {
+        Some(live) => adopt_escrow_owner(app, &live),
+        None => {
+            if let Ok(store) = app.store(crate::profile::store_path(&app, AUTH_STORE)) {
+                store.delete(ESCROW_OWNER_KEY);
+                let _ = store.save();
+            }
+            clear_sync_state(app);
+        }
+    }
+    let _ = std::fs::remove_file(data_dir.join("memory-facts.enc"));
+    if let Ok(entries) = std::fs::read_dir(data_dir) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                if name.starts_with("transcript-emb-") && name.ends_with(".enc") {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
+    log::info!("[escrow] transcript material swapped - relaunching");
+    #[cfg(not(debug_assertions))]
+    {
+        app.restart()
+    }
+    #[cfg(debug_assertions)]
+    {
+        log::info!("[escrow] dev build - exiting; re-run `npm run tauri dev` to relaunch");
+        app.exit(0);
+        Ok(())
+    }
+}
+
 #[tauri::command]
 pub async fn vault_escrow_sync(app: tauri::AppHandle) -> EscrowStatus {
     let held = restore_pending_path(&app).map(|p| p.exists()).unwrap_or(false);
@@ -475,7 +561,19 @@ async fn vault_escrow_sync_inner(app: &tauri::AppHandle) -> EscrowStatus {
             schedule_full_backup(app);
             EscrowStatus::state("synced")
         }
-        Ok(Some(_)) => {
+        Ok(Some(ref m)) => {
+            // This device never backed anything up under its own material
+            // and the identity already has a network: an island. Fold it in
+            // - no door (MULTI_DEVICE.md §5.1). A device that HAS backed up
+            // under its material is the older "conflict" (the person's choice).
+            if load_sync_state(app).is_empty() {
+                match island_merge_start(app, m).await {
+                    Ok(n) => {
+                        return EscrowStatus { state: "island_merging".into(), local_conversations: Some(n), error: None, backups_held: false };
+                    }
+                    Err(e) => log::warn!("[escrow] island merge did not start ({}); reporting the conflict", e),
+                }
+            }
             let count = count_local_conversations(app).await.ok();
             EscrowStatus {
                 state: "conflict".into(),
@@ -531,109 +629,10 @@ pub async fn vault_escrow_restore(
 
     let data_dir = crate::profile::root(&app)
         .map_err(|e| format!("no app data dir: {}", e))?;
-
-    // Stop the conductor + lair so their databases aren't held open (same
-    // signal-by-PID approach as the factory reset).
-    if let Some(hc) = app.try_state::<Arc<HolochainState>>() {
-        if let Some(manager) = hc.manager.get() {
-            for pid in [
-                manager.handle.conductor_child.id(),
-                manager.handle.lair_child.id(),
-            ] {
-                crate::process_ext::stop_pid(pid);
-            }
-            log::info!("[escrow] signalled conductor + lair to stop for restore");
-        }
-    }
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-
-    // Wipe the key-derived state BEFORE committing the new key. The old
-    // Holochain state belongs to the old key; if it cannot be removed
-    // (Windows releases file locks a beat after the processes die - or not
-    // at all if something still holds them), adopting the key anyway would
-    // relaunch into a half-wiped hybrid where lair cannot start and NOTHING
-    // works. Retry while the locks release; on persistent failure abort
-    // with the old key still intact - the user just tries again.
-    for dir in ["conductor", "lair"] {
-        let p = data_dir.join(dir);
-        let mut last_err = String::new();
-        let mut removed = false;
-        for _ in 0..20 {
-            if !p.exists() {
-                removed = true;
-                break;
-            }
-            match std::fs::remove_dir_all(&p) {
-                Ok(_) => {
-                    removed = true;
-                    break;
-                }
-                Err(e) => {
-                    last_err = e.to_string();
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                }
-            }
-        }
-        if !removed {
-            return Err(format!(
-                "Could not release this device's Holochain state for the restore \
-                 ({}: {}). Close and reopen Your Own AI, then try Restore again - \
-                 nothing has been changed.",
-                dir, last_err
-            ));
-        }
-    }
-
-    // Swap the recovery material (old file preserved with a timestamp).
-    transcript_crypto::replace_recovery_material(&data_dir, &escrowed)?;
-
-    // Adopting the Vault's key means this device now belongs to that Vault's
-    // identity - record it (also clears the backup sync state, whose
-    // "already uploaded" beliefs describe the previous owner's slot).
-    match flowsta::find_vault().await.agent_pub_key {
-        Some(live) => adopt_escrow_owner(&app, &live),
-        None => {
-            // Vault locked mid-restore: can't read who we just adopted.
-            // Drop the owner record so the next unlocked contact re-adopts.
-            if let Ok(store) = app.store(crate::profile::store_path(&app, AUTH_STORE)) {
-                store.delete(ESCROW_OWNER_KEY);
-                let _ = store.save();
-            }
-            clear_sync_state(&app);
-        }
-    }
-
-    // Suspend automatic backups until the Vault conversations have been
-    // replayed onto this device - the Vault snapshot may be the only copy.
     if let Err(e) = std::fs::write(data_dir.join(RESTORE_PENDING_FILE), b"") {
         log::warn!("[escrow] could not write restore-pending marker: {}", e);
     }
-
-    // The derived memory caches are keyed to the old material too (the
-    // Holochain state was wiped above, before the key swap). AI configs,
-    // models, and the Flowsta session are untouched.
-    let _ = std::fs::remove_file(data_dir.join("memory-facts.enc"));
-    if let Ok(entries) = std::fs::read_dir(&data_dir) {
-        for entry in entries.flatten() {
-            if let Some(name) = entry.file_name().to_str() {
-                if name.starts_with("transcript-emb-") && name.ends_with(".enc") {
-                    let _ = std::fs::remove_file(entry.path());
-                }
-            }
-        }
-    }
-    log::info!("[escrow] recovery material restored from Vault - relaunching");
-
-    #[cfg(not(debug_assertions))]
-    {
-        app.restart()
-    }
-    #[cfg(debug_assertions)]
-    {
-        log::info!("[escrow] dev build - exiting; re-run `npm run tauri dev` to relaunch");
-        app.exit(0);
-        Ok(())
-    }
+    swap_material_and_restart(&app, &data_dir, &escrowed).await
 }
 
 /// Conflict resolution B: keep this device's key and overwrite the Vault
@@ -1038,6 +1037,125 @@ async fn delete_backup_label(port: u16, label: &str) {
 /// after a first chat) would overwrite the user's Vault copy with a
 /// near-empty snapshot. Cleared by a successful conversation restore.
 pub(crate) const RESTORE_PENDING_FILE: &str = "conversation-restore-pending";
+/// An island merge is pending: this device used Your Own AI before it was
+/// signed in, the identity already had a network elsewhere, and this
+/// device's conversations were exported (the file this marker names) so
+/// they can be replayed into the identity's network after the swap.
+pub(crate) const ISLAND_PENDING_FILE: &str = "island-merge-pending";
+
+pub(crate) fn island_pending_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    crate::profile::root(&app).ok().map(|d| d.join(ISLAND_PENDING_FILE))
+}
+
+/// The export an island merge replays from, when one is pending.
+pub(crate) fn island_export_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    let marker = island_pending_path(app)?;
+    let name = std::fs::read_to_string(&marker).ok()?;
+    let name = name.trim();
+    if name.is_empty() || name.contains('/') || name.contains('\\') {
+        return None;
+    }
+    let path = marker.parent()?.join(name);
+    path.exists().then_some(path)
+}
+
+pub(crate) fn clear_island_pending(app: &tauri::AppHandle) {
+    if let Some(p) = island_pending_path(app) {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+/// The memory facts file re-encrypted under another key (base64 of the
+/// file as it will be written), so the merge restores it under the
+/// identity's key instead of losing it with the swap.
+fn facts_file_rekeyed(dir: &std::path::Path, old_key: &[u8; 32], new_key: &[u8; 32]) -> Option<String> {
+    let bytes = std::fs::read(dir.join(FACTS_FILE)).ok()?;
+    let envelope: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let nonce = hex::decode(envelope["nonce"].as_str()?).ok()?;
+    let cipher = hex::decode(envelope["cipher"].as_str()?).ok()?;
+    let plain = crate::transcript_crypto::decrypt(old_key, &nonce, &cipher).ok()?;
+    let (nonce2, cipher2) = crate::transcript_crypto::encrypt(new_key, &plain).ok()?;
+    let out = serde_json::json!({ "version": 1, "nonce": hex::encode(nonce2), "cipher": hex::encode(cipher2) });
+    use base64::Engine;
+    Some(base64::engine::general_purpose::STANDARD.encode(serde_json::to_vec(&out).ok()?))
+}
+
+/// This device used Your Own AI before it was signed in and the identity
+/// already has a network elsewhere: fold this device's conversations into
+/// it (build-docs MULTI_DEVICE.md §5.1). Export first - the same shape the
+/// restore reads, every record carried as plaintext so it is re-encrypted
+/// under the identity's key - verify the count, then swap the material and
+/// relaunch; the pending marker makes the next start replay the export.
+/// Nothing is touched until the export is complete and checked.
+pub(crate) async fn island_merge_start(app: &tauri::AppHandle, identity: &RecoveryMaterial) -> Result<u64, String> {
+    let data_dir = crate::profile::root(&app).map_err(|e| format!("no app data dir: {}", e))?;
+    let local = local_recovery(app)?;
+    if local == *identity {
+        return Err("already in sync".into());
+    }
+    let old_key = local.data_key()?;
+    let new_key = identity.data_key()?;
+    let expected = count_local_conversations(app).await?;
+    let (convs, _carried) = collect_conversations(app).await?;
+    if convs.len() as u64 != expected {
+        return Err(format!("island_export_incomplete:{}/{}", convs.len(), expected));
+    }
+    let ai_configs = std::fs::read_to_string(data_dir.join("ai-data.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+    let mut payload = assemble_full_payload(&local, ai_configs, convs, usize::MAX);
+    attach_extras(app, &local, &mut payload);
+    // Plaintext only: the raw entries are ciphertext under the island's
+    // key, and the replay re-encrypts human_readable under the identity's.
+    let stamp = unix_now_secs();
+    let source = format!("imported-from-this-device-{}", stamp);
+    if let Some(cells) = payload["cells"].as_array_mut() {
+        for cell in cells.iter_mut() {
+            if let Some(records) = cell["records"].as_array_mut() {
+                for rec in records.iter_mut() {
+                    if let Some(obj) = rec.as_object_mut() {
+                        obj.remove("raw_record");
+                    }
+                    if rec["entryType"] == "Conversation" {
+                        rec["human_readable"]["source"] = serde_json::json!(source);
+                    }
+                }
+            }
+        }
+    }
+    match facts_file_rekeyed(&data_dir, &old_key, &new_key) {
+        Some(b64) => payload["memory_facts"]["raw_b64"] = serde_json::json!(b64),
+        None => {
+            if let Some(obj) = payload.as_object_mut() {
+                obj.remove("memory_facts");
+            }
+        }
+    }
+    payload["deleted"] = serde_json::json!(crate::conversation_cache::deleted_ledger(app));
+    payload["island"] = serde_json::json!({ "source": source, "conversations": expected, "exported_at": stamp });
+    let file_name = format!("island-{}.json", stamp);
+    let file = data_dir.join(&file_name);
+    std::fs::write(&file, serde_json::to_vec(&payload).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("could not write the island export: {}", e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600));
+    }
+    let back: serde_json::Value = std::fs::read(&file)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .ok_or("the island export did not read back")?;
+    if back["island"]["conversations"].as_u64() != Some(expected) {
+        return Err("the island export did not read back whole".into());
+    }
+    std::fs::write(data_dir.join(ISLAND_PENDING_FILE), file_name.as_bytes())
+        .map_err(|e| format!("could not write the island marker: {}", e))?;
+    log::info!("[escrow] island: {} conversation(s) exported; swapping to the identity's material", expected);
+    swap_material_and_restart(app, &data_dir, identity).await?;
+    Ok(expected)
+}
+
 
 pub(crate) fn restore_pending_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     crate::profile::root(&app)
@@ -2277,6 +2395,18 @@ pub fn backup_when_vault_unlocks(app: &tauri::AppHandle) {
 /// Daily safety net while the app runs: if no backup has succeeded in the
 /// last 24 hours, try one (the debounce only fires on writes, and a launch
 /// with the Vault locked used to be the end of it).
+/// One escrow sync shortly after the conductor is ready: a signed-in
+/// device whose material the identity does not know gets reconciled
+/// without anyone opening Settings (the island merge, or the first escrow).
+pub fn start_startup_escrow_sync(app: &tauri::AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(25)).await;
+        let status = vault_escrow_sync_inner(&app).await;
+        log::info!("[escrow] startup sync: {}", status.state);
+    });
+}
+
 pub fn start_daily_backup_check(app: &tauri::AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {

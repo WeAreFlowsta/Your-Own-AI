@@ -247,6 +247,59 @@ fn merge_ai_lists(
     (merged, to_provision, replaced_local, added, replaced)
 }
 
+/// The island's AIs into the identity's (MULTI_DEVICE.md §7.1): an island
+/// starter folds into the identity's AI in the SAME starter slot only when
+/// its name and personality still match (both left as seeded); otherwise -
+/// and for every AI the person made - it stays a separate AI under its own
+/// founding key, name and history kept. Nothing is silently re-parented.
+/// Returns the merged list, the island ids to provision, local ids whose
+/// thumbnail moves (none here), counts, and island id → the identity agent
+/// it folded into.
+fn merge_ai_lists_island(
+    local: Vec<serde_json::Value>,
+    island: &[serde_json::Value],
+) -> (Vec<serde_json::Value>, Vec<String>, HashMap<String, String>, usize, usize, HashMap<String, String>) {
+    let mut merged = local;
+    let mut to_provision: Vec<String> = Vec::new();
+    let mut folded: HashMap<String, String> = HashMap::new();
+    let (mut added, mut folded_n) = (0usize, 0usize);
+    for b in island {
+        let b_id = b["id"].as_str().unwrap_or("");
+        if b_id.is_empty() {
+            continue;
+        }
+        if merged.iter().any(|l| l["id"] == b_id || l["restoredFromId"] == b_id) {
+            continue;
+        }
+        let slot = b["seedSlot"].as_u64();
+        let twin = slot.and_then(|slot| {
+            merged.iter().find(|l| {
+                l["seedSlot"].as_u64() == Some(slot)
+                    && l["name"] == b["name"]
+                    && l["baseArchetypeId"] == b["baseArchetypeId"]
+            })
+        });
+        match twin.and_then(|l| l["agentPubKey"].as_str().map(String::from)) {
+            Some(agent) => {
+                folded.insert(b_id.to_string(), agent);
+                folded_n += 1;
+            }
+            None => {
+                let mut entry = b.clone();
+                entry["restoredFromId"] = serde_json::json!(b_id);
+                if let Some(obj) = entry.as_object_mut() {
+                    // A second starter beside the identity's own is the person's AI now.
+                    obj.remove("seedSlot");
+                }
+                merged.push(entry);
+                to_provision.push(b_id.to_string());
+                added += 1;
+            }
+        }
+    }
+    (merged, to_provision, HashMap::new(), added, folded_n, folded)
+}
+
 /// Rebuild the ciphertext for one backup record. Conversations and messages
 /// replay their raw on-chain bytes verbatim; when the raw bytes are absent
 /// (e.g. a hand-trimmed export) the human_readable view is re-encrypted,
@@ -716,6 +769,7 @@ pub fn vault_restore_pending(app: tauri::AppHandle) -> bool {
     vault_escrow::restore_pending_path(&app)
         .map(|p| p.exists())
         .unwrap_or(false)
+        || vault_escrow::island_export_path(&app).is_some()
 }
 
 /// Restore conversations (and missing AI configs) from the Vault "latest"
@@ -725,6 +779,19 @@ pub fn vault_restore_pending(app: tauri::AppHandle) -> bool {
 pub async fn vault_restore_conversations(
     app: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
+    // An island merge pending from the last start: this device's own
+    // earlier conversations, exported before the material swap, replayed
+    // into the identity's network (every record re-encrypted here).
+    if let Some(export) = vault_escrow::island_export_path(&app) {
+        let backup: serde_json::Value = std::fs::read(&export)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .ok_or("island_export_unreadable")?;
+        let source = backup["island"]["source"].as_str().unwrap_or("island").to_string();
+        let result = restore_backup(&app, backup, Some(source)).await?;
+        vault_escrow::clear_island_pending(&app);
+        return Ok(result);
+    }
     let port = match vault_escrow::escrow_port(&app, true).await {
         Ok(p) => p,
         Err(s) => return Err(s.error.unwrap_or(s.state)),
@@ -736,15 +803,6 @@ pub async fn vault_restore_conversations(
         return Err("siblings_hold_data".into());
     }
     let backup = fetch_data_backup(port).await?;
-    let missing_objects = backup["_missing_objects"]
-        .as_array()
-        .map(|a| a.len() as u64)
-        .unwrap_or(0);
-    let missing_records: u64 = backup["_missing_objects"]
-        .as_array()
-        .map(|a| a.iter().map(|m| m["records"].as_u64().unwrap_or(0)).sum())
-        .unwrap_or(0);
-
     // The raw cipher bytes only decrypt under the key they were written
     // with - a different local key means "restore the key first" (the
     // escrow conflict panel), never a partial mixed-key restore.
@@ -753,6 +811,27 @@ pub async fn vault_restore_conversations(
     if backup_keys != local {
         return Err("key_mismatch".into());
     }
+    restore_backup(&app, backup, None).await
+}
+
+/// Replay a backup (from the Vault, or this device's island export) onto
+/// this device's cells. `island` = the source marker the export carries:
+/// the records are plaintext re-encrypted here, AIs are matched by starter
+/// slot, and the result says the conversations were merged, not restored.
+async fn restore_backup(
+    app: &tauri::AppHandle,
+    backup: serde_json::Value,
+    island: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let app = app.clone();
+    let missing_objects = backup["_missing_objects"]
+        .as_array()
+        .map(|a| a.len() as u64)
+        .unwrap_or(0);
+    let missing_records: u64 = backup["_missing_objects"]
+        .as_array()
+        .map(|a| a.iter().map(|m| m["records"].as_u64().unwrap_or(0)).sum())
+        .unwrap_or(0);
 
     let hc = app
         .try_state::<Arc<HolochainState>>()
@@ -806,8 +885,13 @@ pub async fn vault_restore_conversations(
             serde_json::Value::Array(arr) => arr.clone(),
             _ => Vec::new(),
         };
-    let (mut merged, to_provision, replaced_local, ais_added, ais_replaced) =
-        merge_ai_lists(local_ais, &backup_ais, &conv_counts);
+    let (mut merged, to_provision, replaced_local, ais_added, ais_replaced, folded_aliases) = match &island {
+        Some(_) => merge_ai_lists_island(local_ais, &backup_ais),
+        None => {
+            let (m, t, r, a, rp) = merge_ai_lists(local_ais, &backup_ais, &conv_counts);
+            (m, t, r, a, rp, HashMap::new())
+        }
+    };
 
     // 2. Provision an agent per restored AI and adopt its pub key as the
     // id - the same re-key the frontend does when it creates an AI.
@@ -854,6 +938,9 @@ pub async fn vault_restore_conversations(
         if let Some(name) = ai["name"].as_str() {
             name_to_agent.insert(name.to_lowercase(), agent.to_string());
         }
+    }
+    for (island_id, agent) in &folded_aliases {
+        alias_to_agent.insert(island_id.clone(), agent.clone());
     }
     let (assigned, unmatched) = assign_cells(&cells, &alias_to_agent, &name_to_agent);
 
@@ -966,7 +1053,11 @@ pub async fn vault_restore_conversations(
         vault_escrow::schedule_full_backup(&app);
     }
 
+    if let Some(src) = &island {
+        log::info!("[restore] island merged ({}): {} conversation(s) joined the identity", src, conversations_restored + conversations_preserved);
+    }
     Ok(serde_json::json!({
+        "island": island,
         "ais_added": ais_added,
         "ais_replaced": ais_replaced,
         "conversations_restored": conversations_restored,
@@ -1016,6 +1107,45 @@ mod tests {
         serde_json::json!({
             "data_base64": base64::engine::general_purpose::STANDARD.encode(gz),
         })
+    }
+
+    #[test]
+    fn island_starters_fold_only_when_untouched_and_the_rest_stay_separate() {
+        let ai = |id: &str, name: &str, arch: &str, slot: Option<u64>, agent: Option<&str>| {
+            let mut v = serde_json::json!({ "id": id, "name": name, "baseArchetypeId": arch });
+            if let Some(s) = slot { v["seedSlot"] = serde_json::json!(s); }
+            if let Some(a) = agent { v["agentPubKey"] = serde_json::json!(a); }
+            v
+        };
+        // The identity's AIs: slot 1 renamed by the Work set, slot 2 untouched, slot 3 untouched.
+        let local = vec![
+            ai("id-a1", "Assistant", "reeves", Some(1), Some("agent-a1")),
+            ai("id-a2", "Teresa", "teresa", Some(2), Some("agent-a2")),
+            ai("id-a3", "Reeves", "reeves", Some(3), Some("agent-a3")),
+        ];
+        // The island: slot 1 still Veebo (differs from the identity's Assistant),
+        // slot 2 still Teresa (matches), slot 3 renamed, plus an AI the person made.
+        let island = vec![
+            ai("id-b1", "Veebo", "veebo", Some(1), Some("agent-b1")),
+            ai("id-b2", "Teresa", "teresa", Some(2), Some("agent-b2")),
+            ai("id-b3", "Max", "reeves", Some(3), Some("agent-b3")),
+            ai("id-b4", "Luna", "mQuddS8PXJRTCr7XE77U", None, Some("agent-b4")),
+        ];
+        let (merged, to_provision, _moved, added, folded_n, folded) = super::merge_ai_lists_island(local, &island);
+        assert_eq!(folded_n, 1, "only the untouched starter folds");
+        assert_eq!(folded.get("id-b2").map(String::as_str), Some("agent-a2"), "Teresa's island chats go to the identity's Teresa");
+        assert_eq!(added, 3, "Veebo, Max and Luna stay separate AIs");
+        assert_eq!(to_provision, vec!["id-b1", "id-b3", "id-b4"]);
+        assert_eq!(merged.len(), 6);
+        let veebo = merged.iter().find(|m| m["restoredFromId"] == "id-b1").unwrap();
+        assert!(veebo["seedSlot"].is_null(), "a second starter beside the identity's own is the person's AI now");
+        assert_eq!(veebo["name"], "Veebo", "its name and personality are kept");
+        // Running it again adds nothing: the added ids are known; a fold is
+        // only a mapping and repeats harmlessly.
+        let (again, prov2, _, added2, folded2, _) = super::merge_ai_lists_island(merged.clone(), &island);
+        assert_eq!(again.len(), 6);
+        assert!(prov2.is_empty() && added2 == 0);
+        assert_eq!(folded2, 1);
     }
 
     #[test]

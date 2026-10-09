@@ -127,10 +127,22 @@ export const AiDataProvider = component$(() => {
         setLoadingText("Restoring your conversations from your Vault…");
         for (let attempt = 0; attempt < 15; attempt++) {
           try {
-            const stats = await invoke<{ missing_objects?: number; missing_records?: number; orphan_entries?: number }>(
+            const stats = await invoke<{ missing_objects?: number; missing_records?: number; orphan_entries?: number; island?: string | null; conversations_restored?: number; conversations_preserved?: number }>(
               "vault_restore_conversations"
             );
             console.log("[AiDataContext] Startup restore complete:", stats);
+            if (stats.island) {
+              // This device's own earlier conversations joined the identity's network.
+              const n = (stats.conversations_restored ?? 0) + (stats.conversations_preserved ?? 0);
+              const { announceActivity } = await import("../utils/activity");
+              announceActivity({
+                id: "island-merge",
+                title: "Your earlier conversations on this device joined your identity",
+                detail: n === 1 ? "1 conversation" : `${n} conversations`,
+                state: "done",
+                ttlMs: 30000,
+              });
+            }
             // A restore that dropped anything must say so - silence here
             // used to turn permanent data loss into a normal-looking boot.
             const missing = stats.missing_objects ?? 0;

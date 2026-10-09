@@ -34,6 +34,7 @@ interface FlowstaSession {
 interface EscrowStatus {
   state:
     | "synced"
+    | "island_merging"
     | "conflict"
     | "unlinked"
     | "vault_unavailable"
@@ -660,6 +661,14 @@ export default component$<FlowstaAccountProps>((props) => {
             with the rest of it, framed as the two steps it actually is.
             (It used to sit in the account card above, which read as a
             second, competing "restore from Vault" narrative.) */}
+        {signedIn() && escrow.value?.state === "island_merging" && (
+          <div class="mt-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4">
+            <p class="text-sm font-medium">Joining your other devices</p>
+            <p class="mt-1 text-xs text-[var(--text-secondary)]">
+              The conversations already on this device are being brought into your identity, so every device shows the same ones. Your Own AI restarts in a moment.
+            </p>
+          </div>
+        )}
         {signedIn() && escrow.value?.state === "conflict" && (
           <div class="mt-3 rounded-lg border border-amber-700/60 bg-amber-900/20 p-4">
             <p class="text-sm font-medium text-amber-200">
