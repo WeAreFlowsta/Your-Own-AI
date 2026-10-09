@@ -1110,6 +1110,9 @@ pub(crate) fn resolve_resource_dir(
 }
 
 #[cfg(test)]
+mod multi_device_live; // two real conductors, one seed (build-docs MULTI_DEVICE.md §9)
+
+#[cfg(test)]
 mod attachment_extractor_smoke {
     //! Real-file smoke for the attachment extractors - the crates under them
     //! (pdf-extract/lopdf, calamine/quick-xml) parse USER input, so every

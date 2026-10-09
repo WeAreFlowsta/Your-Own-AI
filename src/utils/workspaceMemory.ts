@@ -232,7 +232,7 @@ export function memoryRows(content: string): string[] {
  *  land on the chain the moment they are learned, not just at session end. */
 export function memoryPromptBlock(memory: string): string {
   const hint =
-    "[This project has a shared memory. When you learn something durable - a command that works, a key file location, a convention, a decision - save it immediately with the remember_for_project tool.]\n";
+    "[This project has a shared memory. When you learn something durable - a command that works, a key file location, a convention, a decision, or the person's preference or correction about how to work - save it immediately with the remember_for_project tool. A preference or correction is saved the moment it is said, in the person's words.]\n";
   if (!memory.trim()) return hint + "\n";
   return (
     "[Project memory - durable notes from earlier work. Trust them, but verify anything that looks stale:]\n" +
@@ -252,10 +252,10 @@ export async function reviseWorkspaceMemory(
   sessionDigest: string,
 ): Promise<string | null> {
   const prompt =
-    "You maintain a compact WORKSPACE MEMORY for a project folder: durable facts that help future sessions (build/deploy/test commands exactly as they work, key file locations, project conventions, decisions).\n\n" +
+    "You maintain a compact WORKSPACE MEMORY for a project folder: durable facts that help future sessions (build/deploy/test commands exactly as they work, key file locations, project conventions, decisions, and the person's preferences and corrections about how to work - these are the most durable of all and are kept in the person's words).\n\n" +
     `CURRENT MEMORY (may be empty):\n${oldMemory || "(empty)"}\n\n` +
     `WHAT HAPPENED THIS SESSION:\n${sessionDigest}\n\n` +
-    "Return ONLY the updated memory as markdown bullet lines. Rules: update in place rather than append; drop anything stale or proven wrong; keep commands verbatim; no conversation summaries or one-off details; maximum " +
+    "Return ONLY the updated memory as markdown bullet lines. Rules: update in place rather than append; drop anything stale or proven wrong - but NEVER drop or reword a preference or correction the person gave; keep commands verbatim; no conversation summaries or one-off details; maximum " +
     `${MEMORY_MAX_LINES} lines. If nothing durable was learned, return the current memory unchanged.`;
   try {
     const r = await fetch("http://127.0.0.1:11435/v1/chat/completions", {

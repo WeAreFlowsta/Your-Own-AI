@@ -2126,7 +2126,7 @@ async fn mcp_post(
             json!({ "tools": [
                 {
                     "name": "remember_for_project",
-                    "description": "Save one durable note to this project's shared memory - a command that works, a key file location, a convention, a decision. Use it the moment you learn something future sessions will need. Keep each note to one line.",
+                    "description": "Save one durable note to this project's shared memory - a command that works, a key file location, a convention, a decision, and above all the person's preferences and corrections about how to work (how much to check, how to report, what to avoid). Save a preference or correction the moment it is said. Keep each note to one line.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
