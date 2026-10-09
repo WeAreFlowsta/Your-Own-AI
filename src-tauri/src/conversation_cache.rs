@@ -237,6 +237,21 @@ pub(crate) fn append_to_cache(app: &tauri::AppHandle, agent_key: &str, info: Con
 /// key the list is filed under, so every cached list is checked - there are
 /// a handful of small files. Silent when the conversation is not cached yet
 /// (the next live read lists it by its start time).
+/// Drop every cached list: after records were written through a lineage
+/// key (the island merge replays through whichever key answered), the list
+/// filed under the AI's current key would otherwise be served as fresh and
+/// empty. The next live read rebuilds each list.
+pub(crate) fn drop_all(app: &tauri::AppHandle) {
+    let Ok(dir) = crate::profile::root(&app) else { return };
+    let Ok(entries) = std::fs::read_dir(&dir) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with("conv-list-") && name.ends_with(".enc") {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 pub(crate) fn touch(app: &tauri::AppHandle, hash: &str, at_micros: i64) {
     let Ok(dir) = crate::profile::root(&app) else { return };
     let Ok(entries) = std::fs::read_dir(&dir) else { return };

@@ -279,7 +279,10 @@ fn merge_ai_lists_island(
                     && l["baseArchetypeId"] == b["baseArchetypeId"]
             })
         });
-        match twin.and_then(|l| l["agentPubKey"].as_str().map(String::from)) {
+        // The twin's agent key may still be arriving (the startup re-key);
+        // its id is the same key once that is done, and an alias by id
+        // resolves the same way when the cells are assigned.
+        match twin.and_then(|l| l["agentPubKey"].as_str().or(l["id"].as_str()).map(String::from)) {
             Some(agent) => {
                 folded.insert(b_id.to_string(), agent);
                 folded_n += 1;
@@ -788,7 +791,18 @@ pub async fn vault_restore_conversations(
             .and_then(|b| serde_json::from_slice(&b).ok())
             .ok_or("island_export_unreadable")?;
         let source = backup["island"]["source"].as_str().unwrap_or("island").to_string();
-        let result = restore_backup(&app, backup, Some(source)).await?;
+        // The merge runs at the first start after the swap, while the cells
+        // are still being provisioned and re-enabled: a transient refusal
+        // is reported as "still starting" so the caller tries again.
+        let result = match restore_backup(&app, backup, Some(source)).await {
+            Ok(r) => r,
+            Err(e) => {
+                let transient = e.contains("CellDisabled") || e.contains("still starting") || e.contains("Agent not found") || e.contains("head has moved");
+                log::warn!("[restore] island merge {}: {}", if transient { "not yet" } else { "failed" }, e);
+                return Err(if transient { format!("Your records are still starting - {}", e) } else { e });
+            }
+        };
+        crate::conversation_cache::drop_all(&app);
         vault_escrow::clear_island_pending(&app);
         return Ok(result);
     }

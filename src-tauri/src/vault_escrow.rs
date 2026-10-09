@@ -1108,7 +1108,11 @@ pub(crate) async fn island_merge_start(app: &tauri::AppHandle, identity: &Recove
     // Plaintext only: the raw entries are ciphertext under the island's
     // key, and the replay re-encrypts human_readable under the identity's.
     let stamp = unix_now_secs();
-    let source = format!("imported-from-this-device-{}", stamp);
+    // `import:` is the convention for adopted history: the drawer lists a
+    // conversation with that source as a place to pick up, and hides any
+    // other source (records of the local server's calls live on the
+    // Memory page instead).
+    let source = format!("import:this-device-{}", stamp);
     if let Some(cells) = payload["cells"].as_array_mut() {
         for cell in cells.iter_mut() {
             if let Some(records) = cell["records"].as_array_mut() {

@@ -136,7 +136,8 @@ export async function seedDefaultAisIfNeeded(): Promise<void> {
         lengthDisposition: toDisposition(prefs.responseLengthId),
         defaultMode: 'chat',
         useEmojis: prefs.useEmojis ?? false,
-        seedSlot: (slotIndex + 1) as 1 | 2 | 3,
+        // Slots follow DEFAULT_ARCHETYPE_IDS (Veebo 1, Teresa 2, Reeves 3), the same on every install.
+        seedSlot: ((DEFAULT_ARCHETYPE_IDS as readonly string[]).indexOf(archetype.id) + 1 || slotIndex + 1) as 1 | 2 | 3,
       };
 
       newAis.push(ai);
