@@ -347,6 +347,10 @@ jobs:
         uses: tauri-apps/tauri-action@action-v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The app's own rendezvous material: with it the conductor can meet
+          # the person's other devices on bootstrap.flowsta.com (one person's
+          # private network across devices); without it, it stays alone.
+          FLOWSTA_AUTH_MATERIAL: ${{ secrets.FLOWSTA_AUTH_MATERIAL_PRODUCTION }}
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '-' }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
