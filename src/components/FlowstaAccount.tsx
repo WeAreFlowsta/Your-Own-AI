@@ -144,7 +144,10 @@ export default component$<FlowstaAccountProps>((props) => {
       // On success the app restarts; in dev builds it exits instead.
     } catch (e) {
       restarting.value = false;
-      error.value = `Restore failed: ${String(e)}`;
+      const msg = String(e);
+      error.value = msg.includes("siblings_hold_data")
+        ? "Your conversations are on another of your devices and arrive from there by themselves - nothing to restore here."
+        : `Restore failed: ${msg}`;
     } finally {
       confirmAction.value = null;
     }
