@@ -37,5 +37,16 @@ if [ -n "${YOAI_E2E_WITH_CUDA:-}" ]; then
   ENGINES="${YOAI_E2E_ENGINES_DIR:-$REAL_HOME/.local/share/com.solar.yourowai/engines}"
   if [ -d "$ENGINES" ]; then mkdir -p "$XDG_DATA_HOME/com.solar.yourowai"; ln -sfn "$ENGINES" "$XDG_DATA_HOME/com.solar.yourowai/engines"; fi
 fi
+# YOAI_E2E_WITH_RENDEZVOUS=1 - the conductor meets the person's other devices
+# through the STAGING rendezvous (the app reads these at run time), with the
+# Vault's staging test material; without it the conductor stays alone.
+if [ -n "${YOAI_E2E_WITH_RENDEZVOUS:-}" ]; then
+  export FLOWSTA_BOOTSTRAP_URL=https://bootstrap-staging.flowsta.com
+  export FLOWSTA_SIGNAL_URL=wss://bootstrap-staging.flowsta.com
+  if [ -z "${FLOWSTA_AUTH_MATERIAL:-}" ]; then
+    FLOWSTA_AUTH_MATERIAL="$(sed -n 's/^FLOWSTA_AUTH_MATERIAL=\([^ \\]*\).*/\1/p' "$HERE/../../flowsta-vault/scripts/run-test-instance.sh" 2>/dev/null | head -1)"
+    export FLOWSTA_AUTH_MATERIAL
+  fi
+fi
 if [ "${XDG_SESSION_TYPE:-}" = "wayland" ] && [ -z "${YOAI_E2E_NATIVE_WAYLAND:-}" ]; then export GDK_BACKEND=x11; fi
 exec "$HERE/../src-tauri/target/debug/app" "$@"
