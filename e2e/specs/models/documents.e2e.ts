@@ -25,7 +25,18 @@ describe("documents", () => {
     // Adding registers the folder; reading it is a sync. Ask for one and wait
     // until the note is in the AI's documents with its passages ready
     // (chunk_count > 0), then ask. Asking earlier gets an honest "no notes".
-    const report = await invoke<unknown>("corpus_folder_sync", { folderId });
+    // Adding a folder starts its own check; a sync asked for while that
+    // runs is refused as "busy" (and a loaded box can push the first past
+    // the 30 s script limit) - ask again until it is taken.
+    let report: unknown = null;
+    for (let i = 0; i < 12 && report === null; i++) {
+      try {
+        report = await invoke<unknown>("corpus_folder_sync", { folderId });
+      } catch (e) {
+        if (!String(e).includes("busy") && !String(e).includes("timed out")) throw e;
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+    }
     console.log(`e2e: sync report ${JSON.stringify(report).slice(0, 300)}`);
     let last = "";
     await browser.waitUntil(
