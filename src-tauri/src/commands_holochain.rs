@@ -96,6 +96,50 @@ pub struct TranscriptEntryInfo {
     pub folder_path: Option<String>,
 }
 
+/// `start_conversation` since coordinator 9: the conversation is listed at
+/// `anchor` - the AI's founding key, the same on every device of the person -
+/// or at this cell's own key when absent.
+#[derive(Serialize, Debug)]
+struct StartConversationInput {
+    cipher: Vec<u8>,
+    nonce: Vec<u8>,
+    anchor: Option<holochain_types::prelude::AgentPubKey>,
+}
+
+#[derive(Serialize, Debug)]
+struct DeleteAtInput {
+    conversation_hash: ActionHash,
+    anchor: Option<holochain_types::prelude::AgentPubKey>,
+}
+
+fn agent_key_from_hex(hex_key: &str) -> Option<holochain_types::prelude::AgentPubKey> {
+    hex::decode(hex_key).ok().filter(|b| b.len() == 39).map(holochain_types::prelude::AgentPubKey::from_raw_39)
+}
+
+/// The founding key of the AI whose device agent is `agent_key`: the first
+/// agent key the AI ever had (`foundingKey` on the AI record), the address
+/// every device lists its conversations at. Falls back to the agent itself
+/// (an AI founded on this device, or a record from before the field).
+pub(crate) fn founding_key_for(app: &tauri::AppHandle, agent_key: &str) -> String {
+    use tauri_plugin_store::StoreExt;
+    let Ok(store) = app.store(crate::profile::store_path(app, "ai-data.json")) else { return agent_key.to_string() };
+    let list = match store.get("custom-ais") {
+        Some(serde_json::Value::Array(a)) => a,
+        Some(serde_json::Value::String(raw)) => serde_json::from_str::<Vec<serde_json::Value>>(&raw).unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    founding_from_list(&list, agent_key)
+}
+
+pub(crate) fn founding_from_list(ais: &[serde_json::Value], agent_key: &str) -> String {
+    ais.iter()
+        .find(|ai| ai["agentPubKey"] == agent_key || ai["id"] == agent_key)
+        .and_then(|ai| ai["foundingKey"].as_str())
+        .filter(|f| !f.is_empty())
+        .map(String::from)
+        .unwrap_or_else(|| agent_key.to_string())
+}
+
 /// Encrypted entry as stored in the zome (cipher + nonce).
 #[derive(Deserialize, Debug)]
 pub(crate) struct EncryptedEntryRaw {
@@ -382,7 +426,9 @@ pub async fn start_conversation(
     let key = manager.data_key()?;
     let (nonce, cipher) = crate::transcript_crypto::encrypt(&key, &plain_bytes)?;
 
-    let payload = ExternIO::encode(EncryptedInput { cipher, nonce: nonce.to_vec() })
+    let founding = founding_key_for(&app, &agent_key);
+    let anchor = if founding != agent_key { agent_key_from_hex(&founding) } else { None };
+    let payload = ExternIO::encode(StartConversationInput { cipher, nonce: nonce.to_vec(), anchor })
         .map_err(|e| format!("Failed to encode input: {}", e))?;
 
     let result = manager
@@ -1106,25 +1152,32 @@ pub async fn get_conversations(
         return Ok(vec![]);
     }
 
+    // Every anchor an AI's conversations may hang at: its founding key (the
+    // address every device of the person writes to since coordinator 9),
+    // then each generation of this device's agent - all read through this
+    // device's live agent, so a generation that is gone (tidied) or a
+    // device that is off still lists. Reading links at a key needs no
+    // private half of it.
+    let founding = founding_key_for(&app, &agent_key);
+    let mut anchors: Vec<String> = Vec::new();
+    if founding != agent_key && !lineage.contains(&founding) {
+        anchors.push(founding);
+    }
+    anchors.extend(lineage.iter().cloned());
+    let reader = if manager.is_provisioned(&agent_key).await { agent_key.clone() } else { lineage[0].clone() };
     let data_key = manager.data_key()?;
     let mut conversations = Vec::new();
-    // Agents whose read did not answer (a 60 s zome timeout right after
+    let mut seen_hashes: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Anchors whose read did not answer (a 60 s zome timeout right after
     // launch, a websocket drop): their conversations are still on disk and
     // still in the cache. They must not vanish from a list that is about
     // to be written back as the last-known-good one.
     let mut unanswered: Vec<String> = Vec::new();
-    for key in &lineage {
-        // A tidied (disabled) generation is indexed for lineage but never
-        // connected: reading it can only fail. Skip it quietly instead of
-        // paying a zome call and a warning per refresh for every one of
-        // them (138 lines a refresh on the dev box, 09-04).
-        if !manager.is_provisioned(key).await {
-            log::debug!("get_conversations: lineage agent {} is not connected (tidied) - skipped", key);
-            continue;
-        }
-        let read = match crate::transcript_pages::all_conversations(
+    for key in &anchors {
+        let read = match crate::transcript_pages::all_conversations_at(
             &manager,
-            key,
+            &reader,
+            Some(key.as_str()),
             std::time::Duration::from_secs(60),
         )
         .await
@@ -1162,6 +1215,9 @@ pub async fn get_conversations(
                     };
                     let Ok(conv) = serde_json::from_slice::<serde_json::Value>(&plain_bytes) else { continue };
                     let hash_encoded = hex::encode(record.action_address().get_raw_39());
+                    if !seen_hashes.insert(hash_encoded.clone()) {
+                        continue;
+                    }
                     conversations.push(ConversationInfo {
                         hash: hash_encoded,
                         ai_personality_id: conv["ai_personality_id"].as_str().unwrap_or("").to_string(),
@@ -1171,7 +1227,8 @@ pub async fn get_conversations(
                         last_active_at: None,
                         title: conv["title"].as_str().map(|s| s.to_string()),
                         source: conv["source"].as_str().map(|s| s.to_string()),
-                        agent_key: key.clone(),
+                        // The live agent that reads and appends to it on this device.
+                        agent_key: reader.clone(),
                     });
                 }
             }
@@ -1188,7 +1245,7 @@ pub async fn get_conversations(
         let have: std::collections::HashSet<String> = conversations.iter().map(|c| c.hash.clone()).collect();
         let mut kept = 0usize;
         for c in cached.iter() {
-            if unanswered.contains(&c.agent_key) && !have.contains(&c.hash) {
+            if !have.contains(&c.hash) {
                 conversations.push(c.clone());
                 kept += 1;
             }
@@ -1248,21 +1305,31 @@ pub async fn delete_conversation(
         .map_err(|e| format!("Invalid conversation hash hex: {}", e))?;
     let conv_hash = ActionHash::from_raw_39(raw_bytes);
 
-    let payload = ExternIO::encode(conv_hash).map_err(|e| format!("Failed to encode: {}", e))?;
-    let result = hc_state
-        .get()?
-        .call_zome(&agent_key, "transcript", "delete_conversation", payload)
-        .await
-        .map_err(|e| {
-            // Frontend-only errors were invisible in every diagnostic; a
-            // failed delete must leave a line here.
-            log::warn!(
-                "[transcripts] delete conversation {}… failed: {}",
-                &conversation_hash[..12.min(conversation_hash.len())],
+    let manager = hc_state.get()?;
+    // Coordinator 9: a tombstone at the founding anchor, honoured by every
+    // device; a cell still on an older coordinator takes the old call.
+    // Frontend-only errors were invisible in every diagnostic; a failed
+    // delete must leave a line here.
+    let founding = founding_key_for(&app, &agent_key);
+    let at = ExternIO::encode(DeleteAtInput {
+        conversation_hash: conv_hash.clone(),
+        anchor: if founding != agent_key { agent_key_from_hex(&founding) } else { None },
+    })
+    .map_err(|e| format!("Failed to encode: {}", e))?;
+    let result = match manager.call_zome(&agent_key, "transcript", "delete_conversation_at", at).await {
+        Ok(r) => r,
+        Err(e) if crate::transcript_pages::is_missing_function(&e) => {
+            let payload = ExternIO::encode(conv_hash).map_err(|e| format!("Failed to encode: {}", e))?;
+            manager.call_zome(&agent_key, "transcript", "delete_conversation", payload).await.map_err(|e| {
+                log::warn!("[transcripts] delete conversation {}… failed: {}", &conversation_hash[..12.min(conversation_hash.len())], e);
                 e
-            );
-            e
-        })?;
+            })?
+        }
+        Err(e) => {
+            log::warn!("[transcripts] delete conversation {}… failed: {}", &conversation_hash[..12.min(conversation_hash.len())], e);
+            return Err(e);
+        }
+    };
     let deleted: u32 =
         ExternIO::decode(&result).map_err(|e| format!("Failed to decode: {}", e))?;
 
@@ -1573,5 +1640,19 @@ mod size_guard_tests {
         // The zome rejects cipher over 1 MiB; encryption overhead is a small
         // constant, so the plaintext budget must sit safely below it.
         assert!(PLAIN_BUDGET + 1024 < 1_048_576);
+    }
+}
+
+#[cfg(test)]
+mod founding_tests {
+    #[test]
+    fn the_founding_key_is_the_record_s_or_the_agent_itself() {
+        let ais = vec![
+            serde_json::json!({ "id": "k-b", "agentPubKey": "k-b", "foundingKey": "k-a", "name": "Teresa" }),
+            serde_json::json!({ "id": "k-c", "agentPubKey": "k-c", "name": "Veebo" }),
+        ];
+        assert_eq!(super::founding_from_list(&ais, "k-b"), "k-a", "a second device's agent lists at the founding key");
+        assert_eq!(super::founding_from_list(&ais, "k-c"), "k-c", "no founding key recorded: the agent is the address");
+        assert_eq!(super::founding_from_list(&ais, "k-x"), "k-x", "an unknown agent is its own address");
     }
 }

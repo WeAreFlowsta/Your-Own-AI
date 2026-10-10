@@ -134,10 +134,33 @@ pub async fn all_conversations(
     agent: &str,
     timeout: Duration,
 ) -> Result<PagedRead, String> {
+    all_conversations_at(manager, agent, None, timeout).await
+}
+
+/// The conversations listed at `anchor` (an agent key as hex - an AI's
+/// founding key, or an earlier generation of this AI), read through
+/// `agent`'s cell. `None` = the cell's own key. Every device of the person
+/// lists an AI's conversations at the same founding key (coordinator 9).
+pub async fn all_conversations_at(
+    manager: &HolochainManager,
+    agent: &str,
+    anchor: Option<&str>,
+    timeout: Duration,
+) -> Result<PagedRead, String> {
+    let anchor_key = match anchor {
+        Some(hex_key) if hex_key != agent => Some(
+            hex::decode(hex_key)
+                .ok()
+                .filter(|b| b.len() == 39)
+                .map(AgentPubKey::from_raw_39)
+                .ok_or_else(|| format!("bad anchor key {}", hex_key))?,
+        ),
+        _ => None,
+    };
     let mut read = PagedRead { complete: true, ..Default::default() };
     let mut before: Option<Timestamp> = None;
     loop {
-        let input = ConversationsPageInput { anchor: None, before, limit: PAGE };
+        let input = ConversationsPageInput { anchor: anchor_key.clone(), before, limit: PAGE };
         match page(manager, agent, "get_conversations_page", &input, timeout).await {
             Ok(p) => {
                 read.total = p.total;

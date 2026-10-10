@@ -214,6 +214,11 @@ fn merge_ai_lists(
 
         let mut entry = b.clone();
         entry["restoredFromId"] = serde_json::json!(b_id);
+        // The AI's address on the person's network: the founding key it
+        // carried, else the key it had where the backup was made.
+        if entry["foundingKey"].as_str().map(|f| f.is_empty()).unwrap_or(true) {
+            entry["foundingKey"] = serde_json::json!(b_id);
+        }
 
         let b_arch = b["baseArchetypeId"].as_str().unwrap_or("");
         let replace_idx = if DEFAULT_ARCHETYPES.contains(&b_arch) {
@@ -290,6 +295,9 @@ fn merge_ai_lists_island(
             None => {
                 let mut entry = b.clone();
                 entry["restoredFromId"] = serde_json::json!(b_id);
+                if entry["foundingKey"].as_str().map(|f| f.is_empty()).unwrap_or(true) {
+                    entry["foundingKey"] = serde_json::json!(b_id);
+                }
                 if let Some(obj) = entry.as_object_mut() {
                     // A second starter beside the identity's own is the person's AI now.
                     obj.remove("seedSlot");

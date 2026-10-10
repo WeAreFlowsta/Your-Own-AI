@@ -241,7 +241,9 @@ export const AiDataProvider = component$(() => {
               const oldId = ai.id;
               ai.agentPubKey = pubKey;
               ai.id = pubKey;
-              await updateLocalCustomAi(oldId, { id: pubKey, agentPubKey: pubKey } as any);
+              // The first agent this AI ever had is its address everywhere.
+              if (!ai.foundingKey) ai.foundingKey = pubKey;
+              await updateLocalCustomAi(oldId, { id: pubKey, agentPubKey: pubKey, foundingKey: ai.foundingKey } as any);
               // Migrate thumbnail to new ID
               try {
                 const thumbData = await invoke<number[]>('get_ai_thumbnail', { aiId: oldId });
@@ -534,7 +536,8 @@ export function useAiDataActions() {
             const oldId = newAi.id;
             newAi.agentPubKey = agentKey;
             newAi.id = agentKey;
-            await updateLocalCustomAi(oldId, { id: agentKey, agentPubKey: agentKey } as any);
+            newAi.foundingKey = newAi.foundingKey || agentKey;
+            await updateLocalCustomAi(oldId, { id: agentKey, agentPubKey: agentKey, foundingKey: newAi.foundingKey } as any);
             try {
               const thumbData = await invoke<number[]>("get_ai_thumbnail", { aiId: oldId });
               await invoke("save_ai_thumbnail", { aiId: agentKey, thumbnailData: thumbData });

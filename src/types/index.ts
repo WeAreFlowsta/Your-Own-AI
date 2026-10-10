@@ -32,6 +32,10 @@ export interface UserDefinedAI {
   /** Advanced generation settings for this AI (fields unset = model default). */
   sampling?: { temperature?: number; topP?: number; minP?: number; repeatPenalty?: number };
   agentPubKey?: string;  // Holochain agent public key (set on first provisioning)
+  /** The AI's address on the person's network: the first agent key it ever had. Every device of the
+   *  person lists this AI's conversations at this key; each device's own agent (agentPubKey) writes
+   *  there. Stamped once at first provisioning; carried across devices and restores; never edited. */
+  foundingKey?: string;
   /** Which starter slot (1-3) this AI was seeded into on this install - stamped once, never edited.
    *  Names and personalities change (the Work set, the wizard), so this is the only stable way to
    *  fold one install's starters into another's when the person signs in on a second device. */

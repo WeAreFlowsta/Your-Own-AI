@@ -299,14 +299,21 @@ export async function getLocalCustomAis(): Promise<UserDefinedAI[]> {
       // Seeded before the slot stamp existed: a starter still on its seed
       // personality takes that slot (best effort, read-only; an edited one
       // stays unslotted and is treated as the person's own AI).
+      let withSlot = out;
       if (out.seedSlot === undefined) {
         const slot = (DEFAULT_ARCHETYPE_IDS as readonly string[]).indexOf(out.baseArchetypeId) + 1;
         if (slot > 0 && !taken.has(slot as 1 | 2 | 3)) {
           taken.add(slot as 1 | 2 | 3);
-          return { ...out, seedSlot: slot as 1 | 2 | 3 };
+          withSlot = { ...out, seedSlot: slot as 1 | 2 | 3 };
         }
       }
-      return out;
+      // An AI from before the founding key existed: its agent on this device
+      // is the first it ever had, so that is its address (read-only until
+      // its next write persists it).
+      if (!withSlot.foundingKey && withSlot.agentPubKey) {
+        withSlot = { ...withSlot, foundingKey: withSlot.agentPubKey };
+      }
+      return withSlot;
     });
   } catch (error) {
     console.error('[LocalAiStorage] Error getting custom AIs:', error);
