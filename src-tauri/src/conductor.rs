@@ -14,6 +14,12 @@ use tauri::Emitter;
 /// Different from Flowsta Vault (4455) and ProofPoll (4466).
 pub const ADMIN_WS_PORT: u16 = 4477;
 
+/// The Holochain network generation this build's conductor speaks - the
+/// Vault's vocabulary (`devices.rs` NETWORK_GENERATION), so a sibling on
+/// another generation reads the same way everywhere: "Needs the update to
+/// sync with <device>". Bump with the Holochain upgrade (0.7.x).
+pub const NETWORK_GENERATION: &str = "holochain-0.6";
+
 /// Handle to a running conductor + lair-keystore pair.
 pub struct ConductorHandle {
     pub lair_child: SidecarChild,

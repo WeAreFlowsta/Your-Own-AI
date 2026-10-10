@@ -46,6 +46,31 @@ interface EscrowStatus {
   backups_held: boolean;
 }
 
+/** The last config-sync round (config_sync.rs): which of the person's other
+ *  devices hold copies here and whether one needs the update. */
+interface ConfigSyncState {
+  checked_at: number;
+  devices: { id: string; name: string | null; needs_update: boolean }[];
+  updated: number;
+  added: number;
+}
+
+/** "Synced with Office PC · just now" - one line, or nothing when this is
+ *  the identity's only device so far. */
+function devicesLine(s: ConfigSyncState | null): { text: string; warn: boolean } | null {
+  if (!s || s.devices.length === 0) return null;
+  const nameOf = (d: ConfigSyncState["devices"][number]) => d.name || "another of your devices";
+  const stale = s.devices.filter((d) => d.needs_update);
+  if (stale.length > 0) {
+    return { text: `Needs the update to sync with ${stale.map(nameOf).join(" and ")}`, warn: true };
+  }
+  const [first, ...rest] = s.devices;
+  const who = rest.length === 0 ? nameOf(first) : `${nameOf(first)} and ${rest.length} other${rest.length === 1 ? "" : "s"}`;
+  const mins = Math.max(0, Math.round((Date.now() - s.checked_at) / 60000));
+  const when = mins < 1 ? "just now" : mins < 60 ? `${mins} min ago` : mins < 1440 ? `${Math.round(mins / 60)} h ago` : "more than a day ago";
+  return { text: `Synced with ${who} · ${when}`, warn: false };
+}
+
 interface RestoreStats {
   ais_added: number;
   ais_replaced: number;
@@ -87,6 +112,7 @@ export default component$<FlowstaAccountProps>((props) => {
   const busy = useSignal(false);
   const error = useSignal("");
   const escrow = useSignal<EscrowStatus | null>(null);
+  const configSync = useSignal<ConfigSyncState | null>(null);
   // Outcome of the most recent backup attempt - a held or failed backup
   // must be visible here, never log-only (this section says backups are
   // automatic, so silence reads as success).
@@ -131,7 +157,14 @@ export default component$<FlowstaAccountProps>((props) => {
       // Reconcile the transcript-key escrow whenever we're signed in. The
       // backend never overwrites a differing Vault copy - a mismatch just
       // reports "conflict" for the panel below.
-      if (s.signed_in) await syncEscrow();
+      if (s.signed_in) {
+        await syncEscrow();
+        try {
+          configSync.value = await invoke<ConfigSyncState | null>("config_sync_status");
+        } catch { /* older backend without the command */ }
+      } else {
+        configSync.value = null;
+      }
     } catch (e) {
       console.warn("[Flowsta] status check failed:", e);
     }
@@ -289,6 +322,14 @@ export default component$<FlowstaAccountProps>((props) => {
     const onEntitlement = () => { if (!busy.value) void refresh(); };
     window.addEventListener("entitlementChanged", onEntitlement);
     cleanup(() => window.removeEventListener("entitlementChanged", onEntitlement));
+    // The stored identity follows the Vault's answer: re-read on focus (a
+    // connection revoked on another device reaches the Vault between
+    // visits) and the moment the backend signs this device out.
+    const onFocus = () => { if (session.value?.signed_in && !busy.value) void refresh(); };
+    window.addEventListener("focus", onFocus);
+    cleanup(() => window.removeEventListener("focus", onFocus));
+    const unlistenSession = await listen("flowsta-session-changed", () => { if (!busy.value) void refresh(); });
+    cleanup(() => unlistenSession());
   });
 
   const handleSignIn = $(async () => {
@@ -610,6 +651,15 @@ export default component$<FlowstaAccountProps>((props) => {
                 Manage plan on yourownai.net
               </button>
             )}
+
+          {devicesLine(configSync.value) && (
+            <p
+              class={`text-xs ${devicesLine(configSync.value)!.warn ? "text-amber-300" : "text-[var(--text-muted)]"}`}
+              data-testid="flowsta-devices-line"
+            >
+              {devicesLine(configSync.value)!.text}
+            </p>
+          )}
 
           {escrow.value?.state === "identity_mismatch" && (
             <div class="rounded-lg border border-amber-700/60 bg-amber-900/20 p-4">

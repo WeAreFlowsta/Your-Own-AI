@@ -8,6 +8,7 @@
 //! to, this device's agent key, its starter slot.
 
 use crate::flowsta::{self, http, VAULT_ORIGIN, YOAI_HOLOCHAIN_CLIENT_ID};
+use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 
 /// The editable, person-owned fields of an AI - what follows the identity.
@@ -147,15 +148,73 @@ fn ai_list(v: &serde_json::Value) -> Vec<serde_json::Value> {
     }
 }
 
+/// What the last round found - the Settings line reads this.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct ConfigSyncState {
+    /// ms epoch of the last completed round.
+    pub checked_at: u64,
+    /// The other devices holding copies here, as the Vault names them.
+    pub devices: Vec<SyncedDevice>,
+    pub updated: u32,
+    pub added: u32,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct SyncedDevice {
+    pub id: String,
+    pub name: Option<String>,
+    /// The device runs another Holochain generation: its configs still
+    /// merge (they are JSON), but its conversations cannot reach this
+    /// device until one of them updates - the Vault's own rule and words.
+    pub needs_update: bool,
+}
+
+const STATE_FILE: &str = "config-sync.json";
+
+fn state_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    crate::profile::root(app).ok().map(|r| r.join(STATE_FILE))
+}
+
+fn save_state(app: &tauri::AppHandle, state: &ConfigSyncState) {
+    if let Some(p) = state_path(app) {
+        if let Ok(json) = serde_json::to_vec(state) {
+            let _ = std::fs::write(p, json);
+        }
+    }
+}
+
+/// The last round's result, for Settings → Flowsta Identity. `None` until a
+/// round has completed on this profile.
+#[tauri::command]
+pub fn config_sync_status(app: tauri::AppHandle) -> Option<ConfigSyncState> {
+    let p = state_path(&app)?;
+    serde_json::from_slice(&std::fs::read(p).ok()?).ok()
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+/// Whether a sibling's manifest comes from another network generation. A
+/// manifest without the field is from a build before it: same generation.
+fn sibling_needs_update(manifest: Option<&serde_json::Value>, device: &crate::vault_escrow::SiblingDevice) -> bool {
+    if let Some(g) = manifest.and_then(|m| m["network_generation"].as_str()) {
+        return g != crate::conductor::NETWORK_GENERATION;
+    }
+    matches!(device.generation.as_deref(), Some(g) if g != crate::conductor::NETWORK_GENERATION)
+}
+
 /// One round: every sibling's manifest copy, merged into this device's AI
 /// list. Returns (updated, added). Silent when not signed in or no Vault.
 pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle) -> Result<(u32, u32), String> {
     use tauri_plugin_store::StoreExt;
     let port = crate::vault_escrow::escrow_port(app, true).await.map_err(|s| s.error.unwrap_or(s.state))?;
-    let devices = crate::vault_escrow::other_devices(port).await?;
+    let devices = crate::vault_escrow::sibling_devices(port).await?;
     if devices.is_empty() {
+        save_state(app, &ConfigSyncState { checked_at: now_ms(), ..Default::default() });
         return Ok((0, 0));
     }
+    let mut synced: Vec<SyncedDevice> = Vec::new();
     let store = app
         .store(crate::profile::store_path(app, "ai-data.json"))
         .map_err(|e| e.to_string())?;
@@ -167,14 +226,19 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle) -> Result<(u32, u
     let (mut total_updated, mut total_added) = (0u32, 0u32);
     let thumb_dir = crate::profile::root(app).map_err(|e| e.to_string())?.join("thumbnails");
     for device in &devices {
-        let manifest = match sibling_manifest(port, device).await {
-            Ok(Some(m)) => m,
-            Ok(None) => continue,
+        let manifest = match sibling_manifest(port, &device.id).await {
+            Ok(m) => m,
             Err(e) => {
-                log::warn!("[config-sync] manifest from {}: {}", &device[..device.len().min(8)], e);
-                continue;
+                log::warn!("[config-sync] manifest from {}: {}", &device.id[..device.id.len().min(8)], e);
+                None
             }
         };
+        synced.push(SyncedDevice {
+            id: device.id.clone(),
+            name: device.name.clone(),
+            needs_update: sibling_needs_update(manifest.as_ref(), device),
+        });
+        let Some(manifest) = manifest else { continue };
         let sibling = ai_list(&manifest);
         if sibling.is_empty() {
             continue;
@@ -195,6 +259,7 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle) -> Result<(u32, u
             }
         }
     }
+    save_state(app, &ConfigSyncState { checked_at: now_ms(), devices: synced, updated: total_updated, added: total_added });
     if total_updated + total_added > 0 {
         store.set("custom-ais", serde_json::json!(local));
         store.save().map_err(|e| e.to_string())?;
@@ -228,7 +293,21 @@ pub fn start_config_sync_rounds(app: &tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::merge_sibling_configs;
+    use super::{merge_sibling_configs, sibling_needs_update};
+    use crate::vault_escrow::SiblingDevice;
+
+    #[test]
+    fn another_generation_needs_the_update_and_a_manifest_without_the_field_does_not() {
+        let dev = |g: Option<&str>| SiblingDevice { id: "d".into(), generation: g.map(String::from), ..Default::default() };
+        let same = serde_json::json!({ "network_generation": crate::conductor::NETWORK_GENERATION });
+        let other = serde_json::json!({ "network_generation": "holochain-0.7" });
+        let older = serde_json::json!({ "version": 1 });
+        assert!(!sibling_needs_update(Some(&same), &dev(None)));
+        assert!(sibling_needs_update(Some(&other), &dev(None)));
+        assert!(!sibling_needs_update(Some(&older), &dev(None)), "a build before the field is this generation");
+        assert!(sibling_needs_update(None, &dev(Some("holochain-0.7"))), "no manifest yet: the registry's word");
+        assert!(!sibling_needs_update(None, &dev(None)));
+    }
 
     fn ai(id: &str, founding: &str, name: &str, updated: i64) -> serde_json::Value {
         serde_json::json!({ "id": id, "agentPubKey": id, "foundingKey": founding, "name": name, "model": "LFM.gguf", "seedSlot": 1, "updatedAt": updated, "status": "active" })

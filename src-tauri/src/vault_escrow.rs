@@ -212,7 +212,18 @@ async fn fetch_app_secret(port: u16, label: &str) -> Result<Option<[u8; 32]>, St
 
 /// The other devices holding Your Own AI backups (`/backup/list`
 /// `other_devices`, Vault 1.6.0+) - ids only; empty on an older Vault.
-pub(crate) async fn other_devices(port: u16) -> Result<Vec<String>, String> {
+/// Another of the person's devices that holds a copy of this app's backups
+/// here (`/backup/list other_devices`). Name, platform and generation come
+/// from the Vault's device registry (1.6.1+); a 1.6.0 Vault gives ids only.
+#[derive(Clone, Debug, Serialize, Default)]
+pub(crate) struct SiblingDevice {
+    pub id: String,
+    pub name: Option<String>,
+    pub platform: Option<String>,
+    pub generation: Option<String>,
+}
+
+pub(crate) async fn sibling_devices(port: u16) -> Result<Vec<SiblingDevice>, String> {
     let resp = http()
         .get(format!("http://127.0.0.1:{}/backup/list", port))
         .header("Origin", VAULT_ORIGIN)
@@ -224,10 +235,21 @@ pub(crate) async fn other_devices(port: u16) -> Result<Vec<String>, String> {
         return Err(body["error"].as_str().unwrap_or("list_failed").to_string());
     }
     let v: serde_json::Value = resp.json().await.map_err(|e| format!("bad list response: {}", e))?;
+    let s = |d: &serde_json::Value, k: &str| d[k].as_str().filter(|x| !x.is_empty()).map(String::from);
     Ok(v["other_devices"]
         .as_array()
-        .map(|a| a.iter().filter_map(|d| d["device"].as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|d| {
+                    s(d, "device").map(|id| SiblingDevice { id, name: s(d, "name"), platform: s(d, "platform"), generation: s(d, "generation") })
+                })
+                .collect()
+        })
         .unwrap_or_default())
+}
+
+pub(crate) async fn other_devices(port: u16) -> Result<Vec<String>, String> {
+    Ok(sibling_devices(port).await?.into_iter().map(|d| d.id).collect())
 }
 
 /// Before the first conductor start on a profile with no material of its
@@ -370,6 +392,11 @@ pub(crate) async fn escrow_port(
         Some(k) => k,
         None => return Err(EscrowStatus::state("vault_locked")),
     };
+    // The Vault's answer rules: a connection revoked elsewhere (or a reset
+    // Vault) means no backup call at all - and no stored identity either.
+    if flowsta::drop_identity_if_revoked(app, port, &live).await {
+        return Err(EscrowStatus::state("unlinked"));
+    }
     let owner = store
         .get(ESCROW_OWNER_KEY)
         .and_then(|v| v.as_str().map(String::from));
@@ -1569,6 +1596,7 @@ fn assemble_full_payload(
 
     let mut payload = serde_json::json!({
         "version": 1,
+        "network_generation": crate::conductor::NETWORK_GENERATION,
         "_readme": "Your Own AI conversation transcripts, backed up from your device. \
                     Each record's human_readable view is the decrypted content; \
                     raw_record holds the encrypted on-chain bytes. The app_keys \
@@ -1975,6 +2003,7 @@ async fn write_incremental_backup(
             "data": cfg,
         });
     }
+    manifest["network_generation"] = serde_json::json!(crate::conductor::NETWORK_GENERATION);
     attach_extras(app, recovery, &mut manifest);
     // Deletions ride the manifest so a restore on ANOTHER device leaves them
     // deleted too: this device's ledger merged with what the Vault's

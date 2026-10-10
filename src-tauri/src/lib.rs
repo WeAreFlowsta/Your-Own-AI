@@ -597,6 +597,7 @@ pub fn run() {
             flowsta::list_online_models,
             flowsta::vault_sign_document,
             vault_escrow::vault_escrow_sync,
+            config_sync::config_sync_status,
             vault_escrow::vault_escrow_restore,
             vault_escrow::vault_escrow_keep_local,
             vault_escrow::vault_backup_now,

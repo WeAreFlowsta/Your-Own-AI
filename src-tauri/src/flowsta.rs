@@ -1028,6 +1028,14 @@ async fn reconcile_vault_link(app: &tauri::AppHandle) -> bool {
             return true;
         }
     }
+    // A link the Vault dropped (revoked elsewhere, or a reset Vault) ends the
+    // session here instead of asking to connect again at launch; the person
+    // signs in again from Settings when they want to.
+    if let Some(ref live) = vault.agent_pub_key {
+        if drop_identity_if_revoked(app, port, live).await {
+            return true;
+        }
+    }
     let client = http();
     if let Err(e) = ensure_linked(app, &client, port).await {
         log::warn!("[flowsta] launch re-link failed: {}", e);
@@ -1065,6 +1073,48 @@ async fn vault_link_active(
         .ok()?;
     let v = resp.json::<serde_json::Value>().await.ok()?;
     Some(v["linked"].as_bool().unwrap_or(false))
+}
+
+/// The stored identity follows the Vault's answer (build-docs NEXT.md field
+/// finding 2026-10-06: a connection revoked on another device left Settings
+/// showing the old name). When the Vault in front of us holds OUR identity
+/// and says this app's link is gone, the session is cleared - the same keys
+/// `flowsta_sign_out` clears, plus the link flag - and the UI is told. Never
+/// on "unreachable" (None), never when the Vault holds someone else (the
+/// session guard owns that case). Returns whether the identity was dropped.
+pub(crate) async fn drop_identity_if_revoked(app: &tauri::AppHandle, port: u16, live_identity: &str) -> bool {
+    let Ok(store) = app.store(crate::profile::store_path(&app, AUTH_STORE)) else { return false };
+    let stored = store.get("agent_pub_key").and_then(|v| v.as_str().map(String::from));
+    let Some(stored) = stored else { return false };
+    if live_identity.is_empty() || stored != live_identity {
+        return false;
+    }
+    if !store.get("link_done").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return false;
+    }
+    let Some(link_key) = store.get("app_link_key").and_then(|v| v.as_str().map(String::from)) else { return false };
+    if vault_link_active(&http(), port, &link_key).await != Some(false) {
+        return false;
+    }
+    log::info!("[flowsta] the Vault no longer holds this app's connection - signing this device out");
+    for key in ["access_token", "refresh_token", "agent_pub_key", "did", "expires_at",
+                "display_name", "web_username", "profile_picture", "link_done"] {
+        store.delete(key);
+    }
+    let _ = store.save();
+    use tauri::Emitter;
+    let _ = app.emit("flowsta-session-changed", serde_json::json!({ "reason": "revoked" }));
+    true
+}
+
+/// `drop_identity_if_revoked` with its own Vault probe; false when the Vault
+/// is absent or locked (no answer to follow).
+pub(crate) async fn drop_identity_if_revoked_now(app: &tauri::AppHandle) -> bool {
+    let vault = find_vault().await;
+    match (vault.port, vault.unlocked, vault.agent_pub_key) {
+        (Some(port), true, Some(live)) => drop_identity_if_revoked(app, port, &live).await,
+        _ => false,
+    }
 }
 
 /// Valid access token for llm.rs's online branch (refreshes if stale).
@@ -1126,6 +1176,9 @@ async fn session_from_store(app: &tauri::AppHandle) -> Result<FlowstaSession, St
     // session first so the reads below report signed-out (not the prior
     // identity's plan/profile).
     let _ = session_identity_ok(app).await;
+    // And a connection the Vault no longer holds (revoked elsewhere) signs
+    // this device out rather than showing a stale name.
+    let _ = drop_identity_if_revoked_now(app).await;
     let store = app.store(crate::profile::store_path(&app, AUTH_STORE)).map_err(|e| e.to_string())?;
     let agent_pub_key = store.get("agent_pub_key").and_then(|v| v.as_str().map(String::from));
     let did = store.get("did").and_then(|v| v.as_str().map(String::from));
