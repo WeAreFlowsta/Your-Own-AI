@@ -604,6 +604,47 @@ export function useAiDataActions() {
     }
   });
 
+  // AI configs arrived from another of the person's devices (config_sync.rs):
+  // reload the list, give any AI new here its own agent, and say so.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async ({ cleanup }) => {
+    const { listen } = await import("@tauri-apps/api/event");
+    const un = await listen<{ updated: number; added: number }>("ai-configs-changed", async (e) => {
+      try {
+        const localAis = await getLocalCustomAis();
+        state.userDefinedAis = localAis;
+        const { provisionAgent } = await import("../utils/holochainTranscripts");
+        for (const ai of state.userDefinedAis) {
+          if (ai.agentPubKey) continue;
+          try {
+            const agentKey = await provisionAgent(ai.id);
+            if (!agentKey) continue;
+            const oldId = ai.id;
+            ai.agentPubKey = agentKey;
+            ai.id = agentKey;
+            ai.foundingKey = ai.foundingKey || oldId;
+            await updateLocalCustomAi(oldId, { id: agentKey, agentPubKey: agentKey, foundingKey: ai.foundingKey } as any);
+          } catch (err) {
+            console.warn("[AiDataContext] agent for an AI from another device failed:", err);
+          }
+        }
+        state.userDefinedAis = [...state.userDefinedAis];
+        const { announceActivity } = await import("../utils/activity");
+        const n = (e.payload?.updated ?? 0) + (e.payload?.added ?? 0);
+        announceActivity({
+          id: "ai-configs-changed",
+          title: "Your AIs were updated from another of your devices",
+          detail: n === 1 ? "1 AI" : `${n} AIs`,
+          state: "done",
+          ttlMs: 20000,
+        });
+      } catch (err) {
+        console.warn("[AiDataContext] reload after a config sync failed:", err);
+      }
+    });
+    cleanup(() => un());
+  });
+
   const refreshUserAis = $(async () => {
     state.isLoadingUserAis = true;
     try {

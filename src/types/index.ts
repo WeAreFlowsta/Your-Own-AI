@@ -36,6 +36,9 @@ export interface UserDefinedAI {
    *  person lists this AI's conversations at this key; each device's own agent (agentPubKey) writes
    *  there. Stamped once at first provisioning; carried across devices and restores; never edited. */
   foundingKey?: string;
+  /** ms epoch of the person's last edit to this AI (never set by seeding or by key changes) - the
+   *  newest edit wins when the same AI is edited on two devices. */
+  updatedAt?: number;
   /** Which starter slot (1-3) this AI was seeded into on this install - stamped once, never edited.
    *  Names and personalities change (the Work set, the wizard), so this is the only stable way to
    *  fold one install's starters into another's when the person signs in on a second device. */

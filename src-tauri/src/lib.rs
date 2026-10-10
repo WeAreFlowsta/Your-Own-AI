@@ -1,6 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod config_sync;          // AI configs across the person's devices (sibling manifests)
 mod conversation_cache;   // last-known-good conversation lists (encrypted)
 mod corpus;               // the person's document library (SQLite, row-encrypted; per-AI grants)
 mod model_hash;
@@ -918,6 +919,7 @@ pub fn run() {
                 }
                 vault_escrow::start_daily_backup_check(&link_app_handle);
                 vault_escrow::start_startup_escrow_sync(&link_app_handle);
+                config_sync::start_config_sync_rounds(&link_app_handle);
                 corpus::sync::start_folder_sync(&link_app_handle);
                 tuning::refresh_gpu_choices(&link_app_handle);
                 llm::start_memory_pressure_watch(&link_app_handle);

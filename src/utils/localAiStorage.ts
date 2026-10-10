@@ -333,7 +333,8 @@ export async function saveLocalCustomAi(ai: Omit<UserDefinedAI, 'id' | 'status'>
     const newAi: UserDefinedAI = {
       ...ai,
       id: `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      status: 'active'
+      status: 'active',
+      updatedAt: Date.now(),
     };
     
     const updatedAis = [...existingAis, newAi];
@@ -365,9 +366,14 @@ export async function updateLocalCustomAi(
       return null;
     }
     
+    // A person's edit is stamped so the newest wins across devices; a key
+    // change or a model pin (per device) is not an edit.
+    const DEVICE_ONLY: ReadonlySet<string> = new Set(['id', 'agentPubKey', 'foundingKey', 'restoredFromId', 'model', 'seedSlot', 'updatedAt']);
+    const isEdit = Object.keys(updates).some((k) => !DEVICE_ONLY.has(k));
     const updatedAi: UserDefinedAI = {
       ...existingAis[aiIndex],
       ...updates,
+      ...(isEdit ? { updatedAt: Date.now() } : {}),
     };
     
     existingAis[aiIndex] = updatedAi;
