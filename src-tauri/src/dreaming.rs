@@ -170,18 +170,156 @@ pub fn plan_dream(live: &[MemoryRow], now: i64, budget: usize) -> Vec<MemoryRow>
     out
 }
 
-/// One scope, one dream: read, plan, write, through `agent`.
+// ───────────── the model-assisted steps (through the memory slot) ─────────────
+
+/// At most this many model calls per scope per dream.
+const ASSIST_CALLS_PER_DREAM: usize = 20;
+
+/// A row whose words place its date relative to when it was said - the
+/// model turns that into an absolute `as_of` from the row's own date.
+pub fn date_cue(text: &str) -> bool {
+    let t = text.to_lowercase();
+    ["yesterday", "today", "tomorrow", "last week", "last month", "last year", "next week", "next month", "next year", "this week", "this month", "this morning", "tonight", " ago", "on monday", "on tuesday", "on wednesday", "on thursday", "on friday", "on saturday", "on sunday"]
+        .iter()
+        .any(|c| t.contains(c))
+}
+
+/// A row that may hold two statements: two sentences, a semicolon, or a
+/// long "and also" - the model says whether and splits it.
+pub fn split_cue(text: &str) -> bool {
+    let t = text.trim();
+    let sentences = t.matches(". ").count() + t.matches("; ").count();
+    sentences >= 1 || t.to_lowercase().contains(" and also ") || t.to_lowercase().contains(", and i ")
+}
+
+const ASSIST_SYSTEM: &str = "You tidy one memory note for a person's AI. Answer ONLY the JSON object. Rules: as_of = the absolute date (YYYY-MM-DD) the note's relative words point to, counted from the note's own date, or \"\" when the note has no relative date; statements = the note split into separate statements when it holds more than one, else the note unchanged as one item - never add, drop or reword facts; topics = one to three short lowercase topic words.";
+const ASSIST_GRAMMAR: &str = "root ::= \"{\" ws qt \"as_of\" qt ws \":\" ws date ws \",\" ws qt \"statements\" qt ws \":\" ws \"[\" ws str ( ws \",\" ws str )* ws \"]\" ws \",\" ws qt \"topics\" qt ws \":\" ws \"[\" ws ( str ( ws \",\" ws str )* ws )? \"]\" ws \"}\"\ndate ::= qt ( [0-9] [0-9] [0-9] [0-9] \"-\" [0-9] [0-9] \"-\" [0-9] [0-9] )? qt\nqt ::= [\"]\nstr ::= qt [^\"]* qt\nws ::= [ \\t\\n\\r]*";
+
+/// The revisions one model answer makes of one row. Pure. A date moves
+/// `as_of`; two or more statements make the first a revision of the row
+/// and the rest new rows (each naming the original in its provenance);
+/// topics fill in when the row had none. Facts are never reworded: a
+/// statement whose words are not (nearly all) the row's own is refused.
+pub fn apply_assist(row: &MemoryRow, answer: &str, now: i64) -> Vec<MemoryRow> {
+    let start = answer.find('{');
+    let end = answer.rfind('}');
+    let Some(v) = (match (start, end) { (Some(a), Some(b)) if b > a => serde_json::from_str::<serde_json::Value>(&answer[a..=b]).ok(), _ => None }) else { return vec![] };
+    let mut out = Vec::new();
+    let row_words: std::collections::HashSet<String> = row.text.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| w.len() > 2).map(String::from).collect();
+    let grounded = |t: &str| {
+        let ws: Vec<String> = t.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| w.len() > 2).map(String::from).collect();
+        !ws.is_empty() && ws.iter().filter(|w| row_words.contains(*w)).count() * 10 >= ws.len() * 8
+    };
+    let statements: Vec<String> = v["statements"].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()).unwrap_or_default();
+    let topics: Vec<String> = v["topics"].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).map(|x| x.trim().to_lowercase()).filter(|x| !x.is_empty() && x.len() <= 32).take(3).collect()).unwrap_or_default();
+    let as_of = v["as_of"].as_str().filter(|d| d.len() == 10).and_then(|d| {
+        let p: Vec<i64> = d.split('-').filter_map(|x| x.parse().ok()).collect();
+        if p.len() == 3 && (1..=12).contains(&p[1]) && (1..=31).contains(&p[2]) { Some(days_from_civil(p[0], p[1], p[2]) * 86_400_000) } else { None }
+    });
+    let mut first = row.clone();
+    let mut changed = false;
+    if let Some(ms) = as_of {
+        if ms != row.as_of && (now - ms).abs() < 50 * 365 * 86_400_000 {
+            first.as_of = ms;
+            changed = true;
+        }
+    }
+    if first.topics.is_empty() && !topics.is_empty() {
+        first.topics = topics.clone();
+        changed = true;
+    }
+    let split_ok = statements.len() >= 2 && statements.iter().all(|s| grounded(s));
+    if split_ok {
+        first.text = statements[0].clone();
+        changed = true;
+    }
+    if changed {
+        first.provenance = with_sources(&format!("dream:{}", row.id), &[row.provenance.as_str()]);
+        first.updated_at = now;
+        first.action_hash = None;
+        out.push(first);
+    }
+    if split_ok {
+        for (i, st) in statements.iter().enumerate().skip(1) {
+            let mut part = row.clone();
+            part.id = format!("{}-{}", row.id, i);
+            part.text = st.clone();
+            part.topics = topics.clone();
+            part.replaces = vec![];
+            part.provenance = with_sources(&format!("dream:{}", row.id), &[row.provenance.as_str()]);
+            part.updated_at = now + i as i64;
+            part.action_hash = None;
+            out.push(part);
+        }
+    }
+    out
+}
+
+/// Days since 1970-01-01 for a civil date (Howard Hinnant).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// Which live rows a dream asks the model about: an untouched layer-2 row
+/// with a relative date, a possible double statement, or no topics.
+pub fn assist_candidates(live: &[MemoryRow]) -> Vec<MemoryRow> {
+    live.iter()
+        .filter(|r| r.kind != "rule" && !r.pinned && r.valid_to.is_none())
+        .filter(|r| !r.provenance.starts_with("dream:"))
+        .filter(|r| date_cue(&r.text) || split_cue(&r.text) || r.topics.is_empty())
+        .cloned()
+        .take(ASSIST_CALLS_PER_DREAM)
+        .collect()
+}
+
+/// The model-assisted pass of one scope: one call per candidate row
+/// through the memory slot (precision work, grammar-constrained), the
+/// answers applied as revisions. Returns how many it wrote.
+async fn assist_scope(app: &tauri::AppHandle, manager: &crate::holochain::HolochainManager, agent: &str, live: &[MemoryRow]) -> usize {
+    let mut written = 0usize;
+    for row in assist_candidates(live) {
+        if idle_for_secs() < IDLE_SECS {
+            break;
+        }
+        let said = crate::memory_rows::ymd(row.as_of);
+        let user = format!("note (said on {said}): \"{}\"", row.text.replace('"', "'"));
+        let answer = match crate::llm::memory_complete(app, crate::llm::UTILITY_MODEL_FILE, ASSIST_SYSTEM, &user, Some(ASSIST_GRAMMAR), 200, 0.0).await {
+            Ok(a) => a,
+            Err(e) => {
+                log::debug!("[dream] assist call failed: {e}");
+                break;
+            }
+        };
+        for rev in apply_assist(&row, &answer, now_ms()) {
+            match crate::memory_rows::write_row_pub(manager, agent, &rev).await {
+                Ok(()) => written += 1,
+                Err(e) => log::warn!("[dream] assist write failed: {e}"),
+            }
+        }
+    }
+    written
+}
+
+/// One scope, one dream: read, plan, write, then the model-assisted pass,
+/// through `agent`.
 async fn dream_scope(app: &tauri::AppHandle, manager: &crate::holochain::HolochainManager, agent: &str, scope: &str) -> Result<usize, String> {
     let live = crate::memory_rows::rows_live(app, manager, agent, scope).await?;
     let plan = plan_dream(&live, now_ms(), LAYER2_BUDGET_ROWS);
     for rev in &plan {
         crate::memory_rows::write_row_pub(manager, agent, rev).await?;
     }
-    if !plan.is_empty() {
-        // Refresh the cache with the result.
+    let live = if plan.is_empty() { live } else { crate::memory_rows::rows_live(app, manager, agent, scope).await? };
+    let assisted = assist_scope(app, manager, agent, &live).await;
+    if assisted > 0 {
         let _ = crate::memory_rows::rows_live(app, manager, agent, scope).await;
     }
-    Ok(plan.len())
+    Ok(plan.len() + assisted)
 }
 
 /// One dream of one scope, now (Settings and the UI tests; the scheduler
@@ -313,6 +451,36 @@ mod tests {
         assert!(f2.provenance.contains("extracted:uhCkk1234"), "the merged row's record stays named: {}", f2.provenance);
         // A second dream over a dreamed row does not pile up marks.
         assert_eq!(with_sources("dream:x", &["dream:f2,f1;extracted:a|extracted:b", "authored"]), "dream:x;extracted:a|extracted:b|authored");
+    }
+
+    #[test]
+    fn the_model_assisted_pass_dates_splits_and_tags_but_never_rewords() {
+        let r = row("n9", "note", "Met Alex at the market yesterday. The office opens at nine", 1_791_600_000_000);
+        assert!(date_cue(&r.text) && split_cue(&r.text));
+        let answer = r#"{"as_of":"2026-10-10","statements":["Met Alex at the market yesterday","The office opens at nine"],"topics":["alex","office"]}"#;
+        let out = apply_assist(&r, answer, 1_791_700_000_000);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].id, "n9");
+        assert_eq!(out[0].text, "Met Alex at the market yesterday");
+        assert_eq!(out[0].as_of, days_from_civil(2026, 10, 10) * 86_400_000);
+        assert_eq!(out[0].topics, vec!["alex", "office"]);
+        assert!(out[0].provenance.starts_with("dream:n9;"));
+        assert_eq!(out[1].id, "n9-1");
+        assert_eq!(out[1].text, "The office opens at nine");
+        // A split that invents words is refused; the topics still apply.
+        let bad = r#"{"as_of":"","statements":["Met Alex at the pub","The office opens at nine"],"topics":["alex"]}"#;
+        let out = apply_assist(&r, bad, 1_791_700_000_000);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].text, r.text, "not reworded");
+        assert_eq!(out[0].topics, vec!["alex"]);
+        // Nothing to change: nothing written; a dreamed row is not asked again.
+        let mut done = r.clone();
+        done.topics = vec!["x".into()];
+        assert!(apply_assist(&done, r#"{"as_of":"","statements":["Met Alex at the market yesterday. The office opens at nine"],"topics":["x"]}"#, 5).is_empty());
+        done.provenance = "dream:n9;authored".into();
+        assert!(assist_candidates(&[done]).is_empty());
+        assert_eq!(days_from_civil(1970, 1, 1), 0);
+        assert_eq!(days_from_civil(2000, 2, 29), 11_016);
     }
 
     #[test]

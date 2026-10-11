@@ -4315,17 +4315,33 @@ pub async fn utility_chat(
     grammar: Option<String>,
     max_tokens: u32,
 ) -> Result<String, String> {
-    // The memory slot (MEMORY_REDESIGN.md §7): a warm model that grades at
-    // or above the helper does the work on the chat server; otherwise the
-    // helper. Precision work is the default for grammar-constrained calls.
+    let _ = state;
+    memory_complete(&app_handle, &model, &system, &user, grammar.as_deref(), max_tokens, 0.7).await
+}
+
+/// One memory-work completion through the memory slot (MEMORY_REDESIGN.md
+/// §7): the warm chat model when it grades high enough, else the helper
+/// (`fallback_model`, started if needed). Never a load, never online. The
+/// helper command above and dreaming's model-assisted steps both use it.
+pub(crate) async fn memory_complete(
+    app_handle: &AppHandle,
+    fallback_model: &str,
+    system: &str,
+    user: &str,
+    grammar: Option<&str>,
+    max_tokens: u32,
+    temperature: f32,
+) -> Result<String, String> {
+    use tauri::Manager;
     let task = if grammar.is_some() || max_tokens <= 64 { "memory-precision" } else { "memory-prose" };
-    let pick = crate::memory_slot::pick(&app_handle, task);
+    let pick = crate::memory_slot::pick(app_handle, task);
     let (port, model) = if pick.via == "loaded" {
         log::info!("[LLM] memory work on the loaded model: {}", pick.reason);
         (CHAT_PORT, pick.model.clone())
     } else {
-        ensure_utility_server(&app_handle, &state, &model).await?;
-        (UTIL_PORT, model)
+        let state = app_handle.state::<LLMState>();
+        ensure_utility_server(app_handle, &state, fallback_model).await?;
+        (UTIL_PORT, fallback_model.to_string())
     };
     let _busy = Inflight::new(&UTIL_INFLIGHT);
 
@@ -4336,7 +4352,7 @@ pub async fn utility_chat(
             { "role": "user", "content": user }
         ],
         "max_tokens": max_tokens,
-        "temperature": 0.7,
+        "temperature": temperature,
         "stream": false,
         "cache_prompt": true,
         // The same stops as chat: the chat model stands in here when the
@@ -4345,7 +4361,7 @@ pub async fn utility_chat(
         "stop": chat_stop_strings(&model)
     });
     if let Some(g) = grammar {
-        body["grammar"] = serde_json::Value::String(g);
+        body["grammar"] = serde_json::Value::String(g.to_string());
     }
 
     let _turn = UTIL_ONE_AT_A_TIME.acquire().await.map_err(|e| e.to_string())?;

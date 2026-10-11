@@ -136,9 +136,20 @@ describe("memory rules", () => {
     const B = `Always run cargo test before each release (dream ${stamp})`;
     await invoke("save_memory_row", { agentKey: null, row: mk(`dream-a-${stamp}`, A, Date.now() - 2000) });
     await invoke("save_memory_row", { agentKey: null, row: mk(`dream-b-${stamp}`, B, Date.now() - 1000) });
+    // A note with a relative date and two statements: the model-assisted
+    // pass (through the memory slot) dates it, splits it or tags it - never
+    // rewords it. Which of the three a small model manages may vary; one
+    // assisted revision is the proof.
+    const noteText = `Met Alex at the market yesterday. The office opens at nine (dream ${stamp})`;
+    await invoke("save_memory_row", { agentKey: null, row: { ...mk(`dream-n-${stamp}`, noteText, Date.now() - 3000), kind: "note" } });
     const n = await invoke<number>("dream_now", { scope: "person", agentKey: null });
     console.log(`e2e: dream wrote ${n} revision(s)`);
     expect(n).toBeGreaterThan(0);
+    const assisted = (await invoke<any[]>("list_memory_revisions", { agentKey: null, scope: "person" }))
+      .filter((r) => (r.id === `dream-n-${stamp}` || r.id.startsWith(`dream-n-${stamp}-`)) && r.provenance.startsWith("dream:"));
+    console.log(`e2e: assisted ${JSON.stringify(assisted.map((r) => [r.id, r.text.slice(0, 40), r.as_of, r.topics]))}`);
+    expect(assisted.length).toBeGreaterThan(0);
+    for (const r of assisted) expect(noteText.toLowerCase()).toContain(r.text.toLowerCase().replace(/ \(dream.*$/, "").slice(0, 12));
     const live = (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).filter((r) => r.text.includes(`(dream ${stamp})`));
     expect(live.length).toBe(1);
     expect(live[0].text).toBe(B);
@@ -159,8 +170,8 @@ describe("memory rules", () => {
       const rows = (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).filter((r) => r.text.includes(`(dream ${stamp})`));
       return rows.length === 2;
     }, { timeout: 30_000, timeoutMsg: "Undo did not bring both commands back" });
-    // Tidy.
-    for (const r of (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).filter((x) => x.text.includes(`(dream ${stamp})`))) {
+    // Tidy (the note and anything the dream made of it too).
+    for (const r of (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).filter((x) => x.text.includes(`(dream ${stamp})`) || x.id.startsWith(`dream-n-${stamp}`))) {
       await invoke("save_memory_row", { agentKey: null, row: { ...r, deleted: true, updated_at: Date.now(), action_hash: null } });
     }
   });
