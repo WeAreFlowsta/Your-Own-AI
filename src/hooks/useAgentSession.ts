@@ -239,6 +239,7 @@ function humanizeMcpName(name: string): string {
     "project-memory__remember_for_project": "Remember something for this project",
     "project-memory__read_project_memory": "Read the project's memory",
     "project-memory__read_memory": "Read your memory",
+    "project-memory__remember": "Remembered something for you",
   };
   if (known[name]) return known[name];
   // "<server>__<tool>" -> "Tool words (server)": the server half says WHICH

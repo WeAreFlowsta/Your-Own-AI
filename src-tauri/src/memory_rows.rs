@@ -312,6 +312,108 @@ pub(crate) fn rows_text_for(app: &tauri::AppHandle, key: &[u8; 32], scopes: &[St
     out.join("\n")
 }
 
+// ───────────── the tool's self-edit ─────────────
+
+fn words(text: &str) -> std::collections::HashSet<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() > 2)
+        .map(String::from)
+        .collect()
+}
+
+/// Two rows say the same thing when one's words are mostly the other's:
+/// Jaccard ≥ 0.6, or one is a sub-statement of the other. The reason the
+/// old append-only project memory filled with near-duplicates.
+pub(crate) fn says_the_same(a: &str, b: &str) -> bool {
+    let (wa, wb) = (words(a), words(b));
+    if wa.is_empty() || wb.is_empty() {
+        return a.trim().eq_ignore_ascii_case(b.trim());
+    }
+    let inter = wa.intersection(&wb).count() as f32;
+    let union = wa.union(&wb).count() as f32;
+    inter / union >= 0.6 || inter >= wa.len().min(wb.len()) as f32 && wa.len().min(wb.len()) >= 3
+}
+
+/// Which live row (same scope and kind) a new statement revises, if any.
+pub(crate) fn find_revised<'a>(live: &'a [MemoryRow], kind: &str, text: &str) -> Option<&'a MemoryRow> {
+    live.iter().filter(|r| r.kind == kind).find(|r| says_the_same(&r.text, text))
+}
+
+/// Write a row, revising a row that says the same thing instead of adding
+/// a twin: the new row carries `replaces: [old id]` and the old id, so the
+/// reducer shows one. Returns (action hash hex, the replaced text if any).
+pub(crate) async fn upsert_row(app: &tauri::AppHandle, manager: &crate::holochain::HolochainManager, agent: &str, mut row: MemoryRow) -> Result<(String, Option<String>), String> {
+    let live = rows_at(app, manager, agent, &row.scope).await.unwrap_or_default();
+    let mut replaced = None;
+    if let Some(old) = find_revised(&live, &row.kind, &row.text) {
+        row.id = old.id.clone();
+        row.pinned = row.pinned || old.pinned;
+        if old.text != row.text {
+            replaced = Some(old.text.clone());
+        }
+    }
+    let key = manager.data_key()?;
+    let mut sealed = row.clone();
+    sealed.action_hash = None;
+    let plain = serde_json::to_vec(&sealed).map_err(|e| e.to_string())?;
+    let (nonce, cipher) = crate::transcript_crypto::encrypt(&key, &plain)?;
+    let anchor = scope_anchor(&row.scope, &key)?;
+    let payload = ExternIO::encode(SaveInput { cipher, nonce: nonce.to_vec(), anchor }).map_err(|e| e.to_string())?;
+    let out = manager.call_zome(agent, "transcript", "save_memory_row", payload).await?;
+    let hash: ActionHash = ExternIO::decode(&out).map_err(|e| e.to_string())?;
+    // The cache sees the change at once.
+    let mut after: Vec<MemoryRow> = live.into_iter().filter(|r| r.id != row.id).collect();
+    row.action_hash = Some(hex::encode(hash.get_raw_39()));
+    after.push(row.clone());
+    write_cache(app, &key, &row.scope, &reduce(after));
+    Ok((hex::encode(hash.get_raw_39()), replaced))
+}
+
+/// The `remember` tool: a row the AI saves for the person (`person`) or
+/// for itself (`ai:<founding>`), kinds limited to what an AI may save - a
+/// `rule` is the person's to save (decision 2), so a rule-shaped request
+/// becomes a `note` with the words kept.
+pub(crate) async fn remember_tool(app: &tauri::AppHandle, agent_key: &str, scope_word: &str, kind: &str, text: &str) -> Result<String, String> {
+    let hc = app.try_state::<Arc<HolochainState>>().ok_or("memory is not available yet")?;
+    let manager = hc.get()?;
+    let writer = if !agent_key.is_empty() && manager.is_provisioned(agent_key).await { agent_key.to_string() } else { any_agent(&manager).await.ok_or("no agent provisioned yet")? };
+    let scope = match scope_word {
+        "ai" | "me" | "self" if !agent_key.is_empty() => format!("ai:{}", crate::commands_holochain::founding_key_for(app, agent_key)),
+        _ => "person".to_string(),
+    };
+    let kind = match kind {
+        "command" | "location" | "decision" | "fact" | "note" => kind.to_string(),
+        _ => "note".to_string(),
+    };
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("nothing to remember - the text was empty".into());
+    }
+    let row = MemoryRow {
+        id: { use rand::RngCore; let mut b = [0u8; 16]; rand::thread_rng().fill_bytes(&mut b); hex::encode(b) },
+        scope: scope.clone(),
+        kind: kind.clone(),
+        text: text.to_string(),
+        structured: None,
+        as_of: now_ms(),
+        valid_to: None,
+        saved_by: if agent_key.is_empty() { "person".into() } else { format!("ai:{}", crate::commands_holochain::founding_key_for(app, agent_key)) },
+        provenance: "authored".into(),
+        pinned: false,
+        topics: vec![],
+        replaces: vec![],
+        deleted: false,
+        updated_at: now_ms(),
+        action_hash: None,
+    };
+    let (_, replaced) = upsert_row(app, &manager, &writer, row).await?;
+    Ok(match replaced {
+        Some(old) => format!("Updated what was remembered (replaces: \"{old}\")."),
+        None => format!("Remembered as a {kind} for {}.", if scope == "person" { "them" } else { "you" }),
+    })
+}
+
 // ───────────── the person's facts file ↔ person-scope rows ─────────────
 
 /// A `MemoryFact` (the facts file's record) as a person-scope row: facts
@@ -815,6 +917,19 @@ mod tests {
         assert_eq!(ymd(951_782_400_000), "2000-02-29");
         assert_eq!(ymd(1_791_686_974_094), "2026-10-11");
         assert_eq!(ymd(-5), "");
+    }
+
+    #[test]
+    fn a_statement_that_says_the_same_revises_the_old_row_instead_of_adding_a_twin() {
+        let live = vec![row("c1", "Run npm test before every commit", 10), row("l1", "The API lives in src/api", 10)];
+        let mut live = live;
+        live[0].kind = "command".into();
+        live[1].kind = "location".into();
+        assert_eq!(find_revised(&live, "command", "Always run npm test before each commit").map(|r| r.id.as_str()), Some("c1"));
+        assert!(find_revised(&live, "command", "Deploy with firebase deploy").is_none());
+        assert!(find_revised(&live, "location", "Run npm test before every commit").is_none(), "another kind is another row");
+        assert!(says_the_same("use short answers", "Use short answers."));
+        assert!(!says_the_same("the office opens at nine", "call the supplier on mondays"));
     }
 
     #[test]

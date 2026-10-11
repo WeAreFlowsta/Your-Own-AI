@@ -49,6 +49,27 @@ export function memoryLine(): string | null {
   return parts.length ? `Memory: ${parts.join(", ")}` : null;
 }
 
+/** The cue rule (MEMORY_REDESIGN.md §5.2, until the decision model ships):
+ *  does a message read as a standing instruction about how to work? High
+ *  precision on purpose - a wrong offer under a message is noise. Short,
+ *  not a question, and carries an explicit standing marker. */
+export function looksLikeInstruction(text: string): boolean {
+  const t = text.trim();
+  if (t.length < 6 || t.length > 240 || t.endsWith("?")) return false;
+  const lower = t.toLowerCase();
+  return (
+    /\b(always|never|from now on|going forward|in future|in the future|every time|each time)\b/.test(lower) ||
+    /^(please )?(don't|do not|stop|avoid|keep|use|only|no more|make sure|remember to|be more|be less)\b/.test(lower) ||
+    /\b(instead of|rather than)\b/.test(lower) && /^(please )?(use|say|write|answer|reply|call|keep)\b/.test(lower)
+  );
+}
+
+/** The same rule said twice is one rule: lower case, no trailing stop,
+ *  single spaces. */
+export function normalizeRuleText(text: string): string {
+  return text.trim().toLowerCase().replace(/[.!]+$/, "").replace(/\s+/g, " ");
+}
+
 /** The always-loaded facts block is capped by BYTES, not lines (the
  *  survey's 2-3 KB figure): about 25 short rows. */
 export const MEMORY_FACTS_BUDGET_BYTES = 2048;

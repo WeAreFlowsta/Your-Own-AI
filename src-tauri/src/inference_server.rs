@@ -2141,6 +2141,19 @@ async fn mcp_post(
                     "inputSchema": { "type": "object", "properties": {} }
                 },
                 {
+                    "name": "remember",
+                    "description": "Remember one thing for this person (or for yourself) beyond this project: a command that works, where something is, a decision, a fact about them, a note. One line. Say it again with new words to update it - the old line is replaced, not duplicated. Rules are theirs to save: offer, don't save.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "text": { "type": "string", "description": "What to remember, one line." },
+                            "kind": { "type": "string", "enum": ["command", "location", "decision", "fact", "note"], "description": "What kind of thing it is (default note)." },
+                            "scope": { "type": "string", "enum": ["person", "ai"], "description": "For the person (default) or for yourself." }
+                        },
+                        "required": ["text"]
+                    }
+                },
+                {
                     "name": "read_memory",
                     "description": "Read what this person has asked you to remember - their standing rules, commands, locations, decisions, facts and notes, for them and for you - optionally only the ones about a topic. Use it before guessing how they want something done.",
                     "inputSchema": {
@@ -2155,6 +2168,17 @@ async fn mcp_post(
         Some("tools/call") => {
             // The person's memory rows need no project: the person's scope
             // and this AI's own scope (by its founding key).
+            if req["params"]["name"].as_str() == Some("remember") {
+                let a = &req["params"]["arguments"];
+                let (text, kind, scope) = (a["text"].as_str().unwrap_or(""), a["kind"].as_str().unwrap_or("note"), a["scope"].as_str().unwrap_or("person"));
+                return match crate::memory_rows::remember_tool(&app, &agent_key, scope, kind, text).await {
+                    Ok(line) => {
+                        log::info!("[mcp] {} remembered a {} ({})", agent_label, kind, scope);
+                        mcp_tool_text(&id, line, false)
+                    }
+                    Err(e) => mcp_tool_text(&id, format!("Could not remember that: {e}"), true),
+                };
+            }
             if req["params"]["name"].as_str() == Some("read_memory") {
                 let topic = req["params"]["arguments"]["topic"].as_str().map(str::to_string);
                 let unavailable = || mcp_tool_text(&id, "Memory is not available yet.".to_string(), true);

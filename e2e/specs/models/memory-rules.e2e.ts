@@ -5,6 +5,17 @@
 import { shot, invoke, waitForChat, ask, waitForReplyDone } from "./_helpers";
 
 const RULE = `Always ask before sending anything (test ${Date.now().toString(36)})`;
+const SAID_RULE = `From now on, answer in one short sentence (test ${Date.now().toString(36)})`;
+
+async function mcpCall(name: string, args: Record<string, unknown>) {
+  const r = await fetch("http://127.0.0.1:11435/mcp", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
+  });
+  const body = await r.json();
+  return { status: r.status, text: String(body?.result?.content?.[0]?.text ?? ""), isError: !!body?.result?.isError };
+}
 
 async function yourMemory() {
   await browser.url("tauri://localhost/your-memory/");
@@ -67,6 +78,34 @@ describe("memory rules", () => {
     await shot("memory-rule-rail-line");
   });
 
+  it("offers to keep an instruction said in chat as a rule, and the remember tool revises instead of duplicating", async () => {
+    await waitForChat();
+    // Said in chat, instruction-shaped: one line under the message offers.
+    await ask(SAID_RULE);
+    const offer = await $('[data-testid="rule-offer"]');
+    await offer.waitForDisplayed({ timeout: 15_000 });
+    await shot("memory-rule-offer");
+    await (await $('[data-testid="rule-offer-keep"]')).click();
+    await (await $('[data-testid="rule-kept"]')).waitForDisplayed({ timeout: 30_000 });
+    await waitForReplyDone().catch(() => undefined);
+    const rows = await invoke<{ kind: string; text: string }[]>("list_memory_rows", { agentKey: null, scope: "person" });
+    expect(rows.some((r) => r.kind === "rule" && r.text === SAID_RULE)).toBe(true);
+    // The remember tool: said twice with new words, one row with the newer text.
+    const first = await mcpCall("remember", { text: "Run npm test before every commit (e2e)", kind: "command" });
+    console.log(`e2e: remember 1 -> ${JSON.stringify(first.text)}`);
+    expect(first.isError).toBe(false);
+    const second = await mcpCall("remember", { text: "Always run npm test before each commit (e2e)", kind: "command" });
+    console.log(`e2e: remember 2 -> ${JSON.stringify(second.text)}`);
+    expect(second.text).toContain("replaces");
+    const commands = (await invoke<{ kind: string; text: string }[]>("list_memory_rows", { agentKey: null, scope: "person" })).filter((r) => r.kind === "command" && r.text.includes("(e2e)"));
+    console.log(`e2e: commands ${JSON.stringify(commands.map((c) => c.text))}`);
+    expect(commands.length).toBe(1);
+    expect(commands[0].text).toContain("Always run");
+    // Tidy: the command goes (a deletion is a record).
+    const cmd = (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).find((r) => r.kind === "command" && r.text.includes("(e2e)"));
+    await invoke("save_memory_row", { agentKey: null, row: { ...cmd, deleted: true, updated_at: Date.now(), action_hash: null } });
+  });
+
   it("keeps the rule across a reload and removes it as a record", async () => {
     await yourMemory();
     await (await $(`[data-testid="memory-rule"]*=${RULE.slice(0, 30)}`)).waitForDisplayed({ timeout: 60_000 });
@@ -78,5 +117,8 @@ describe("memory rules", () => {
     const after = await invoke<{ text: string }[]>("list_memory_rows", { agentKey: null, scope: "person" });
     expect(after.some((r) => r.text === RULE)).toBe(false);
     await shot("memory-rule-removed");
+    // Tidy the rule kept from chat the same way.
+    const said = (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).find((r) => r.text === SAID_RULE);
+    if (said) await invoke("save_memory_row", { agentKey: null, row: { ...said, deleted: true, updated_at: Date.now(), action_hash: null } });
   });
 });

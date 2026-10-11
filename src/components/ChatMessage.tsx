@@ -20,6 +20,7 @@ import { AgentWorkingBox } from './AgentWorkingBox';
 import ThemeAwareLottie from './ThemeAwareLottie';
 import LiquidMetalButton from './LiquidMetalButton';
 import type { RememberHandle } from '../utils/rememberText';
+import { looksLikeInstruction } from '../utils/memory';
 
 // Markdown rendering imported from shared utility (renderMarkdown)
 
@@ -952,6 +953,44 @@ const ActionBar = component$<ActionBarProps>((props) => {
 });
 
 const ChatMessage = component$<ChatMessageProps>((props) => {
+  /** Capture at the moment of saying (MEMORY_REDESIGN.md §5): under the
+   *  person's own message, one line - "Keep this as a rule?" when it reads
+   *  as a standing instruction, else a quiet Remember that saves a note.
+   *  '' | 'saving' | 'saved-rule' | 'saved-note' | 'dismissed' | 'error' */
+  const captureState = useSignal('');
+  const keepAsRule = $(async () => {
+    if (captureState.value === 'saving') return;
+    captureState.value = 'saving';
+    try {
+      const [{ saveMemoryRow, newRow, listMemoryRowsCached, personScope }, { normalizeRuleText }] = await Promise.all([
+        import('../utils/memoryRows'),
+        import('../utils/memory'),
+      ]);
+      const text = props.message.content.trim();
+      const same = (await listMemoryRowsCached(personScope).catch(() => [])).find(
+        (r) => r.kind === 'rule' && normalizeRuleText(r.text) === normalizeRuleText(text),
+      );
+      if (!same) await saveMemoryRow(newRow(personScope, 'rule', text, { pinned: true }));
+      captureState.value = 'saved-rule';
+    } catch (e) {
+      console.warn('[ChatMessage] keeping the rule failed:', e);
+      captureState.value = 'error';
+      setTimeout(() => (captureState.value = ''), 2500);
+    }
+  });
+  const rememberOwn = $(async () => {
+    if (captureState.value === 'saving') return;
+    captureState.value = 'saving';
+    try {
+      const { addAuthoredNote } = await import('../utils/memory');
+      await addAuthoredNote(props.message.content.trim());
+      captureState.value = 'saved-note';
+    } catch (e) {
+      console.warn('[ChatMessage] remembering the message failed:', e);
+      captureState.value = 'error';
+      setTimeout(() => (captureState.value = ''), 2500);
+    }
+  });
   const finalText = useSignal('');
   const displayedLineCount = useSignal(0);
   const thinkingPreviewRef = useSignal<HTMLDivElement>();
@@ -1326,7 +1365,8 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
   if (props.message.role === 'user') {
     const images = props.message.images;
     return (
-      <div class="flex justify-end mb-4 items-start gap-2" data-testid="chat-message" data-role="user">
+      <div class="group flex flex-col items-end mb-4" data-testid="chat-message" data-role="user">
+      <div class="flex justify-end items-start gap-2 w-full">
         <div class="bg-[var(--bg-user-message)] chat-bubble-border text-[var(--text-primary)] text-sm mt-1 py-1.5 px-4 leading-loose tracking-wide font-light max-w-[calc(100%)] rounded-2xl">
           {images && images.length > 0 && (
             <div class="flex flex-wrap gap-2 justify-end pt-1.5 pb-1">
@@ -1362,6 +1402,34 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
               multi-line prompt read as one paragraph, 09-24). */}
           <span class="whitespace-pre-wrap">{props.message.content}</span>
         </div>
+      </div>
+      {/* One line, never a modal: the offer for an instruction, a quiet
+          Remember for anything else; gone once answered. */}
+      {props.message.content && captureState.value !== 'dismissed' && (
+        <div class="mt-1 pr-1 text-[11px] text-[var(--text-muted)] flex items-center gap-2" data-testid="own-message-capture">
+          {captureState.value === 'saved-rule' ? (
+            <span data-testid="rule-kept">Kept as a rule - every AI follows it.</span>
+          ) : captureState.value === 'saved-note' ? (
+            <span>Remembered.</span>
+          ) : captureState.value === 'error' ? (
+            <span>Could not save it just now.</span>
+          ) : looksLikeInstruction(props.message.content) ? (
+            <>
+              <span data-testid="rule-offer">Keep this as a rule?</span>
+              <button type="button" class="underline hover:text-[var(--text-primary)]" data-testid="rule-offer-keep" onClick$={keepAsRule} disabled={captureState.value === 'saving'}>
+                {captureState.value === 'saving' ? 'Keeping…' : 'Keep'}
+              </button>
+              <button type="button" class="hover:text-[var(--text-primary)]" onClick$={() => (captureState.value = 'dismissed')}>
+                Not now
+              </button>
+            </>
+          ) : (
+            <button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-[var(--text-primary)] transition-opacity" title="Remember this for your AIs" onClick$={rememberOwn} disabled={captureState.value === 'saving'} data-testid="remember-own">
+              Remember
+            </button>
+          )}
+        </div>
+      )}
       </div>
     );
   }

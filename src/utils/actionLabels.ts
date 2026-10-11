@@ -112,6 +112,7 @@ const KNOWN_MCP: Record<string, [string, string]> = {
   "project-memory__remember_for_project": ["Remembering something for this project", "Remembered something for this project"],
   "project-memory__read_project_memory": ["Reading the project's memory", "Read the project's memory"],
   "project-memory__read_memory": ["Reading your memory", "Read your memory"],
+  "project-memory__remember": ["Remembering something for you", "Remembered something for you"],
 };
 
 function titleClean(title: string): string {
