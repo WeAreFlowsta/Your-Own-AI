@@ -16,6 +16,7 @@
  */
 
 import { skillNameFromPath } from "../utils/skills";
+import { invoke } from "@tauri-apps/api/core";
 import { describeAction, subjectOfLabel, errorOf } from "../utils/actionLabels";
 import { MCP_PRESETS } from "../utils/mcp";
 import { summaryOf } from "../utils/agentSummary";
@@ -375,6 +376,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
   // of the session's FIRST prompt, revised at session end when real work
   // happened.
   const workspaceMemory = useSignal("");
+  /** The project's AGENTS.md text, read at session start (empty when none). */
+  const agentsMd = useSignal("");
   const memoryPending = useSignal(false);
   const toolsPending = useSignal(false);
   const sessionTurns = useSignal(0);
@@ -735,9 +738,13 @@ export function useAgentSession(props: UseAgentSessionProps) {
     if (memoryPending.value) {
       memoryPending.value = false;
       // Workspace memory leads (durable folder truths), then any restored
-      // conversation context, then the question.
+      // conversation context, then the question. The project's AGENTS.md
+      // leads all of it: the person's own rules for working here.
       const block = memoryPromptBlock(workspaceMemory.value);
       if (block) wire = block + wire;
+      if (agentsMd.value) {
+        wire = `Rules for working in this project, from its AGENTS.md - the person wrote them; follow them exactly:\n${agentsMd.value}\n\n` + wire;
+      }
     }
     if (toolsPending.value) {
       toolsPending.value = false;
@@ -1437,6 +1444,20 @@ export function useAgentSession(props: UseAgentSessionProps) {
         // The first prompt always carries at least the tool hint; the
         // memory content joins it when the chain read lands in time.
         memoryPending.value = true;
+        // The project's AGENTS.md (MEMORY_REDESIGN.md §8, decision 5): the
+        // person-written rules layer, read by default at every session start,
+        // nearest file wins (the project root here), capped so it stays a
+        // rules file and not a manual.
+        agentsMd.value = "";
+        invoke<{ content?: string }>("read_file_for_context", { filePath: `${folder.replace(/[\\/]+$/, "")}/AGENTS.md` })
+          .then((r) => {
+            const text = String(r?.content ?? "").trim();
+            if (text) {
+              agentsMd.value = text.length > 6000 ? text.slice(0, 6000) + "\n…" : text;
+              console.log(`[AgentSession] AGENTS.md read for ${folder} (${text.length} chars)`);
+            }
+          })
+          .catch(() => { /* no AGENTS.md here - nothing to follow */ });
         getWorkspaceMemory(folder)
           .then((m) => {
             workspaceMemory.value = m.content;

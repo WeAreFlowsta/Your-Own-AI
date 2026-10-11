@@ -264,6 +264,9 @@ export async function reviseWorkspaceMemory(
         "Content-Type": "application/json",
         "X-Your-Own-AI-Memory": "off",
         "X-Your-Own-AI-Record": "off",
+        // A memory writer never runs online (MEMORY_REDESIGN.md §7): the
+        // session digest stays on this machine whatever the AI's own model.
+        "X-Your-Own-AI-Online-Share": "local",
       },
       body: JSON.stringify({
         model: aiId,
