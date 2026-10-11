@@ -281,10 +281,12 @@ pub fn assist_candidates(live: &[MemoryRow]) -> Vec<MemoryRow> {
 /// The model-assisted pass of one scope: one call per candidate row
 /// through the memory slot (precision work, grammar-constrained), the
 /// answers applied as revisions. Returns how many it wrote.
-async fn assist_scope(app: &tauri::AppHandle, manager: &crate::holochain::HolochainManager, agent: &str, live: &[MemoryRow]) -> usize {
+async fn assist_scope(app: &tauri::AppHandle, manager: &crate::holochain::HolochainManager, agent: &str, live: &[MemoryRow], respect_idle: bool) -> usize {
     let mut written = 0usize;
     for row in assist_candidates(live) {
-        if idle_for_secs() < IDLE_SECS {
+        // The scheduler stops the moment the person comes back; a dream
+        // asked for (Settings, the tests) runs to the end.
+        if respect_idle && idle_for_secs() < IDLE_SECS {
             break;
         }
         let said = crate::memory_rows::ymd(row.as_of);
@@ -292,7 +294,7 @@ async fn assist_scope(app: &tauri::AppHandle, manager: &crate::holochain::Holoch
         let answer = match crate::llm::memory_complete(app, crate::llm::UTILITY_MODEL_FILE, ASSIST_SYSTEM, &user, Some(ASSIST_GRAMMAR), 200, 0.0).await {
             Ok(a) => a,
             Err(e) => {
-                log::debug!("[dream] assist call failed: {e}");
+                log::warn!("[dream] assist call failed: {e}");
                 break;
             }
         };
@@ -308,14 +310,14 @@ async fn assist_scope(app: &tauri::AppHandle, manager: &crate::holochain::Holoch
 
 /// One scope, one dream: read, plan, write, then the model-assisted pass,
 /// through `agent`.
-async fn dream_scope(app: &tauri::AppHandle, manager: &crate::holochain::HolochainManager, agent: &str, scope: &str) -> Result<usize, String> {
+async fn dream_scope(app: &tauri::AppHandle, manager: &crate::holochain::HolochainManager, agent: &str, scope: &str, respect_idle: bool) -> Result<usize, String> {
     let live = crate::memory_rows::rows_live(app, manager, agent, scope).await?;
     let plan = plan_dream(&live, now_ms(), LAYER2_BUDGET_ROWS);
     for rev in &plan {
         crate::memory_rows::write_row_pub(manager, agent, rev).await?;
     }
     let live = if plan.is_empty() { live } else { crate::memory_rows::rows_live(app, manager, agent, scope).await? };
-    let assisted = assist_scope(app, manager, agent, &live).await;
+    let assisted = assist_scope(app, manager, agent, &live, respect_idle).await;
     if assisted > 0 {
         let _ = crate::memory_rows::rows_live(app, manager, agent, scope).await;
     }
@@ -336,7 +338,7 @@ pub async fn dream_now(
         Some(a) => a,
         None => manager.agents.lock().await.keys().next().cloned().ok_or("no agent provisioned yet")?,
     };
-    dream_scope(&app, &manager, &agent, &scope).await
+    dream_scope(&app, &manager, &agent, &scope, false).await
 }
 
 /// Every half hour: when the app has been quiet for ten minutes, dream the
@@ -367,7 +369,7 @@ pub fn start_dreaming(app: &tauri::AppHandle) {
                 if idle_for_secs() < IDLE_SECS {
                     break; // the person came back
                 }
-                match dream_scope(&app, &manager, &agent, &scope).await {
+                match dream_scope(&app, &manager, &agent, &scope, true).await {
                     Ok(0) => {}
                     Ok(n) => log::info!("[dream] {}: {} revision(s)", &scope[..scope.len().min(12)], n),
                     Err(e) => log::debug!("[dream] {} skipped: {}", &scope[..scope.len().min(12)], e),
