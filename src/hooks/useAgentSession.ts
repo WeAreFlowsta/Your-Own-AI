@@ -380,6 +380,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
   const agentsMd = useSignal("");
   /** The project's memory rows as layer-1 text (rules/commands/locations). */
   const projectRules = useSignal("");
+  /** The open project's id (`project_identity_for`), empty until known. */
+  const projectId = useSignal("");
   const memoryPending = useSignal(false);
   const toolsPending = useSignal(false);
   const sessionTurns = useSignal(0);
@@ -401,6 +403,24 @@ export function useAgentSession(props: UseAgentSessionProps) {
         /* safety copy only */
       }
     };
+    // Raw capture first (MEMORY_REDESIGN.md §5.5): one episode row per
+    // session in the project's scope - what happened, in the digest's own
+    // words, never rewritten here (dreaming consolidates later).
+    if (projectId.value) {
+      try {
+        const { saveMemoryRow, newRow, projectScope } = await import("../utils/memoryRows");
+        const founding = ai.aiConfig.foundingKey ?? ai.aiConfig.agentPubKey ?? "";
+        await saveMemoryRow(
+          newRow(projectScope(projectId.value), "episode", digest.length > 2000 ? digest.slice(0, 2000) + "…" : digest, {
+            saved_by: founding ? `ai:${founding}` : "person",
+            provenance: "distilled:session",
+          }),
+          ai.aiConfig.agentPubKey,
+        );
+      } catch (e) {
+        console.warn("[WorkspaceMemory] episode row failed (the distillation still runs):", e);
+      }
+    }
     const revised = await reviseWorkspaceMemory(ai.id, workspaceMemory.value, digest);
     if (!revised || revised === workspaceMemory.value.trim()) {
       clearPending();
@@ -1459,8 +1479,10 @@ export function useAgentSession(props: UseAgentSessionProps) {
         projectRules.value = "";
         // The project's own memory rows (rules, commands, locations) by its
         // id - the same project on every machine (MEMORY_REDESIGN.md §13.1).
+        projectId.value = "";
         invoke<string>("project_identity_for", { folder })
           .then(async (pid) => {
+            projectId.value = pid;
             const { loadRulesLayer } = await import("../utils/memory");
             const { projectScope } = await import("../utils/memoryRows");
             projectRules.value = await loadRulesLayer([projectScope(pid)]);
