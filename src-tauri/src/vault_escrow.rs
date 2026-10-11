@@ -1226,6 +1226,13 @@ pub(crate) fn set_reembed_pending(app: &tauri::AppHandle) {
 /// One conversation with its entries, ready for assembly.
 struct ConvBundle {
     installed_app_id: String,
+    /// The cell's agent (hex) - how another device tells which AI this
+    /// conversation belongs to (the founding key); the app id above carries
+    /// the AI's original local id, which no other device knows.
+    agent: String,
+    /// The conversation's title at read time, for a drawer that lists it
+    /// from the copy before its records arrive.
+    title: Option<String>,
     started_at: i64,
     /// Conversation record first, then its entries in chain order.
     records: Vec<serde_json::Value>,
@@ -1410,6 +1417,8 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
                             carried.push(serde_json::json!({
                                 "label": label,
                                 "role_name": installed_app_id,
+                                "agent": agent_key,
+                                "title": open_record(&key, conv).and_then(|(p, _)| p["title"].as_str().map(String::from)),
                                 "started_at": started,
                                 "records": prev.records,
                                 "labels": prev.labels,
@@ -1434,6 +1443,8 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
                         carried.push(serde_json::json!({
                             "label": label,
                             "role_name": installed_app_id,
+                            "agent": agent_key,
+                            "title": p["title"].as_str(),
                             "started_at": p["started_at"].as_i64().unwrap_or(0),
                             "records": prev.records,
                             "labels": prev.labels,
@@ -1445,6 +1456,7 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
             }
             let Some((conv_plain, conv_raw)) = open_record(&key, conv) else { continue };
             let started_at = conv_plain["started_at"].as_i64().unwrap_or(0);
+            let title = conv_plain["title"].as_str().map(String::from);
             let conv_hash = conv.action_address().clone();
             let conv_hash_hex = hex::encode(conv_hash.get_raw_39());
             let mut records =
@@ -1519,6 +1531,8 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
                 .sum();
             bundles.push(ConvBundle {
                 installed_app_id: installed_app_id.clone(),
+                agent: agent_key.clone(),
+                title,
                 started_at,
                 records,
                 size,
@@ -1946,6 +1960,8 @@ async fn write_incremental_backup(
         index.push(serde_json::json!({
             "label": label,
             "role_name": c.installed_app_id,
+            "agent": c.agent,
+            "title": c.title,
             "started_at": c.started_at,
             "records": c.records.len(),
             "labels": labels,
@@ -2525,6 +2541,8 @@ mod tests {
         ConvBundle {
             active_at: None,
             installed_app_id: "ai-1".into(),
+            agent: String::new(),
+            title: None,
             started_at: 1000,
             records,
             size,
@@ -2669,6 +2687,8 @@ mod tests {
         ConvBundle {
             active_at: None,
             installed_app_id: app_id.to_string(),
+            agent: String::new(),
+            title: None,
             started_at,
             records,
             size,

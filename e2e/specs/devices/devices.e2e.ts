@@ -4,7 +4,9 @@
 // renamed AI with its own agent. Two launches, one phase each
 // (DEVICES_PHASE), each against its own TEST Vault (YOAI_VAULT_PORT) -
 // never the installed one. Run: e2e/devices-live.sh
-import { shot, waitForChat, invoke } from "../models/_helpers";
+import { shot, waitForChat, invoke, ask, waitForReplyDone, typeInto } from "../models/_helpers";
+
+const MESSAGE = "Devices test: name one colour and nothing else.";
 
 const PHASE = process.env.DEVICES_PHASE ?? "";
 const NAME = process.env.DEVICES_NAME ?? "Synced AI";
@@ -42,7 +44,14 @@ describe(`devices, phase ${PHASE}`, () => {
       await browser.waitUntil(async () => (await bodyText()).includes(NAME), { timeout: 30_000, timeoutMsg: "the renamed AI never showed on Your AIs" });
       console.log(`e2e: renamed ${JSON.stringify(oldName)} -> ${JSON.stringify(NAME)} (page had ${before.includes(oldName) ? "" : "NOT "}listed it)`);
       await shot("devices-a-renamed");
-      // The manifest (with ai_configs) goes to this device's Vault now.
+      // One conversation on this device, so the other device can show it
+      // from the Vault's copy while this one is off (MULTI_DEVICE.md §3.3).
+      await waitForChat();
+      await ask(MESSAGE);
+      await waitForReplyDone();
+      await shot("devices-a-chat");
+      // The manifest (with ai_configs) and the conversation go to this
+      // device's Vault now.
       const backup = await invoke<Record<string, unknown>>("vault_backup_now");
       console.log(`e2e: backup ${JSON.stringify(backup).slice(0, 300)}`);
     } else if (PHASE === "b") {
@@ -79,6 +88,33 @@ describe(`devices, phase ${PHASE}`, () => {
       expect(renamed).toBeDefined();
       expect(renamed.agent.length).toBeGreaterThan(0);
       expect(renamed.founding).not.toBe(renamed.agent);
+      // A's conversation, read-only from the Vault's copy: device A is off,
+      // so its records cannot have arrived; the drawer lists the copy and the
+      // chat opens it with the quiet line; a send is refused with the reason.
+      await waitForChat();
+      await (await $('button[title^="Conversations"]')).click();
+      const copyItem = await $('[data-testid="conversation-item"][data-copy="1"]');
+      await copyItem.waitForDisplayed({ timeout: 60_000 });
+      const items = await browser.execute(() => [...document.querySelectorAll('[data-testid="conversation-item"]')].map((d) => `${d.getAttribute("data-copy")}:${(d as HTMLElement).innerText.replace(/\s+/g, " ").slice(0, 80)}`));
+      console.log(`e2e: drawer ${JSON.stringify(items)}`);
+      expect(await copyItem.getText()).toContain("from another of your devices");
+      await shot("devices-b-drawer");
+      await (await copyItem.$("button")).click();
+      const line = await $('[data-testid="copied-from-line"]');
+      await line.waitForDisplayed({ timeout: 60_000 });
+      console.log(`e2e: copied-from line ${JSON.stringify(await line.getText())}`);
+      expect(await line.getText()).toContain("LinuxLappy");
+      await browser.waitUntil(async () => (await $$('[data-testid="chat-message"]')).length >= 2, { timeout: 30_000, timeoutMsg: "the copied conversation showed no messages" });
+      const texts = await browser.execute(() => [...document.querySelectorAll('[data-testid="chat-message"]')].map((m) => (m as HTMLElement).innerText.slice(0, 60)));
+      console.log(`e2e: copied messages ${JSON.stringify(texts)}`);
+      expect(texts.some((t: string) => t.includes("Devices test"))).toBe(true);
+      await shot("devices-b-copied-conversation");
+      await typeInto("chat-input", "Can I add to this?");
+      await (await $('[data-testid="chat-send"]')).click();
+      await browser.waitUntil(async () => (await browser.execute(() => document.body.innerText)).includes("You can read it here"), { timeout: 15_000, timeoutMsg: "the send was not refused with the reason" });
+      expect((await $$('[data-testid="chat-message"]')).length).toBeLessThanOrEqual(texts.length);
+      await shot("devices-b-send-refused");
+
       // Settings names the device it synced with - in the signed-in panel.
       // A test identity on the staging API cannot complete the proxy
       // sign-in (only the Vault link is real here), so the panel renders

@@ -5,7 +5,7 @@
  * as living navigation.
  */
 import { v4 as uuidv4 } from "uuid";
-import { getConversations, getConversationsCached, getTranscript } from "./holochainTranscripts";
+import { getConversations, getConversationsCached, getCopyTranscript, getTranscript } from "./holochainTranscripts";
 import type {
   HolochainConversation,
   HolochainTranscriptEntry,
@@ -27,6 +27,13 @@ export interface ConversationListItem {
 
 /** What the list orders by: the last recorded turn, else when it started
  *  (conversations not continued since last-activity tracking began). */
+/** The device id a `copy:<device>` source names: the conversation is held
+ *  here only as the Vault's copy of that device's backup, read-only until
+ *  its records arrive (build-docs MULTI_DEVICE.md §3.3). */
+export function copiedFromDevice(c: Pick<HolochainConversation, "source">): string | null {
+  return c.source?.startsWith("copy:") ? c.source.slice("copy:".length) : null;
+}
+
 export function lastActiveAt(c: HolochainConversation): number {
   return c.last_active_at ?? c.started_at;
 }
@@ -69,7 +76,7 @@ export async function listAllConversations(
           // places - they live on the Memory page, not here. Imported
           // history is the exception: an adopted conversation IS a place -
           // the user can pick up where they left off with their old app.
-          if (conversation.source && !conversation.source.startsWith("import:")) continue;
+          if (conversation.source && !conversation.source.startsWith("import:") && !conversation.source.startsWith("copy:")) continue;
           out.push({
             conversation,
             title:
@@ -99,7 +106,7 @@ export async function listAllConversationsCached(
       .map(async (ai) => {
         const conversations = await getConversationsCached(ai.aiConfig.agentPubKey!);
         for (const conversation of conversations) {
-          if (conversation.source && !conversation.source.startsWith("import:")) continue;
+          if (conversation.source && !conversation.source.startsWith("import:") && !conversation.source.startsWith("copy:")) continue;
           out.push({
             conversation,
             title:
@@ -122,9 +129,15 @@ export async function loadConversationMessages(
   agentKey: string,
   conversationHash: string,
   ai: SelectedAiModel,
-): Promise<{ messages: Message[]; nextSequence: number; folderPath?: string }> {
-  const entries = await getTranscript(agentKey, conversationHash);
-  entries.sort((a, b) => a.sequence - b.sequence);
+  source?: string | null,
+): Promise<{ messages: Message[]; nextSequence: number; folderPath?: string; copiedFrom?: string }> {
+  const copiedFrom = copiedFromDevice({ source });
+  const entries = copiedFrom
+    ? await getCopyTranscript(conversationHash, copiedFrom)
+    : await getTranscript(agentKey, conversationHash);
+  // Two devices that appended while apart can share a sequence number:
+  // time, then the hash, settles the order the same way everywhere.
+  entries.sort((a, b) => a.sequence - b.sequence || a.timestamp - b.timestamp || a.hash.localeCompare(b.hash));
   let folderPath: string | undefined;
   const messages = entries.map((e: HolochainTranscriptEntry): Message => {
     if (e.folder_path) folderPath = e.folder_path;
@@ -225,7 +238,7 @@ export async function loadConversationMessages(
         "This question never got an answer - the turn was stopped or failed. Ask again to continue.",
     });
   }
-  return { messages, nextSequence, folderPath };
+  return { messages, nextSequence, folderPath, copiedFrom: copiedFrom ?? undefined };
 }
 
 /* ---- client-side conversation metadata (until the DNA work lands) ---- */

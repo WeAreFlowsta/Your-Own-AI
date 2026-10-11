@@ -361,6 +361,10 @@ export default component$(() => {
   // banner, NEVER as a silently blank conversation (which reads as
   // data loss, the one message a records product must never send).
   const resumeWarning = useSignal<string | null>(null);
+  // The open conversation is another device's, held here only as the
+  // Vault's copy: read-only until its records arrive. Holds the device's
+  // name (or id) for the line under the messages.
+  const copiedFrom = useSignal<string | null>(null);
   // The title of the conversation being opened RIGHT NOW - the hero line
   // otherwise shows the last-conversation pointer's title, which is wrong
   // when resuming an older conversation from the drawer.
@@ -484,7 +488,7 @@ export default component$(() => {
 
   const resumeGeneration = useSignal(0);
   const resumeConversation = $(
-    async (target: { hash: string; agentKey: string; aiId?: string; title?: string; seq?: number }) => {
+    async (target: { hash: string; agentKey: string; aiId?: string; title?: string; seq?: number; source?: string | null }) => {
       const who = `${target.agentKey.slice(0, 8)}../${target.hash.slice(0, 12)}..`;
       if (chatState.isLoading) {
         console.warn("[Resume] ignored: a reply is still in flight");
@@ -521,6 +525,7 @@ export default component$(() => {
         // them (Windows beta.1, 09-11: "2 messages in 17 ms", blank chat;
         // the next click, chunk cached, opened fine).
         await resetChat();
+        copiedFrom.value = null;
         // A resume fired right after launch (the Memory-page handoff or the
         // hero Continue line) can outrun the conductor - reads would come
         // back empty and the conversation would look blank or unanswered.
@@ -529,11 +534,20 @@ export default component$(() => {
         // SUCCEED empty while the cell loads its records. Bailing silently
         // there made "Continue" a dead click - poll through the window with
         // a visible state instead (utils/recordsWarmup).
-        loaded = await loadConversationMessages(target.agentKey, target.hash, ai);
-        while (loaded.messages.length === 0 && emptyMayBeWarmup() && resumeGeneration.value === gen) {
+        loaded = await loadConversationMessages(target.agentKey, target.hash, ai, target.source);
+        while (loaded.messages.length === 0 && !loaded.copiedFrom && emptyMayBeWarmup() && resumeGeneration.value === gen) {
           resumeState.value = "warming";
           await new Promise((r) => setTimeout(r, WARMUP_POLL_MS));
-          loaded = await loadConversationMessages(target.agentKey, target.hash, ai);
+          loaded = await loadConversationMessages(target.agentKey, target.hash, ai, target.source);
+        }
+        if (loaded.copiedFrom && resumeGeneration.value === gen) {
+          // The device's name, as the last sync round recorded it.
+          let name = "another of your devices";
+          try {
+            const st = await invoke<{ devices: { id: string; name: string | null }[] } | null>("config_sync_status");
+            name = st?.devices.find((d) => d.id === loaded.copiedFrom)?.name || name;
+          } catch { /* keep the generic name */ }
+          copiedFrom.value = name;
         }
       } finally {
         if (resumeGeneration.value === gen) {
@@ -551,7 +565,11 @@ export default component$(() => {
         messages.length === 0 ? "warn" : "info",
       );
       if (messages.length > 0) noteRecordsSeen();
-      if (messages.length === 0) {
+      if (messages.length === 0 && loaded.copiedFrom) {
+        resumeWarning.value =
+          `This conversation is on ${copiedFrom.value ?? "another of your devices"} and its copy in your Vault ` +
+          `couldn't be read just now. Try again in a moment.`;
+      } else if (messages.length === 0) {
         // The read didn't answer (slow or unwell records cell) - say so.
         // Nothing is lost; the records are still on this device.
         resumeWarning.value =
@@ -1233,6 +1251,13 @@ export default component$(() => {
   const replaceTurnFrom = useSignal(-1);
 
   const handleSubmit = $(async () => {
+    // A conversation held here only as another device's copy cannot take a
+    // turn yet: its records (the base an entry links to) are not here.
+    if (copiedFrom.value && chatState.messages.length > 0) {
+      resumeWarning.value = `This conversation is from ${copiedFrom.value}. You can read it here; it opens for new messages once Your Own AI is open there and it has arrived in full.`;
+      return;
+    }
+    copiedFrom.value = null;
     const dropReplacedTurn = () => {
       if (replaceTurnFrom.value < 0) return;
       chatState.messages = chatState.messages.slice(0, replaceTurnFrom.value);
@@ -1709,6 +1734,11 @@ export default component$(() => {
       )}
       {/* A conversation open whose records read didn't answer: without
           this banner the wiped chat looks like lost records. */}
+      {copiedFrom.value && !resumeWarning.value && (
+        <div class="relative z-30 border-b border-[var(--border-subtle)] px-4 py-1.5 text-xs text-[var(--text-muted)]" data-testid="copied-from-line">
+          From {copiedFrom.value} - arrives in full when Your Own AI is open there.
+        </div>
+      )}
       {resumeWarning.value && (
         <div class="relative z-30 flex items-start gap-3 border-b border-amber-700/60 bg-amber-900/30 px-4 py-2.5 text-xs text-amber-200">
           <span class="min-w-0 flex-1">{resumeWarning.value}</span>
@@ -2493,6 +2523,7 @@ export default component$(() => {
             agentKey: item.conversation.agent_key,
             aiId: item.aiId,
             title: item.title,
+            source: item.conversation.source,
           }),
         )}
         onRename$={$((hash: string, title: string) => {

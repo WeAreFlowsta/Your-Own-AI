@@ -62,16 +62,19 @@ prelink() {  # <home> <port> <label>
 prelink "$A" "$P1" A
 prelink "$B" "$P2" B
 
+A_START="$(date +%s)"
 echo "== phase a: device A renames an AI to '$DEVICES_NAME' and backs up (Vault $P1)"
 YOAI_E2E_HOME="$A" YOAI_VAULT_PORT="$P1" DEVICES_PHASE=a node e2e/run.mjs models --spec e2e/specs/devices/devices.e2e.ts
 echo "== V2 fetches V1's copies"
 for _ in $(seq 1 150); do
   dev "$P2" '{"op":"round"}' >/dev/null
   held="$(dev "$P2" "{\"op\":\"backups\",\"client_id\":\"$CID\"}")"
-  printf '%s' "$held" | grep -q '"label":"manifest","from":"[0-9a-f]' && break
+  # The copy must be the manifest A wrote AFTER its chat, not the one from its first start.
+  newest="$(printf '%s' "$held" | python3 -c 'import sys,json; h=[x for x in json.load(sys.stdin).get("held",[]) if x.get("label")=="manifest" and x.get("from")]; print(max([x.get("created_at",0) for x in h] or [0]))' 2>/dev/null || echo 0)"
+  [ "${newest:-0}" -ge "$A_START" ] && break
   sleep 4
 done
-printf '%s' "$held" | grep -q '"label":"manifest","from":"[0-9a-f]' || { echo "V2 never received A's manifest: $held"; exit 1; }
+[ "${newest:-0}" -ge "$A_START" ] || { echo "V2 never received A's new manifest (newest copy $newest < $A_START): $held"; exit 1; }
 echo "== V2 holds A's manifest"
 echo "== phase b: device B signs in fresh on Vault $P2"
 YOAI_E2E_HOME="$B" YOAI_VAULT_PORT="$P2" DEVICES_PHASE=b node e2e/run.mjs models --spec e2e/specs/devices/devices.e2e.ts

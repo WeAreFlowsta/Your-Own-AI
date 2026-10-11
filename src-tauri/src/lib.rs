@@ -599,6 +599,7 @@ pub fn run() {
             vault_escrow::vault_escrow_sync,
             config_sync::config_sync_status,
             config_sync::config_sync_now,
+            commands_holochain::get_copy_transcript,
             vault_escrow::vault_escrow_restore,
             vault_escrow::vault_escrow_keep_local,
             vault_escrow::vault_backup_now,

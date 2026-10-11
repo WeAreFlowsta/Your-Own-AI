@@ -247,6 +247,23 @@ export async function getTranscript(
   }
 }
 
+/** A conversation another of the person's devices holds, read from the
+ *  Vault's copy of that device's backup object - read-only until its records
+ *  arrive here. `label` is the drawer item's hash (`conv-…`), `device` the
+ *  id after `copy:` in its source. */
+export async function getCopyTranscript(
+  label: string,
+  device: string,
+): Promise<HolochainTranscriptEntry[]> {
+  try {
+    return await invoke<HolochainTranscriptEntry[]>("get_copy_transcript", { label, device });
+  } catch (e) {
+    console.warn("[Holochain] Failed to read a copy transcript:", e);
+    uiLog(`copy transcript ${label} from ${device.slice(0, 8)}.. read threw: ${String(e).slice(0, 200)}`, "warn");
+    return [];
+  }
+}
+
 /**
  * Provision a single AI agent. Returns the agent pub key hex.
  * `aiId` is the stable local AI ID used as the lair seed tag.

@@ -198,6 +198,65 @@ pub struct SyncedDevice {
 }
 
 const STATE_FILE: &str = "config-sync.json";
+const SIBLING_CONVERSATIONS_FILE: &str = "sibling-conversations.json";
+
+/// One conversation another device backed up, as its manifest lists it -
+/// enough to show it in the drawer before its records arrive here and to
+/// fetch the copy for a read-only view (build-docs MULTI_DEVICE.md §3.3).
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub(crate) struct SiblingConversation {
+    pub device: String,
+    pub device_name: Option<String>,
+    /// `conv-<first 24 hex of the conversation hash>`.
+    pub label: String,
+    /// The object(s) holding its records (one, or parts).
+    pub labels: Vec<String>,
+    /// `transcript_v1_<the AI's original local id on that device>` - not
+    /// meaningful here; `agent` is.
+    pub role_name: String,
+    /// The cell's agent on the authoring device = the AI's founding key
+    /// when that device founded it (0.9.0 manifests; None before).
+    pub agent: Option<String>,
+    pub title: Option<String>,
+    pub started_at: i64,
+    pub records: u64,
+}
+
+fn sibling_conversations_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    crate::profile::root(app).ok().map(|r| r.join(SIBLING_CONVERSATIONS_FILE))
+}
+
+/// The other devices' conversation index as of the last round (empty before one).
+pub(crate) fn sibling_conversations(app: &tauri::AppHandle) -> Vec<SiblingConversation> {
+    sibling_conversations_path(app)
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+fn index_of(manifest: &serde_json::Value, device: &crate::vault_escrow::SiblingDevice) -> Vec<SiblingConversation> {
+    manifest["conversations"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|c| {
+                    let label = c["label"].as_str()?.to_string();
+                    Some(SiblingConversation {
+                        device: device.id.clone(),
+                        device_name: device.name.clone(),
+                        labels: c["labels"].as_array().map(|l| l.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_else(|| vec![label.clone()]),
+                        label,
+                        role_name: c["role_name"].as_str().unwrap_or("").to_string(),
+                        agent: c["agent"].as_str().map(String::from),
+                        title: c["title"].as_str().map(String::from),
+                        started_at: c["started_at"].as_i64().unwrap_or(0),
+                        records: c["records"].as_u64().unwrap_or(0),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 fn state_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     crate::profile::root(app).ok().map(|r| r.join(STATE_FILE))
@@ -251,6 +310,7 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle) -> Result<(u32, u
         return Ok((0, 0));
     }
     let mut synced: Vec<SyncedDevice> = Vec::new();
+    let mut sibling_index: Vec<SiblingConversation> = Vec::new();
     let store = app
         .store(crate::profile::store_path(app, "ai-data.json"))
         .map_err(|e| e.to_string())?;
@@ -275,6 +335,7 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle) -> Result<(u32, u
             needs_update: sibling_needs_update(manifest.as_ref(), device),
         });
         let Some(manifest) = manifest else { continue };
+        sibling_index.extend(index_of(&manifest, device));
         let sibling = ai_list(&manifest);
         if sibling.is_empty() {
             continue;
@@ -293,6 +354,11 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle) -> Result<(u32, u
                     let _ = std::fs::write(thumb_dir.join(format!("{}.jpg", local_id)), bytes);
                 }
             }
+        }
+    }
+    if let Some(p) = sibling_conversations_path(app) {
+        if let Ok(json) = serde_json::to_vec(&sibling_index) {
+            let _ = std::fs::write(p, json);
         }
     }
     save_state(app, &ConfigSyncState { checked_at: now_ms(), devices: synced, updated: total_updated, added: total_added, ..Default::default() });
@@ -339,6 +405,24 @@ pub fn start_config_sync_rounds(app: &tauri::AppHandle) {
 mod tests {
     use super::{merge_sibling_configs, sibling_needs_update};
     use crate::vault_escrow::SiblingDevice;
+
+    #[test]
+    fn a_siblings_manifest_index_lists_its_conversations_with_their_objects() {
+        let dev = SiblingDevice { id: "dev-a".into(), name: Some("Office PC".into()), ..Default::default() };
+        let manifest = serde_json::json!({ "conversations": [
+            { "label": "conv-aaaa", "role_name": "transcript_v1_local-1", "agent": "agentA", "title": "Hello", "started_at": 5, "records": 4, "labels": ["conv-aaaa", "conv-aaaa.2"] },
+            { "label": "conv-bbbb", "role_name": "transcript_v1_agentA", "started_at": 6, "records": 2 },
+            { "role_name": "no label - skipped" }
+        ]});
+        let idx = super::index_of(&manifest, &dev);
+        assert_eq!(idx.len(), 2);
+        assert_eq!(idx[0].labels, vec!["conv-aaaa", "conv-aaaa.2"]);
+        assert_eq!(idx[1].labels, vec!["conv-bbbb"], "one object when the manifest names none");
+        assert_eq!(idx[1].device_name.as_deref(), Some("Office PC"));
+        assert_eq!(idx[0].agent.as_deref(), Some("agentA"));
+        assert_eq!(idx[0].title.as_deref(), Some("Hello"));
+        assert!(idx[1].agent.is_none(), "an older manifest names no agent");
+    }
 
     #[test]
     fn another_generation_needs_the_update_and_a_manifest_without_the_field_does_not() {

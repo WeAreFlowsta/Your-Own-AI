@@ -172,6 +172,8 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
             {shown.map((item) => (
               <div
                 key={item.conversation.hash}
+                data-testid="conversation-item"
+                data-copy={item.conversation.source?.startsWith("copy:") ? "1" : "0"}
                 class="group flex w-full items-center gap-3 px-4 py-2.5 hover:bg-[var(--bg-dropdown-hover)]"
                 title={`Started ${whenText(item.conversation.started_at)} · last active ${whenText(lastActiveAt(item.conversation))}`}
               >
@@ -222,6 +224,7 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
                       {item.aiLabel}
                       {item.folderPath &&
                         ` · ${item.folderPath.split("/").filter(Boolean).pop()}`}
+                      {item.conversation.source?.startsWith("copy:") && " · from another of your devices"}
                     </span>
                   </button>
                 )}

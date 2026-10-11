@@ -1238,6 +1238,37 @@ pub async fn get_conversations(
     // Last activity lives only in the local cache (the records entry knows
     // when a conversation started, not when it was last continued) - carry
     // it over so a live refresh never resets the order.
+    // Conversations another of the person's devices backed up for this AI
+    // whose records have not reached this device yet: listed from the
+    // sibling's manifest index, opened read-only from the Vault's copy
+    // (`source: copy:<device>`), dropped the moment the live list has them.
+    for c in crate::config_sync::sibling_conversations(&app) {
+        // The authoring device's cell agent names the AI (its founding key
+        // here); a manifest from before the field cannot be placed.
+        let Some(agent) = c.agent.as_deref() else { continue };
+        if !anchors.iter().any(|a| a == agent) {
+            continue;
+        }
+        let Some(prefix) = c.label.strip_prefix("conv-") else { continue };
+        if seen_hashes.iter().any(|h| h.starts_with(prefix)) {
+            continue;
+        }
+        if conversations.iter().any(|x| x.hash == c.label) {
+            continue;
+        }
+        conversations.push(ConversationInfo {
+            hash: c.label.clone(),
+            ai_personality_id: agent_key.clone(),
+            ai_personality_name: String::new(),
+            model_used: String::new(),
+            started_at: c.started_at,
+            last_active_at: None,
+            title: c.title.clone(),
+            source: Some(format!("copy:{}", c.device)),
+            agent_key: reader.clone(),
+        });
+    }
+
     let cached = crate::conversation_cache::read_cache(&app, &agent_key).unwrap_or_default();
     if !unanswered.is_empty() {
         // Keep what the cache knows for the agents that did not answer -
@@ -1346,6 +1377,79 @@ pub async fn delete_conversation(
     Ok(deleted)
 }
 
+/// A decrypted message as the front end sees it.
+fn entry_info(hash: String, e: MessagePlain) -> TranscriptEntryInfo {
+    TranscriptEntryInfo {
+        hash,
+        role: e.role,
+        content: e.content,
+        sequence: e.sequence,
+        timestamp: e.timestamp,
+        model_hash: e.model_hash,
+        provider_fingerprint: e.provider_fingerprint,
+        model: e.model,
+        thinking: e.thinking,
+        tokens: e.tokens,
+        sources: e.sources,
+        system_prompt: e.system_prompt,
+        mode: e.mode,
+        attachments: e.attachments,
+        images: e.images,
+        grounded: e.grounded,
+        library: e.library,
+        runtime: e.runtime,
+        routing_reason: e.routing_reason,
+        routing_task: e.routing_task,
+        stopped: e.stopped,
+        agent_log: e.agent_log,
+        folder_path: e.folder_path,
+    }
+}
+
+/// Transcript order across devices: two devices that appended while apart
+/// can both have taken the same sequence number - time, then the hash,
+/// settles the tie the same way on every device.
+fn sort_entries(entries: &mut [TranscriptEntryInfo]) {
+    entries.sort_by(|a, b| (a.sequence, a.timestamp, &a.hash).cmp(&(b.sequence, b.timestamp, &b.hash)));
+}
+
+/// A conversation another device backed up, read from the Vault's copy of
+/// that device's object, for a read-only view until its records arrive
+/// here (build-docs MULTI_DEVICE.md §3.3). `device` is the authoring
+/// device's id, as the drawer item's `copy:<device>` source carries it.
+#[tauri::command]
+pub async fn get_copy_transcript(
+    app: tauri::AppHandle,
+    label: String,
+    device: String,
+    hc_state: State<'_, Arc<HolochainState>>,
+) -> Result<Vec<TranscriptEntryInfo>, String> {
+    let data_key = hc_state.get()?.data_key()?;
+    let port = crate::vault_escrow::escrow_port(&app, true).await.map_err(|s| s.error.unwrap_or(s.state))?;
+    let labels: Vec<String> = crate::config_sync::sibling_conversations(&app)
+        .into_iter()
+        .find(|c| c.label == label && c.device == device)
+        .map(|c| c.labels)
+        .unwrap_or_else(|| vec![label.clone()]);
+    let mut entries = Vec::new();
+    for part in &labels {
+        let obj = crate::vault_restore::retrieve_label_across(port, part, Some(&device)).await?;
+        let records = crate::vault_restore::decode_conv_object(part, &obj)?;
+        for r in &records {
+            let Some(b64) = r["raw_record"]["entry_b64"].as_str() else { continue };
+            use base64::Engine;
+            let Ok(raw) = base64::engine::general_purpose::STANDARD.decode(b64) else { continue };
+            let Ok(ee) = rmp_serde::from_slice::<EncryptedEntryRaw>(&raw) else { continue };
+            let Ok(plain) = crate::transcript_crypto::decrypt(&data_key, &ee.nonce, &ee.cipher) else { continue };
+            let Ok(e) = serde_json::from_slice::<MessagePlain>(&plain) else { continue };
+            let hash = r["actionHash"].as_str().unwrap_or("").to_string();
+            entries.push(entry_info(hash, e));
+        }
+    }
+    sort_entries(&mut entries);
+    Ok(entries)
+}
+
 #[tauri::command]
 pub async fn get_conversation_transcript(
     agent_key: String,
@@ -1433,31 +1537,7 @@ pub async fn get_conversation_transcript(
                         continue;
                     }
                 };
-                entries.push(TranscriptEntryInfo {
-                    hash: hex::encode(record.action_address().get_raw_39()),
-                    role: e.role,
-                    content: e.content,
-                    sequence: e.sequence,
-                    timestamp: e.timestamp,
-                    model_hash: e.model_hash,
-                    provider_fingerprint: e.provider_fingerprint,
-                    model: e.model,
-                    thinking: e.thinking,
-                    tokens: e.tokens,
-                    sources: e.sources,
-                    system_prompt: e.system_prompt,
-                    mode: e.mode,
-                    attachments: e.attachments,
-                    images: e.images,
-                    grounded: e.grounded,
-                    library: e.library,
-                    runtime: e.runtime,
-                    routing_reason: e.routing_reason,
-                    routing_task: e.routing_task,
-                    stopped: e.stopped,
-                    agent_log: e.agent_log,
-                    folder_path: e.folder_path,
-                });
+                entries.push(entry_info(hex::encode(record.action_address().get_raw_39()), e));
             }
         }
     }
@@ -1473,7 +1553,7 @@ pub async fn get_conversation_transcript(
     }
 
     // Content-level ordering (sequence lives inside the ciphertext).
-    entries.sort_by_key(|e| e.sequence);
+    sort_entries(&mut entries);
 
     let ms = t0.elapsed().as_millis();
     if entries.is_empty() {
@@ -1640,6 +1720,33 @@ mod size_guard_tests {
         // The zome rejects cipher over 1 MiB; encryption overhead is a small
         // constant, so the plaintext budget must sit safely below it.
         assert!(PLAIN_BUDGET + 1024 < 1_048_576);
+    }
+}
+
+#[cfg(test)]
+mod order_tests {
+    use super::*;
+
+    fn e(hash: &str, seq: u32, ts: i64) -> TranscriptEntryInfo {
+        TranscriptEntryInfo {
+            hash: hash.into(), role: "user".into(), content: String::new(), sequence: seq, timestamp: ts,
+            model: String::new(), model_hash: None, provider_fingerprint: None, thinking: None, tokens: None,
+            sources: None, system_prompt: None, mode: None, attachments: None, images: None, grounded: None,
+            library: None, runtime: None, routing_reason: None, routing_task: None, stopped: None,
+            agent_log: None, folder_path: None,
+        }
+    }
+
+    #[test]
+    fn two_devices_that_took_the_same_sequence_order_by_time_then_hash_everywhere() {
+        let mut a = vec![e("b", 3, 200), e("a", 3, 100), e("z", 2, 900), e("c", 3, 200)];
+        let mut b = a.clone();
+        b.reverse();
+        sort_entries(&mut a);
+        sort_entries(&mut b);
+        let order: Vec<&str> = a.iter().map(|x| x.hash.as_str()).collect();
+        assert_eq!(order, vec!["z", "a", "b", "c"]);
+        assert_eq!(order, b.iter().map(|x| x.hash.as_str()).collect::<Vec<_>>(), "the same on both devices");
     }
 }
 

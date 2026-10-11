@@ -357,13 +357,22 @@ fn remap_annotation(
 /// Fetch the "latest" full-data backup from Vault.
 /// Retrieve one labeled backup; the full IPC response (data / data_base64).
 async fn retrieve_label(port: u16, label: &str) -> Result<serde_json::Value, String> {
+    retrieve_label_across(port, label, None).await
+}
+
+/// One backup object by label - this device's own, or (`device`) the copy
+/// held here of another device's (Vault 1.6.1 names it; 1.6.0 answers with
+/// the newest copy across devices).
+pub(crate) async fn retrieve_label_across(port: u16, label: &str, device: Option<&str>) -> Result<serde_json::Value, String> {
+    let mut body = serde_json::json!({ "client_id": YOAI_HOLOCHAIN_CLIENT_ID, "label": label });
+    if let Some(d) = device {
+        body["across"] = serde_json::json!("devices");
+        body["device"] = serde_json::json!(d);
+    }
     let resp = http()
         .post(format!("http://127.0.0.1:{}/backup/retrieve", port))
         .header("Origin", VAULT_ORIGIN)
-        .json(&serde_json::json!({
-            "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
-            "label": label,
-        }))
+        .json(&body)
         .send()
         .await
         .map_err(|e| format!("vault unreachable: {}", e))?;
@@ -381,7 +390,7 @@ async fn retrieve_label(port: u16, label: &str) -> Result<serde_json::Value, Str
 }
 
 /// Decode one fetched conversation object into its records.
-fn decode_conv_object(label: &str, obj: &serde_json::Value) -> Result<Vec<serde_json::Value>, String> {
+pub(crate) fn decode_conv_object(label: &str, obj: &serde_json::Value) -> Result<Vec<serde_json::Value>, String> {
     let b64 = obj["data_base64"]
         .as_str()
         .ok_or_else(|| format!("conversation object {} has no bytes", label))?;
