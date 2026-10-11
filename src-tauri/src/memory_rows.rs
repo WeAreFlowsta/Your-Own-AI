@@ -1078,6 +1078,24 @@ mod tests {
     }
 
     #[test]
+    fn the_row_is_group_ready_the_only_per_person_field_is_saved_by() {
+        // MEMORY_REDESIGN.md §3 / §13.6: a group cell adds membership and an
+        // agreement; nothing in the row changes. Guard the shape: no owner,
+        // user, identity or device field may creep in beside `saved_by`.
+        let r = row("x", "hello", 1);
+        let v = serde_json::to_value(&r).unwrap();
+        let keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+        let allowed = ["id", "scope", "kind", "text", "structured", "as_of", "valid_to", "saved_by", "provenance", "pinned", "topics", "replaces", "deleted", "updated_at", "action_hash"];
+        for k in &keys {
+            assert!(allowed.contains(k), "unexpected field on MemoryRow: {k}");
+        }
+        for k in &keys {
+            let lk = k.to_lowercase();
+            assert!(!(lk.contains("owner") || lk.contains("user") || lk.contains("identity") || lk.contains("device")), "per-person field outside saved_by: {k}");
+        }
+    }
+
+    #[test]
     fn a_merge_replaces_its_sources() {
         let mut merged = row("m", "one row for both", 50);
         merged.replaces = vec!["a".into(), "b".into()];
