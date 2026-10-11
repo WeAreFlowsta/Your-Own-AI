@@ -83,6 +83,211 @@ impl Drop for KillOnDrop {
     }
 }
 
+// ───────────── the memory slot's measured leg (MEMORY_REDESIGN.md §7) ─────────────
+
+/// A message a person might send, and the facts the extractor must find
+/// (predicate + a phrase the value must contain) - or nothing at all.
+const EXTRACTION_GOLD: &[(&str, &[(&str, &str)])] = &[
+    ("I'm Sam, a nurse in Leeds, and I love hiking on weekends.", &[("name_is", "sam"), ("works_on", "nurse"), ("lives_in", "leeds"), ("likes", "hiking")]),
+    ("hey my name's Jordan and I was born in Cork", &[("name_is", "jordan"), ("born_in", "cork")]),
+    ("I can't stand mondays", &[("dislikes", "monday")]),
+    ("my partner's name is Alex and we have a dog called Pip", &[("has", "alex"), ("has", "pip")]),
+    ("did you know I'm a teacher?", &[("works_on", "teacher")]),
+    ("I'm really into woodworking these days", &[("interested_in", "woodworking")]),
+    ("I'd rather you keep answers short, I read on my phone", &[("prefers", "short")]),
+    ("my goal this year is to run a marathon", &[("goal_is", "marathon")]),
+    ("write me a report on the housing market", &[]),
+    ("my build is failing again - can you check the logs?", &[]),
+    ("how does HTTPS work?", &[]),
+    ("thanks, that's really helpful!", &[]),
+    ("what's 17 times 23?", &[]),
+    ("go deeper on section 2", &[]),
+];
+
+/// Mirror of EXTRACTION_SYSTEM_PROMPT / EXTRACTION_GRAMMAR in
+/// src/utils/memoryExtraction.ts - the leg grades the very prompt the app
+/// uses; change both together.
+const EXTRACTION_SYSTEM: &str = "You extract durable facts the USER states ABOUT THEMSELVES, for an AI's long-term memory. A fact is something true about the user's own life: their name, where they live, their job/projects, an explicit preference or trait, a goal they state, or a person/thing they have.\nExtract ONLY what the user plainly states about themselves. When unsure, extract nothing.\nCRITICAL - a question, a request, a task, or small talk is NOT a fact, so output []:\n- Asking you to DO something - output [].\n- Asking a question - output [].\n- Praise, thanks, or compliments - output [].\n- Work-in-progress talk about code, builds, bugs, files, or a task at hand - output []. A durable occupation IS a fact; the day's task list is NOT.\nAsking ABOUT a topic does NOT mean they like, dislike, prefer, or are interested in it. (A fact phrased as a question still counts.)\nlikes / dislikes / prefers / interested_in: ONLY from an explicit statement of feeling - NEVER inferred from a question, request, or compliment.\nworks_on: the user's job, role, or projects.\nname_is / lives_in / born_in / age_is: the USER THEMSELVES only - never another person. Someone else goes under \"has\".\nOutput ONLY a JSON array. Each item: {\"subject\": \"user\", \"predicate\": \"<relation>\", \"value\": \"<the fact>\", \"confidence\": <0-1>}. Use ONLY these relations: name_is, lives_in, born_in, age_is, works_on, likes, dislikes, prefers, goal_is, interested_in, has, is. Keep each value short.";
+const EXTRACTION_GRAMMAR: &str = "root ::= \"[\" ws ( fact ( ws \",\" ws fact )* ws )? \"]\"\nfact ::= \"{\" ws qt \"subject\" qt ws \":\" ws qt \"user\" qt ws \",\" ws qt \"predicate\" qt ws \":\" ws pred ws \",\" ws qt \"value\" qt ws \":\" ws str ws \",\" ws qt \"confidence\" qt ws \":\" ws number ws \"}\"\npred ::= qt ( \"name_is\" | \"lives_in\" | \"born_in\" | \"age_is\" | \"works_on\" | \"likes\" | \"dislikes\" | \"prefers\" | \"goal_is\" | \"interested_in\" | \"has\" | \"is\" ) qt\nqt ::= [\"]\nstr ::= qt [^\"]* qt\nnumber ::= [0-9] ( \".\" [0-9]+ )?\nws ::= [ \\t\\n\\r]*";
+
+/// Precision and recall of one extraction answer against its gold facts.
+/// A hit = the predicate matches and the gold phrase is in the value (or
+/// the value in the gold). Returns (hits, extracted, gold).
+pub(crate) fn score_extraction(answer: &str, gold: &[(&str, &str)]) -> (usize, usize, usize) {
+    let start = answer.find('[');
+    let end = answer.rfind(']');
+    let items: Vec<serde_json::Value> = match (start, end) {
+        (Some(a), Some(b)) if b > a => serde_json::from_str::<serde_json::Value>(&answer[a..=b]).ok().and_then(|v| v.as_array().cloned()).unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    let extracted: Vec<(String, String)> = items
+        .iter()
+        .filter(|i| i["confidence"].as_f64().unwrap_or(0.0) >= 0.6)
+        .map(|i| (i["predicate"].as_str().unwrap_or("").to_string(), i["value"].as_str().unwrap_or("").to_lowercase()))
+        .collect();
+    let mut used = vec![false; extracted.len()];
+    let mut hits = 0usize;
+    for (pred, phrase) in gold {
+        if let Some(i) = extracted.iter().enumerate().position(|(k, (p, v))| !used[k] && p == pred && (v.contains(phrase) || !v.is_empty() && phrase.contains(v.as_str()))) {
+            used[i] = true;
+            hits += 1;
+        }
+    }
+    (hits, extracted.len(), gold.len())
+}
+
+/// Grade 0-10 from precision and recall across the set: F1 × 10, with the
+/// negatives counted (an extraction from a non-fact message is a false
+/// positive).
+pub(crate) fn extraction_grade(hits: usize, extracted: usize, gold: usize) -> u8 {
+    if gold == 0 && extracted == 0 {
+        return 10;
+    }
+    let p = if extracted == 0 { 0.0 } else { hits as f64 / extracted as f64 };
+    let r = if gold == 0 { 1.0 } else { hits as f64 / gold as f64 };
+    if p + r == 0.0 {
+        return 0;
+    }
+    ((2.0 * p * r / (p + r)) * 10.0).round() as u8
+}
+
+/// The consolidation rubric's input: eight lines, two duplicate pairs, one
+/// verbatim preference that must survive, and a session digest that
+/// corrects one line.
+const PROSE_MEMORY: &str = "- Run npm test before every commit\n- The API lives in src/api\n- Always run npm test before each commit\n- Deploy with firebase deploy --only hosting\n- Keep answers short, I read on my phone\n- The database is Postgres on port 5432\n- The API code is in src/api/\n- Use conventional commit messages";
+const PROSE_DIGEST: &str = "Moved the database to port 5433 today and confirmed deploys still work with firebase deploy --only hosting.";
+const PROSE_PREFERENCE: &str = "Keep answers short, I read on my phone";
+
+/// 0-10: the preference kept verbatim (4), duplicates merged to four to
+/// six lines (3), nothing invented - every output line shares half its
+/// words with some input line or the digest (3).
+pub(crate) fn score_prose(output: &str) -> u8 {
+    let lines: Vec<&str> = output.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    if lines.is_empty() {
+        return 0;
+    }
+    let mut score = 0u8;
+    if output.contains(PROSE_PREFERENCE) {
+        score += 4;
+    }
+    if (4..=6).contains(&lines.len()) {
+        score += 3;
+    }
+    let sources: Vec<std::collections::HashSet<String>> = PROSE_MEMORY
+        .lines()
+        .chain(std::iter::once(PROSE_DIGEST))
+        .map(|l| l.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| w.len() > 2).map(String::from).collect())
+        .collect();
+    let grounded = lines.iter().all(|l| {
+        let words: std::collections::HashSet<String> = l.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| w.len() > 2).map(String::from).collect();
+        words.is_empty() || sources.iter().any(|s| words.intersection(s).count() * 2 >= words.len())
+    });
+    if grounded {
+        score += 3;
+    }
+    score
+}
+
+/// Every runnable installed model served on the bench port in turn: the
+/// extraction set with the app's grammar, then the consolidation task;
+/// grades written to the memory slot's store.
+pub async fn leg_memory_grade(app: &AppHandle, bin: &Path, dir: &Path, sink: Sink<'_>) -> Vec<String> {
+    use std::time::Duration;
+    let mut failures = Vec::new();
+    let mut models: Vec<String> = crate::fit::assess(app)
+        .await
+        .into_iter()
+        .filter(|f| !matches!(f.fit, crate::fit::Fit::Red))
+        .filter(|f| crate::gguf::read_meta(&dir.join(&f.name)).map(|m| !m.is_embedding()).unwrap_or(false))
+        .map(|f| f.name)
+        .collect();
+    models.sort();
+    models.dedup();
+    if models.is_empty() {
+        sink("no runnable model to grade".into());
+        return failures;
+    }
+    let client = crate::llm::local_http();
+    for model in models {
+        if cancelled() {
+            break;
+        }
+        let args: Vec<String> = vec![
+            "--port".into(), BENCH_PORT.to_string(), "--host".into(), "127.0.0.1".into(),
+            "--no-webui".into(), "--reasoning".into(), "off".into(),
+            "--ctx-size".into(), "4096".into(), "--fit".into(), "off".into(),
+            "--model".into(), model.clone(),
+        ];
+        let _guard = match spawn_bench_server(bin, dir, args).await {
+            Ok(g) => g,
+            Err(e) => {
+                sink(format!("{model}: could not load ({e})"));
+                failures.push(format!("{model}: load"));
+                continue;
+            }
+        };
+        let ask = |system: &str, user: &str, grammar: Option<&str>, max_tokens: u32| {
+            let client = client.clone();
+            let model = model.clone();
+            let (system, user, grammar) = (system.to_string(), user.to_string(), grammar.map(String::from));
+            async move {
+                let mut body = serde_json::json!({
+                    "model": model,
+                    "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                    "max_tokens": max_tokens, "temperature": 0.0, "stream": false,
+                    "stop": crate::llm::chat_stop_strings(&model), "cache_prompt": true,
+                });
+                if let Some(g) = grammar {
+                    body["grammar"] = serde_json::Value::String(g);
+                }
+                let v: serde_json::Value = client
+                    .post(format!("http://127.0.0.1:{BENCH_PORT}/v1/chat/completions"))
+                    .json(&body)
+                    .timeout(Duration::from_secs(180))
+                    .send()
+                    .await
+                    .map_err(|e| format!("request: {e}"))?
+                    .json()
+                    .await
+                    .map_err(|e| format!("json: {e}"))?;
+                Ok::<String, String>(crate::llm::strip_turn_markers(v["choices"][0]["message"]["content"].as_str().unwrap_or("")))
+            }
+        };
+        let (mut hits, mut extracted, mut gold) = (0usize, 0usize, 0usize);
+        let mut asked = 0usize;
+        for (message, expected) in EXTRACTION_GOLD {
+            match ask(EXTRACTION_SYSTEM, &format!("message: \"{message}\""), Some(EXTRACTION_GRAMMAR), 256).await {
+                Ok(answer) => {
+                    let (h, e, g) = score_extraction(&answer, expected);
+                    hits += h;
+                    extracted += e;
+                    gold += g;
+                    asked += 1;
+                }
+                Err(e) => sink(format!("{model}: extraction call failed ({e})")),
+            }
+        }
+        let precision = if asked == 0 { None } else { Some(extraction_grade(hits, extracted, gold)) };
+        let prose_prompt = format!(
+            "You maintain a compact WORKSPACE MEMORY for a project folder: durable facts that help future sessions. Return ONLY the updated memory as markdown bullet lines. Rules: update in place rather than append; drop anything stale or proven wrong - but NEVER drop or reword a preference or correction the person gave; keep commands verbatim; no conversation summaries; merge lines that say the same thing.\n\nCURRENT MEMORY:\n{PROSE_MEMORY}\n\nWHAT HAPPENED THIS SESSION:\n{PROSE_DIGEST}"
+        );
+        let prose = match ask("You are a careful editor of a project's memory file.", &prose_prompt, None, 400).await {
+            Ok(answer) => Some(score_prose(&answer)),
+            Err(e) => {
+                sink(format!("{model}: consolidation call failed ({e})"));
+                None
+            }
+        };
+        crate::memory_slot::set_grade(app, &model, precision, prose);
+        sink(format!(
+            "{model}: extraction {} (hits {hits}/{gold}, extracted {extracted}), consolidation {}",
+            precision.map(|g| g.to_string()).unwrap_or_else(|| "-".into()),
+            prose.map(|g| g.to_string()).unwrap_or_else(|| "-".into())
+        ));
+    }
+    failures
+}
+
 /// Spawn a server binary on the bench port and wait for /health. Works for
 /// llama-server and the MLX server alike (same probe).
 async fn spawn_bench_server(
@@ -1405,6 +1610,13 @@ pub async fn matrix_run(
             sink(String::new());
         }
     }
+    if !cancelled() && want("memory") {
+        sink("== Memory grades (extraction precision/recall, consolidation rubric) ==".into());
+        for f in leg_memory_grade(&app, &bin, &dir, sink).await {
+            failures.push(format!("memory: {f}"));
+        }
+        sink(String::new());
+    }
     if !cancelled() && want("tune") {
         let tune_model = ggufs
             .iter()
@@ -1457,4 +1669,32 @@ pub async fn matrix_run(
     }
     let _ = app.emit("matrix-done", path.display().to_string());
     Ok(path.display().to_string())
+}
+
+#[cfg(test)]
+mod memory_grade_tests {
+    use super::*;
+
+    #[test]
+    fn extraction_scores_hits_by_predicate_and_phrase_and_negatives_by_silence() {
+        let gold = &[("name_is", "sam"), ("works_on", "nurse")][..];
+        let (h, e, g) = score_extraction(r#"[{"subject":"user","predicate":"name_is","value":"Sam","confidence":1},{"subject":"user","predicate":"works_on","value":"a nurse in Leeds","confidence":0.9},{"subject":"user","predicate":"likes","value":"tea","confidence":0.8}]"#, gold);
+        assert_eq!((h, e, g), (2, 3, 2));
+        assert_eq!(extraction_grade(2, 3, 2), 8, "f1 0.8");
+        assert_eq!(score_extraction("[]", &[]), (0, 0, 0));
+        assert_eq!(extraction_grade(0, 0, 0), 10, "silence on a non-fact is perfect");
+        assert_eq!(score_extraction(r#"[{"subject":"user","predicate":"likes","value":"housing","confidence":0.9}]"#, &[]), (0, 1, 0));
+        assert_eq!(extraction_grade(0, 1, 0), 0);
+    }
+
+    #[test]
+    fn the_consolidation_rubric_rewards_the_kept_preference_merged_duplicates_and_no_inventions() {
+        let good = "- Always run npm test before each commit\n- The API lives in src/api\n- Deploy with firebase deploy --only hosting\n- Keep answers short, I read on my phone\n- The database is Postgres on port 5433\n- Use conventional commit messages";
+        assert_eq!(score_prose(good), 10);
+        let dropped_pref = good.replace("- Keep answers short, I read on my phone\n", "");
+        assert_eq!(score_prose(&dropped_pref), 6);
+        let invented = format!("{good}\n- The team meets on Fridays at the pub");
+        assert_eq!(score_prose(&invented), 4, "one invented line costs grounding and the length band");
+        assert_eq!(score_prose(""), 0);
+    }
 }

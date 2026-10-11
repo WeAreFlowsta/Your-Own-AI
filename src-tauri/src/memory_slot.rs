@@ -112,6 +112,20 @@ pub fn memory_slot_pick(app: tauri::AppHandle, task: String) -> MemoryPick {
     pick(&app, &task)
 }
 
+/// The measured leg's write path (no command boundary).
+pub fn set_grade(app: &tauri::AppHandle, model: &str, precision: Option<u8>, prose: Option<u8>) {
+    let mut grades = load_grades(app);
+    let g = grades.entry(model.to_string()).or_default();
+    if precision.is_some() {
+        g.precision = precision.map(|v| v.min(10));
+    }
+    if prose.is_some() {
+        g.prose = prose.map(|v| v.min(10));
+    }
+    g.measured_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    save_grades(app, &grades);
+}
+
 /// The measured leg writes a model's grades here.
 #[tauri::command]
 pub fn memory_grades_set(app: tauri::AppHandle, model: String, precision: Option<u8>, prose: Option<u8>) -> Result<(), String> {
