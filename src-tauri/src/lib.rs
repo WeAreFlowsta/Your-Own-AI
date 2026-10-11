@@ -612,6 +612,7 @@ pub fn run() {
             memory_slot::memory_slot_pick,
             memory_slot::memory_grades_set,
             memory_slot::memory_grades,
+            memory_slot::memory_helper_needed,
             project_identity::project_identity_for,
             vault_escrow::vault_escrow_restore,
             vault_escrow::vault_escrow_keep_local,

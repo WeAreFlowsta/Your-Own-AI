@@ -97,26 +97,22 @@ export default component$<HelperModelOfferProps>(({ needFor }) => {
   return (
     <Callout
       intent="info"
-      title={needFor === 'documents' ? 'Documents need a small download' : needFor === 'placement' ? 'The helper models are not installed yet' : 'Give your AIs a memory'}
+      title={needFor === 'documents' ? 'Documents need a small download' : needFor === 'placement' ? 'The helper is not installed' : 'Add the helper?'}
       id={needFor ? undefined : HELPER_OFFER_TIP_ID}
       class={needFor === 'documents' ? 'mb-4 text-left' : needFor ? 'text-left' : 'mt-10 text-left'}
     >
       {done.value ? (
         <p>
-          {needFor === 'documents'
-            ? 'Installed. Add your documents now.'
-            : needFor === 'placement'
-              ? 'Installed. Where they run can be chosen here the next time you open Settings.'
-              : 'Installed. Your AIs now remember what you tell them and can read documents you add. Nothing else to do.'}
+          {needFor === 'documents' ? 'Installed. Add your documents.' : 'Installed.'}
         </p>
       ) : (
         <>
           <p class="mb-2.5">
-            {needFor === 'placement'
-              ? `A small optional download (${totalGb.value || UTILITY_MODEL.size} GB) so your AIs remember what you tell them and can read documents you add. It runs on this computer only.`
-              : needFor
-              ? `Your AIs read documents with a small helper (${totalGb.value || UTILITY_MODEL.size} GB). It runs on this computer only. Download it once, then add your documents.`
-              : `A small optional download (${totalGb.value || UTILITY_MODEL.size} GB) so your AIs remember what you tell them and can read documents you add. It runs on this computer only. Remove it anytime in Settings.`}
+            {needFor === 'documents'
+              ? `Reading documents needs it. ${totalGb.value || UTILITY_MODEL.size} GB, on this computer only.`
+              : needFor === 'placement'
+              ? `${totalGb.value || UTILITY_MODEL.size} GB, on this computer only.`
+              : `Your AIs learn facts and read documents better with it. ${totalGb.value || UTILITY_MODEL.size} GB, on this computer only.`}
           </p>
           {downloading.value ? (
             <div class="flex items-center gap-3">

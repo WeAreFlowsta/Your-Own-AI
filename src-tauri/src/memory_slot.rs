@@ -107,6 +107,35 @@ pub fn pick(app: &tauri::AppHandle, task: &str) -> MemoryPick {
     choose(task, loaded.as_deref(), loaded_grade, helper, helper_grade)
 }
 
+/// Pure: is the 2 GB helper needed on this machine? Not when it is
+/// installed, not when nothing is installed yet (nothing to judge), and
+/// not when any installed chat model grades at or above the floor for
+/// precision work - then memory works without it and nobody is asked.
+pub fn helper_needed(grades: &HashMap<String, MemoryGrade>, installed: &[String], helper: &str) -> bool {
+    if installed.is_empty() || installed.iter().any(|m| m == helper) {
+        return false;
+    }
+    !installed.iter().any(|m| grade_for(grades, m, "memory-precision") >= FLOOR)
+}
+
+/// The helper offer's gate (MEMORY_REDESIGN.md §7 / NEXT.md 10-08: the
+/// helper is a floor, offered only when the installed models grade below
+/// it - and only ever as an offer).
+#[tauri::command]
+pub async fn memory_helper_needed(app: tauri::AppHandle) -> bool {
+    let Ok(dir) = crate::llm::get_models_dir(&app) else { return false };
+    let installed: Vec<String> = std::fs::read_dir(&dir)
+        .map(|rd| {
+            rd.flatten()
+                .filter_map(|e| e.file_name().to_str().map(String::from))
+                .filter(|n| n.ends_with(".gguf") && !n.to_lowercase().contains("mmproj"))
+                .filter(|n| crate::gguf::read_meta(&dir.join(n)).map(|m| !m.is_embedding()).unwrap_or(false))
+                .collect()
+        })
+        .unwrap_or_default();
+    helper_needed(&load_grades(&app), &installed, crate::llm::UTILITY_MODEL_FILE)
+}
+
 #[tauri::command]
 pub fn memory_slot_pick(app: tauri::AppHandle, task: String) -> MemoryPick {
     pick(&app, &task)
@@ -164,6 +193,20 @@ mod tests {
         assert_eq!(p.via, "helper", "nothing loaded: never a load for memory work");
         let p = choose("memory-precision", Some(helper), 9, helper, 6);
         assert_eq!(p.via, "helper", "the helper itself loaded counts as the helper");
+    }
+
+    #[test]
+    fn the_helper_is_offered_only_when_every_installed_model_grades_below_the_floor() {
+        let helper = "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf";
+        let mut grades = HashMap::new();
+        grades.insert("good.gguf".to_string(), MemoryGrade { precision: Some(9), prose: None, measured_at: 1 });
+        grades.insert("weak.gguf".to_string(), MemoryGrade { precision: Some(4), prose: None, measured_at: 1 });
+        assert!(!helper_needed(&grades, &[], helper), "nothing installed: nothing to ask yet");
+        assert!(!helper_needed(&grades, &["good.gguf".into()], helper));
+        assert!(helper_needed(&grades, &["weak.gguf".into()], helper));
+        assert!(!helper_needed(&grades, &["weak.gguf".into(), "good.gguf".into()], helper));
+        assert!(!helper_needed(&grades, &["weak.gguf".into(), helper.into()], helper), "already installed");
+        assert!(helper_needed(&grades, &["unmeasured-unknown-family.gguf".into()], helper), "unknown and unmeasured ranks at zero");
     }
 
     #[test]

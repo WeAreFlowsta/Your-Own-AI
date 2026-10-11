@@ -66,9 +66,9 @@ export async function cudaOffer(): Promise<CudaOffer> {
  *  embedding model (memory recall, the freshness gate and the semantic
  *  half of the health gate - without it Frontier-first routing stays home
  *  by design). Never part of the first-run download (field, 2026-09-03). */
-export async function helperFilesMissing(): Promise<{ filename: string; downloadUrl: string; size: number }[]> {
+export async function helperFilesMissing(includeEmbedding = true): Promise<{ filename: string; downloadUrl: string; size: number }[]> {
   const out: { filename: string; downloadUrl: string; size: number }[] = [];
-  for (const m of [UTILITY_MODEL, EMBEDDING_MODEL]) {
+  for (const m of includeEmbedding ? [UTILITY_MODEL, EMBEDDING_MODEL] : [UTILITY_MODEL]) {
     try {
       if (!(await modelManager.isModelDownloaded(m.filename))) {
         out.push({ filename: m.filename, downloadUrl: m.downloadUrl, size: m.size });
@@ -85,7 +85,14 @@ export async function helperFilesMissing(): Promise<{ filename: string; download
  *  own (help tip id). */
 export async function helperOfferEligible(): Promise<boolean> {
   if (launchCount() < 2) return false;
-  if ((await helperFilesMissing()).length === 0) return false;
+  if ((await helperFilesMissing(false)).length === 0) return false;
+  // The helper is a floor, not an offer for everyone: only when no installed
+  // model grades high enough for memory work (the measured grade, else the
+  // registry). A person whose model clears it never sees this.
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    if (!(await invoke<boolean>("memory_helper_needed"))) return false;
+  } catch { /* older backend: offer as before */ }
   const cuda = await cudaOffer();
   return !cuda.eligible;
 }

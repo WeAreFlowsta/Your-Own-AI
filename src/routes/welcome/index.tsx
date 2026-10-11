@@ -1,4 +1,5 @@
 import { renderAiDescription } from '../../utils/aiDescription';
+import { EMBEDDING_MODEL } from "../../data/recommended-models";
 /**
  * Welcome wizard - the first-run experience.
  *
@@ -220,6 +221,13 @@ export default component$(() => {
       await modelManager.downloadModel(r.variant.downloadUrl, r.variant.filename, (p) => {
         progress.value = p;
       });
+      // The memory component rides the first download (130 MB): recall and
+      // smart routing work from the first conversation, nothing to ask.
+      try {
+        if (!(await modelManager.isModelDownloaded(EMBEDDING_MODEL.filename))) {
+          void modelManager.downloadModel(EMBEDDING_MODEL.downloadUrl, EMBEDDING_MODEL.filename, () => {}).catch(() => {});
+        }
+      } catch { /* the documents offer covers it later */ }
       // The root FirstModelIndicator loads it, assigns it to every AI and
       // announces FIRST_MODEL_READY - this page only reflects that.
     } catch (err) {
