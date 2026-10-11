@@ -598,6 +598,7 @@ pub fn run() {
             flowsta::vault_sign_document,
             vault_escrow::vault_escrow_sync,
             config_sync::config_sync_status,
+            config_sync::config_sync_now,
             vault_escrow::vault_escrow_restore,
             vault_escrow::vault_escrow_keep_local,
             vault_escrow::vault_backup_now,

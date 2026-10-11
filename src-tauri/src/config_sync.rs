@@ -62,9 +62,29 @@ pub(crate) fn merge_sibling_configs(
                 || l["id"] == founding.as_str()
                 || (!s_id.is_empty() && l["restoredFromId"] == s_id.as_str())
         });
+        // A fresh device seeds its own three starters before it knows the
+        // identity has them already: an untouched starter in the same slot
+        // IS the identity's slot-N AI and folds into it (takes its founding
+        // key and config; keeps this device's agent) instead of standing
+        // beside it as a twin. An edited starter is this person's work and
+        // stays.
+        let fold = pos.is_none()
+            && s["seedSlot"].as_u64().is_some()
+            && merged.iter().position(|l| {
+                l["seedSlot"] == s["seedSlot"]
+                    && founding_of(l).as_deref() == l["agentPubKey"].as_str()
+            }).map(|i| { merged[i]["foundingKey"] = serde_json::json!(founding); i }).is_some();
+        let pos = if fold {
+            merged.iter().position(|l| founding_of(l).as_deref() == Some(founding.as_str()))
+        } else {
+            pos
+        };
         match pos {
             Some(i) => {
-                if updated_at(s) > updated_at(&merged[i]) {
+                // The newer edit wins the fields (and the picture); a fold
+                // whose local side is newer takes only the key.
+                let take_fields = updated_at(s) > updated_at(&merged[i]);
+                if take_fields {
                     for f in SYNCED_FIELDS {
                         match s.get(*f) {
                             Some(v) => merged[i][*f] = v.clone(),
@@ -75,13 +95,15 @@ pub(crate) fn merge_sibling_configs(
                             }
                         }
                     }
+                    if let Some(local_id) = merged[i]["id"].as_str() {
+                        touched.push((s_id.clone(), local_id.to_string()));
+                    }
+                }
+                if take_fields || fold {
                     if merged[i]["foundingKey"].as_str().map(|f| f.is_empty()).unwrap_or(true) {
                         merged[i]["foundingKey"] = serde_json::json!(founding);
                     }
                     updated += 1;
-                    if let Some(local_id) = merged[i]["id"].as_str() {
-                        touched.push((s_id.clone(), local_id.to_string()));
-                    }
                 }
             }
             None => {
@@ -155,8 +177,14 @@ pub struct ConfigSyncState {
     pub checked_at: u64,
     /// The other devices holding copies here, as the Vault names them.
     pub devices: Vec<SyncedDevice>,
+    /// This round's changes.
     pub updated: u32,
     pub added: u32,
+    /// Every round's changes on this profile, added up.
+    #[serde(default)]
+    pub total_updated: u32,
+    #[serde(default)]
+    pub total_added: u32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -176,8 +204,16 @@ fn state_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
 }
 
 fn save_state(app: &tauri::AppHandle, state: &ConfigSyncState) {
+    let mut state = state.clone();
+    if let Some(prev) = config_sync_status(app.clone()) {
+        state.total_updated = prev.total_updated + state.updated;
+        state.total_added = prev.total_added + state.added;
+    } else {
+        state.total_updated = state.updated;
+        state.total_added = state.added;
+    }
     if let Some(p) = state_path(app) {
-        if let Ok(json) = serde_json::to_vec(state) {
+        if let Ok(json) = serde_json::to_vec(&state) {
             let _ = std::fs::write(p, json);
         }
     }
@@ -259,7 +295,7 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle) -> Result<(u32, u
             }
         }
     }
-    save_state(app, &ConfigSyncState { checked_at: now_ms(), devices: synced, updated: total_updated, added: total_added });
+    save_state(app, &ConfigSyncState { checked_at: now_ms(), devices: synced, updated: total_updated, added: total_added, ..Default::default() });
     if total_updated + total_added > 0 {
         store.set("custom-ais", serde_json::json!(local));
         store.save().map_err(|e| e.to_string())?;
@@ -267,6 +303,14 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle) -> Result<(u32, u
         let _ = app.emit("ai-configs-changed", serde_json::json!({ "updated": total_updated, "added": total_added }));
     }
     Ok((total_updated, total_added))
+}
+
+/// One round now (Settings, tests). The same answer the background round
+/// records.
+#[tauri::command]
+pub async fn config_sync_now(app: tauri::AppHandle) -> Result<ConfigSyncState, String> {
+    sync_from_siblings(&app).await?;
+    Ok(config_sync_status(app).unwrap_or_default())
 }
 
 /// Rounds like the Vault's: the first shortly after start, then every five
@@ -350,5 +394,33 @@ mod tests {
         let (again, u2, a2, _) = merge_sibling_configs(merged.clone(), &sibling);
         assert_eq!((u2, a2), (0, 0));
         assert_eq!(again.len(), 2);
+    }
+
+    #[test]
+    fn a_fresh_devices_untouched_starter_folds_into_the_identitys_ai_in_that_slot() {
+        // B seeded its own Teresa (slot 2, never edited); A's Teresa was
+        // renamed on A. B's starter takes A's founding key and name, keeps
+        // its own agent; an edited starter on B stays beside the sibling's.
+        let mut b_teresa = ai("b-agent-2", "b-agent-2", "Teresa", 0);
+        b_teresa.as_object_mut().unwrap().remove("updatedAt");
+        b_teresa["seedSlot"] = serde_json::json!(2);
+        let mut b_veebo = ai("b-agent-1", "b-agent-1", "Veebo the Great", 9);
+        b_veebo["seedSlot"] = serde_json::json!(1);
+        let mut a_teresa = ai("a-agent-2", "a-agent-2", "Teresa Two", 30);
+        a_teresa["seedSlot"] = serde_json::json!(2);
+        let mut a_veebo = ai("a-agent-1", "a-agent-1", "Veebo", 0);
+        a_veebo.as_object_mut().unwrap().remove("updatedAt");
+        a_veebo["seedSlot"] = serde_json::json!(1);
+        let (merged, updated, added, touched) = merge_sibling_configs(vec![b_veebo, b_teresa], &[a_veebo, a_teresa]);
+        assert_eq!((updated, added), (2, 0), "both slots fold, nothing is added");
+        assert_eq!(merged.len(), 2);
+        let t = merged.iter().find(|l| l["seedSlot"] == 2).unwrap();
+        assert_eq!(t["name"], "Teresa Two");
+        assert_eq!(t["foundingKey"], "a-agent-2", "the identity's founding key");
+        assert_eq!(t["agentPubKey"], "b-agent-2", "this device's agent stays");
+        let v = merged.iter().find(|l| l["seedSlot"] == 1).unwrap();
+        assert_eq!(v["foundingKey"], "a-agent-1", "an edited starter still folds its KEY (one AI per slot)");
+        assert_eq!(v["name"], "Veebo the Great", "but keeps its newer edit");
+        assert_eq!(touched.len(), 1, "only the slot that took A's fields takes A's picture");
     }
 }
