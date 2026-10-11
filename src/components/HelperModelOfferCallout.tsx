@@ -109,10 +109,10 @@ export default component$<HelperModelOfferProps>(({ needFor }) => {
         <>
           <p class="mb-2.5">
             {needFor === 'documents'
-              ? `Reading documents needs it. ${totalGb.value || UTILITY_MODEL.size} GB, on this computer only.`
+              ? `Reading documents needs it. ${totalGb.value || UTILITY_MODEL.size} GB. Privately on your device only.`
               : needFor === 'placement'
-              ? `${totalGb.value || UTILITY_MODEL.size} GB, on this computer only.`
-              : `Your AIs learn facts and read documents better with it. ${totalGb.value || UTILITY_MODEL.size} GB, on this computer only.`}
+              ? `${totalGb.value || UTILITY_MODEL.size} GB. Privately on your device only.`
+              : `Your AIs update their memory and read documents better with it. ${totalGb.value || UTILITY_MODEL.size} GB. Privately on your device only.`}
           </p>
           {downloading.value ? (
             <div class="flex items-center gap-3">
