@@ -37,6 +37,9 @@ describe("memory rules", () => {
     const saved = rows.find((r) => r.text === RULE);
     expect(saved?.kind).toBe("rule");
     expect(saved?.pinned).toBe(true);
+    // The per-scope cache is what every turn's memory block reads (layer 1).
+    const cached = await invoke<{ text: string }[]>("list_memory_rows_cached", { scope: "person" });
+    expect(cached.some((r) => r.text === RULE)).toBe(true);
     // Survives a reload.
     await yourMemory();
     await (await $(`[data-testid="memory-rule"]*=${RULE.slice(0, 30)}`)).waitForDisplayed({ timeout: 60_000 });

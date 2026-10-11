@@ -14,6 +14,45 @@ import {
   isEmbeddingModelReady,
 } from "./embeddings";
 import { recallPerAi } from "./transcriptMemory";
+import { listMemoryRows, listMemoryRowsCached, personScope, aiScope, type MemoryRow } from "./memoryRows";
+
+/** Layer 1 of memory (MEMORY_REDESIGN.md §4): the person's rules, commands
+ *  and locations for the scopes in play - the person's words verbatim,
+ *  first, re-stated on every turn, never summarised. Read from the local
+ *  per-scope cache (instant); the cache is refreshed in the background so
+ *  a rule saved on another device lands within a turn or two. */
+const rulesRefreshedAt = new Map<string, number>();
+export async function loadRulesLayer(scopes: string[]): Promise<string> {
+  const rows: MemoryRow[] = [];
+  for (const scope of scopes) {
+    try {
+      rows.push(...(await listMemoryRowsCached(scope)));
+    } catch { /* older backend */ }
+    const last = rulesRefreshedAt.get(scope) ?? 0;
+    if (Date.now() - last > 60_000) {
+      rulesRefreshedAt.set(scope, Date.now());
+      void listMemoryRows(scope).catch(() => undefined);
+    }
+  }
+  const rules = rows.filter((r) => r.kind === "rule");
+  const commands = rows.filter((r) => r.kind === "command");
+  const locations = rows.filter((r) => r.kind === "location");
+  if (rules.length === 0 && commands.length === 0 && locations.length === 0) return "";
+  const lines: string[] = [];
+  if (rules.length) {
+    lines.push("Rules from them, in their words - follow them in every answer:");
+    for (const r of rules) lines.push(`- ${r.text}`);
+  }
+  if (commands.length) {
+    lines.push("Commands they use here:");
+    for (const r of commands) lines.push(`- ${r.text}`);
+  }
+  if (locations.length) {
+    lines.push("Where things are:");
+    for (const r of locations) lines.push(`- ${r.text}`);
+  }
+  return lines.join("\n");
+}
 
 export interface Fact {
   id: string;
@@ -273,6 +312,8 @@ export async function loadMemoryBlock(
   query?: string,
   opts?: {
     aiId?: string;
+    /** The AI's founding key: its own memory scope (`ai:<founding>`). */
+    foundingKey?: string | null;
     conversationHash?: string | null;
     /** A shared embedding of `query` (the send path embeds the turn once and
      *  hands it to both the router and this retrieval). Absent = embed here. */
@@ -304,7 +345,11 @@ export async function loadMemoryBlock(
     ? `Their name is ${name.value}.`
     : "Their name is unknown. Do not assume or allude to it.";
 
-  let block = nameLine;
+  // Layer 1 first: the person's rules for the person and this AI.
+  const rulesLayer = await loadRulesLayer(
+    opts?.foundingKey ? [personScope, aiScope(opts.foundingKey)] : [personScope],
+  ).catch(() => "");
+  let block = rulesLayer ? `${rulesLayer}\n${nameLine}` : nameLine;
   // The consolidated portrait first (the 2026 lesson: a coherent summary
   // outperforms a bare fact list), the ground-truth facts after it.
   if (synthesis) {

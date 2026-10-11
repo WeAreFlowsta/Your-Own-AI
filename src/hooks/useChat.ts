@@ -526,6 +526,7 @@ export function useChat(props: UseChatProps) {
       const aiModelSetting = selectedAi.aiConfig?.model || "";
       const memoryBlockPromise = loadMemoryBlock(userInput, {
         aiId: selectedAi.id,
+        foundingKey: selectedAi.aiConfig?.foundingKey ?? selectedAi.aiConfig?.agentPubKey ?? null,
         conversationHash: state.conversationHash,
         queryVec: queryVecPromise,
       }).catch(() => "");
