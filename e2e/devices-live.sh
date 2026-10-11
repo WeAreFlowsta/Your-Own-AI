@@ -23,6 +23,8 @@ dev() { curl -s -m 60 -X POST "http://127.0.0.1:$1/dev/devices" -H 'content-type
 trap 'killtests; sleep 2; killtests' EXIT
 
 [ -z "$(answering)" ] || { echo "a test Vault is already answering - stop it first"; exit 1; }
+# The Vault's debug test binary (a target clean removes it): build it when missing.
+[ -x "$VAULT/src-tauri/target/debug/flowsta-vault" ] || { echo "== building the Vault test binary"; (cd "$VAULT" && scripts/build-test-binary.sh > "$LOGS/vault-test-build.log" 2>&1) || { echo "Vault test build failed"; tail -20 "$LOGS/vault-test-build.log"; exit 1; }; }
 rm -rf "$HOME/.local/share/flowsta-vault-md-e" "$HOME/.local/share/flowsta-vault-md-f"
 (cd "$VAULT" && dbus-run-session -- scripts/run-test-instance.sh md-e > "$LOGS/md-e.log" 2>&1 &)
 P1="$(waitnew)" || { echo "md-e never answered"; exit 1; }

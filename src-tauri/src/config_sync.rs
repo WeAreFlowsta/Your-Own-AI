@@ -9,7 +9,7 @@
 
 use crate::flowsta::{self, http, VAULT_ORIGIN, YOAI_HOLOCHAIN_CLIENT_ID};
 use serde::{Deserialize, Serialize};
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 /// The editable, person-owned fields of an AI - what follows the identity.
 const SYNCED_FIELDS: &[&str] = &[
@@ -336,6 +336,15 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle) -> Result<(u32, u
         });
         let Some(manifest) = manifest else { continue };
         sibling_index.extend(index_of(&manifest, device));
+        // The sibling's memory while it is off: its facts and its rows.
+        if let Some(hc) = app.try_state::<std::sync::Arc<crate::commands_holochain::HolochainState>>() {
+            if let Ok(key) = hc.get().and_then(|m| m.data_key()) {
+                let (f, r) = crate::memory_rows::fold_sibling_person_memory(app, &key, &manifest);
+                if f + r > 0 {
+                    log::info!("[config-sync] memory from {}: {} fact(s), {} row(s) folded in", device.name.as_deref().unwrap_or("another device"), f, r);
+                }
+            }
+        }
         let sibling = ai_list(&manifest);
         if sibling.is_empty() {
             continue;

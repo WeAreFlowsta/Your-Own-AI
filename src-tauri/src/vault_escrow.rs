@@ -1820,6 +1820,18 @@ fn attach_extras(
             }
             payload["memory_facts"] = block;
         }
+        // The person's memory rows for this device (its person-scope cache,
+        // sealed under the data key): another device reads them from the
+        // copy while this one is off (MEMORY_REDESIGN.md §10).
+        if let Some(rows_path) = crate::memory_rows::cache_path(app, "person") {
+            if let Ok(bytes) = std::fs::read(&rows_path) {
+                use base64::Engine;
+                payload["memory_rows"] = serde_json::json!({
+                    "_readme": "The person's memory rows (rules, commands, locations, decisions, facts, notes) as this device last read them - the encrypted rows cache, readable with app_keys.",
+                    "person_raw_b64": base64::engine::general_purpose::STANDARD.encode(&bytes),
+                });
+            }
+        }
     }
 
     // Per-AI thumbnails (small jpgs), keyed by AI id.

@@ -171,10 +171,125 @@ pub async fn list_memory_rows(
 
 // ───────────── the local cache per scope ─────────────
 
-fn cache_path(app: &tauri::AppHandle, scope: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn cache_path(app: &tauri::AppHandle, scope: &str) -> Option<std::path::PathBuf> {
     use sha2::Digest;
     let tag = hex::encode(sha2::Sha256::digest(scope.as_bytes()));
     crate::profile::root(app).ok().map(|r| r.join(format!("memory-rows-{}.enc", &tag[..16])))
+}
+
+/// Rows of a scope that came from another device's backup copy (its rows
+/// cache rides its manifest) - kept apart from the live cache so a live
+/// read, which cannot see an offline device's records, never drops them.
+fn siblings_path(app: &tauri::AppHandle, scope: &str) -> Option<std::path::PathBuf> {
+    cache_path(app, scope).map(|p| p.with_extension("siblings.enc"))
+}
+
+fn read_sealed_rows(path: Option<std::path::PathBuf>, key: &[u8; 32]) -> Vec<MemoryRow> {
+    let Some(path) = path else { return Vec::new() };
+    let Ok(raw) = std::fs::read(&path) else { return Vec::new() };
+    decode_sealed_rows(&raw, key)
+}
+
+/// A sealed rows file (the cache's shape) as rows, or nothing.
+pub(crate) fn decode_sealed_rows(raw: &[u8], key: &[u8; 32]) -> Vec<MemoryRow> {
+    let Ok(file) = serde_json::from_slice::<SealedFile>(raw) else { return Vec::new() };
+    let (Ok(nonce), Ok(cipher)) = (hex::decode(&file.nonce), hex::decode(&file.cipher)) else { return Vec::new() };
+    let Ok(plain) = crate::transcript_crypto::decrypt(key, &nonce, &cipher) else { return Vec::new() };
+    serde_json::from_slice(&plain).unwrap_or_default()
+}
+
+fn write_sealed_rows(path: Option<std::path::PathBuf>, key: &[u8; 32], rows: &[MemoryRow]) {
+    let Some(path) = path else { return };
+    let Ok(plain) = serde_json::to_vec(rows) else { return };
+    let Ok((nonce, cipher)) = crate::transcript_crypto::encrypt(key, &plain) else { return };
+    let file = SealedFile { version: 1, nonce: hex::encode(nonce), cipher: hex::encode(cipher) };
+    if let Ok(json) = serde_json::to_vec(&file) {
+        let _ = std::fs::write(&path, json);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
+    }
+}
+
+/// Fold another device's memory (from its manifest copy) into this
+/// device's: its facts file by id (newer wins, no vector when the words
+/// changed), its person-scope rows into the siblings file and the cache.
+/// Returns (facts adopted, rows adopted). The facts write does not mirror
+/// (the other device already wrote those rows).
+pub(crate) fn fold_sibling_person_memory(app: &tauri::AppHandle, key: &[u8; 32], manifest: &serde_json::Value) -> (usize, usize) {
+    use base64::Engine;
+    let mut facts_adopted = 0usize;
+    if let Some(b64) = manifest["memory_facts"]["raw_b64"].as_str() {
+        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
+            if let Ok(file) = serde_json::from_slice::<SealedFile>(&bytes) {
+                if let (Ok(nonce), Ok(cipher)) = (hex::decode(&file.nonce), hex::decode(&file.cipher)) {
+                    if let Ok(plain) = crate::transcript_crypto::decrypt(key, &nonce, &cipher) {
+                        if let Ok(theirs) = serde_json::from_slice::<Vec<crate::memory::MemoryFact>>(&plain) {
+                            let mut mine = crate::memory::read_facts(app, key).unwrap_or_default();
+                            facts_adopted = merge_facts(&mut mine, theirs);
+                            if facts_adopted > 0 {
+                                let _ = crate::memory::write_facts(app, key, &mine);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut rows_adopted = 0usize;
+    if let Some(b64) = manifest["memory_rows"]["person_raw_b64"].as_str() {
+        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
+            let theirs = decode_sealed_rows(&bytes, key);
+            if !theirs.is_empty() {
+                let mut siblings = read_sealed_rows(siblings_path(app, "person"), key);
+                let before: std::collections::HashSet<(String, i64)> = siblings.iter().map(|r| (r.id.clone(), r.updated_at)).collect();
+                siblings.extend(theirs);
+                let siblings = reduce(siblings);
+                rows_adopted = siblings.iter().filter(|r| !before.contains(&(r.id.clone(), r.updated_at))).count();
+                write_sealed_rows(siblings_path(app, "person"), key, &siblings);
+                let mut all = read_cache(app, key, "person");
+                all.extend(siblings);
+                write_cache(app, key, "person", &reduce(all));
+            }
+        }
+    }
+    (facts_adopted, rows_adopted)
+}
+
+/// Merge another device's facts into ours by id: a fact we lack is added, a
+/// newer one replaces ours (its vector dropped when the words changed);
+/// portraits (synthesis, library) stay this device's own. Returns how many
+/// changed.
+pub(crate) fn merge_facts(mine: &mut Vec<crate::memory::MemoryFact>, theirs: Vec<crate::memory::MemoryFact>) -> usize {
+    let mut n = 0usize;
+    for t in theirs {
+        if t.entry_kind == "synthesis" || t.entry_kind == "library" {
+            continue;
+        }
+        match mine.iter_mut().find(|m| m.id == t.id) {
+            Some(m) if m.updated_at >= t.updated_at => {}
+            Some(m) => {
+                let keep_vec = m.value == t.value;
+                let vec = m.embedding.take();
+                *m = t;
+                if keep_vec {
+                    m.embedding = vec;
+                } else {
+                    m.embedding = None;
+                }
+                n += 1;
+            }
+            None => {
+                let mut t = t;
+                t.embedding = None;
+                mine.push(t);
+                n += 1;
+            }
+        }
+    }
+    n
 }
 
 #[derive(Serialize, Deserialize)]
@@ -184,7 +299,7 @@ struct SealedFile {
     cipher: String,
 }
 
-fn write_cache(app: &tauri::AppHandle, key: &[u8; 32], scope: &str, rows: &[MemoryRow]) {
+pub(crate) fn write_cache(app: &tauri::AppHandle, key: &[u8; 32], scope: &str, rows: &[MemoryRow]) {
     let Some(path) = cache_path(app, scope) else { return };
     let Ok(plain) = serde_json::to_vec(rows) else { return };
     let Ok((nonce, cipher)) = crate::transcript_crypto::encrypt(key, &plain) else { return };
@@ -199,7 +314,7 @@ fn write_cache(app: &tauri::AppHandle, key: &[u8; 32], scope: &str, rows: &[Memo
     }
 }
 
-fn read_cache(app: &tauri::AppHandle, key: &[u8; 32], scope: &str) -> Vec<MemoryRow> {
+pub(crate) fn read_cache(app: &tauri::AppHandle, key: &[u8; 32], scope: &str) -> Vec<MemoryRow> {
     let Some(path) = cache_path(app, scope) else { return Vec::new() };
     let Ok(raw) = std::fs::read(&path) else { return Vec::new() };
     let Ok(file) = serde_json::from_slice::<SealedFile>(&raw) else { return Vec::new() };
@@ -240,6 +355,8 @@ async fn rows_at(app: &tauri::AppHandle, manager: &crate::holochain::HolochainMa
         row.action_hash = Some(hex::encode(record.action_address().get_raw_39()));
         rows.push(row);
     }
+    // What an offline device's backup copy brought stays in the list.
+    rows.extend(read_sealed_rows(siblings_path(app, scope), &key));
     let reduced = reduce(rows);
     write_cache(app, &key, scope, &reduced);
     Ok(reduced)
@@ -368,6 +485,16 @@ pub(crate) async fn upsert_row(app: &tauri::AppHandle, manager: &crate::holochai
     after.push(row.clone());
     write_cache(app, &key, &row.scope, &reduce(after));
     Ok((hex::encode(hash.get_raw_39()), replaced))
+}
+
+/// Live rows of a scope through `agent` (refreshes the cache) - for dreaming.
+pub(crate) async fn rows_live(app: &tauri::AppHandle, manager: &crate::holochain::HolochainManager, agent: &str, scope: &str) -> Result<Vec<MemoryRow>, String> {
+    rows_at(app, manager, agent, scope).await
+}
+
+/// Write one row through `agent` - for dreaming's revisions.
+pub(crate) async fn write_row_pub(manager: &crate::holochain::HolochainManager, agent: &str, row: &MemoryRow) -> Result<(), String> {
+    write_row(manager, agent, row).await
 }
 
 /// The `remember` tool: a row the AI saves for the person (`person`) or
@@ -932,6 +1059,22 @@ mod tests {
         assert!(find_revised(&live, "location", "Run npm test before every commit").is_none(), "another kind is another row");
         assert!(says_the_same("use short answers", "Use short answers."));
         assert!(!says_the_same("the office opens at nine", "call the supplier on mondays"));
+    }
+
+    #[test]
+    fn another_devices_facts_fold_in_by_id_newer_wins_vectors_stay_per_device() {
+        let mut mine = vec![fact("a", "fact", "tea", 10), fact("b", "note", "old words", 10)];
+        let mut b2 = fact("b", "note", "new words", 20);
+        b2.embedding = Some(vec![9.0]);
+        let mut portrait = fact("s", "synthesis", "…", 99);
+        portrait.entry_kind = "synthesis".into();
+        let n = merge_facts(&mut mine, vec![fact("a", "fact", "tea", 5), b2, fact("c", "fact", "dogs", 30), portrait]);
+        assert_eq!(n, 2, "b updated, c added; a older, the portrait never");
+        assert_eq!(mine.len(), 3);
+        let b = mine.iter().find(|f| f.id == "b").unwrap();
+        assert_eq!(b.value, "new words");
+        assert!(b.embedding.is_none(), "the words changed: embed here");
+        assert!(mine.iter().find(|f| f.id == "c").unwrap().embedding.is_none());
     }
 
     #[test]

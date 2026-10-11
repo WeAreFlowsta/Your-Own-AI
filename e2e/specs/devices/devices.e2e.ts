@@ -10,6 +10,7 @@ const MESSAGE = "Devices test: name one colour and nothing else.";
 
 const PHASE = process.env.DEVICES_PHASE ?? "";
 const NAME = process.env.DEVICES_NAME ?? "Synced AI";
+const RULE = `Always answer in one short sentence (devices ${process.env.DEVICES_NAME ?? ""})`.trim();
 
 const escrow = () => invoke<{ state: string }>("vault_escrow_sync");
 const bodyText = () => browser.execute(() => document.body.innerText);
@@ -44,6 +45,15 @@ describe(`devices, phase ${PHASE}`, () => {
       await browser.waitUntil(async () => (await bodyText()).includes(NAME), { timeout: 30_000, timeoutMsg: "the renamed AI never showed on Your AIs" });
       console.log(`e2e: renamed ${JSON.stringify(oldName)} -> ${JSON.stringify(NAME)} (page had ${before.includes(oldName) ? "" : "NOT "}listed it)`);
       await shot("devices-a-renamed");
+      // A standing rule, kept here: a person-scope memory row. The live read
+      // puts it in this device's rows cache, which rides the manifest, so the
+      // other device has it while this one is off (MEMORY_REDESIGN.md §10).
+      await invoke("save_memory_row", { agentKey: null, row: {
+        id: `devices-${Date.now().toString(36)}`, scope: "person", kind: "rule", text: RULE, structured: null,
+        as_of: Date.now(), valid_to: null, saved_by: "person", provenance: "authored", pinned: true, topics: [], replaces: [], deleted: false, updated_at: Date.now(),
+      } });
+      const rowsA = await invoke<{ text: string }[]>("list_memory_rows", { agentKey: null, scope: "person" });
+      expect(rowsA.some((r) => r.text === RULE)).toBe(true);
       // One conversation on this device, so the other device can show it
       // from the Vault's copy while this one is off (MULTI_DEVICE.md §3.3).
       await waitForChat();
@@ -88,6 +98,15 @@ describe(`devices, phase ${PHASE}`, () => {
       expect(renamed).toBeDefined();
       expect(renamed.agent.length).toBeGreaterThan(0);
       expect(renamed.founding).not.toBe(renamed.agent);
+      // A's rule, with A off: folded from A's manifest copy into this
+      // device's rows cache, listed on Your Memory, read by every turn.
+      const cachedRules = await invoke<{ kind: string; text: string }[]>("list_memory_rows_cached", { scope: "person" });
+      console.log(`e2e: B's cached rules ${JSON.stringify(cachedRules.filter((r) => r.kind === "rule").map((r) => r.text))}`);
+      expect(cachedRules.some((r) => r.kind === "rule" && r.text === RULE)).toBe(true);
+      await browser.url("tauri://localhost/your-memory/");
+      const ruleEl = await $(`[data-testid="memory-rule"]*=${RULE.slice(0, 30)}`);
+      await ruleEl.waitForDisplayed({ timeout: 60_000 });
+      await shot("devices-b-rule-from-a");
       // A's conversation, read-only from the Vault's copy: device A is off,
       // so its records cannot have arrived; the drawer lists the copy and the
       // chat opens it with the quiet line; a send is refused with the reason.
