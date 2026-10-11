@@ -111,7 +111,13 @@ pub fn save_transcript_embeddings(
     hc_state: State<'_, Arc<HolochainState>>,
 ) -> Result<(), String> {
     let key = hc_state.get()?.data_key()?;
-    write_for(&app, &key, &ai_id, &items)
+    let before = read_for(&app, &key, &ai_id).unwrap_or_default();
+    write_for(&app, &key, &ai_id, &items)?;
+    // The knowledge the person gave this AI (not its episodic index, not
+    // document chunks) is mirrored into the AI's memory rows in the
+    // person's network, so it follows the AI to their other devices.
+    crate::memory_rows::mirror_ai_knowledge(&app, &ai_id, before, items);
+    Ok(())
 }
 
 /// Encrypt + write this AI's embedding store - the non-command counterpart

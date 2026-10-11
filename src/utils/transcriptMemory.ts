@@ -300,7 +300,12 @@ export async function recallPerAi(
       e.kind !== "authored" &&
       (!excludeConversationHash || e.conversation_hash !== excludeConversationHash),
   );
-  const authoredPool = all.filter((e) => e.kind === "authored");
+  // Knowledge that arrived from another device without a vector cannot
+  // match yet: embed it for the next turn and leave it out of this one.
+  if (all.some((e) => e.kind === "authored" && !e.source && !(e.vector && e.vector.length))) {
+    void embedBareKnowledge(aiId);
+  }
+  const authoredPool = all.filter((e) => e.kind === "authored" && e.vector && e.vector.length);
 
   return {
     episodic: topMatches(episodicPool, queryVec).map((e) => e.text),
@@ -314,9 +319,43 @@ export async function getAiMemories(aiId: string): Promise<TranscriptEmbedding[]
   return all.filter((e) => e.kind !== "authored").reverse();
 }
 
+/** Knowledge given to this AI on another of the person's devices arrives
+ *  through its memory rows without a vector (vectors are per device): embed
+ *  those here once the embedding model is ready, so recall sees them.
+ *  Returns how many were embedded; never runs twice at once per AI. */
+const embeddingBareFor = new Set<string>();
+export async function embedBareKnowledge(aiId: string): Promise<number> {
+  if (embeddingBareFor.has(aiId)) return 0;
+  embeddingBareFor.add(aiId);
+  try {
+    const all = await getEmb(aiId);
+    const bare = all.filter((e) => e.kind === "authored" && !e.source && !(e.vector && e.vector.length));
+    if (bare.length === 0 || !(await isEmbeddingModelReady())) return 0;
+    const vecs = await embedDocuments(bare.map((e) => e.text));
+    let n = 0;
+    bare.forEach((e, i) => {
+      const v = vecs[i];
+      if (v && v.length) {
+        e.vector = v;
+        n++;
+      }
+    });
+    if (n > 0) await saveTranscriptEmbeddings(aiId, all);
+    return n;
+  } catch (e) {
+    console.warn("[Memory] embedding knowledge from other devices failed:", e);
+    return 0;
+  } finally {
+    embeddingBareFor.delete(aiId);
+  }
+}
+
 /** Knowledge the user has given this AI (most recent first) — the pack. */
 export async function getAiKnowledge(aiId: string): Promise<TranscriptEmbedding[]> {
   const all = await getEmb(aiId);
+  if (all.some((e) => e.kind === "authored" && !e.source && !(e.vector && e.vector.length))) {
+    void embedBareKnowledge(aiId); // for the next read; this one goes on
+  }
   // Loose authored lore only - document chunks (which carry a `source`) are
   // surfaced grouped-by-document via listKnowledgeDocuments, not as individual
   // lines here.

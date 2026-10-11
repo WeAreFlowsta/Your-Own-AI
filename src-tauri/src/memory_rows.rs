@@ -388,6 +388,157 @@ pub(crate) fn mirror_person_facts(app: &tauri::AppHandle, before: Vec<crate::mem
     });
 }
 
+// ───────────── an AI's authored knowledge ↔ ai-scope rows ─────────────
+
+/// Knowledge the person gave the AI by hand: authored, not from a document
+/// (document chunks are the library's; the episodic index is derived).
+fn is_authored_note(e: &crate::transcript_memory::TranscriptEmbedding) -> bool {
+    e.kind == "authored" && e.source.is_none()
+}
+
+pub(crate) fn knowledge_to_row(e: &crate::transcript_memory::TranscriptEmbedding, founding: &str) -> MemoryRow {
+    MemoryRow {
+        id: e.id.clone(),
+        scope: format!("ai:{founding}"),
+        kind: "note".into(),
+        text: e.text.clone(),
+        structured: None,
+        as_of: e.created_at,
+        valid_to: None,
+        saved_by: "person".into(),
+        provenance: "authored".into(),
+        pinned: false,
+        topics: vec![],
+        replaces: vec![],
+        deleted: false,
+        updated_at: e.created_at.max(1),
+        action_hash: None,
+    }
+}
+
+/// The reverse: a note from another device as the index wants it - no
+/// vector (the front end embeds bare authored items it finds).
+pub(crate) fn row_to_knowledge(r: &MemoryRow) -> Option<crate::transcript_memory::TranscriptEmbedding> {
+    if r.kind != "note" || !r.scope.starts_with("ai:") {
+        return None;
+    }
+    Some(crate::transcript_memory::TranscriptEmbedding {
+        id: r.id.clone(),
+        conversation_hash: "authored".into(),
+        role: "authored".into(),
+        text: r.text.clone(),
+        vector: vec![],
+        kind: "authored".into(),
+        created_at: r.as_of,
+        source: None,
+    })
+}
+
+/// What a knowledge save changed, as rows (new or changed text = revision,
+/// removed = deletion). Pure.
+pub(crate) fn knowledge_delta(before: &[crate::transcript_memory::TranscriptEmbedding], after: &[crate::transcript_memory::TranscriptEmbedding], founding: &str) -> Vec<MemoryRow> {
+    use std::collections::HashMap;
+    let was: HashMap<&str, &crate::transcript_memory::TranscriptEmbedding> = before.iter().filter(|e| is_authored_note(e)).map(|e| (e.id.as_str(), e)).collect();
+    let now: HashMap<&str, &crate::transcript_memory::TranscriptEmbedding> = after.iter().filter(|e| is_authored_note(e)).map(|e| (e.id.as_str(), e)).collect();
+    let mut out = Vec::new();
+    for (id, e) in &now {
+        if was.get(id).map(|b| b.text != e.text).unwrap_or(true) {
+            let mut r = knowledge_to_row(e, founding);
+            r.updated_at = r.updated_at.max(now_ms());
+            out.push(r);
+        }
+    }
+    for (id, e) in &was {
+        if !now.contains_key(id) {
+            let mut r = knowledge_to_row(e, founding);
+            r.deleted = true;
+            r.updated_at = now_ms();
+            out.push(r);
+        }
+    }
+    out
+}
+
+/// Called by every knowledge-index save for an AI (`ai_id` = its agent on
+/// this device): the authored notes' delta goes to the AI's rows in the
+/// background, through the AI's own agent.
+pub(crate) fn mirror_ai_knowledge(app: &tauri::AppHandle, ai_id: &str, before: Vec<crate::transcript_memory::TranscriptEmbedding>, after: Vec<crate::transcript_memory::TranscriptEmbedding>) {
+    let founding = crate::commands_holochain::founding_key_for(app, ai_id);
+    let rows = knowledge_delta(&before, &after, &founding);
+    if rows.is_empty() {
+        return;
+    }
+    let (app, agent) = (app.clone(), ai_id.to_string());
+    tauri::async_runtime::spawn(async move {
+        let Some(hc) = app.try_state::<Arc<HolochainState>>() else { return };
+        let Ok(manager) = hc.get() else { return };
+        let writer = if manager.is_provisioned(&agent).await { agent } else { match any_agent(&manager).await { Some(a) => a, None => return } };
+        let mut written = 0usize;
+        for r in &rows {
+            match write_row(&manager, &writer, r).await {
+                Ok(()) => written += 1,
+                Err(e) => log::warn!("[memory-rows] mirror of knowledge {} failed: {}", &r.id[..r.id.len().min(8)], e),
+            }
+        }
+        log::info!("[memory-rows] {} of {} knowledge change(s) mirrored to the AI's rows", written, rows.len());
+    });
+}
+
+/// Once per AI per profile: its authored notes become `ai:` rows; then
+/// every round, notes from the other devices join its index here (bare,
+/// embedded by the front end).
+async fn migrate_and_reconcile_ai_knowledge(app: &tauri::AppHandle, manager: &crate::holochain::HolochainManager, agent: &str) -> Result<(usize, usize), String> {
+    let key = manager.data_key()?;
+    let founding = crate::commands_holochain::founding_key_for(app, agent);
+    let scope = format!("ai:{founding}");
+    let root = crate::profile::root(app)?;
+    let marker = root.join(format!("memory-rows-migrated-{}", &founding[..founding.len().min(16)]));
+    let items = crate::transcript_memory::read_for(app, &key, agent)?;
+    let mut live = rows_at(app, manager, agent, &scope).await?;
+    let mut migrated = 0usize;
+    if !marker.exists() {
+        let have: std::collections::HashSet<&str> = live.iter().map(|r| r.id.as_str()).collect();
+        for e in items.iter().filter(|e| is_authored_note(e)) {
+            if have.contains(e.id.as_str()) {
+                continue;
+            }
+            let mut r = knowledge_to_row(e, &founding);
+            r.provenance = "migrated:ai-knowledge;authored".into();
+            write_row(manager, agent, &r).await?;
+            migrated += 1;
+        }
+        let _ = std::fs::write(&marker, now_ms().to_string());
+        if migrated > 0 {
+            live = rows_at(app, manager, agent, &scope).await?;
+        }
+    }
+    let mut merged = items.clone();
+    let mut adopted = 0usize;
+    for r in &live {
+        let Some(incoming) = row_to_knowledge(r) else { continue };
+        match merged.iter_mut().find(|e| e.id == incoming.id) {
+            Some(cur) if cur.text == incoming.text => {}
+            Some(cur) => {
+                cur.text = incoming.text;
+                cur.vector.clear(); // the words changed: embed again here
+                adopted += 1;
+            }
+            None => {
+                merged.push(incoming);
+                adopted += 1;
+            }
+        }
+    }
+    let live_ids: std::collections::HashSet<&str> = live.iter().map(|r| r.id.as_str()).collect();
+    let before_len = merged.len();
+    merged.retain(|e| !is_authored_note(e) || live_ids.contains(e.id.as_str()) || e.created_at > now_ms() - 120_000);
+    if adopted > 0 || merged.len() != before_len {
+        crate::transcript_memory::write_for(app, &key, agent, &merged)?;
+        log::info!("[memory-rows] {}: knowledge index updated from the AI's rows: {} adopted, {} removed", &agent[..agent.len().min(8)], adopted, before_len - merged.len());
+    }
+    Ok((migrated, adopted))
+}
+
 const MIGRATED_MARKER: &str = "memory-rows-migrated";
 
 /// Once per profile: every fact in the file becomes a person-scope row
@@ -475,6 +626,19 @@ pub fn start_person_memory_sync(app: &tauri::AppHandle) {
                 Ok((m, a)) => log::info!("[memory-rows] round: {} migrated, {} adopted", m, a),
                 Err(e) => log::debug!("[memory-rows] round skipped: {}", e),
             }
+            // Every AI this device has provisioned: its authored knowledge.
+            if let Some(hc) = app.try_state::<Arc<HolochainState>>() {
+                if let Ok(manager) = hc.get() {
+                    let agents: Vec<String> = manager.agents.lock().await.keys().cloned().collect();
+                    for agent in agents {
+                        match migrate_and_reconcile_ai_knowledge(&app, &manager, &agent).await {
+                            Ok((0, 0)) => {}
+                            Ok((m, a)) => log::info!("[memory-rows] {}: knowledge round: {} migrated, {} adopted", &agent[..agent.len().min(8)], m, a),
+                            Err(e) => log::debug!("[memory-rows] {}: knowledge round skipped: {}", &agent[..agent.len().min(8)], e),
+                        }
+                    }
+                }
+            }
         }
     });
 }
@@ -560,6 +724,33 @@ mod tests {
         let mut ids: Vec<(String, bool)> = delta.iter().map(|r| (r.id.clone(), r.deleted)).collect();
         ids.sort();
         assert_eq!(ids, vec![("b".to_string(), false), ("c".to_string(), true), ("d".to_string(), false)]);
+    }
+
+    fn knowledge(id: &str, text: &str, kind: &str, doc: bool) -> crate::transcript_memory::TranscriptEmbedding {
+        crate::transcript_memory::TranscriptEmbedding {
+            id: id.into(), conversation_hash: "authored".into(), role: "authored".into(), text: text.into(), vector: vec![0.5],
+            kind: kind.into(), created_at: 100,
+            source: if doc { Some(crate::transcript_memory::KnowledgeSource { doc_id: "d".into(), filename: "f.pdf".into(), size_bytes: 1 }) } else { None },
+        }
+    }
+
+    #[test]
+    fn only_hand_given_knowledge_travels_never_document_chunks_or_the_episodic_index() {
+        let before = vec![knowledge("k1", "The office opens at nine", "authored", false)];
+        let after = vec![
+            knowledge("k1", "The office opens at nine", "authored", false),
+            knowledge("k2", "Call the supplier on Mondays", "authored", false),
+            knowledge("doc", "chunk of a pdf", "authored", true),
+            knowledge("ep", "a turn", "episodic", false),
+        ];
+        let rows = knowledge_delta(&before, &after, "found-1");
+        assert_eq!(rows.len(), 1);
+        assert_eq!((rows[0].id.as_str(), rows[0].scope.as_str(), rows[0].kind.as_str()), ("k2", "ai:found-1", "note"));
+        let gone = knowledge_delta(&after, &before, "found-1");
+        assert_eq!(gone.iter().filter(|r| r.deleted).map(|r| r.id.as_str()).collect::<Vec<_>>(), vec!["k2"]);
+        let back = row_to_knowledge(&rows[0]).unwrap();
+        assert!(back.vector.is_empty(), "a vector is per device");
+        assert_eq!(back.kind, "authored");
     }
 
     #[test]
