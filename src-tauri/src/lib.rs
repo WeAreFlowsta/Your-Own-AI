@@ -606,6 +606,8 @@ pub fn run() {
             memory_rows::save_memory_row,
             memory_rows::list_memory_rows,
             memory_rows::list_memory_rows_cached,
+            memory_rows::list_memory_revisions,
+            dreaming::dream_now,
             project_identity::project_identity_for,
             vault_escrow::vault_escrow_restore,
             vault_escrow::vault_escrow_keep_local,

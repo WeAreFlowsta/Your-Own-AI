@@ -43,13 +43,26 @@ import {
 import {
   listMemoryRows,
   listMemoryRowsCached,
+  listMemoryRevisions,
+  describeDream,
+  undoDream,
   saveMemoryRow,
   newRow,
   revise,
   deletion,
   personScope,
   type MemoryRow,
+  type MemoryRevision,
 } from "../utils/memoryRows";
+
+/** Layer 1 of memory on this page (module-level: used inside $ closures). */
+const isLayer1 = (r: MemoryRow) => LAYER1_KINDS.some((k) => k.kind === r.kind);
+const LAYER1_KINDS: { kind: string; heading: string }[] = [
+  { kind: "rule", heading: "Rules your AIs follow" },
+  { kind: "command", heading: "Commands" },
+  { kind: "location", heading: "Where things are" },
+  { kind: "decision", heading: "Decisions" },
+];
 
 /** Friendly labels for the relations a user can author by hand. Values are the
  *  predicate vocabulary the extraction grammar also uses, so authored and
@@ -109,17 +122,26 @@ export default component$<ProfileMemoryProps>(
     const rules = useSignal<MemoryRow[]>([]);
     const editingRuleId = useSignal<string | null>(null);
     const editRuleValue = useSignal("");
+    /** What dreaming changed, newest first (dream revisions in the records). */
+    const dreams = useSignal<MemoryRevision[]>([]);
+    const revisions = useSignal<MemoryRevision[]>([]);
+    const dreamsOpen = useSignal(false);
     const loadRules$ = $(async () => {
       try {
         const cached = await listMemoryRowsCached(personScope);
-        rules.value = cached.filter((r) => r.kind === "rule");
+        rules.value = cached.filter(isLayer1);
       } catch { /* older backend */ }
       try {
         const live = await listMemoryRows(personScope);
-        rules.value = live.filter((r) => r.kind === "rule");
+        rules.value = live.filter(isLayer1);
       } catch (e) {
         console.warn("[Memory] rules did not answer (cached shown):", e);
       }
+      try {
+        const all = await listMemoryRevisions(personScope);
+        revisions.value = all;
+        dreams.value = all.filter((r) => r.provenance.startsWith("dream:")).slice(0, 20);
+      } catch { /* older backend, or records not up yet */ }
     });
     const memoryPaused = useSignal(false);
     const editingId = useSignal<string | null>(null);
@@ -316,14 +338,63 @@ export default component$<ProfileMemoryProps>(
             )}
           </div>
         )}
-        {/* Standing rules: the person's words, kept first and re-stated. */}
+        {/* What dreaming changed: every change a revision, undoable. */}
+        {dreams.value.length > 0 && (
+          <div class="mb-5 p-4 rounded-xl bg-[var(--bg-main)] border border-[var(--border-subtle)]" data-testid="memory-dreams">
+            <div class="flex items-center justify-between gap-3">
+              <p class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide">
+                Tidied while you were away
+              </p>
+              <button type="button" class="text-xs text-[var(--text-link)] hover:underline" onClick$={() => (dreamsOpen.value = !dreamsOpen.value)}>
+                {dreamsOpen.value ? "Hide" : `Show ${dreams.value.length}`}
+              </button>
+            </div>
+            {!dreamsOpen.value && (
+              <p class="mt-1 text-[11px] text-[var(--text-muted)]">
+                Duplicates merged, notes filed, old entries moved to history - on this computer, by itself. Each change can be undone.
+              </p>
+            )}
+            {dreamsOpen.value && (
+              <div class="mt-2 flex flex-col gap-1.5">
+                {dreams.value.map((d) => (
+                  <div key={d.action_hash ?? d.id + d.updated_at} class="flex items-start gap-2 text-sm" data-testid="memory-dream">
+                    <span class="min-w-0 flex-1 text-[var(--text-secondary)]">
+                      {describeDream(d, revisions.value)}
+                      <span class="text-[var(--text-muted)]"> · {new Date(d.updated_at).toLocaleDateString()}</span>
+                    </span>
+                    {!readOnly && !d.superseded && (
+                      <button
+                        type="button"
+                        class="text-xs text-[var(--text-link)] hover:underline shrink-0"
+                        onClick$={async () => {
+                          try {
+                            await undoDream(d, revisions.value);
+                            await loadRules$();
+                            await activeFacts$();
+                          } catch (e) {
+                            console.warn("[Memory] undo failed:", e);
+                          }
+                        }}
+                      >
+                        Undo
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        {/* Layer 1: the person's words, kept first and re-stated every turn. */}
         {rules.value.length > 0 && (
           <div class="mb-5 p-4 rounded-xl bg-[var(--bg-main)] border border-[var(--border-subtle)]" data-testid="memory-rules">
+            {LAYER1_KINDS.filter((k) => rules.value.some((r) => r.kind === k.kind)).map((k) => (
+            <div key={k.kind} class="mb-3 last:mb-0">
             <p class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide">
-              Rules your AIs follow
+              {k.heading}
             </p>
             <div class="mt-2 flex flex-col gap-1.5">
-              {rules.value.map((r) => (
+              {rules.value.filter((r) => r.kind === k.kind).map((r) => (
                 <div key={r.id} class="group flex items-start gap-2" data-testid="memory-rule">
                   {!readOnly && editingRuleId.value === r.id ? (
                     <input
@@ -376,6 +447,8 @@ export default component$<ProfileMemoryProps>(
                 </div>
               ))}
             </div>
+            </div>
+            ))}
             <p class="mt-2 text-[11px] text-[var(--text-muted)]">
               Kept in your own records, so they follow you to your other devices. Every AI is reminded of them when it answers.
             </p>

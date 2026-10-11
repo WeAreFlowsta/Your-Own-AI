@@ -84,6 +84,49 @@ export async function listMemoryRows(scope: string, agentKey?: string): Promise<
   return invoke<MemoryRow[]>("list_memory_rows", { agentKey: agentKey ?? null, scope });
 }
 
+/** Every revision ever written in a scope, newest first, live or
+ *  superseded - the history view. A live read. */
+export type MemoryRevision = MemoryRow & { superseded: boolean };
+export async function listMemoryRevisions(scope: string, agentKey?: string): Promise<MemoryRevision[]> {
+  return invoke<MemoryRevision[]>("list_memory_revisions", { agentKey: agentKey ?? null, scope });
+}
+
+/** A human line for a dream revision: what dreaming did to this row. */
+export function describeDream(r: MemoryRevision, all: MemoryRevision[]): string {
+  const prev = all.filter((x) => x.id === r.id && x.updated_at < r.updated_at).sort((a, b) => b.updated_at - a.updated_at)[0];
+  if (r.replaces.length > 0) {
+    const merged = r.replaces.map((id) => all.find((x) => x.id === id)?.text).filter(Boolean) as string[];
+    return merged.length ? `Merged "${merged.map((t) => t.slice(0, 50)).join('", "')}" into "${r.text.slice(0, 60)}"` : `Merged ${r.replaces.length} into "${r.text.slice(0, 60)}"`;
+  }
+  if (prev && prev.kind !== r.kind) return `Filed "${r.text.slice(0, 60)}" as a ${r.kind} (was a ${prev.kind})`;
+  if (r.valid_to && !(prev && prev.valid_to)) return `Moved "${r.text.slice(0, 60)}" to history (past the budget)`;
+  return `Revised "${r.text.slice(0, 60)}"`;
+}
+
+/** Undo one dream revision: the row returns to its revision before the
+ *  dream, and rows a merge folded in come back as they were. Every step is
+ *  a new revision (nothing is deleted), marked undo:<the dream's record>. */
+export async function undoDream(r: MemoryRevision, all: MemoryRevision[], agentKey?: string): Promise<number> {
+  const now = Date.now();
+  const mark = `undo:${r.action_hash ?? r.id}`;
+  let n = 0;
+  const latestBefore = (id: string) => all.filter((x) => x.id === id && x.updated_at < r.updated_at).sort((a, b) => b.updated_at - a.updated_at)[0];
+  const prev = latestBefore(r.id);
+  if (prev) {
+    const { superseded: _s, ...row } = prev;
+    await saveMemoryRow({ ...row, replaces: [], updated_at: now, provenance: `${mark};${row.provenance}`, action_hash: undefined }, agentKey);
+    n++;
+  }
+  for (const id of r.replaces) {
+    const back = all.filter((x) => x.id === id).sort((a, b) => b.updated_at - a.updated_at)[0];
+    if (!back) continue;
+    const { superseded: _s, ...row } = back;
+    await saveMemoryRow({ ...row, replaces: [], deleted: false, updated_at: now + 1, provenance: `${mark};${row.provenance}`, action_hash: undefined }, agentKey);
+    n++;
+  }
+  return n;
+}
+
 /** The scope's rows as of the last live read - instant. */
 export async function listMemoryRowsCached(scope: string): Promise<MemoryRow[]> {
   return invoke<MemoryRow[]>("list_memory_rows_cached", { scope });

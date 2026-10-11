@@ -126,6 +126,45 @@ describe("memory rules", () => {
     await invoke("save_memory_row", { agentKey: null, row: { ...cmd, deleted: true, updated_at: Date.now(), action_hash: null } });
   });
 
+  it("dreaming merges two commands that say the same, shows it in the history, and Undo brings both back", async () => {
+    const stamp = Date.now().toString(36);
+    const mk = (id: string, text: string, at: number) => ({
+      id, scope: "person", kind: "command", text, structured: null, as_of: at, valid_to: null, saved_by: "person",
+      provenance: "authored", pinned: false, topics: [], replaces: [], deleted: false, updated_at: at,
+    });
+    const A = `Run cargo test before every release (dream ${stamp})`;
+    const B = `Always run cargo test before each release (dream ${stamp})`;
+    await invoke("save_memory_row", { agentKey: null, row: mk(`dream-a-${stamp}`, A, Date.now() - 2000) });
+    await invoke("save_memory_row", { agentKey: null, row: mk(`dream-b-${stamp}`, B, Date.now() - 1000) });
+    const n = await invoke<number>("dream_now", { scope: "person", agentKey: null });
+    console.log(`e2e: dream wrote ${n} revision(s)`);
+    expect(n).toBeGreaterThan(0);
+    const live = (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).filter((r) => r.text.includes(`(dream ${stamp})`));
+    expect(live.length).toBe(1);
+    expect(live[0].text).toBe(B);
+    expect(live[0].provenance.startsWith("dream:")).toBe(true);
+    expect(live[0].provenance).toContain("authored");
+    // The history shows it; Undo restores both.
+    await yourMemory();
+    const section = await $('[data-testid="memory-dreams"]');
+    await section.waitForDisplayed({ timeout: 60_000 });
+    await (await section.$("button*=Show")).click();
+    const entry = await $(`[data-testid="memory-dream"]*=${B.slice(0, 24)}`);
+    await entry.waitForDisplayed({ timeout: 15_000 });
+    console.log(`e2e: dream line ${JSON.stringify(await entry.getText())}`);
+    expect(await entry.getText()).toContain("Merged");
+    await shot("memory-dream-history");
+    await (await entry.$("button=Undo")).click();
+    await browser.waitUntil(async () => {
+      const rows = (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).filter((r) => r.text.includes(`(dream ${stamp})`));
+      return rows.length === 2;
+    }, { timeout: 30_000, timeoutMsg: "Undo did not bring both commands back" });
+    // Tidy.
+    for (const r of (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).filter((x) => x.text.includes(`(dream ${stamp})`))) {
+      await invoke("save_memory_row", { agentKey: null, row: { ...r, deleted: true, updated_at: Date.now(), action_hash: null } });
+    }
+  });
+
   it("keeps the rule across a reload and removes it as a record", async () => {
     await yourMemory();
     await (await $(`[data-testid="memory-rule"]*=${RULE.slice(0, 30)}`)).waitForDisplayed({ timeout: 60_000 });

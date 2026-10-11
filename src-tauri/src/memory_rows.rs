@@ -153,6 +153,47 @@ pub async fn save_memory_row(
     Ok(hex::encode(hash.get_raw_39()))
 }
 
+/// One revision as the history view wants it: the row, and whether a
+/// newer revision (or a merge) has since replaced it.
+#[derive(Serialize, Clone, Debug)]
+pub struct MemoryRevision {
+    #[serde(flatten)]
+    pub row: MemoryRow,
+    pub superseded: bool,
+}
+
+/// Every revision ever written in a scope, newest first, each marked as
+/// live or superseded - the modal's history ("what dreaming changed", and
+/// the chain back to the record a memory came from). A live read.
+#[tauri::command]
+pub async fn list_memory_revisions(
+    agent_key: Option<String>,
+    scope: String,
+    hc_state: State<'_, Arc<HolochainState>>,
+) -> Result<Vec<MemoryRevision>, String> {
+    let manager = hc_state.get()?;
+    let agent_key = match agent_key {
+        Some(a) => a,
+        None => any_agent(&manager).await.ok_or("no agent provisioned yet")?,
+    };
+    let key = manager.data_key()?;
+    let anchor = scope_anchor(&scope, &key)?;
+    let payload = ExternIO::encode(RowsInput { anchor }).map_err(|e| e.to_string())?;
+    let out = manager.call_zome(&agent_key, "transcript", "get_memory_rows", payload).await?;
+    let records: Vec<Record> = ExternIO::decode(&out).map_err(|e| e.to_string())?;
+    let mut rows = Vec::with_capacity(records.len());
+    for record in &records {
+        let Some((plain, _)) = crate::vault_escrow::open_record(&key, record) else { continue };
+        let Ok(mut row) = serde_json::from_value::<MemoryRow>(plain) else { continue };
+        row.action_hash = Some(hex::encode(record.action_address().get_raw_39()));
+        rows.push(row);
+    }
+    let live: std::collections::HashSet<Option<String>> = reduce(rows.clone()).into_iter().map(|r| r.action_hash).collect();
+    let mut out: Vec<MemoryRevision> = rows.into_iter().map(|row| MemoryRevision { superseded: !live.contains(&row.action_hash), row }).collect();
+    out.sort_by(|a, b| b.row.updated_at.cmp(&a.row.updated_at).then(a.row.id.cmp(&b.row.id)));
+    Ok(out)
+}
+
 /// Every live row in a scope, reduced, pinned rules first.
 #[tauri::command]
 pub async fn list_memory_rows(

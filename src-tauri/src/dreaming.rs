@@ -184,6 +184,23 @@ async fn dream_scope(app: &tauri::AppHandle, manager: &crate::holochain::Holocha
     Ok(plan.len())
 }
 
+/// One dream of one scope, now (Settings and the UI tests; the scheduler
+/// waits for quiet). Returns how many revisions it wrote.
+#[tauri::command]
+pub async fn dream_now(
+    app: tauri::AppHandle,
+    scope: String,
+    agent_key: Option<String>,
+    hc_state: tauri::State<'_, std::sync::Arc<crate::commands_holochain::HolochainState>>,
+) -> Result<usize, String> {
+    let manager = hc_state.get()?;
+    let agent = match agent_key {
+        Some(a) => a,
+        None => manager.agents.lock().await.keys().next().cloned().ok_or("no agent provisioned yet")?,
+    };
+    dream_scope(&app, &manager, &agent, &scope).await
+}
+
 /// Every half hour: when the app has been quiet for ten minutes, dream the
 /// person's scope and each AI's, at most once in six hours per scope.
 pub fn start_dreaming(app: &tauri::AppHandle) {
