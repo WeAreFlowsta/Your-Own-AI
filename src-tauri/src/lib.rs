@@ -4,6 +4,7 @@
 mod config_sync;          // AI configs across the person's devices (sibling manifests)
 mod memory_rows;          // typed, dated, sealed memory rows at scope anchors (MEMORY_REDESIGN)
 mod project_identity;     // a folder's project id: git root commit / id file / path hash
+mod dreaming;             // memory consolidation when idle (MEMORY_REDESIGN §6)
 mod conversation_cache;   // last-known-good conversation lists (encrypted)
 mod corpus;               // the person's document library (SQLite, row-encrypted; per-AI grants)
 mod model_hash;
@@ -930,6 +931,7 @@ pub fn run() {
                 vault_escrow::start_startup_escrow_sync(&link_app_handle);
                 config_sync::start_config_sync_rounds(&link_app_handle);
                 memory_rows::start_person_memory_sync(&link_app_handle);
+                dreaming::start_dreaming(&link_app_handle);
                 corpus::sync::start_folder_sync(&link_app_handle);
                 tuning::refresh_gpu_choices(&link_app_handle);
                 llm::start_memory_pressure_watch(&link_app_handle);

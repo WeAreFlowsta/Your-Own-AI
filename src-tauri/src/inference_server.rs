@@ -726,6 +726,7 @@ async fn chat_completions(
     headers: HeaderMap,
     Json(mut body): Json<Value>,
 ) -> Response {
+    crate::dreaming::note_activity();
     let model = body
         .get("model")
         .and_then(Value::as_str)
