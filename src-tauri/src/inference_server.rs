@@ -890,7 +890,21 @@ async fn chat_completions(
         } else {
             mode
         };
-        match crate::router::route(&app, route_mode, &query, eagerness, task, difficulty, lean, &picks, None, agent_routing, plan_routing).await {
+        // Memory work (X-Your-Own-AI-Task: memory-prose | memory-precision)
+        // takes the memory slot's pick when a warm model qualifies; else it
+        // routes locally as any offline turn (never online, never a load
+        // of the helper onto the chat server).
+        let routed_result = if task.starts_with("memory") {
+            let pick = crate::memory_slot::pick(&app, task);
+            if pick.via == "loaded" {
+                Ok(crate::router::RouteResult { model: pick.model, reason: format!("memory slot: {}", pick.reason), think: Some(false) })
+            } else {
+                crate::router::route(&app, "offline", &query, "local", task, difficulty, lean, &picks, None, false, false).await
+            }
+        } else {
+            crate::router::route(&app, route_mode, &query, eagerness, task, difficulty, lean, &picks, None, agent_routing, plan_routing).await
+        };
+        match routed_result {
             Ok(r) => {
                 log::info!("[inference] router ({}): {mode} task={task} diff={difficulty} eag={eagerness} -> {} ({})", ai.name, r.model, r.reason);
                 // The rail's pearl needs to know WHAT it is waiting on: a

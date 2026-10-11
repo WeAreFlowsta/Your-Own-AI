@@ -4315,7 +4315,18 @@ pub async fn utility_chat(
     grammar: Option<String>,
     max_tokens: u32,
 ) -> Result<String, String> {
-    ensure_utility_server(&app_handle, &state, &model).await?;
+    // The memory slot (MEMORY_REDESIGN.md §7): a warm model that grades at
+    // or above the helper does the work on the chat server; otherwise the
+    // helper. Precision work is the default for grammar-constrained calls.
+    let task = if grammar.is_some() || max_tokens <= 64 { "memory-precision" } else { "memory-prose" };
+    let pick = crate::memory_slot::pick(&app_handle, task);
+    let (port, model) = if pick.via == "loaded" {
+        log::info!("[LLM] memory work on the loaded model: {}", pick.reason);
+        (CHAT_PORT, pick.model.clone())
+    } else {
+        ensure_utility_server(&app_handle, &state, &model).await?;
+        (UTIL_PORT, model)
+    };
     let _busy = Inflight::new(&UTIL_INFLIGHT);
 
     let mut body = serde_json::json!({
@@ -4340,7 +4351,7 @@ pub async fn utility_chat(
     let _turn = UTIL_ONE_AT_A_TIME.acquire().await.map_err(|e| e.to_string())?;
     let client = local_http();
     let resp = client
-        .post(format!("http://localhost:{}/v1/chat/completions", UTIL_PORT)).bearer_auth(local_api_key())
+        .post(format!("http://localhost:{}/v1/chat/completions", port)).bearer_auth(local_api_key())
         .json(&body)
         .send()
         .await
