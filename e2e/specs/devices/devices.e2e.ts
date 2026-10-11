@@ -11,6 +11,18 @@ const MESSAGE = "Devices test: name one colour and nothing else.";
 const PHASE = process.env.DEVICES_PHASE ?? "";
 const NAME = process.env.DEVICES_NAME ?? "Synced AI";
 const RULE = `Always answer in one short sentence (devices ${process.env.DEVICES_NAME ?? ""})`.trim();
+const AI_NOTE = `The office opens at nine (devices ${process.env.DEVICES_NAME ?? ""})`.trim();
+
+/** This device's AI list from its store: name, agent, founding key. */
+async function aiList() {
+  return browser.execute(async (path: string) => {
+    const t = (window as any).__TAURI__.core;
+    const rid = await t.invoke("plugin:store|load", { path, autoSave: false });
+    const got = await t.invoke("plugin:store|get", { rid, key: "custom-ais" });
+    const list = Array.isArray(got) ? got[0] : got;
+    return (Array.isArray(list) ? list : []).map((a: any) => ({ name: a.name, agent: a.agentPubKey ?? "", founding: a.foundingKey ?? a.agentPubKey ?? "" }));
+  }, await invoke<string>("profile_store_path", { name: "ai-data.json" })) as Promise<{ name: string; agent: string; founding: string }[]>;
+}
 
 const escrow = () => invoke<{ state: string }>("vault_escrow_sync");
 const bodyText = () => browser.execute(() => document.body.innerText);
@@ -54,6 +66,16 @@ describe(`devices, phase ${PHASE}`, () => {
       } });
       const rowsA = await invoke<{ text: string }[]>("list_memory_rows", { agentKey: null, scope: "person" });
       expect(rowsA.some((r) => r.text === RULE)).toBe(true);
+      // And a note the renamed AI knows: an ai-scope row by its founding key,
+      // which is the same address on the other device.
+      const renamedA = (await aiList()).find((a) => a.name === NAME);
+      expect(renamedA?.founding).toBeTruthy();
+      await invoke("save_memory_row", { agentKey: renamedA!.agent, row: {
+        id: `devices-ai-${Date.now().toString(36)}`, scope: `ai:${renamedA!.founding}`, kind: "note", text: AI_NOTE, structured: null,
+        as_of: Date.now(), valid_to: null, saved_by: "person", provenance: "authored", pinned: false, topics: [], replaces: [], deleted: false, updated_at: Date.now(),
+      } });
+      const aiRowsA = await invoke<{ text: string }[]>("list_memory_rows", { agentKey: renamedA!.agent, scope: `ai:${renamedA!.founding}` });
+      expect(aiRowsA.some((r) => r.text === AI_NOTE)).toBe(true);
       // One conversation on this device, so the other device can show it
       // from the Vault's copy while this one is off (MULTI_DEVICE.md §3.3).
       await waitForChat();
@@ -103,6 +125,11 @@ describe(`devices, phase ${PHASE}`, () => {
       const cachedRules = await invoke<{ kind: string; text: string }[]>("list_memory_rows_cached", { scope: "person" });
       console.log(`e2e: B's cached rules ${JSON.stringify(cachedRules.filter((r) => r.kind === "rule").map((r) => r.text))}`);
       expect(cachedRules.some((r) => r.kind === "rule" && r.text === RULE)).toBe(true);
+      // The AI's note too, under the same founding key on this device's AI.
+      const renamedB = (await aiList()).find((a) => a.name === NAME);
+      const aiCached = await invoke<{ kind: string; text: string }[]>("list_memory_rows_cached", { scope: `ai:${renamedB!.founding}` });
+      console.log(`e2e: B's cached AI notes ${JSON.stringify(aiCached.map((r) => r.text))}`);
+      expect(aiCached.some((r) => r.text === AI_NOTE)).toBe(true);
       await browser.url("tauri://localhost/your-memory/");
       const ruleEl = await $(`[data-testid="memory-rule"]*=${RULE.slice(0, 30)}`);
       await ruleEl.waitForDisplayed({ timeout: 60_000 });
