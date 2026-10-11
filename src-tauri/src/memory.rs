@@ -84,32 +84,37 @@ struct EncryptedFactsFile {
     cipher: String,
 }
 
+/// The facts file, decrypted; empty when none has been written.
+pub(crate) fn read_facts(app: &tauri::AppHandle, key: &[u8; 32]) -> Result<Vec<MemoryFact>, String> {
+    let dir = crate::profile::root(app).map_err(|e| format!("No app data dir: {}", e))?;
+    let path = dir.join(FACTS_FILE);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let raw = std::fs::read_to_string(&path).map_err(|e| format!("Failed to read memory facts: {}", e))?;
+    let file: EncryptedFactsFile =
+        serde_json::from_str(&raw).map_err(|e| format!("Failed to parse memory facts: {}", e))?;
+    let nonce = hex::decode(&file.nonce).map_err(|e| format!("Bad nonce: {}", e))?;
+    let cipher = hex::decode(&file.cipher).map_err(|e| format!("Bad cipher: {}", e))?;
+    let plain = crate::transcript_crypto::decrypt(key, &nonce, &cipher)?;
+    serde_json::from_slice(&plain).map_err(|e| format!("Failed to deserialize facts: {}", e))
+}
+
 /// Load all profile facts (decrypted). Returns empty if none recorded yet.
 #[tauri::command]
 pub fn get_memory_facts(
     app: tauri::AppHandle,
     hc_state: State<'_, Arc<HolochainState>>,
 ) -> Result<Vec<MemoryFact>, String> {
-    let dir = crate::profile::root(&app)
-        .map_err(|e| format!("No app data dir: {}", e))?;
-    let path = dir.join(FACTS_FILE);
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let raw = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read memory facts: {}", e))?;
-    let file: EncryptedFactsFile =
-        serde_json::from_str(&raw).map_err(|e| format!("Failed to parse memory facts: {}", e))?;
-
     let key = hc_state.get()?.data_key()?;
-    let nonce = hex::decode(&file.nonce).map_err(|e| format!("Bad nonce: {}", e))?;
-    let cipher = hex::decode(&file.cipher).map_err(|e| format!("Bad cipher: {}", e))?;
-    let plain = crate::transcript_crypto::decrypt(&key, &nonce, &cipher)?;
-    serde_json::from_slice(&plain).map_err(|e| format!("Failed to deserialize facts: {}", e))
+    read_facts(&app, &key)
 }
 
 /// Persist the full fact set (encrypted, 0600). The frontend owns
-/// reconciliation; this overwrites the blob with the supplied set.
+/// reconciliation; this overwrites the blob with the supplied set. The
+/// file is this device's cache: what changed is mirrored into the
+/// person's memory rows in their network, so it reaches their other
+/// devices (MEMORY_REDESIGN.md §12).
 #[tauri::command]
 pub fn save_memory_facts(
     app: tauri::AppHandle,
@@ -117,6 +122,15 @@ pub fn save_memory_facts(
     hc_state: State<'_, Arc<HolochainState>>,
 ) -> Result<(), String> {
     let key = hc_state.get()?.data_key()?;
+    let before = read_facts(&app, &key).unwrap_or_default();
+    write_facts(&app, &key, &facts)?;
+    crate::memory_rows::mirror_person_facts(&app, before, facts);
+    Ok(())
+}
+
+/// Encrypt + write the facts file (0600) - the non-command counterpart of
+/// `read_facts`.
+pub(crate) fn write_facts(app: &tauri::AppHandle, key: &[u8; 32], facts: &[MemoryFact]) -> Result<(), String> {
     let plain =
         serde_json::to_vec(&facts).map_err(|e| format!("Failed to serialize facts: {}", e))?;
     let (nonce, cipher) = crate::transcript_crypto::encrypt(&key, &plain)?;
@@ -126,7 +140,7 @@ pub fn save_memory_facts(
         cipher: hex::encode(cipher),
     };
 
-    let dir = crate::profile::root(&app)
+    let dir = crate::profile::root(app)
         .map_err(|e| format!("No app data dir: {}", e))?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create app data dir: {}", e))?;
     let path = dir.join(FACTS_FILE);

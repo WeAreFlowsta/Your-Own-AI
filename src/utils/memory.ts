@@ -88,6 +88,37 @@ export async function saveFacts(facts: Fact[]): Promise<void> {
   }
 }
 
+/** Notes written on another of the person's devices arrive through their
+ *  memory rows without a vector (vectors are per device): embed them here
+ *  once the embedding model is ready, so recall sees them. Returns how many
+ *  were embedded. Never runs twice at once. */
+let embeddingBare = false;
+export async function embedBareNotes(): Promise<number> {
+  if (embeddingBare) return 0;
+  embeddingBare = true;
+  try {
+    const facts = await getFacts();
+    const bare = facts.filter((f) => f.entry_kind === "note" && f.valid_to == null && !(f.embedding && f.embedding.length));
+    if (bare.length === 0 || !(await isEmbeddingModelReady())) return 0;
+    const vectors = await embedDocuments(bare.map((f) => f.value));
+    let n = 0;
+    bare.forEach((f, i) => {
+      const v = vectors[i];
+      if (v && v.length) {
+        f.embedding = v;
+        n++;
+      }
+    });
+    if (n > 0) await saveFacts(facts);
+    return n;
+  } catch (e) {
+    console.warn("[Memory] embedding notes from other devices failed:", e);
+    return 0;
+  } finally {
+    embeddingBare = false;
+  }
+}
+
 /** Mint a new personal-scope fact (Phase A). */
 export function newFact(input: {
   subject: string;
@@ -254,6 +285,9 @@ export async function loadMemoryBlock(
   const all = (await getFacts()).filter(
     (f) => f.valid_to == null || f.valid_to === undefined,
   );
+  if (all.some((f) => f.entry_kind === "note" && !(f.embedding && f.embedding.length))) {
+    void embedBareNotes(); // for the next turn; this one goes on
+  }
 
   // Always-injected = facts only. Notes are free-text and retrieved on
   // relevance (below); the synthesis paragraph injects separately.

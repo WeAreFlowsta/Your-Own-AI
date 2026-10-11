@@ -71,13 +71,20 @@ export function deletion(row: MemoryRow): MemoryRow {
   return { ...row, deleted: true, updated_at: Date.now(), action_hash: undefined };
 }
 
-/** Write a row through an AI's agent (any provisioned agent can write a
- *  person- or project-scope row). Returns the record's action hash. */
-export async function saveMemoryRow(agentKey: string, row: MemoryRow): Promise<string> {
-  return invoke<string>("save_memory_row", { agentKey, row });
+/** Write a row. An `ai:` scope row goes through that AI's agent; a person-
+ *  or project-scope row through any provisioned agent when none is given.
+ *  Returns the record's action hash. */
+export async function saveMemoryRow(row: MemoryRow, agentKey?: string): Promise<string> {
+  return invoke<string>("save_memory_row", { agentKey: agentKey ?? null, row });
 }
 
-/** Every live row in a scope, pinned rules first, then newest. */
-export async function listMemoryRows(agentKey: string, scope: string): Promise<MemoryRow[]> {
-  return invoke<MemoryRow[]>("list_memory_rows", { agentKey, scope });
+/** Every live row in a scope, pinned rules first, then newest (a live read;
+ *  refreshes the local cache). */
+export async function listMemoryRows(scope: string, agentKey?: string): Promise<MemoryRow[]> {
+  return invoke<MemoryRow[]>("list_memory_rows", { agentKey: agentKey ?? null, scope });
+}
+
+/** The scope's rows as of the last live read - instant. */
+export async function listMemoryRowsCached(scope: string): Promise<MemoryRow[]> {
+  return invoke<MemoryRow[]>("list_memory_rows_cached", { scope });
 }

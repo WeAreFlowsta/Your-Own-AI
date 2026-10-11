@@ -37,13 +37,25 @@ import {
   addAuthoredNote,
   isMemoryPaused,
   setMemoryPaused,
+  embedBareNotes,
   type Fact,
 } from "../utils/memory";
+import {
+  listMemoryRows,
+  listMemoryRowsCached,
+  saveMemoryRow,
+  newRow,
+  revise,
+  deletion,
+  personScope,
+  type MemoryRow,
+} from "../utils/memoryRows";
 
 /** Friendly labels for the relations a user can author by hand. Values are the
  *  predicate vocabulary the extraction grammar also uses, so authored and
  *  learned facts read and rank the same way. */
 const RELATION_OPTIONS = [
+  { predicate: "rule", label: "Rule (always)", example: "In your own words, e.g. Always ask before sending anything" },
   { predicate: "note", label: "Note (free text)", example: "Anything you'd like your AIs to know — in your own words" },
   { predicate: "name_is", label: "Name", example: "e.g. Alex" },
   { predicate: "lives_in", label: "Lives in", example: "e.g. Berlin" },
@@ -91,6 +103,24 @@ export default component$<ProfileMemoryProps>(
   ({ readOnly = false, manageHref = "/your-memory/" }) => {
     const facts = useSignal<Fact[]>([]);
     const factsLoading = useSignal(true);
+    /** The person's standing rules: pinned person-scope rows in their own
+     *  network (MEMORY_REDESIGN.md §3) - the person's words verbatim,
+     *  loaded first and re-stated every turn once the loader lands. */
+    const rules = useSignal<MemoryRow[]>([]);
+    const editingRuleId = useSignal<string | null>(null);
+    const editRuleValue = useSignal("");
+    const loadRules$ = $(async () => {
+      try {
+        const cached = await listMemoryRowsCached(personScope);
+        rules.value = cached.filter((r) => r.kind === "rule");
+      } catch { /* older backend */ }
+      try {
+        const live = await listMemoryRows(personScope);
+        rules.value = live.filter((r) => r.kind === "rule");
+      } catch (e) {
+        console.warn("[Memory] rules did not answer (cached shown):", e);
+      }
+    });
     const memoryPaused = useSignal(false);
     const editingId = useSignal<string | null>(null);
     const editValue = useSignal("");
@@ -151,6 +181,8 @@ export default component$<ProfileMemoryProps>(
         () => alive,
       );
       factsLoading.value = false;
+      void loadRules$();
+      void embedBareNotes().then((n: number) => { if (n > 0 && alive) void activeFacts$(); });
       // A fact from the turn the user just sent may still be saving (extraction
       // is fire-and-forget). Wait for it, then refresh — so the list isn't
       // stale until a manual reload.
@@ -198,6 +230,17 @@ export default component$<ProfileMemoryProps>(
     const doAddFact = $(async () => {
       const val = addValue.value.trim();
       if (!val) return;
+      if (addPredicate.value === "rule") {
+        try {
+          await saveMemoryRow(newRow(personScope, "rule", val, { pinned: true }));
+          addValue.value = "";
+          showAdd.value = false;
+          await loadRules$();
+        } catch (e) {
+          console.warn("[Memory] saving the rule failed:", e);
+        }
+        return;
+      }
       if (addPredicate.value === "note") {
         await addAuthoredNote(val);
       } else {
@@ -271,6 +314,71 @@ export default component$<ProfileMemoryProps>(
             )}
           </div>
         )}
+        {/* Standing rules: the person's words, kept first and re-stated. */}
+        {rules.value.length > 0 && (
+          <div class="mb-5 p-4 rounded-xl bg-[var(--bg-main)] border border-[var(--border-subtle)]" data-testid="memory-rules">
+            <p class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide">
+              Rules your AIs follow
+            </p>
+            <div class="mt-2 flex flex-col gap-1.5">
+              {rules.value.map((r) => (
+                <div key={r.id} class="group flex items-start gap-2" data-testid="memory-rule">
+                  {!readOnly && editingRuleId.value === r.id ? (
+                    <input
+                      type="text"
+                      value={editRuleValue.value}
+                      autoFocus
+                      onInput$={(_, el) => (editRuleValue.value = el.value)}
+                      onKeyDown$={async (e) => {
+                        if (e.key === "Escape") editingRuleId.value = null;
+                        if (e.key === "Enter") {
+                          const text = editRuleValue.value.trim();
+                          editingRuleId.value = null;
+                          if (text && text !== r.text) {
+                            await saveMemoryRow(revise(r, { text }));
+                            await loadRules$();
+                          }
+                        }
+                      }}
+                      class="flex-1 px-2.5 py-1.5 rounded-lg bg-[var(--bg-card)] border border-[var(--border-subtle)] text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--bg-button-primary)]"
+                    />
+                  ) : (
+                    <p class="min-w-0 flex-1 text-sm text-[var(--text-primary)]">{r.text}</p>
+                  )}
+                  {!readOnly && editingRuleId.value !== r.id && (
+                    <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        type="button"
+                        class="p-1 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                        title="Edit rule"
+                        onClick$={() => {
+                          editingRuleId.value = r.id;
+                          editRuleValue.value = r.text;
+                        }}
+                      >
+                        <LuPencil class="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        class="p-1 rounded text-[var(--text-muted)] hover:text-red-400"
+                        title="Remove rule"
+                        onClick$={async () => {
+                          await saveMemoryRow(deletion(r));
+                          await loadRules$();
+                        }}
+                      >
+                        <LuTrash2 class="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <p class="mt-2 text-[11px] text-[var(--text-muted)]">
+              Kept in your own records, so they follow you to your other devices. Every AI is reminded of them when it answers.
+            </p>
+          </div>
+        )}
         {/* Header + controls */}
         <div class="flex flex-wrap items-center justify-between gap-3 mb-5">
           <p class="text-sm text-[var(--text-secondary)] flex items-center gap-1.5">
@@ -328,6 +436,7 @@ export default component$<ProfileMemoryProps>(
               )}
               <LiquidMetalButton
                 onClick$={() => (showAdd.value = !showAdd.value)}
+                testId="memory-add"
                 title="Add something for your AIs to remember about you"
                 class="flex items-center gap-1.5 px-3 py-1.5 text-xs"
               >
@@ -346,6 +455,7 @@ export default component$<ProfileMemoryProps>(
               <div class="relative sm:w-40 sm:flex-shrink-0">
                 <button
                   type="button"
+                  data-testid="memory-add-kind"
                   onClick$={() => (relOpen.value = !relOpen.value)}
                   class="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-[var(--bg-main)] border border-[var(--border-subtle)] text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--bg-button-primary)]"
                 >
@@ -365,6 +475,8 @@ export default component$<ProfileMemoryProps>(
                         <button
                           key={o.predicate}
                           type="button"
+                          data-testid="memory-add-option"
+                          data-kind={o.predicate}
                           onClick$={() => {
                             addPredicate.value = o.predicate;
                             relOpen.value = false;
@@ -402,6 +514,7 @@ export default component$<ProfileMemoryProps>(
               ) : (
                 <input
                   type="text"
+                  data-testid="memory-add-value"
                   value={addValue.value}
                   placeholder={
                     RELATION_OPTIONS.find((o) => o.predicate === addPredicate.value)?.example ?? ""

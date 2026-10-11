@@ -12,7 +12,7 @@ use crate::commands_holochain::HolochainState;
 use holochain_types::prelude::{ActionHash, AgentPubKey, AnyLinkableHash, ExternIO, ExternalHash, Record};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::State;
+use tauri::{Manager, State};
 
 /// What a row is. A `rule` is the person's words verbatim and may be
 /// pinned; extraction may propose but never save one (decision 2).
@@ -129,7 +129,7 @@ struct RowsInput {
 /// write a person- or project-scope row, since the anchor is the scope's.
 #[tauri::command]
 pub async fn save_memory_row(
-    agent_key: String,
+    agent_key: Option<String>,
     row: MemoryRow,
     hc_state: State<'_, Arc<HolochainState>>,
 ) -> Result<String, String> {
@@ -137,6 +137,10 @@ pub async fn save_memory_row(
         return Err(format!("unknown memory kind {}", row.kind));
     }
     let manager = hc_state.get()?;
+    let agent_key = match agent_key {
+        Some(a) => a,
+        None => any_agent(&manager).await.ok_or("no agent provisioned yet")?,
+    };
     let key = manager.data_key()?;
     let mut sealed = row.clone();
     sealed.action_hash = None;
@@ -152,15 +156,82 @@ pub async fn save_memory_row(
 /// Every live row in a scope, reduced, pinned rules first.
 #[tauri::command]
 pub async fn list_memory_rows(
-    agent_key: String,
+    app: tauri::AppHandle,
+    agent_key: Option<String>,
     scope: String,
     hc_state: State<'_, Arc<HolochainState>>,
 ) -> Result<Vec<MemoryRow>, String> {
     let manager = hc_state.get()?;
+    let agent_key = match agent_key {
+        Some(a) => a,
+        None => any_agent(&manager).await.ok_or("no agent provisioned yet")?,
+    };
+    rows_at(&app, &manager, &agent_key, &scope).await
+}
+
+// ───────────── the local cache per scope ─────────────
+
+fn cache_path(app: &tauri::AppHandle, scope: &str) -> Option<std::path::PathBuf> {
+    use sha2::Digest;
+    let tag = hex::encode(sha2::Sha256::digest(scope.as_bytes()));
+    crate::profile::root(app).ok().map(|r| r.join(format!("memory-rows-{}.enc", &tag[..16])))
+}
+
+#[derive(Serialize, Deserialize)]
+struct SealedFile {
+    version: u32,
+    nonce: String,
+    cipher: String,
+}
+
+fn write_cache(app: &tauri::AppHandle, key: &[u8; 32], scope: &str, rows: &[MemoryRow]) {
+    let Some(path) = cache_path(app, scope) else { return };
+    let Ok(plain) = serde_json::to_vec(rows) else { return };
+    let Ok((nonce, cipher)) = crate::transcript_crypto::encrypt(key, &plain) else { return };
+    let file = SealedFile { version: 1, nonce: hex::encode(nonce), cipher: hex::encode(cipher) };
+    if let Ok(json) = serde_json::to_vec(&file) {
+        let _ = std::fs::write(&path, json);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
+    }
+}
+
+fn read_cache(app: &tauri::AppHandle, key: &[u8; 32], scope: &str) -> Vec<MemoryRow> {
+    let Some(path) = cache_path(app, scope) else { return Vec::new() };
+    let Ok(raw) = std::fs::read(&path) else { return Vec::new() };
+    let Ok(file) = serde_json::from_slice::<SealedFile>(&raw) else { return Vec::new() };
+    let (Ok(nonce), Ok(cipher)) = (hex::decode(&file.nonce), hex::decode(&file.cipher)) else { return Vec::new() };
+    let Ok(plain) = crate::transcript_crypto::decrypt(key, &nonce, &cipher) else { return Vec::new() };
+    serde_json::from_slice(&plain).unwrap_or_default()
+}
+
+/// The scope's rows as of the last live read - instant, never waits on a
+/// zome call (the list cache's rule for conversations).
+#[tauri::command]
+pub fn list_memory_rows_cached(
+    app: tauri::AppHandle,
+    scope: String,
+    hc_state: State<'_, Arc<HolochainState>>,
+) -> Result<Vec<MemoryRow>, String> {
+    let key = hc_state.get()?.data_key()?;
+    Ok(read_cache(&app, &key, &scope))
+}
+
+/// Any agent this device has provisioned - the writer for rows whose anchor
+/// is the scope's, not an AI's.
+async fn any_agent(manager: &crate::holochain::HolochainManager) -> Option<String> {
+    let map = manager.agents.lock().await;
+    map.keys().next().cloned()
+}
+
+async fn rows_at(app: &tauri::AppHandle, manager: &crate::holochain::HolochainManager, agent: &str, scope: &str) -> Result<Vec<MemoryRow>, String> {
     let key = manager.data_key()?;
-    let anchor = scope_anchor(&scope, &key)?;
+    let anchor = scope_anchor(scope, &key)?;
     let payload = ExternIO::encode(RowsInput { anchor }).map_err(|e| e.to_string())?;
-    let out = manager.call_zome(&agent_key, "transcript", "get_memory_rows", payload).await?;
+    let out = manager.call_zome(agent, "transcript", "get_memory_rows", payload).await?;
     let records: Vec<Record> = ExternIO::decode(&out).map_err(|e| e.to_string())?;
     let mut rows = Vec::with_capacity(records.len());
     for record in &records {
@@ -169,7 +240,243 @@ pub async fn list_memory_rows(
         row.action_hash = Some(hex::encode(record.action_address().get_raw_39()));
         rows.push(row);
     }
-    Ok(reduce(rows))
+    let reduced = reduce(rows);
+    write_cache(app, &key, scope, &reduced);
+    Ok(reduced)
+}
+
+async fn write_row(manager: &crate::holochain::HolochainManager, agent: &str, row: &MemoryRow) -> Result<(), String> {
+    let key = manager.data_key()?;
+    let mut sealed = row.clone();
+    sealed.action_hash = None;
+    let plain = serde_json::to_vec(&sealed).map_err(|e| e.to_string())?;
+    let (nonce, cipher) = crate::transcript_crypto::encrypt(&key, &plain)?;
+    let anchor = scope_anchor(&row.scope, &key)?;
+    let payload = ExternIO::encode(SaveInput { cipher, nonce: nonce.to_vec(), anchor }).map_err(|e| e.to_string())?;
+    manager.call_zome(agent, "transcript", "save_memory_row", payload).await.map(|_| ())
+}
+
+// ───────────── the person's facts file ↔ person-scope rows ─────────────
+
+/// A `MemoryFact` (the facts file's record) as a person-scope row: facts
+/// keep their triple in `structured`, notes are `note` rows; the fact's id
+/// is the row's id, so every later edit of the fact is a revision.
+pub(crate) fn fact_to_row(f: &crate::memory::MemoryFact) -> Option<MemoryRow> {
+    if f.entry_kind == "synthesis" || f.entry_kind == "library" {
+        return None; // derived portraits, rewritten on each device
+    }
+    let kind = if f.entry_kind == "note" { "note" } else { "fact" };
+    let text = if kind == "fact" { format!("{} {}: {}", f.subject, f.predicate.replace('_', " "), f.value) } else { f.value.clone() };
+    let provenance = match (f.provenance.as_str(), f.source_action_hash.as_deref()) {
+        ("authored", _) => "authored".to_string(),
+        (_, Some(h)) => format!("extracted:{h}"),
+        _ => "extracted".to_string(),
+    };
+    let saved_by = match f.source_ai_id.as_deref() {
+        Some(ai) if f.provenance != "authored" => format!("ai:{ai}"),
+        _ => "person".to_string(),
+    };
+    Some(MemoryRow {
+        id: f.id.clone(),
+        scope: "person".into(),
+        kind: kind.into(),
+        text,
+        structured: Some(serde_json::json!({
+            "subject": f.subject, "predicate": f.predicate, "value": f.value,
+            "confidence": f.confidence, "entry_kind": f.entry_kind, "provenance": f.provenance,
+            "source_action_hash": f.source_action_hash, "source_ai_id": f.source_ai_id,
+            "group_id": f.group_id, "author_identity": f.author_identity,
+        })),
+        as_of: f.valid_from / 1000,
+        valid_to: f.valid_to.map(|t| t / 1000),
+        saved_by,
+        provenance,
+        pinned: false,
+        topics: vec![],
+        replaces: vec![],
+        deleted: false,
+        updated_at: f.updated_at.max(1),
+        action_hash: None,
+    })
+}
+
+/// The reverse, for a row made on another device: the fact as the file
+/// wants it (no embedding - the front end embeds notes it finds bare).
+pub(crate) fn row_to_fact(r: &MemoryRow) -> Option<crate::memory::MemoryFact> {
+    if r.scope != "person" || !(r.kind == "fact" || r.kind == "note") {
+        return None;
+    }
+    let st = r.structured.clone().unwrap_or_default();
+    let s = |k: &str| st[k].as_str().map(String::from);
+    Some(crate::memory::MemoryFact {
+        id: r.id.clone(),
+        subject: s("subject").unwrap_or_else(|| "user".into()),
+        predicate: s("predicate").unwrap_or_else(|| if r.kind == "note" { "note".into() } else { "fact".into() }),
+        value: s("value").unwrap_or_else(|| r.text.clone()),
+        confidence: st["confidence"].as_f64().unwrap_or(1.0) as f32,
+        valid_from: r.as_of * 1000,
+        valid_to: r.valid_to.map(|t| t * 1000),
+        source_action_hash: s("source_action_hash"),
+        source_ai_id: s("source_ai_id"),
+        owner_scope: "personal".into(),
+        key_scope: "personal".into(),
+        entry_kind: s("entry_kind").unwrap_or_else(|| r.kind.clone()),
+        provenance: s("provenance").unwrap_or_else(|| if r.provenance == "authored" { "authored".into() } else { "extracted".into() }),
+        author_identity: s("author_identity"),
+        embedding: None,
+        group_id: s("group_id"),
+        created_at: r.as_of * 1000,
+        updated_at: r.updated_at,
+    })
+}
+
+/// What a facts-file save changed, as rows: a changed or new fact is a
+/// revision, a removed fact a deletion. Pure; the caller writes them.
+pub(crate) fn facts_delta(before: &[crate::memory::MemoryFact], after: &[crate::memory::MemoryFact]) -> Vec<MemoryRow> {
+    use std::collections::HashMap;
+    let was: HashMap<&str, &crate::memory::MemoryFact> = before.iter().map(|f| (f.id.as_str(), f)).collect();
+    let now_ids: std::collections::HashSet<&str> = after.iter().map(|f| f.id.as_str()).collect();
+    let mut out = Vec::new();
+    for f in after {
+        let changed = match was.get(f.id.as_str()) {
+            None => true,
+            Some(b) => b.value != f.value || b.valid_to != f.valid_to || b.predicate != f.predicate || b.subject != f.subject,
+        };
+        if changed {
+            if let Some(mut r) = fact_to_row(f) {
+                r.updated_at = r.updated_at.max(now_ms());
+                out.push(r);
+            }
+        }
+    }
+    for f in before {
+        if !now_ids.contains(f.id.as_str()) {
+            if let Some(mut r) = fact_to_row(f) {
+                r.deleted = true;
+                r.updated_at = now_ms();
+                out.push(r);
+            }
+        }
+    }
+    out
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
+/// Called by every facts-file save: the delta goes to the network in the
+/// background through any provisioned agent. Nothing waits on it.
+pub(crate) fn mirror_person_facts(app: &tauri::AppHandle, before: Vec<crate::memory::MemoryFact>, after: Vec<crate::memory::MemoryFact>) {
+    let rows = facts_delta(&before, &after);
+    if rows.is_empty() {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let Some(hc) = app.try_state::<Arc<HolochainState>>() else { return };
+        let Ok(manager) = hc.get() else { return };
+        let Some(agent) = any_agent(&manager).await else { return };
+        let mut written = 0usize;
+        for r in &rows {
+            match write_row(&manager, &agent, r).await {
+                Ok(()) => written += 1,
+                Err(e) => log::warn!("[memory-rows] mirror of fact {} failed: {}", &r.id[..r.id.len().min(8)], e),
+            }
+        }
+        log::info!("[memory-rows] {} of {} fact change(s) mirrored to the person's rows", written, rows.len());
+    });
+}
+
+const MIGRATED_MARKER: &str = "memory-rows-migrated";
+
+/// Once per profile: every fact in the file becomes a person-scope row
+/// (provenance kept), so the person's memory joins their network. Then
+/// `reconcile_person_rows` keeps the file current with rows written on
+/// the other devices. Runs after the conductor is up; silent until then.
+pub async fn migrate_and_reconcile_person_memory(app: &tauri::AppHandle) -> Result<(usize, usize), String> {
+    let hc = app.try_state::<Arc<HolochainState>>().ok_or("holochain state missing")?;
+    let manager = hc.get()?;
+    let key = manager.data_key()?;
+    let agent = any_agent(&manager).await.ok_or("no agent provisioned yet")?;
+    let root = crate::profile::root(app)?;
+    let marker = root.join(MIGRATED_MARKER);
+    let facts = crate::memory::read_facts(app, &key)?;
+    let mut live = rows_at(app, &manager, &agent, "person").await?;
+    let mut migrated = 0usize;
+    if !marker.exists() {
+        let have: std::collections::HashSet<&str> = live.iter().map(|r| r.id.as_str()).collect();
+        for f in &facts {
+            if have.contains(f.id.as_str()) {
+                continue;
+            }
+            if let Some(mut r) = fact_to_row(f) {
+                r.provenance = format!("migrated:memory-facts;{}", r.provenance);
+                write_row(&manager, &agent, &r).await?;
+                migrated += 1;
+            }
+        }
+        let _ = std::fs::write(&marker, now_ms().to_string());
+        if migrated > 0 {
+            log::info!("[memory-rows] {} fact(s) migrated to the person's rows", migrated);
+            live = rows_at(app, &manager, &agent, "person").await?;
+        }
+    }
+    // Rows from the other devices (or edits made there) into this file.
+    let mut merged = facts.clone();
+    let mut adopted = 0usize;
+    for r in &live {
+        let Some(incoming) = row_to_fact(r) else { continue };
+        match merged.iter_mut().find(|f| f.id == incoming.id) {
+            Some(cur) if cur.updated_at >= incoming.updated_at => {}
+            Some(cur) => {
+                let embedding = cur.embedding.take();
+                *cur = incoming;
+                if cur.value == r.structured.as_ref().and_then(|s| s["value"].as_str()).unwrap_or("") {
+                    cur.embedding = embedding; // same words, same vector
+                }
+                adopted += 1;
+            }
+            None => {
+                merged.push(incoming);
+                adopted += 1;
+            }
+        }
+    }
+    // Deletions made elsewhere: a fact whose row is gone (reduced away).
+    let live_ids: std::collections::HashSet<&str> = live.iter().map(|r| r.id.as_str()).collect();
+    let before_len = merged.len();
+    if marker.exists() {
+        let deleted_elsewhere: std::collections::HashSet<String> = facts
+            .iter()
+            .filter(|f| f.entry_kind != "synthesis" && f.entry_kind != "library" && !live_ids.contains(f.id.as_str()) && f.updated_at < now_ms() - 120_000)
+            .map(|f| f.id.clone())
+            .collect();
+        merged.retain(|f| !deleted_elsewhere.contains(&f.id));
+    }
+    if adopted > 0 || merged.len() != before_len {
+        crate::memory::write_facts(app, &key, &merged)?;
+        log::info!("[memory-rows] facts file updated from the person's rows: {} adopted, {} removed", adopted, before_len - merged.len());
+    }
+    Ok((migrated, adopted))
+}
+
+/// Startup: one migration + reconcile after the conductor settles, then a
+/// reconcile every five minutes while the app is open.
+pub fn start_person_memory_sync(app: &tauri::AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut wait = std::time::Duration::from_secs(75);
+        loop {
+            tokio::time::sleep(wait).await;
+            wait = std::time::Duration::from_secs(300);
+            match migrate_and_reconcile_person_memory(&app).await {
+                Ok((0, 0)) => {}
+                Ok((m, a)) => log::info!("[memory-rows] round: {} migrated, {} adopted", m, a),
+                Err(e) => log::debug!("[memory-rows] round skipped: {}", e),
+            }
+        }
+    });
 }
 
 #[cfg(test)]
@@ -213,6 +520,46 @@ mod tests {
         q.action_hash = Some("h9".into());
         assert_eq!(reduce(vec![p.clone(), q.clone()])[0].text, "q");
         assert_eq!(reduce(vec![q, p])[0].text, "q");
+    }
+
+    fn fact(id: &str, kind: &str, value: &str, at: i64) -> crate::memory::MemoryFact {
+        crate::memory::MemoryFact {
+            id: id.into(), subject: "user".into(), predicate: if kind == "note" { "note".into() } else { "likes".into() }, value: value.into(),
+            confidence: 0.9, valid_from: at * 1000, valid_to: None, source_action_hash: Some("abc".into()), source_ai_id: Some("ai1".into()),
+            owner_scope: "personal".into(), key_scope: "personal".into(), entry_kind: kind.into(), provenance: "extracted".into(),
+            author_identity: None, embedding: Some(vec![0.1, 0.2]), group_id: None, created_at: at * 1000, updated_at: at,
+        }
+    }
+
+    #[test]
+    fn a_fact_round_trips_through_a_row_and_portraits_never_travel() {
+        let f = fact("f1", "fact", "cycling", 1_700_000_000_000);
+        let r = fact_to_row(&f).unwrap();
+        assert_eq!((r.kind.as_str(), r.scope.as_str(), r.id.as_str()), ("fact", "person", "f1"));
+        assert_eq!(r.text, "user likes: cycling");
+        assert_eq!(r.saved_by, "ai:ai1");
+        assert_eq!(r.provenance, "extracted:abc");
+        let back = row_to_fact(&r).unwrap();
+        assert_eq!((back.predicate.as_str(), back.value.as_str(), back.entry_kind.as_str()), ("likes", "cycling", "fact"));
+        assert_eq!(back.valid_from, f.valid_from);
+        assert!(back.embedding.is_none(), "vectors are per device");
+        let mut portrait = fact("s", "synthesis", "…", 1);
+        portrait.entry_kind = "synthesis".into();
+        assert!(fact_to_row(&portrait).is_none());
+        let n = fact("n1", "note", "I prefer short answers", 5);
+        assert_eq!(fact_to_row(&n).unwrap().kind, "note");
+    }
+
+    #[test]
+    fn a_save_mirrors_only_what_changed_and_a_removal_is_a_deletion() {
+        let before = vec![fact("a", "fact", "tea", 10), fact("b", "fact", "dogs", 10), fact("c", "note", "gone", 10)];
+        let mut b2 = fact("b", "fact", "cats", 20);
+        b2.updated_at = 20;
+        let after = vec![fact("a", "fact", "tea", 10), b2, fact("d", "note", "new", 30)];
+        let delta = facts_delta(&before, &after);
+        let mut ids: Vec<(String, bool)> = delta.iter().map(|r| (r.id.clone(), r.deleted)).collect();
+        ids.sort();
+        assert_eq!(ids, vec![("b".to_string(), false), ("c".to_string(), true), ("d".to_string(), false)]);
     }
 
     #[test]

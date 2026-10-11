@@ -603,6 +603,7 @@ pub fn run() {
             commands_holochain::get_copy_transcript,
             memory_rows::save_memory_row,
             memory_rows::list_memory_rows,
+            memory_rows::list_memory_rows_cached,
             vault_escrow::vault_escrow_restore,
             vault_escrow::vault_escrow_keep_local,
             vault_escrow::vault_backup_now,
@@ -926,6 +927,7 @@ pub fn run() {
                 vault_escrow::start_daily_backup_check(&link_app_handle);
                 vault_escrow::start_startup_escrow_sync(&link_app_handle);
                 config_sync::start_config_sync_rounds(&link_app_handle);
+                memory_rows::start_person_memory_sync(&link_app_handle);
                 corpus::sync::start_folder_sync(&link_app_handle);
                 tuning::refresh_gpu_choices(&link_app_handle);
                 llm::start_memory_pressure_watch(&link_app_handle);
