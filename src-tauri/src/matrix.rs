@@ -194,30 +194,51 @@ pub(crate) fn score_prose(output: &str) -> u8 {
 pub async fn leg_memory_grade(app: &AppHandle, bin: &Path, dir: &Path, sink: Sink<'_>) -> Vec<String> {
     use std::time::Duration;
     let mut failures = Vec::new();
-    let mut models: Vec<String> = crate::fit::assess(app)
-        .await
-        .into_iter()
-        .filter(|f| !matches!(f.fit, crate::fit::Fit::Red))
-        .filter(|f| crate::gguf::read_meta(&dir.join(&f.name)).map(|m| !m.is_embedding()).unwrap_or(false))
-        .map(|f| f.name)
-        .collect();
+    // Every chat model on disk (the sampling leg's rule: not an embedding
+    // model, not a projector) - the fit verdict is for the chat server's
+    // context; the bench serves one model at a time with the chat model
+    // unloaded, and a load that fails is reported, not fatal.
+    let mut models: Vec<String> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten()
+                .filter_map(|e| e.file_name().to_str().map(String::from))
+                .filter(|n| n.ends_with(".gguf") && !n.to_lowercase().contains("mmproj"))
+                .filter(|n| crate::gguf::read_meta(&dir.join(n)).map(|m| !m.is_embedding()).unwrap_or(false))
+                .collect()
+        })
+        .unwrap_or_default();
     models.sort();
     models.dedup();
     if models.is_empty() {
-        sink("no runnable model to grade".into());
+        sink("no chat model to grade".into());
         return failures;
     }
+    let _ = app;
     let client = crate::llm::local_http();
+    let free = free_vram_gb(bin);
     for model in models {
         if cancelled() {
             break;
         }
-        let args: Vec<String> = vec![
+        let mut args: Vec<String> = vec![
             "--port".into(), BENCH_PORT.to_string(), "--host".into(), "127.0.0.1".into(),
             "--no-webui".into(), "--reasoning".into(), "off".into(),
             "--ctx-size".into(), "4096".into(), "--fit".into(), "off".into(),
             "--model".into(), model.clone(),
         ];
+        if let Ok(meta) = crate::gguf::read_meta(&dir.join(&model)) {
+            let size = std::fs::metadata(dir.join(&model)).map(|m| m.len()).unwrap_or(0);
+            if let Some(n) = moe_decision(&meta, size, 4096, free) {
+                if n > 0 {
+                    if (n as usize) < meta.expert_bytes_per_layer.len() {
+                        args.push("--n-cpu-moe".into());
+                        args.push(n.to_string());
+                    } else {
+                        args.push("--cpu-moe".into());
+                    }
+                }
+            }
+        }
         let _guard = match spawn_bench_server(bin, dir, args).await {
             Ok(g) => g,
             Err(e) => {
@@ -272,12 +293,26 @@ pub async fn leg_memory_grade(app: &AppHandle, bin: &Path, dir: &Path, sink: Sin
             "You maintain a compact WORKSPACE MEMORY for a project folder: durable facts that help future sessions. Return ONLY the updated memory as markdown bullet lines. Rules: update in place rather than append; drop anything stale or proven wrong - but NEVER drop or reword a preference or correction the person gave; keep commands verbatim; no conversation summaries; merge lines that say the same thing.\n\nCURRENT MEMORY:\n{PROSE_MEMORY}\n\nWHAT HAPPENED THIS SESSION:\n{PROSE_DIGEST}"
         );
         let prose = match ask("You are a careful editor of a project's memory file.", &prose_prompt, None, 400).await {
-            Ok(answer) => Some(score_prose(&answer)),
+            Ok(answer) => {
+                let g = score_prose(&answer);
+                if g <= 3 {
+                    // A low prose grade must be readable: a rubric miss and a
+                    // bad answer look the same as a number.
+                    let one_line: String = answer.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" / ");
+                    sink(format!("{model}: consolidation answer ({} lines): {}", answer.lines().filter(|l| !l.trim().is_empty()).count(), &one_line.chars().take(240).collect::<String>()));
+                }
+                Some(g)
+            }
             Err(e) => {
                 sink(format!("{model}: consolidation call failed ({e})"));
                 None
             }
         };
+        if let Some(0) = precision {
+            if let Ok(sample) = ask(EXTRACTION_SYSTEM, "message: \"I'm Sam, a nurse in Leeds, and I love hiking on weekends.\"", Some(EXTRACTION_GRAMMAR), 256).await {
+                sink(format!("{model}: extraction answer for the first message: {}", sample.chars().take(200).collect::<String>()));
+            }
+        }
         crate::memory_slot::set_grade(app, &model, precision, prose);
         sink(format!(
             "{model}: extraction {} (hits {hits}/{gold}, extracted {extracted}), consolidation {}",

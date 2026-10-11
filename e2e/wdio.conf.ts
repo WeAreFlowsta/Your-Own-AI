@@ -147,7 +147,8 @@ export const config: WebdriverIO.Config = {
   framework: "mocha",
   // A cold model load plus a reply can take three minutes on a small card.
   // A capture take records whole flows, measurements included.
-  mochaOpts: { ui: "bdd", timeout: CAPTURE ? 1_800_000 : 300_000 },
+  // YOAI_E2E_LONG=1: a spec that runs a matrix leg (a load per model).
+  mochaOpts: { ui: "bdd", timeout: CAPTURE || process.env.YOAI_E2E_LONG ? 2_400_000 : 300_000 },
   reporters: ["spec"],
   logLevel: "warn",
   waitforTimeout: 30_000,
