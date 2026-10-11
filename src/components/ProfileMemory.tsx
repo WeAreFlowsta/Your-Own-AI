@@ -40,29 +40,8 @@ import {
   embedBareNotes,
   type Fact,
 } from "../utils/memory";
-import {
-  listMemoryRows,
-  listMemoryRowsCached,
-  listMemoryRevisions,
-  describeDream,
-  undoDream,
-  saveMemoryRow,
-  newRow,
-  revise,
-  deletion,
-  personScope,
-  type MemoryRow,
-  type MemoryRevision,
-} from "../utils/memoryRows";
-
-/** Layer 1 of memory on this page (module-level: used inside $ closures). */
-const isLayer1 = (r: MemoryRow) => LAYER1_KINDS.some((k) => k.kind === r.kind);
-const LAYER1_KINDS: { kind: string; heading: string }[] = [
-  { kind: "rule", heading: "Rules your AIs follow" },
-  { kind: "command", heading: "Commands" },
-  { kind: "location", heading: "Where things are" },
-  { kind: "decision", heading: "Decisions" },
-];
+import { saveMemoryRow, newRow, personScope } from "../utils/memoryRows";
+import MemoryRowsPanel from "./MemoryRowsPanel";
 
 /** Friendly labels for the relations a user can author by hand. Values are the
  *  predicate vocabulary the extraction grammar also uses, so authored and
@@ -116,33 +95,8 @@ export default component$<ProfileMemoryProps>(
   ({ readOnly = false, manageHref = "/your-memory/" }) => {
     const facts = useSignal<Fact[]>([]);
     const factsLoading = useSignal(true);
-    /** The person's standing rules: pinned person-scope rows in their own
-     *  network (MEMORY_REDESIGN.md §3) - the person's words verbatim,
-     *  loaded first and re-stated every turn once the loader lands. */
-    const rules = useSignal<MemoryRow[]>([]);
-    const editingRuleId = useSignal<string | null>(null);
-    const editRuleValue = useSignal("");
-    /** What dreaming changed, newest first (dream revisions in the records). */
-    const dreams = useSignal<MemoryRevision[]>([]);
-    const revisions = useSignal<MemoryRevision[]>([]);
-    const dreamsOpen = useSignal(false);
-    const loadRules$ = $(async () => {
-      try {
-        const cached = await listMemoryRowsCached(personScope);
-        rules.value = cached.filter(isLayer1);
-      } catch { /* older backend */ }
-      try {
-        const live = await listMemoryRows(personScope);
-        rules.value = live.filter(isLayer1);
-      } catch (e) {
-        console.warn("[Memory] rules did not answer (cached shown):", e);
-      }
-      try {
-        const all = await listMemoryRevisions(personScope);
-        revisions.value = all;
-        dreams.value = all.filter((r) => r.provenance.startsWith("dream:")).slice(0, 20);
-      } catch { /* older backend, or records not up yet */ }
-    });
+    /** Bumped when this page adds a rule, so the rows panel reloads. */
+    const rulesRefresh = useSignal(0);
     const memoryPaused = useSignal(false);
     const editingId = useSignal<string | null>(null);
     const editValue = useSignal("");
@@ -181,8 +135,6 @@ export default component$<ProfileMemoryProps>(
       let alive = true;
       cleanup(() => (alive = false));
       memoryPaused.value = isMemoryPaused();
-      // Rules first: they do not wait on the facts warm-up below.
-      void loadRules$();
       try {
         portraitOpen.value = localStorage.getItem("memoryPortraitOpen") === "1";
       } catch {
@@ -205,7 +157,6 @@ export default component$<ProfileMemoryProps>(
         () => alive,
       );
       factsLoading.value = false;
-      void loadRules$();
       void embedBareNotes().then((n: number) => { if (n > 0 && alive) void activeFacts$(); });
       // A fact from the turn the user just sent may still be saving (extraction
       // is fire-and-forget). Wait for it, then refresh — so the list isn't
@@ -259,7 +210,7 @@ export default component$<ProfileMemoryProps>(
           await saveMemoryRow(newRow(personScope, "rule", val, { pinned: true }));
           addValue.value = "";
           showAdd.value = false;
-          await loadRules$();
+          rulesRefresh.value++;
         } catch (e) {
           console.warn("[Memory] saving the rule failed:", e);
         }
@@ -338,122 +289,7 @@ export default component$<ProfileMemoryProps>(
             )}
           </div>
         )}
-        {/* What dreaming changed: every change a revision, undoable. */}
-        {dreams.value.length > 0 && (
-          <div class="mb-5 p-4 rounded-xl bg-[var(--bg-main)] border border-[var(--border-subtle)]" data-testid="memory-dreams">
-            <div class="flex items-center justify-between gap-3">
-              <p class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide">
-                Tidied while you were away
-              </p>
-              <button type="button" class="text-xs text-[var(--text-link)] hover:underline" onClick$={() => (dreamsOpen.value = !dreamsOpen.value)}>
-                {dreamsOpen.value ? "Hide" : `Show ${dreams.value.length}`}
-              </button>
-            </div>
-            {!dreamsOpen.value && (
-              <p class="mt-1 text-[11px] text-[var(--text-muted)]">
-                Duplicates merged, notes filed, old entries moved to history - on this computer, by itself. Each change can be undone.
-              </p>
-            )}
-            {dreamsOpen.value && (
-              <div class="mt-2 flex flex-col gap-1.5">
-                {dreams.value.map((d) => (
-                  <div key={d.action_hash ?? d.id + d.updated_at} class="flex items-start gap-2 text-sm" data-testid="memory-dream">
-                    <span class="min-w-0 flex-1 text-[var(--text-secondary)]">
-                      {describeDream(d, revisions.value)}
-                      <span class="text-[var(--text-muted)]"> · {new Date(d.updated_at).toLocaleDateString()}</span>
-                    </span>
-                    {!readOnly && !d.superseded && (
-                      <button
-                        type="button"
-                        class="text-xs text-[var(--text-link)] hover:underline shrink-0"
-                        onClick$={async () => {
-                          try {
-                            await undoDream(d, revisions.value);
-                            await loadRules$();
-                            await activeFacts$();
-                          } catch (e) {
-                            console.warn("[Memory] undo failed:", e);
-                          }
-                        }}
-                      >
-                        Undo
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-        {/* Layer 1: the person's words, kept first and re-stated every turn. */}
-        {rules.value.length > 0 && (
-          <div class="mb-5 p-4 rounded-xl bg-[var(--bg-main)] border border-[var(--border-subtle)]" data-testid="memory-rules">
-            {LAYER1_KINDS.filter((k) => rules.value.some((r) => r.kind === k.kind)).map((k) => (
-            <div key={k.kind} class="mb-3 last:mb-0">
-            <p class="text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide">
-              {k.heading}
-            </p>
-            <div class="mt-2 flex flex-col gap-1.5">
-              {rules.value.filter((r) => r.kind === k.kind).map((r) => (
-                <div key={r.id} class="group flex items-start gap-2" data-testid="memory-rule">
-                  {!readOnly && editingRuleId.value === r.id ? (
-                    <input
-                      type="text"
-                      value={editRuleValue.value}
-                      autoFocus
-                      onInput$={(_, el) => (editRuleValue.value = el.value)}
-                      onKeyDown$={async (e) => {
-                        if (e.key === "Escape") editingRuleId.value = null;
-                        if (e.key === "Enter") {
-                          const text = editRuleValue.value.trim();
-                          editingRuleId.value = null;
-                          if (text && text !== r.text) {
-                            await saveMemoryRow(revise(r, { text }));
-                            await loadRules$();
-                          }
-                        }
-                      }}
-                      class="flex-1 px-2.5 py-1.5 rounded-lg bg-[var(--bg-card)] border border-[var(--border-subtle)] text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--bg-button-primary)]"
-                    />
-                  ) : (
-                    <p class="min-w-0 flex-1 text-sm text-[var(--text-primary)]">{r.text}</p>
-                  )}
-                  {!readOnly && editingRuleId.value !== r.id && (
-                    <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        type="button"
-                        class="p-1 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)]"
-                        title="Edit rule"
-                        onClick$={() => {
-                          editingRuleId.value = r.id;
-                          editRuleValue.value = r.text;
-                        }}
-                      >
-                        <LuPencil class="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        class="p-1 rounded text-[var(--text-muted)] hover:text-red-400"
-                        title="Remove rule"
-                        onClick$={async () => {
-                          await saveMemoryRow(deletion(r));
-                          await loadRules$();
-                        }}
-                      >
-                        <LuTrash2 class="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-            </div>
-            ))}
-            <p class="mt-2 text-[11px] text-[var(--text-muted)]">
-              Kept in your own records, so they follow you to your other devices. Every AI is reminded of them when it answers.
-            </p>
-          </div>
-        )}
+        <MemoryRowsPanel scope={personScope} readOnly={readOnly} refresh={rulesRefresh.value} />
         {/* Header + controls */}
         <div class="flex flex-wrap items-center justify-between gap-3 mb-5">
           <p class="text-sm text-[var(--text-secondary)] flex items-center gap-1.5">

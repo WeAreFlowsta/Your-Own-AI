@@ -46,6 +46,7 @@ import { exportConversation, describeSignError, type ExportOptions } from "../..
 import { ExportConversationModal } from "../../components/ExportConversationModal";
 import AiEpisodicMemory from "../../components/AiEpisodicMemory";
 import AiKnowledge from "../../components/AiKnowledge";
+import MemoryRowsPanel from "../../components/MemoryRowsPanel";
 import { RememberEntryButton } from "../../components/RememberEntryButton";
 import AiKnowledgeDocuments from "../../components/AiKnowledgeDocuments";
 import { Callout } from "../../components/Callout";
@@ -538,6 +539,8 @@ export default component$(() => {
                   Given by you
                 </h3>
                 <AiKnowledge aiId={aiId.value} aiName={aiName.value} />
+                {/* This AI's own standing rows and what dreaming tidied for it. */}
+                <MemoryRowsPanel aiId={aiId.value} agentKey={aiId.value} rulesHeading={`Rules ${aiName.value || "this AI"} follows`} />
                 <div class="mt-4">
                   <AiKnowledgeDocuments aiId={aiId.value} aiName={aiName.value} />
                 </div>
