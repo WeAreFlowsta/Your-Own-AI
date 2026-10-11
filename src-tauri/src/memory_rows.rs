@@ -239,21 +239,33 @@ pub(crate) fn fold_sibling_person_memory(app: &tauri::AppHandle, key: &[u8; 32],
         }
     }
     let mut rows_adopted = 0usize;
-    if let Some(b64) = manifest["memory_rows"]["person_raw_b64"].as_str() {
-        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
-            let theirs = decode_sealed_rows(&bytes, key);
-            if !theirs.is_empty() {
-                let mut siblings = read_sealed_rows(siblings_path(app, "person"), key);
-                let before: std::collections::HashSet<(String, i64)> = siblings.iter().map(|r| (r.id.clone(), r.updated_at)).collect();
-                siblings.extend(theirs);
-                let siblings = reduce(siblings);
-                rows_adopted = siblings.iter().filter(|r| !before.contains(&(r.id.clone(), r.updated_at))).count();
-                write_sealed_rows(siblings_path(app, "person"), key, &siblings);
-                let mut all = read_cache(app, key, "person");
-                all.extend(siblings);
-                write_cache(app, key, "person", &reduce(all));
+    // Every scope the sibling carried (person + its AIs by founding key);
+    // older manifests carried the person's alone.
+    let mut scoped: Vec<(String, String)> = Vec::new();
+    if let Some(obj) = manifest["memory_rows"]["scopes"].as_object() {
+        for (scope, v) in obj {
+            if let Some(b64) = v.as_str() {
+                scoped.push((scope.clone(), b64.to_string()));
             }
         }
+    } else if let Some(b64) = manifest["memory_rows"]["person_raw_b64"].as_str() {
+        scoped.push(("person".to_string(), b64.to_string()));
+    }
+    for (scope, b64) in scoped {
+        let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&b64) else { continue };
+        let theirs = decode_sealed_rows(&bytes, key);
+        if theirs.is_empty() {
+            continue;
+        }
+        let mut siblings = read_sealed_rows(siblings_path(app, &scope), key);
+        let before: std::collections::HashSet<(String, i64)> = siblings.iter().map(|r| (r.id.clone(), r.updated_at)).collect();
+        siblings.extend(theirs);
+        let siblings = reduce(siblings);
+        rows_adopted += siblings.iter().filter(|r| !before.contains(&(r.id.clone(), r.updated_at))).count();
+        write_sealed_rows(siblings_path(app, &scope), key, &siblings);
+        let mut all = read_cache(app, key, &scope);
+        all.extend(siblings);
+        write_cache(app, key, &scope, &reduce(all));
     }
     (facts_adopted, rows_adopted)
 }
