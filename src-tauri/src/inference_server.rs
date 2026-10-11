@@ -2148,7 +2148,7 @@ async fn mcp_post(
                         "properties": {
                             "text": { "type": "string", "description": "What to remember, one line." },
                             "kind": { "type": "string", "enum": ["command", "location", "decision", "fact", "note"], "description": "What kind of thing it is (default note)." },
-                            "scope": { "type": "string", "enum": ["person", "ai"], "description": "For the person (default) or for yourself." }
+                            "scope": { "type": "string", "enum": ["person", "ai", "project"], "description": "For the person (default), for yourself, or for the open project." }
                         },
                         "required": ["text"]
                     }
@@ -2171,7 +2171,8 @@ async fn mcp_post(
             if req["params"]["name"].as_str() == Some("remember") {
                 let a = &req["params"]["arguments"];
                 let (text, kind, scope) = (a["text"].as_str().unwrap_or(""), a["kind"].as_str().unwrap_or("note"), a["scope"].as_str().unwrap_or("person"));
-                return match crate::memory_rows::remember_tool(&app, &agent_key, scope, kind, text).await {
+                let project_id = if folder.is_empty() { None } else { Some(crate::project_identity::project_identity(std::path::Path::new(&folder))) };
+                return match crate::memory_rows::remember_tool(&app, &agent_key, scope, kind, text, project_id.as_deref()).await {
                     Ok(line) => {
                         log::info!("[mcp] {} remembered a {} ({})", agent_label, kind, scope);
                         mcp_tool_text(&id, line, false)
@@ -2188,6 +2189,9 @@ async fn mcp_post(
                 let mut scopes = vec!["person".to_string()];
                 if !agent_key.is_empty() {
                     scopes.push(format!("ai:{}", crate::commands_holochain::founding_key_for(&app, &agent_key)));
+                }
+                if !folder.is_empty() {
+                    scopes.push(format!("project:{}", crate::project_identity::project_identity(std::path::Path::new(&folder))));
                 }
                 let text = crate::memory_rows::rows_text_for(&app, &key, &scopes, topic.as_deref());
                 return if text.is_empty() {

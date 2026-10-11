@@ -378,6 +378,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
   const workspaceMemory = useSignal("");
   /** The project's AGENTS.md text, read at session start (empty when none). */
   const agentsMd = useSignal("");
+  /** The project's memory rows as layer-1 text (rules/commands/locations). */
+  const projectRules = useSignal("");
   const memoryPending = useSignal(false);
   const toolsPending = useSignal(false);
   const sessionTurns = useSignal(0);
@@ -742,6 +744,11 @@ export function useAgentSession(props: UseAgentSessionProps) {
       // leads all of it: the person's own rules for working here.
       const block = memoryPromptBlock(workspaceMemory.value);
       if (block) wire = block + wire;
+      // Project rows stack over the AI's and the person's (loaded with the
+      // chat's own memory block): rules first, then commands and locations.
+      if (projectRules.value) {
+        wire = `For this project:\n${projectRules.value}\n\n` + wire;
+      }
       if (agentsMd.value) {
         wire = `Rules for working in this project, from its AGENTS.md - the person wrote them; follow them exactly:\n${agentsMd.value}\n\n` + wire;
       }
@@ -1449,6 +1456,16 @@ export function useAgentSession(props: UseAgentSessionProps) {
         // nearest file wins (the project root here), capped so it stays a
         // rules file and not a manual.
         agentsMd.value = "";
+        projectRules.value = "";
+        // The project's own memory rows (rules, commands, locations) by its
+        // id - the same project on every machine (MEMORY_REDESIGN.md §13.1).
+        invoke<string>("project_identity_for", { folder })
+          .then(async (pid) => {
+            const { loadRulesLayer } = await import("../utils/memory");
+            const { projectScope } = await import("../utils/memoryRows");
+            projectRules.value = await loadRulesLayer([projectScope(pid)]);
+          })
+          .catch(() => { /* older backend */ });
         invoke<{ content?: string }>("read_file_for_context", { filePath: `${folder.replace(/[\\/]+$/, "")}/AGENTS.md` })
           .then((r) => {
             const text = String(r?.content ?? "").trim();

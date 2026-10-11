@@ -374,12 +374,14 @@ pub(crate) async fn upsert_row(app: &tauri::AppHandle, manager: &crate::holochai
 /// for itself (`ai:<founding>`), kinds limited to what an AI may save - a
 /// `rule` is the person's to save (decision 2), so a rule-shaped request
 /// becomes a `note` with the words kept.
-pub(crate) async fn remember_tool(app: &tauri::AppHandle, agent_key: &str, scope_word: &str, kind: &str, text: &str) -> Result<String, String> {
+pub(crate) async fn remember_tool(app: &tauri::AppHandle, agent_key: &str, scope_word: &str, kind: &str, text: &str, project_id: Option<&str>) -> Result<String, String> {
     let hc = app.try_state::<Arc<HolochainState>>().ok_or("memory is not available yet")?;
     let manager = hc.get()?;
     let writer = if !agent_key.is_empty() && manager.is_provisioned(agent_key).await { agent_key.to_string() } else { any_agent(&manager).await.ok_or("no agent provisioned yet")? };
-    let scope = match scope_word {
-        "ai" | "me" | "self" if !agent_key.is_empty() => format!("ai:{}", crate::commands_holochain::founding_key_for(app, agent_key)),
+    let scope = match (scope_word, project_id) {
+        ("ai" | "me" | "self", _) if !agent_key.is_empty() => format!("ai:{}", crate::commands_holochain::founding_key_for(app, agent_key)),
+        ("project", Some(pid)) => format!("project:{pid}"),
+        ("project", None) => return Err("no project is open".into()),
         _ => "person".to_string(),
     };
     let kind = match kind {
@@ -410,7 +412,7 @@ pub(crate) async fn remember_tool(app: &tauri::AppHandle, agent_key: &str, scope
     let (_, replaced) = upsert_row(app, &manager, &writer, row).await?;
     Ok(match replaced {
         Some(old) => format!("Updated what was remembered (replaces: \"{old}\")."),
-        None => format!("Remembered as a {kind} for {}.", if scope == "person" { "them" } else { "you" }),
+        None => format!("Remembered as a {kind} for {}.", if scope == "person" { "them" } else if scope.starts_with("project:") { "this project" } else { "you" }),
     })
 }
 

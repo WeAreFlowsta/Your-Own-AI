@@ -7,10 +7,10 @@ import { shot, invoke, waitForChat, ask, waitForReplyDone } from "./_helpers";
 const RULE = `Always ask before sending anything (test ${Date.now().toString(36)})`;
 const SAID_RULE = `From now on, answer in one short sentence (test ${Date.now().toString(36)})`;
 
-async function mcpCall(name: string, args: Record<string, unknown>) {
+async function mcpCall(name: string, args: Record<string, unknown>, headers: Record<string, string> = {}) {
   const r = await fetch("http://127.0.0.1:11435/mcp", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
   });
   const body = await r.json();
@@ -101,6 +101,26 @@ describe("memory rules", () => {
     console.log(`e2e: commands ${JSON.stringify(commands.map((c) => c.text))}`);
     expect(commands.length).toBe(1);
     expect(commands[0].text).toContain("Always run");
+    // A project scope: a temp folder stands in for an open project; the
+    // id file is made on first use, and the rows meet under project:<id>.
+    const { mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const folder = mkdtempSync(join(tmpdir(), "yoai-proj-"));
+    const pid = await invoke<string>("project_identity_for", { folder });
+    console.log(`e2e: project id ${pid}`);
+    expect(pid.startsWith("id:")).toBe(true);
+    const proj = await mcpCall("remember", { text: "Deploy with firebase deploy --only hosting (e2e)", kind: "command", scope: "project" }, { "x-project": folder });
+    console.log(`e2e: remember project -> ${JSON.stringify(proj.text)}`);
+    expect(proj.text).toContain("this project");
+    const readBack = await mcpCall("read_memory", { topic: "firebase" }, { "x-project": folder });
+    expect(readBack.text).toContain("firebase deploy --only hosting (e2e)");
+    const noProject = await mcpCall("read_memory", { topic: "firebase" });
+    expect(noProject.text).not.toContain("firebase deploy");
+    const projRows = await invoke<any[]>("list_memory_rows", { agentKey: null, scope: `project:${pid.slice(0)}` });
+    const projCmd = projRows.find((r) => r.kind === "command" && r.text.includes("(e2e)"));
+    expect(projCmd).toBeDefined();
+    await invoke("save_memory_row", { agentKey: null, row: { ...projCmd, deleted: true, updated_at: Date.now(), action_hash: null } });
     // Tidy: the command goes (a deletion is a record).
     const cmd = (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).find((r) => r.kind === "command" && r.text.includes("(e2e)"));
     await invoke("save_memory_row", { agentKey: null, row: { ...cmd, deleted: true, updated_at: Date.now(), action_hash: null } });
