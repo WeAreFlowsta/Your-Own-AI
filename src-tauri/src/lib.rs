@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod config_sync;          // AI configs across the person's devices (sibling manifests)
+mod memory_rows;          // typed, dated, sealed memory rows at scope anchors (MEMORY_REDESIGN)
 mod conversation_cache;   // last-known-good conversation lists (encrypted)
 mod corpus;               // the person's document library (SQLite, row-encrypted; per-AI grants)
 mod model_hash;
@@ -600,6 +601,8 @@ pub fn run() {
             config_sync::config_sync_status,
             config_sync::config_sync_now,
             commands_holochain::get_copy_transcript,
+            memory_rows::save_memory_row,
+            memory_rows::list_memory_rows,
             vault_escrow::vault_escrow_restore,
             vault_escrow::vault_escrow_keep_local,
             vault_escrow::vault_backup_now,

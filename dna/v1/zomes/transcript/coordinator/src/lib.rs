@@ -81,6 +81,62 @@ pub struct DeleteAtInput {
     pub anchor: Option<AgentPubKey>,
 }
 
+/// The tag that marks a link at a scope anchor as a MEMORY ROW (build-docs
+/// MEMORY_REDESIGN.md §11, v1): the same sealed entry type and the same
+/// link type as a conversation, told apart by the tag, so no integrity
+/// change is needed. Conversation readers skip these; the memory reader
+/// takes only these. Hashes and ids in tags, never text.
+const MEMORY_TAG: &[u8] = b"mem";
+
+fn is_memory(link: &Link) -> bool {
+    link.tag.as_ref() == MEMORY_TAG
+}
+
+/// A sealed memory row at a scope anchor: the AI's founding key for an
+/// `ai:` scope, a hashed external anchor for a person or project scope.
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SaveMemoryRowInput {
+    pub cipher: Vec<u8>,
+    pub nonce: Vec<u8>,
+    pub anchor: AnyLinkableHash,
+}
+
+#[hdk_extern]
+pub fn save_memory_row(input: SaveMemoryRowInput) -> ExternResult<ActionHash> {
+    let entry = EncryptedEntry { cipher: input.cipher, nonce: input.nonce };
+    let hash = create_entry(&EntryZomes::IntegrityTranscript(EntryTypes::EncryptedEntry(entry)))?;
+    create_link(input.anchor, hash.clone(), LinkTypes::AllConversations, MEMORY_TAG.to_vec())?;
+    Ok(hash)
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MemoryRowsInput {
+    pub anchor: AnyLinkableHash,
+}
+
+/// Every memory row at the anchor, oldest link first. Reduction (latest
+/// revision per id, a deletion over a live row) happens client-side after
+/// decryption, the same way on every device.
+#[hdk_extern]
+pub fn get_memory_rows(input: MemoryRowsInput) -> ExternResult<Vec<Record>> {
+    let mut links: Vec<Link> = get_links(
+        LinkQuery::try_new(input.anchor, LinkTypes::AllConversations)?,
+        GetStrategy::default(),
+    )?
+    .into_iter()
+    .filter(is_memory)
+    .collect();
+    links.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+    let mut rows = Vec::with_capacity(links.len());
+    for link in links {
+        let Ok(hash) = ActionHash::try_from(link.target) else { continue };
+        if let Some(record) = get(hash, GetOptions::default())? {
+            rows.push(record);
+        }
+    }
+    Ok(rows)
+}
+
 /// Did this cell author the action? Only the author may delete an entry
 /// (the integrity zome refuses the whole commit otherwise), so a delete
 /// from another device must leave the entries to the author.
@@ -180,7 +236,7 @@ pub fn get_all_conversations(_: ()) -> ExternResult<Vec<Record>> {
     )?;
 
     let mut conversations = Vec::new();
-    for link in links {
+    for link in links.into_iter().filter(|l| !is_memory(l) && !is_tombstone(l)) {
         let hash = ActionHash::try_from(link.target)
             .map_err(|_| wasm_error!("Invalid conversation hash"))?;
         if let Some(record) = get(hash, GetOptions::default())? {
@@ -388,7 +444,7 @@ pub fn get_conversations_page(input: ConversationsPageInput) -> ExternResult<Rec
         .collect();
     let mut links: Vec<Link> = all
         .into_iter()
-        .filter(|l| !is_tombstone(l) && !tombstoned.contains(l.target.get_raw_39()))
+        .filter(|l| !is_memory(l) && !is_tombstone(l) && !tombstoned.contains(l.target.get_raw_39()))
         .collect();
     let total = links.len() as u32;
     links.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));

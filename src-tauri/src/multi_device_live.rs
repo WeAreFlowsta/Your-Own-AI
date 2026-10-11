@@ -203,6 +203,18 @@ mod tests {
     /// (4) two conductors on one seed find each other through the
     /// rendezvous; and B can append a message under A's conversation, which
     /// A then lists (the link base lives on another device's chain).
+    #[derive(serde::Serialize, Debug)]
+    struct SaveMemoryRowInput {
+        cipher: Vec<u8>,
+        nonce: Vec<u8>,
+        anchor: holochain_types::prelude::AnyLinkableHash,
+    }
+
+    #[derive(serde::Serialize, Debug)]
+    struct MemoryRowsInput {
+        anchor: holochain_types::prelude::AnyLinkableHash,
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     #[ignore = "starts two real conductors on the staging rendezvous"]
     async fn live_md_a_conversation_on_one_device_lists_on_the_other() {
@@ -291,6 +303,44 @@ mod tests {
                 .call("get_conversations_page", ConversationsPageInput { anchor: Some(a_key3.clone()), before: None, limit: 10 })
                 .await;
             matches!((on_a, on_b), (Ok(ref pa), Ok(ref pb)) if pa.total == 1 && pb.total == 1)
+        })
+        .await;
+
+        // (5) Memory rows (coordinator 10): B saves a row at A's founding
+        // anchor; A reads it; A's conversation list is untouched by it. A
+        // saves a row at a person-scope external anchor; B reads it there.
+        let a_anchor: holochain_types::prelude::AnyLinkableHash = a.agent.clone().into();
+        let row_hash: ActionHash = b
+            .call("save_memory_row", SaveMemoryRowInput { cipher: b"row-from-b".to_vec(), nonce: vec![3u8; 24], anchor: a_anchor.clone() })
+            .await
+            .expect("B saves a memory row at A's anchor");
+        println!("  B saved memory row {} at A's anchor", row_hash);
+        let (a_ref5, anchor5) = (&a, a_anchor.clone());
+        eventually("A reads B's memory row at its own anchor", 420, || async {
+            let rows: Result<Vec<holochain_types::prelude::Record>, String> = a_ref5
+                .call("get_memory_rows", MemoryRowsInput { anchor: anchor5.clone() })
+                .await;
+            matches!(rows, Ok(ref r) if r.len() == 1)
+        })
+        .await;
+        let still: Page = a
+            .call("get_conversations_page", ConversationsPageInput { anchor: None, before: None, limit: 10 })
+            .await
+            .expect("A's list after a memory row");
+        assert_eq!(still.total, 1, "a memory row never shows up as a conversation");
+
+        let person_anchor: holochain_types::prelude::AnyLinkableHash =
+            holochain_types::prelude::ExternalHash::from_raw_32(vec![0x42u8; 32]).into();
+        let _: ActionHash = a
+            .call("save_memory_row", SaveMemoryRowInput { cipher: b"person-row-from-a".to_vec(), nonce: vec![4u8; 24], anchor: person_anchor.clone() })
+            .await
+            .expect("A saves a person-scope row at an external anchor");
+        let (b_ref5, anchor6) = (&b, person_anchor.clone());
+        eventually("B reads A's person-scope row at the external anchor", 420, || async {
+            let rows: Result<Vec<holochain_types::prelude::Record>, String> = b_ref5
+                .call("get_memory_rows", MemoryRowsInput { anchor: anchor6.clone() })
+                .await;
+            matches!(rows, Ok(ref r) if r.len() == 1)
         })
         .await;
     }
