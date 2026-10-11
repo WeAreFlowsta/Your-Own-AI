@@ -111,6 +111,7 @@ function splitMcp(toolName: string): [string | undefined, string] {
 const KNOWN_MCP: Record<string, [string, string]> = {
   "project-memory__remember_for_project": ["Remembering something for this project", "Remembered something for this project"],
   "project-memory__read_project_memory": ["Reading the project's memory", "Read the project's memory"],
+  "project-memory__read_memory": ["Reading your memory", "Read your memory"],
 };
 
 function titleClean(title: string): string {

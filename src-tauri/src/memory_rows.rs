@@ -256,6 +256,62 @@ async fn write_row(manager: &crate::holochain::HolochainManager, agent: &str, ro
     manager.call_zome(agent, "transcript", "save_memory_row", payload).await.map(|_| ())
 }
 
+/// `YYYY-MM-DD` (UTC) for a ms epoch; empty for a time before 1970.
+pub(crate) fn ymd(ms: i64) -> String {
+    if ms < 0 {
+        return String::new();
+    }
+    // Days to civil (Howard Hinnant), no calendar crate needed.
+    let z = ms / 86_400_000 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// The rows of several scopes as text for a tool answer: pinned rules first
+/// within each kind, grouped by kind, filtered by a topic (a case-insensitive
+/// match over the text and the topics). From the per-scope cache, so the
+/// answer is instant; the loader keeps the caches fresh during a chat.
+pub(crate) fn rows_text_for(app: &tauri::AppHandle, key: &[u8; 32], scopes: &[String], topic: Option<&str>) -> String {
+    let needle = topic.map(|t| t.trim().to_lowercase()).filter(|t| !t.is_empty());
+    let mut rows: Vec<MemoryRow> = scopes.iter().flat_map(|sc| read_cache(app, key, sc)).collect();
+    if let Some(n) = &needle {
+        rows.retain(|r| r.text.to_lowercase().contains(n.as_str()) || r.topics.iter().any(|t| t.to_lowercase().contains(n.as_str())));
+    }
+    if rows.is_empty() {
+        return String::new();
+    }
+    let mut out: Vec<String> = Vec::new();
+    for (kind, heading) in [
+        ("rule", "Rules (follow exactly)"),
+        ("command", "Commands"),
+        ("location", "Locations"),
+        ("decision", "Decisions"),
+        ("fact", "Facts"),
+        ("note", "Notes"),
+        ("episode", "Episodes"),
+    ] {
+        let mut of_kind: Vec<&MemoryRow> = rows.iter().filter(|r| r.kind == kind).collect();
+        if of_kind.is_empty() {
+            continue;
+        }
+        of_kind.sort_by(|a, b| b.pinned.cmp(&a.pinned).then(b.updated_at.cmp(&a.updated_at)));
+        out.push(format!("{heading}:"));
+        for r in of_kind.iter().take(40) {
+            let when = ymd(r.as_of);
+            out.push(format!("- {}{}", r.text, if when.is_empty() { String::new() } else { format!(" ({when})") }));
+        }
+    }
+    out.join("\n")
+}
+
 // ───────────── the person's facts file ↔ person-scope rows ─────────────
 
 /// A `MemoryFact` (the facts file's record) as a person-scope row: facts
@@ -751,6 +807,14 @@ mod tests {
         let back = row_to_knowledge(&rows[0]).unwrap();
         assert!(back.vector.is_empty(), "a vector is per device");
         assert_eq!(back.kind, "authored");
+    }
+
+    #[test]
+    fn ymd_reads_a_millisecond_epoch_as_a_utc_date() {
+        assert_eq!(ymd(0), "1970-01-01");
+        assert_eq!(ymd(951_782_400_000), "2000-02-29");
+        assert_eq!(ymd(1_791_686_974_094), "2026-10-11");
+        assert_eq!(ymd(-5), "");
     }
 
     #[test]

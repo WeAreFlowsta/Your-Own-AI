@@ -2139,10 +2139,39 @@ async fn mcp_post(
                     "name": "read_project_memory",
                     "description": "Read this project's current shared memory notes.",
                     "inputSchema": { "type": "object", "properties": {} }
+                },
+                {
+                    "name": "read_memory",
+                    "description": "Read what this person has asked you to remember - their standing rules, commands, locations, decisions, facts and notes, for them and for you - optionally only the ones about a topic. Use it before guessing how they want something done.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "topic": { "type": "string", "description": "A word or phrase to look for; leave out for everything." }
+                        }
+                    }
                 }
             ] }),
         ),
         Some("tools/call") => {
+            // The person's memory rows need no project: the person's scope
+            // and this AI's own scope (by its founding key).
+            if req["params"]["name"].as_str() == Some("read_memory") {
+                let topic = req["params"]["arguments"]["topic"].as_str().map(str::to_string);
+                let unavailable = || mcp_tool_text(&id, "Memory is not available yet.".to_string(), true);
+                let Some(hc) = app.try_state::<std::sync::Arc<crate::commands_holochain::HolochainState>>() else { return unavailable() };
+                let Ok(manager) = hc.get() else { return unavailable() };
+                let Ok(key) = manager.data_key() else { return unavailable() };
+                let mut scopes = vec!["person".to_string()];
+                if !agent_key.is_empty() {
+                    scopes.push(format!("ai:{}", crate::commands_holochain::founding_key_for(&app, &agent_key)));
+                }
+                let text = crate::memory_rows::rows_text_for(&app, &key, &scopes, topic.as_deref());
+                return if text.is_empty() {
+                    mcp_tool_text(&id, match topic { Some(t) => format!("Nothing remembered about \"{t}\"."), None => "Nothing remembered yet.".to_string() }, false)
+                } else {
+                    mcp_tool_text(&id, text, false)
+                };
+            }
             if folder.is_empty() {
                 return mcp_tool_text(&id, "No project is open.".to_string(), true);
             }

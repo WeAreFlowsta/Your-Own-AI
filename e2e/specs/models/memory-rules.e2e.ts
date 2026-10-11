@@ -40,6 +40,19 @@ describe("memory rules", () => {
     // The per-scope cache is what every turn's memory block reads (layer 1).
     const cached = await invoke<{ text: string }[]>("list_memory_rows_cached", { scope: "person" });
     expect(cached.some((r) => r.text === RULE)).toBe(true);
+    // The AI's read_memory tool (the in-app MCP server on :11435) answers
+    // with the rule - asked from the test runner, no project open.
+    const mcp = await fetch("http://127.0.0.1:11435/mcp", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "read_memory", arguments: { topic: "sending" } } }),
+    });
+    const mcpBody = await mcp.json();
+    const toolText = String(mcpBody?.result?.content?.[0]?.text ?? "");
+    console.log(`e2e: read_memory -> ${JSON.stringify(toolText.slice(0, 160))}`);
+    expect(mcp.status).toBe(200);
+    expect(toolText).toContain(RULE);
+    expect(toolText).toContain("Rules (follow exactly)");
     // The next answer is given the rule, and the rail under it says so.
     await waitForChat();
     await ask("Rules test: name one colour and nothing else.");
