@@ -22,7 +22,41 @@ import { listMemoryRows, listMemoryRowsCached, personScope, aiScope, type Memory
  *  per-scope cache (instant); the cache is refreshed in the background so
  *  a rule saved on another device lands within a turn or two. */
 const rulesRefreshedAt = new Map<string, number>();
+
+/** What the last memory block carried - the rail line under a reply reads
+ *  it ("Memory: 3 rules, 12 facts"). Set by `loadMemoryBlock`. */
+export interface MemorySummary {
+  rules: number;
+  commands: number;
+  locations: number;
+  facts: number;
+  at: number;
+}
+let lastSummary: MemorySummary | null = null;
+export function lastMemorySummary(): MemorySummary | null {
+  return lastSummary;
+}
+/** One short line for the rail, or null when nothing was loaded. */
+export function memoryLine(): string | null {
+  const s = lastSummary;
+  if (!s) return null;
+  const parts: string[] = [];
+  const n = (k: number, w: string) => (k > 0 ? parts.push(`${k} ${w}${k === 1 ? "" : "s"}`) : 0);
+  n(s.rules, "rule");
+  n(s.commands, "command");
+  n(s.locations, "location");
+  n(s.facts, "fact");
+  return parts.length ? `Memory: ${parts.join(", ")}` : null;
+}
+
+/** The always-loaded facts block is capped by BYTES, not lines (the
+ *  survey's 2-3 KB figure): about 25 short rows. */
+export const MEMORY_FACTS_BUDGET_BYTES = 2048;
+
 export async function loadRulesLayer(scopes: string[]): Promise<string> {
+  return (await loadRulesLayerCounted(scopes)).text;
+}
+export async function loadRulesLayerCounted(scopes: string[]): Promise<{ text: string; rules: number; commands: number; locations: number }> {
   const rows: MemoryRow[] = [];
   for (const scope of scopes) {
     try {
@@ -37,7 +71,8 @@ export async function loadRulesLayer(scopes: string[]): Promise<string> {
   const rules = rows.filter((r) => r.kind === "rule");
   const commands = rows.filter((r) => r.kind === "command");
   const locations = rows.filter((r) => r.kind === "location");
-  if (rules.length === 0 && commands.length === 0 && locations.length === 0) return "";
+  const counts = { rules: rules.length, commands: commands.length, locations: locations.length };
+  if (rules.length === 0 && commands.length === 0 && locations.length === 0) return { text: "", ...counts };
   const lines: string[] = [];
   if (rules.length) {
     lines.push("Rules from them, in their words - follow them in every answer:");
@@ -51,7 +86,7 @@ export async function loadRulesLayer(scopes: string[]): Promise<string> {
     lines.push("Where things are:");
     for (const r of locations) lines.push(`- ${r.text}`);
   }
-  return lines.join("\n");
+  return { text: lines.join("\n"), ...counts };
 }
 
 export interface Fact {
@@ -332,10 +367,18 @@ export async function loadMemoryBlock(
 
   // Always-injected = facts only. Notes are free-text and retrieved on
   // relevance (below); the synthesis paragraph injects separately.
-  const factItems = all
+  const ranked = all
     .filter((f) => f.entry_kind !== "note" && f.entry_kind !== "synthesis" && f.entry_kind !== "library")
-    .sort((a, b) => b.confidence - a.confidence || b.updated_at - a.updated_at)
-    .slice(0, 25);
+    .sort((a, b) => b.confidence - a.confidence || b.updated_at - a.updated_at);
+  // By bytes: the strongest facts until the block would pass the budget.
+  const factItems: Fact[] = [];
+  let bytes = 0;
+  for (const f of ranked) {
+    const line = `- ${f.predicate.replace(/_/g, " ")}: ${f.value}\n`.length;
+    if (factItems.length > 0 && bytes + line > MEMORY_FACTS_BUDGET_BYTES) break;
+    factItems.push(f);
+    bytes += line;
+  }
   const synthesis = all.find((f) => f.entry_kind === "synthesis");
 
   const name = factItems.find((f) => isNamePredicate(f.predicate));
@@ -346,10 +389,11 @@ export async function loadMemoryBlock(
     : "Their name is unknown. Do not assume or allude to it.";
 
   // Layer 1 first: the person's rules for the person and this AI.
-  const rulesLayer = await loadRulesLayer(
+  const layer1 = await loadRulesLayerCounted(
     opts?.foundingKey ? [personScope, aiScope(opts.foundingKey)] : [personScope],
-  ).catch(() => "");
-  let block = rulesLayer ? `${rulesLayer}\n${nameLine}` : nameLine;
+  ).catch(() => ({ text: "", rules: 0, commands: 0, locations: 0 }));
+  lastSummary = { rules: layer1.rules, commands: layer1.commands, locations: layer1.locations, facts: others.length, at: Date.now() };
+  let block = layer1.text ? `${layer1.text}\n${nameLine}` : nameLine;
   // The consolidated portrait first (the 2026 lesson: a coherent summary
   // outperforms a bare fact list), the ground-truth facts after it.
   if (synthesis) {

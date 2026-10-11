@@ -730,6 +730,11 @@ const ActionBar = component$<ActionBarProps>((props) => {
                 ? `Auto routing: ${props.message.routingReason}`
                 : 'This model was picked directly, not by Auto routing.'}
             </p>
+            {props.message.memoryLine && (
+              <p class="text-xs mt-1.5" data-testid="memory-line" title="What this AI was reminded of for this answer - open Your Memory to change it">
+                {props.message.memoryLine}
+              </p>
+            )}
             {!!props.message.skills?.length && (
               <p class="text-xs mt-1.5">
                 Skills carried on this turn: {props.message.skills.join(', ')}

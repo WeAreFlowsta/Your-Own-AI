@@ -24,7 +24,7 @@ import {
 import { extractAndStoreFacts, looksLikeUserFact } from "../utils/memoryExtraction";
 import { isUtilityModelReady } from "../utils/utilityModel";
 import { groundDocument, type GroundedSource } from "../utils/grounding";
-import { loadMemoryBlock, loadDocumentContextUsed, followUpQuery } from "../utils/memory";
+import { loadMemoryBlock, loadDocumentContextUsed, followUpQuery, memoryLine } from "../utils/memory";
 import { indexTurn } from "../utils/transcriptMemory";
 import { boundaryIndex } from "../utils/replyBoundary";
 import { llamaServerApi } from "../utils/llamaServerApi";
@@ -1779,7 +1779,7 @@ export function useChat(props: UseChatProps) {
         // renders it once the reply finishes).
         state.messages = state.messages.map((m) =>
           m.id === assistantId
-            ? { ...m, servedBy: modelName, routingReason: routedReason, routingTask: routedTask, skills: skillsUsed }
+            ? { ...m, servedBy: modelName, routingReason: routedReason, routingTask: routedTask, skills: skillsUsed, memoryLine: memoryLine() ?? undefined }
             : m,
         );
 

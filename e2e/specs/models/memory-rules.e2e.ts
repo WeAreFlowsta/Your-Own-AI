@@ -2,7 +2,7 @@
 // the Your Memory page is a pinned person-scope row in the person's own
 // records - it is listed first, survives a reload (read back from the
 // network), and a removal is a record that hides it.
-import { shot, invoke } from "./_helpers";
+import { shot, invoke, waitForChat, ask, waitForReplyDone } from "./_helpers";
 
 const RULE = `Always ask before sending anything (test ${Date.now().toString(36)})`;
 
@@ -12,7 +12,7 @@ async function yourMemory() {
 }
 
 describe("memory rules", () => {
-  it("adds a rule, lists it first, keeps it across a reload, and removes it", async () => {
+  it("adds a rule, lists it first, and the next answer is given it", async () => {
     await yourMemory();
     // The records answer only once the conductor is up and an AI is provisioned.
     await browser.waitUntil(async () => {
@@ -40,7 +40,21 @@ describe("memory rules", () => {
     // The per-scope cache is what every turn's memory block reads (layer 1).
     const cached = await invoke<{ text: string }[]>("list_memory_rows_cached", { scope: "person" });
     expect(cached.some((r) => r.text === RULE)).toBe(true);
-    // Survives a reload.
+    // The next answer is given the rule, and the rail under it says so.
+    await waitForChat();
+    await ask("Rules test: name one colour and nothing else.");
+    await waitForReplyDone();
+    // The line sits in the reply's Model details (folded until opened).
+    const lastReplyEl = (await $$('[data-testid="chat-message"][data-role="assistant"]')).slice(-1)[0];
+    await (await lastReplyEl.$("button*=Model")).click();
+    const line = await $('[data-testid="memory-line"]');
+    await line.waitForDisplayed({ timeout: 15_000 });
+    console.log(`e2e: memory line ${JSON.stringify(await line.getText())}`);
+    expect(await line.getText()).toContain("1 rule");
+    await shot("memory-rule-rail-line");
+  });
+
+  it("keeps the rule across a reload and removes it as a record", async () => {
     await yourMemory();
     await (await $(`[data-testid="memory-rule"]*=${RULE.slice(0, 30)}`)).waitForDisplayed({ timeout: 60_000 });
     // Removing it is a record; the list no longer shows it.

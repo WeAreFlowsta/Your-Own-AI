@@ -203,6 +203,8 @@ export interface Message {
   /** Why the router picked servedBy (Auto modes only; undefined = the user
    *  picked the model). */
   routingReason?: string;
+  /** What memory the AI was given for this turn ("Memory: 3 rules, 12 facts"). */
+  memoryLine?: string;
   /** The classified routing task at send time — reused when the user retries
    *  this turn online or on device. */
   routingTask?: string;
