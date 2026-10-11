@@ -191,7 +191,32 @@ pub(crate) fn score_prose(output: &str) -> u8 {
 /// Every runnable installed model served on the bench port in turn: the
 /// extraction set with the app's grammar, then the consolidation task;
 /// grades written to the memory slot's store.
-pub async fn leg_memory_grade(app: &AppHandle, bin: &Path, dir: &Path, sink: Sink<'_>) -> Vec<String> {
+/// At most this many models per run: the matrix must stay bearable on a
+/// machine with many models (a load each).
+const MEMORY_GRADE_MAX_MODELS: usize = 4;
+
+/// Which models to grade: the helper, the model that was loaded, then the
+/// strongest by the registry - up to the cap, each once. Pure.
+pub(crate) fn memory_grade_candidates(all: &[String], loaded: Option<&str>, helper: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |m: &str| {
+        if all.iter().any(|a| a == m) && !out.iter().any(|o| o == m) && out.len() < MEMORY_GRADE_MAX_MODELS {
+            out.push(m.to_string());
+        }
+    };
+    push(helper);
+    if let Some(l) = loaded {
+        push(l);
+    }
+    let mut rest: Vec<&String> = all.iter().collect();
+    rest.sort_by(|a, b| crate::model_caps::caps_for(b).overall.cmp(&crate::model_caps::caps_for(a).overall).then(a.cmp(b)));
+    for m in rest {
+        push(m);
+    }
+    out
+}
+
+pub async fn leg_memory_grade(app: &AppHandle, bin: &Path, dir: &Path, loaded: Option<&str>, sink: Sink<'_>) -> Vec<String> {
     use std::time::Duration;
     let mut failures = Vec::new();
     // Every chat model on disk (the sampling leg's rule: not an embedding
@@ -213,7 +238,9 @@ pub async fn leg_memory_grade(app: &AppHandle, bin: &Path, dir: &Path, sink: Sin
         sink("no chat model to grade".into());
         return failures;
     }
-    let _ = app;
+    let all = models.len();
+    let models = memory_grade_candidates(&models, loaded, crate::llm::UTILITY_MODEL_FILE);
+    sink(format!("grading {} of {} chat model(s): the helper, the loaded model, then the strongest by the registry", models.len(), all));
     let client = crate::llm::local_http();
     let free = free_vram_gb(bin);
     for model in models {
@@ -1462,6 +1489,9 @@ pub async fn matrix_run(
         if stamp.is_empty() { "run" } else { &stamp }
     ));
 
+    // The model in use before the matrix takes the card: the memory leg
+    // grades it first (it is the one the slot would hand memory work to).
+    let loaded_before: Option<String> = state.current_model.lock().await.clone();
     // The whole card belongs to the matrix: unload the chat model the safe
     // way (the same stop the engine switch uses - never mid-request).
     crate::llm::stop_chat_server_for_maintenance(&state).await;
@@ -1647,7 +1677,7 @@ pub async fn matrix_run(
     }
     if !cancelled() && want("memory") {
         sink("== Memory grades (extraction precision/recall, consolidation rubric) ==".into());
-        for f in leg_memory_grade(&app, &bin, &dir, sink).await {
+        for f in leg_memory_grade(&app, &bin, &dir, loaded_before.as_deref(), sink).await {
             failures.push(format!("memory: {f}"));
         }
         sink(String::new());
@@ -1709,6 +1739,17 @@ pub async fn matrix_run(
 #[cfg(test)]
 mod memory_grade_tests {
     use super::*;
+
+    #[test]
+    fn the_leg_grades_the_helper_the_loaded_model_and_the_strongest_up_to_four() {
+        let all: Vec<String> = ["a.gguf", "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf", "b.gguf", "c.gguf", "d.gguf", "e.gguf"].iter().map(|s| s.to_string()).collect();
+        let picked = memory_grade_candidates(&all, Some("d.gguf"), "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf");
+        assert_eq!(picked.len(), 4);
+        assert_eq!(picked[0], "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf");
+        assert_eq!(picked[1], "d.gguf");
+        let none_loaded = memory_grade_candidates(&all, None, "missing-helper.gguf");
+        assert_eq!(none_loaded.len(), 4, "no helper on disk, nothing loaded: the strongest four");
+    }
 
     #[test]
     fn extraction_scores_hits_by_predicate_and_phrase_and_negatives_by_silence() {
