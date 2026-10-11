@@ -62,6 +62,27 @@ pub fn plain_kind(text: &str) -> Option<&'static str> {
     None
 }
 
+/// `dream:<ids>;<source>|<source>` - the dream's own mark first, then every
+/// source it rests on (deduped, an earlier dream's own mark dropped so the
+/// chain reads as the original records), so a reader never has to walk
+/// the history to find the transcript record a memory came from.
+pub fn with_sources(mark: &str, sources: &[&str]) -> String {
+    let mut seen: Vec<String> = Vec::new();
+    for s in sources {
+        // A prior provenance may itself be "dream:…;a|b": keep only a|b.
+        let tail = match s.split_once(';') {
+            Some((head, rest)) if head.starts_with("dream:") => rest,
+            _ => s,
+        };
+        for part in tail.split('|').map(str::trim).filter(|p| !p.is_empty() && !p.starts_with("dream:")) {
+            if !seen.iter().any(|x| x == part) {
+                seen.push(part.to_string());
+            }
+        }
+    }
+    if seen.is_empty() { mark.to_string() } else { format!("{mark};{}", seen.join("|")) }
+}
+
 /// The revisions one dream of a scope writes. Pure: the same input gives
 /// the same plan, and the plan applied gives an input that plans nothing.
 pub fn plan_dream(live: &[MemoryRow], now: i64, budget: usize) -> Vec<MemoryRow> {
@@ -98,7 +119,12 @@ pub fn plan_dream(live: &[MemoryRow], now: i64, budget: usize) -> Vec<MemoryRow>
                 rev.replaces = dups.iter().map(|d| d.id.clone()).collect();
                 rev.replaces.sort();
                 let ids: Vec<&str> = std::iter::once(survivor.id.as_str()).chain(dups.iter().map(|d| d.id.as_str())).collect();
-                rev.provenance = format!("dream:{}", ids.join(","));
+                // The sources stay on the row: the survivor's provenance and
+                // every merged row's (a transcript record, an author, an
+                // earlier dream) - so the link to where a memory came from
+                // never has to be dug out of the history.
+                let sources: Vec<&str> = std::iter::once(survivor.provenance.as_str()).chain(dups.iter().map(|d| d.provenance.as_str())).collect();
+                rev.provenance = with_sources(&format!("dream:{}", ids.join(",")), &sources);
                 rev.updated_at = now;
                 rev.action_hash = None;
                 for d in &dups {
@@ -117,7 +143,7 @@ pub fn plan_dream(live: &[MemoryRow], now: i64, budget: usize) -> Vec<MemoryRow>
         if let Some(kind) = plain_kind(&r.text) {
             let mut rev = r.clone();
             rev.kind = kind.into();
-            rev.provenance = format!("dream:{}", r.id);
+            rev.provenance = with_sources(&format!("dream:{}", r.id), &[r.provenance.as_str()]);
             rev.updated_at = now;
             rev.action_hash = None;
             consumed.insert(r.id.clone());
@@ -135,7 +161,7 @@ pub fn plan_dream(live: &[MemoryRow], now: i64, budget: usize) -> Vec<MemoryRow>
         for r in candidates.into_iter().take(over) {
             let mut rev = r.clone();
             rev.valid_to = Some(now);
-            rev.provenance = format!("dream:{}", r.id);
+            rev.provenance = with_sources(&format!("dream:{}", r.id), &[r.provenance.as_str()]);
             rev.updated_at = now;
             rev.action_hash = None;
             out.push(rev);
@@ -235,6 +261,9 @@ mod tests {
         assert!(kinds.contains(&("n2".into(), "command".into())));
         assert!(!plan.iter().any(|r| r.id == "r" || r.id == "p"), "rules and pinned rows are never touched");
         assert!(plan.iter().all(|r| r.provenance.starts_with("dream:")));
+        // The merged command keeps both sources after its dream mark.
+        let merged = plan.iter().find(|r| r.id == "c2").unwrap();
+        assert_eq!(merged.provenance, "dream:c2,c1;authored");
         // Idempotent: the plan applied plans nothing.
         let after = apply(&live, &plan);
         assert!(plan_dream(&after, 200, 500).is_empty());
@@ -251,6 +280,22 @@ mod tests {
         assert!(plan.iter().all(|r| !r.deleted));
         let after = apply(&live, &plan);
         assert!(plan_dream(&after, 6000, 10).is_empty());
+    }
+
+    #[test]
+    fn a_dream_revision_keeps_the_transcript_record_its_memory_came_from() {
+        let mut from_chat = row("f1", "note", "npm run lint", 10);
+        from_chat.provenance = "extracted:uhCkk1234".into();
+        let mut also = row("f2", "note", "run npm run lint", 20);
+        also.provenance = "extracted:uhCkk5678".into();
+        let plan = plan_dream(&[from_chat, also], 100, 500);
+        // Both rows are typed as commands; f2 (newer) merges f1 by meaning.
+        let f2 = plan.iter().find(|r| r.id == "f2").unwrap();
+        assert!(f2.provenance.starts_with("dream:"));
+        assert!(f2.provenance.contains("extracted:uhCkk5678"), "{}", f2.provenance);
+        assert!(f2.provenance.contains("extracted:uhCkk1234"), "the merged row's record stays named: {}", f2.provenance);
+        // A second dream over a dreamed row does not pile up marks.
+        assert_eq!(with_sources("dream:x", &["dream:f2,f1;extracted:a|extracted:b", "authored"]), "dream:x;extracted:a|extracted:b|authored");
     }
 
     #[test]
