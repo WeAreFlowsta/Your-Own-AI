@@ -159,6 +159,8 @@ export default component$<ProfileMemoryProps>(
       let alive = true;
       cleanup(() => (alive = false));
       memoryPaused.value = isMemoryPaused();
+      // Rules first: they do not wait on the facts warm-up below.
+      void loadRules$();
       try {
         portraitOpen.value = localStorage.getItem("memoryPortraitOpen") === "1";
       } catch {

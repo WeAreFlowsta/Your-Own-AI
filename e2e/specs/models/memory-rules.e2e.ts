@@ -27,7 +27,7 @@ describe("memory rules", () => {
       el.focus(); el.value = t;
       el.dispatchEvent(new Event("input", { bubbles: true }));
     }, RULE);
-    await input.keys("Enter");
+    await browser.keys("Enter");
     const rule = await $(`[data-testid="memory-rule"]*=${RULE.slice(0, 30)}`);
     await rule.waitForDisplayed({ timeout: 60_000 });
     await shot("memory-rule-added");
