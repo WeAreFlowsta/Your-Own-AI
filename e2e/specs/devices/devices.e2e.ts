@@ -4,7 +4,7 @@
 // renamed AI with its own agent. Two launches, one phase each
 // (DEVICES_PHASE), each against its own TEST Vault (YOAI_VAULT_PORT) -
 // never the installed one. Run: e2e/devices-live.sh
-import { shot, waitForChat, invoke, ask, waitForReplyDone, typeInto } from "../models/_helpers";
+import { shot, waitForChat, invoke, ask, waitForReplyDone } from "../models/_helpers";
 
 const MESSAGE = "Devices test: name one colour and nothing else.";
 
@@ -146,20 +146,23 @@ describe(`devices, phase ${PHASE}`, () => {
       expect(await copyItem.getText()).toContain("from another of your devices");
       await shot("devices-b-drawer");
       await (await copyItem.$("button")).click();
-      const line = await $('[data-testid="copied-from-line"]');
-      await line.waitForDisplayed({ timeout: 60_000 });
-      console.log(`e2e: copied-from line ${JSON.stringify(await line.getText())}`);
-      expect(await line.getText()).toContain("LinuxLappy");
+      // The state lives in the composer: the reason where the person would
+      // type, typing off, Send disabled. No line across the top.
+      const reason = await $('[data-testid="chat-readonly-reason"]');
+      await reason.waitForDisplayed({ timeout: 60_000 });
+      console.log(`e2e: composer reads ${JSON.stringify(await reason.getText())}`);
+      expect(await reason.getText()).toContain("From LinuxLappy");
+      expect(await reason.getText()).toContain("read-only until it arrives");
+      expect(await (await $('[data-testid="chat-input"]')).getAttribute("contenteditable")).toBe("false");
+      expect(await $('[data-testid="copied-from-line"]').isExisting()).toBe(false);
       await browser.waitUntil(async () => (await $$('[data-testid="chat-message"]')).length >= 2, { timeout: 30_000, timeoutMsg: "the copied conversation showed no messages" });
       const texts = await browser.execute(() => [...document.querySelectorAll('[data-testid="chat-message"]')].map((m) => (m as HTMLElement).innerText.slice(0, 60)));
       console.log(`e2e: copied messages ${JSON.stringify(texts)}`);
       expect(texts.some((t: string) => t.includes("Devices test"))).toBe(true);
       await shot("devices-b-copied-conversation");
-      await typeInto("chat-input", "Can I add to this?");
-      await (await $('[data-testid="chat-send"]')).click();
-      await browser.waitUntil(async () => (await browser.execute(() => document.body.innerText)).includes("You can read it here"), { timeout: 15_000, timeoutMsg: "the send was not refused with the reason" });
-      expect((await $$('[data-testid="chat-message"]')).length).toBeLessThanOrEqual(texts.length);
-      await shot("devices-b-send-refused");
+      expect(await (await $('[data-testid="chat-send"]')).isEnabled()).toBe(false);
+      expect(await (await $('[data-testid="chat-send"]')).getAttribute("title")).toContain("read-only until it arrives");
+      await shot("devices-b-read-only-composer");
 
       // Settings names the device it synced with - in the signed-in panel.
       // A test identity on the staging API cannot complete the proxy

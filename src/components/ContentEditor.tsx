@@ -11,6 +11,10 @@ interface ContentEditorProps {
   handleSubmit$: QRL<() => void>;
   isLoading: boolean;
   currentPlaceholder: string;
+  /** The conversation cannot take a message yet (it is another device's,
+   *  held here as a copy): the reason shows where the person would type,
+   *  typing is off and Send is disabled with the same words. */
+  readOnlyReason?: string;
   selectedAction: ChatAction;
   setSelectedAction$: QRL<(action: ChatAction) => void>;
   stopChat$?: QRL<() => void>;
@@ -304,7 +308,8 @@ export const ContentEditor = component$<ContentEditorProps>((props) => {
                 data-testid="chat-input"
                 // Always editable: the next message can be written while a
                 // reply runs. Sending waits for the reply (handleSubmit).
-                contentEditable="true"
+                contentEditable={props.readOnlyReason ? "false" : "true"}
+                data-readonly={props.readOnlyReason ? "1" : "0"}
                 onInput$={onContentChange}
                 onDrop$={onDrop}
                 onKeyDown$={handleEditorKeyDown}
@@ -316,8 +321,9 @@ export const ContentEditor = component$<ContentEditorProps>((props) => {
           {!hasContent.value && !props.selectedAction && (
             <div
               class="absolute top-0 left-2 py-1 text-xs sm:text-base pointer-events-none text-[var(--text-secondary)]"
+              data-testid={props.readOnlyReason ? "chat-readonly-reason" : undefined}
             >
-              {props.currentPlaceholder}
+              {props.readOnlyReason ?? props.currentPlaceholder}
             </div>
           )}
 
@@ -339,7 +345,8 @@ export const ContentEditor = component$<ContentEditorProps>((props) => {
                 type="submit"
                 testId="chat-send"
                 class="flex items-center gap-1.5 px-3 py-1.5 text-sm transition-all duration-150 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed"
-                disabled={props.isLoading || !props.input.value.trim()}
+                disabled={props.isLoading || !!props.readOnlyReason || !props.input.value.trim()}
+                title={props.readOnlyReason}
               >
                 <svg class="w-[18px] h-[18px]" viewBox="0 0 16 16" fill="currentColor">
                   <path d="M2.678 11.894a1 1 0 0 1 .287.801 10.97 10.97 0 0 1-.398 2c1.395-.323 2.247-.697 2.634-.893a1 1 0 0 1 .71-.074A8.06 8.06 0 0 0 8 14c3.996 0 7-2.807 7-6s-3.004-6-7-6-7 2.808-7 6c0 1.468.617 2.83 1.678 3.894zm-.493 3.905a21.682 21.682 0 0 1-.713.129c-.2.032-.352-.176-.273-.362a9.68 9.68 0 0 0 .244-.637l.003-.01c.248-.72.45-1.548.524-2.319C.743 11.37 0 9.76 0 8c0-3.866 3.582-7 8-7s8 3.134 8 7-3.582 7-8 7a9.06 9.06 0 0 1-2.347-.306c-.52.263-1.639.742-3.468 1.105z" />

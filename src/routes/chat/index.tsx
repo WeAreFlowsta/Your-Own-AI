@@ -566,16 +566,11 @@ export default component$(() => {
       );
       if (messages.length > 0) noteRecordsSeen();
       if (messages.length === 0 && loaded.copiedFrom) {
-        resumeWarning.value =
-          `This conversation is on ${copiedFrom.value ?? "another of your devices"} and its copy in your Vault ` +
-          `couldn't be read just now. Try again in a moment.`;
+        resumeWarning.value = `Couldn't read the copy from ${copiedFrom.value ?? "your other device"} just now. Try again in a moment.`;
       } else if (messages.length === 0) {
         // The read didn't answer (slow or unwell records cell) - say so.
         // Nothing is lost; the records are still on this device.
-        resumeWarning.value =
-          `${ai.label}'s records didn't answer just now, so the conversation ` +
-          `couldn't open. Nothing is lost - it's still in your records. ` +
-          `Try again in a moment.`;
+        resumeWarning.value = `${ai.label}'s records didn't answer, so this didn't open. Nothing is lost - try again in a moment.`;
         return;
       }
       resumeWarning.value = null;
@@ -1254,8 +1249,7 @@ export default component$(() => {
     // A conversation held here only as another device's copy cannot take a
     // turn yet: its records (the base an entry links to) are not here.
     if (copiedFrom.value && chatState.messages.length > 0) {
-      resumeWarning.value = `This conversation is from ${copiedFrom.value}. You can read it here; it opens for new messages once Your Own AI is open there and it has arrived in full.`;
-      return;
+      return; // the composer says why (read-only until it arrives)
     }
     copiedFrom.value = null;
     const dropReplacedTurn = () => {
@@ -1716,58 +1710,26 @@ export default component$(() => {
 
   return (
     <div class="flex flex-col h-screen bg-[var(--bg-main)]">
-      {/* Startup Vault-restore outcome that must not stay invisible:
-          a failed or partial restore looks exactly like a normal boot
-          without this banner. Dismissable; details live in Settings. */}
-      {aiDataState.startupRestoreWarning && (
-        <div class="relative z-30 flex items-start gap-3 border-b border-amber-700/60 bg-amber-900/30 px-4 py-2.5 text-xs text-amber-200">
-          <span class="min-w-0 flex-1">{aiDataState.startupRestoreWarning}</span>
-          <button
-            type="button"
-            class="shrink-0 text-amber-300 hover:text-amber-100"
-            aria-label="Dismiss"
-            onClick$={() => (aiDataState.startupRestoreWarning = null)}
-          >
+      {/* Notices: one short line each, dismissable. A failed or partial
+          restore, records that could not be set up, a conversation that
+          did not open - never a paragraph, never a mechanism. */}
+      {([
+        ["restore", aiDataState.startupRestoreWarning, () => (aiDataState.startupRestoreWarning = null)],
+        ["resume", resumeWarning.value, () => (resumeWarning.value = null)],
+        ["records", aiDataState.provisioningWarning, () => (aiDataState.provisioningWarning = null)],
+      ] as [string, string | null, () => void][]).filter(([, text]) => !!text).map(([key, text, clear]) => (
+        <div key={key} class="relative z-30 flex items-center gap-3 border-b border-amber-700/40 bg-amber-900/15 px-4 py-1.5 text-xs text-amber-200" data-testid={`notice-${key}`}>
+          <span class="min-w-0 flex-1 truncate" title={text!}>{text}</span>
+          {key !== "resume" && (
+            <button type="button" class="shrink-0 underline text-amber-300 hover:text-amber-100" onClick$={() => nav("/settings")}>
+              Details
+            </button>
+          )}
+          <button type="button" class="shrink-0 text-amber-300 hover:text-amber-100" aria-label="Dismiss" onClick$={clear}>
             ✕
           </button>
         </div>
-      )}
-      {/* A conversation open whose records read didn't answer: without
-          this banner the wiped chat looks like lost records. */}
-      {copiedFrom.value && !resumeWarning.value && (
-        <div class="relative z-30 border-b border-[var(--border-subtle)] px-4 py-1.5 text-xs text-[var(--text-muted)]" data-testid="copied-from-line">
-          From {copiedFrom.value} - arrives in full when Your Own AI is open there.
-        </div>
-      )}
-      {resumeWarning.value && (
-        <div class="relative z-30 flex items-start gap-3 border-b border-amber-700/60 bg-amber-900/30 px-4 py-2.5 text-xs text-amber-200">
-          <span class="min-w-0 flex-1">{resumeWarning.value}</span>
-          <button
-            type="button"
-            class="shrink-0 text-amber-300 hover:text-amber-100"
-            aria-label="Dismiss"
-            onClick$={() => (resumeWarning.value = null)}
-          >
-            ✕
-          </button>
-        </div>
-      )}
-      {/* Provisioning gave up (conductor never ready, or installs hard-
-          failing): without this banner a session with paused records looks
-          exactly like a healthy one. Chat itself still works. */}
-      {aiDataState.provisioningWarning && (
-        <div class="relative z-30 flex items-start gap-3 border-b border-amber-700/60 bg-amber-900/30 px-4 py-2.5 text-xs text-amber-200">
-          <span class="min-w-0 flex-1">{aiDataState.provisioningWarning}</span>
-          <button
-            type="button"
-            class="shrink-0 text-amber-300 hover:text-amber-100"
-            aria-label="Dismiss"
-            onClick$={() => (aiDataState.provisioningWarning = null)}
-          >
-            ✕
-          </button>
-        </div>
-      )}
+      ))}
       {/* Header */}
       {/* z-20: above page content so header dropdowns (projects, menus)
           are never painted over by in-page stacking contexts like the
@@ -1821,6 +1783,7 @@ export default component$(() => {
               handleUpgradeClick$={handleUpgradeClick}
               input={input}
               handleSubmit$={handleSubmit}
+              readOnlyReason={copiedFrom.value ? `From ${copiedFrom.value} · read-only until it arrives` : undefined}
               isLoading={chatState.isLoading}
               stopChat$={handleStop}
               currentPlaceholder={firstModelPlaceholder.value ?? `Ask ${selectedAi.value.label} ${

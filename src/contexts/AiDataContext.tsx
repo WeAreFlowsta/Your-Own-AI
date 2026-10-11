@@ -149,7 +149,7 @@ export const AiDataProvider = component$(() => {
             const orphans = stats.orphan_entries ?? 0;
             if (missing > 0 || orphans > 0) {
               state.startupRestoreWarning =
-                `Your conversations were restored from your Vault, but ${missing > 0 ? `${missing} conversation object${missing === 1 ? " was" : "s were"} missing or unreadable (about ${stats.missing_records ?? 0} records)` : ""}${missing > 0 && orphans > 0 ? " and " : ""}${orphans > 0 ? `${orphans} record${orphans === 1 ? "" : "s"} had no parent conversation` : ""}. Everything recoverable was restored. Details in Settings → Backups & recovery.`;
+                `Restored from your Vault; ${missing + orphans} item${missing + orphans === 1 ? "" : "s"} couldn't be read.`;
             }
             break;
           } catch (e) {
@@ -161,7 +161,7 @@ export const AiDataProvider = component$(() => {
               // suspended and the next launch retries - tell the user
               // instead of booting as if nothing happened.
               state.startupRestoreWarning =
-                "Restoring your conversations from your Vault didn't finish - your data is safe in the Vault and automatic backups are paused until it completes. It will retry next launch, or use Settings → Backups & recovery → Restore conversations from Vault.";
+                "Restoring from your Vault didn't finish. It retries next launch; backups wait until then.";
               break;
             }
           }
@@ -229,7 +229,7 @@ export const AiDataProvider = component$(() => {
               }
               console.warn("[AiDataContext] Agent provisioning gave up:", msg);
               state.provisioningWarning =
-                "Your AIs' conversation records couldn't be set up this session, so new chats aren't being saved to your records. Restarting the app usually fixes this. If it keeps happening, save a diagnostic report in Settings, Help and diagnostics.";
+                "Couldn't set up your records this session, so new chats aren't saved. Restarting usually fixes it.";
               break;
             }
           }

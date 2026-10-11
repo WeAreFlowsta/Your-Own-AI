@@ -30,7 +30,7 @@ export default component$<{
       disabled={disabled}
       title={title}
       data-testid={testId}
-      class={`btn-liquid-metal ${variantClass} ${className || ""}`}
+      class={`btn-liquid-metal ${variantClass} ${className || ""}${disabled ? " opacity-50 cursor-not-allowed" : ""}`}
     >
       <div class="shader-border" />
       <div class="shader-inner-fill" />

@@ -22,6 +22,8 @@ interface ChatInputBarProps {
   handleSubmit$: QRL<() => void>;
   isLoading: boolean;
   currentPlaceholder: string;
+  /** See ContentEditor: the open conversation cannot take a message yet. */
+  readOnlyReason?: string;
   selectedAi: SelectedAiModel;
   setSelectedAi$: QRL<(ai: SelectedAiModel) => void>;
   dynamicModelOptions: SelectedAiModel[];
@@ -50,6 +52,7 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
   handleSubmit$,
   isLoading,
   currentPlaceholder,
+  readOnlyReason,
   selectedAi,
   setSelectedAi$,
   dynamicModelOptions,
@@ -227,6 +230,7 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
             handleSubmit$={handleSubmit$}
             isLoading={isLoading}
             currentPlaceholder={currentPlaceholder}
+            readOnlyReason={readOnlyReason}
             selectedAction={selectedAction}
             setSelectedAction$={setSelectedAction$}
             stopChat$={stopChat$}

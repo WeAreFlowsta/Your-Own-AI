@@ -24,6 +24,8 @@ interface ChatContainerProps {
   isLoading: boolean;
   stopChat$: QRL<() => void>;
   currentPlaceholder: string;
+  /** The open conversation cannot take a message yet (see ContentEditor). */
+  readOnlyReason?: string;
   selectedAi: Signal<SelectedAiModel>;
   dynamicModelOptions: SelectedAiModel[];
   currentSelectedOptionInListbox: SelectedAiModel | undefined;
@@ -259,6 +261,7 @@ export default component$<ChatContainerProps>((props) => {
           isLoading={props.isLoading}
           stopChat$={props.stopChat$}
           currentPlaceholder={props.currentPlaceholder}
+          readOnlyReason={props.readOnlyReason}
           selectedAi={props.selectedAi.value}
           setSelectedAi$={setSelectedAi$}
           dynamicModelOptions={props.dynamicModelOptions}
