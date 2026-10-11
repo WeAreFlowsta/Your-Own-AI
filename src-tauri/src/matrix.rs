@@ -290,7 +290,7 @@ pub async fn leg_memory_grade(app: &AppHandle, bin: &Path, dir: &Path, sink: Sin
         }
         let precision = if asked == 0 { None } else { Some(extraction_grade(hits, extracted, gold)) };
         let prose_prompt = format!(
-            "You maintain a compact WORKSPACE MEMORY for a project folder: durable facts that help future sessions. Return ONLY the updated memory as markdown bullet lines. Rules: update in place rather than append; drop anything stale or proven wrong - but NEVER drop or reword a preference or correction the person gave; keep commands verbatim; no conversation summaries; merge lines that say the same thing.\n\nCURRENT MEMORY:\n{PROSE_MEMORY}\n\nWHAT HAPPENED THIS SESSION:\n{PROSE_DIGEST}"
+            "You maintain a compact WORKSPACE MEMORY for a project folder: durable facts that help future sessions. Return ONLY the COMPLETE updated memory as markdown bullet lines - every line that still holds, not only what changed. Rules: update in place rather than append; drop anything stale or proven wrong - but NEVER drop or reword a preference or correction the person gave; keep commands verbatim; no conversation summaries; merge lines that say the same thing.\n\nCURRENT MEMORY:\n{PROSE_MEMORY}\n\nWHAT HAPPENED THIS SESSION:\n{PROSE_DIGEST}"
         );
         let prose = match ask("You are a careful editor of a project's memory file.", &prose_prompt, None, 400).await {
             Ok(answer) => {

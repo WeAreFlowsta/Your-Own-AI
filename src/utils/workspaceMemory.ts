@@ -255,7 +255,7 @@ export async function reviseWorkspaceMemory(
     "You maintain a compact WORKSPACE MEMORY for a project folder: durable facts that help future sessions (build/deploy/test commands exactly as they work, key file locations, project conventions, decisions, and the person's preferences and corrections about how to work - these are the most durable of all and are kept in the person's words).\n\n" +
     `CURRENT MEMORY (may be empty):\n${oldMemory || "(empty)"}\n\n` +
     `WHAT HAPPENED THIS SESSION:\n${sessionDigest}\n\n` +
-    "Return ONLY the updated memory as markdown bullet lines. Rules: update in place rather than append; drop anything stale or proven wrong - but NEVER drop or reword a preference or correction the person gave; keep commands verbatim; no conversation summaries or one-off details; maximum " +
+    "Return ONLY the COMPLETE updated memory as markdown bullet lines - every line that still holds, not only what changed. Rules: update in place rather than append; drop anything stale or proven wrong - but NEVER drop or reword a preference or correction the person gave; keep commands verbatim; no conversation summaries or one-off details; maximum " +
     `${MEMORY_MAX_LINES} lines. If nothing durable was learned, return the current memory unchanged.`;
   try {
     const r = await fetch("http://127.0.0.1:11435/v1/chat/completions", {
