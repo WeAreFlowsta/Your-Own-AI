@@ -608,6 +608,7 @@ pub fn run() {
             memory_rows::list_memory_rows,
             memory_rows::list_memory_rows_cached,
             memory_rows::list_memory_revisions,
+            memory_rows::memory_would_replace,
             dreaming::dream_now,
             memory_slot::memory_slot_pick,
             memory_slot::memory_grades_set,

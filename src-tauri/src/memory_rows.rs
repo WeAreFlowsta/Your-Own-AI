@@ -550,6 +550,33 @@ pub(crate) async fn write_row_pub(manager: &crate::holochain::HolochainManager, 
     write_row(manager, agent, row).await
 }
 
+/// For the permission card, before a `remember` runs: the text of the live
+/// row (same scope and kind) the new line would revise, from the cache -
+/// so the card can say "replaces: <old>" and the person approves knowing.
+#[tauri::command]
+pub fn memory_would_replace(
+    app: tauri::AppHandle,
+    scope_word: String,
+    kind: String,
+    text: String,
+    agent_key: Option<String>,
+    folder: Option<String>,
+    hc_state: State<'_, Arc<HolochainState>>,
+) -> Option<String> {
+    let key = hc_state.get().ok()?.data_key().ok()?;
+    let scope = match scope_word.as_str() {
+        "ai" | "me" | "self" => format!("ai:{}", crate::commands_holochain::founding_key_for(&app, agent_key.as_deref()?)),
+        "project" => format!("project:{}", crate::project_identity::project_identity(std::path::Path::new(folder.as_deref()?))),
+        _ => "person".to_string(),
+    };
+    let kind = match kind.as_str() {
+        "command" | "location" | "decision" | "fact" | "note" => kind,
+        _ => "note".to_string(),
+    };
+    let live = read_cache(&app, &key, &scope);
+    find_revised(&live, &kind, text.trim()).filter(|r| r.text != text.trim()).map(|r| r.text.clone())
+}
+
 /// The `remember` tool: a row the AI saves for the person (`person`) or
 /// for itself (`ai:<founding>`), kinds limited to what an AI may save - a
 /// `rule` is the person's to save (decision 2), so a rule-shaped request

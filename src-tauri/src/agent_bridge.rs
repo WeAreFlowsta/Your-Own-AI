@@ -762,12 +762,13 @@ async fn handle_agent_message(
             // notes, and the answer is always yes. The harness classifies
             // every `use_tool` dispatch as mutating, so it asks; answer the
             // read-only memory tool ourselves and never show a card. Writes
-            // (remember_for_project) still ask - the note is shown on the card.
+            // (remember_for_project, remember) still ask - the note is shown on
+            // the card, with what it would replace.
             let tool_name = msg
                 .pointer("/params/toolCall/rawInput/tool_name")
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            if tool_name == "project-memory__read_project_memory" {
+            if tool_name == "project-memory__read_project_memory" || tool_name == "project-memory__read_memory" {
                 let allow = msg
                     .pointer("/params/options")
                     .and_then(Value::as_array)
