@@ -616,12 +616,34 @@ async function embedInBatches(texts: string[]): Promise<number[][]> {
  *  the library's passages, and record the current model once both are done.
  *  No-op on a fresh install and once the marker matches. Runs where the
  *  walker runs (launch, and right after the component downloads). */
+/** The records live in the conductor, which can still be starting for a minute
+ *  or more after launch (2026-10-12: the first rebuild ran against "conductor
+ *  is still starting", saw no conversations and called itself complete). Wait
+ *  for it; give up for this launch after a few minutes and leave the markers
+ *  in place for the next one. */
+async function waitForConductor(maxMs = 4 * 60_000): Promise<boolean> {
+  const started = Date.now();
+  let wait = 1000;
+  while (Date.now() - started < maxMs) {
+    try {
+      if (await invoke<boolean>("holochain_ready")) return true;
+    } catch { /* command missing: assume ready, the calls below report */ return true; }
+    await new Promise((r) => setTimeout(r, wait));
+    wait = Math.min(wait * 2, 15_000);
+  }
+  return false;
+}
+
 export async function migrateEmbeddingIndexIfNeeded(): Promise<void> {
   let stale = false;
   try { stale = await invoke<boolean>("embedding_index_stale"); } catch { return; }
   if (!stale) return;
   if (!(await isEmbeddingModelReady())) {
     console.log("[Memory] Indexes belong to an earlier memory component - rebuild waits for the download");
+    return;
+  }
+  if (!(await waitForConductor())) {
+    console.log("[Memory] Indexes belong to an earlier memory component - the records are not ready yet, rebuild retried next launch");
     return;
   }
   try {
@@ -631,6 +653,7 @@ export async function migrateEmbeddingIndexIfNeeded(): Promise<void> {
     console.log(`[Memory] Library re-embedded with the current memory component: ${n} passages`);
     if (!(await invoke<boolean>("memory_reembed_pending"))) {
       await invoke("embedding_index_mark_current");
+      console.log("[Memory] Every index now belongs to the current memory component");
     }
   } catch (e) {
     console.warn("[Memory] Index rebuild for the new memory component failed (retried next launch):", e);
@@ -645,6 +668,12 @@ export async function rebuildMemoryIndexIfPending(): Promise<void> {
   }
   if (!(await isEmbeddingModelReady())) {
     console.log("[Memory] Re-embed pending, but no embedding model yet - deferred");
+    return;
+  }
+  // Conversations come from the conductor: a walk while it is still starting
+  // sees none and would rebuild every index empty, then clear the marker.
+  if (!(await waitForConductor())) {
+    console.log("[Memory] Re-embed pending, but the records are not ready yet - deferred to the next launch");
     return;
   }
 
