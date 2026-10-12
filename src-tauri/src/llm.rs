@@ -514,6 +514,16 @@ pub(crate) fn local_http() -> reqwest::Client {
         .clone()
 }
 
+/// Does this model think natively - its template declares a thinking switch
+/// or a reasoning strength, or it is a harmony model? Report mode then leaves
+/// the thinking to the model (enable_thinking) instead of asking for
+/// `<think>` tags in the answer; asking for both made a model echo the
+/// instruction's literal tags into its report (2026-10-12).
+#[tauri::command]
+pub fn model_thinks_natively(model: String) -> bool {
+    model_thinks_on_request(&model)
+}
+
 #[tauri::command]
 pub async fn is_llama_server_ready() -> Result<bool, String> {
     let client = local_http();

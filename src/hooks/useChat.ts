@@ -197,7 +197,10 @@ export function buildSystemPrompt(
   disposition: string,
   turnMode: TurnMode = "chat",
   userMemory: string = "",
-  hasImages: boolean = false
+  hasImages: boolean = false,
+  /** The turn's model thinks natively (report mode turns that on per
+   *  request): the report prompt then skips the <think> ceremony. */
+  nativeThinking: boolean = false
 ): string {
   // Assemble the shared mission-core + the AI's CURRENT persona template, looked
   // up live by personality rather than a copy baked at creation - so changing the
@@ -245,7 +248,7 @@ export function buildSystemPrompt(
   }
 
   // Per-turn mode block (report ceremony / code-first) - decoupled from length.
-  systemPrompt += getModePrompt(turnMode);
+  systemPrompt += getModePrompt(turnMode, nativeThinking);
 
   const useEmojis = ai.aiConfig.useEmojis ?? false;
   if (useEmojis) {
@@ -1268,12 +1271,21 @@ export function useChat(props: UseChatProps) {
         // Memory: the block was kicked off in parallel right after the
         // optimistic UI - by now routing/model-load usually paid for it.
         const userMemory = await memoryBlockPromise;
+        // Report mode: a local model whose template thinks natively gets the
+        // ceremony-free prompt (its thinking arrives as reasoning already).
+        const nativeThinking =
+          turnMode === "report" &&
+          !!preferredModel &&
+          !preferredModel.startsWith("online:") &&
+          !preferredModel.startsWith("external:") &&
+          (await invoke<boolean>("model_thinks_natively", { model: preferredModel }).catch(() => false));
         let systemPrompt = buildSystemPrompt(
           selectedAi,
           disposition,
           turnMode,
           userMemory,
-          needsVision
+          needsVision,
+          nativeThinking
         );
         // Skills: the ones chosen for this AI. Chat has no tool use, so the
         // Rust side picks the skill whose description matches the question

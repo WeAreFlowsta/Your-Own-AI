@@ -686,6 +686,7 @@ pub fn run() {
             llm::get_current_model,
             llm::is_llama_server_running,
             llm::is_llama_server_ready,
+            llm::model_thinks_natively,
             llm::is_vision_ready,
             llm::find_vision_model,
             llm::start_llama_server,
