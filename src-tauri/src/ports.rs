@@ -7,7 +7,7 @@
 
 use std::sync::OnceLock;
 
-fn offset() -> u16 {
+pub fn offset() -> u16 {
     static OFFSET: OnceLock<u16> = OnceLock::new();
     *OFFSET.get_or_init(|| {
         std::env::var("YOAI_PORT_OFFSET")

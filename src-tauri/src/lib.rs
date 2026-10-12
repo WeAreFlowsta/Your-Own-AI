@@ -535,6 +535,26 @@ pub fn run() {
     // `e2e` feature - never in a release build.
     #[cfg(feature = "e2e")]
     let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+    // A second instance on shifted ports (YOAI_PORT_OFFSET - the two-device
+    // harness) is a different app to this one: the single-instance hand-off
+    // below is for the normal install only. instance_guard still locks the
+    // shifted port set, so two instances on the SAME offset still exclude.
+    let builder = if crate::ports::offset() == 0 {
+        builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            use tauri::{Emitter, Manager};
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.set_focus();
+            }
+            // A yourownai:// link opened while the app runs arrives here as
+            // the second instance's argument (Linux / Windows).
+            if let Some(url) = args.iter().find(|a| a.starts_with("yourownai://")) {
+                log::info!("[deep-link] {url}");
+                let _ = app.emit("deep-link", url.clone());
+            }
+        }))
+    } else {
+        builder
+    };
     builder
         // One instance only: two copies (e.g. a dev build beside the
         // installed release - same identifier, same models, same GPU, same
@@ -547,18 +567,6 @@ pub fn run() {
         // winner's hidden message window isn't findable (simultaneous
         // double-launch, or a hung zombie) - instance_guard in setup() is
         // the authoritative lock.
-        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            use tauri::{Emitter, Manager};
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.set_focus();
-            }
-            // A yourownai:// link opened while the app runs arrives here as
-            // the second instance's argument (Linux / Windows).
-            if let Some(url) = args.iter().find(|a| a.starts_with("yourownai://")) {
-                log::info!("[deep-link] {url}");
-                let _ = app.emit("deep-link", url.clone());
-            }
-        }))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
