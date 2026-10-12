@@ -473,6 +473,118 @@ pub fn get_conversation_entries_page(input: EntriesPageInput) -> ExternResult<Re
     Ok(page)
 }
 
+
+/// Every message this agent recorded, read from its OWN chain in one scan
+/// and paged by sequence number - for the memory index rebuild, which
+/// used to read each conversation one call at a time (a 1,071-conversation
+/// AI: ~35 minutes of reads, 2026-10-12). One chain scan without entries
+/// yields the message creates, their conversation links, the deletes and
+/// this device's tombstones; the agent anchor's links add tombstones other
+/// devices wrote; the records themselves come in tight sequence ranges
+/// (never an unranged entry query - see `from_own_chain`).
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MyEntriesPageInput {
+    /// Only messages after this chain sequence number. None = from the first.
+    pub after_seq: Option<u32>,
+    pub limit: u32,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MyEntry {
+    pub record: Record,
+    /// The conversation the message belongs to (its list link's base).
+    pub conversation: ActionHash,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MyEntriesPage {
+    pub items: Vec<MyEntry>,
+    /// Pass back as `after_seq` for the next page. None = no more.
+    pub next_seq: Option<u32>,
+    /// Live messages on the chain, all pages.
+    pub total: u32,
+}
+
+#[hdk_extern]
+pub fn get_my_entries_page(input: MyEntriesPageInput) -> ExternResult<MyEntriesPage> {
+    let entries_lt = ScopedLinkType::try_from(LinkTypes::ConversationToEntries)?;
+    let list_lt = ScopedLinkType::try_from(LinkTypes::AllConversations)?;
+    // Tombstones any of the person's devices wrote sit on the anchor's links
+    // (links only - no record is fetched).
+    let mut tombstoned: HashSet<ActionHash> = HashSet::new();
+    for l in get_links(LinkQuery::try_new(agent_anchor()?, LinkTypes::AllConversations)?, GetStrategy::default())? {
+        if is_tombstone(&l) {
+            if let Ok(t) = ActionHash::try_from(l.target) {
+                tombstoned.insert(t);
+            }
+        }
+    }
+    let actions = query(ChainQueryFilter::new().include_entries(false))?;
+    let mut seq_of: HashMap<ActionHash, u32> = HashMap::new();
+    let mut conv_of: HashMap<ActionHash, ActionHash> = HashMap::new();
+    let mut deleted: HashSet<ActionHash> = HashSet::new();
+    for r in actions.iter() {
+        match r.action() {
+            Action::Create(c) => {
+                seq_of.insert(r.action_address().clone(), c.action_seq);
+            }
+            Action::CreateLink(l) => {
+                if l.zome_index == entries_lt.zome_index && l.link_type == entries_lt.zome_type {
+                    if let (Ok(base), Ok(target)) =
+                        (ActionHash::try_from(l.base_address.clone()), ActionHash::try_from(l.target_address.clone()))
+                    {
+                        conv_of.insert(target, base);
+                    }
+                } else if l.zome_index == list_lt.zome_index
+                    && l.link_type == list_lt.zome_type
+                    && l.tag.as_ref() == TOMBSTONE_TAG
+                {
+                    if let Ok(t) = ActionHash::try_from(l.target_address.clone()) {
+                        tombstoned.insert(t);
+                    }
+                }
+            }
+            Action::Delete(d) => {
+                deleted.insert(d.deletes_address.clone());
+            }
+            _ => {}
+        }
+    }
+    drop(actions);
+    let mut wanted: Vec<(u32, ActionHash, ActionHash)> = conv_of
+        .into_iter()
+        .filter(|(msg, conv)| !deleted.contains(msg) && !tombstoned.contains(conv))
+        .filter_map(|(msg, conv)| seq_of.get(&msg).map(|&s| (s, msg, conv)))
+        .collect();
+    wanted.sort_by_key(|w| w.0);
+    let total = wanted.len() as u32;
+    if let Some(after) = input.after_seq {
+        wanted.retain(|w| w.0 > after);
+    }
+    let limit = input.limit.max(1) as usize;
+    let more = wanted.len() > limit;
+    wanted.truncate(limit);
+    let next_seq = if more { wanted.last().map(|w| w.0) } else { None };
+    let mut seqs: Vec<u32> = wanted.iter().map(|w| w.0).collect();
+    let by_hash: HashMap<ActionHash, ActionHash> = wanted.into_iter().map(|w| (w.1, w.2)).collect();
+    let mut items = Vec::with_capacity(by_hash.len());
+    for (from, to) in seq_ranges(&mut seqs, RANGE_GAP) {
+        let records = query(
+            ChainQueryFilter::new()
+                .sequence_range(ChainQueryFilterRange::ActionSeqRange(from, to))
+                .action_type(ActionType::Create)
+                .include_entries(true),
+        )?;
+        for r in records {
+            if let Some(conv) = by_hash.get(r.action_address()) {
+                items.push(MyEntry { conversation: conv.clone(), record: r });
+            }
+        }
+    }
+    items.sort_by_key(|i| i.record.action().action_seq());
+    Ok(MyEntriesPage { items, next_seq, total })
+}
+
 /// Get a single conversation record.
 #[hdk_extern]
 pub fn get_conversation(action_hash: ActionHash) -> ExternResult<Option<Record>> {

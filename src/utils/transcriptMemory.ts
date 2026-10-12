@@ -712,17 +712,32 @@ export async function rebuildMemoryIndexIfPending(): Promise<void> {
 
       // Episodic entries rebuild from the transcripts - same filters as
       // indexTurn, so the rebuilt store matches what live indexing builds.
+      // Fast path: every message of the AI in a few pages off its own chain
+      // (get_my_transcript_turns); the per-conversation reads remain the
+      // fallback for a cell whose coordinator predates it.
       const turns: { text: string; conversationHash: string; createdAt: number }[] = [];
-      for (const conv of await getConversations(agentKey)) {
-        for (const entry of await getTranscript(conv.agent_key ?? agentKey, conv.hash)) {
-          if (entry.role !== "user") continue;
-          const t = entry.content?.trim();
-          if (!t || isPureQuestion(t) || isCommandOrFiller(t)) continue;
-          turns.push({
-            text: t.slice(0, MAX_TEXT),
-            conversationHash: conv.hash,
-            createdAt: entry.timestamp,
-          });
+      const keep = (role: string, content: string | undefined, conversationHash: string, createdAt: number) => {
+        if (role !== "user") return;
+        const t = content?.trim();
+        if (!t || isPureQuestion(t) || isCommandOrFiller(t)) return;
+        turns.push({ text: t.slice(0, MAX_TEXT), conversationHash, createdAt });
+      };
+      let fast: { conversation_hash: string; role: string; content: string; timestamp: number }[] | null = null;
+      try {
+        fast = await invoke<{ conversation_hash: string; role: string; content: string; timestamp: number }[]>(
+          "get_my_transcript_turns",
+          { agentKey },
+        );
+      } catch (e) {
+        console.warn(`[Memory] fast transcript read unavailable for AI ${ai.id.slice(0, 8)} - reading conversation by conversation:`, e);
+      }
+      if (fast) {
+        for (const e of fast) keep(e.role, e.content, e.conversation_hash, e.timestamp);
+      } else {
+        for (const conv of await getConversations(agentKey)) {
+          for (const entry of await getTranscript(conv.agent_key ?? agentKey, conv.hash)) {
+            keep(entry.role, entry.content, conv.hash, entry.timestamp);
+          }
         }
       }
       turns.sort((a, b) => a.createdAt - b.createdAt);

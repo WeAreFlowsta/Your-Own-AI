@@ -742,6 +742,7 @@ pub fn run() {
             commands_holochain::record_transcript_entry,
             commands_holochain::record_grounding_annotation,
             commands_holochain::holochain_ready,
+            commands_holochain::get_my_transcript_turns,
             commands_holochain::get_conversations,
             commands_holochain::get_conversation_transcript,
             commands_holochain::ui_log,

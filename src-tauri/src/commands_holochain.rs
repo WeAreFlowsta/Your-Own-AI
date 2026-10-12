@@ -1564,6 +1564,64 @@ pub async fn get_conversation_transcript(
     Ok(entries)
 }
 
+/// One message of the person's, with the conversation it belongs to - the
+/// memory index rebuild's input, read from the agent's own chain in a few
+/// pages instead of one call per conversation.
+#[derive(Serialize, Debug)]
+pub struct TranscriptTurnInfo {
+    pub conversation_hash: String,
+    pub hash: String,
+    pub role: String,
+    pub content: String,
+    pub timestamp: i64,
+}
+
+#[tauri::command]
+pub async fn get_my_transcript_turns(
+    agent_key: String,
+    hc_state: State<'_, Arc<HolochainState>>,
+) -> Result<Vec<TranscriptTurnInfo>, String> {
+    let t0 = std::time::Instant::now();
+    if !hc_state.get()?.is_provisioned(&agent_key).await {
+        return Err("agent key not provisioned on this conductor".into());
+    }
+    let manager = hc_state.get()?;
+    let (records, total) =
+        crate::transcript_pages::all_my_entries(&manager, &agent_key, std::time::Duration::from_secs(120)).await?;
+    let data_key = hc_state.get()?.data_key()?;
+    let mut turns = Vec::with_capacity(records.len());
+    let mut skipped = 0usize;
+    for (record, conversation) in records.iter() {
+        let Some(entry) = record.entry().as_option() else { continue };
+        let Some(app_bytes) = entry.as_app_entry() else { continue };
+        let Ok(ee) = rmp_serde::from_slice::<EncryptedEntryRaw>(app_bytes.as_ref().bytes()) else { skipped += 1; continue };
+        let Ok(plain_bytes) = crate::transcript_crypto::decrypt(&data_key, &ee.nonce, &ee.cipher) else { skipped += 1; continue };
+        if let Ok(ann) = serde_json::from_slice::<GroundingAnnotationPlain>(&plain_bytes) {
+            if ann.annotation == "grounding" {
+                continue;
+            }
+        }
+        let Ok(e) = serde_json::from_slice::<MessagePlain>(&plain_bytes) else { skipped += 1; continue };
+        let info = entry_info(hex::encode(record.action_address().get_raw_39()), e);
+        turns.push(TranscriptTurnInfo {
+            conversation_hash: hex::encode(conversation.get_raw_39()),
+            hash: info.hash,
+            role: info.role,
+            content: info.content,
+            timestamp: info.timestamp,
+        });
+    }
+    log::info!(
+        "[records] my turns {}..: {} turns from {} records ({} on the chain, {skipped} skipped) in {} ms",
+        &agent_key[..8.min(agent_key.len())],
+        turns.len(),
+        records.len(),
+        total,
+        t0.elapsed().as_millis()
+    );
+    Ok(turns)
+}
+
 /// A line from the webview into the app log, so what a person saw (a
 /// conversation that would not open, a dead click) sits next to what the
 /// records answered. Diagnostics reports carry the log; the browser

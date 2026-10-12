@@ -218,6 +218,58 @@ pub async fn all_entries(
     }
 }
 
+#[derive(Serialize, Debug)]
+struct MyEntriesPageInput {
+    after_seq: Option<u32>,
+    limit: u32,
+}
+#[derive(Deserialize, Debug)]
+struct MyEntry {
+    record: Record,
+    conversation: ActionHash,
+}
+#[derive(Deserialize, Debug)]
+struct MyEntriesPage {
+    items: Vec<MyEntry>,
+    next_seq: Option<u32>,
+    total: u32,
+}
+const MY_ENTRIES_PAGE: u32 = 200;
+
+/// Every live message this agent recorded, with its conversation, read from
+/// the agent's own chain a page at a time (`get_my_entries_page`). Err when
+/// the cell's coordinator predates the function (callers fall back to the
+/// per-conversation reads) or a page fails.
+pub async fn all_my_entries(
+    manager: &HolochainManager,
+    agent: &str,
+    timeout: Duration,
+) -> Result<(Vec<(Record, ActionHash)>, u32), String> {
+    let mut out = Vec::new();
+    let mut after_seq: Option<u32> = None;
+    let mut total = 0u32;
+    loop {
+        let input = MyEntriesPageInput { after_seq, limit: MY_ENTRIES_PAGE };
+        let payload = ExternIO::encode(&input).map_err(|e| format!("Failed to encode: {}", e))?;
+        let t0 = std::time::Instant::now();
+        let raw = manager.call_zome_with_timeout(agent, "transcript", "get_my_entries_page", payload, timeout).await?;
+        let page: MyEntriesPage = ExternIO::decode(&raw).map_err(|e| format!("Failed to decode get_my_entries_page: {}", e))?;
+        log::info!(
+            "[records] get_my_entries_page {}..: {} of {} message(s), {} ms",
+            &agent[..8.min(agent.len())],
+            page.items.len(),
+            page.total,
+            t0.elapsed().as_millis()
+        );
+        total = page.total;
+        out.extend(page.items.into_iter().map(|i| (i.record, i.conversation)));
+        match page.next_seq {
+            Some(s) => after_seq = Some(s),
+            None => return Ok((out, total)),
+        }
+    }
+}
+
 /// How many conversations an agent holds, without fetching their records.
 pub async fn conversation_count(manager: &HolochainManager, agent: &str, timeout: Duration) -> Result<u64, String> {
     let input = ConversationsPageInput { anchor: None, before: None, limit: 1 };
