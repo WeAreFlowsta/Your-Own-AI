@@ -330,6 +330,33 @@ async fn semantic_fresh_score(
     Some(fresh)
 }
 
+/// The freshness gate as it ships, for the truth matrix: the keyword cue
+/// confirmed against the anchors, else the semantic score at the Balanced
+/// threshold - the same two stages `route_dry` runs, without the dial's
+/// local-first twist. Returns `(fresh, semantic_ran)`; `semantic_ran ==
+/// false` means only the keyword stage could run (no memory component).
+pub(crate) async fn fresh_gate_preview(app: &AppHandle, query: &str) -> (bool, bool) {
+    let mut semantic = false;
+    let cue_confirmed = if looks_time_sensitive(query) {
+        match fresh_scores(app, query, None).await {
+            Some((f, b)) => {
+                semantic = true;
+                f >= b
+            }
+            None => !looks_small_talk(query),
+        }
+    } else {
+        false
+    };
+    if cue_confirmed {
+        return (true, semantic);
+    }
+    match semantic_fresh_score(app, query, None).await {
+        Some(s) => (s >= threshold_for("balanced"), true),
+        None => (false, semantic),
+    }
+}
+
 /// Dev preview / calibration: both raw scores.
 pub async fn fresh_scores_preview(app: &AppHandle, query: &str) -> Option<(f32, f32)> {
     fresh_scores(app, query, None).await
@@ -455,7 +482,7 @@ async fn benign_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec<f32>>
 /// reference scores sit lower than bge's (yes >= 0.32, no <= 0.36), so the
 /// floor only rejects turns unrelated to everything, as before.
 const MEDICAL_THRESHOLD: f32 = 0.30;
-const MEDICAL_MARGIN: f32 = 0.05;
+pub(crate) const MEDICAL_MARGIN: f32 = 0.05;
 
 /// Stage-0 medical gate: unambiguous health terms only. Deliberately excludes
 /// words developers use about software ("symptom", "diagnose") - the semantic

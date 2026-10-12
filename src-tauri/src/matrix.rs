@@ -686,6 +686,171 @@ fn moe_decision(meta: &crate::gguf::GgufMeta, size: u64, ctx: u64, free: Option<
 /// CLAIM vs REALITY for every downloaded GGUF: the estimate's arithmetic
 /// (parsed header, chosen context, need, grade), then the real load - VRAM
 /// delta, load time, measured speeds. Returns the lines where the grade
+// ───────────── the report/code mode classifier (turnModeClassifier.ts), measured ─────────────
+
+/// Mirror of BASE in src/utils/turnModeClassifier.ts - the leg grades the very
+/// prompt the app uses; change both together.
+const MODE_SYSTEM: &str = "Classify what the user is asking the assistant to DO right now. Output exactly one word: REPORT, CODE, or NEITHER.\nOnly answer REPORT or CODE if the user is asking YOU, the assistant, to PRODUCE it for them right now. If they are merely talking about, mentioning, complaining about, or planning a report/code in their own work or life, answer NEITHER.\nREPORT = asking you to WRITE/DRAFT/PUT TOGETHER a report, write-up, analysis, deep-dive, or structured document.\nCODE = asking you to write, implement, or fix code / a function / a script.\nNEITHER = everything else, INCLUDING ordinary questions ('explain X', 'how does X work'), capability questions ('can you code?'), and any mention of a report/code that isn't a request for you to make one.\n\nExamples:\nwrite me a report on solar energy => REPORT\nput together a detailed write-up of our options => REPORT\ndo a deep dive on how transformers work => REPORT\nexplain how vaccines work => NEITHER\nhow does the TLS handshake work? => NEITHER\nmy boss wants a report by friday => NEITHER\ni need to write a report for work => NEITHER\nthe quarterly report is due tomorrow => NEITHER\ni hate writing reports => NEITHER\nthe news report said it might rain => NEITHER\nwrite a python function to parse a csv => CODE\nfix this code: def f(): retrun 1 => CODE\nour codebase is a mess => NEITHER\ndo you know how to code? => NEITHER\nhey how's it going => NEITHER";
+const MODE_GRAMMAR: &str = "root ::= \"REPORT\" | \"CODE\" | \"NEITHER\"";
+/// Mirror of REPORT_KW (turnModeClassifier.ts) and CODE_KW (routingKeywords.ts):
+/// the free pre-gate - a message with none of these never reaches the model
+/// and is NEITHER by construction. Change both together.
+const MODE_REPORT_KW: &[&str] = &["report", "write up", "write-up", "writeup", "analysis", "analyze", "analyse", "deep dive", "deep-dive", "breakdown", "rundown", "overview", "draft", "write me", "put together", "in-depth", "in depth", "dossier", "white paper", "comprehensive"];
+const MODE_CODE_KW: &[&str] = &["code", "function", "bug", "debug", "error", "exception", "compile", "script", "program", "implement", "refactor", "snippet", "fix this", "rewrite this", "api", "regex", "algorithm", "stack trace", "syntax", "variable", "python", "javascript", "typescript", "rust", "java", "c++", "sql", "html", "css", "git", "terminal", "shell", "npm", "docker", "class ", "def ", "import "];
+fn mode_pregate_relevant(message: &str) -> bool {
+    let m = format!(" {} ", message.to_lowercase());
+    MODE_REPORT_KW.iter().chain(MODE_CODE_KW.iter()).any(|k| m.contains(k))
+}
+/// Held out from the prompt's examples (never copy one in): what a person
+/// might say, and whether the turn should become a report, code, or stay chat.
+const MODE_GOLD: &[(&str, &str)] = &[
+    ("write me a report on the state of electric buses in europe", "REPORT"),
+    ("put together a write-up comparing the three mortgage offers", "REPORT"),
+    ("do a deep dive on the history of the esperanto movement", "REPORT"),
+    ("draft a comprehensive analysis of our churn numbers", "REPORT"),
+    ("can you write up an overview of the main theories of consciousness", "REPORT"),
+    ("give me an in-depth breakdown of how the eu ai act affects small startups", "REPORT"),
+    ("prepare a dossier on the company's main competitors", "REPORT"),
+    ("I need a detailed report on the pros and cons of heat pumps for our house", "REPORT"),
+    ("write a bash script that renames every photo by its exif date", "CODE"),
+    ("implement a function that merges two sorted lists in rust", "CODE"),
+    ("fix this: for i in range(10) print(i)", "CODE"),
+    ("can you write the sql to find customers with no orders this year", "CODE"),
+    ("refactor this javascript so it uses async/await", "CODE"),
+    ("debug this regex, it never matches emails with a plus sign", "CODE"),
+    ("write a small python program that watches a folder and prints new files", "CODE"),
+    ("implement the binary search in typescript", "CODE"),
+    ("how does a heat pump work", "NEITHER"),
+    ("my manager asked me for a report by monday, I'm stressed", "NEITHER"),
+    ("the code review took three hours today", "NEITHER"),
+    ("what's the difference between a function and a method", "NEITHER"),
+    ("do you know how to write sql", "NEITHER"),
+    ("the annual report came out and the numbers look bad", "NEITHER"),
+    ("I spent all weekend writing reports", "NEITHER"),
+    ("can you explain what a deep dive means", "NEITHER"),
+    ("any dinner ideas for tonight", "NEITHER"),
+    ("the weather report says snow", "NEITHER"),
+    ("is python a good first language", "NEITHER"),
+    ("what did the analysis in the paper conclude", "NEITHER"),
+    ("tell me about the programming language rust", "NEITHER"),
+    ("our codebase at work is a mess, any advice on how to cope", "NEITHER"),
+];
+
+/// The report/code mode classifier on this machine's models: the app's own
+/// prompt, grammar and pre-gate against MODE_GOLD, on the same candidates the
+/// memory leg grades (the helper, the loaded model, the strongest by the
+/// registry). A line per model: right of total, per class, pre-gated count.
+pub async fn leg_turn_mode(bin: &Path, dir: &Path, loaded: Option<&str>, sink: Sink<'_>) -> Vec<String> {
+    use std::time::Duration;
+    let mut failures = Vec::new();
+    let mut models: Vec<String> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten()
+                .filter_map(|e| e.file_name().to_str().map(String::from))
+                .filter(|n| n.ends_with(".gguf") && !n.to_lowercase().contains("mmproj"))
+                .filter(|n| crate::gguf::read_meta(&dir.join(n)).map(|m| !m.is_embedding()).unwrap_or(false))
+                .collect()
+        })
+        .unwrap_or_default();
+    models.sort();
+    models.dedup();
+    if models.is_empty() {
+        sink("no chat model to grade".into());
+        return failures;
+    }
+    let all = models.len();
+    let models = memory_grade_candidates(&models, loaded, crate::llm::UTILITY_MODEL_FILE);
+    sink(format!("grading {} of {} chat model(s): the helper, the loaded model, then the strongest by the registry", models.len(), all));
+    let pregated = MODE_GOLD.iter().filter(|(m, _)| !mode_pregate_relevant(m)).count();
+    sink(format!("{} of {} messages never reach a model (the free pre-gate says NEITHER){}", pregated, MODE_GOLD.len(),
+        if MODE_GOLD.iter().any(|(m, want)| !mode_pregate_relevant(m) && *want != "NEITHER") { " - WARNING: a report/code request among them" } else { "" }));
+    let client = crate::llm::local_http();
+    let free = free_vram_gb(bin);
+    for model in models {
+        if cancelled() {
+            break;
+        }
+        let mut args: Vec<String> = vec![
+            "--port".into(), BENCH_PORT.to_string(), "--host".into(), "127.0.0.1".into(),
+            "--no-webui".into(), "--reasoning".into(), "off".into(),
+            "--ctx-size".into(), "4096".into(), "--fit".into(), "off".into(),
+            "--model".into(), model.clone(),
+        ];
+        if let Ok(meta) = crate::gguf::read_meta(&dir.join(&model)) {
+            let size = std::fs::metadata(dir.join(&model)).map(|m| m.len()).unwrap_or(0);
+            if let Some(n) = moe_decision(&meta, size, 4096, free) {
+                if n > 0 {
+                    if (n as usize) < meta.expert_bytes_per_layer.len() {
+                        args.push("--n-cpu-moe".into());
+                        args.push(n.to_string());
+                    } else {
+                        args.push("--cpu-moe".into());
+                    }
+                }
+            }
+        }
+        let _guard = match spawn_bench_server(bin, dir, args).await {
+            Ok(g) => g,
+            Err(e) => {
+                sink(format!("{model}: could not load ({e})"));
+                failures.push(format!("{model}: load"));
+                continue;
+            }
+        };
+        let started = std::time::Instant::now();
+        let (mut right, mut asked) = (0usize, 0usize);
+        let mut per: std::collections::BTreeMap<&str, (usize, usize)> = std::collections::BTreeMap::new();
+        let mut wrong: Vec<String> = Vec::new();
+        for (message, want) in MODE_GOLD {
+            let e = per.entry(want).or_insert((0, 0));
+            e.1 += 1;
+            let got: String = if !mode_pregate_relevant(message) {
+                "NEITHER".into()
+            } else {
+                let body = serde_json::json!({
+                    "model": model,
+                    "messages": [{"role": "system", "content": MODE_SYSTEM}, {"role": "user", "content": message}],
+                    "max_tokens": 3, "temperature": 0.0, "stream": false, "grammar": MODE_GRAMMAR, "cache_prompt": true,
+                    "stop": crate::llm::chat_stop_strings(&model),
+                });
+                let v: Result<serde_json::Value, String> = async {
+                    client.post(format!("http://127.0.0.1:{BENCH_PORT}/v1/chat/completions")).json(&body).timeout(Duration::from_secs(120)).send().await
+                        .map_err(|e| format!("request: {e}"))?.json().await.map_err(|e| format!("json: {e}"))
+                }.await;
+                match v {
+                    Ok(v) => {
+                        asked += 1;
+                        let w = crate::llm::strip_turn_markers(v["choices"][0]["message"]["content"].as_str().unwrap_or("")).trim().to_uppercase();
+                        if w.starts_with("REPORT") { "REPORT".into() } else if w.starts_with("CODE") { "CODE".into() } else { "NEITHER".into() }
+                    }
+                    Err(e) => {
+                        sink(format!("{model}: classifier call failed ({e})"));
+                        failures.push(format!("{model}: call"));
+                        break;
+                    }
+                }
+            };
+            if got == *want {
+                right += 1;
+                e.0 += 1;
+            } else {
+                wrong.push(format!("{message} => {got} (wanted {want})"));
+            }
+        }
+        let per_line: Vec<String> = per.iter().map(|(k, (r, n))| format!("{} {r}/{n}", k.to_lowercase())).collect();
+        sink(format!("modes: {model}: {right}/{} right ({}) | {asked} model calls in {:.0} s", MODE_GOLD.len(), per_line.join(", "), started.elapsed().as_secs_f64()));
+        for w in wrong.iter().take(6) {
+            sink(format!("  {w}"));
+        }
+        // A classifier that turns chat into a report is worse than one that
+        // misses: any NEITHER wrong is listed; under 80% right is a fail.
+        if right * 5 < MODE_GOLD.len() * 4 {
+            failures.push(format!("{model}: {right} of {} right", MODE_GOLD.len()));
+        }
+    }
+    failures
+}
+
 /// LIED GREEN (claimed ok, did not load); a conservative red that runs is
 /// reported but not a failure.
 pub async fn leg_fit_truth(app: Option<&AppHandle>, bin: &Path, dir: &Path, only: &[String], sink: Sink<'_>) -> Vec<String> {
@@ -1280,6 +1445,82 @@ pub async fn leg_routing(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<Str
         if embeddings { "yes" } else { "no (semantic gates off - ordinary questions stay on the device)" },
         if helper { "yes" } else { "no (difficulty unknown)" },
     ));
+    // The semantic gates on their own, before the routing verdicts: how the
+    // freshness and health gates did on the battery's labeled buckets with
+    // THIS machine's memory component (Eric 2026-10-12: "the web/recent and
+    // the report classifier in the matrix"). Follow-ups and long turns are
+    // not single messages and sit out; the health bucket is the medical
+    // gate's yes and the freshness gate's no, the fresh buckets the reverse.
+    {
+        let single: Vec<&serde_json::Value> = queries
+            .iter()
+            .filter(|q| !matches!(q["bucket"].as_str().unwrap_or(""), "followup" | "long_turn"))
+            .collect();
+        let (mut fresh_hit, mut fresh_yes, mut fresh_false, mut fresh_no) = (0u32, 0u32, 0u32, 0u32);
+        let (mut fresh_kw_hit, mut fresh_kw_yes) = (0u32, 0u32);
+        let (mut med_hit, mut med_yes, mut med_false, mut med_no) = (0u32, 0u32, 0u32, 0u32);
+        let mut semantic_ran = false;
+        let mut misses: Vec<String> = Vec::new();
+        for q in &single {
+            if cancelled() {
+                break;
+            }
+            let id = q["id"].as_str().unwrap_or("?");
+            let bucket = q["bucket"].as_str().unwrap_or("?");
+            let text = q["q"].as_str().unwrap_or("");
+            let (fresh, ran_f) = crate::router::fresh_gate_preview(app, text).await;
+            let (medical, ran_m) = crate::router::medical_check(app, text, None, crate::router::MEDICAL_MARGIN).await;
+            semantic_ran |= ran_f || ran_m;
+            let is_fresh = bucket.starts_with("fresh_");
+            if is_fresh {
+                fresh_yes += 1;
+                if fresh { fresh_hit += 1 } else { misses.push(format!("fresh gate missed {id}: {text}")) }
+                if bucket == "fresh_keyword" {
+                    fresh_kw_yes += 1;
+                    if fresh { fresh_kw_hit += 1 }
+                }
+            } else {
+                fresh_no += 1;
+                if fresh { fresh_false += 1; misses.push(format!("fresh gate false hit {id} ({bucket}): {text}")) }
+            }
+            if bucket == "health" {
+                med_yes += 1;
+                if medical { med_hit += 1 } else { misses.push(format!("health gate missed {id}: {text}")) }
+            } else {
+                med_no += 1;
+                if medical { med_false += 1; misses.push(format!("health gate false hit {id} ({bucket}): {text}")) }
+            }
+        }
+        sink(format!(
+            "gates ({}): fresh caught {fresh_hit}/{fresh_yes} (keyword bucket {fresh_kw_hit}/{fresh_kw_yes}, paraphrase {}/{}) | fresh false hits {fresh_false}/{fresh_no} | health caught {med_hit}/{med_yes} | health false hits {med_false}/{med_no}",
+            if semantic_ran { "semantic stage on" } else { "keyword stage only - no memory component" },
+            fresh_hit - fresh_kw_hit,
+            fresh_yes - fresh_kw_yes,
+        ));
+        for m in misses.iter().take(12) {
+            sink(format!("  {m}"));
+        }
+        if misses.len() > 12 {
+            sink(format!("  ... {} more", misses.len() - 12));
+        }
+        // With the semantic stage on, the gates are a promise: more than a
+        // fifth of fresh questions kept home, or more than one in twenty
+        // ordinary questions sent to the web / flagged as health, is a fail.
+        if semantic_ran {
+            if fresh_yes > 0 && fresh_hit * 5 < fresh_yes * 4 {
+                failures.push(format!("fresh gate caught only {fresh_hit} of {fresh_yes}"));
+            }
+            if fresh_no > 0 && fresh_false * 20 > fresh_no {
+                failures.push(format!("fresh gate false hits {fresh_false} of {fresh_no}"));
+            }
+            if med_yes > 0 && med_hit * 5 < med_yes * 4 {
+                failures.push(format!("health gate caught only {med_hit} of {med_yes}"));
+            }
+            if med_no > 0 && med_false * 20 > med_no {
+                failures.push(format!("health gate false hits {med_false} of {med_no}"));
+            }
+        }
+    }
     let online_possible = catalog.is_some() && !not_entitled;
     let picks = crate::router::OnlinePicks::from_store(app);
     let side_of = |model: &str| if model.starts_with("online:") { "online" } else if model.starts_with("external:") { "server" } else { "device" };
@@ -1682,6 +1923,13 @@ pub async fn matrix_run(
         }
         sink(String::new());
     }
+    if !cancelled() && want("modes") {
+        sink("== Report/code mode classifier (the app's prompt and pre-gate, per model) ==".into());
+        for f in leg_turn_mode(&bin, &dir, loaded_before.as_deref(), sink).await {
+            failures.push(format!("modes: {f}"));
+        }
+        sink(String::new());
+    }
     if !cancelled() && want("tune") {
         let tune_model = ggufs
             .iter()
@@ -1734,6 +1982,23 @@ pub async fn matrix_run(
     }
     let _ = app.emit("matrix-done", path.display().to_string());
     Ok(path.display().to_string())
+}
+
+#[cfg(test)]
+mod mode_leg_tests {
+    #[test]
+    fn every_report_and_code_request_in_the_gold_set_reaches_the_model() {
+        // The free pre-gate must never swallow a real request: a REPORT or
+        // CODE message with none of the keywords would be NEITHER by construction.
+        for (m, want) in super::MODE_GOLD {
+            if *want != "NEITHER" {
+                assert!(super::mode_pregate_relevant(m), "pre-gate would skip a real request: {m}");
+            }
+        }
+        // plain chat with none of the words never costs a model call
+        assert!(!super::mode_pregate_relevant("any dinner ideas for tonight"));
+        assert!(super::mode_pregate_relevant("write me a report on bees"));
+    }
 }
 
 #[cfg(test)]
