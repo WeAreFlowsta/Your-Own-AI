@@ -852,7 +852,11 @@ pub async fn leg_quality(bin: &Path, dir: &Path, loaded: Option<&str>, sink: Sin
                     {"role": "system", "content": format!("You are a helpful, plain-spoken assistant. Answer the question directly.{}", case.system_extra.unwrap_or(""))},
                     {"role": "user", "content": case.ask}
                 ],
-                "max_tokens": 700, "temperature": 0.0, "stream": false, "cache_prompt": true,
+                // A model whose template thinks first spends its budget on the
+                // thinking before a word of answer (the Opus-distilled 4B: 580
+                // tokens a question at 700, graded on truncated thinking). Room
+                // for both; a cut-off answer is still named below.
+                "max_tokens": 1500, "temperature": 0.0, "stream": false, "cache_prompt": true,
                 "stop": crate::llm::chat_stop_strings(&model),
             });
             let t0 = std::time::Instant::now();
@@ -871,8 +875,13 @@ pub async fn leg_quality(bin: &Path, dir: &Path, loaded: Option<&str>, sink: Sin
             };
             gen_ms += t0.elapsed().as_millis();
             gen_tokens += v["usage"]["completion_tokens"].as_u64().unwrap_or(0);
+            let content_empty = v["choices"][0]["message"]["content"].as_str().map(|c| c.trim().is_empty()).unwrap_or(true);
+            let cut_off = v["choices"][0]["finish_reason"].as_str() == Some("length");
             let answer = crate::llm::completion_text(&v);
-            let (p, missing) = score_quality(case, &answer);
+            let (p, mut missing) = score_quality(case, &answer);
+            if content_empty && cut_off {
+                missing.insert(0, "ran out of budget while thinking - no answer reached".into());
+            }
             points += p as u32;
             per.push(format!("q{} {p}", i + 1));
             if p < 2 {
