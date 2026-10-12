@@ -150,7 +150,7 @@ describe("memory rules", () => {
     console.log(`e2e: assisted ${JSON.stringify(assisted.map((r) => [r.id, r.text.slice(0, 40), r.as_of, r.topics]))}`);
     expect(assisted.length).toBeGreaterThan(0);
     for (const r of assisted) expect(noteText.toLowerCase()).toContain(r.text.toLowerCase().replace(/ \(dream.*$/, "").slice(0, 12));
-    const live = (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).filter((r) => r.text.includes(`(dream ${stamp})`));
+    const live = (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).filter((r) => r.kind === "command" && r.text.includes(`(dream ${stamp})`));
     expect(live.length).toBe(1);
     expect(live[0].text).toBe(B);
     expect(live[0].provenance.startsWith("dream:")).toBe(true);
@@ -167,7 +167,7 @@ describe("memory rules", () => {
     await shot("memory-dream-history");
     await (await entry.$("button=Undo")).click();
     await browser.waitUntil(async () => {
-      const rows = (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).filter((r) => r.text.includes(`(dream ${stamp})`));
+      const rows = (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).filter((r) => r.kind === "command" && r.text.includes(`(dream ${stamp})`));
       return rows.length === 2;
     }, { timeout: 30_000, timeoutMsg: "Undo did not bring both commands back" });
     // Tidy (the note and anything the dream made of it too).
