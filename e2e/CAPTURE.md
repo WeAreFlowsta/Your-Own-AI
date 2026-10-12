@@ -81,7 +81,7 @@ uses (the versions are in `.github/workflows/build-release.yml`: the llama
 engine `RELEASE_TAG` and `HC_RELEASE`; update these lines if they moved):
 
 ```powershell
-gh release download llama-b10809 --repo WeAreFlowsta/Your-Own-AI --pattern "llama-server-x86_64-pc-windows-msvc.exe" --dir src-tauri/bin
+gh release download llama-b11429 --repo WeAreFlowsta/Your-Own-AI --pattern "llama-server-x86_64-pc-windows-msvc.exe" --dir src-tauri/bin
 New-Item -ItemType Directory -Force src-tauri/binaries | Out-Null
 foreach ($b in "holochain", "lair-keystore") {
   Invoke-WebRequest "https://github.com/holochain/holochain/releases/download/holochain-0.6.1/$b-x86_64-pc-windows-msvc.exe" -OutFile "src-tauri/binaries/yourowai-$b-x86_64-pc-windows-msvc.exe"

@@ -1252,10 +1252,10 @@ fn helper_need_gb(app: &AppHandle, file: &str, ctx: u64) -> Option<f64> {
 /// file mapped as well, the first copy stays resident and is never read
 /// again. Measured 2026-09-22 (Ministral-3B Q4_K_M, ctx 4096): mapped 4.03 GB,
 /// read into memory 2.73 GB, the same 35 tok/s reading speed, ready in 5 s.
-/// `--no-mmap` is the long-standing spelling (newer engines also say
-/// `--load-mode none`); re-check it on every engine bump.
+/// `--load-mode none` is the spelling since llama.cpp v0.4.1 (`--no-mmap`
+/// was removed there); re-check it on every engine bump.
 fn helper_processor_args() -> Vec<String> {
-    ["--device", "none", "-ngl", "0", "--no-mmap"].iter().map(|s| s.to_string()).collect()
+    ["--device", "none", "-ngl", "0", "--load-mode", "none"].iter().map(|s| s.to_string()).collect()
 }
 
 /// The footprint record of a PROCESSOR placement lives beside the card one,
@@ -3220,7 +3220,8 @@ pub async fn start_llama_server(
         || moe_plan.is_some()
         || cfg!(target_os = "macos");
     if weights_in_ram {
-        args.push("--no-mmap".to_string());
+        args.push("--load-mode".to_string());
+        args.push("none".to_string());
         log::info!("[LLM] weights stay in main memory for this load - read into memory, not mapped");
     }
 
@@ -7124,7 +7125,7 @@ mod live_matrix {
         assert!(a.windows(2).any(|w| w[0] == "--device" && w[1] == "none"));
         assert!(a.windows(2).any(|w| w[0] == "-ngl" && w[1] == "0"));
         // mapped + repacked held 4.03 GB; read into memory 2.73 GB, same speed
-        assert!(a.iter().any(|x| x == "--no-mmap"));
+        assert!(a.windows(2).any(|w| w[0] == "--load-mode" && w[1] == "none"));
         // still recognized as a processor start by the code that asks
         assert!(super::args_force_cpu(&a));
     }
