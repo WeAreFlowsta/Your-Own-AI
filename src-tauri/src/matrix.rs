@@ -686,6 +686,203 @@ fn moe_decision(meta: &crate::gguf::GgufMeta, size: u64, ctx: u64, free: Option<
 /// CLAIM vs REALITY for every downloaded GGUF: the estimate's arithmetic
 /// (parsed header, chosen context, need, grade), then the real load - VRAM
 /// delta, load time, measured speeds. Returns the lines where the grade
+
+// ───────────── answer quality, measured (the capability table's check) ─────────────
+
+/// A general question and its rubric: every `must` group needs one of its
+/// phrases in the answer (facts a right answer cannot avoid); `number` is an
+/// exact figure the answer must carry; `min_items` counts list lines or
+/// numbered points; `sentences` bounds a count the person asked for. Two
+/// points per question: both halves of the rubric (facts, form) met = 2,
+/// one = 1. Held out of every prompt; never a benchmark set verbatim.
+struct QualityCase {
+    ask: &'static str,
+    must: &'static [&'static [&'static str]],
+    number: Option<&'static str>,
+    min_items: usize,
+    sentences: Option<(usize, usize)>,
+    max_chars: usize,
+}
+const QUALITY_GOLD: &[QualityCase] = &[
+    QualityCase { ask: "why is the sky blue?", must: &[&["rayleigh", "scatter"], &["wavelength", "shorter", "blue light"]], number: None, min_items: 0, sentences: None, max_chars: 2500 },
+    QualityCase { ask: "explain compound interest with a short worked example", must: &[&["principal", "initial", "start"], &["rate", "percent", "%"], &["year"]], number: None, min_items: 0, sentences: None, max_chars: 2500 },
+    QualityCase { ask: "a train leaves at 9:15 and the trip takes 2 hours and 50 minutes. when does it arrive?", must: &[], number: Some("12:05"), min_items: 0, sentences: None, max_chars: 1200 },
+    QualityCase { ask: "what is the difference between weather and climate?", must: &[&["weather"], &["climate"], &["long", "decade", "average", "pattern", "years"], &["short", "day", "daily", "hour", "now", "moment"]], number: None, min_items: 0, sentences: None, max_chars: 2000 },
+    QualityCase { ask: "give me three tips for a first vegetable garden", must: &[&["sun", "light"], &["water"], &["soil", "compost"]], number: None, min_items: 3, sentences: None, max_chars: 2500 },
+    QualityCase { ask: "summarize the plot of romeo and juliet in four sentences", must: &[&["verona", "montague", "capulet", "families", "feud"], &["die", "death", "dies", "poison", "dagger", "kill"]], number: None, min_items: 0, sentences: Some((3, 6)), max_chars: 1500 },
+    QualityCase { ask: "how does a vaccine work?", must: &[&["immune"], &["antibod", "antigen", "memory", "recogni"]], number: None, min_items: 0, sentences: None, max_chars: 2500 },
+    QualityCase { ask: "write a short friendly reply to a colleague who thanked me for helping with their presentation", must: &[&["welcome", "glad", "happy", "pleasure", "anytime", "any time", "no problem"]], number: None, min_items: 0, sentences: Some((1, 5)), max_chars: 600 },
+];
+
+fn count_sentences(text: &str) -> usize {
+    text.split(|c| c == '.' || c == '!' || c == '?').filter(|s| s.trim().split_whitespace().count() >= 3).count()
+}
+fn count_items(text: &str) -> usize {
+    text.lines().map(str::trim).filter(|l| l.starts_with('-') || l.starts_with('*') || l.starts_with('•') || l.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) && (l.contains(". ") || l.contains(") "))).count()
+}
+/// (points 0-2, what was missing)
+pub(crate) fn score_quality(case: &QualityCase, answer: &str) -> (u8, Vec<String>) {
+    let a = answer.to_lowercase();
+    let mut missing = Vec::new();
+    // Refusals and filler fail the whole question: an answer that is not one.
+    if a.trim().is_empty() || a.starts_with("i'm sorry") || a.starts_with("i am sorry") || a.contains("as an ai language model") {
+        return (0, vec!["no answer (empty, refusal or filler)".into()]);
+    }
+    let mut facts_ok = true;
+    for group in case.must {
+        if !group.iter().any(|p| a.contains(p)) {
+            facts_ok = false;
+            missing.push(format!("none of {}", group.join("/")));
+        }
+    }
+    if let Some(n) = case.number {
+        if !a.contains(n) {
+            facts_ok = false;
+            missing.push(format!("figure {n}"));
+        }
+    }
+    let mut form_ok = true;
+    if case.min_items > 0 && count_items(answer) < case.min_items {
+        form_ok = false;
+        missing.push(format!("{} list items", case.min_items));
+    }
+    if let Some((lo, hi)) = case.sentences {
+        let n = count_sentences(answer);
+        if n < lo || n > hi {
+            form_ok = false;
+            missing.push(format!("{n} sentences (wanted {lo}-{hi})"));
+        }
+    }
+    if answer.chars().count() > case.max_chars {
+        form_ok = false;
+        missing.push(format!("over {} chars", case.max_chars));
+    }
+    (facts_ok as u8 + form_ok as u8, missing)
+}
+
+/// Answer quality on this machine's models: eight general questions with a
+/// deterministic rubric, two points each, on the memory leg's candidates. The
+/// capability table (`model_caps`) scores by family name; the line shows the
+/// table's `overall` beside the measured points so the two can be compared
+/// on every machine - the table's size tiers are to be set from these
+/// numbers, never by hand (NEXT.md §A0, Eric 2026-10-12).
+pub async fn leg_quality(bin: &Path, dir: &Path, loaded: Option<&str>, sink: Sink<'_>) -> Vec<String> {
+    use std::time::Duration;
+    let mut failures = Vec::new();
+    let mut models: Vec<String> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten()
+                .filter_map(|e| e.file_name().to_str().map(String::from))
+                .filter(|n| n.ends_with(".gguf") && !n.to_lowercase().contains("mmproj"))
+                .filter(|n| crate::gguf::read_meta(&dir.join(n)).map(|m| !m.is_embedding()).unwrap_or(false))
+                .collect()
+        })
+        .unwrap_or_default();
+    models.sort();
+    models.dedup();
+    if models.is_empty() {
+        sink("no chat model to grade".into());
+        return failures;
+    }
+    let all = models.len();
+    let models = memory_grade_candidates(&models, loaded, crate::llm::UTILITY_MODEL_FILE);
+    sink(format!("grading {} of {} chat model(s): the helper, the loaded model, then the strongest by the registry", models.len(), all));
+    let client = crate::llm::local_http();
+    let free = free_vram_gb(bin);
+    let max_points = (QUALITY_GOLD.len() * 2) as u32;
+    for model in models {
+        if cancelled() {
+            break;
+        }
+        let mut args: Vec<String> = vec![
+            "--port".into(), BENCH_PORT.to_string(), "--host".into(), "127.0.0.1".into(),
+            "--no-webui".into(), "--reasoning".into(), "off".into(),
+            "--ctx-size".into(), "4096".into(), "--fit".into(), "off".into(),
+            "--model".into(), model.clone(),
+        ];
+        if let Ok(meta) = crate::gguf::read_meta(&dir.join(&model)) {
+            let size = std::fs::metadata(dir.join(&model)).map(|m| m.len()).unwrap_or(0);
+            if let Some(n) = moe_decision(&meta, size, 4096, free) {
+                if n > 0 {
+                    if (n as usize) < meta.expert_bytes_per_layer.len() {
+                        args.push("--n-cpu-moe".into());
+                        args.push(n.to_string());
+                    } else {
+                        args.push("--cpu-moe".into());
+                    }
+                }
+            }
+        }
+        let _guard = match spawn_bench_server(bin, dir, args).await {
+            Ok(g) => g,
+            Err(e) => {
+                sink(format!("{model}: could not load ({e})"));
+                failures.push(format!("{model}: load"));
+                continue;
+            }
+        };
+        let started = std::time::Instant::now();
+        let mut points = 0u32;
+        let mut per: Vec<String> = Vec::new();
+        let mut notes: Vec<String> = Vec::new();
+        let mut gen_tokens = 0u64;
+        let mut gen_ms = 0u128;
+        let mut broke = false;
+        for (i, case) in QUALITY_GOLD.iter().enumerate() {
+            let body = serde_json::json!({
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "You are a helpful, plain-spoken assistant. Answer the question directly."},
+                    {"role": "user", "content": case.ask}
+                ],
+                "max_tokens": 700, "temperature": 0.0, "stream": false, "cache_prompt": true,
+                "stop": crate::llm::chat_stop_strings(&model),
+            });
+            let t0 = std::time::Instant::now();
+            let v: Result<serde_json::Value, String> = async {
+                client.post(format!("http://127.0.0.1:{BENCH_PORT}/v1/chat/completions")).json(&body).timeout(Duration::from_secs(300)).send().await
+                    .map_err(|e| format!("request: {e}"))?.json().await.map_err(|e| format!("json: {e}"))
+            }.await;
+            let v = match v {
+                Ok(v) => v,
+                Err(e) => {
+                    sink(format!("{model}: question {} failed ({e})", i + 1));
+                    failures.push(format!("{model}: call"));
+                    broke = true;
+                    break;
+                }
+            };
+            gen_ms += t0.elapsed().as_millis();
+            gen_tokens += v["usage"]["completion_tokens"].as_u64().unwrap_or(0);
+            let answer = crate::llm::completion_text(&v);
+            let (p, missing) = score_quality(case, &answer);
+            points += p as u32;
+            per.push(format!("q{} {p}", i + 1));
+            if p < 2 {
+                notes.push(format!("  q{} ({}): {}", i + 1, case.ask.chars().take(40).collect::<String>(), missing.join("; ")));
+            }
+        }
+        if broke {
+            continue;
+        }
+        let registry = crate::model_caps::caps_for(&model).overall;
+        let tps = if gen_ms > 0 { gen_tokens as f64 / (gen_ms as f64 / 1000.0) } else { 0.0 };
+        sink(format!(
+            "quality: {model}: {points}/{max_points} points ({}) | registry overall {registry} | {gen_tokens} tokens at {tps:.1} tok/s in {:.0} s",
+            per.join(", "),
+            started.elapsed().as_secs_f64()
+        ));
+        for n in notes.iter().take(8) {
+            sink(n.clone());
+        }
+        // Under half the points is a model that is not answering plain questions here.
+        if points * 2 < max_points {
+            failures.push(format!("{model}: {points} of {max_points} points"));
+        }
+    }
+    failures
+}
+
 // ───────────── the report/code mode classifier (turnModeClassifier.ts), measured ─────────────
 
 /// Mirror of BASE in src/utils/turnModeClassifier.ts - the leg grades the very
@@ -1937,6 +2134,13 @@ pub async fn matrix_run(
         }
         sink(String::new());
     }
+    if !cancelled() && want("quality") {
+        sink("== Answer quality (eight plain questions, a rubric, per model; registry score beside it) ==".into());
+        for f in leg_quality(&bin, &dir, loaded_before.as_deref(), sink).await {
+            failures.push(format!("quality: {f}"));
+        }
+        sink(String::new());
+    }
     if !cancelled() && want("modes") {
         sink("== Report/code mode classifier (the app's prompt and pre-gate, per model) ==".into());
         for f in leg_turn_mode(&bin, &dir, loaded_before.as_deref(), sink).await {
@@ -1996,6 +2200,32 @@ pub async fn matrix_run(
     }
     let _ = app.emit("matrix-done", path.display().to_string());
     Ok(path.display().to_string())
+}
+
+#[cfg(test)]
+mod quality_leg_tests {
+    use super::*;
+    #[test]
+    fn rubric_scores_facts_and_form_separately() {
+        let sky = &QUALITY_GOLD[0];
+        assert_eq!(score_quality(sky, "Sunlight is scattered by air molecules (Rayleigh scattering); shorter wavelengths scatter more, so we see blue.").0, 2);
+        assert_eq!(score_quality(sky, "Because the ocean reflects onto it.").0, 1, "form fine, facts missing");
+        assert_eq!(score_quality(sky, "I'm sorry, I cannot help with that.").0, 0);
+        let train = &QUALITY_GOLD[2];
+        assert_eq!(score_quality(train, "It arrives at 12:05.").0, 2);
+        assert_eq!(score_quality(train, "It arrives at 11:65.").0, 1);
+        let garden = &QUALITY_GOLD[4];
+        assert_eq!(score_quality(garden, "1. Pick a sunny spot.\n2. Water in the morning.\n3. Feed the soil with compost.").0, 2);
+        assert_eq!(score_quality(garden, "Sun, water and good soil matter most.").0, 1, "facts yes, no list");
+        let rj = &QUALITY_GOLD[5];
+        assert_eq!(score_quality(rj, "In Verona two feuding families keep Romeo and Juliet apart. They marry in secret with Friar Laurence's help. A duel leaves Tybalt dead and Romeo banished. Believing Juliet dead, Romeo takes poison and she kills herself with his dagger.").0, 2);
+    }
+    #[test]
+    fn every_question_has_a_rubric_half() {
+        for c in QUALITY_GOLD {
+            assert!(!c.must.is_empty() || c.number.is_some(), "{} has no fact check", c.ask);
+        }
+    }
 }
 
 #[cfg(test)]
