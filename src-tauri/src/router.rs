@@ -406,6 +406,9 @@ const MEDICAL_REFERENCES: &[&str] = &[
     "help me understand my lab report",
     "what treatment options exist for this illness",
     "what should I eat or avoid with my medical condition",
+    // Hospital paperwork is the person's own health too (2026-10-12: "summarize
+    // my discharge report" sat nearer the document anchors than these).
+    "can you go through my hospital discharge papers with me",
 ];
 
 /// Benign anchors: the everyday-question REGISTER (asks, tasks, info-seeking).
@@ -447,6 +450,17 @@ const BENIGN_REFERENCES: &[&str] = &[
     "solve this equation for x step by step",
     "what is the derivative of x squared",
     "write a function in python that parses a file",
+    "add an index to this table in my database",
+    // Document requests: "please write me a report on why the sky is blue"
+    // sat next to "help me understand my lab report" with nothing
+    // report-shaped on this side (2026-10-12: routed to MedGemma, margin
+    // 0.067). The gate is for someone's own health, never for the word.
+    "write me a report on this topic",
+    "do a deep dive on this subject",
+    "put together an overview of how this works",
+    "draft a write-up comparing these options",
+    "give me a breakdown of this report",
+    "explain this for a school project",
 ];
 
 static MEDICAL_REFS: tokio::sync::OnceCell<Vec<Vec<f32>>> = tokio::sync::OnceCell::const_new();

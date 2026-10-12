@@ -697,6 +697,16 @@ const MODE_GRAMMAR: &str = "root ::= \"REPORT\" | \"CODE\" | \"NEITHER\"";
 /// and is NEITHER by construction. Change both together.
 const MODE_REPORT_KW: &[&str] = &["report", "write up", "write-up", "writeup", "analysis", "analyze", "analyse", "deep dive", "deep-dive", "breakdown", "rundown", "overview", "draft", "write me", "put together", "in-depth", "in depth", "dossier", "white paper", "comprehensive"];
 const MODE_CODE_KW: &[&str] = &["code", "function", "bug", "debug", "error", "exception", "compile", "script", "program", "implement", "refactor", "snippet", "fix this", "rewrite this", "api", "regex", "algorithm", "stack trace", "syntax", "variable", "python", "javascript", "typescript", "rust", "java", "c++", "sql", "html", "css", "git", "terminal", "shell", "npm", "docker", "class ", "def ", "import "];
+/// Mirror of REPORT_STRONG / CODE_STRONG (turnModeClassifier.ts): an unambiguous
+/// ask-the-assistant phrasing decides on its own, before any model. Change both together.
+const MODE_REPORT_STRONG: &[&str] = &["write me a report", "write a report", "write up a", "write a detailed", "put together a report", "do a deep dive", "deep dive on", "in-depth report", "write a comprehensive", "draft a report"];
+const MODE_CODE_STRONG: &[&str] = &["write a function", "write code", "write a script", "write me a script", "write a program", "implement a", "implement the", "fix this code", "debug this", "refactor this"];
+fn mode_strong_verdict(message: &str) -> Option<&'static str> {
+    let m = message.to_lowercase();
+    if MODE_REPORT_STRONG.iter().any(|k| m.contains(k)) { return Some("REPORT"); }
+    if MODE_CODE_STRONG.iter().any(|k| m.contains(k)) { return Some("CODE"); }
+    None
+}
 fn mode_pregate_relevant(message: &str) -> bool {
     let m = format!(" {} ", message.to_lowercase());
     MODE_REPORT_KW.iter().chain(MODE_CODE_KW.iter()).any(|k| m.contains(k))
@@ -762,6 +772,8 @@ pub async fn leg_turn_mode(bin: &Path, dir: &Path, loaded: Option<&str>, sink: S
     let models = memory_grade_candidates(&models, loaded, crate::llm::UTILITY_MODEL_FILE);
     sink(format!("grading {} of {} chat model(s): the helper, the loaded model, then the strongest by the registry", models.len(), all));
     let pregated = MODE_GOLD.iter().filter(|(m, _)| !mode_pregate_relevant(m)).count();
+    let strong = MODE_GOLD.iter().filter(|(m, _)| mode_pregate_relevant(m) && mode_strong_verdict(m).is_some()).count();
+    sink(format!("{strong} of {} messages are decided by the strong phrasings alone (no model call)", MODE_GOLD.len()));
     sink(format!("{} of {} messages never reach a model (the free pre-gate says NEITHER){}", pregated, MODE_GOLD.len(),
         if MODE_GOLD.iter().any(|(m, want)| !mode_pregate_relevant(m) && *want != "NEITHER") { " - WARNING: a report/code request among them" } else { "" }));
     let client = crate::llm::local_http();
@@ -806,6 +818,8 @@ pub async fn leg_turn_mode(bin: &Path, dir: &Path, loaded: Option<&str>, sink: S
             e.1 += 1;
             let got: String = if !mode_pregate_relevant(message) {
                 "NEITHER".into()
+            } else if let Some(v) = mode_strong_verdict(message) {
+                v.into()
             } else {
                 let body = serde_json::json!({
                     "model": model,

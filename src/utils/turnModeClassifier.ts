@@ -110,6 +110,16 @@ export async function classifyTurnMode(
   // → skip the model call entirely (instant, the common case).
   if (!isFollowUp && !looksRelevant(message)) return null;
 
+  // An unambiguous ask-the-assistant phrasing ("write me a report on",
+  // "implement a", "fix this code") decides on its own: the strong lists are
+  // high-precision by construction, and a small chat model asked the same
+  // question is the weaker judge (2026-10-12: a 4B model called "please write
+  // me a report on why the sky is blue" CODE; the matrix's modes leg puts
+  // that model at 3 of 8 on report requests). The model only judges the
+  // phrasings the lists do not name.
+  const strong = keywordVerdict(message);
+  if (strong) return strong;
+
   // A LOCAL model that is still loading can't classify without stalling the
   // whole turn behind server health (the 6s abort burned in full right after
   // launch - measured 2026-07-17). Use the keyword verdict instead of
