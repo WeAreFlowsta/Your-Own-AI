@@ -34,9 +34,9 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
 pub fn acquire_or_exit(app: &AppHandle) -> Option<TcpListener> {
     let lan = crate::inference_server::lan_config(app).enabled;
     let addr = if lan {
-        format!("0.0.0.0:{}", crate::inference_server::PORT)
+        format!("0.0.0.0:{}", crate::inference_server::port())
     } else {
-        format!("127.0.0.1:{}", crate::inference_server::PORT)
+        format!("127.0.0.1:{}", crate::inference_server::port())
     };
 
     match TcpListener::bind(&addr) {
@@ -78,7 +78,7 @@ pub fn acquire_or_exit(app: &AppHandle) -> Option<TcpListener> {
 /// True if the port holder answers /health AND identifies as this app -
 /// a plain web server on our port must not read as a second instance.
 fn other_instance_is_healthy() -> bool {
-    let addr = SocketAddr::from(([127, 0, 0, 1], crate::inference_server::PORT));
+    let addr = SocketAddr::from(([127, 0, 0, 1], crate::inference_server::port()));
     let Ok(mut stream) = TcpStream::connect_timeout(&addr, PROBE_TIMEOUT) else {
         return false;
     };

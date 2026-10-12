@@ -183,6 +183,7 @@ fn ensure_agent_model_entry(
     device_workers: bool,
     web_allowed: bool,
 ) -> Result<(), String> {
+    let inference_port = crate::ports::inference();
     let config_path = home.join(".your-own-ai-build").join("config.toml");
     let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
     let header = format!("[model.{}]", slug);
@@ -193,7 +194,7 @@ fn ensure_agent_model_entry(
     // = compacting constantly inside a million-token window.
     let ctx = agent_ctx;
     let entry = format!(
-        "{header}\nmodel = \"{slug}:agent\"\nbase_url = \"http://localhost:11435/v1\"\nname = \"{slug}\"\napi_key = \"local\"\napi_backend = \"chat_completions\"\ncontext_window = {ctx}\n",
+        "{header}\nmodel = \"{slug}:agent\"\nbase_url = \"http://localhost:{inference_port}/v1\"\nname = \"{slug}\"\napi_key = \"local\"\napi_backend = \"chat_completions\"\ncontext_window = {ctx}\n",
     );
     let content = if let Some(start) = existing.find(&header) {
         // Replace our managed section in place (up to the next section or
@@ -214,7 +215,7 @@ fn ensure_agent_model_entry(
     let plan_header = "[model.planning]";
     let ctx = plan_ctx;
     let plan_entry = format!(
-        "{plan_header}\nmodel = \"{slug}:plan\"\nbase_url = \"http://localhost:11435/v1\"\nname = \"planning\"\napi_key = \"local\"\napi_backend = \"chat_completions\"\ncontext_window = {ctx}\n",
+        "{plan_header}\nmodel = \"{slug}:plan\"\nbase_url = \"http://localhost:{inference_port}/v1\"\nname = \"planning\"\napi_key = \"local\"\napi_backend = \"chat_completions\"\ncontext_window = {ctx}\n",
     );
     let content = if let Some(start) = content.find(plan_header) {
         let after = &content[start + plan_header.len()..];
@@ -233,7 +234,7 @@ fn ensure_agent_model_entry(
     let dw_header = "[model.device-worker]";
     let dw_ctx = crate::llm::current_ctx_size();
     let dw_entry = format!(
-        "{dw_header}\nmodel = \"{slug}:agent-device\"\nbase_url = \"http://localhost:11435/v1\"\nname = \"device-worker\"\napi_key = \"local\"\napi_backend = \"chat_completions\"\ncontext_window = {dw_ctx}\n",
+        "{dw_header}\nmodel = \"{slug}:agent-device\"\nbase_url = \"http://localhost:{inference_port}/v1\"\nname = \"device-worker\"\napi_key = \"local\"\napi_backend = \"chat_completions\"\ncontext_window = {dw_ctx}\n",
     );
     let content = if let Some(start) = content.find(dw_header) {
         let after = &content[start + dw_header.len()..];
@@ -833,7 +834,7 @@ async fn handle_agent_message(
                 json!([{
                     "type": "http",
                     "name": "project-memory",
-                    "url": "http://127.0.0.1:11435/mcp",
+                    "url": format!("http://127.0.0.1:{}/mcp", crate::ports::inference()),
                     "headers": [
                         { "name": "x-project", "value": workspace },
                         { "name": "x-agent-key", "value": memory_identity.0 },

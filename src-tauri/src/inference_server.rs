@@ -42,13 +42,18 @@ fn conv_map() -> &'static Mutex<HashMap<String, (String, u32)>> {
 
 /// Dedicated Your Own AI port (deliberately NOT Ollama's 11434). Doubles as
 /// the single-instance lock: instance_guard binds it before anything spawns.
-pub(crate) const PORT: u16 = 11435;
+pub(crate) fn port() -> u16 { crate::ports::inference() }
+
+/// The inference port for the front end (it follows YOAI_PORT_OFFSET like
+/// every other local port; a literal in the webview would not).
+#[tauri::command]
+pub fn inference_port() -> u16 { port() }
 
 /// The local chat server's OpenAI endpoint (port owned by llm.rs).
 fn llama_upstream() -> String {
     format!(
         "http://127.0.0.1:{}/v1/chat/completions",
-        crate::llm::CHAT_PORT
+        crate::llm::chat_port()
     )
 }
 const AI_STORE: &str = "ai-data.json";
@@ -130,7 +135,7 @@ pub fn lan_access_status(app: AppHandle) -> serde_json::Value {
         "enabled": cfg.enabled,
         "key": cfg.key,
         "ips": lan_ips(),
-        "port": PORT,
+        "port": port(),
     })
 }
 
@@ -143,7 +148,7 @@ pub fn lan_access_set(app: AppHandle, enabled: bool) -> Result<serde_json::Value
     }
     save_lan_config(&app, &cfg)?;
     restart_server(app.clone());
-    Ok(json!({ "enabled": cfg.enabled, "key": cfg.key, "ips": lan_ips(), "port": PORT }))
+    Ok(json!({ "enabled": cfg.enabled, "key": cfg.key, "ips": lan_ips(), "port": port() }))
 }
 
 #[tauri::command]
@@ -224,9 +229,9 @@ pub fn spawn(app: AppHandle, pre_bound: Option<std::net::TcpListener>) {
             .with_state(app);
 
         let addr = if lan {
-            format!("0.0.0.0:{PORT}")
+            format!("0.0.0.0:{}", port())
         } else {
-            format!("127.0.0.1:{PORT}")
+            format!("127.0.0.1:{}", port())
         };
         let listener = match pre_bound {
             Some(l) => {
@@ -1615,7 +1620,7 @@ async fn caption_one(model: &str, image_part: &Value) -> Result<String, String> 
     });
     let _turn = crate::llm::CHAT_ONE_AT_A_TIME.acquire().await.map_err(|e| e.to_string())?;
     let resp = reqwest::Client::new()
-        .post(format!("http://localhost:{}/v1/chat/completions", crate::llm::CHAT_PORT)).bearer_auth(crate::llm::local_api_key())
+        .post(format!("http://localhost:{}/v1/chat/completions", crate::llm::chat_port())).bearer_auth(crate::llm::local_api_key())
         .json(&body)
         .timeout(std::time::Duration::from_secs(180))
         .send()

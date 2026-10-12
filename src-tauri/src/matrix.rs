@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::tuning::{arms_for, bench_one, TuneArm, BENCH_PORT};
+use crate::tuning::{arms_for, bench_one, bench_port, TuneArm};
 
 static MATRIX_RUNNING: AtomicBool = AtomicBool::new(false);
 pub static MATRIX_CANCEL: AtomicBool = AtomicBool::new(false);
@@ -248,7 +248,7 @@ pub async fn leg_memory_grade(app: &AppHandle, bin: &Path, dir: &Path, loaded: O
             break;
         }
         let mut args: Vec<String> = vec![
-            "--port".into(), BENCH_PORT.to_string(), "--host".into(), "127.0.0.1".into(),
+            "--port".into(), bench_port().to_string(), "--host".into(), "127.0.0.1".into(),
             "--no-webui".into(), "--reasoning".into(), "off".into(),
             "--ctx-size".into(), "4096".into(), "--fit".into(), "off".into(),
             "--model".into(), model.clone(),
@@ -289,7 +289,7 @@ pub async fn leg_memory_grade(app: &AppHandle, bin: &Path, dir: &Path, loaded: O
                     body["grammar"] = serde_json::Value::String(g);
                 }
                 let v: serde_json::Value = client
-                    .post(format!("http://127.0.0.1:{BENCH_PORT}/v1/chat/completions"))
+                    .post(format!("http://127.0.0.1:{}/v1/chat/completions", bench_port()))
                     .json(&body)
                     .timeout(Duration::from_secs(180))
                     .send()
@@ -376,7 +376,7 @@ async fn spawn_bench_server(
             return Err(format!("exited during load: {st}"));
         }
         if let Ok(r) = client
-            .get(format!("http://127.0.0.1:{BENCH_PORT}/health"))
+            .get(format!("http://127.0.0.1:{}/health", bench_port()))
             .send()
             .await
         {
@@ -429,7 +429,7 @@ async fn ask_scenarios(
             body["reasoning_effort"] = serde_json::json!(e);
         }
         let v: serde_json::Value = match client
-            .post(format!("http://127.0.0.1:{BENCH_PORT}/v1/chat/completions"))
+            .post(format!("http://127.0.0.1:{}/v1/chat/completions", bench_port()))
             .json(&body)
             .timeout(Duration::from_secs(300))
             .send()
@@ -526,7 +526,7 @@ pub async fn bench_chat_format(
     scenarios: &[(&str, &str)],
 ) -> String {
     let mut args: Vec<String> = vec![
-        "--port".into(), BENCH_PORT.to_string(),
+        "--port".into(), bench_port().to_string(),
         "--host".into(), "127.0.0.1".into(),
         "--no-webui".into(), "--reasoning".into(), "off".into(),
         "--ctx-size".into(), arm.ctx.to_string(),
@@ -611,7 +611,7 @@ async fn ask_think(model: &str, on: bool, strength: bool, marker: Option<&'stati
         }
     }
     let v: serde_json::Value = client
-        .post(format!("http://127.0.0.1:{BENCH_PORT}/v1/chat/completions"))
+        .post(format!("http://127.0.0.1:{}/v1/chat/completions", bench_port()))
         .json(&body)
         .timeout(Duration::from_secs(300))
         .send()
@@ -812,7 +812,7 @@ pub async fn leg_quality(bin: &Path, dir: &Path, loaded: Option<&str>, sink: Sin
             break;
         }
         let mut args: Vec<String> = vec![
-            "--port".into(), BENCH_PORT.to_string(), "--host".into(), "127.0.0.1".into(),
+            "--port".into(), bench_port().to_string(), "--host".into(), "127.0.0.1".into(),
             "--no-webui".into(), "--reasoning".into(), "off".into(),
             "--ctx-size".into(), "4096".into(), "--fit".into(), "off".into(),
             "--model".into(), model.clone(),
@@ -861,7 +861,7 @@ pub async fn leg_quality(bin: &Path, dir: &Path, loaded: Option<&str>, sink: Sin
             });
             let t0 = std::time::Instant::now();
             let v: Result<serde_json::Value, String> = async {
-                client.post(format!("http://127.0.0.1:{BENCH_PORT}/v1/chat/completions")).json(&body).timeout(Duration::from_secs(300)).send().await
+                client.post(format!("http://127.0.0.1:{}/v1/chat/completions", bench_port())).json(&body).timeout(Duration::from_secs(300)).send().await
                     .map_err(|e| format!("request: {e}"))?.json().await.map_err(|e| format!("json: {e}"))
             }.await;
             let v = match v {
@@ -1006,7 +1006,7 @@ pub async fn leg_turn_mode(bin: &Path, dir: &Path, loaded: Option<&str>, sink: S
             break;
         }
         let mut args: Vec<String> = vec![
-            "--port".into(), BENCH_PORT.to_string(), "--host".into(), "127.0.0.1".into(),
+            "--port".into(), bench_port().to_string(), "--host".into(), "127.0.0.1".into(),
             "--no-webui".into(), "--reasoning".into(), "off".into(),
             "--ctx-size".into(), "4096".into(), "--fit".into(), "off".into(),
             "--model".into(), model.clone(),
@@ -1051,7 +1051,7 @@ pub async fn leg_turn_mode(bin: &Path, dir: &Path, loaded: Option<&str>, sink: S
                     "stop": crate::llm::chat_stop_strings(&model),
                 });
                 let v: Result<serde_json::Value, String> = async {
-                    client.post(format!("http://127.0.0.1:{BENCH_PORT}/v1/chat/completions")).json(&body).timeout(Duration::from_secs(120)).send().await
+                    client.post(format!("http://127.0.0.1:{}/v1/chat/completions", bench_port())).json(&body).timeout(Duration::from_secs(120)).send().await
                         .map_err(|e| format!("request: {e}"))?.json().await.map_err(|e| format!("json: {e}"))
                 }.await;
                 match v {
@@ -1273,7 +1273,7 @@ pub async fn leg_sampling(bin: &Path, dir: &Path, model: &str, sink: Sink<'_>) -
     let size = std::fs::metadata(dir.join(model)).map_err(|e| e.to_string())?.len();
     let free = free_vram_gb(bin);
     let mut args: Vec<String> = vec![
-        "--port".into(), BENCH_PORT.to_string(),
+        "--port".into(), bench_port().to_string(),
         "--host".into(), "127.0.0.1".into(),
         "--no-webui".into(), "--reasoning".into(), "off".into(),
         "--ctx-size".into(), "4096".into(), "--fit".into(), "off".into(),
@@ -1319,7 +1319,7 @@ pub async fn leg_sampling(bin: &Path, dir: &Path, model: &str, sink: Sink<'_>) -
                 body["seed"] = serde_json::json!(sd);
             }
             let v: Result<serde_json::Value, String> = match client
-                .post(format!("http://127.0.0.1:{BENCH_PORT}/v1/chat/completions"))
+                .post(format!("http://127.0.0.1:{}/v1/chat/completions", bench_port()))
                 .json(&body)
                 .timeout(Duration::from_secs(180))
                 .send()
@@ -1448,7 +1448,7 @@ pub async fn leg_mlx(app: &AppHandle, bin_dir_hint: &Path, sink: Sink<'_>) -> Ve
             "--model".into(),
             model_dir.display().to_string(),
             "--port".into(),
-            BENCH_PORT.to_string(),
+            bench_port().to_string(),
         ];
         let verdict = match spawn_bench_server(&bin, bin_dir_hint, args).await {
             Ok(guard) => {

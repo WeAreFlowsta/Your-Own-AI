@@ -12,7 +12,7 @@ use tauri::Emitter;
 
 /// Admin WebSocket port for the local Holochain conductor.
 /// Different from Flowsta Vault (4455) and ProofPoll (4466).
-pub const ADMIN_WS_PORT: u16 = 4477;
+pub fn admin_ws_port() -> u16 { crate::ports::admin_ws() }
 
 /// The Holochain network generation this build's conductor speaks - the
 /// Vault's vocabulary (`devices.rs` NETWORK_GENERATION), so a sibling on
@@ -469,7 +469,7 @@ pub async fn start_holochain(
     );
     let conductor_dir = data_dir.join("conductor");
     let rendezvous = Rendezvous::resolve().await;
-    let config_path = match generate_conductor_config(&conductor_dir, &connection_url, ADMIN_WS_PORT, rendezvous.as_ref()) {
+    let config_path = match generate_conductor_config(&conductor_dir, &connection_url, admin_ws_port(), rendezvous.as_ref()) {
         Ok(p) => p,
         Err(e) => fail_with_lair_cleanup!(e),
     };
@@ -487,7 +487,7 @@ pub async fn start_holochain(
             message: "Waiting for conductor...".into(),
         },
     );
-    if let Err(e) = wait_for_admin_ws(ADMIN_WS_PORT, 30, &mut conductor_child, &conductor_dir).await {
+    if let Err(e) = wait_for_admin_ws(admin_ws_port(), 30, &mut conductor_child, &conductor_dir).await {
         let _ = conductor_child.kill();
         let _ = conductor_child.wait();
         fail_with_lair_cleanup!(e);
@@ -501,7 +501,7 @@ pub async fn start_holochain(
         },
     );
     let admin_ws = holochain_client::AdminWebsocket::connect(
-        format!("localhost:{}", ADMIN_WS_PORT),
+        format!("localhost:{}", admin_ws_port()),
         Some("your-own-ai".to_string()),
     )
     .await
@@ -522,13 +522,13 @@ pub async fn start_holochain(
     let _ = app_handle.emit(
         "conductor-status",
         ConductorStatus::Ready {
-            admin_port: ADMIN_WS_PORT,
+            admin_port: admin_ws_port(),
             app_port,
         },
     );
     log::info!(
         "Holochain conductor ready (admin: {}, app: {})",
-        ADMIN_WS_PORT,
+        admin_ws_port(),
         app_port
     );
 
@@ -536,7 +536,7 @@ pub async fn start_holochain(
         handle: ConductorHandle {
             lair_child,
             conductor_child,
-            admin_port: ADMIN_WS_PORT,
+            admin_port: admin_ws_port(),
             app_port,
         },
         lair_client,

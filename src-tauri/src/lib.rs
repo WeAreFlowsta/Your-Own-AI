@@ -7,6 +7,7 @@ mod project_identity;     // a folder's project id: git root commit / id file / 
 mod dreaming;             // memory consolidation when idle (MEMORY_REDESIGN §6)
 mod memory_slot;          // which local model does the memory work (MEMORY_REDESIGN §7)
 mod conversation_cache;   // last-known-good conversation lists (encrypted)
+mod ports;                 // every fixed local port, shifted together by YOAI_PORT_OFFSET
 mod embedding_model;       // THE embedding model: file, prefixes, pooling, index marker
 mod corpus;               // the person's document library (SQLite, row-encrypted; per-AI grants)
 mod model_hash;
@@ -687,6 +688,7 @@ pub fn run() {
             llm::is_llama_server_running,
             llm::is_llama_server_ready,
             llm::model_thinks_natively,
+            inference_server::inference_port,
             llm::is_vision_ready,
             llm::find_vision_model,
             llm::start_llama_server,

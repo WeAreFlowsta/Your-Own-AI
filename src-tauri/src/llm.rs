@@ -18,9 +18,9 @@ use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::CommandChild;
 use tokio::sync::Mutex;
 
-/// Chat server port. The embedding (:8091, `EMBED_PORT`) and utility
-/// (:8092, `UTIL_PORT`) servers have their own consts further down.
-pub(crate) const CHAT_PORT: &str = "8080";
+/// Chat server port. The embedding (:8091, `embed_port()`) and utility
+/// (:8092, `util_port()`) servers have their own consts further down.
+pub(crate) fn chat_port() -> String { crate::ports::chat().to_string() }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LocalModel {
@@ -466,7 +466,7 @@ pub async fn set_models_directory(
  */
 #[tauri::command]
 pub async fn is_llama_server_running() -> Result<bool, String> {
-    match tokio::net::TcpStream::connect(format!("127.0.0.1:{}", CHAT_PORT)).await {
+    match tokio::net::TcpStream::connect(format!("127.0.0.1:{}", chat_port())).await {
         Ok(_) => Ok(true),
         Err(_) => Ok(false)
     }
@@ -527,7 +527,7 @@ pub fn model_thinks_natively(model: String) -> bool {
 #[tauri::command]
 pub async fn is_llama_server_ready() -> Result<bool, String> {
     let client = local_http();
-    match client.get(format!("http://localhost:{}/health", CHAT_PORT)).bearer_auth(local_api_key()).send().await {
+    match client.get(format!("http://localhost:{}/health", chat_port())).bearer_auth(local_api_key()).send().await {
         Ok(resp) if resp.status().is_success() => Ok(true),
         _ => Ok(false)
     }
@@ -545,7 +545,7 @@ pub async fn kill_port_8080() -> Result<String, String> {
         
         // Try lsof first
         let lsof_result = Command::new("lsof")
-            .args(&["-ti", &format!(":{}", CHAT_PORT)])
+            .args(&["-ti", &format!(":{}", chat_port())])
             .output();
         
         if let Ok(output) = lsof_result {
@@ -565,7 +565,7 @@ pub async fn kill_port_8080() -> Result<String, String> {
         
         // If lsof failed, try fuser as alternative
         let fuser_result = Command::new("fuser")
-            .args(&["-k", "-9", &format!("{}/tcp", CHAT_PORT)])
+            .args(&["-k", "-9", &format!("{}/tcp", chat_port())])
             .output();
         
         if fuser_result.is_ok() {
@@ -2191,7 +2191,7 @@ pub async fn count_tokens_text(text: &str) -> u64 {
     }
     let client = local_http();
     let res = client
-        .post(format!("http://localhost:{}/tokenize", CHAT_PORT)).bearer_auth(local_api_key())
+        .post(format!("http://localhost:{}/tokenize", chat_port())).bearer_auth(local_api_key())
         .timeout(std::time::Duration::from_secs(8))
         .json(&serde_json::json!({ "content": text, "add_special": false, "with_pieces": false }))
         .send()
@@ -2604,7 +2604,7 @@ fn has_word_oom(lower: &str) -> bool {
 async fn chat_server_health_ok() -> bool {
     let client = local_http();
     matches!(
-        client.get(format!("http://127.0.0.1:{}/health", CHAT_PORT)).bearer_auth(local_api_key()).send().await,
+        client.get(format!("http://127.0.0.1:{}/health", chat_port())).bearer_auth(local_api_key()).send().await,
         Ok(r) if r.status().is_success()
     )
 }
@@ -2776,7 +2776,7 @@ async fn start_mlx_server(
             "--model",
             &mlx_dir.display().to_string(),
             "--port",
-            CHAT_PORT,
+            &chat_port(),
         ])
         .spawn()
         .map_err(|e| format!("Failed to start the MLX engine: {e}"))?;
@@ -2975,7 +2975,7 @@ pub async fn start_llama_server(
     let reasoning_flag = reasoning_flag_for(model_filename.as_deref());
     let mut args = vec![
         "--port".to_string(),
-        CHAT_PORT.to_string(),
+        chat_port().to_string(),
         "--host".to_string(),
         "127.0.0.1".to_string(),
         "--api-key".to_string(),
@@ -3305,7 +3305,7 @@ pub async fn start_llama_server(
         .to_string(),
     );
 
-    println!("[LLM] llama-server started on port {} ({:?} engine)", CHAT_PORT, backend);
+    println!("[LLM] llama-server started on port {} ({:?} engine)", chat_port(), backend);
     
     // Spawn a task to monitor server output
     let progress_app = app_handle.clone();
@@ -3631,7 +3631,7 @@ pub async fn stop_llama_server(
 // bundled binary as the chat server (no extra download), started on demand and
 // CPU-only so it never competes with the chat model for GPU memory.
 
-const EMBED_PORT: &str = "8091";
+fn embed_port() -> String { crate::ports::embed().to_string() }
 
 #[derive(Deserialize)]
 struct EmbeddingResponse {
@@ -3725,7 +3725,7 @@ pub(crate) fn netstat_listening_pids(text: &str, port: &str) -> Vec<String> {
 async fn embed_server_ready() -> bool {
     let client = local_http();
     matches!(
-        client.get(format!("http://localhost:{}/health", EMBED_PORT)).bearer_auth(local_api_key()).send().await,
+        client.get(format!("http://localhost:{}/health", embed_port())).bearer_auth(local_api_key()).send().await,
         Ok(r) if r.status().is_success()
     )
 }
@@ -3793,9 +3793,9 @@ async fn ensure_embedding_server(
     // running the clean-exit handler, leaving the old one holding the port).
     // Then wait for the port to actually release before rebinding.
     stop_embedding_server_inner(state).await;
-    free_port(EMBED_PORT);
+    free_port(&embed_port());
     for _ in 0..20 {
-        if tokio::net::TcpStream::connect(format!("127.0.0.1:{}", EMBED_PORT))
+        if tokio::net::TcpStream::connect(format!("127.0.0.1:{}", embed_port()))
             .await
             .is_err()
         {
@@ -3823,7 +3823,7 @@ async fn ensure_embedding_server(
         model_filename.to_string(),
         "--embedding".to_string(),
         "--port".to_string(),
-        EMBED_PORT.to_string(),
+        embed_port().to_string(),
         "--host".to_string(),
         "127.0.0.1".to_string(),
         "--api-key".to_string(),
@@ -3875,7 +3875,7 @@ async fn ensure_embedding_server(
     *state.embed_running.lock().await = true;
     *state.embed_model.lock().await = Some(model_filename.to_string());
     *state.embed_place.lock().await = place;
-    println!("[LLM] embedding server started on port {} ({})", EMBED_PORT, place.word());
+    println!("[LLM] embedding server started on port {} ({})", embed_port(), place.word());
 
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
@@ -4007,7 +4007,7 @@ async fn embed_request(model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>, E
     let _busy = Inflight::new(&EMBED_INFLIGHT);
     let client = local_http();
     let resp = client
-        .post(format!("http://localhost:{}/v1/embeddings", EMBED_PORT)).bearer_auth(local_api_key())
+        .post(format!("http://localhost:{}/v1/embeddings", embed_port())).bearer_auth(local_api_key())
         .json(&serde_json::json!({ "model": model, "input": texts }))
         .send()
         .await
@@ -4053,12 +4053,12 @@ async fn embed_one_shrinking(model: &str, text: String) -> Result<Vec<f32>, Stri
 // never competes with the chat model for GPU memory. Optional: when this model
 // isn't installed, the caller rides the chat/online model instead.
 
-const UTIL_PORT: &str = "8092";
+fn util_port() -> String { crate::ports::util().to_string() }
 
 async fn util_server_ready() -> bool {
     let client = local_http();
     matches!(
-        client.get(format!("http://localhost:{}/health", UTIL_PORT)).bearer_auth(local_api_key()).send().await,
+        client.get(format!("http://localhost:{}/health", util_port())).bearer_auth(local_api_key()).send().await,
         Ok(r) if r.status().is_success()
     )
 }
@@ -4115,9 +4115,9 @@ async fn ensure_utility_server(
     }
 
     stop_utility_server_inner(state).await;
-    free_port(UTIL_PORT);
+    free_port(&util_port());
     for _ in 0..20 {
-        if tokio::net::TcpStream::connect(format!("127.0.0.1:{}", UTIL_PORT))
+        if tokio::net::TcpStream::connect(format!("127.0.0.1:{}", util_port()))
             .await
             .is_err()
         {
@@ -4144,7 +4144,7 @@ async fn ensure_utility_server(
         "--model".to_string(),
         model_filename.to_string(),
         "--port".to_string(),
-        UTIL_PORT.to_string(),
+        util_port().to_string(),
         "--host".to_string(),
         "127.0.0.1".to_string(),
         "--api-key".to_string(),
@@ -4190,7 +4190,7 @@ async fn ensure_utility_server(
     *state.util_running.lock().await = true;
     *state.util_model.lock().await = Some(model_filename.to_string());
     *state.util_place.lock().await = place;
-    println!("[LLM] utility server started on port {} ({})", UTIL_PORT, place.word());
+    println!("[LLM] utility server started on port {} ({})", util_port(), place.word());
 
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
@@ -4300,7 +4300,7 @@ pub async fn warm_chat_prompt(state: State<'_, LLMState>, system: String) -> Res
     let _turn = CHAT_ONE_AT_A_TIME.acquire().await.map_err(|e| e.to_string())?;
     let started = std::time::Instant::now();
     let resp = local_http()
-        .post(format!("http://localhost:{}/v1/chat/completions", CHAT_PORT)).bearer_auth(local_api_key())
+        .post(format!("http://localhost:{}/v1/chat/completions", chat_port())).bearer_auth(local_api_key())
         .timeout(std::time::Duration::from_secs(120))
         .json(&body)
         .send()
@@ -4351,11 +4351,11 @@ pub(crate) async fn memory_complete(
     let pick = crate::memory_slot::pick(app_handle, task);
     let (port, model) = if pick.via == "loaded" {
         log::info!("[LLM] memory work on the loaded model: {}", pick.reason);
-        (CHAT_PORT, pick.model.clone())
+        (chat_port(), pick.model.clone())
     } else {
         let state = app_handle.state::<LLMState>();
         ensure_utility_server(app_handle, &state, fallback_model).await?;
-        (UTIL_PORT, fallback_model.to_string())
+        (util_port(), fallback_model.to_string())
     };
     let _busy = Inflight::new(&UTIL_INFLIGHT);
 
@@ -5936,7 +5936,7 @@ pub async fn stream_chat_completion(
         } else {
             // Query the running server for its model name
             let client_tmp = local_http();
-            match client_tmp.get(format!("http://localhost:{}/v1/models", CHAT_PORT)).bearer_auth(local_api_key()).send().await {
+            match client_tmp.get(format!("http://localhost:{}/v1/models", chat_port())).bearer_auth(local_api_key()).send().await {
                 Ok(resp) if resp.status().is_success() => {
                     if let Ok(body) = resp.json::<serde_json::Value>().await {
                         body["data"][0]["id"].as_str()
@@ -6083,7 +6083,7 @@ pub async fn stream_chat_completion(
     
     println!("[LLM] Waiting for model to be fully loaded...");
     for attempt in 1..=max_health_checks {
-        match client.get(format!("http://localhost:{}/health", CHAT_PORT)).bearer_auth(local_api_key()).send().await {
+        match client.get(format!("http://localhost:{}/health", chat_port())).bearer_auth(local_api_key()).send().await {
             Ok(health_resp) if health_resp.status().is_success() => {
                 println!("[LLM] Model is fully loaded and ready!");
                 break;
@@ -6147,7 +6147,7 @@ pub async fn stream_chat_completion(
             })?
     } else {
         client
-            .post(format!("http://localhost:{}/v1/chat/completions", CHAT_PORT)).bearer_auth(local_api_key())
+            .post(format!("http://localhost:{}/v1/chat/completions", chat_port())).bearer_auth(local_api_key())
             .header("Content-Type", "application/json")
             .json(&request_body)
             .send()

@@ -9,6 +9,7 @@
  * memory, and the chain keeps an auditable history of how it evolved.
  * Zero DNA changes: this is all client-side schema.
  */
+import { invoke } from "@tauri-apps/api/core";
 import {
   getConversations,
   getTranscript,
@@ -258,7 +259,9 @@ export async function reviseWorkspaceMemory(
     "Return ONLY the COMPLETE updated memory as markdown bullet lines - every line that still holds, not only what changed. Rules: update in place rather than append; drop anything stale or proven wrong - but NEVER drop or reword a preference or correction the person gave; keep commands verbatim; no conversation summaries or one-off details; maximum " +
     `${MEMORY_MAX_LINES} lines. If nothing durable was learned, return the current memory unchanged.`;
   try {
-    const r = await fetch("http://127.0.0.1:11435/v1/chat/completions", {
+    // The port follows the app's port switch (two instances on one box), never a literal.
+    const inferencePort = await invoke<number>("inference_port").catch(() => 11435);
+    const r = await fetch(`http://127.0.0.1:${inferencePort}/v1/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

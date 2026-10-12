@@ -224,7 +224,7 @@ pub async fn tuning_apply_now(
 // it shows was measured on this machine.
 // ---------------------------------------------------------------------------
 
-pub const BENCH_PORT: u16 = 18098;
+pub fn bench_port() -> u16 { crate::ports::bench() }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct TuneArm {
@@ -550,7 +550,7 @@ pub async fn bench_one(
         during_free: None,
     };
     let mut args: Vec<String> = vec![
-        "--port".into(), BENCH_PORT.to_string(),
+        "--port".into(), bench_port().to_string(),
         "--host".into(), "127.0.0.1".into(),
         "--no-webui".into(), "--reasoning".into(), "off".into(),
         "--ctx-size".into(), arm.ctx.to_string(),
@@ -650,7 +650,7 @@ pub async fn bench_one(
             result.failed = Some(format!("did not load ({status}): {}", t.chars().rev().take(300).collect::<String>().chars().rev().collect::<String>()));
             return result;
         }
-        if let Ok(r) = client.get(format!("http://127.0.0.1:{BENCH_PORT}/health")).send().await {
+        if let Ok(r) = client.get(format!("http://127.0.0.1:{}/health", bench_port())).send().await {
             if r.status().is_success() {
                 break;
             }
@@ -686,7 +686,7 @@ pub async fn bench_one(
         body["reasoning_effort"] = serde_json::json!(e);
     }
     match client
-        .post(format!("http://127.0.0.1:{BENCH_PORT}/v1/chat/completions"))
+        .post(format!("http://127.0.0.1:{}/v1/chat/completions", bench_port()))
         .json(&body)
         .timeout(Duration::from_secs(300))
         .send()
