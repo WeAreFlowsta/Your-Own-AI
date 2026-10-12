@@ -11,6 +11,7 @@ import { LuBrain, LuEye, LuFileText, LuSparkles, LuCheck, LuDownload, LuTrash2, 
 import { modelManager, type DownloadProgress } from "../utils/modelManager";
 import LiquidMetalButton from "./LiquidMetalButton";
 import { EMBEDDING_MODEL, modelFamilies, type CapabilityModel } from "../data/recommended-models";
+import type { RebuildProgress } from "../utils/transcriptMemory";
 
 export interface CardProps {
   model: CapabilityModel;
@@ -56,6 +57,10 @@ export const ComponentCard = component$<CardProps>((props) => {
   const percent = useSignal(0);
   const error = useSignal("");
   const checking = useSignal(true);
+  // The memory component's index rebuild, while it runs (after a restore or
+  // a component update): which pass and how far - the only sign used to be
+  // the log (2026-10-12: ~90 minutes on a 13-AI profile).
+  const rebuild = useSignal<RebuildProgress>(null);
   const modelInstalled = useSignal(true);
   // A vision projector is inert without its paired chat model — gate the download.
   const paired = pairedModelFor(props.model);
@@ -144,6 +149,13 @@ export const ComponentCard = component$<CardProps>((props) => {
 
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async ({ cleanup }) => {
+    if (props.model.id === EMBEDDING_MODEL.id) {
+      const { rebuildProgress } = await import("../utils/transcriptMemory");
+      rebuild.value = rebuildProgress();
+      const onProgress = (e: Event) => { rebuild.value = (e as CustomEvent<RebuildProgress>).detail; };
+      window.addEventListener("memory-rebuild-progress", onProgress);
+      cleanup(() => window.removeEventListener("memory-rebuild-progress", onProgress));
+    }
     await refresh();
     if (downloaded.value) return;
     // Reattach to (or resume) a download already in progress — parity with the
@@ -195,6 +207,15 @@ export const ComponentCard = component$<CardProps>((props) => {
         <p class="text-sm text-[var(--text-secondary)] mt-0.5">
           {props.model.description}
         </p>
+        {rebuild.value && (
+          <p class="mt-1.5 text-xs text-[var(--text-muted)]" data-testid="memory-rebuild-progress">
+            {rebuild.value.phase === "conversations"
+              ? `Rebuilding memory for your AIs: ${Math.min(rebuild.value.done + 1, rebuild.value.total)} of ${rebuild.value.total}`
+              : rebuild.value.total
+                ? `Updating documents: ${rebuild.value.done.toLocaleString()} of ${rebuild.value.total.toLocaleString()}`
+                : "Updating documents…"}
+          </p>
+        )}
         {blocked && (
           <p class="mt-1.5 text-xs text-amber-500/90">
             Install {paired!.name} from Offline Models first — downloading the model brings this in automatically.

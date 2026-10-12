@@ -616,6 +616,17 @@ async function embedInBatches(texts: string[]): Promise<number[][]> {
  *  the library's passages, and record the current model once both are done.
  *  No-op on a fresh install and once the marker matches. Runs where the
  *  walker runs (launch, and right after the component downloads). */
+/** What the index rebuild is doing right now, for the memory component's card
+ *  (Settings -> Components): which pass and how far. null = nothing running.
+ *  Read `rebuildProgress()` on mount, then listen for `memory-rebuild-progress`. */
+export type RebuildProgress = { phase: "conversations" | "library"; done: number; total: number } | null;
+let currentRebuild: RebuildProgress = null;
+export function rebuildProgress(): RebuildProgress { return currentRebuild; }
+function setRebuildProgress(p: RebuildProgress): void {
+  currentRebuild = p;
+  try { window.dispatchEvent(new CustomEvent("memory-rebuild-progress", { detail: p })); } catch { /* no window */ }
+}
+
 /** The records live in the conductor, which can still be starting for a minute
  *  or more after launch (2026-10-12: the first rebuild ran against "conductor
  *  is still starting", saw no conversations and called itself complete). Wait
@@ -646,9 +657,15 @@ export async function migrateEmbeddingIndexIfNeeded(): Promise<void> {
     console.log("[Memory] Indexes belong to an earlier memory component - the records are not ready yet, rebuild retried next launch");
     return;
   }
+  let unlisten: (() => void) | null = null;
   try {
     await invoke("memory_mark_reembed_pending");
     await rebuildMemoryIndexIfPending();
+    const { listen } = await import("@tauri-apps/api/event");
+    unlisten = await listen<{ done: number; total: number }>("corpus-reembed-progress", (e) => {
+      setRebuildProgress({ phase: "library", done: e.payload.done, total: e.payload.total });
+    });
+    setRebuildProgress({ phase: "library", done: 0, total: 0 });
     const n = await invoke<number>("corpus_reembed_all");
     console.log(`[Memory] Library re-embedded with the current memory component: ${n} passages`);
     if (!(await invoke<boolean>("memory_reembed_pending"))) {
@@ -657,6 +674,9 @@ export async function migrateEmbeddingIndexIfNeeded(): Promise<void> {
     }
   } catch (e) {
     console.warn("[Memory] Index rebuild for the new memory component failed (retried next launch):", e);
+  } finally {
+    unlisten?.();
+    setRebuildProgress(null);
   }
 }
 
@@ -681,9 +701,11 @@ export async function rebuildMemoryIndexIfPending(): Promise<void> {
   const { getConversations, getTranscript } = await import("./holochainTranscripts");
   const ais = await getLocalCustomAis();
   let failed = false;
+  setRebuildProgress({ phase: "conversations", done: 0, total: ais.length });
 
-  for (const ai of ais) {
+  for (const [n, ai] of ais.entries()) {
     const agentKey = ai.agentPubKey ?? ai.id;
+    setRebuildProgress({ phase: "conversations", done: n, total: ais.length });
     try {
       const existing = await getEmb(ai.id);
       const authored = existing.filter((e) => e.kind === "authored");
@@ -744,6 +766,7 @@ export async function rebuildMemoryIndexIfPending(): Promise<void> {
     }
   }
 
+  setRebuildProgress(null);
   if (!failed) {
     try {
       await invoke("memory_reembed_done");
