@@ -30,6 +30,67 @@ fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
+/// On battery, not plugged in: a dream waits (MEMORY_REDESIGN.md §6 - never
+/// on battery saver). Best effort per platform; unknown = plugged in.
+pub fn on_battery() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let Ok(rd) = std::fs::read_dir("/sys/class/power_supply") else { return false };
+        let mut saw_battery = false;
+        let mut discharging = false;
+        for e in rd.flatten() {
+            let p = e.path();
+            let kind = std::fs::read_to_string(p.join("type")).unwrap_or_default();
+            if kind.trim() == "Battery" {
+                saw_battery = true;
+                let status = std::fs::read_to_string(p.join("status")).unwrap_or_default();
+                if linux_status_discharging(&status) {
+                    discharging = true;
+                }
+            }
+        }
+        saw_battery && discharging
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("pmset")
+            .args(["-g", "batt"])
+            .output()
+            .ok()
+            .map(|o| pmset_on_battery(&String::from_utf8_lossy(&o.stdout)))
+            .unwrap_or(false)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", "(Get-CimInstance Win32_Battery).BatteryStatus"])
+            .output()
+            .ok()
+            .map(|o| windows_battery_status_discharging(&String::from_utf8_lossy(&o.stdout)))
+            .unwrap_or(false)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        false
+    }
+}
+
+/// `/sys/class/power_supply/BAT*/status`: "Discharging" means on battery.
+pub fn linux_status_discharging(status: &str) -> bool {
+    status.trim().eq_ignore_ascii_case("discharging")
+}
+
+/// `pmset -g batt`: "Now drawing from 'Battery Power'" means on battery.
+pub fn pmset_on_battery(out: &str) -> bool {
+    out.contains("'Battery Power'")
+}
+
+/// `Win32_Battery.BatteryStatus`: 1 = discharging; anything else (2 = AC,
+/// 3-11 charging states, no battery) counts as plugged in.
+pub fn windows_battery_status_discharging(out: &str) -> bool {
+    out.lines().any(|l| l.trim() == "1")
+}
+
 fn idle_for_secs() -> i64 {
     let last = LAST_ACTIVITY_MS.load(Ordering::Relaxed);
     if last == 0 {
@@ -350,7 +411,7 @@ pub fn start_dreaming(app: &tauri::AppHandle) {
         let mut last_by_scope: std::collections::HashMap<String, i64> = Default::default();
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(30 * 60)).await;
-            if idle_for_secs() < IDLE_SECS {
+            if idle_for_secs() < IDLE_SECS || on_battery() {
                 continue;
             }
             let Some(hc) = app.try_state::<std::sync::Arc<crate::commands_holochain::HolochainState>>() else { continue };
@@ -483,6 +544,16 @@ mod tests {
         assert!(assist_candidates(&[done]).is_empty());
         assert_eq!(days_from_civil(1970, 1, 1), 0);
         assert_eq!(days_from_civil(2000, 2, 29), 11_016);
+    }
+
+    #[test]
+    fn the_battery_parsers_read_each_platform() {
+        assert!(linux_status_discharging("Discharging\n"));
+        assert!(!linux_status_discharging("Charging\n") && !linux_status_discharging("Full") && !linux_status_discharging(""));
+        assert!(pmset_on_battery("Now drawing from 'Battery Power'\n -InternalBattery-0 (id=123)\t87%; discharging; 3:10 remaining present: true"));
+        assert!(!pmset_on_battery("Now drawing from 'AC Power'\n -InternalBattery-0\t100%; charged; 0:00 remaining present: true"));
+        assert!(windows_battery_status_discharging("\n1\n"));
+        assert!(!windows_battery_status_discharging("2\n") && !windows_battery_status_discharging(""));
     }
 
     #[test]
