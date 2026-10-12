@@ -70,9 +70,10 @@ export interface KnowledgeDocument {
 const MAX_PER_AI = 1000;
 /** Cap stored/injected text length, to bound both the store and the prompt. */
 const MAX_TEXT = 600;
-/** Absolute cosine floor (calibrated for bge-small): catches a typo'd/fuzzy
- *  primary match (~0.47) while rejecting unrelated turns (≤~0.41). */
-const RECALL_THRESHOLD = 0.45;
+/** Absolute cosine floor. EmbeddingGemma (2026-10-12 matrix): right passages
+ *  0.21-0.75, the best wrong one <= 0.32 - the floor only drops noise, the
+ *  margin below does the separating. (bge-small sat at 0.45.) */
+const RECALL_THRESHOLD = 0.25;
 /** Relative margin: also drop any match much weaker than the BEST one. First-
  *  person turns ("my dog…", "I'm allergic…") cluster ~0.47–0.49, so without
  *  this a strong hit (0.69) drags in an unrelated second (0.47). Keeping only
@@ -610,6 +611,32 @@ async function embedInBatches(texts: string[]): Promise<number[][]> {
  * embedding model isn't downloaded yet the marker stays for a later pass
  * (next launch, or right after the model download in Settings → Components).
  */
+/** A different memory component than the indexes were built with (a model
+ *  swap in an update): mark the per-AI index for the walker below, re-embed
+ *  the library's passages, and record the current model once both are done.
+ *  No-op on a fresh install and once the marker matches. Runs where the
+ *  walker runs (launch, and right after the component downloads). */
+export async function migrateEmbeddingIndexIfNeeded(): Promise<void> {
+  let stale = false;
+  try { stale = await invoke<boolean>("embedding_index_stale"); } catch { return; }
+  if (!stale) return;
+  if (!(await isEmbeddingModelReady())) {
+    console.log("[Memory] Indexes belong to an earlier memory component - rebuild waits for the download");
+    return;
+  }
+  try {
+    await invoke("memory_mark_reembed_pending");
+    await rebuildMemoryIndexIfPending();
+    const n = await invoke<number>("corpus_reembed_all");
+    console.log(`[Memory] Library re-embedded with the current memory component: ${n} passages`);
+    if (!(await invoke<boolean>("memory_reembed_pending"))) {
+      await invoke("embedding_index_mark_current");
+    }
+  } catch (e) {
+    console.warn("[Memory] Index rebuild for the new memory component failed (retried next launch):", e);
+  }
+}
+
 export async function rebuildMemoryIndexIfPending(): Promise<void> {
   try {
     if (!(await invoke<boolean>("memory_reembed_pending"))) return;

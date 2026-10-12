@@ -110,7 +110,10 @@ export const ComponentCard = component$<CardProps>((props) => {
       // per-AI memory index - run the walker now instead of at next launch.
       if (props.model.filename === EMBEDDING_MODEL.filename) {
         import("../utils/transcriptMemory")
-          .then(({ rebuildMemoryIndexIfPending }) => rebuildMemoryIndexIfPending())
+          .then(async ({ rebuildMemoryIndexIfPending, migrateEmbeddingIndexIfNeeded }) => {
+            await rebuildMemoryIndexIfPending();
+            await migrateEmbeddingIndexIfNeeded();
+          })
           .catch(() => {});
       }
     } catch (e) {

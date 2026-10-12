@@ -63,6 +63,15 @@ fn safe_id(ai_id: &str) -> String {
         .collect()
 }
 
+/// Any per-AI transcript index on disk (the model-change migration asks
+/// before scheduling a rebuild on a fresh install).
+pub fn any_index_exists(app: &tauri::AppHandle) -> bool {
+    let Ok(dir) = crate::profile::root(app) else { return false };
+    std::fs::read_dir(dir)
+        .map(|rd| rd.flatten().any(|e| e.file_name().to_string_lossy().starts_with("transcript-emb-")))
+        .unwrap_or(false)
+}
+
 fn file_for(app: &tauri::AppHandle, ai_id: &str) -> Result<std::path::PathBuf, String> {
     let dir = crate::profile::root(&app)
         .map_err(|e| format!("No app data dir: {}", e))?;

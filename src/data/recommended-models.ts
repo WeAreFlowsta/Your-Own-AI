@@ -221,35 +221,48 @@ export interface CapabilityModel {
    *  Leave a name out and those users see "Download" for a thing they
    *  already downloaded, and keep both copies on disk. */
   previousFilenames?: string[];
+  /** sha256 of the pinned file, compared with the download (see ModelVariant.sha256). */
+  sha256?: string;
 }
 
 /**
- * The embedding model behind memory recall. Defined here — NOT in `modelFamilies`
- * — so it downloads via Settings → Components and never appears in the chat
- * picker. bge-small-en-v1.5: small (384-dim, 512-ctx), runs in llama.cpp
- * `--embedding --pooling cls`. Chosen over nomic-embed after a calibration test
- * (2026-06-21): bge cleanly separates unrelated queries (max ~0.37) from real
- * matches (~0.58+), where nomic's scores clustered ~0.46–0.63 and no threshold
- * worked. Swappable (the index is rebuildable) — but a swap must also update the
- * Rust pooling flag (`ensure_embedding_server`) and the query/doc prefixes
- * (`embeddings.ts`). URL verified to resolve 2026-06-21 (67 MB).
+ * The embedding model behind memory recall, document recall and the gates
+ * (tools, health, freshness). Defined here - NOT in `modelFamilies` - so it
+ * downloads via Settings -> Components and the welcome flow, never the chat
+ * picker. EmbeddingGemma-300M (2026-10-12, replacing bge-small-en-v1.5):
+ * chosen by the embedding-model matrix (build-docs guides/tools/embed-matrix.mjs,
+ * archive/embed-matrix-2026-10-12): tools gate 1 wrong of 84 held-out messages
+ * (bge 9); health and rule gates in six languages from English examples;
+ * document recall 12/12 in English, Spanish and German (bge 12 / 8 / 4).
+ * 768-dim, mean pooling from its own metadata, task prefixes below.
  *
- * ⚠️ A swap is a MIGRATION, not just a new download: every per-AI memory
- * index holds THIS model's vectors, and recall silently degrades to noise
- * under a different one. Shipping a replacement means adding the old
- * filename to `previousFilenames` AND wiring a full re-embed (the rebuild
- * walker in transcriptMemory is the starting point).
+ * A swap is a MIGRATION: every index holds one model's vectors. The Rust
+ * side notices a different model than the indexes were built with
+ * (`embedding_index_stale`) and the app rebuilds them once; thresholds in
+ * toolsGate.ts, memory.ts, transcriptMemory.ts, router.rs, corpus.rs,
+ * inference_memory.rs and skills.rs were all re-measured for this model.
  */
+export const EMBEDDING_PREFIXES = {
+  query: 'task: search result | query: ',
+  doc: 'title: none | text: ',
+  said: 'task: classification | query: ',
+} as const;
+
 export const EMBEDDING_MODEL: CapabilityModel = {
-  id: 'bge-small-en-v1.5',
+  id: 'embeddinggemma-300m',
   name: 'Memory & smart routing',
   role: 'embedding',
   description:
-    'A small local model two features share: memory recall (each AI recalling relevant past conversations and notes) and smart routing (spotting when a question needs an online model). Runs on your device.',
-  filename: 'bge-small-en-v1.5-f16.gguf',
+    'A small local model your AIs share: memory recall (past conversations, notes and documents), smart routing (spotting when a question needs an online model) and the gates that keep a health question on your device. Works in 100+ languages. Runs on your device.',
+  filename: 'embeddinggemma-300M-Q8_0.gguf',
+  // Pinned revision; load-checked on the pinned engine 2026-10-12 (LOAD_CHECK_ARGS="--embedding").
   downloadUrl:
-    'https://huggingface.co/CompendiumLabs/bge-small-en-v1.5-gguf/resolve/d32f8c040ea3b516330eeb75b72bcc2d3a780ab7/bge-small-en-v1.5-f16.gguf',
-  size: 0.067, // ~67 MB
+    'https://huggingface.co/ggml-org/embeddinggemma-300M-GGUF/resolve/0f741b5a6585/embeddinggemma-300M-Q8_0.gguf',
+  sha256: 'b5ce9d77a3fc4b3b39ccb5643c36777911cc4eb46a66962eadfa3f5f60490d63',
+  size: 0.334, // 334 MB
+  // The earlier memory component: its indexes are rebuilt with this one on
+  // first launch (embedding_index_stale) and the file is reclaimed.
+  previousFilenames: ['bge-small-en-v1.5-f16.gguf'],
 };
 
 /**

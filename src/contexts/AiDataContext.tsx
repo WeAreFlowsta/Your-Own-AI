@@ -293,8 +293,13 @@ export const AiDataProvider = component$(() => {
     // After a device restore, rebuild the per-AI memory index (episodic
     // recall + authored-knowledge vectors) in the background - no-op unless
     // the restore left its marker and the embedding model is present.
+    // Also after an update that changed the memory component: every index is
+    // rebuilt once with the current model (migrateEmbeddingIndexIfNeeded).
     import("../utils/transcriptMemory")
-      .then(({ rebuildMemoryIndexIfPending }) => rebuildMemoryIndexIfPending())
+      .then(async ({ rebuildMemoryIndexIfPending, migrateEmbeddingIndexIfNeeded }) => {
+        await rebuildMemoryIndexIfPending();
+        await migrateEmbeddingIndexIfNeeded();
+      })
       .catch((e) => console.warn("[AiDataContext] Memory re-embed check failed:", e));
     // Document knowledge moved into the person's library (0.7.1): one pass
     // per launch until every AI's document chunks have crossed over.

@@ -3800,21 +3800,18 @@ async fn ensure_embedding_server(
         return Err(format!("Embedding model not downloaded: {}", model_filename));
     }
 
-    // bge-small-en-v1.5: CLS pooling, 512-token context. CPU-only to spare
+    // The memory component (embedding_model.rs). CPU-only to spare
     // the chat GPU. `--device none` and not just `-ngl 0`: with layers at 0
     // the Vulkan backend still allocates a device compute buffer, which OOMs
     // on a card the chat model has filled - and llama-server's OOM error
-    // path segfaults instead of exiting. NB: pooling + ctx are
-    // model-specific - swapping the embedding model (see EMBEDDING_MODEL)
-    // may require changing these.
+    // path segfaults instead of exiting. Pooling and prefixes are the
+    // model's own: embedding_model.rs holds them.
     let mut args = vec![
         // Bare filename + models-dir working directory: absolute paths under
         // a non-ASCII user profile arrive mangled in llama-server's argv.
         "--model".to_string(),
         model_filename.to_string(),
         "--embedding".to_string(),
-        "--pooling".to_string(),
-        "cls".to_string(),
         "--port".to_string(),
         EMBED_PORT.to_string(),
         "--host".to_string(),
@@ -3822,9 +3819,15 @@ async fn ensure_embedding_server(
         "--api-key".to_string(),
         local_api_key().to_string(),
         "--ctx-size".to_string(),
-        "512".to_string(),
+        EMBED_CTX.to_string(),
         "--no-webui".to_string(),
     ];
+    // Pooling comes from the file's own metadata unless the model needs it
+    // spelled out (embedding_model::POOLING; bge needed `cls`).
+    if let Some(p) = crate::embedding_model::POOLING {
+        args.push("--pooling".to_string());
+        args.push(p.to_string());
+    }
     // Where the verdict puts it: the chat engine on the card, else the
     // bundled engine with the card switched off.
     let mut place = helper_verdict().0;

@@ -17,10 +17,10 @@ use crate::commands_holochain::HolochainState;
 use crate::memory::MemoryFact;
 use crate::transcript_memory::TranscriptEmbedding;
 
-const EMBED_MODEL: &str = "bge-small-en-v1.5-f16.gguf";
-/// bge-small wants the query (not docs) wrapped in this retrieval instruction.
-const QUERY_INSTRUCTION: &str = "Represent this sentence for searching relevant passages: ";
-const RECALL_THRESHOLD: f32 = 0.45;
+use crate::embedding_model::{FILE as EMBED_MODEL, QUERY_PREFIX as QUERY_INSTRUCTION};
+/// EmbeddingGemma: unrelated passages score <= ~0.32, right ones 0.21-0.75
+/// (2026-10-12 matrix); the floor only drops noise, the margin does the work.
+const RECALL_THRESHOLD: f32 = 0.25;
 const RECALL_MARGIN: f32 = 0.12;
 const MAX_RECALL: usize = 3;
 const MAX_NOTES: usize = 3;

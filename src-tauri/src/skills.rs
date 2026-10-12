@@ -646,9 +646,12 @@ pub struct SkillsBlock {
 /// A skill's description above this cosine to the question gets its full
 /// text into the turn (bge-small, same query instruction as routing and
 /// memory retrieval; routing's own gates sit at 0.52-0.62).
-const SKILL_MATCH_THRESHOLD: f32 = 0.50;
+/// EmbeddingGemma scores a message against a description lower than bge did
+/// (the matrix's description-only gate: best bar 0.15 vs bge's 0.48);
+/// scaled from bge's 0.50 / 0.58 - verify live with a real skill set.
+const SKILL_MATCH_THRESHOLD: f32 = 0.20;
 /// A second skill rides only when it is this close as well.
-const SKILL_SECOND_THRESHOLD: f32 = 0.58;
+const SKILL_SECOND_THRESHOLD: f32 = 0.26;
 /// Full skill text carried per turn, at most (tokens, approx).
 const SKILL_BODY_BUDGET_TOKENS: u64 = 4000;
 

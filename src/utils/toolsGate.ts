@@ -49,10 +49,12 @@
  *  line = a session; at or below = ordinary chat. Measured: requests
  *  +0.01 .. +0.26, ordinary chat -0.25 .. +0.07 - the line sits under the
  *  lowest real request, because a missed tool is the dearer mistake. */
-export const CONTRAST_LINE = -0.02;
+export const CONTRAST_LINE = -0.02; // EmbeddingGemma: best line -0.021 on 84 held-out messages (1 wrong); unchanged from bge
 /** A tool with no example requests: its description, leaning to a session
  *  (measured: every real request scored 0.46 or more). */
-export const DESCRIPTION_BAR = 0.46;
+/** EmbeddingGemma scores a message against a description lower than bge did:
+ *  best bar 0.15 on the gate matrix (16 wrong of 84; bge's 0.46 was 21). */
+export const DESCRIPTION_BAR = 0.15;
 
 /** What ordinary chat sounds like - the other side of the contrast. About no
  *  tool in particular, and broad on purpose: a kind of message with nothing
@@ -233,14 +235,17 @@ export async function toolsGate(input: {
   // cheap, so the log can tune the numbers from every kind of turn.
   try {
     const { embedTexts, embedQuery, cosineSimilarity } = await import("./embeddings");
+    const { EMBEDDING_PREFIXES } = await import("../data/recommended-models");
     const { followUpQuery } = await import("./memory");
     // Requests and chat are things a person SAYS, like the message: they
-    // carry the query instruction. A description is a passage: it does not.
-    const Q = "Represent this sentence for searching relevant passages: ";
-    const said = (t: string) => Q + t;
+    // carry the "said" prefix and are compared with the message carrying it
+    // too (classification). A description is a passage: it carries the
+    // document prefix and the message meets it as a search query.
+    const said = (t: string) => EMBEDDING_PREFIXES.said + t;
+    const desc = (t: string) => EMBEDDING_PREFIXES.doc + t;
     const wanted = [
       ...ORDINARY_CHAT.map(said),
-      ...input.tools.flatMap((t) => (t.examples.length ? t.examples.map(said) : [`${t.title}. ${t.description}`.trim()])),
+      ...input.tools.flatMap((t) => (t.examples.length ? t.examples.map(said) : [desc(`${t.title}. ${t.description}`.trim())])),
     ].filter((t) => !vectors.has(t));
     if (wanted.length) {
       const made = await embedTexts(wanted);
@@ -250,16 +255,17 @@ export async function toolsGate(input: {
     const together = followUpQuery(input.previous, input.message);
     if (together) queries.push(together);
     const qv = (await Promise.all(queries.map((q) => embedQuery(q)))).filter((v): v is number[] => !!v);
+    const sv = (await embedTexts(queries.map(said))).filter((v): v is number[] => !!v);
     if (qv.length) {
       const nearest = (texts: string[], q: number[]) =>
         Math.max(0, ...texts.map((t) => { const v = vectors.get(t); return v ? cosineSimilarity(q, v) : 0; }));
       scores = input.tools.map((t): GateScore => {
         if (!t.examples.length) {
-          const text = `${t.title}. ${t.description}`.trim();
+          const text = desc(`${t.title}. ${t.description}`.trim());
           return { tool: t.name, kind: "description", score: Math.max(...qv.map((q) => nearest([text], q))) };
         }
         const mine = t.examples.map(said), chat = ORDINARY_CHAT.map(said);
-        return { tool: t.name, kind: "contrast", score: Math.max(...qv.map((q) => nearest(mine, q) - nearest(chat, q))) };
+        return { tool: t.name, kind: "contrast", score: Math.max(...(sv.length ? sv : qv).map((q) => nearest(mine, q) - nearest(chat, q))) };
       });
     }
   } catch {

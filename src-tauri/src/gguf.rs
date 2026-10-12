@@ -182,7 +182,7 @@ impl GgufMeta {
     /// does not [support] logits computation").
     pub fn is_embedding(&self) -> bool {
         let a = self.architecture.to_lowercase();
-        a.contains("bert") || a.contains("jina") || a == "gte"
+        a.contains("bert") || a.contains("jina") || a == "gte" || a.contains("embedding") || a.contains("granite-embed")
     }
 }
 
@@ -1357,6 +1357,12 @@ mod tests {
             let m = read_meta(&bge).unwrap();
             assert_eq!(m.architecture, "bert");
             assert!(m.is_embedding(), "bge must be flagged as embedding");
+        }
+        let eg = dir.join(crate::embedding_model::FILE);
+        if eg.exists() {
+            let m = read_meta(&eg).unwrap();
+            assert_eq!(m.architecture, "gemma-embedding");
+            assert!(m.is_embedding(), "the memory component must be flagged as embedding");
         }
         for chat in ["gemma-4-E2B-it-Q4_K_M.gguf", "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf"] {
             let p = dir.join(chat);

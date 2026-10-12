@@ -4,13 +4,14 @@
  * server is started lazily on the first call and runs CPU-only so it never
  * contends with the chat model for GPU memory.
  *
- * Used by memory retrieval. bge-small-en-v1.5 wants the QUERY (not the stored
- * documents) wrapped in a retrieval instruction; the helpers below apply it.
- * If the embedding model is swapped, revisit these prefixes + the Rust pooling
- * flag together.
+ * Used by memory retrieval and the gates. The model is trained with task
+ * prefixes (EMBEDDING_PREFIXES): queries, stored passages and "things a
+ * person says" each get their own; the helpers below apply them. A swap
+ * changes the prefixes with the model, in recommended-models.ts and
+ * src-tauri/src/embedding_model.rs together.
  */
 import { invoke } from "@tauri-apps/api/core";
-import { EMBEDDING_MODEL } from "../data/recommended-models";
+import { EMBEDDING_MODEL, EMBEDDING_PREFIXES } from "../data/recommended-models";
 
 /** Is the embedding model downloaded? (recall degrades gracefully without it.) */
 export async function isEmbeddingModelReady(): Promise<boolean> {
@@ -32,23 +33,27 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
   });
 }
 
-/** bge-small wants the query (not docs) prefixed with this retrieval instruction. */
-const BGE_QUERY_INSTRUCTION =
-  "Represent this sentence for searching relevant passages: ";
-
-/** Embed stored documents (notes, transcript chunks) for the index. */
+/** Embed stored documents (notes, transcript turns, tool descriptions) for the index. */
 export async function embedDocuments(texts: string[]): Promise<number[][]> {
-  return embedTexts(texts); // bge: documents are embedded raw
+  return embedTexts(texts.map((t) => `${EMBEDDING_PREFIXES.doc}${t}`));
 }
 
 /** Embed a search query to retrieve against the document vectors. */
 export async function embedQuery(query: string): Promise<number[] | null> {
-  const [vec] = await embedTexts([`${BGE_QUERY_INSTRUCTION}${query}`]);
+  const [vec] = await embedTexts([`${EMBEDDING_PREFIXES.query}${query}`]);
   return vec ?? null;
+}
+
+/** Embed things people SAY, for scoring against example sayings (the tools gate). */
+export async function embedSaid(texts: string[]): Promise<number[][]> {
+  return embedTexts(texts.map((t) => `${EMBEDDING_PREFIXES.said}${t}`));
 }
 
 /** Cosine similarity between two equal-length vectors. */
 export function cosineSimilarity(a: number[], b: number[]): number {
+  // A vector of another length belongs to another model (an index not yet
+  // rebuilt after a model change): no likeness, never garbage.
+  if (a.length !== b.length || a.length === 0) return 0;
   let dot = 0;
   let na = 0;
   let nb = 0;

@@ -41,7 +41,9 @@ eq("clearly a request", r({ ...base, scores: [c("obsidian", 0.2)] }), "session:s
 eq("a request for one tool beats chat for another", r({ ...base, scores: [c("obsidian", -0.2), c("blender", 0.05)] }), "session:similar:blender");
 eq("no examples: description over its bar", r({ ...base, scores: [d("fetch", DESCRIPTION_BAR)] }), "session:similar:fetch");
 eq("no examples: description under its bar", r({ ...base, scores: [d("fetch", DESCRIPTION_BAR - 0.01)] }), "direct:direct:fetch");
-eq("a big description score does not outrank a real request", r({ ...base, scores: [d("fetch", 0.3), c("obsidian", 0.05)] }), "session:similar:obsidian");
+// Scores sit on each kind's own scale: a description just under ITS bar is not a request, however it
+// compares with a contrast that is over its line.
+eq("a description under its bar does not outrank a real request", r({ ...base, scores: [d("fetch", DESCRIPTION_BAR - 0.02), c("obsidian", 0.05)] }), "session:similar:obsidian");
 eq("named beats ordinary chat", r({ ...base, named: "obsidian", scores: [c("obsidian", -0.2)] }), "session:named:obsidian");
 eq("sticky keeps the session", r({ ...base, sticky: true, scores: [c("obsidian", -0.2)] }), "session:sticky:obsidian");
 eq("forced beats everything", r({ forced: true, sticky: false, named: null, scores: [c("obsidian", -0.2)] }), "session:forced:obsidian");

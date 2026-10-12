@@ -7,6 +7,7 @@ mod project_identity;     // a folder's project id: git root commit / id file / 
 mod dreaming;             // memory consolidation when idle (MEMORY_REDESIGN §6)
 mod memory_slot;          // which local model does the memory work (MEMORY_REDESIGN §7)
 mod conversation_cache;   // last-known-good conversation lists (encrypted)
+mod embedding_model;       // THE embedding model: file, prefixes, pooling, index marker
 mod corpus;               // the person's document library (SQLite, row-encrypted; per-AI grants)
 mod model_hash;
 mod model_stats;         // per-machine measured tok/s + load time, shared by router + UI           // sha256 per model artifact (provenance for records)
@@ -622,6 +623,10 @@ pub fn run() {
             vault_restore::vault_restore_conversations,
             vault_restore::vault_restore_pending,
             vault_restore::memory_reembed_pending,
+            embedding_model::embedding_index_stale,
+            embedding_model::embedding_index_mark_current,
+            embedding_model::memory_mark_reembed_pending,
+            corpus::corpus_reembed_all,
             vault_restore::memory_reembed_done,
             llm::get_system_info,
             llm::list_local_models,

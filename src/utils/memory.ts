@@ -523,7 +523,7 @@ export async function loadMemoryBlock(
  *  gap: it keeps fuzzy/typo'd real queries while still rejecting unrelated ones.
  *  Bias is toward recall (a stray note is injected as "use if helpful" and
  *  ignored; a miss reads as broken). Revisit if the model changes. */
-const NOTE_RELEVANCE_THRESHOLD = 0.45;
+const NOTE_RELEVANCE_THRESHOLD = 0.25; // EmbeddingGemma scale (2026-10-12 matrix); bge sat at 0.45
 /** Cap retrieved notes per turn, to bound prompt growth. */
 const MAX_RETRIEVED_NOTES = 3;
 
@@ -685,9 +685,16 @@ export function removePendingTurn(id: string): void {
  *  and handing over the "least bad" passages only misleads a small model and
  *  sends private text to an online one for nothing. Not a perfect line;
  *  every turn logs its top score so it can be tuned. */
-export const RECALL_BEST_AT_LEAST = 0.66;
+/** EmbeddingGemma (2026-10-12 matrix, 12 questions x 3 languages against 12
+ *  passages): right passages 0.21-0.75 (mean 0.57 en / 0.50 es, de), the best
+ *  wrong one <= 0.32. 0.30 sits under every right answer measured and above
+ *  the wrong ones; verify on a real library through the `documents: best
+ *  match` log line (bge's bar was 0.66 on a 0.62-0.75 band). */
+export const RECALL_BEST_AT_LEAST = 0.30;
 /** How far below the best match a passage may score and still be given. */
-export const RECALL_MARGIN = 0.12;
+/** EmbeddingGemma spreads scores ~1.7x wider than bge (mean right-vs-wrong
+ *  margin 0.37 vs 0.20), so the margin that keeps the same company grows. */
+export const RECALL_MARGIN = 0.15;
 
 /** The passages worth giving: none unless the best one clears the bar, then
  *  only those close to it (input in any order). */

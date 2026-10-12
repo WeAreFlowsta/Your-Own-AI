@@ -44,11 +44,13 @@ pub const DOC_EXTENSIONS: &[&str] = &[
 ];
 /// Recall: the same floor as conversational memory. No relative margin here -
 /// a document's fourth-best passage is still worth reading.
-const RECALL_THRESHOLD: f32 = 0.45;
+/// EmbeddingGemma (2026-10-12 matrix): right passages 0.21-0.75, the best wrong
+/// one <= 0.32; 0.25 drops only noise. bge sat at 0.45.
+const RECALL_THRESHOLD: f32 = 0.25;
 /// Embedding batch size (the embed server takes a batch per request).
 const EMBED_BATCH: usize = 24;
 /// The memory component (mirrors EMBEDDING_MODEL in src/data/recommended-models.ts).
-pub const EMBEDDING_MODEL_FILE: &str = "bge-small-en-v1.5-f16.gguf";
+pub use crate::embedding_model::FILE as EMBEDDING_MODEL_FILE;
 
 // ---------------------------------------------------------------- records
 
@@ -531,6 +533,60 @@ fn cache_load(conn: &Connection, key: &[u8; 32]) -> Result<Arc<Vec<CachedVec>>, 
         *g = Some(arc.clone());
     }
     Ok(arc)
+}
+
+/// Does the library hold any passage at all (the model-change migration asks
+/// before scheduling a rebuild on a fresh install).
+pub fn any_passages(app: &AppHandle) -> bool {
+    match open(app) {
+        Ok(conn) => conn.query_row("SELECT COUNT(*) FROM passages", [], |r| r.get::<_, i64>(0)).map(|n| n > 0).unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
+/// Re-embed every stored passage with the current embedding model (a model
+/// change: the old vectors belong to another space and would score as
+/// noise). Walks the table in batches, emits `corpus-reembed-progress`
+/// {done, total}, invalidates the vector cache at the end. Idempotent.
+#[tauri::command]
+pub async fn corpus_reembed_all(
+    app: AppHandle,
+    hc: State<'_, Arc<HolochainState>>,
+    llm_state: State<'_, crate::llm::LLMState>,
+) -> Result<usize, String> {
+    let key = data_key(&hc)?;
+    let rows: Vec<(String, i64, String)> = {
+        let conn = open(&app)?;
+        let mut stmt = conn.prepare("SELECT doc_id, idx, text_enc FROM passages").map_err(|e| e.to_string())?;
+        let it = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, Vec<u8>>(2)?)))
+            .map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for row in it {
+            let (doc_id, idx, blob) = row.map_err(|e| e.to_string())?;
+            out.push((doc_id, idx, String::from_utf8_lossy(&dec(&key, &blob)?).into_owned()));
+        }
+        out
+    };
+    let total = rows.len();
+    let mut done = 0usize;
+    for batch in rows.chunks(EMBED_BATCH) {
+        let texts: Vec<String> = batch.iter().map(|(_, _, t)| format!("{}{}", crate::embedding_model::DOC_PREFIX, t)).collect();
+        let vecs = crate::llm::embed_texts(app.clone(), llm_state.clone(), texts, EMBEDDING_MODEL_FILE.to_string()).await?;
+        let conn = open(&app)?;
+        for ((doc_id, idx, _), v) in batch.iter().zip(vecs.iter()) {
+            conn.execute(
+                "UPDATE passages SET vec_enc = ?3 WHERE doc_id = ?1 AND idx = ?2",
+                params![doc_id, idx, enc(&key, &vec_to_bytes(v))?],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        done += batch.len();
+        let _ = app.emit("corpus-reembed-progress", serde_json::json!({ "done": done, "total": total }));
+    }
+    cache_invalidate();
+    log::info!("[corpus] {total} passages re-embedded with {}", EMBEDDING_MODEL_FILE);
+    Ok(total)
 }
 
 pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
@@ -1094,7 +1150,7 @@ pub async fn corpus_import(
             if CANCEL.load(Ordering::SeqCst) {
                 break;
             }
-            match crate::llm::embed_texts(app.clone(), llm_state.clone(), batch.to_vec(), embed_model.clone()).await {
+            match crate::llm::embed_texts(app.clone(), llm_state.clone(), batch.iter().map(|t| format!("{}{}", crate::embedding_model::DOC_PREFIX, t)).collect(), embed_model.clone()).await {
                 Ok(v) => vectors.extend(v),
                 Err(e) => {
                     failed = Some(e);
@@ -1413,7 +1469,7 @@ async fn reread_paths(
             if CANCEL.load(Ordering::SeqCst) {
                 break;
             }
-            match crate::llm::embed_texts(app.clone(), llm_state.clone(), batch.to_vec(), embed_model.clone()).await {
+            match crate::llm::embed_texts(app.clone(), llm_state.clone(), batch.iter().map(|t| format!("{}{}", crate::embedding_model::DOC_PREFIX, t)).collect(), embed_model.clone()).await {
                 Ok(v) => vectors.extend(v),
                 Err(e) => {
                     failed = Some(e);

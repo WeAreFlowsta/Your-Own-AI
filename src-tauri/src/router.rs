@@ -61,7 +61,9 @@ pub(crate) fn is_followup(query: &str) -> bool {
 /// Topic-change decay: the follow-up must still sit near the previous user
 /// turn (cosine of the two query embeddings). Without a previous vector the
 /// wording alone decides.
-const FOLLOWUP_TOPIC_MIN: f32 = 0.45;
+/// EmbeddingGemma: real follow-ups 0.21-0.45 vs unrelated pairs 0.14-0.23
+/// (2026-10-12 matrix, 12 pairs - small; verify live). bge sat at 0.45.
+const FOLLOWUP_TOPIC_MIN: f32 = 0.20;
 
 /// The think verdict for a routing decision. Pure; unit-tested.
 fn think_for(difficulty: &str, capable: bool, agent: bool) -> Option<bool> {
@@ -75,8 +77,8 @@ fn think_for(difficulty: &str, capable: bool, agent: bool) -> Option<bool> {
     }
 }
 
-pub(crate) const QUERY_INSTRUCTION: &str = "Represent this sentence for searching relevant passages: ";
-pub(crate) const EMBED_MODEL: &str = "bge-small-en-v1.5-f16.gguf";
+// The embedding model and its query prefix live in embedding_model.rs (one home).
+pub(crate) use crate::embedding_model::{FILE as EMBED_MODEL, QUERY_PREFIX as QUERY_INSTRUCTION};
 
 /// Every embed the router makes goes through here. A wedged embed server
 /// (up but never healthy) used to cost each call a 30 s wait inside
@@ -311,7 +313,9 @@ async fn fresh_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec<f32>>>
 /// sits to ordinary-question anchors. A greeting with "today" in it or a
 /// creative ask scores high on the fresh references alone; against the
 /// benign anchors it scores higher still, and the margin sends it home.
-const FRESH_MARGIN: f32 = 0.05;
+/// EmbeddingGemma (2026-10-12 matrix, 72 held-out messages): margin 0.10 = 1 wrong;
+/// at bge's 0.05 the same model is 8 wrong, bge itself 10.
+const FRESH_MARGIN: f32 = 0.10;
 
 async fn semantic_fresh_score(
     app: &AppHandle,
@@ -446,7 +450,11 @@ async fn benign_reference_vecs(app: &AppHandle) -> Option<&'static Vec<Vec<f32>>
 /// changing refs, thresholds, or the embedding model): floor 0.50 + margin
 /// 0.05 = 0/26 benign false fires, 16/16 medical recall. The margin does the
 /// separating; the floor only rejects turns unrelated to everything.
-const MEDICAL_THRESHOLD: f32 = 0.50;
+/// EmbeddingGemma (2026-10-12 matrix, 46 health/non-health messages in six
+/// languages): floor 0.30 + margin 0.05 = 2 wrong (bge: 15). Its raw
+/// reference scores sit lower than bge's (yes >= 0.32, no <= 0.36), so the
+/// floor only rejects turns unrelated to everything, as before.
+const MEDICAL_THRESHOLD: f32 = 0.30;
 const MEDICAL_MARGIN: f32 = 0.05;
 
 /// Stage-0 medical gate: unambiguous health terms only. Deliberately excludes
