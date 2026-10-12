@@ -85,7 +85,10 @@ export async function runUtilityTask(
     )) {
       if (chunk.type === "text") out += chunk.content;
     }
-    return out;
+    // A grammar-forced answer from a model that always thinks arrives inside
+    // the thinking block (wrapped in <think> tags by the stream): keep the
+    // words, drop the tags.
+    return out.replace(/<\/?think>/gi, "").trim();
   })();
 
   if (!timeoutMs) return work;

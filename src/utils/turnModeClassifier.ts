@@ -144,7 +144,10 @@ export async function classifyTurnMode(
       if (chunk.type === 'text') out += chunk.content;
     }
     clearTimeout(timer);
-    const w = out.trim().toUpperCase();
+    // A model whose template always thinks (even with reasoning off) answers
+    // inside the thinking block; the stream wraps that in <think> tags. The
+    // grammar forced one word either way - read it wherever it landed.
+    const w = out.replace(/<\/?think>/gi, '').trim().toUpperCase();
     if (w.startsWith('REPORT')) return 'report';
     if (w.startsWith('CODE')) return 'code';
     return null;

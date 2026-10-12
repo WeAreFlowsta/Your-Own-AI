@@ -4385,7 +4385,23 @@ pub(crate) async fn memory_complete(
         .json()
         .await
         .map_err(|e| format!("Failed to parse utility response: {}", e))?;
-    Ok(strip_turn_markers(parsed["choices"][0]["message"]["content"].as_str().unwrap_or("")))
+    Ok(completion_text(&parsed))
+}
+
+/// The text a non-streamed completion answered with. A model whose template
+/// always opens a thinking block (Qwen3.5-4B-Opus-Distilled, 2026-10-12)
+/// ignores `--reasoning off`; the server then files everything it wrote,
+/// grammar-forced word included, under `reasoning_content` and leaves
+/// `content` empty - which read as "nothing extracted" / NEITHER. Read the
+/// field the server filled: content first, else the reasoning. Format, not
+/// a model name.
+pub fn completion_text(v: &serde_json::Value) -> String {
+    let m = &v["choices"][0]["message"];
+    let content = m["content"].as_str().unwrap_or("").trim();
+    if !content.is_empty() {
+        return strip_turn_markers(content);
+    }
+    strip_turn_markers(m["reasoning_content"].as_str().unwrap_or("").trim())
 }
 
 /// The Apple Silicon chip name ("Apple M2"), for the system-info GPU field.

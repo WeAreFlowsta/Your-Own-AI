@@ -1622,7 +1622,7 @@ async fn caption_one(model: &str, image_part: &Value) -> Result<String, String> 
         .await
         .map_err(|e| e.to_string())?;
     let v: Value = resp.json().await.map_err(|e| e.to_string())?;
-    let text = v["choices"][0]["message"]["content"].as_str().unwrap_or("").trim().to_string();
+    let text = crate::llm::completion_text(&v).trim().to_string();
     if text.is_empty() {
         return Err("empty caption".into());
     }

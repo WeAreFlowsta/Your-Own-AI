@@ -298,7 +298,7 @@ pub async fn leg_memory_grade(app: &AppHandle, bin: &Path, dir: &Path, loaded: O
                     .json()
                     .await
                     .map_err(|e| format!("json: {e}"))?;
-                Ok::<String, String>(crate::llm::strip_turn_markers(v["choices"][0]["message"]["content"].as_str().unwrap_or("")))
+                Ok::<String, String>(crate::llm::completion_text(&v))
             }
         };
         let (mut hits, mut extracted, mut gold) = (0usize, 0usize, 0usize);
@@ -820,7 +820,7 @@ pub async fn leg_turn_mode(bin: &Path, dir: &Path, loaded: Option<&str>, sink: S
                 match v {
                     Ok(v) => {
                         asked += 1;
-                        let w = crate::llm::strip_turn_markers(v["choices"][0]["message"]["content"].as_str().unwrap_or("")).trim().to_uppercase();
+                        let w = crate::llm::completion_text(&v).trim().to_uppercase();
                         if w.starts_with("REPORT") { "REPORT".into() } else if w.starts_with("CODE") { "CODE".into() } else { "NEITHER".into() }
                     }
                     Err(e) => {
@@ -1091,7 +1091,7 @@ pub async fn leg_sampling(bin: &Path, dir: &Path, model: &str, sink: Sink<'_>) -
                 Ok(r) => r.json().await.map_err(|e| format!("json: {e}")),
                 Err(e) => Err(format!("request: {e}")),
             };
-            v.map(|v| v["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string())
+            v.map(|v| crate::llm::completion_text(&v))
         }
     };
     let greedy = crate::llm::SamplingParams { temperature: Some(0.0), ..Default::default() };
