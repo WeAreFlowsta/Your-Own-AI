@@ -1,12 +1,16 @@
 // One identity on two devices, live (build-docs MULTI_DEVICE.md §5.4):
 // device A renames an AI and backs up; its Vault copies the manifest to
 // the identity's second Vault; device B signs in fresh there and shows the
-// renamed AI with its own agent. Two launches, one phase each
-// (DEVICES_PHASE), each against its own TEST Vault (YOAI_VAULT_PORT) -
-// never the installed one. Run: e2e/devices-live.sh
+// renamed AI with its own agent. Phase c: BOTH devices online at once (A
+// unattended on the default ports, B driven on shifted ports - YOAI_PORT_OFFSET)
+// on the staging rendezvous: A's conversation, a read-only copy in phase b,
+// ARRIVES in B's own records and the composer opens. Three launches, one
+// phase each (DEVICES_PHASE), each against its own TEST Vault
+// (YOAI_VAULT_PORT) - never the installed one. Run: e2e/devices-live.sh
 import { shot, waitForChat, invoke, ask, waitForReplyDone } from "../models/_helpers";
 
 const MESSAGE = "Devices test: name one colour and nothing else.";
+const MESSAGE_C = "Devices test two: name one animal and nothing else.";
 
 const PHASE = process.env.DEVICES_PHASE ?? "";
 const NAME = process.env.DEVICES_NAME ?? "Synced AI";
@@ -33,7 +37,7 @@ async function yourAis() {
 }
 
 describe(`devices, phase ${PHASE}`, () => {
-  it(PHASE === "a" ? "A: renames an AI through the form and backs up" : "B: signs in fresh and shows A's edit with its own agent", async () => {
+  it(PHASE === "a" ? "A: renames an AI through the form and backs up" : PHASE === "c" ? "C: with A online too, A's conversation arrives in B's own records and the composer opens" : "B: signs in fresh and shows A's edit with its own agent", async () => {
     if (PHASE === "a") {
       await waitForChat();
       const st = await escrow();
@@ -179,8 +183,43 @@ describe(`devices, phase ${PHASE}`, () => {
         console.log("e2e: no proxy session on a test identity - the Settings line needs the signed-in panel (checked by hand / the signed-in flow)");
       }
       await shot("devices-b-settings");
+    } else if (PHASE === "c") {
+      // Both devices are up on the rendezvous: A (unattended, default ports)
+      // holds the conversation's records; this is B on shifted ports. The
+      // Vault's copy is read-only until the records arrive by gossip - here
+      // they must, and the drawer item stops being a copy.
+      const started = Date.now();
+      await waitForChat();
+      await (await $('button[title^="Conversations"]')).click();
+      const drawer = () => browser.execute(() => [...document.querySelectorAll('[data-testid="conversation-item"]')].map((d) => ({ copy: d.getAttribute("data-copy"), text: (d as HTMLElement).innerText.slice(0, 80) })));
+      await browser.waitUntil(async () => (await drawer()).some((d: { text: string }) => d.text.includes("Devices test")), { timeout: 60_000, timeoutMsg: "the drawer never listed A's conversation at all" });
+      console.log(`e2e: drawer at start ${JSON.stringify(await drawer())}`);
+      // Gossip between two conductors on one seed found peers in ~30 s in the
+      // Rust live leg; allow the lane a few minutes here.
+      await browser.waitUntil(async () => {
+        const items = await drawer();
+        return items.some((d: { copy: string | null; text: string }) => d.text.includes("Devices test") && d.copy !== "1");
+      }, { timeout: 360_000, interval: 5_000, timeoutMsg: "A's conversation never arrived in B's own records (still only the Vault copy after 6 min)" });
+      console.log(`e2e: arrived after ${Math.round((Date.now() - started) / 1000)} s: ${JSON.stringify(await drawer())}`);
+      await shot("devices-c-arrived");
+      const arrived = await $('[data-testid="conversation-item"]:not([data-copy="1"])*=Devices test');
+      await (await arrived.$("button")).click();
+      await browser.waitUntil(async () => (await $$('[data-testid="chat-message"]')).length >= 2, { timeout: 60_000, timeoutMsg: "the arrived conversation showed no messages" });
+      const texts = await browser.execute(() => [...document.querySelectorAll('[data-testid="chat-message"]')].map((m) => (m as HTMLElement).innerText.slice(0, 60)));
+      console.log(`e2e: arrived messages ${JSON.stringify(texts)}`);
+      expect(texts.some((t: string) => t.includes("Devices test"))).toBe(true);
+      // The composer is open: no read-only reason, typing on, Send enabled.
+      expect(await $('[data-testid="chat-readonly-reason"]').isExisting()).toBe(false);
+      expect(await (await $('[data-testid="chat-input"]')).getAttribute("contenteditable")).not.toBe("false");
+      await shot("devices-c-composer-open");
+      // And B continues the conversation in its own records.
+      await ask(MESSAGE_C);
+      await waitForReplyDone();
+      const after = await browser.execute(() => [...document.querySelectorAll('[data-testid="chat-message"]')].map((m) => (m as HTMLElement).innerText.slice(0, 60)));
+      expect(after.some((t: string) => t.includes("Devices test two"))).toBe(true);
+      await shot("devices-c-continued");
     } else {
-      throw new Error("set DEVICES_PHASE to a or b");
+      throw new Error("set DEVICES_PHASE to a, b or c");
     }
   });
 });

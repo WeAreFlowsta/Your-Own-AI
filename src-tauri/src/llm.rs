@@ -3391,7 +3391,18 @@ pub async fn start_llama_server(
     // hit. ~60s ceiling covers a slow but legitimate load.
     if model_specified {
         use std::sync::atomic::Ordering;
-        for i in 0..120 {
+        // 60 s covers a mapped load; weights READ INTO MEMORY (the processor
+        // and split-MoE paths, every macOS load) arrive at disk speed, and a
+        // 4.8 GB mixture model took 68 s from a cold disk under memory
+        // pressure (2026-10-13, the two-device run) - a fixed bound called a
+        // healthy load a failure. One extra tick per 25 MB that has to be read.
+        let max_ticks: u64 = 120
+            + if weights_in_ram {
+                loading_name.as_deref().and_then(|n| std::fs::metadata(models_dir.join(n)).ok()).map(|m| m.len() / (25 * 1024 * 1024)).unwrap_or(0)
+            } else {
+                0
+            };
+        for i in 0..max_ticks {
             // 15s of TOTAL silence is not a slow load - the process is
             // blocked before its first print (antivirus hold, GPU init hung
             // in the driver). Say so once, so the diagnostic report carries
