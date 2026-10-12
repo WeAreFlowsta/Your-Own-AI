@@ -234,7 +234,10 @@ struct MyEntriesPage {
     next_seq: Option<u32>,
     total: u32,
 }
-const MY_ENTRIES_PAGE: u32 = 200;
+/// Each page re-scans the chain once (~2-3 s on a 25,000-action chain) before
+/// loading its records, so a bigger page is nearly free: 500 instead of 200
+/// cuts the 11,768-message read from 59 scans to 24.
+const MY_ENTRIES_PAGE: u32 = 500;
 
 /// Every live message this agent recorded, with its conversation, read from
 /// the agent's own chain a page at a time (`get_my_entries_page`). Err when
