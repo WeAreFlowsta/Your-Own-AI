@@ -71,9 +71,17 @@ pub struct MemoryPick {
 }
 
 /// The pure rule: the warm model when it clears the floor and the helper's
-/// own grade, else the helper.
-pub fn choose(task: &str, loaded: Option<&str>, loaded_grade: u8, helper: &str, helper_grade: u8) -> MemoryPick {
+/// own grade, else the helper. While the helper is installed, only a
+/// MEASURED grade lets the warm model take the work: the registry's guess
+/// (a weak extractor can sit at 6 there) is for machines without a helper.
+pub fn choose(task: &str, loaded: Option<&str>, loaded_grade: u8, loaded_measured: bool, helper: &str, helper_grade: u8, helper_installed: bool) -> MemoryPick {
     match loaded {
+        Some(m) if m != helper && helper_installed && !loaded_measured => MemoryPick {
+            model: helper.to_string(),
+            via: "helper".into(),
+            grade: helper_grade,
+            reason: format!("{task}: the loaded model ({}) is not measured yet - the helper until the matrix grades it", &m[..m.len().min(24)]),
+        },
         Some(m) if m != helper && loaded_grade >= FLOOR && loaded_grade >= helper_grade => MemoryPick {
             model: m.to_string(),
             via: "loaded".into(),
@@ -104,7 +112,9 @@ pub fn pick(app: &tauri::AppHandle, task: &str) -> MemoryPick {
         .try_state::<crate::llm::LLMState>()
         .and_then(|st| st.current_model.try_lock().ok().and_then(|m| m.clone()));
     let loaded_grade = loaded.as_deref().map(|m| grade_for(&grades, m, task)).unwrap_or(0);
-    choose(task, loaded.as_deref(), loaded_grade, helper, helper_grade)
+    let loaded_measured = loaded.as_deref().and_then(|m| grades.get(m)).map(|g| if task == "memory-prose" { g.prose.is_some() } else { g.precision.is_some() }).unwrap_or(false);
+    let helper_installed = crate::llm::get_models_dir(app).map(|d| d.join(helper).exists()).unwrap_or(false);
+    choose(task, loaded.as_deref(), loaded_grade, loaded_measured, helper, helper_grade, helper_installed)
 }
 
 /// Pure: is the 2 GB helper needed on this machine? Not when it is
@@ -183,15 +193,19 @@ mod tests {
     #[test]
     fn the_warm_model_takes_memory_work_only_when_it_clears_the_floor_and_the_helper() {
         let helper = "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf";
-        let p = choose("memory-precision", Some("Big-14B.gguf"), 8, helper, 6);
+        let p = choose("memory-precision", Some("Big-14B.gguf"), 8, true, helper, 6, true);
         assert_eq!((p.via.as_str(), p.model.as_str()), ("loaded", "Big-14B.gguf"));
-        let p = choose("memory-precision", Some("Small-1B.gguf"), 3, helper, 6);
+        let p = choose("memory-precision", Some("Big-14B.gguf"), 8, false, helper, 6, true);
+        assert_eq!(p.via, "helper", "unmeasured while the helper is installed: the helper");
+        let p = choose("memory-precision", Some("Big-14B.gguf"), 8, false, helper, 6, false);
+        assert_eq!(p.via, "loaded", "no helper on disk: the registry decides");
+        let p = choose("memory-precision", Some("Small-1B.gguf"), 3, true, helper, 6, true);
         assert_eq!((p.via.as_str(), p.model.as_str()), ("helper", helper), "below the floor");
-        let p = choose("memory-prose", Some("Mid-7B.gguf"), 6, helper, 7);
+        let p = choose("memory-prose", Some("Mid-7B.gguf"), 6, true, helper, 7, true);
         assert_eq!(p.via, "helper", "the helper measured better for prose");
-        let p = choose("memory-prose", None, 0, helper, 6);
+        let p = choose("memory-prose", None, 0, false, helper, 6, true);
         assert_eq!(p.via, "helper", "nothing loaded: never a load for memory work");
-        let p = choose("memory-precision", Some(helper), 9, helper, 6);
+        let p = choose("memory-precision", Some(helper), 9, true, helper, 6, true);
         assert_eq!(p.via, "helper", "the helper itself loaded counts as the helper");
     }
 

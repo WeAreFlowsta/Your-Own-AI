@@ -958,15 +958,35 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
    *  as a standing instruction, else a quiet Remember that saves a note.
    *  '' | 'saving' | 'saved-rule' | 'saved-note' | 'dismissed' | 'error' */
   const captureState = useSignal('');
+  /** A rule the extractor suggested for this message (its own wording),
+   *  arriving a few seconds after the turn - or none. */
+  const offeredRule = useSignal<string | null>(null);
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async ({ track, cleanup }) => {
+    track(() => props.message.content);
+    if (props.message.role !== 'user' || !props.message.content) return;
+    const { pendingRuleOffer } = await import('../utils/memory');
+    offeredRule.value = pendingRuleOffer(props.message.content);
+    const onOffer = (e: Event) => {
+      const d = (e as CustomEvent<{ message: string; rule: string }>).detail;
+      if (d && d.message.trim().toLowerCase().replace(/\s+/g, ' ') === props.message.content.trim().toLowerCase().replace(/\s+/g, ' ')) {
+        offeredRule.value = d.rule;
+      }
+    };
+    window.addEventListener('rule-offer', onOffer);
+    cleanup(() => window.removeEventListener('rule-offer', onOffer));
+  });
   const keepAsRule = $(async () => {
     if (captureState.value === 'saving') return;
     captureState.value = 'saving';
     try {
-      const [{ saveMemoryRow, newRow, listMemoryRowsCached, personScope }, { normalizeRuleText }] = await Promise.all([
+      const [{ saveMemoryRow, newRow, listMemoryRowsCached, personScope }, { normalizeRuleText, clearRuleOffer }] = await Promise.all([
         import('../utils/memoryRows'),
         import('../utils/memory'),
       ]);
-      const text = props.message.content.trim();
+      // The extractor's wording when it offered one, else the message as said.
+      const text = (offeredRule.value ?? props.message.content).trim();
+      clearRuleOffer(props.message.content);
       const same = (await listMemoryRowsCached(personScope).catch(() => [])).find(
         (r) => r.kind === 'rule' && normalizeRuleText(r.text) === normalizeRuleText(text),
       );
@@ -1413,9 +1433,11 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
             <span>Remembered.</span>
           ) : captureState.value === 'error' ? (
             <span>Could not save it just now.</span>
-          ) : looksLikeInstruction(props.message.content) ? (
+          ) : looksLikeInstruction(props.message.content) || offeredRule.value ? (
             <>
-              <span data-testid="rule-offer">Keep this as a rule?</span>
+              <span data-testid="rule-offer">
+                {offeredRule.value && !looksLikeInstruction(props.message.content) ? `Keep this as a rule? "${offeredRule.value}"` : 'Keep this as a rule?'}
+              </span>
               <button type="button" class="underline hover:text-[var(--text-primary)]" data-testid="rule-offer-keep" onClick$={keepAsRule} disabled={captureState.value === 'saving'}>
                 {captureState.value === 'saving' ? 'Keeping…' : 'Keep'}
               </button>

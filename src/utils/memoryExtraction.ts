@@ -374,6 +374,17 @@ async function runExtraction(input: {
     }
     if (candidates.length === 0) return;
 
+    // Typed on the way out: a stated preference about how to work is a
+    // candidate RULE - offered under the message, never saved as one by
+    // extraction (rules are the person's). The fact is still kept below.
+    for (const c of candidates) {
+      if (c.predicate === "prefers" && c.confidence >= MIN_CONFIDENCE && c.value.trim().length >= 4) {
+        const { offerRule } = await import("./memory");
+        offerRule(input.userText, c.value.trim());
+        break;
+      }
+    }
+
     // Generation is done (the slow part) — the parallel transcript write has
     // usually resolved the hash by now, so this adds ~no latency.
     const sourceActionHash = await resolveSourceHash(input.sourceActionHash);

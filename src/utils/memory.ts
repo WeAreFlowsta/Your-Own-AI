@@ -64,6 +64,28 @@ export function looksLikeInstruction(text: string): boolean {
   );
 }
 
+/** Rule offers from extraction (MEMORY_REDESIGN.md §5.6): a preference the
+ *  extractor finds in a message is saved as a fact as before AND offered as
+ *  a rule under that message - never saved as a rule silently. Keyed by the
+ *  message's text; the chat bubble asks when it renders or when the offer
+ *  lands later (`rule-offer` event). */
+const ruleOffers = new Map<string, string>();
+const offerKey = (message: string) => message.trim().toLowerCase().replace(/\s+/g, " ");
+export function offerRule(message: string, rule: string): void {
+  const text = rule.trim();
+  if (!text || text.length > 200) return;
+  ruleOffers.set(offerKey(message), text);
+  try {
+    window.dispatchEvent(new CustomEvent("rule-offer", { detail: { message, rule: text } }));
+  } catch { /* no window */ }
+}
+export function pendingRuleOffer(message: string): string | null {
+  return ruleOffers.get(offerKey(message)) ?? null;
+}
+export function clearRuleOffer(message: string): void {
+  ruleOffers.delete(offerKey(message));
+}
+
 /** The same rule said twice is one rule: lower case, no trailing stop,
  *  single spaces. */
 export function normalizeRuleText(text: string): string {

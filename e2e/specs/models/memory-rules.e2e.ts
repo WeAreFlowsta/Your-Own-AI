@@ -90,6 +90,20 @@ describe("memory rules", () => {
     await waitForReplyDone().catch(() => undefined);
     const rows = await invoke<{ kind: string; text: string }[]>("list_memory_rows", { agentKey: null, scope: "person" });
     expect(rows.some((r) => r.kind === "rule" && r.text === SAID_RULE)).toBe(true);
+    // A preference that is NOT instruction-shaped: the extractor finds it a
+    // few seconds after the turn and the same line offers it, in the
+    // extractor's wording.
+    const PREF = `I'd rather you kept answers short since I read on my phone (pref ${Date.now().toString(36)})`;
+    await ask(PREF);
+    await browser.waitUntil(async () => {
+      const offers = await $$('[data-testid="rule-offer"]');
+      for (const o of offers) if ((await o.getText()).includes('"')) return true;
+      return false;
+    }, { timeout: 120_000, timeoutMsg: "the extractor's rule offer never appeared under the preference" });
+    const texts2 = await browser.execute(() => [...document.querySelectorAll('[data-testid="rule-offer"]')].map((n) => (n as HTMLElement).innerText));
+    console.log(`e2e: offers ${JSON.stringify(texts2)}`);
+    expect(texts2.some((t: string) => t.includes('"'))).toBe(true);
+    await waitForReplyDone().catch(() => undefined);
     // The remember tool: said twice with new words, one row with the newer text.
     const first = await mcpCall("remember", { text: "Run npm test before every commit (e2e)", kind: "command" });
     console.log(`e2e: remember 1 -> ${JSON.stringify(first.text)}`);
