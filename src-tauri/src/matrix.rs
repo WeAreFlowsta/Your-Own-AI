@@ -697,6 +697,10 @@ fn moe_decision(meta: &crate::gguf::GgufMeta, size: u64, ctx: u64, free: Option<
 /// one = 1. Held out of every prompt; never a benchmark set verbatim.
 struct QualityCase {
     ask: &'static str,
+    /// Extra system text for the case (the app's own block shapes, mirrored).
+    system_extra: Option<&'static str>,
+    /// Phrases that must NOT appear: context dragged in where it does not belong.
+    must_not: &'static [&'static str],
     must: &'static [&'static [&'static str]],
     number: Option<&'static str>,
     min_items: usize,
@@ -704,15 +708,22 @@ struct QualityCase {
     max_chars: usize,
 }
 const QUALITY_GOLD: &[QualityCase] = &[
-    QualityCase { ask: "why is the sky blue?", must: &[&["rayleigh", "scatter"], &["wavelength", "shorter", "blue light"]], number: None, min_items: 0, sentences: None, max_chars: 2500 },
-    QualityCase { ask: "explain compound interest with a short worked example", must: &[&["principal", "initial", "start"], &["rate", "percent", "%"], &["year"]], number: None, min_items: 0, sentences: None, max_chars: 2500 },
-    QualityCase { ask: "a train leaves at 9:15 and the trip takes 2 hours and 50 minutes. when does it arrive?", must: &[], number: Some("12:05"), min_items: 0, sentences: None, max_chars: 1200 },
-    QualityCase { ask: "what is the difference between weather and climate?", must: &[&["weather"], &["climate"], &["long", "decade", "average", "pattern", "years"], &["short", "day", "daily", "hour", "now", "moment"]], number: None, min_items: 0, sentences: None, max_chars: 2000 },
-    QualityCase { ask: "give me three tips for a first vegetable garden", must: &[&["sun", "light"], &["water"], &["soil", "compost"]], number: None, min_items: 3, sentences: None, max_chars: 2500 },
-    QualityCase { ask: "summarize the plot of romeo and juliet in four sentences", must: &[&["verona", "montague", "capulet", "families", "feud"], &["die", "death", "dies", "poison", "dagger", "kill"]], number: None, min_items: 0, sentences: Some((3, 6)), max_chars: 1500 },
-    QualityCase { ask: "how does a vaccine work?", must: &[&["immune"], &["antibod", "antigen", "memory", "recogni"]], number: None, min_items: 0, sentences: None, max_chars: 2500 },
-    QualityCase { ask: "write a short friendly reply to a colleague who thanked me for helping with their presentation", must: &[&["welcome", "glad", "happy", "pleasure", "anytime", "any time", "no problem"]], number: None, min_items: 0, sentences: Some((1, 5)), max_chars: 600 },
+    QualityCase { system_extra: None, must_not: &[], ask: "why is the sky blue?", must: &[&["rayleigh", "scatter"], &["wavelength", "shorter", "blue light"]], number: None, min_items: 0, sentences: None, max_chars: 2500 },
+    QualityCase { system_extra: None, must_not: &[], ask: "explain compound interest with a short worked example", must: &[&["principal", "initial", "start"], &["rate", "percent", "%"], &["year"]], number: None, min_items: 0, sentences: None, max_chars: 2500 },
+    QualityCase { system_extra: None, must_not: &[], ask: "a train leaves at 9:15 and the trip takes 2 hours and 50 minutes. when does it arrive?", must: &[], number: Some("12:05"), min_items: 0, sentences: None, max_chars: 1200 },
+    QualityCase { system_extra: None, must_not: &[], ask: "what is the difference between weather and climate?", must: &[&["weather"], &["climate"], &["long", "decade", "average", "pattern", "years"], &["short", "day", "daily", "hour", "now", "moment"]], number: None, min_items: 0, sentences: None, max_chars: 2000 },
+    QualityCase { system_extra: None, must_not: &[], ask: "give me three tips for a first vegetable garden", must: &[&["sun", "light"], &["water"], &["soil", "compost"]], number: None, min_items: 3, sentences: None, max_chars: 2500 },
+    QualityCase { system_extra: None, must_not: &[], ask: "summarize the plot of romeo and juliet in four sentences", must: &[&["verona", "montague", "capulet", "families", "feud"], &["die", "death", "dies", "poison", "dagger", "kill"]], number: None, min_items: 0, sentences: Some((3, 6)), max_chars: 1500 },
+    QualityCase { system_extra: None, must_not: &[], ask: "how does a vaccine work?", must: &[&["immune"], &["antibod", "antigen", "memory", "recogni"]], number: None, min_items: 0, sentences: None, max_chars: 2500 },
+    QualityCase { system_extra: None, must_not: &[], ask: "write a short friendly reply to a colleague who thanked me for helping with their presentation", must: &[&["welcome", "glad", "happy", "pleasure", "anytime", "any time", "no problem"]], number: None, min_items: 0, sentences: Some((1, 5)), max_chars: 600 },
+    // A document card with no matched passage (memory.ts loadDocumentContextUsed, cards-only shape):
+    // an unrelated question must not drag the document in (2026-10-12: a why-is-the-sky-blue answer cited a lease).
+    QualityCase { system_extra: Some(DOC_CARDS_ONLY), must_not: &["lease", "tenancy", "deposit", "document"], ask: "why is the sky blue?", must: &[&["rayleigh", "scatter"], &["wavelength", "shorter", "blue light"]], number: None, min_items: 0, sentences: None, max_chars: 2500 },
+    // The same card, a question about it: the AI names the document it holds (it has no passage, so it offers what it knows).
+    QualityCase { system_extra: Some(DOC_CARDS_ONLY), must_not: &[], ask: "what does my lease say about the deposit?", must: &[&["lease", "tenancy agreement"]], number: None, min_items: 0, sentences: None, max_chars: 1500 },
 ];
+/// The app's document block when no passage cleared the bar - header, one card, the closing instruction.
+const DOC_CARDS_ONLY: &str = "\n\n[From your documents]\nThis AI has one document from your library:\n- \"Flat lease 2026\": The tenancy runs twelve months from 1 March; rent 1,150 a month; deposit 1,325 held in the approved scheme.\n\nThese are only the names of the documents this AI holds. Do not mention or use them unless the question is about one of them or about the documents themselves.";
 
 fn count_sentences(text: &str) -> usize {
     text.split(|c| c == '.' || c == '!' || c == '?').filter(|s| s.trim().split_whitespace().count() >= 3).count()
@@ -729,6 +740,12 @@ pub(crate) fn score_quality(case: &QualityCase, answer: &str) -> (u8, Vec<String
         return (0, vec!["no answer (empty, refusal or filler)".into()]);
     }
     let mut facts_ok = true;
+    for banned in case.must_not {
+        if a.contains(banned) {
+            facts_ok = false;
+            missing.push(format!("dragged in \"{banned}\""));
+        }
+    }
     for group in case.must {
         if !group.iter().any(|p| a.contains(p)) {
             facts_ok = false;
@@ -832,7 +849,7 @@ pub async fn leg_quality(bin: &Path, dir: &Path, loaded: Option<&str>, sink: Sin
             let body = serde_json::json!({
                 "model": model,
                 "messages": [
-                    {"role": "system", "content": "You are a helpful, plain-spoken assistant. Answer the question directly."},
+                    {"role": "system", "content": format!("You are a helpful, plain-spoken assistant. Answer the question directly.{}", case.system_extra.unwrap_or(""))},
                     {"role": "user", "content": case.ask}
                 ],
                 "max_tokens": 700, "temperature": 0.0, "stream": false, "cache_prompt": true,
@@ -2219,6 +2236,14 @@ mod quality_leg_tests {
         assert_eq!(score_quality(garden, "Sun, water and good soil matter most.").0, 1, "facts yes, no list");
         let rj = &QUALITY_GOLD[5];
         assert_eq!(score_quality(rj, "In Verona two feuding families keep Romeo and Juliet apart. They marry in secret with Friar Laurence's help. A duel leaves Tybalt dead and Romeo banished. Believing Juliet dead, Romeo takes poison and she kills herself with his dagger.").0, 2);
+    }
+    #[test]
+    fn a_card_dragged_into_an_unrelated_answer_loses_the_facts_half() {
+        let sky_with_card = QUALITY_GOLD.iter().find(|c| c.system_extra.is_some() && c.ask.starts_with("why is the sky")).unwrap();
+        assert_eq!(score_quality(sky_with_card, "Rayleigh scattering: shorter wavelengths scatter more. By the way, your lease says the deposit is 1,325.").0, 1);
+        assert_eq!(score_quality(sky_with_card, "Rayleigh scattering: shorter wavelengths scatter more, so the sky looks blue.").0, 2);
+        let about = QUALITY_GOLD.iter().find(|c| c.ask.starts_with("what does my lease")).unwrap();
+        assert_eq!(score_quality(about, "Your lease notes a deposit of 1,325 held in the approved scheme.").0, 2);
     }
     #[test]
     fn every_question_has_a_rubric_half() {

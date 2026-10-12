@@ -831,7 +831,14 @@ export async function loadDocumentContextUsed(
         }
       }
     }
-    block += "\nUse these when they answer the question, and say which document they came from.";
+    // The closing instruction depends on what the block holds. With matched
+    // passages: use them, name the document. With only the cards (no passage
+    // cleared the bar): the cards are an inventory, not material - a small
+    // model told "use these" worked a document into an answer about the sky
+    // (2026-10-12). The quality matrix leg checks both shapes.
+    block += used.length > 0
+      ? "\nUse these passages when they answer the question, and say which document they came from."
+      : "\nThese are only the names of the documents this AI holds. Do not mention or use them unless the question is about one of them or about the documents themselves.";
     return { text: block, used };
   } catch (e) {
     console.warn("[Memory] document context skipped:", e);
