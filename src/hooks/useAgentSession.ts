@@ -2159,6 +2159,34 @@ export function useAgentSession(props: UseAgentSessionProps) {
           ],
         };
       });
+      // A `remember` ask says what it would replace (MEMORY_REDESIGN.md
+      // §5.3): the self-edit is found at execution, so the card asks the
+      // cache first and adds the line while the person is still reading.
+      const toolName: string = typeof tc.rawInput?.tool_name === "string" ? tc.rawInput.tool_name : (tc.title ?? "");
+      if (toolName === "project-memory__remember") {
+        const payload = tc.rawInput?.tool_input && typeof tc.rawInput.tool_input === "object" ? tc.rawInput.tool_input : tc.rawInput ?? {};
+        if (typeof payload.text === "string") {
+          invoke<string | null>("memory_would_replace", {
+            scopeWord: typeof payload.scope === "string" ? payload.scope : "person",
+            kind: typeof payload.kind === "string" ? payload.kind : "note",
+            text: payload.text,
+            agentKey: props.selectedAi.value.aiConfig?.agentPubKey ?? null,
+            folder: state.mode === "project" ? state.folderPath : null,
+          })
+            .then((old) => {
+              if (!old) return;
+              mutateTurn((m) => ({
+                ...m,
+                agentLog: (m.agentLog ?? []).map((i) =>
+                  i.type === "permission" && i.permission.requestId === permission.requestId
+                    ? { ...i, permission: { ...i.permission, detail: `${i.permission.detail ?? payload.text}\nReplaces: ${old}` } }
+                    : i,
+                ),
+              }));
+            })
+            .catch(() => undefined);
+        }
+      }
     });
 
     // A permission the APP answered on the user's behalf (the harness asks
