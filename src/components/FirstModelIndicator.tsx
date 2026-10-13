@@ -62,7 +62,7 @@ export const FirstModelIndicator = component$(() => {
       }
       clearFirstModelInFlight();
       readyLabel.value = f.label;
-      announceActivity({ id: "first-model", title: `${f.label} is ready`, detail: "Your AIs can answer now.", state: "done", ttlMs: 15000 });
+      announceActivity({ id: "first-model", title: `${f.label} is ready`, detail: "Your AIs can answer now.", state: "done", ttlMs: 15000, home: "/chat" });
       finishing.value = false;
       window.dispatchEvent(new CustomEvent(FIRST_MODEL_READY, { detail: { filename: f.filename, label: f.label } }));
     };

@@ -21,6 +21,18 @@ export interface ActivityNote {
   state: "done" | "error";
   /** How long the note stays before it clears itself; 0 = until dismissed. */
   ttlMs?: number;
+  /** The page that shows this work itself (a route prefix): the tray never
+   *  repeats the page the person is on, so the row is hidden there. */
+  home?: string;
+}
+
+/** The page where a download's own progress shows: the tray hides the row
+ *  there (Eric 2026-10-13: "they already know, they are on it"). */
+export function homeForFile(filename: string): string {
+  const f = filename.toLowerCase();
+  if (f.startsWith("llama-server-")) return "/settings";
+  if (f.startsWith("your-own-ai-build-") || f.includes("mmproj") || f.startsWith("bge-") || f.includes("embeddinggemma")) return "/add-ons/components";
+  return "/setup";
 }
 
 /** Show a one-off line in the activity tray. */

@@ -29,4 +29,28 @@ describe("activity tray and the composer", () => {
     expect(geo.trayBottom).toBeLessThanOrEqual(geo.barTop + 1);
     expect(geo.sendOnTop).toBe(true);
   });
+
+  it("never repeats the page the person is on", async () => {
+    // The download row is for elsewhere: on the Offline Models page, which
+    // shows the download itself, the row is hidden; back in the chat it is back.
+    const rowShown = () => browser.execute(() => document.body.innerText.includes("e2e-fake-model"));
+    expect(await rowShown()).toBe(true);
+    await (await $('button[title^="Menu"]')).click();
+    await browser.execute(() => {
+      const item = [...document.querySelectorAll('[role="menuitem"]')].find((b) => (b as HTMLElement).innerText.trim().startsWith("Offline Models")) as HTMLElement | undefined;
+      item?.click();
+    });
+    await browser.waitUntil(async () => (await browser.execute(() => location.pathname)) === "/setup/", { timeout: 30_000, timeoutMsg: "Offline Models never opened" });
+    await browser.pause(500);
+    console.log(`e2e: on ${await browser.execute(() => location.pathname)} the row shows: ${await rowShown()}`);
+    expect(await rowShown()).toBe(false);
+    await shot("51-tray-hidden-on-its-page");
+    await browser.execute(() => {
+      const img = [...document.querySelectorAll('img[alt="Your Own AI"]')].find((i) => (i as HTMLElement).offsetParent !== null) as HTMLElement | undefined;
+      (img?.closest("button") as HTMLElement | null)?.click();
+    });
+    await browser.waitUntil(async () => (await browser.execute(() => location.pathname)) === "/chat/", { timeout: 30_000, timeoutMsg: "the chat never reopened" });
+    await browser.pause(500);
+    expect(await rowShown()).toBe(true);
+  });
 });

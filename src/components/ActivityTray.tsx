@@ -25,7 +25,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useVisionDownload } from "../contexts/VisionDownloadContext";
 import { useAiData } from "../contexts/AiDataContext";
 import { ActionIcon } from "./ActionIcon";
-import { ACTIVITY_EVENT, labelForFile, formatBytes, type ActivityNote } from "../utils/activity";
+import { ACTIVITY_EVENT, labelForFile, formatBytes, homeForFile, type ActivityNote } from "../utils/activity";
 import { firstModelInFlight } from "../utils/firstModel";
 import type { CorpusProgress } from "../utils/corpus";
 import type { DownloadProgress, DownloadComplete } from "../utils/modelManager";
@@ -39,6 +39,8 @@ interface Row {
   state: "running" | "done" | "error";
   stoppable: boolean;
   startedAt: number;
+  /** The page that shows this work itself; the row is hidden there. */
+  home?: string;
 }
 
 const LINGER_MS = 8000;
@@ -138,6 +140,7 @@ export const ActivityTray = component$(() => {
       const isFirst = !!f && f.filename === p.filename;
       upsert(`dl:${p.filename}`, {
         kind: "download",
+        home: homeForFile(p.filename),
         title: downloadTitle(p.filename),
         percent: p.percent,
         state: "running",
@@ -172,7 +175,7 @@ export const ActivityTray = component$(() => {
           const parts: string[] = [];
           if (p.added > 0) parts.push(`${p.added} document${p.added === 1 ? "" : "s"} in`);
           if (p.failed > 0) parts.push(`${p.failed} couldn't be read`);
-          upsert("read", { kind: "read", title: readTitle, state: "done", percent: 100, stoppable: false, detail: parts.join(" · ") });
+          upsert("read", { kind: "read", home: "/memory", title: readTitle, state: "done", percent: 100, stoppable: false, detail: parts.join(" · ") });
           linger("read", LINGER_MS);
         } else {
           remove("read");
@@ -192,6 +195,7 @@ export const ActivityTray = component$(() => {
             : null;
       upsert("read", {
         kind: "read",
+        home: "/memory",
         title: readTitle,
         state: "running",
         stoppable: true,
@@ -203,13 +207,14 @@ export const ActivityTray = component$(() => {
     const { onCardProgress } = await import("../utils/documentSummaries");
     const unCards = onCardProgress((done, total, file, partDone, partTotal) => {
       if (done >= total) {
-        upsert("cards", { kind: "cards", title: "Writing document cards", state: "done", percent: 100, detail: `${total} card${total === 1 ? "" : "s"} written` });
+        upsert("cards", { kind: "cards", home: "/memory", title: "Writing document cards", state: "done", percent: 100, detail: `${total} card${total === 1 ? "" : "s"} written` });
         linger("cards", LINGER_MS);
         return;
       }
       const within = partTotal ? Math.min(1, (partDone ?? 0) / partTotal) : 0;
       upsert("cards", {
         kind: "cards",
+        home: "/memory",
         title: "Writing document cards",
         state: "running",
         percent: total ? Math.round(((done + within) / total) * 100) : null,
@@ -220,7 +225,7 @@ export const ActivityTray = component$(() => {
     const onNote = (ev: Event) => {
       const n = (ev as CustomEvent<ActivityNote>).detail;
       if (!n?.id) return;
-      upsert(`note:${n.id}`, { kind: "note", title: n.title, detail: n.detail ?? "", state: n.state, percent: null });
+      upsert(`note:${n.id}`, { kind: "note", home: n.home, title: n.title, detail: n.detail ?? "", state: n.state, percent: null });
       linger(`note:${n.id}`, n.ttlMs ?? 0);
     };
     window.addEventListener(ACTIVITY_EVENT, onNote);
@@ -268,9 +273,14 @@ export const ActivityTray = component$(() => {
   // the raw download rows for its files are hidden so it shows once.
   const vis = vision.state.active;
   const visionFiles = new Set(vis ? vis.files.map((f) => f.filename) : []);
-  const rows = store.rows.filter((r) => !(r.kind === "download" && visionFiles.has(r.id.slice(3))));
+  // The tray never repeats the page the person is on: a row whose home is
+  // this page is hidden (the page shows the work itself), whatever its state.
+  const here = loc.url.pathname.replace(/\/$/, "") || "/";
+  const rows = store.rows.filter(
+    (r) => !(r.kind === "download" && visionFiles.has(r.id.slice(3))) && !(r.home && (here === r.home || here.startsWith(r.home + "/"))),
+  );
   void tick.value;
-  const onChat = loc.url.pathname.replace(/\/$/, "") === "/chat";
+  const onChat = here === "/chat";
   const now = Date.now();
   const turnRows = turnsState.turns.filter((t) => {
     if (dismissedTurns.value.includes(t.id)) return false;

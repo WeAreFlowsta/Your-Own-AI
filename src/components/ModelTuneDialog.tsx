@@ -219,7 +219,7 @@ export default component$<ModelTuneDialogProps>((props) => {
             : 'Back to automatic. Applies when this model next loads.';
       // The outcome rides the activity tray so the dialog can close, as the
       // edit-AI dialog does on Save.
-      announceActivity({ id: `tune:${props.model}`, title: `${name} fine-tuned`, detail, state: 'done', ttlMs: 8000 });
+      announceActivity({ id: `tune:${props.model}`, title: `${name} fine-tuned`, detail, state: 'done', ttlMs: 8000, home: '/setup' });
       await props.onClose$();
       return;
     } catch (e) {
