@@ -22,6 +22,9 @@ interface ChatContainerProps {
   input: Signal<string>;
   handleSubmit$: QRL<() => void>;
   isLoading: boolean;
+  /** The AI selector stays put: a chat reply runs at the app root and the
+   *  person may switch AI meanwhile; an agent turn holds its session. */
+  aiSwitchLocked?: boolean;
   stopChat$: QRL<() => void>;
   currentPlaceholder: string;
   /** The open conversation cannot take a message yet (see ContentEditor). */
@@ -259,6 +262,7 @@ export default component$<ChatContainerProps>((props) => {
           input={props.input}
           handleSubmit$={props.handleSubmit$}
           isLoading={props.isLoading}
+          aiSwitchLocked={props.aiSwitchLocked}
           stopChat$={props.stopChat$}
           currentPlaceholder={props.currentPlaceholder}
           readOnlyReason={props.readOnlyReason}

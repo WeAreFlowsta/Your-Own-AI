@@ -800,6 +800,7 @@ export default component$<AppHeaderProps>(
             {onOpenConversations$ && (
               <LiquidMetalButton
                 onClick$={onOpenConversations$}
+                testId="conversations-open"
                 variant="secondary"
                 class="flex items-center justify-center w-9 h-9 cursor-pointer"
                 title="Conversations - pick up any conversation where you left off"
@@ -811,6 +812,7 @@ export default component$<AppHeaderProps>(
             {/* New Chat Button — Liquid Metal shader */}
             <LiquidMetalButton
               onClick$={handleClick}
+              testId="new-chat"
               class="flex items-center gap-2.5 px-4 sm:px-5 h-9 text-[0.9375rem] cursor-pointer"
               title="Start a fresh conversation"
             >

@@ -98,6 +98,70 @@ export function ownsAgentSession(owner: number): boolean {
   return agentOwner === owner || liveAgentTurn() === null;
 }
 
+// Which conversation the chat page is showing (the tray hides that turn's
+// row: the person is looking at it).
+let openHash: string | null = null;
+export function noteOpenConversation(hash: string | null): void {
+  if (openHash === hash) return;
+  openHash = hash;
+  changed();
+}
+export function openConversation(): string | null {
+  return openHash;
+}
+
+/** "Open" on a tray row: the chat page opens the turn's conversation - at
+ *  once when it is mounted (the event), or when it mounts next. */
+export const TURN_OPEN_EVENT = "yoai-turn-open";
+let pendingOpen: Turn | null = null;
+export function requestOpen(t: Turn): void {
+  pendingOpen = t;
+  try { window.dispatchEvent(new CustomEvent(TURN_OPEN_EVENT, { detail: t })); } catch { /* no window */ }
+}
+export function takePendingOpen(): Turn | null {
+  const t = pendingOpen;
+  pendingOpen = null;
+  return t;
+}
+
+/** A model served by the engine on this computer (null = an agent's local pick). */
+export function isLocalModel(model: string | null): boolean {
+  return !model || !(model.startsWith("online:") || model.startsWith("external:"));
+}
+
+/** The running local turn that holds the engine against a turn on `model`:
+ *  the engine serves one model at a time, so a different model would mean a
+ *  server restart under the running reply. The same model shares the engine
+ *  (a slot); online and external models never wait. */
+export function engineHolder(exceptId: string | null, model: string | null): Turn | null {
+  if (!isLocalModel(model)) return null;
+  for (const t of turns.values()) {
+    if (t.id === exceptId || t.state !== "running" || !isLocalModel(t.model)) continue;
+    if (t.model && model && t.model === model) continue;
+    return t;
+  }
+  return null;
+}
+
+/** Resolves true when the engine is free for `model` (or was never held),
+ *  false when `signal` aborts first (Stop while waiting). */
+export function waitForEngine(id: string, model: string | null, signal: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    const done = (ok: boolean) => {
+      window.removeEventListener(TURNS_EVENT, check);
+      signal.removeEventListener("abort", check);
+      resolve(ok);
+    };
+    const check = () => {
+      if (signal.aborted) return done(false);
+      if (!engineHolder(id, model)) return done(true);
+    };
+    window.addEventListener(TURNS_EVENT, check);
+    signal.addEventListener("abort", check);
+    check();
+  });
+}
+
 export function beginTurn(turn: Turn, controller: AbortController): void {
   turns.set(turn.id, turn);
   controllers.set(turn.id, controller);

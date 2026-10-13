@@ -445,7 +445,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
   // page-ensure) badge unrelated replies with a textless loading icon.
   // A search turn's statusText is live search progress, not a model load —
   // it renders with the thinking animation, not the loading one.
-  const isShowingModelLoading = !!props.statusText && !props.message.searchingWeb;
+  const isShowingModelLoading = !!props.statusText && !props.message.searchingWeb && !props.message.queued;
 
   // A model load can take tens of seconds. After a moment, a slow rotation
   // of short lines explains what the wait IS (the model moving into

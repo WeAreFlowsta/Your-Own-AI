@@ -21,7 +21,7 @@ import {
   recordMessage,
   recordGroundingAnnotation,
 } from "../utils/holochainTranscripts";
-import { beginTurn, updateTurn, endTurn, getTurn, liveTurnFor, abortTurn, requestBoundary } from "../utils/turns";
+import { beginTurn, updateTurn, endTurn, dropTurn, getTurn, liveTurnFor, abortTurn, requestBoundary, engineHolder, waitForEngine } from "../utils/turns";
 import { extractAndStoreFacts, looksLikeUserFact } from "../utils/memoryExtraction";
 import { isUtilityModelReady } from "../utils/utilityModel";
 import { groundDocument, type GroundedSource } from "../utils/grounding";
@@ -863,6 +863,49 @@ export function useChat(props: UseChatProps) {
           loadedNow = ready ? rustModel : null;
         } catch {
           loadedNow = null;
+        }
+      }
+      // One engine on this computer, one model at a time: a second local
+      // reply on a DIFFERENT model waits, visibly, for the running one -
+      // never a server restart under it. The same model shares the engine;
+      // online replies run in parallel. Stop while waiting ends the wait.
+      if (!isOnlineModel && !isExternalModel && preferredModel) {
+        const holder = engineHolder(assistantId, preferredModel);
+        if (holder) {
+          const queueController = new AbortController();
+          abortControllerRef.value = noSerialize(queueController);
+          const line = `Waiting for the engine · ${holder.aiLabel} is answering first`;
+          state.messages = state.messages.map((m) =>
+            m.id === assistantId ? { ...m, statusText: line, queued: true } : m,
+          );
+          beginTurn({
+            id: assistantId,
+            kind: "chat",
+            aiId: selectedAi.id,
+            agentKey: selectedAi.aiConfig?.agentPubKey ?? selectedAi.id,
+            aiLabel: selectedAi.label,
+            conversationHash: state.conversationHash,
+            question: userInput.slice(0, 200),
+            model: preferredModel,
+            state: "queued",
+            startedAt: Date.now(),
+            user: { ...userMessage },
+            assistant: { ...assistantMessage, statusText: line, queued: true },
+            stopAtBoundary: null,
+          }, queueController);
+          const ok = await waitForEngine(assistantId, preferredModel, queueController.signal);
+          if (!ok) {
+            // Stopped while waiting: nothing was asked yet.
+            state.messages = state.messages.filter((m) => m.id !== assistantId && m.id !== userMessage.id);
+            state.isLoading = false;
+            dropTurn(assistantId);
+            if (abortControllerRef.value === queueController) abortControllerRef.value = null;
+            return;
+          }
+          state.messages = state.messages.map((m) =>
+            m.id === assistantId ? { ...m, statusText: undefined, queued: false } : m,
+          );
+          updateTurn(assistantId, { state: "running", assistant: { statusText: undefined, queued: false } });
         }
       }
       if (!isOnlineModel && !isExternalModel && preferredModel && preferredModel !== loadedNow) {
@@ -2220,10 +2263,10 @@ export function useChat(props: UseChatProps) {
   });
 
   const resetChat = $(() => {
-    if (abortControllerRef.value) {
-      abortControllerRef.value.abort();
-      abortControllerRef.value = null;
-    }
+    // A reply in flight stays at the app root (utils/turns.ts): the page
+    // lets go of it - it finishes and records on its own, Stop reaches it
+    // from the tray or when its conversation is opened again.
+    abortControllerRef.value = null;
     state.messages = [];
     state.error = null;
     state.isLoading = false;

@@ -37,12 +37,20 @@ describe("a reply keeps going when you leave the chat", () => {
     await browser.waitUntil(async () => (await browser.execute(() => location.pathname)) === "/settings/", { timeout: 30_000, timeoutMsg: "Settings never opened" });
     await new Promise((r) => setTimeout(r, 6000));
     console.log(`e2e: turns while on Settings ${JSON.stringify(await browser.execute(() => (window as any).__yoaiTurns?.() ?? []))}`);
+    // The activity tray is where the reply shows while you are elsewhere: a row
+    // "Reeves is answering.." with Stop and Open.
+    const row = await $('[data-testid="turn-row"][data-turn-state="running"]');
+    await row.waitForDisplayed({ timeout: 10_000 });
+    const rowText = await row.getText();
+    console.log(`e2e: tray row ${JSON.stringify(rowText.replace(/\s+/g, " ").slice(0, 160))}`);
+    expect(rowText).toContain("is answering");
+    expect(rowText).toContain("Stop");
     await shot("reply-continues-settings");
-    // Back to the chat the same way: the page opens the reply's conversation by itself.
-    // The header's logo is the way back to the chat (a button around the logo image).
+    // Back to the chat through the row's Open: the page opens the reply's conversation.
     await browser.execute(() => {
-      const img = [...document.querySelectorAll('img[alt="Your Own AI"]')].find((i) => (i as HTMLElement).offsetParent !== null) as HTMLElement | undefined;
-      (img?.closest("button") as HTMLElement | null)?.click();
+      const r = document.querySelector('[data-testid="turn-row"][data-turn-state="running"]');
+      const open = [...(r?.querySelectorAll("button") ?? [])].find((b) => b.textContent?.trim() === "Open") as HTMLElement | undefined;
+      open?.click();
     });
     await browser.waitUntil(async () => (await browser.execute(() => location.pathname)) === "/chat/", { timeout: 30_000, timeoutMsg: "the chat never reopened" });
     await new Promise((r) => setTimeout(r, 4000));

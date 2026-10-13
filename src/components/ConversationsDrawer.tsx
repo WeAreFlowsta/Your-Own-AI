@@ -1,6 +1,8 @@
 import { component$, useSignal, type QRL } from "@builder.io/qwik";
 import { LuFolderOpen, LuPencil, LuX } from "@qwikest/icons/lucide";
 import { lastActiveAt, type ConversationListItem } from "../utils/conversationResume";
+import { useTurns } from "../contexts/TurnsContext";
+import { isLive } from "../utils/turns";
 
 interface ConversationsDrawerProps {
   open: boolean;
@@ -49,6 +51,11 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
     const renameDraft = useSignal("");
     /** Filter by AI - null = all. Cleared when the filtered AI has no rows. */
     const filterAiId = useSignal<string | null>(null);
+    // Live dots: a conversation with a reply running at the root, and the
+    // AIs with one (on their filter chips).
+    const turnsState = useTurns();
+    const liveHashes = new Set(turnsState.turns.filter((t) => isLive(t) && t.conversationHash).map((t) => t.conversationHash as string));
+    const liveAis = new Set(turnsState.turns.filter((t) => isLive(t)).map((t) => t.aiId));
     const stripAtStart = useSignal(true);
     const stripAtEnd = useSignal(false);
     if (!open) return null;
@@ -117,7 +124,8 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
                     key={ai.id}
                     onClick$={() => (filterAiId.value = activeFilter === ai.id ? null : ai.id)}
                     title={activeFilter === ai.id ? `${ai.label} - show all` : `Only ${ai.label}`}
-                    class={`shrink-0 rounded-full p-0.5 border-2 bg-transparent cursor-pointer transition-colors ${
+                    data-live={liveAis.has(ai.id) ? "1" : "0"}
+                    class={`relative shrink-0 rounded-full p-0.5 border-2 bg-transparent cursor-pointer transition-colors ${
                       activeFilter === ai.id
                         ? "border-[var(--text-secondary)]"
                         : "border-transparent opacity-70 hover:opacity-100"
@@ -135,6 +143,9 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
                       <span class="w-7 h-7 rounded-full bg-[var(--bg-card)] border border-[var(--border-subtle)] flex items-center justify-center text-xs font-semibold text-[var(--text-secondary)]">
                         {(ai.label || "?").charAt(0).toUpperCase()}
                       </span>
+                    )}
+                    {liveAis.has(ai.id) && (
+                      <span class="absolute -right-0.5 -bottom-0.5 h-2.5 w-2.5 rounded-full bg-[var(--bg-button-primary)] ring-2 ring-[var(--bg-header-footer)] animate-pulse" />
                     )}
                   </button>
                 ))}
@@ -174,20 +185,26 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
                 key={item.conversation.hash}
                 data-testid="conversation-item"
                 data-copy={item.conversation.source?.startsWith("copy:") ? "1" : "0"}
+                data-live={liveHashes.has(item.conversation.hash) ? "1" : "0"}
                 class="group flex w-full items-center gap-3 px-4 py-2.5 hover:bg-[var(--bg-dropdown-hover)]"
                 title={`Started ${whenText(item.conversation.started_at)} · last active ${whenText(lastActiveAt(item.conversation))}`}
               >
-                {item.aiImageUrl ? (
-                  <img
-                    src={item.aiImageUrl}
-                    alt={item.aiLabel}
-                    width={28}
-                    height={28}
-                    class="w-7 h-7 rounded-full object-cover shrink-0"
-                  />
-                ) : (
-                  <span class="w-7 h-7 rounded-full bg-[var(--bg-card)] border border-[var(--border-subtle)] shrink-0" />
-                )}
+                <span class="relative shrink-0">
+                  {item.aiImageUrl ? (
+                    <img
+                      src={item.aiImageUrl}
+                      alt={item.aiLabel}
+                      width={28}
+                      height={28}
+                      class="w-7 h-7 rounded-full object-cover block"
+                    />
+                  ) : (
+                    <span class="block w-7 h-7 rounded-full bg-[var(--bg-card)] border border-[var(--border-subtle)]" />
+                  )}
+                  {liveHashes.has(item.conversation.hash) && (
+                    <span class="absolute -right-0.5 -bottom-0.5 h-2.5 w-2.5 rounded-full bg-[var(--bg-button-primary)] ring-2 ring-[var(--bg-header-footer)] animate-pulse" title="A reply is running" />
+                  )}
+                </span>
                 {renamingHash.value === item.conversation.hash ? (
                   <input
                     type="text"

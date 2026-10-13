@@ -21,6 +21,8 @@ interface ChatInputBarProps {
   onToolsPermission$?: QRL<(mode: AgentPermissionMode) => void>;
   handleSubmit$: QRL<() => void>;
   isLoading: boolean;
+  /** When set, decides whether the AI selector is locked (default: while loading). */
+  aiSwitchLocked?: boolean;
   currentPlaceholder: string;
   /** See ContentEditor: the open conversation cannot take a message yet. */
   readOnlyReason?: string;
@@ -51,6 +53,7 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
   input,
   handleSubmit$,
   isLoading,
+  aiSwitchLocked,
   currentPlaceholder,
   readOnlyReason,
   selectedAi,
@@ -154,7 +157,7 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
               dynamicModelOptions={dynamicModelOptions}
               getDisplayImageUrl$={getDisplayImageUrl$}
               currentSelectedOptionInListbox={currentSelectedOptionInListbox}
-              isLoading={isLoading}
+              isLoading={aiSwitchLocked ?? isLoading}
               positionClass={aiSelectorPositionClass}
             />
           </LiquidMetalBorder>

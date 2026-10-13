@@ -18,7 +18,9 @@
  * scrolls inside itself on a short window.
  */
 import { component$, useStore, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
-import { useLocation } from "@builder.io/qwik-city";
+import { useLocation, useNavigate } from "@builder.io/qwik-city";
+import { useTurns } from "../contexts/TurnsContext";
+import { abortTurn, engineHolder, isLive, requestOpen, type Turn } from "../utils/turns";
 import { listen } from "@tauri-apps/api/event";
 import { useVisionDownload } from "../contexts/VisionDownloadContext";
 import { useAiData } from "../contexts/AiDataContext";
@@ -40,6 +42,8 @@ interface Row {
 }
 
 const LINGER_MS = 8000;
+/** A finished turn's row ("X answered · Open") stays this long. */
+const TURN_LINGER_MS = 60_000;
 const SHOWN = 3;
 
 export const ActivityTray = component$(() => {
@@ -76,6 +80,22 @@ export const ActivityTray = component$(() => {
   const stopping = useSignal(false);
   const vision = useVisionDownload();
   const aiData = useAiData();
+  // Turn rows: the replies running at the app root (ALWAYS_ON_AND_THREADS.md
+  // step 2) - where an AI "returns" when you are not looking at its chat.
+  const turnsState = useTurns();
+  const nav = useNavigate();
+  const dismissedTurns = useSignal<string[]>([]);
+  // Finished rows expire by time: a slow tick re-reads the clock.
+  const tick = useSignal(0);
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ cleanup }) => {
+    const t = setInterval(() => { tick.value++; }, 15_000);
+    cleanup(() => clearInterval(t));
+  });
+  const openTurn = $(async (t: Turn) => {
+    requestOpen(t);
+    if (loc.url.pathname.replace(/\/$/, "") !== "/chat") await nav("/chat/");
+  });
 
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async ({ cleanup }) => {
@@ -249,7 +269,18 @@ export const ActivityTray = component$(() => {
   const vis = vision.state.active;
   const visionFiles = new Set(vis ? vis.files.map((f) => f.filename) : []);
   const rows = store.rows.filter((r) => !(r.kind === "download" && visionFiles.has(r.id.slice(3))));
-  const total = rows.length + (vis ? 1 : 0);
+  void tick.value;
+  const onChat = loc.url.pathname.replace(/\/$/, "") === "/chat";
+  const now = Date.now();
+  const turnRows = turnsState.turns.filter((t) => {
+    if (dismissedTurns.value.includes(t.id)) return false;
+    // On screen already: the chat page shows that conversation.
+    if (onChat && t.conversationHash && t.conversationHash === turnsState.openConversation) return false;
+    if (isLive(t)) return true;
+    if (t.state === "stopped") return false;
+    return (t.endedAt ?? 0) > now - TURN_LINGER_MS;
+  });
+  const total = rows.length + turnRows.length + (vis ? 1 : 0);
   if (total === 0) return null;
   // The welcome wizard reports its own download in its header pill, and its
   // primary buttons sit exactly where the tray would land at the default
@@ -322,6 +353,63 @@ export const ActivityTray = component$(() => {
           )}
         </div>
       )}
+
+      {turnRows.map((t) => {
+        const holder = t.state === "queued" ? engineHolder(t.id, t.model) : null;
+        const title =
+          t.state === "queued" ? `${t.aiLabel} is waiting for the engine`
+          : t.state === "waiting" ? `${t.aiLabel} needs you`
+          : t.state === "running" ? (t.kind === "chat" ? `${t.aiLabel} is answering..` : `${t.aiLabel} is working..`)
+          : t.state === "error" ? `${t.aiLabel}'s reply failed`
+          : `${t.aiLabel} answered`;
+        const detail =
+          t.state === "queued" && holder ? `${holder.aiLabel} is answering first`
+          : t.state === "waiting" ? "A permission card is waiting for your answer"
+          : t.question;
+        const live = isLive(t);
+        return (
+          <div key={`turn:${t.id}`} data-testid="turn-row" data-turn-state={t.state} data-turn-kind={t.kind}>
+            <div class="flex items-start justify-between gap-2">
+              <div class="min-w-0 flex items-center gap-2">
+                <ActionIcon
+                  icon={t.kind === "chat" ? "think" : "tool"}
+                  status={t.state === "running" || t.state === "queued" ? "in_progress" : t.state === "waiting" ? "pending" : t.state === "error" ? "failed" : "completed"}
+                />
+                <span class={`text-sm font-medium truncate ${t.state === "error" ? "text-red-400" : "text-[var(--text-primary)]"}`}>
+                  {title}
+                </span>
+              </div>
+              <div class="flex-shrink-0 flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick$={() => openTurn(t)}
+                  class="text-xs text-[var(--text-link)] hover:underline"
+                >
+                  Open
+                </button>
+                {live ? (
+                  <button
+                    type="button"
+                    onClick$={() => { abortTurn(t.id); }}
+                    class="text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                  >
+                    Stop
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick$={() => { dismissedTurns.value = [...dismissedTurns.value, t.id]; }}
+                    class="text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                  >
+                    Dismiss
+                  </button>
+                )}
+              </div>
+            </div>
+            <p class="text-xs text-[var(--text-muted)] mt-0.5 truncate">{detail}</p>
+          </div>
+        );
+      })}
 
       {shown.map((r) => (
         <div key={r.id}>

@@ -42,6 +42,7 @@ export const AiSelector = component$<AiSelectorProps>((props) => {
     <div class="relative">
       <button
         type="button"
+        data-testid="ai-selector"
         onClick$={() => { if (!props.isLoading) aiDropdownOpen.value = !aiDropdownOpen.value; }}
         disabled={props.isLoading}
         class="relative w-full cursor-default rounded-full bg-[var(--bg-input)] py-1.5 pl-2 sm:pl-3 pr-10 text-left text-[var(--text-primary)] focus:outline-none text-xs sm:text-base gradient-border-target"
@@ -71,6 +72,8 @@ export const AiSelector = component$<AiSelectorProps>((props) => {
               return (
                 <div
                   key={option.id}
+                  data-testid="ai-option"
+                  data-ai-label={option.label}
                   onClick$={() => {
                     props.setSelectedAi$(option);
                     aiDropdownOpen.value = false;

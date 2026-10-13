@@ -17,7 +17,7 @@ import { useAgentSession, readRecentFolders, resolveBinaryPath } from "../../hoo
 import { permissionModeForTools, setPermissionModeForTools, type AgentPermissionMode } from "../../utils/agentPermissions";
 import { ConversationsDrawer } from "../../components/ConversationsDrawer";
 import { useTurns } from "../../contexts/TurnsContext";
-import { abortTurn, isLive } from "../../utils/turns";
+import { abortTurn, isLive, liveAgentTurn, engineHolder, noteOpenConversation, takePendingOpen, TURN_OPEN_EVENT, type Turn, allTurns } from "../../utils/turns";
 import OnlineModelsDoor from "../../components/OnlineModelsDoor";
 import { loadModelBounded } from "../../utils/loadModelBounded";
 import { uiLog } from "../../utils/uiLog";
@@ -536,11 +536,8 @@ export default component$(() => {
   const resumeConversation = $(
     async (target: { hash: string; agentKey: string; aiId?: string; title?: string; seq?: number; source?: string | null }) => {
       const who = `${target.agentKey.slice(0, 8)}../${target.hash.slice(0, 12)}..`;
-      if (chatState.isLoading) {
-        console.warn("[Resume] ignored: a reply is still in flight");
-        uiLog(`resume ${who} ignored: a reply is still in flight`, "warn");
-        return;
-      }
+      // A reply still running here stays at the app root (utils/turns.ts):
+      // the reset below lets go of it, it finishes and records on its own.
       // A click while an earlier open is still reading (a slow records read
       // can take a minute) SUPERSEDES it - a second click must never be a
       // dead click. The older open checks its generation before applying.
@@ -656,16 +653,45 @@ export default component$(() => {
   // Coming back to the chat while a reply of this AI is still running at the
   // root (or finished moments ago): open that conversation - the person
   // left it mid-answer and expects to land back in it, not on the start view.
+  // Once, when the page comes up with its AI known - never again on a turn
+  // update: after "New chat" the page is deliberately empty while the reply
+  // runs on at the root, and must not be pulled back into it.
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(({ track }) => {
-    const turns = track(() => turnsState.turns);
     const aiId = track(() => selectedAi.value.id);
+    const turns = allTurns();
     if (chatState.conversationHash || chatState.messages.length > 0 || chatState.isLoading) return;
     if (resumeState.value !== "idle") return;
-    const t = turns.find((x) => x.aiId === aiId && x.conversationHash && (isLive(x) || (x.endedAt ?? 0) > Date.now() - 60_000));
+    if (aiId === "__placeholder__") return;
+    // "Open" on a tray row from another page lands here.
+    const asked = takePendingOpen();
+    const t = asked?.conversationHash
+      ? asked
+      : turns.find((x) => x.aiId === aiId && x.conversationHash && (isLive(x) || (x.endedAt ?? 0) > Date.now() - 60_000));
     void import("../../utils/uiLog").then(({ uiLog }) => uiLog(`[turns] chat mounted for ${aiId.slice(0, 12)}: ${turns.length} turn(s) at the root${t ? `, opening ${t.conversationHash!.slice(0, 12)}` : ""}`));
     if (!t) return;
     resumeConversation({ hash: t.conversationHash!, agentKey: t.agentKey, aiId: t.aiId, title: t.question });
+  });
+
+  // "Open" on a tray row while this page is up: switch to that conversation.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ cleanup }) => {
+    const onOpen = (ev: Event) => {
+      const t = (ev as CustomEvent<Turn>).detail;
+      if (!t?.conversationHash) return;
+      takePendingOpen();
+      if (chatState.conversationHash === t.conversationHash) return;
+      void resumeConversation({ hash: t.conversationHash, agentKey: t.agentKey, aiId: t.aiId, title: t.question });
+    };
+    window.addEventListener(TURN_OPEN_EVENT, onOpen);
+    cleanup(() => window.removeEventListener(TURN_OPEN_EVENT, onOpen));
+  });
+  // The tray hides the row of the conversation on screen.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track, cleanup }) => {
+    const hash = track(() => chatState.conversationHash);
+    noteOpenConversation(hash);
+    cleanup(() => noteOpenConversation(null));
   });
 
   const openConversations = $(async () => {
@@ -1083,6 +1109,13 @@ export default component$(() => {
         // instructions here so the first question is not the first read.
         void import("../../utils/warmPrompt").then((m) => m.warmSystemPrompt(selectedAi.value, targetModel));
       } else {
+        // Another AI's local reply is running on a different model: loading
+        // now would restart the engine under it. The first send here waits
+        // its turn and loads then (utils/turns.ts).
+        if (engineHolder(null, targetModel)) {
+          console.log("[ChatPage] Model load deferred - the engine is answering for another AI");
+          return;
+        }
         console.log("[ChatPage] Loading model:", targetModel);
         isModelLoading.value = true;
         modelLoadTime.value = Date.now();
@@ -1287,7 +1320,7 @@ export default component$(() => {
     // reopens the same folder for the new AI, so its turns run on the new
     // AI's model and tools, never through the old AI's session.
     const aiId = selectedAi.value.aiConfig?.id;
-    if (aiId && agentState.sessionAiId && agentState.sessionAiId !== aiId && !chatState.isLoading) {
+    if (aiId && agentState.sessionAiId && agentState.sessionAiId !== aiId && !chatState.isLoading && !liveAgentTurn()) {
       if (agentState.mode === "tools") {
         closeFolder$();
       } else if (agentState.mode === "project" && agentState.folderPath) {
@@ -1849,6 +1882,7 @@ export default component$(() => {
               handleSubmit$={handleSubmit}
               readOnlyReason={copiedFrom.value ? `From ${copiedFrom.value} · read-only until it arrives` : undefined}
               isLoading={chatState.isLoading || !!(attached.value && isLive(attached.value))}
+              aiSwitchLocked={!!(agentState.folderPath && chatState.isLoading)}
               stopChat$={handleStop}
               currentPlaceholder={firstModelPlaceholder.value ?? `Ask ${selectedAi.value.label} ${
                 selectedAi.value.aiConfig?.askBlurb &&

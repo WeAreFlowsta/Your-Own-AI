@@ -157,6 +157,8 @@ export interface Message {
   aiLabel?: string;
   aiImageUrl?: string | null;
   statusText?: string; // Custom status text like "Model loading, please wait..."
+  /** Waiting for the engine: another AI's local reply runs on a different model first. */
+  queued?: boolean;
   turnMode?: TurnMode; // the mode this message was generated under — drives thinking-window presentation + live-thinking gate
   turnModeAuto?: boolean; // true when turnMode was chosen by the classifier (not a sparkle/default) — for the auto badge
   /** True when this turn routed to a web-search model: it researches for a
