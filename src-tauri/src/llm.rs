@@ -4267,6 +4267,29 @@ pub(crate) static UTIL_ONE_AT_A_TIME: tokio::sync::Semaphore = tokio::sync::Sema
 /// same few cores and both crawl (a 965-token extraction ran 233 s beside
 /// a reply on a 2-core Mac).
 static FOREGROUND_TURNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// How long a load for a DIFFERENT model waits for the person's streaming
+/// turns before it goes ahead anyway (the UI's own ceiling is 150 s).
+const FOREGROUND_SWAP_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// What a background request does when its model is not the loaded one.
+#[derive(Debug, PartialEq)]
+pub(crate) enum BackgroundChoice {
+    /// Run on this (loaded, healthy) model instead.
+    Serve(String),
+    /// Nothing is up: do not load for work nobody is waiting on.
+    StepAside,
+}
+
+/// Background work (memory extraction, titles, dreaming) is model-agnostic
+/// enough to ride whatever is loaded; it must never move the engine.
+pub(crate) fn background_model_choice(wanted: &str, current: Option<&str>, healthy: bool) -> BackgroundChoice {
+    match current {
+        Some(cur) if healthy && !cur.is_empty() => {
+            if cur == wanted { BackgroundChoice::Serve(wanted.to_string()) } else { BackgroundChoice::Serve(cur.to_string()) }
+        }
+        _ => BackgroundChoice::StepAside,
+    }
+}
 struct ForegroundTurn;
 impl ForegroundTurn {
     fn start() -> Self {
@@ -5436,6 +5459,39 @@ async fn load_model_inner(
             return Ok(());
         }
     }
+    // A different model while a person's turn is streaming on this one: the
+    // swap would restart the server under that reply. Wait for the turns to
+    // end (bounded) - the UI queues such turns visibly, so this is the
+    // engine's own guarantee for every other caller.
+    {
+        let current = state.current_model.lock().await.clone();
+        if current.as_deref() != Some(filename.as_str()) {
+            let waited = std::time::Instant::now();
+            let mut said = false;
+            while FOREGROUND_TURNS.load(std::sync::atomic::Ordering::SeqCst) > 0
+                && waited.elapsed() < FOREGROUND_SWAP_WAIT
+            {
+                if !said {
+                    log::info!(
+                        "[LLM] load of '{}' waits: {} turn(s) still streaming on {:?}",
+                        filename,
+                        FOREGROUND_TURNS.load(std::sync::atomic::Ordering::SeqCst),
+                        current
+                    );
+                    said = true;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+            if said {
+                log::info!(
+                    "[LLM] load of '{}' goes ahead after {} ms ({} turn(s) left)",
+                    filename,
+                    waited.elapsed().as_millis(),
+                    FOREGROUND_TURNS.load(std::sync::atomic::Ordering::SeqCst)
+                );
+            }
+        }
+    }
     // A real load follows: say so (the wrapper says how it ended).
     {
         use tauri::Emitter as _;
@@ -5845,6 +5901,14 @@ pub async fn stream_chat_completion(
         .as_deref()
         .filter(|m| m.starts_with("external:"))
         .map(|m| m["external:".len()..].to_string());
+    // One stream per request id: a second invoke with the same id (seen
+    // 10-13 on a resend: two identical requests in the same second, chunks
+    // of both landing on one listener, an empty reply) is refused here,
+    // and the first stream goes on untouched.
+    if state.live_streams.is_live(&request_id) {
+        log::warn!("[LLM] request {request_id} is already streaming - the second invoke is refused");
+        return Err("DUPLICATE_REQUEST".into());
+    }
     // This reply's own stop handle, released when the function returns.
     let stop = state.live_streams.register(&request_id);
 
@@ -5855,6 +5919,7 @@ pub async fn stream_chat_completion(
     // and waiting for a server nobody starts was the "couldn't be loaded"
     // dead end (fit-truth 09-01, round 5). Reason "chat" is deliberate -
     // the sentinel only blocks automatic reasons.
+    let mut model = model;
     {
         let is_remote = model
             .as_deref()
@@ -5865,12 +5930,30 @@ pub async fn stream_chat_completion(
                 let healthy = chat_server_health_ok().await;
                 let cur = state.current_model.lock().await.clone();
                 if !healthy || cur.as_deref() != Some(wanted.as_str()) {
-                    log::info!(
-                        "[LLM] the question loads '{wanted}' (server {}, current {:?})",
-                        if healthy { "up" } else { "down" },
-                        cur
-                    );
-                    load_model(app.clone(), app.state(), wanted, false, "chat".into()).await?;
+                    if background.unwrap_or(false) {
+                        // Work nobody is waiting on never moves the engine: the
+                        // AI that just answered may no longer hold it (another
+                        // AI's queued reply is loading its model). Run on what is
+                        // loaded, or step aside when nothing is - a load here
+                        // raced the switch and took the server down (10-13).
+                        match background_model_choice(&wanted, cur.as_deref(), healthy) {
+                            BackgroundChoice::Serve(on) => {
+                                log::info!("[LLM] background work asked for '{wanted}' - runs on the loaded '{on}' instead");
+                                model = Some(on);
+                            }
+                            BackgroundChoice::StepAside => {
+                                log::info!("[LLM] background work asked for '{wanted}' with no model up - skipped, never a load");
+                                return Err("ENGINE_IDLE_BACKGROUND".into());
+                            }
+                        }
+                    } else {
+                        log::info!(
+                            "[LLM] the question loads '{wanted}' (server {}, current {:?})",
+                            if healthy { "up" } else { "down" },
+                            cur
+                        );
+                        load_model(app.clone(), app.state(), wanted, false, "chat".into()).await?;
+                    }
                 }
             }
         }
@@ -6713,6 +6796,12 @@ impl Drop for LiveStream {
 }
 
 impl LiveStreams {
+    /// Is a stream with this id already running?
+    pub fn is_live(&self, id: &str) -> bool {
+        let map = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        map.live.contains_key(id)
+    }
+
     pub fn register(&self, id: &str) -> LiveStream {
         let handle = std::sync::Arc::new(StopHandle {
             flag: std::sync::atomic::AtomicBool::new(false),
@@ -7476,5 +7565,23 @@ mod live_matrix {
         assert!(!content.trim().is_empty(), "reply had no visible content");
         assert!(tps > 0.0, "server reported no generation timing");
         assert!(n_gen >= 20, "reply too short to measure ({n_gen} tokens)");
+    }
+}
+
+#[cfg(test)]
+mod background_choice_tests {
+    use super::{background_model_choice, BackgroundChoice};
+
+    #[test]
+    fn background_rides_the_loaded_model() {
+        assert_eq!(background_model_choice("a.gguf", Some("b.gguf"), true), BackgroundChoice::Serve("b.gguf".into()));
+        assert_eq!(background_model_choice("a.gguf", Some("a.gguf"), true), BackgroundChoice::Serve("a.gguf".into()));
+    }
+
+    #[test]
+    fn background_steps_aside_when_nothing_is_up() {
+        assert_eq!(background_model_choice("a.gguf", None, true), BackgroundChoice::StepAside);
+        assert_eq!(background_model_choice("a.gguf", Some("b.gguf"), false), BackgroundChoice::StepAside);
+        assert_eq!(background_model_choice("a.gguf", Some(""), true), BackgroundChoice::StepAside);
     }
 }

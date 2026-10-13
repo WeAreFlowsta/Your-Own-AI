@@ -154,6 +154,8 @@ export class LlamaServerAPI {
     // Generate unique request ID
     const requestId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     console.log('[LlamaServer] Starting stream with request ID:', requestId);
+    const trace = (line: string) => { void import("./uiLog").then(({ uiLog }) => uiLog(`[stream ${requestId.slice(-6)}] ${line}`)).catch(() => {}); };
+    trace(`start model=${model ?? "loaded"} background=${!!background} aborted=${!!_signal?.aborted}`);
 
     // Set up event listeners for this request
     const chunks: StreamChunk[] = [];
@@ -185,11 +187,13 @@ export class LlamaServerAPI {
     const unlistenError = await listen(`chat-stream-error-${requestId}`, (event: any) => {
       streamError = event.payload.error;
       streamComplete = true;
+      trace(`error: ${String(event.payload.error).slice(0, 160)}`);
     });
 
     // Stop is per reply: the caller's abort stops THIS request in the app
     // (and, for an online model, at the provider), never another one.
     const stopThisReply = () => {
+      trace("stopped by the caller's signal");
       invoke('cancel_chat_completion', { requestId }).catch(err =>
         console.error('[LlamaServer] Failed to stop the stream:', err)
       );
@@ -220,6 +224,14 @@ export class LlamaServerAPI {
         sampling: sampling || null,
         background: background || false,
       }).catch(err => {
+        // The same invoke reached the backend twice (seen 10-13 on a resend:
+        // one JS call, two commands in the same second); the backend keeps the
+        // first stream and refuses the second. That refusal is not an error of
+        // THIS stream - its chunks and [DONE] are still coming.
+        if (String(err).includes("DUPLICATE_REQUEST")) {
+          trace("a duplicate invoke was refused - the first stream goes on");
+          return;
+        }
         console.error('[LlamaServer] Stream command error:', err);
         streamError = err.toString();
         streamComplete = true;
@@ -257,6 +269,7 @@ export class LlamaServerAPI {
       console.log('[LlamaServer] Stream complete');
     } finally {
       // Clean up event listeners
+      trace(`end: ${chunks.filter((c) => c.type === "text").length} text chunk(s), complete=${streamComplete}, error=${streamError ? "yes" : "no"}`);
       unlistenChunk();
       unlistenUsage();
       unlistenSources();
