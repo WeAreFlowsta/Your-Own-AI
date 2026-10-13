@@ -58,7 +58,45 @@ function logLine(line: string): void {
 
 // Test aids: the live list, readable from the page (the UI tests print it), and the full records-side ids.
 try { (window as any).__yoaiTurnsFull = () => allTurns().map((t) => ({ agentKey: t.agentKey, conversationHash: t.conversationHash, state: t.state })); } catch { /* no window */ }
-try { (window as any).__yoaiTurns = () => allTurns().map((t) => ({ id: t.id.slice(0, 8), kind: t.kind, ai: t.aiId.slice(0, 12), conv: t.conversationHash?.slice(0, 12) ?? null, state: t.state, chars: t.assistant.content.length })); } catch { /* no window */ }
+try { (window as any).__yoaiTurns = () => allTurns().map((t) => ({ id: t.id.slice(0, 8), kind: t.kind, ai: t.aiId.slice(0, 12), conv: t.conversationHash?.slice(0, 12) ?? null, state: t.state, chars: t.assistant.content.length, rail: t.assistant.agentLog?.length ?? 0 })); } catch { /* no window */ }
+
+/** The live agent (tools / project) turn, if any. The Rust bridge runs one
+ *  agent session at a time, so there is at most one. */
+export function liveAgentTurn(): Turn | null {
+  for (const t of turns.values()) if (t.kind !== "chat" && isLive(t)) return t;
+  return null;
+}
+
+/** The live turn holding a permission card with this request id. */
+export function turnWithPermission(requestId: number): Turn | null {
+  for (const t of turns.values()) {
+    if ((t.assistant.agentLog ?? []).some((i) => i.type === "permission" && i.permission.requestId === requestId)) return t;
+  }
+  return null;
+}
+
+// Who handles the agent session's events. The chat page's agent hook is
+// page-scoped; its listeners stay up after the page is left while a turn it
+// started is live (the turn's loop lives in that closure), and a page that
+// comes back ADOPTS the live turn: it takes the token, and the earlier
+// hook's listeners see they no longer own the session and go.
+let agentOwner = 0;
+let nextAgentOwner = 0;
+export function newAgentOwner(): number {
+  return ++nextAgentOwner;
+}
+export function claimAgentSession(owner: number): void {
+  if (agentOwner === owner) return;
+  agentOwner = owner;
+  changed();
+}
+/** Does this hook handle the agent session's events now? Yes while no agent
+ *  turn is live (session-level events - ready, hints, exit - go to whoever is
+ *  mounted; the earlier hooks have let go), and during a live turn only for
+ *  the hook that started or adopted it. */
+export function ownsAgentSession(owner: number): boolean {
+  return agentOwner === owner || liveAgentTurn() === null;
+}
 
 export function beginTurn(turn: Turn, controller: AbortController): void {
   turns.set(turn.id, turn);
@@ -87,6 +125,15 @@ export function endTurn(id: string, state: "done" | "stopped" | "error"): void {
   t.assistant = { ...t.assistant, isLoading: false, statusText: undefined, stopped: state === "stopped" ? true : t.assistant.stopped };
   changed();
   setTimeout(() => { turns.delete(id); changed(); }, KEEP_ENDED_MS);
+}
+
+/** Forget a turn that never became one (a prepared bubble discarded, a
+ *  cancel before any output): nothing to fold into a page, nothing to list. */
+export function dropTurn(id: string): void {
+  if (!turns.has(id)) return;
+  turns.delete(id);
+  controllers.delete(id);
+  changed();
 }
 
 export function getTurn(id: string): Turn | null {

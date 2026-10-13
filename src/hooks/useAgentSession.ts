@@ -21,6 +21,21 @@ import { describeAction, subjectOfLabel, errorOf } from "../utils/actionLabels";
 import { MCP_PRESETS } from "../utils/mcp";
 import { summaryOf } from "../utils/agentSummary";
 import { uiLog } from "../utils/uiLog";
+import {
+  beginTurn,
+  updateTurn,
+  endTurn,
+  dropTurn,
+  getTurn,
+  isLive,
+  allTurns,
+  liveAgentTurn,
+  turnWithPermission,
+  newAgentOwner,
+  claimAgentSession,
+  ownsAgentSession,
+  TURNS_EVENT,
+} from "../utils/turns";
 import { lastKnownEntitled } from "../utils/entitlement";
 import { $, useSignal, useStore, useVisibleTask$, type Signal } from "@builder.io/qwik";
 import { v4 as uuidv4 } from "uuid";
@@ -446,6 +461,10 @@ export function useAgentSession(props: UseAgentSessionProps) {
   });
   // The message id of the current turn's reply bubble.
   const turnId = useSignal<string | null>(null);
+  // This hook instance's token for the agent session (see utils/turns.ts):
+  // the live agent turn is handled by whichever mounted hook holds it.
+  const ownerId = useSignal(0);
+  const listening = useSignal(false);
 
   const invokeTauri = $(async (cmd: string, args?: Record<string, unknown>) => {
     const { invoke } = await import("@tauri-apps/api/core");
@@ -479,6 +498,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       }
       props.chatState.conversationHash = hash;
       props.chatState.messageSequence = 0;
+      if (turnId.value) updateTurn(turnId.value, { conversationHash: hash });
       if (state.folderPath && state.mode === "project") rememberConversationFolder(hash, state.folderPath);
       rememberLastConversation({ hash, agentKey, aiId: ai.id, title });
     }
@@ -648,47 +668,72 @@ export function useAgentSession(props: UseAgentSessionProps) {
   const startTurnBubble = $((userText: string, attachedFiles?: string[], library?: LibraryDocGiven[], surface?: "project" | "tools") => {
     const id = uuidv4();
     turnId.value = id;
-    props.chatState.messages = [
-      ...props.chatState.messages,
-      {
-        id: uuidv4(),
-        role: "user",
-        content: userText,
-        model: "user",
-        ...(attachedFiles?.length ? { attachedFiles } : {}),
-      },
-      {
-        id,
-        role: "assistant",
-        content: "",
-        model: props.selectedAi.value.id,
-        aiLabel: props.selectedAi.value.label,
-        aiImageUrl: props.selectedAi.value.imageUrl || undefined,
-        isLoading: true,
-        agentTurn: true,
-        agentSurface: surface ?? (state.mode === "tools" ? "tools" : "project"),
-        // The AI's own documents whose passages rode with this prompt
-        // (shown under Sources, recorded with the turn as names and counts).
-        ...(library?.length ? { library } : {}),
-        // A tool server that died at start is invisible otherwise - say so
-        // on the turn, once, with the reason its log gave.
-        agentLog: [
-          ...state.toolStartFailures.map((f) => ({
-            id: `toolstart-${f.name}-${id}`,
-            type: "notice" as const,
-            text: `${f.name} didn't start, so its tools are not available this session. Its log says: ${f.tail}`,
-          })),
-          ...state.startNotices.map((n) => ({
-            id: `hint-${n.kind || uuidv4()}`,
-            type: "notice" as const,
-            text: n.text,
-          })),
-        ],
-      },
-    ];
+    const kind: "project" | "tools" = surface ?? (state.mode === "tools" ? "tools" : "project");
+    const userMsg: Message = {
+      id: uuidv4(),
+      role: "user",
+      content: userText,
+      model: "user",
+      ...(attachedFiles?.length ? { attachedFiles } : {}),
+    };
+    const assistantMsg: Message = {
+      id,
+      role: "assistant",
+      content: "",
+      model: props.selectedAi.value.id,
+      aiLabel: props.selectedAi.value.label,
+      aiImageUrl: props.selectedAi.value.imageUrl || undefined,
+      isLoading: true,
+      agentTurn: true,
+      agentSurface: kind,
+      // The AI's own documents whose passages rode with this prompt
+      // (shown under Sources, recorded with the turn as names and counts).
+      ...(library?.length ? { library } : {}),
+      // A tool server that died at start is invisible otherwise - say so
+      // on the turn, once, with the reason its log gave.
+      agentLog: [
+        ...state.toolStartFailures.map((f) => ({
+          id: `toolstart-${f.name}-${id}`,
+          type: "notice" as const,
+          text: `${f.name} didn't start, so its tools are not available this session. Its log says: ${f.tail}`,
+        })),
+        ...state.startNotices.map((n) => ({
+          id: `hint-${n.kind || uuidv4()}`,
+          type: "notice" as const,
+          text: n.text,
+        })),
+      ],
+    };
+    props.chatState.messages = [...props.chatState.messages, userMsg, assistantMsg];
     state.toolStartFailures = [];
     state.startNotices = [];
     props.chatState.isLoading = true;
+    // The turn lives at the app root from here (ALWAYS_ON_AND_THREADS.md step
+    // 1b): leave the page and it keeps going; come back and the page attaches.
+    // Stop on the turn cancels over ACP, the same as the page's Stop.
+    const controller = new AbortController();
+    controller.signal.addEventListener("abort", () => {
+      invokeTauri("cancel_agent_turn").catch(() => {});
+    });
+    claimAgentSession(ownerId.value);
+    beginTurn(
+      {
+        id,
+        kind,
+        aiId: props.selectedAi.value.id,
+        agentKey: props.selectedAi.value.aiConfig?.agentPubKey ?? props.selectedAi.value.id,
+        aiLabel: props.selectedAi.value.label,
+        conversationHash: props.chatState.conversationHash ?? null,
+        question: userText,
+        model: props.selectedAi.value.aiConfig?.model ?? null,
+        state: "running",
+        startedAt: Date.now(),
+        user: userMsg,
+        assistant: assistantMsg,
+        stopAtBoundary: null,
+      },
+      controller,
+    );
     // Fire-and-forget - chat always works even if the conductor is down.
     recordUserTurn(userText).catch(() => {});
   });
@@ -729,6 +774,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     turnId.value = null;
     props.chatState.isLoading = false;
     state.liveStatus = "";
+    if (id) dropTurn(id);
     const msgs = props.chatState.messages;
     const at = msgs.findIndex((m) => m.id === id);
     props.chatState.messages = at > 0 ? [...msgs.slice(0, at - 1), ...msgs.slice(at + 1)] : msgs.filter((m) => m.id !== id);
@@ -741,10 +787,6 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.lastRouteServer = false;
     state.liveStatus = "Thinking..";
     props.chatState.isLoading = true;
-    // A turn in flight is lost if the chat page unmounts (its listeners go
-    // with it). The root layout reads this flag to hold navigation with a
-    // question until the session is lifted to app level.
-    try { (window as unknown as { __yoaiTurnRunning?: boolean }).__yoaiTurnRunning = true; } catch { /* fine */ }
     // First prompt after a resume: the restored-context digest rides ahead
     // of the question ON THE WIRE only - the bubble and the transcript keep
     // the clean question (the digest is derived from the chain; recording
@@ -1158,7 +1200,6 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.sessionToolCalls = 0;
     state.status = "idle";
     state.statusNote = "";
-    try { (window as unknown as { __yoaiTurnRunning?: boolean }).__yoaiTurnRunning = false; } catch { /* fine */ }
     state.pendingPermissionId = null;
     state.overloadOffer = null;
     queued.value = null;
@@ -1181,7 +1222,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
   /** Update a permission item (by ACP request id) wherever it lives. */
   const updatePermission = $(
     (requestId: number, mutate: (p: AgentPermission) => AgentPermission) => {
-      props.chatState.messages = props.chatState.messages.map((m) => {
+      const apply = (m: Message): Message => {
         if (!m.agentLog?.some((i) => i.type === "permission" && i.permission.requestId === requestId)) {
           return m;
         }
@@ -1193,7 +1234,16 @@ export function useAgentSession(props: UseAgentSessionProps) {
               : i,
           ),
         };
-      });
+      };
+      props.chatState.messages = props.chatState.messages.map(apply);
+      // The card may live on a turn this page came back to (its bubble is
+      // the root's copy until the turn ends).
+      const owning = turnWithPermission(requestId);
+      if (owning) {
+        const next = apply(owning.assistant);
+        const answered = (next.agentLog ?? []).some((i) => i.type === "permission" && i.permission.requestId === requestId && i.permission.state !== "pending");
+        updateTurn(owning.id, { assistant: next, ...(answered && owning.state === "waiting" ? { state: "running" as const } : {}) });
+      }
     },
   );
 
@@ -1222,7 +1272,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
   const respondPermission$ = $(
     async (requestId: number, decision: "allow" | "reject", always: boolean) => {
       let perm: AgentPermission | undefined;
-      for (const m of props.chatState.messages) {
+      for (const m of [...props.chatState.messages, ...allTurns().filter((t) => t.kind !== "chat").map((t) => t.assistant)]) {
         for (const i of m.agentLog ?? []) {
           if (i.type === "permission" && i.permission.requestId === requestId) perm = i.permission;
         }
@@ -1274,7 +1324,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         const label = permissionActionLabel(perm);
         state.liveStatus = `${label}..`;
         const tcId = perm.toolCallId ?? `perm-${requestId}`;
-        props.chatState.messages = props.chatState.messages.map((m) => {
+        const grow = (m: Message): Message => {
           const log = m.agentLog;
           if (!log?.some((i) => i.type === "permission" && i.permission.requestId === requestId)) {
             return m;
@@ -1300,7 +1350,10 @@ export function useAgentSession(props: UseAgentSessionProps) {
               },
             ],
           };
-        });
+        };
+        props.chatState.messages = props.chatState.messages.map(grow);
+        const owning = turnWithPermission(requestId);
+        if (owning) updateTurn(owning.id, { assistant: grow(owning.assistant) });
       } else {
         state.liveStatus = "Thinking..";
       }
@@ -1320,7 +1373,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     const requestId = state.pendingPermissionId;
     if (requestId === null) return;
     let perm: AgentPermission | undefined;
-    for (const m of props.chatState.messages) {
+    for (const m of [...props.chatState.messages, ...allTurns().filter((t) => t.kind !== "chat").map((t) => t.assistant)]) {
       for (const i of m.agentLog ?? []) {
         if (i.type === "permission" && i.permission.requestId === requestId) perm = i.permission;
       }
@@ -1353,15 +1406,48 @@ export function useAgentSession(props: UseAgentSessionProps) {
   });
 
   // eslint-disable-next-line qwik/no-use-visible-task
+  /** A page that comes back to a conversation whose agent turn is still
+   *  running at the root takes the turn over: this hook's listeners handle
+   *  its events from here (the hook that started it lets go), the composer
+   *  shows Stop, a pending card is answerable, and the turn is recorded
+   *  here when it ends. Only once this hook's listeners are up. */
+  const adoptLiveTurn$ = $(() => {
+    if (!listening.value) return;
+    const live = liveAgentTurn();
+    if (!live || live.id === turnId.value) return;
+    const hash = props.chatState.conversationHash;
+    if (!hash || live.conversationHash !== hash) return;
+    turnId.value = live.id;
+    claimAgentSession(ownerId.value);
+    state.status = "working";
+    const pending = (live.assistant.agentLog ?? []).find((i) => i.type === "permission" && i.permission.state === "pending");
+    state.pendingPermissionId = pending?.type === "permission" ? pending.permission.requestId : null;
+    state.liveStatus = state.pendingPermissionId !== null ? "Waiting for you.." : "Working..";
+    props.chatState.isLoading = true;
+    uiLog(`[turns] adopted ${live.id.slice(0, 8)} ${live.kind} on ${hash.slice(0, 12)}`);
+  });
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    track(() => props.chatState.conversationHash);
+    track(() => listening.value);
+    void adoptLiveTurn$();
+  });
+
   useVisibleTask$(async ({ cleanup }) => {
     const { listen } = await import("@tauri-apps/api/event");
+    ownerId.value = newAgentOwner();
 
+    // The bubble is written in two places while they differ: the page's
+    // list (when this page started the turn) and the root's copy (what a
+    // page that comes back renders until the turn ends and folds it in).
     const mutateTurn = (mutate: (m: Message) => Message) => {
       const id = turnId.value;
       if (!id) return;
       props.chatState.messages = props.chatState.messages.map((m) =>
         m.id === id ? mutate(m) : m,
       );
+      const t = getTurn(id);
+      if (t) updateTurn(id, { assistant: mutate(t.assistant) });
     };
 
     // A message sent while the agent works (see sendPrompt$). The running
@@ -1386,6 +1472,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         agentLog: (m.agentLog ?? []).filter((i) => !isOpen(i)),
       }));
       recordTurnOnce(oldId);
+      if (oldId) endTurn(oldId, "done");
       await startTurnBubble(text, files, library);
       if (running.length) {
         mutateTurn((m) => ({ ...m, agentLog: [...running, ...(m.agentLog ?? [])] }));
@@ -1415,6 +1502,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     window.addEventListener("yoai-agent-stop-task", onStopTask);
 
     const unReady = await listen<{ sessionId: string }>("agent-ready", async () => {
+      if (!ownsAgentSession(ownerId.value)) return;
       state.status = "ready";
       state.statusNote = "";
       // Fetched tool icons, for the rail's tool steps.
@@ -1530,6 +1618,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     const helperSessions = new Map<string, string>();
 
     const unUpdate = await listen<any>("agent-update", (e) => {
+      if (!ownsAgentSession(ownerId.value)) return;
       const update = e.payload?.params?.update;
       if (!update) return;
       const kind = update.sessionUpdate;
@@ -2033,6 +2122,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     // and tools are ~10k tokens; on a small card that is a silent minute):
     // the pearl says how far along it is instead of "Thinking..".
     const unProgress = await listen<any>("llm-prompt-progress", (e) => {
+      if (!ownsAgentSession(ownerId.value)) return;
       if (state.status !== "working") return;
       const tokens = Number(e.payload?.tokens);
       const progress = Number(e.payload?.progress);
@@ -2042,10 +2132,12 @@ export function useAgentSession(props: UseAgentSessionProps) {
       }
     });
     const unTiming = await listen<any>("agent-call-timing", (e) => {
+      if (!ownsAgentSession(ownerId.value)) return;
       const tps = Number(e.payload?.tokens_per_second);
       state.lastCallTps = Number.isFinite(tps) && tps > 0 ? tps : 0;
     });
     const unRoute = await listen<any>("agent-route", (e) => {
+      if (!ownsAgentSession(ownerId.value)) return;
       const model = typeof e.payload?.model === "string" ? e.payload.model : "";
       // The pearl names what the turn waits on: an online model, or the
       // person's own server (Settings > Engines) serving the turn.
@@ -2065,6 +2157,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     // offline-only, with how to turn it on. Rendered as narration in the
     // rail at its true position.
     const unHint = await listen<any>("agent-hint", (e) => {
+      if (!ownsAgentSession(ownerId.value)) return;
       const text = typeof e.payload?.text === "string" ? e.payload.text : "";
       if (!text) return;
       const kind = String(e.payload?.kind ?? "");
@@ -2087,6 +2180,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     });
 
     const unPermission = await listen<any>("agent-permission", (e) => {
+      if (!ownsAgentSession(ownerId.value)) return;
       const params = e.payload?.params ?? {};
       const tc = params.toolCall ?? {};
       const locations = (tc.locations ?? [])
@@ -2141,6 +2235,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       state.pendingPermissionId = permission.requestId;
       state.pendingCardOffscreen = false;
       state.liveStatus = "Waiting for you..";
+      if (turnId.value) updateTurn(turnId.value, { state: "waiting" });
       mutateTurn((m) => {
         // Idempotent by request id: a re-delivered event (seen once in the
         // wild as two identical pending cards) must not add a second card.
@@ -2194,6 +2289,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     // never shows a card, but it belongs in the same record as the asks
     // the user answered - logged already-answered, via "auto".
     const unPermissionAuto = await listen<any>("agent-permission-auto", (e) => {
+      if (!ownsAgentSession(ownerId.value)) return;
       const params = e.payload?.params ?? {};
       const tc = params.toolCall ?? {};
       const opt = (params.options ?? []).find((o: any) => o.optionId === e.payload?.optionId);
@@ -2243,6 +2339,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     // earlier grants, the prompted ones (which already have their card) -
     // rolls into the turn's compact ledger.
     const unDecided = await listen<any>("agent-permission-decided", (e) => {
+      if (!ownsAgentSession(ownerId.value)) return;
       const ev = e.payload?.event;
       if (!ev || typeof ev !== "object") return;
       // Our vocabulary in the user's records, not the wire protocol's.
@@ -2364,7 +2461,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         const promoted = promoteLastSpeech(m.content, m.agentLog ?? []);
         return promoted ? { ...m, content: promoted.content, agentLog: promoted.log } : m;
       });
-      const bubble = props.chatState.messages.find((m) => m.id === id);
+      const bubble = props.chatState.messages.find((m) => m.id === id) ?? getTurn(id)?.assistant;
       if (!bubble || (!bubble.content && !(bubble.agentLog ?? []).length)) return;
       recordedTurnIds.add(id);
       recordAssistantTurn(bubble).catch((e) =>
@@ -2439,10 +2536,11 @@ export function useAgentSession(props: UseAgentSessionProps) {
       }, 0);
     };
 
-    const finishTurn = (errorText?: string) => {
+    const finishTurn = (errorText?: string, outcome: "done" | "stopped" | "error" = errorText ? "error" : "done") => {
       // Once per turn: turn_completed (with the informative error) and the
       // RPC response (with a generic "Internal error") both land here.
-      if (!props.chatState.isLoading) {
+      const adopted = !!turnId.value && !!getTurn(turnId.value) && isLive(getTurn(turnId.value)!);
+      if (!props.chatState.isLoading && !adopted) {
         uiLog("[rail] finishTurn skipped: loading already false");
         return;
       }
@@ -2550,12 +2648,19 @@ export function useAgentSession(props: UseAgentSessionProps) {
       });
       // A bubble that never got anything (cancelled before output) is noise.
       const id = turnId.value;
+      const empty = !!id && props.chatState.messages.some(
+        (m) => m.id === id && m.content === "" && !(m.agentLog ?? []).length && !m.error,
+      );
       props.chatState.messages = props.chatState.messages.filter(
         (m) =>
           !(m.id === id && m.content === "" && !(m.agentLog ?? []).length && !m.error),
       );
       recordTurnOnce(id);
       props.chatState.isLoading = false;
+      if (id) {
+        if (empty) dropTurn(id);
+        else endTurn(id, outcome);
+      }
       // The struggle, said once the turn is over: which model on this
       // computer does better (when the AI is pinned to a weaker one), and
       // the plan's online models when the account has them.
@@ -2624,7 +2729,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     };
 
     const unTurn = await listen<any>("agent-turn", async (e) => {
-      try { (window as unknown as { __yoaiTurnRunning?: boolean }).__yoaiTurnRunning = false; } catch { /* fine */ }
+      if (!ownsAgentSession(ownerId.value)) return;
       const err = e.payload?.error;
       const stop = e.payload?.result?.stopReason;
       if (err) {
@@ -2647,7 +2752,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       } else if (stop === "refusal") {
         finishTurn("The agent declined to continue this task.");
       } else {
-        finishTurn();
+        finishTurn(undefined, stop === "cancelled" ? "stopped" : "done");
       }
       // The net: even when finishTurn short-circuited (loading flag already
       // cleared by a stray event), turn end still records the turn.
@@ -2691,6 +2796,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     // a different model than the AI's face is the one substitution the trust
     // story forbids.
     const unLog = await listen<string>("agent-log", (e) => {
+      if (!ownsAgentSession(ownerId.value)) return;
       if (
         typeof e.payload === "string" &&
         e.payload.startsWith("couldn't set model")
@@ -2710,9 +2816,9 @@ export function useAgentSession(props: UseAgentSessionProps) {
     });
 
     const unExit = await listen<{ code: number | null }>("agent-exit", (e) => {
-      try { (window as unknown as { __yoaiTurnRunning?: boolean }).__yoaiTurnRunning = false; } catch { /* fine */ }
+      if (!ownsAgentSession(ownerId.value)) return;
       const wasOpen = state.folderPath !== null;
-      const midTurn = props.chatState.isLoading;
+      const midTurn = props.chatState.isLoading || (!!turnId.value && !!getTurn(turnId.value) && isLive(getTurn(turnId.value)!));
       state.status = wasOpen ? "stopped" : "idle";
       state.statusNote = wasOpen
         ? `The agent stopped (code ${e.payload?.code ?? "?"}).`
@@ -2748,9 +2854,10 @@ export function useAgentSession(props: UseAgentSessionProps) {
       }
     });
 
-    cleanup(() => {
-      window.removeEventListener("yoai-agent-interject", onInterject);
-      window.removeEventListener("yoai-agent-stop-task", onStopTask);
+    listening.value = true;
+    void adoptLiveTurn$();
+
+    const unlistenAll = () => {
       unReady();
       unUpdate();
       unPermission();
@@ -2763,6 +2870,31 @@ export function useAgentSession(props: UseAgentSessionProps) {
       unTurn();
       unLog();
       unExit();
+    };
+    cleanup(() => {
+      // The page's own hooks go with the page.
+      window.removeEventListener("yoai-agent-interject", onInterject);
+      window.removeEventListener("yoai-agent-stop-task", onStopTask);
+      listening.value = false;
+      // A turn this hook owns keeps its listeners until it ends or another
+      // page takes it over - the turn's loop lives here (step 1b).
+      const me = ownerId.value;
+      const stillMine = () => {
+        const id = turnId.value;
+        return ownsAgentSession(me) && !!id && !!getTurn(id) && isLive(getTurn(id)!);
+      };
+      if (!stillMine()) {
+        unlistenAll();
+        return;
+      }
+      uiLog(`[turns] page left mid-turn ${turnId.value?.slice(0, 8)}: its listeners stay up`);
+      const onTurns = () => {
+        if (stillMine()) return;
+        window.removeEventListener(TURNS_EVENT, onTurns);
+        unlistenAll();
+        uiLog(`[turns] listeners of the left page released`);
+      };
+      window.addEventListener(TURNS_EVENT, onTurns);
     });
   });
 

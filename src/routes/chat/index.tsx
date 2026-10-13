@@ -180,10 +180,12 @@ export default component$(() => {
     if (!t || isLive(t)) return;
     if (!chatState.messages.some((m) => m.id === t.assistant.id)) {
       const base = withoutUnansweredPlaceholder(chatState.messages);
+      // A bubble that never got anything (cancelled before output) is noise.
+      const empty = t.assistant.content === "" && !(t.assistant.agentLog ?? []).length && !t.assistant.error;
       chatState.messages = [
         ...base,
         ...(base.some((m) => m.role === "user" && m.content === t.user.content) ? [] : [{ ...t.user }]),
-        { ...t.assistant, isLoading: false },
+        ...(empty ? [] : [{ ...t.assistant, isLoading: false }]),
       ];
     }
   });
@@ -340,11 +342,14 @@ export default component$(() => {
             agentState.sessionAiId = selectedAi.value.aiConfig?.id ?? null;
             // Mid-startup remount keeps the starting state; the hook's own
             // agent-ready listener flips it live.
-            agentState.status = status.running
-              ? status.sessionId
-                ? "ready"
-                : "starting"
-              : "stopped";
+            // A turn adopted from the root already says "working".
+            if (agentState.status !== "working") {
+              agentState.status = status.running
+                ? status.sessionId
+                  ? "ready"
+                  : "starting"
+                : "stopped";
+            }
           }
         })
         .catch(() => {});
@@ -478,6 +483,12 @@ export default component$(() => {
     } catch {
       /* the guard is advisory - never block the folder on it */
     }
+  });
+  // Test aid: the UI tests open a project folder without the native picker
+  // (the Build helper's path is set in storage by the test).
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(() => {
+    try { (window as any).__yoaiOpenFolder = (p: string) => openFolder$(p); } catch { /* no window */ }
   });
 
   /** Re-enter a conversation: rebuild the messages from its transcript and
