@@ -21,6 +21,7 @@ import {
   recordMessage,
   recordGroundingAnnotation,
 } from "../utils/holochainTranscripts";
+import { beginTurn, updateTurn, endTurn, getTurn, liveTurnFor, abortTurn, requestBoundary } from "../utils/turns";
 import { extractAndStoreFacts, looksLikeUserFact } from "../utils/memoryExtraction";
 import { isUtilityModelReady } from "../utils/utilityModel";
 import { groundDocument, type GroundedSource } from "../utils/grounding";
@@ -1166,6 +1167,25 @@ export function useChat(props: UseChatProps) {
       const controller = new AbortController();
       abortControllerRef.value = noSerialize(controller);
       state.stopAtBoundary = null;
+      // The turn is registered at the app root from here on: it outlives
+      // this page (utils/turns.ts). "chat" here - a tools session is the
+      // agent path (useAgentSession), registered there.
+      let turnOutcome: "done" | "stopped" | "error" = "done";
+      beginTurn({
+        id: assistantId,
+        kind: "chat",
+        aiId: selectedAi.id,
+        agentKey: selectedAi.aiConfig?.agentPubKey ?? selectedAi.id,
+        aiLabel: selectedAi.label,
+        conversationHash: state.conversationHash,
+        question: userInput.slice(0, 200),
+        model: preferredModel ?? null,
+        state: "running",
+        startedAt: Date.now(),
+        user: { ...userMessage },
+        assistant: { ...assistantMessage },
+        stopAtBoundary: null,
+      }, controller);
 
       // Records: the conversation and the user's message are written the
       // moment they are sent - in parallel with the request, never gating
@@ -1451,6 +1471,7 @@ export function useChat(props: UseChatProps) {
                 return null;
               }
               state.conversationHash = hash;
+              updateTurn(assistantId, { conversationHash: hash });
             }
             const appVersion = await import("@tauri-apps/api/app")
               .then((m) => m.getVersion())
@@ -1549,10 +1570,13 @@ export function useChat(props: UseChatProps) {
           // the sentence, then stop (the check after the loop records the
           // partial as stopped). While the model is still thinking there is
           // no sentence to finish - stop now.
-          if (state.stopAtBoundary !== null) {
+          // The boundary comes from this page, or from the turn at the root (a
+          // page that left and came back asks through the turn).
+          const boundaryAsked = state.stopAtBoundary ?? getTurn(assistantId)?.stopAtBoundary ?? null;
+          if (boundaryAsked !== null) {
             const { thinking: thoughtSoFar, contentWithoutThinking: visible } =
               extractThinkingFromContent(fullResponse);
-            const cut = visible.trim() ? boundaryIndex(visible, state.stopAtBoundary) : 0;
+            const cut = visible.trim() ? boundaryIndex(visible, boundaryAsked) : 0;
             if (cut !== null) {
               // Keep the reply up to the end of that sentence (a chunk may
               // have run on into the next one).
@@ -1593,6 +1617,7 @@ export function useChat(props: UseChatProps) {
                 }
               : m
           );
+          updateTurn(assistantId, { assistant: { content: contentWithoutThinking, thinking: thinking || undefined, statusText: undefined, isLoading: true } });
         }
 
         // Stopped by the person: the stream ends quietly (the app closes
@@ -1689,6 +1714,7 @@ export function useChat(props: UseChatProps) {
               ? ""
               : "(The model returned an empty reply twice - it may not sit well with this AI's setup. Try asking again, or pick a different model for this AI.)");
 
+        updateTurn(assistantId, { assistant: { content: displayContent, thinking: finalThinking || undefined, isLoading: false, statusText: undefined } });
         state.messages = state.messages.map((m) =>
           m.id === assistantId
             ? {
@@ -1958,6 +1984,8 @@ export function useChat(props: UseChatProps) {
           const { thinking: partialThinking, contentWithoutThinking: partialText } =
             extractThinkingFromContent(partialMsg?.content ?? "");
           if (partialText.trim() && !partialMsg?.error) {
+            turnOutcome = "stopped";
+            updateTurn(assistantId, { assistant: { content: partialText, thinking: partialThinking || undefined, isLoading: false, statusText: undefined, stopped: true } });
             state.messages = state.messages.map((m) =>
               m.id === assistantId
                 ? {
@@ -2133,9 +2161,12 @@ export function useChat(props: UseChatProps) {
                   }
                 : m
             );
+            turnOutcome = "error";
+            updateTurn(assistantId, { assistant: { content: `Error: ${errorMsg}`, error: errorMsg, isLoading: false } });
           }
         }
       } finally {
+        endTurn(assistantId, controller.signal.aborted && turnOutcome === "done" ? "stopped" : turnOutcome);
         // Only when this turn is still the current one: a turn sent right
         // after a stop has its own controller, and this older turn's
         // cleanup must not switch its loading state off.
@@ -2153,7 +2184,13 @@ export function useChat(props: UseChatProps) {
    *  sentence, then stop it. Before the first visible word there is nothing
    *  to finish, so that stops at once. A second call (or Stop) is immediate. */
   const stopAtBoundary = $(() => {
-    if (!state.isLoading || !abortControllerRef.value) return;
+    if (!state.isLoading || !abortControllerRef.value) {
+      // Not this page's turn (the page came back to a reply still running):
+      // the interjection goes to the turn at the root.
+      const live = liveTurnFor(state.conversationHash);
+      if (live) requestBoundary(live.id);
+      return;
+    }
     const streaming = state.messages.find((m) => m.isLoading && m.role === "assistant");
     const visible = streaming?.content ?? "";
     if (!visible.trim() || state.stopAtBoundary !== null) {
@@ -2170,6 +2207,9 @@ export function useChat(props: UseChatProps) {
       abortControllerRef.value.abort();
       return;
     }
+    // A reply this page attached to (it was started before the page came back).
+    const live = liveTurnFor(state.conversationHash);
+    if (live && abortTurn(live.id)) return;
     // No turn of ours is known: stop whatever is streaming.
     try {
       const { invoke } = await import("@tauri-apps/api/core");

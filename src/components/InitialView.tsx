@@ -91,6 +91,7 @@ export default component$<InitialViewProps>((props) => {
         <div class="mt-3 text-center">
           <button
             onClick$={props.onContinueLast$}
+            data-testid="continue-last"
             class="inline-flex items-center gap-2 text-sm text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
             disabled={!!props.continueState && props.continueState !== 'idle'}
           >

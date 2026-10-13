@@ -13,6 +13,7 @@ import { ModeProvider } from "../contexts/ModeContext";
 import { AiDataProvider } from "../contexts/AiDataContext";
 import { VisionDownloadProvider } from "../contexts/VisionDownloadContext";
 import { ActivityTray } from "../components/ActivityTray";
+import { useProvideTurns } from "../contexts/TurnsContext";
 import { FirstModelIndicator } from "../components/FirstModelIndicator";
 import { bumpLaunchCount } from "../utils/homeOffers";
 import { WorkspaceMemoryModal } from "../components/WorkspaceMemoryModal";
@@ -301,6 +302,9 @@ export default component$(() => {
   });
 
   useContextProvider(ThemeContext, { theme });
+  // Live turns (replies that keep going when you leave the chat): one list
+  // for the whole app - the chat page attaches, the tray shows them.
+  useProvideTurns();
 
   const projectMemoryFolder = useSignal<string | null>(null);
   useContextProvider(ProjectMemoryContext, projectMemoryFolder);

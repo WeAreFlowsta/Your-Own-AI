@@ -5,14 +5,7 @@ import { toggleAgentView } from "../../utils/agentView";
  * Migrated from React ChatPage.tsx
  */
 
-import {
-  useComputed$,
-  component$,
-  useSignal,
-  useContext,
-  useVisibleTask$,
-  $,
-} from "@builder.io/qwik";
+import { useComputed$, component$, useSignal, useContext, useVisibleTask$, $, useTask$ } from "@builder.io/qwik";
 import { type DocumentHead, useNavigate } from "@builder.io/qwik-city";
 import { invoke } from "@tauri-apps/api/core";
 import { setMedicalOnlineAlways } from "../../utils/medicalModel";
@@ -23,6 +16,8 @@ import { useChat } from "../../hooks/useChat";
 import { useAgentSession, readRecentFolders, resolveBinaryPath } from "../../hooks/useAgentSession";
 import { permissionModeForTools, setPermissionModeForTools, type AgentPermissionMode } from "../../utils/agentPermissions";
 import { ConversationsDrawer } from "../../components/ConversationsDrawer";
+import { useTurns } from "../../contexts/TurnsContext";
+import { abortTurn, isLive } from "../../utils/turns";
 import OnlineModelsDoor from "../../components/OnlineModelsDoor";
 import { loadModelBounded } from "../../utils/loadModelBounded";
 import { uiLog } from "../../utils/uiLog";
@@ -39,6 +34,7 @@ import {
   type ConversationListItem,
   type LastConversationPointer,
   lastActiveAt,
+  withoutUnansweredPlaceholder,
 } from "../../utils/conversationResume";
 import { emptyMayBeWarmup, noteRecordsSeen, WARMUP_POLL_MS } from "../../utils/recordsWarmup";
 import { waitForHolochainReady } from "../../utils/holochainTranscripts";
@@ -164,6 +160,45 @@ export default component$(() => {
     modelLoadTime,
     modelTooBig,
     modelIssue,
+  });
+
+  // A reply that kept going while this page was away (utils/turns.ts): the
+  // live turn of the open conversation, unless this page already holds its
+  // messages (it started it, or folded it in below). Rendered after the
+  // records' messages; the composer shows Stop for it; when it ends, its two
+  // messages are folded into the page's list so they stay when the turn is
+  // pruned from the root.
+  const turnsState = useTurns();
+  const attached = useComputed$(() => {
+    const hash = chatState.conversationHash;
+    if (!hash) return null;
+    const t = turnsState.turns.find((x) => x.conversationHash === hash && !chatState.messages.some((m) => m.id === x.assistant.id));
+    return t ?? null;
+  });
+  useTask$(({ track }) => {
+    const t = track(() => attached.value);
+    if (!t || isLive(t)) return;
+    if (!chatState.messages.some((m) => m.id === t.assistant.id)) {
+      const base = withoutUnansweredPlaceholder(chatState.messages);
+      chatState.messages = [
+        ...base,
+        ...(base.some((m) => m.role === "user" && m.content === t.user.content) ? [] : [{ ...t.user }]),
+        { ...t.assistant, isLoading: false },
+      ];
+    }
+  });
+  // The records' view of the open conversation plus the attached turn: the
+  // resume's "never got an answer" bubble goes (the answer is on its way),
+  // and the question is not shown twice.
+  const shownMessages = useComputed$(() => {
+    const t = attached.value;
+    if (!t) return chatState.messages;
+    const base = withoutUnansweredPlaceholder(chatState.messages);
+    return [
+      ...base,
+      ...(base.some((m) => m.role === "user" && m.content === t.user.content) ? [] : [t.user]),
+      t.assistant,
+    ];
   });
 
   // Folder (Build agent) session - while a folder is open, every prompt goes
@@ -606,6 +641,21 @@ export default component$(() => {
       }
     },
   );
+
+  // Coming back to the chat while a reply of this AI is still running at the
+  // root (or finished moments ago): open that conversation - the person
+  // left it mid-answer and expects to land back in it, not on the start view.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    const turns = track(() => turnsState.turns);
+    const aiId = track(() => selectedAi.value.id);
+    if (chatState.conversationHash || chatState.messages.length > 0 || chatState.isLoading) return;
+    if (resumeState.value !== "idle") return;
+    const t = turns.find((x) => x.aiId === aiId && x.conversationHash && (isLive(x) || (x.endedAt ?? 0) > Date.now() - 60_000));
+    void import("../../utils/uiLog").then(({ uiLog }) => uiLog(`[turns] chat mounted for ${aiId.slice(0, 12)}: ${turns.length} turn(s) at the root${t ? `, opening ${t.conversationHash!.slice(0, 12)}` : ""}`));
+    if (!t) return;
+    resumeConversation({ hash: t.conversationHash!, agentKey: t.agentKey, aiId: t.aiId, title: t.question });
+  });
 
   const openConversations = $(async () => {
     conversationsOpen.value = true;
@@ -1505,6 +1555,9 @@ export default component$(() => {
   const handleStop = $(async () => {
     if (agentState.folderPath && chatState.isLoading) {
       await cancelTurn$();
+    } else if (!chatState.isLoading && attached.value && isLive(attached.value)) {
+      // A reply this page came back to: it runs at the root.
+      abortTurn(attached.value.id);
     } else {
       await stopGeneration();
     }
@@ -1773,7 +1826,7 @@ export default component$(() => {
             style={{ flex: showSidePanel ? "1 1 50%" : "1 1 100%" }}
           >
             <ChatContainer
-              messages={chatState.messages}
+              messages={shownMessages.value}
               messagesEndRef={messagesEndRef}
               retry$={retryOrTools$}
               canUseTools={activeTools(selectedAi.value.aiConfig).length > 0 && !chatState.isLoading}
@@ -1784,7 +1837,7 @@ export default component$(() => {
               input={input}
               handleSubmit$={handleSubmit}
               readOnlyReason={copiedFrom.value ? `From ${copiedFrom.value} · read-only until it arrives` : undefined}
-              isLoading={chatState.isLoading}
+              isLoading={chatState.isLoading || !!(attached.value && isLive(attached.value))}
               stopChat$={handleStop}
               currentPlaceholder={firstModelPlaceholder.value ?? `Ask ${selectedAi.value.label} ${
                 selectedAi.value.aiConfig?.askBlurb &&

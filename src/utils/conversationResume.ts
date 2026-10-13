@@ -234,11 +234,21 @@ export async function loadConversationMessages(
       model: ai.id,
       aiLabel: ai.label,
       aiImageUrl: ai.imageUrl || undefined,
-      error:
-        "This question never got an answer - the turn was stopped or failed. Ask again to continue.",
+      error: UNANSWERED_PLACEHOLDER,
     });
   }
   return { messages, nextSequence, folderPath, copiedFrom: copiedFrom ?? undefined };
+}
+
+/** The bubble a resume adds under a question the records never answered.
+ *  While that question's turn is still running at the root, the chat page
+ *  drops it and shows the live reply instead. */
+export const UNANSWERED_PLACEHOLDER =
+  "This question never got an answer - the turn was stopped or failed. Ask again to continue.";
+
+/** `messages` without the resume placeholder (and nothing else). */
+export function withoutUnansweredPlaceholder<T extends { role: string; content: string; error?: string | null }>(messages: T[]): T[] {
+  return messages.filter((m) => !(m.role === "assistant" && m.content === "" && m.error === UNANSWERED_PLACEHOLDER));
 }
 
 /* ---- client-side conversation metadata (until the DNA work lands) ---- */
