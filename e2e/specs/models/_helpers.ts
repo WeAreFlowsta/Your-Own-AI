@@ -30,6 +30,31 @@ export async function waitForChat() {
   if ((await browser.execute(() => location.pathname)) !== "/chat/") await browser.url("tauri://localhost/chat/");
   await browser.waitUntil(async () => (await browser.execute(() => location.pathname)) === "/chat/", { timeout: 60_000 });
   await (await $('[data-testid="chat-input"]')).waitForDisplayed({ timeout: 60_000 });
+  // The profile lives across the specs of one run: a reply a failed spec left
+  // running would be reopened by the page (it runs on at the root) and its
+  // Stop would stand where Send is. Stop it, and start from the start view.
+  const stopped = await browser.execute(() => {
+    const w = window as any;
+    const live = (w.__yoaiTurns?.() ?? []).filter((t: { state: string }) => t.state === "running" || t.state === "queued" || t.state === "waiting");
+    for (const t of live) w.__yoaiStopTurn?.(t.id);
+    return live.length;
+  });
+  if (stopped) console.log(`e2e: stopped ${stopped} leftover turn(s)`);
+  // A project left open by an earlier spec would take the next question
+  // through the agent: close it.
+  const closed = await browser.execute(async () => {
+    const w = window as any;
+    const s = await w.__TAURI__.core.invoke("build_agent_status").catch(() => null);
+    if (s?.folder && typeof w.__yoaiCloseFolder === "function") { await w.__yoaiCloseFolder(); return s.folder; }
+    return null;
+  });
+  if (closed) console.log(`e2e: closed leftover project ${closed}`);
+  if (await browser.execute(() => document.querySelectorAll('[data-testid="chat-message"]').length > 0)) {
+    await browser.waitUntil(async () => browser.execute(() => !((window as any).__yoaiTurns?.() ?? []).some((t: { state: string }) => t.state === "running")), { timeout: 30_000, timeoutMsg: "a leftover reply would not stop" });
+    await (await $('[data-testid="new-chat"]')).click();
+    await browser.waitUntil(async () => browser.execute(() => document.querySelectorAll('[data-testid="chat-message"]').length === 0), { timeout: 15_000, timeoutMsg: "the new chat did not clear the page" });
+    await (await $('[data-testid="chat-input"]')).waitForDisplayed({ timeout: 30_000 });
+  }
   let model: string | null = null;
   await browser.waitUntil(async () => { model = await invoke<string | null>("get_current_model"); return !!model; }, {
     timeout: 180_000,

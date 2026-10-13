@@ -66,18 +66,37 @@ describe("two AIs on one engine", () => {
     console.log(`e2e: turns with Teresa queued ${JSON.stringify(await turns())}`);
     expect(page).toContain("Waiting for the engine");
     expect(page).toContain("Reeves is answering first");
-    // Reeves's row is in the tray now that his conversation is off screen.
-    const runningRow = await $('[data-testid="turn-row"][data-turn-state="running"]');
-    await runningRow.waitForDisplayed({ timeout: 10_000 });
-    expect(await runningRow.getText()).toContain("Reeves is answering");
+    // Reeves's row is in the tray now that his conversation is off screen - read
+    // together with the turns, in one snapshot: under load every step takes
+    // seconds and Reeves may finish between two of them.
+    const snap = await browser.execute(() => ({
+      turns: (window as any).__yoaiTurns?.() ?? [],
+      rows: [...document.querySelectorAll('[data-testid="turn-row"]')].map((r) => `${(r as HTMLElement).dataset.turnState}: ${(r as HTMLElement).innerText.replace(/\s+/g, " ").slice(0, 80)}`),
+    })) as { turns: T[]; rows: string[] };
+    console.log(`e2e: tray snapshot ${JSON.stringify(snap.rows)}`);
+    const reevesStillRunning = snap.turns.some((t) => t.id === reeves.id && t.state === "running");
+    if (reevesStillRunning) {
+      expect(snap.rows.some((r) => r.startsWith("running:") && r.includes("Reeves is answering"))).toBe(true);
+    } else {
+      // He finished already: his row says so (for a minute) and Teresa's turn is on.
+      expect(snap.rows.some((r) => r.includes("Reeves answered") || r.includes("Teresa is answering"))).toBe(true);
+    }
     await shot("queue-waiting");
 
     // The drawer: Reeves's conversation carries the live dot; so does his chip.
     await (await $('[data-testid="conversations-open"]')).click();
     await browser.waitUntil(async () => browser.execute(() => document.querySelectorAll('[data-testid="conversation-item"]').length > 0), { timeout: 60_000, timeoutMsg: "the drawer never listed conversations" });
-    const liveItems = await browser.execute(() => document.querySelectorAll('[data-testid="conversation-item"][data-live="1"]').length);
-    console.log(`e2e: live conversation items ${liveItems}`);
-    expect(liveItems).toBeGreaterThan(0);
+    // Read the dots and the turns in ONE snapshot: Reeves may have finished
+    // between two slow steps, and then no dot is right.
+    const drawer = await browser.execute(() => ({
+      live: document.querySelectorAll('[data-testid="conversation-item"][data-live="1"]').length,
+      items: document.querySelectorAll('[data-testid="conversation-item"]').length,
+      liveTurns: ((window as any).__yoaiTurns?.() ?? []).filter((t: { state: string; conv: string | null }) => (t.state === "running" || t.state === "queued") && t.conv).length,
+    })) as { live: number; items: number; liveTurns: number };
+    console.log(`e2e: drawer ${JSON.stringify(drawer)}`);
+    expect(drawer.items).toBeGreaterThan(0);
+    if (drawer.liveTurns > 0) expect(drawer.live).toBeGreaterThan(0);
+    else expect(drawer.live).toBe(0);
     await shot("queue-drawer");
     await (await $('button[title="Close"]')).click();
 

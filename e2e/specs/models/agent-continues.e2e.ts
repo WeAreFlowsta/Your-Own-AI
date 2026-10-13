@@ -135,7 +135,11 @@ describe("an agent turn keeps going when you leave the chat", () => {
       expect(assistant.length).toBeGreaterThan(0);
     }
     await shot("agent-continues-done");
-    // Leave the session closed for the specs that follow.
+    // Leave nothing for the specs that follow: the project closed on the page
+    // (its conversation would otherwise be resumed INTO the project), a fresh chat.
+    await browser.execute(async () => { await (window as any).__yoaiCloseFolder?.(); });
+    await (await $('[data-testid="new-chat"]')).click();
+    await browser.waitUntil(async () => browser.execute(() => document.querySelectorAll('[data-testid="chat-message"]').length === 0), { timeout: 15_000 });
     await invoke("stop_build_agent").catch(() => {});
   });
 });

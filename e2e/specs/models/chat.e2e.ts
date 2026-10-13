@@ -21,4 +21,13 @@ describe("chat with installed models", () => {
     await shot("12-replied");
     expect(r.text.toLowerCase()).toContain("ready");
   });
+
+  it("answers a real short question, not with a greeting", async () => {
+    // A persona template once held a quoted example reply ("Doing well - ready
+    // when you are..") and the small model parroted it for short questions.
+    await ask("In one sentence, what is the capital of France?");
+    const r = await waitForReplyDone();
+    console.log(`e2e: short answer ${JSON.stringify(r.text.slice(0, 160))}`);
+    expect(r.text.toLowerCase()).toContain("paris");
+  });
 });

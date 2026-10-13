@@ -57,6 +57,7 @@ function logLine(line: string): void {
 }
 
 // Test aids: the live list, readable from the page (the UI tests print it), and the full records-side ids.
+try { (window as any).__yoaiStopTurn = (id: string) => { const t = [...turns.values()].find((x) => x.id === id || x.id.startsWith(id)); return t ? abortTurn(t.id) : false; }; } catch { /* no window */ }
 try { (window as any).__yoaiTurnsFull = () => allTurns().map((t) => ({ agentKey: t.agentKey, conversationHash: t.conversationHash, state: t.state })); } catch { /* no window */ }
 try { (window as any).__yoaiTurns = () => allTurns().map((t) => ({ id: t.id.slice(0, 8), kind: t.kind, ai: t.aiId.slice(0, 12), conv: t.conversationHash?.slice(0, 12) ?? null, state: t.state, chars: t.assistant.content.length, rail: t.assistant.agentLog?.length ?? 0 })); } catch { /* no window */ }
 
