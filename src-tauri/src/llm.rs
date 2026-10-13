@@ -5073,7 +5073,7 @@ async fn download_model_inner(
                 }
             }
             // Append when resuming (206); fresh file otherwise (200 = full restart).
-            let mut file = match if resume_from > 0 && is_partial {
+            let raw = match if resume_from > 0 && is_partial {
                 std::fs::OpenOptions::new().append(true).open(&part_path)
             } else {
                 File::create(&part_path)
@@ -5081,7 +5081,15 @@ async fn download_model_inner(
                 Ok(f) => f,
                 Err(e) => break 'attempt Some(format!("file open failed: {}", e)),
             };
+            // The network hands over ~16 KB TLS records; writing each one and
+            // taking the progress lock each time cost 30% of the loop's CPU
+            // (release build, measured 2026-10-13: 15.8 -> 11.0 ms of CPU per
+            // MB; a 60 MB/s connection was a full core - the Holochain team's
+            // 0.8.0 report). Buffer 8 MB per write; progress every 4 MB. The
+            // rest is TLS and HTTP in the networking stack, per record.
+            let mut file = std::io::BufWriter::with_capacity(8 * 1024 * 1024, raw);
             let mut downloaded = if is_partial { resume_from } else { 0 };
+            let mut since_progress: u64 = 0;
             let mut stream = response.bytes_stream();
             loop {
                 // Per-chunk read timeout: a dropped connection often *stalls*
@@ -5094,8 +5102,12 @@ async fn download_model_inner(
                             break 'attempt Some(format!("write failed: {}", e));
                         }
                         downloaded += chunk.len() as u64;
-                        if let Ok(mut p) = progress_map().lock() {
-                            p.insert(filename.clone(), (downloaded, total_size));
+                        since_progress += chunk.len() as u64;
+                        if since_progress >= 4 * 1024 * 1024 || downloaded >= total_size {
+                            since_progress = 0;
+                            if let Ok(mut p) = progress_map().lock() {
+                                p.insert(filename.clone(), (downloaded, total_size));
+                            }
                         }
                         let pct = if total_size > 0 {
                             ((downloaded as f64 / total_size as f64) * 100.0) as u32
@@ -5115,7 +5127,12 @@ async fn download_model_inner(
                     Err(_) => break 'attempt Some("read timed out (connection stalled)".to_string()),
                 }
             }
-            file.flush().ok();
+            if let Err(e) = file.flush() {
+                break 'attempt Some(format!("write failed: {}", e));
+            }
+            if let Ok(mut p) = progress_map().lock() {
+                p.insert(filename.clone(), (downloaded, total_size));
+            }
             None
         };
 
@@ -7116,6 +7133,79 @@ Active Connections\r\n\
         assert_eq!(strip_turn_markers("established doctrines.<turn|>"), "established doctrines.");
         assert_eq!(strip_turn_markers("<|turn>model\nhello<end_of_turn>"), "model\nhello");
         assert_eq!(strip_turn_markers("plain words"), "plain words");
+    }
+}
+
+#[cfg(test)]
+mod live_download_cpu {
+    //! MEASURE the download loop's CPU cost before changing it (NEXT.md: "downloads
+    //! take a full core" - the Holochain team's 0.8.0 report). Streams one real
+    //! file two ways and reports this process's CPU seconds per wall second:
+    //! (a) the shipped shape - a blocking write_all per network chunk plus a
+    //! progress-map lock per chunk; (b) an 8 MB BufWriter with progress per
+    //! buffer. `cargo test --lib -- --ignored live_download_cpu --nocapture`.
+    //! Downloads ~170 MB twice from a pinned Hugging Face URL; deletes the files.
+    const URL: &str = "https://huggingface.co/ggml-org/Julia-1-GGUF/resolve/16fee1794920/Julia-1-Q8_0.gguf";
+
+    fn cpu_seconds() -> f64 {
+        // utime + stime of this process, in clock ticks -> seconds.
+        let stat = std::fs::read_to_string("/proc/self/stat").unwrap_or_default();
+        let after = stat.rsplit(')').next().unwrap_or("");
+        let f: Vec<&str> = after.split_whitespace().collect();
+        let ticks: f64 = f.get(11).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0) + f.get(12).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0);
+        ticks / 100.0
+    }
+
+    async fn run(label: &str, buffered: bool) {
+        use futures::StreamExt;
+        use std::io::Write;
+        let path = std::env::temp_dir().join(format!("yoai-dl-cpu-{label}.bin"));
+        let client = reqwest::Client::builder().build().unwrap();
+        let resp = client.get(URL).send().await.expect("request");
+        let total = resp.content_length().unwrap_or(0);
+        let mut stream = resp.bytes_stream();
+        let raw = std::fs::File::create(&path).unwrap();
+        let mut plain = Some(raw);
+        let mut buf: Option<std::io::BufWriter<std::fs::File>> = None;
+        if buffered {
+            buf = Some(std::io::BufWriter::with_capacity(8 * 1024 * 1024, plain.take().unwrap()));
+        }
+        let progress = std::sync::Mutex::new(std::collections::HashMap::<String, (u64, u64)>::new());
+        let (cpu0, t0) = (cpu_seconds(), std::time::Instant::now());
+        let (mut downloaded, mut chunks, mut since_progress) = (0u64, 0u64, 0u64);
+        while let Some(item) = stream.next().await {
+            let chunk = item.expect("chunk");
+            chunks += 1;
+            downloaded += chunk.len() as u64;
+            if let Some(w) = buf.as_mut() {
+                w.write_all(&chunk).unwrap();
+                since_progress += chunk.len() as u64;
+                if since_progress >= 8 * 1024 * 1024 {
+                    progress.lock().unwrap().insert(label.to_string(), (downloaded, total));
+                    since_progress = 0;
+                }
+            } else {
+                plain.as_mut().unwrap().write_all(&chunk).unwrap();
+                progress.lock().unwrap().insert(label.to_string(), (downloaded, total));
+            }
+        }
+        if let Some(mut w) = buf.take() { w.flush().unwrap(); } else { plain.as_mut().unwrap().flush().unwrap(); }
+        let (cpu, wall) = (cpu_seconds() - cpu0, t0.elapsed().as_secs_f64());
+        eprintln!(
+            "[download-cpu] {label}: {:.1} MB in {wall:.1} s ({:.1} MB/s), {chunks} chunks (avg {:.1} KB), CPU {cpu:.2} s = {:.0}% of one core",
+            downloaded as f64 / 1e6,
+            downloaded as f64 / 1e6 / wall,
+            downloaded as f64 / chunks.max(1) as f64 / 1024.0,
+            cpu / wall * 100.0
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_download_cpu_shipped_vs_buffered() {
+        run("shipped-per-chunk", false).await;
+        run("buffered-8mb", true).await;
     }
 }
 
