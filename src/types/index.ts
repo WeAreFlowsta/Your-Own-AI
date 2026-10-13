@@ -31,6 +31,9 @@ export interface UserDefinedAI {
   skillsOff?: string[];  // carried skills switched off the same way
   /** Advanced generation settings for this AI (fields unset = model default). */
   sampling?: { temperature?: number; topP?: number; minP?: number; repeatPenalty?: number };
+  /** May this AI reach the web (read pages on this computer; search on a plan with online models)?
+   *  On unless turned off - "offline only" is about which models answer, not about the web. */
+  webAccess?: boolean;
   agentPubKey?: string;  // Holochain agent public key (set on first provisioning)
   /** The AI's address on the person's network: the first agent key it ever had. Every device of the
    *  person lists this AI's conversations at this key; each device's own agent (agentPubKey) writes
@@ -77,6 +80,7 @@ export interface UpdateUserAiData {
   mcp?: string[];
   mcpOff?: string[];
   skillsOff?: string[];
+  webAccess?: boolean;
   sampling?: { temperature?: number; topP?: number; minP?: number; repeatPenalty?: number };
 }
 
@@ -159,6 +163,9 @@ export interface Message {
   statusText?: string; // Custom status text like "Model loading, please wait..."
   /** Waiting for the engine: another AI's local reply runs on a different model first. */
   queued?: boolean;
+  /** The question needed the web (a page it named, or current information) while this AI's
+   *  web access is off - the reply carries the one-line offer to turn it on. */
+  needsWeb?: 'page' | 'live';
   turnMode?: TurnMode; // the mode this message was generated under — drives thinking-window presentation + live-thinking gate
   turnModeAuto?: boolean; // true when turnMode was chosen by the classifier (not a sparkle/default) — for the auto badge
   /** True when this turn routed to a web-search model: it researches for a

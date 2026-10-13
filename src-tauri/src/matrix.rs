@@ -1793,7 +1793,7 @@ pub async fn leg_routing(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<Str
                 let (result, expected_side): (Result<crate::router::RouteResult, String>, String) = if let Some(follow) = q["follow"].as_str() {
                     match &first {
                         Ok(r1) => {
-                            let prev = crate::router::PrevTurn { side: Some(side_of(&r1.model).to_string()), task: Some(task.to_string()), model: Some(r1.model.clone()), vec: None };
+                            let prev = crate::router::PrevTurn { side: Some(side_of(&r1.model).to_string()), task: Some(task.to_string()), model: Some(r1.model.clone()), vec: None, web_off: false };
                             let r2 = crate::router::route_dry(app, mode, follow, dial, "general", "easy", "balanced", &picks, false, false, None, &prev).await;
                             let want = if q["firstBucket"].as_str() == Some("health") { "device".to_string() } else { side_of(&r1.model).to_string() };
                             (r2, want)

@@ -37,6 +37,7 @@ mod agent_bridge;         // Your Own AI Build coding agent over ACP (stdio JSON
 mod build_install;       // Your Own AI Build install-on-demand
 mod terminal;             // open a suggested command in the user's own terminal
 mod inference_server;     // OpenAI-compatible local server (external apps use custom AIs)
+mod web_fetch;            // reads a web page for an AI, on this computer, under the address rules
 mod inference_memory;     // backend memory assembly for the inference server
 mod router;               // Auto-mode model routing (offline / online+offline)
 mod gguf;                  // minimal GGUF header reader (model metadata for fit)
@@ -713,6 +714,7 @@ pub fn run() {
             agent_bridge::respond_agent_permission,
             agent_bridge::set_agent_permission_mode,
             agent_bridge::stop_build_agent,
+            web_fetch::web_read_page,
             agent_bridge::build_agent_status,
             agent_bridge::read_agent_task_logs,
             build_install::build_install_status,

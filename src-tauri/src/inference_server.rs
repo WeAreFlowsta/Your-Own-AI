@@ -67,6 +67,8 @@ struct ResolvedAi {
     name: String,
     /// Offline GGUF filename, or an `online:` id (not yet served).
     model: String,
+    /// This AI's web switch (Edit AI > Web access): on unless turned off.
+    web_access: bool,
     system_prompt: String,
     use_emojis: bool,
     /// Holochain agent pub key (hex), set on first provisioning. Empty if the
@@ -220,6 +222,7 @@ pub fn spawn(app: AppHandle, pre_bound: Option<std::net::TcpListener>) {
             .route("/v1/chat/completions", post(chat_completions))
             .route("/v1/responses", post(responses_web_search))
             .route("/mcp", post(mcp_post).get(mcp_get))
+            .route("/mcp/web", post(mcp_web_post).get(mcp_get))
             .route("/internal/route-preview", get(route_preview))
         .route("/internal/matrix-run", get(matrix_run_dev))
         .route("/internal/online-smoke", get(online_smoke_dev))
@@ -320,6 +323,7 @@ fn resolve_ai(app: &AppHandle, model: &str) -> Option<ResolvedAi> {
         id: pick.get("id").and_then(Value::as_str).unwrap_or("").to_string(),
         name: pick.get("name").and_then(Value::as_str).unwrap_or("AI").to_string(),
         model: pick.get("model").and_then(Value::as_str).unwrap_or("").to_string(),
+        web_access: pick.get("webAccess").and_then(Value::as_bool).unwrap_or(true),
         system_prompt: pick
             .get("systemPrompt")
             .and_then(Value::as_str)
@@ -413,6 +417,7 @@ async fn route_preview(
         task: over("prev_task"),
         model: over("prev_model"),
         vec: None,
+        web_off: false,
     };
     match crate::router::route_dry(
         &app,
@@ -2326,23 +2331,23 @@ async fn responses_web_search(
     if query.trim().is_empty() {
         return err(StatusCode::BAD_REQUEST, "No search query in `input`.", "invalid_request");
     }
-    // May THIS AI go online? Its own model setting is the consent: a pinned
-    // online model, or the automatic mode that is allowed to reach out. Any
-    // offline setting means web search is off for it - a web search is by
-    // definition an online act, so no header or heuristic overrides this.
-    let may_go_online = ai.model.starts_with("online:") || ai.model == "auto:online-offline";
-    if !may_go_online {
-        log::info!("[inference] web search refused for {} - AI is offline-only ({})", ai.name, ai.model);
+    // May THIS AI reach the web? Its own switch says (Edit AI > Web access,
+    // on unless turned off). "Offline only" is about which MODELS answer;
+    // the web is this switch. Search runs through the Flowsta proxy on the
+    // person's plan, so a plan without online models is refused there.
+    if !ai.web_access {
+        log::info!("[inference] web search refused for {} - web access is off for this AI", ai.name);
         // Tell the rail, so the person sees WHY and how to turn it on -
         // the agent's own wording of the refusal is not guaranteed.
         use tauri::Emitter as _;
         let _ = app.emit(
             "agent-hint",
             json!({
-                "kind": "web_search_offline",
+                "kind": "web_off",
+                "sticky": true,
                 "ai": ai.name,
                 "text": format!(
-                    "{} stays offline, so it can't search the web. To allow that, set its model to Auto - Online and Offline or an online model (the model chip beside Ask, or the AI's card).",
+                    "{} has web access turned off, so it can't search the web or read pages. You can turn it on in this AI's settings (Edit AI > Web access).",
                     ai.name
                 )
             }),
@@ -2478,6 +2483,106 @@ async fn responses_web_search(
 /// them strictly sequential so two notes cannot both read the same base and
 /// drop each other's row.
 static PROJECT_MEMORY_WRITE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+// ── web MCP endpoint ───────────────────────────────────────────────────────
+//
+// `read_web_page`: the page is downloaded on THIS computer under the
+// address rules in web_fetch.rs and read by the local helper model when it
+// is long (the WebFetch shape) - nothing through Flowsta, no plan needed.
+// The AI's own web switch gates it (Edit AI > Web access, on by default);
+// off = a plain refusal the agent can relay, plus a notice on the rail.
+
+fn web_access_for_agent(app: &AppHandle, agent_key: &str) -> bool {
+    if agent_key.is_empty() {
+        return true;
+    }
+    load_ais(app)
+        .iter()
+        .find(|a| a.get("agentPubKey").and_then(Value::as_str) == Some(agent_key))
+        .and_then(|a| a.get("webAccess"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+async fn mcp_web_post(
+    State(app): State<AppHandle>,
+    headers: HeaderMap,
+    Json(req): Json<Value>,
+) -> Response {
+    let id = req["id"].clone();
+    let agent_key = header_str(&headers, "x-agent-key").unwrap_or_default();
+    let agent_label = header_str(&headers, "x-agent-label").unwrap_or_else(|| "your AI".into());
+    match req["method"].as_str() {
+        Some("initialize") => {
+            let mut resp = mcp_result(
+                &id,
+                json!({
+                    "protocolVersion": req["params"]["protocolVersion"].clone(),
+                    "capabilities": { "tools": {} },
+                    "serverInfo": { "name": "web", "version": env!("CARGO_PKG_VERSION") },
+                }),
+            );
+            resp.headers_mut()
+                .insert("mcp-session-id", header::HeaderValue::from_static("web"));
+            resp
+        }
+        Some("tools/list") => mcp_result(
+            &id,
+            json!({ "tools": [
+                {
+                    "name": "read_web_page",
+                    "description": "Read one public web page and return its text - or, with a question, the answer the page gives. The page is downloaded on this computer. Give the full address; local and private addresses are never read. Use it when the person points you at a page, or when a current fact lives at a known address.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "url": { "type": "string", "description": "The page's address." },
+                            "question": { "type": "string", "description": "What to find on the page (optional; without it, the page's text or a faithful summary comes back)." }
+                        },
+                        "required": ["url"]
+                    }
+                }
+            ] }),
+        ),
+        Some("tools/call") => {
+            if req["params"]["name"].as_str() != Some("read_web_page") {
+                return mcp_tool_text(&id, format!("Unknown tool: {:?}", req["params"]["name"]), true);
+            }
+            if !web_access_for_agent(&app, &agent_key) {
+                use tauri::Emitter as _;
+                let _ = app.emit(
+                    "agent-hint",
+                    json!({
+                        "kind": "web_off",
+                        "sticky": true,
+                        "text": format!(
+                            "{agent_label} has web access turned off, so it can't read web pages. You can turn it on in this AI's settings (Edit AI > Web access)."
+                        )
+                    }),
+                );
+                return mcp_tool_text(
+                    &id,
+                    "Web access is off for this AI, so the page was not read. Tell the person; they can turn it on in this AI's settings.".into(),
+                    true,
+                );
+            }
+            let a = &req["params"]["arguments"];
+            let url = a["url"].as_str().unwrap_or("").trim();
+            if url.is_empty() {
+                return mcp_tool_text(&id, "No address was given.".into(), true);
+            }
+            let question = a["question"].as_str();
+            log::info!("[web] {} reads {}", agent_label, url.chars().take(120).collect::<String>());
+            match crate::web_fetch::read_web_page(&app, url, question).await {
+                Ok(text) => mcp_tool_text(&id, text, false),
+                Err(e) => {
+                    log::info!("[web] not read: {e}");
+                    mcp_tool_text(&id, e, true)
+                }
+            }
+        }
+        _ => StatusCode::ACCEPTED.into_response(),
+    }
+}
 
 async fn mcp_get() -> Response {
     // A hang-open SSE stream (the client keeps it for server-initiated

@@ -488,7 +488,10 @@ export default component$(() => {
   // (the Build helper's path is set in storage by the test).
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(() => {
-    try { (window as any).__yoaiOpenFolder = (p: string) => openFolder$(p); } catch { /* no window */ }
+    try {
+      (window as any).__yoaiOpenFolder = (p: string) => openFolder$(p);
+      (window as any).__yoaiCloseFolder = () => (agentState.folderPath ? closeFolder$() : Promise.resolve());
+    } catch { /* no window */ }
   });
 
   /** Re-enter a conversation: rebuild the messages from its transcript and
@@ -1333,6 +1336,8 @@ export default component$(() => {
   // --- Callbacks (replace useCallback with $()) ---
   // "Answer again with tools" on a reply: the next submit skips the gate.
   const forceToolsNext = useSignal(false);
+  // "Just this once" on the web offer line: the next submit may read the web.
+  const webOnceNext = useSignal(false);
   // ...and the exchange it replaces: where it starts in the list, or -1. The
   // old question and reply stay on screen until the new turn is actually
   // sent (a session takes a couple of seconds to open; an empty list in the
@@ -1554,7 +1559,9 @@ export default component$(() => {
     // comes down here; the direct chat raises its own.
     await discardPreparedAgentTurn$();
     dropReplacedTurn();
-    sendMessage(finalInput, selectedAction.value, fileContext, images);
+    const webOnce = webOnceNext.value;
+    webOnceNext.value = false;
+    sendMessage(finalInput, selectedAction.value, fileContext, images, undefined, false, webOnce ? { webOnce: true } : undefined);
     input.value = "";
     selectedAction.value = null;
     attachedImages.value = []; // image is per-turn — don't silently re-send it
@@ -1563,18 +1570,39 @@ export default component$(() => {
   // Retry, redo on the other side, or - for an AI that carries tools -
   // "Answer again with tools": the direct reply and its question leave the
   // list (as any retry does) and the same question goes through a session.
-  const retryOrTools$ = $(async (id: string, target?: "online" | "device" | "tools") => {
-    if (target !== "tools") return retry(id, target);
+  const retryOrTools$ = $(async (id: string, target?: "online" | "device" | "tools" | "web-once" | "web-on" | "web-never") => {
+    if (target === "web-never") {
+      // Only reached by someone who turned the switch off: no more offers for this AI.
+      try { localStorage.setItem(`web-offer-off:${selectedAi.value.id}`, "1"); } catch { /* preference */ }
+      chatState.messages = chatState.messages.map((m) => (m.id === id ? { ...m, needsWeb: undefined } : m));
+      return;
+    }
+    if (target === "web-on") {
+      // The switch itself, then the same question again with the web.
+      const ai = selectedAi.value;
+      if (ai.aiConfig?.id) {
+        try {
+          await updateCustomAi(ai.aiConfig.id, { webAccess: true });
+        } catch (e) {
+          console.warn("[Web] could not turn web access on:", e);
+        }
+        selectedAi.value = { ...ai, aiConfig: { ...ai.aiConfig, webAccess: true } };
+      }
+    }
+    if (target !== "tools" && target !== "web-once" && target !== "web-on") return retry(id, target);
     const at = chatState.messages.findIndex((m) => m.id === id);
     const asked = at > 0 ? chatState.messages[at - 1] : undefined;
+    uiLog(`[web] ${target} on ${id.slice(0, 8)}: at ${at}, asked ${asked?.role ?? "-"}, loading ${chatState.isLoading}`);
     if (!asked || asked.role !== "user" || chatState.isLoading) return;
     replaceTurnFrom.value = at - 1;
     input.value = asked.content;
-    forceToolsNext.value = true;
+    if (target === "tools") forceToolsNext.value = true;
+    if (target === "web-once") webOnceNext.value = true;
     try {
       await handleSubmit();
     } finally {
       replaceTurnFrom.value = -1; // a submit that sent nothing replaces nothing
+      webOnceNext.value = false;
     }
   });
 

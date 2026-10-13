@@ -95,6 +95,8 @@ const AiFormModal = component$<AiFormModalProps>(
       model: 'auto:offline',
       askBlurb: '',
       useEmojis: false,
+      // Web access (Edit only): on unless the person turns it off for this AI.
+      webAccess: true,
       advancedOpen: false,
       sTemperature: null as number | null,
       sTopP: null as number | null,
@@ -429,6 +431,7 @@ const AiFormModal = component$<AiFormModalProps>(
           store.model = editingAi.model || 'auto:offline';
           store.askBlurb = editingAi.askBlurb || '';
           store.useEmojis = editingAi.useEmojis ?? false;
+          store.webAccess = editingAi.webAccess ?? true;
           store.sTemperature = editingAi.sampling?.temperature ?? null;
           store.sTopP = editingAi.sampling?.topP ?? null;
           store.sMinP = editingAi.sampling?.minP ?? null;
@@ -633,6 +636,7 @@ const AiFormModal = component$<AiFormModalProps>(
           model: store.model,
           askBlurb: store.askBlurb.trim(),
           useEmojis: store.useEmojis,
+          webAccess: store.webAccess,
           skills: store.skills,
           mcp: store.mcp,
           sampling: (() => {
@@ -881,6 +885,55 @@ const AiFormModal = component$<AiFormModalProps>(
             {/* Response Length + Default Mode (edit only) */}
             {editingAi && (
               <>
+              {/* Web access: this AI's own switch. "Offline only" is about which
+                  models answer; the web is governed here, on by default. */}
+              <div>
+                <label class="block text-sm font-medium text-[var(--text-secondary)] mb-1">
+                  Web access
+                </label>
+                <p class="text-xs text-[var(--text-muted)] mb-2">
+                  On: this AI can read web pages you point it to, downloaded on this computer. Searching the web
+                  also needs online models on your plan. Off: nothing from the web, whatever models answer.
+                </p>
+                <LiquidMetalBorder borderRadius="9999px">
+                  <div class="flex rounded-full overflow-hidden bg-[var(--bg-card)]" data-testid="ai-web-access">
+                    <button
+                      type="button"
+                      onClick$={() => {
+                        store.webAccess = false;
+                      }}
+                      disabled={store.isSubmitting}
+                      data-testid="ai-web-access-off"
+                      class={`flex-1 px-4 py-2.5 font-medium focus:outline-none transition-colors disabled:opacity-70
+                        ${
+                          !store.webAccess
+                            ? 'bg-[var(--bg-main)] text-[var(--text-primary)] font-semibold'
+                            : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
+                        }
+                      `}
+                    >
+                      Off
+                    </button>
+                    <button
+                      type="button"
+                      onClick$={() => {
+                        store.webAccess = true;
+                      }}
+                      disabled={store.isSubmitting}
+                      data-testid="ai-web-access-on"
+                      class={`flex-1 px-4 py-2.5 font-medium focus:outline-none transition-colors disabled:opacity-70
+                        ${
+                          store.webAccess
+                            ? 'bg-[var(--bg-main)] text-[var(--text-primary)] font-semibold'
+                            : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
+                        }
+                      `}
+                    >
+                      On
+                    </button>
+                  </div>
+                </LiquidMetalBorder>
+              </div>
               <div>
                 <label class="block text-sm font-medium text-[var(--text-secondary)] mb-1">
                   Response Length *

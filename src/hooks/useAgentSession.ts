@@ -1083,6 +1083,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
         permissionMode: state.permissionMode,
         // Tools this AI carries (Add-ons > Tools) - the bridge resolves them.
         mcpNames: activeTools(props.selectedAi.value.aiConfig),
+        // This AI's web switch (Edit AI > Web access): on unless turned off.
+        webAccess: props.selectedAi.value.aiConfig?.webAccess ?? true,
       });
       // Warm the embedding model now, while the person types: the
       // documents search that rides with the first prompt paid the
@@ -1167,6 +1169,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         aiLabel: ai.label ?? null,
         permissionMode: state.permissionMode,
         mcpNames: names,
+        webAccess: ai.aiConfig?.webAccess ?? true,
       });
       return true;
       // Warm the embedding model now, while the person types: the

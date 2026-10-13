@@ -13,7 +13,7 @@ type SidePanelContent = { messageId: string; codeString: string; language: strin
 interface ChatContainerProps {
   messages: Message[];
   messagesEndRef: Signal<HTMLDivElement | undefined>;
-  retry$: QRL<(id: string, target?: 'online' | 'device' | 'tools') => void>;
+  retry$: QRL<(id: string, target?: 'online' | 'device' | 'tools' | 'web-once' | 'web-on' | 'web-never') => void>;
   canRouteOnline: boolean;
   canUseTools?: boolean;
   onGround$?: QRL<(id: string) => void>;

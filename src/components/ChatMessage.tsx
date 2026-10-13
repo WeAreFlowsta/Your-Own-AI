@@ -122,7 +122,7 @@ interface ChatMessageProps {
   onScrollNeeded$?: QRL<() => void>;
   onUpgradeClick$?: QRL<(originalQuery: string, triggerMessageId: string) => void>;
   /** Redo this turn on the other side ("Try online" / "Redo on your device"). */
-  onRouteRetry$?: QRL<(target: 'online' | 'device' | 'tools') => void>;
+  onRouteRetry$?: QRL<(target: 'online' | 'device' | 'tools' | 'web-once' | 'web-on' | 'web-never') => void>;
   /** Whether this AI may go online at all (auto online-offline mode). */
   canRouteOnline?: boolean;
   /** This AI carries tools (a direct reply offers them). */
@@ -294,7 +294,7 @@ interface ActionBarProps {
   theme: 'light' | 'dark';
   onGround$?: QRL<() => void>;
   isLast?: boolean;
-  onRouteRetry$?: QRL<(target: 'online' | 'device' | 'tools') => void>;
+  onRouteRetry$?: QRL<(target: 'online' | 'device' | 'tools' | 'web-once' | 'web-on' | 'web-never') => void>;
   canRouteOnline?: boolean;
   /** This AI carries tools (a direct reply offers them). */
   canUseTools?: boolean;
@@ -555,6 +555,27 @@ const ActionBar = component$<ActionBarProps>((props) => {
             </span>
           </div>
         )}
+
+        {/* The question needed the web and this AI's web access is off: one
+            line, three doors - never a modal, only when the web was needed. */}
+        {props.isLast &&
+          props.message.needsWeb &&
+          !props.message.isLoading &&
+          !!props.message.content &&
+          props.onRouteRetry$ && (
+            <div class="flex flex-wrap items-center gap-2 text-xs text-[var(--text-muted)]" data-testid="web-offer">
+              <span>This needs the web, which is off for this AI.</span>
+              <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={() => props.onRouteRetry$!('web-on')}>
+                Turn on web access for this AI
+              </button>
+              <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={() => props.onRouteRetry$!('web-once')}>
+                Just this once
+              </button>
+              <button type="button" class="hover:text-[var(--text-secondary)]" onClick$={() => props.onRouteRetry$!('web-never')}>
+                Don't ask again for this AI
+              </button>
+            </div>
+          )}
 
         {/* Spacer to push buttons right */}
         <div class="flex-grow" />

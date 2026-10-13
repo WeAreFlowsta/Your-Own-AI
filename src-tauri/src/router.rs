@@ -35,6 +35,9 @@ pub struct PrevTurn {
     pub task: Option<String>,
     pub model: Option<String>,
     pub vec: Option<Vec<f32>>,
+    /// The AI's web switch is off: a question is never read as needing the
+    /// live web (no search model), whatever its words say.
+    pub web_off: bool,
 }
 
 /// A short, anaphoric follow-up ("more on that", "why?", "and the second
@@ -2276,7 +2279,7 @@ async fn route_core(
         // explicit live-web ask, and a Local-first user without the memory
         // model would otherwise never reach the live web at all (the Air
         // matrix, 2026-09-03).
-        let cue_confirmed = if looks_time_sensitive(query) {
+        let cue_confirmed = if !prev.web_off && looks_time_sensitive(query) {
             match fresh_scores(app, query, query_vec).await {
                 Some((f, b)) => f >= b && (!local_first || f >= threshold_for("balanced")),
                 // No embeddings: the cue counts (the 09-03 decision), except
@@ -2289,9 +2292,10 @@ async fn route_core(
         };
         let fresh_why = if cue_confirmed {
             Some("looks like it needs current info")
-        } else if semantic_fresh_score(app, query, query_vec)
-            .await
-            .is_some_and(|s| s >= threshold_for(share))
+        } else if !prev.web_off
+            && semantic_fresh_score(app, query, query_vec)
+                .await
+                .is_some_and(|s| s >= threshold_for(share))
         {
             Some("seems to need up-to-date info")
         } else {
@@ -2579,8 +2583,9 @@ pub async fn route_model(
     prev_task: Option<String>,
     prev_model: Option<String>,
     prev_vec: Option<Vec<f32>>,
+    web_off: Option<bool>,
 ) -> Result<RouteResult, String> {
-    let prev = PrevTurn { side: prev_side, task: prev_task, model: prev_model, vec: prev_vec };
+    let prev = PrevTurn { side: prev_side, task: prev_task, model: prev_model, vec: prev_vec, web_off: web_off.unwrap_or(false) };
     let picks = OnlinePicks {
         fresh: online_fresh,
         everyday: online_everyday,

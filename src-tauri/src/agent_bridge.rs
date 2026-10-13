@@ -284,14 +284,14 @@ fn ensure_agent_model_entry(
     } else {
         format!("{}\n{}", content, roles)
     };
-    // "Offline only" means nothing leaves the machine - and web_fetch is an
-    // outbound request from the user's machine, however innocent the URL.
-    // The harness's feature switch turns the tool off before any network
-    // I/O; web_search is refused separately by the local server (which also
-    // catches a mid-session model change). Written at every session open
-    // from the AI's model setting at that moment.
+    // The harness's own fetch stays OFF: pages are read by our `web` MCP
+    // tool (inference_server.rs), which applies the address rules (no
+    // local or private hosts, redirects reported, body capped) and has the
+    // helper model read long pages. Web search is gated by the local server
+    // on the AI's web switch. Written at every session open.
+    let _ = web_allowed;
     let features_header = "[features]";
-    let features = format!("{features_header}\nweb_fetch = {}\n", if web_allowed { "true" } else { "false" });
+    let features = format!("{features_header}\nweb_fetch = false\n");
     let content = if let Some(start) = content.find(features_header) {
         let after = &content[start + features_header.len()..];
         let end = after
@@ -422,6 +422,8 @@ pub async fn start_build_agent(
     // MCP servers this AI carries (names from Add-ons > Tools); resolved
     // here and handed to the agent on session/new beside project memory.
     mcp_names: Option<Vec<String>>,
+    // This AI's web switch (Edit AI > Web access): on unless turned off.
+    web_access: Option<bool>,
 ) -> Result<(), String> {
     // One agent at a time: replace any previous instance. Bumping the
     // generation FIRST makes the old process's reader stand down - its
@@ -576,10 +578,14 @@ pub async fn start_build_agent(
         }
         AGENT_WINDOW.store(if local_window { agent_ctx } else { 0 }, Ordering::SeqCst);
         let device_workers = crate::router::device_subagents_enabled(&app_handle).await;
-        // The AI's own model setting is the consent to go online: a pinned
-        // online model or Auto - Online and Offline may reach the web; every
-        // offline setting keeps the session off it entirely.
-        let web_allowed = ai_model
+        // The web is this AI's own switch (Edit AI > Web access, on unless
+        // turned off) - "offline only" is about which models answer, not
+        // about reading a page. Pages are read by our own tool (the `web`
+        // MCP server below) under its address rules; the harness's native
+        // fetch stays off so nothing bypasses them. Search goes through
+        // :11435 `/v1/responses`, gated there by the same switch.
+        let web_allowed = web_access.unwrap_or(true);
+        let offline_only = !ai_model
             .as_deref()
             .map(|m| m.starts_with("online:") || m == "auto:online-offline")
             .unwrap_or(false);
@@ -587,7 +593,7 @@ pub async fn start_build_agent(
         // work is slow and weaker there (field, 2026-09-23: with online routing
         // "it worked much better"). One line on the turn, with the online
         // door under it - said once per session, never on our own faults.
-        if local_window && !web_allowed {
+        if local_window && offline_only {
             if let Some(s) = crate::router::local_agent_serving_model(&app_handle, ai_model.as_deref().unwrap_or("")).await {
                 let grade = crate::model_caps::agent_caps(&s);
                 if grade < 6 {
@@ -606,7 +612,7 @@ pub async fn start_build_agent(
             agent_ctx,
             plan_ctx,
             device_workers,
-            if web_allowed { "allowed" } else { "off (offline-only AI)" }
+            if web_allowed { "on" } else { "off (this AI's switch)" }
         );
         ensure_agent_model_entry(&home, slug, agent_ctx, plan_ctx, device_workers, web_allowed)?;
         ensure_agent_permission_config(&home)?;
@@ -842,6 +848,20 @@ async fn handle_agent_message(
                     ]
                 }])
             };
+            // Reading web pages: our own tool, on this computer, under the
+            // address rules (web_fetch.rs); the AI's web switch is checked
+            // at every call by its key.
+            if let Some(arr) = mcp_servers.as_array_mut() {
+                arr.push(json!({
+                    "type": "http",
+                    "name": "web",
+                    "url": format!("http://127.0.0.1:{}/mcp/web", crate::ports::inference()),
+                    "headers": [
+                        { "name": "x-agent-key", "value": memory_identity.0 },
+                        { "name": "x-agent-label", "value": memory_identity.1 }
+                    ]
+                }));
+            }
             // The AI's own tools (Add-ons > Tools) ride beside project memory.
             if let Some(arr) = mcp_servers.as_array_mut() {
                 arr.extend(extra_mcp.iter().cloned());

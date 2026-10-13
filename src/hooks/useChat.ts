@@ -21,6 +21,7 @@ import {
   recordMessage,
   recordGroundingAnnotation,
 } from "../utils/holochainTranscripts";
+import { uiLog } from "../utils/uiLog";
 import { beginTurn, updateTurn, endTurn, dropTurn, getTurn, liveTurnFor, abortTurn, requestBoundary, engineHolder, waitForEngine } from "../utils/turns";
 import { extractAndStoreFacts, looksLikeUserFact } from "../utils/memoryExtraction";
 import { isUtilityModelReady } from "../utils/utilityModel";
@@ -366,6 +367,7 @@ export function useChat(props: UseChatProps) {
       images: string[] = [],
       modelOverride?: string,
       consentGranted: boolean = false,
+      options?: { webOnce?: boolean },
     ) => {
       if (!userInput.trim() || state.isLoading) return;
       // Attached document names for the bubble's file chips - parsed from
@@ -378,6 +380,9 @@ export function useChat(props: UseChatProps) {
       state.pendingTurn = null;
 
       const selectedAi = props.selectedAi.value;
+      // This AI's web switch (Edit AI > Web access, on unless turned off),
+      // or "Just this once" from the offer line under a reply.
+      const webAllowed = (selectedAi.aiConfig?.webAccess !== false) || !!options?.webOnce;
       const currentModel = props.currentModel.value;
 
       // Two axes (see RESPONSE_LENGTH_AND_MODES.md):
@@ -510,6 +515,51 @@ export function useChat(props: UseChatProps) {
         turnModeAuto: false,
       };
       state.messages = [...state.messages, userMessage, assistantMessage];
+
+      // A page the person points at is read here, on this computer (web
+      // access on): its text rides with the question as a labelled block,
+      // like an attached document. Web access off: the reply carries the
+      // offer line instead (a page named, or a question about now).
+      {
+        const urls = [...userInput.matchAll(/https?:\/\/[^\s<>()"'\]]+/gi)].map((m) => m[0].replace(/[.,;:!?]+$/, "")).slice(0, 2);
+        const askAgain = (() => { try { return localStorage.getItem(`web-offer-off:${selectedAi.id}`) !== "1"; } catch { return true; } })();
+        uiLog(`[web] ${urls.length} address(es) in the question, web ${webAllowed ? "on" : "off"}${options?.webOnce ? " (just this once)" : ""}`);
+        if (urls.length && webAllowed) {
+          const blocks: string[] = [];
+          for (const url of urls) {
+            const host = (() => { try { return new URL(url).host; } catch { return url; } })();
+            state.messages = state.messages.map((m) => (m.id === assistantId ? { ...m, statusText: `Reading ${host}..` } : m));
+            try {
+              const text = await invoke<string>("web_read_page", { url, question: userInput });
+              blocks.push(`[Web page the person pointed at - read on this computer]\n--- web: ${url} ---\n${text}`);
+            } catch (e) {
+              blocks.push(`[Web page the person pointed at - it could not be read]\n--- web: ${url} ---\n${String(e)}`);
+            }
+          }
+          state.messages = state.messages.map((m) => (m.id === assistantId ? { ...m, statusText: undefined } : m));
+          const last = chatHistory[chatHistory.length - 1];
+          if (last && last.role === "user") {
+            const pages = blocks.join("\n\n");
+            if (typeof last.content === "string") {
+              last.content = `${pages}\n\n[User question]\n${userInput}`;
+            } else if (Array.isArray(last.content)) {
+              (last.content as unknown as { type: string; text?: string }[]).unshift({ type: "text", text: pages });
+            }
+          }
+        } else if (!webAllowed && askAgain) {
+          let needs: "page" | "live" | null = urls.length ? "page" : null;
+          if (!needs) {
+            try {
+              if (await invoke<boolean>("live_web_cue", { text: userInput })) needs = "live";
+            } catch { /* the cue is a nicety */ }
+          }
+          if (needs) {
+            const n = needs;
+            state.messages = state.messages.map((m) => (m.id === assistantId ? { ...m, needsWeb: n } : m));
+            updateTurn(assistantId, { assistant: { needsWeb: n } });
+          }
+        }
+      }
       state.isLoading = true;
       state.error = null;
 
@@ -785,6 +835,7 @@ export function useChat(props: UseChatProps) {
             prevTask: prevTurn?.routingTask,
             prevModel: prevTurn?.servedBy,
             prevVec: prevUserVec ?? undefined,
+            webOff: !webAllowed,
             task: signals.task,
             difficulty: signals.difficulty,
             onlineShare,
@@ -1475,6 +1526,11 @@ export function useChat(props: UseChatProps) {
           }
         }
 
+        {
+          const lastUser = chatHistory[chatHistory.length - 1];
+          const shown = typeof lastUser?.content === "string" ? lastUser.content : JSON.stringify(lastUser?.content ?? null);
+          uiLog(`[web] last user message on the wire (${shown.length} chars): ${JSON.stringify(shown.slice(0, 160))}`);
+        }
         // Write the user's side now (see recordCtx above). Not awaited: the
         // request below goes out immediately; the assistant record awaits
         // this promise later.
@@ -1678,6 +1734,7 @@ export function useChat(props: UseChatProps) {
         // second empty run falls through to the honest message below.
         if (!fullResponse.trim() && !controller.signal.aborted) {
           console.warn("[Chat] empty reply - one retry with a plain-words steer");
+          uiLog(`[chat] empty reply after ${updateCount} update(s) - one retry with a plain-words steer`);
           state.messages = state.messages.map((m) =>
             m.id === assistantId
               ? { ...m, statusText: "Asking again...", isLoading: true }
