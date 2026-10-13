@@ -161,6 +161,12 @@ export class LlamaServerAPI {
     const chunks: StreamChunk[] = [];
     let streamComplete = false;
     let streamError: string | null = null;
+    // A duplicate invoke was refused by the backend (one JS call, two
+    // commands - seen on a resend, 10-13). The first stream should still
+    // deliver; when nothing arrives for a long while after that, the reply
+    // is lost and the turn must end rather than sit "answering" forever.
+    let duplicateRefusedAt: number | null = null;
+    const DUPLICATE_LOST_MS = 90_000;
 
     const unlistenChunk = await listen(`chat-stream-${requestId}`, (event: any) => {
       const chunk = event.payload.chunk;
@@ -230,6 +236,7 @@ export class LlamaServerAPI {
         // THIS stream - its chunks and [DONE] are still coming.
         if (String(err).includes("DUPLICATE_REQUEST")) {
           trace("a duplicate invoke was refused - the first stream goes on");
+          duplicateRefusedAt = Date.now();
           return;
         }
         console.error('[LlamaServer] Stream command error:', err);
@@ -248,6 +255,11 @@ export class LlamaServerAPI {
 
         // Check for errors
         if (streamError) {
+          throw new Error(streamError);
+        }
+        if (duplicateRefusedAt !== null && chunks.length === 0 && Date.now() - duplicateRefusedAt > DUPLICATE_LOST_MS) {
+          trace("nothing arrived after the refused duplicate - the reply is lost; ending the turn");
+          streamError = "The reply was lost on the way (the request reached the engine twice). Ask again.";
           throw new Error(streamError);
         }
 
