@@ -166,6 +166,10 @@ export interface Message {
   /** The question needed the web (a page it named, or current information) while this AI's
    *  web access is off - the reply carries the one-line offer to turn it on. */
   needsWeb?: 'page' | 'live';
+  /** What the research step did for this reply ("That page had little to read, so I looked at 2 more pages on the site."). */
+  webNote?: string;
+  /** One page was not enough and the Build helper is not installed: the reply carries the one-line offer. */
+  buildOffer?: boolean;
   turnMode?: TurnMode; // the mode this message was generated under — drives thinking-window presentation + live-thinking gate
   turnModeAuto?: boolean; // true when turnMode was chosen by the classifier (not a sparkle/default) — for the auto badge
   /** True when this turn routed to a web-search model: it researches for a

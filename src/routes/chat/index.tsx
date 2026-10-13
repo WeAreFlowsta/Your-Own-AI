@@ -1451,7 +1451,16 @@ export default component$(() => {
     // gate decides where it runs (the gate's embedding call is a second
     // warm, two or three cold - field, 2026-09-25). Should the gate choose the
     // direct chat, the bubble comes down again before that path speaks.
-    const mayGate = activeTools(selectedAi.value.aiConfig).length > 0 && attachedImages.value.length === 0;
+    // A question that names a web page, with the Build helper installed and
+    // this AI's web access on: the agent's own loop reads on and searches
+    // when one page is not enough - the built-in web reader counts as a
+    // carried tool for such a question.
+    const webQuestion =
+      buildInstalled.value &&
+      selectedAi.value.aiConfig?.webAccess !== false &&
+      /https?:\/\//i.test(finalInput) &&
+      attachedImages.value.length === 0;
+    const mayGate = (activeTools(selectedAi.value.aiConfig).length > 0 || webQuestion) && attachedImages.value.length === 0;
     if (mayGate && agentState.status !== "working" && !chatState.isLoading) {
       dropReplacedTurn();
       await prepareAgentTurn$(finalInput, attachedFiles.value.map((f) => f.filename), "tools", "Thinking..");
@@ -1485,6 +1494,9 @@ export default component$(() => {
       // end it. It would not see this turn, and the next tools message opens
       // a fresh one that is told the whole conversation.
       if (!wantsTools && agentState.mode === "tools" && !chatState.isLoading) await closeFolder$();
+    } else if (webQuestion) {
+      wantsTools = true;
+      uiLog("[web] a page question with Build installed: the agent reads it (tools session)");
     }
     // A tools session keeps the tools it started with. When a tool's
     // settings have changed since (read only switched off, another vault),
@@ -1537,10 +1549,13 @@ export default component$(() => {
       input.value = "";
       selectedAction.value = null;
       attachedFiles.value = [];
-      if (await openToolsSession$()) {
+      if (await openToolsSession$({ web: webQuestion })) {
         const given = await sessionContext(fileContext, finalInput);
         const context = [
           forcedTools ? "Answer this through the tools you carry - read or search with them first. Do not answer from memory or from earlier turns." : undefined,
+          // The reader is the app's own tool; without this line a small model
+          // reaches for web search, is refused, and gives up (10-14).
+          webQuestion ? "The question names a web page. Read it first with the read_web_page tool from the web server (use_tool with tool_name web__read_web_page and the address as url); follow the links it returns if one page is not enough, and answer from what the pages say. Web search may not be available; the reader always is." : undefined,
           given.context,
         ]
           .filter(Boolean)
@@ -1570,7 +1585,19 @@ export default component$(() => {
   // Retry, redo on the other side, or - for an AI that carries tools -
   // "Answer again with tools": the direct reply and its question leave the
   // list (as any retry does) and the same question goes through a session.
-  const retryOrTools$ = $(async (id: string, target?: "online" | "device" | "tools" | "web-once" | "web-on" | "web-never") => {
+  const retryOrTools$ = $(async (id: string, target?: "online" | "device" | "tools" | "web-once" | "web-on" | "web-never" | "build-install" | "build-dismiss" | "build-never") => {
+    if (target === "build-install" || target === "build-dismiss" || target === "build-never") {
+      // The offer line under a thin-page reply: the existing install flow
+      // (consent given by the press; the header shows progress), or quiet.
+      if (target === "build-never") {
+        try { localStorage.setItem("build-offer-off", "1"); } catch { /* preference */ }
+      }
+      if (target === "build-install") {
+        invoke("download_build_agent").catch(() => {});
+      }
+      chatState.messages = chatState.messages.map((m) => (m.id === id ? { ...m, buildOffer: undefined } : m));
+      return;
+    }
     if (target === "web-never") {
       // Only reached by someone who turned the switch off: no more offers for this AI.
       try { localStorage.setItem(`web-offer-off:${selectedAi.value.id}`, "1"); } catch { /* preference */ }

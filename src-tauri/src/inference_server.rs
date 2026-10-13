@@ -2361,82 +2361,26 @@ async fn responses_web_search(
             "web_search_offline",
         );
     }
-    let token = match crate::flowsta::get_access_token(&app).await {
-        Ok(t) => t,
-        Err(_) => {
+    let search_model = crate::router::DEFAULT_FRESH.trim_start_matches("online:");
+    let (answer, sources) = match web_search_once(&app, &ai.name, &query).await {
+        Ok(r) => r,
+        // A refusal the agent can act on: the page reader needs no plan.
+        Err(SearchFailure::Auth) => {
             return err(
                 StatusCode::UNAUTHORIZED,
-                "Web search needs the online models: sign in with Flowsta in the app to enable it.",
+                "Web search is not available here (it needs online models on the person's plan). To read a specific page, call the read_web_page tool with its address - that works without a plan. Otherwise answer from what you know and say that you could not search.",
                 "auth_required",
             )
         }
-    };
-    let search_model = crate::router::DEFAULT_FRESH.trim_start_matches("online:");
-    log::info!("[inference] web search for {} via {} ({} chars)", ai.name, search_model, query.len());
-    let upstream = reqwest::Client::new()
-        .post(format!("{}/v1/chat/completions", crate::flowsta::proxy_url()))
-        .bearer_auth(token)
-        .json(&json!({
-            "model": search_model,
-            "messages": [
-                { "role": "system", "content": "You are a web search assistant. Search the web for the user's query and answer concisely with the facts found, citing sources." },
-                { "role": "user", "content": query }
-            ],
-            "stream": true,
-            "max_tokens": 4096
-        }))
-        .send()
-        .await;
-    let upstream = match upstream {
-        Ok(r) => r,
-        Err(e) => return err(StatusCode::BAD_GATEWAY, &format!("Search upstream error: {e}"), "upstream_error"),
-    };
-    let status = upstream.status();
-    let text = upstream.text().await.unwrap_or_default();
-    if !status.is_success() {
-        // Pass the proxy's own reason through (entitlement_required, allowance..)
-        // so the agent's message names the real block.
-        let reason = serde_json::from_str::<Value>(&text)
-            .ok()
-            .and_then(|v| v.pointer("/error/message").and_then(Value::as_str).map(str::to_string))
-            .unwrap_or_else(|| text.chars().take(300).collect());
-        return err(
-            StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
-            &format!("Web search unavailable: {reason}"),
-            "upstream_error",
-        );
-    }
-    // The proxy always streams SSE: gather the answer text and the search
-    // results (title + url) it sends with the final chunk.
-    let mut answer = String::new();
-    let mut sources: Vec<(String, String)> = Vec::new();
-    for line in text.lines() {
-        let Some(data) = line.strip_prefix("data:") else { continue };
-        let data = data.trim();
-        if data.is_empty() || data == "[DONE]" { continue; }
-        let Ok(chunk) = serde_json::from_str::<Value>(data) else { continue };
-        if let Some(c) = chunk.pointer("/choices/0/delta/content").and_then(Value::as_str) {
-            answer.push_str(c);
+        Err(SearchFailure::Upstream(status, reason)) => {
+            return err(
+                StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
+                &format!("Web search unavailable: {reason}. To read a specific page, call the read_web_page tool with its address."),
+                "upstream_error",
+            )
         }
-        if let Some(results) = chunk.get("search_results").and_then(Value::as_array) {
-            let found: Vec<(String, String)> = results
-                .iter()
-                .filter_map(|r| {
-                    let url = r["url"].as_str()?.to_string();
-                    let title = r["title"].as_str().unwrap_or(&url).to_string();
-                    Some((title, url))
-                })
-                .collect();
-            if !found.is_empty() { sources = found; }
-        }
-    }
-    // The search model thinks out loud in <think> tags - that is not part of
-    // the answer the agent should read back to the user.
-    let mut answer = answer;
-    while let (Some(a), Some(b)) = (answer.find("<think>"), answer.find("</think>")) {
-        if b > a { answer.replace_range(a..b + "</think>".len(), ""); } else { break; }
-    }
-    let mut out = answer.trim().to_string();
+    };
+    let mut out = answer;
     if !sources.is_empty() {
         out.push_str("\n\nSources:\n");
         for (t, u) in &sources {
@@ -2479,9 +2423,94 @@ async fn responses_web_search(
     .into_response()
 }
 
-/// Project-memory writes from the MCP tool run in the background; this keeps
-/// them strictly sequential so two notes cannot both read the same base and
-/// drop each other's row.
+pub(crate) enum SearchFailure {
+    /// No Flowsta token: the online models are not available to this person.
+    Auth,
+    /// The proxy answered with an error (status, reason).
+    Upstream(u16, String),
+}
+
+/// One web search through the Flowsta proxy on the person's plan: the
+/// answer (thinking stripped) and the sources it cited. Used by the agent's
+/// search tool and by the chat's research step.
+pub(crate) async fn web_search_once(app: &AppHandle, who: &str, query: &str) -> Result<(String, Vec<(String, String)>), SearchFailure> {
+    let token = match crate::flowsta::get_access_token(app).await {
+        Ok(t) => t,
+        Err(_) => return Err(SearchFailure::Auth),
+    };
+    let search_model = crate::router::DEFAULT_FRESH.trim_start_matches("online:");
+    log::info!("[inference] web search for {} via {} ({} chars)", who, search_model, query.len());
+    let upstream = reqwest::Client::new()
+        .post(format!("{}/v1/chat/completions", crate::flowsta::proxy_url()))
+        .bearer_auth(token)
+        .json(&json!({
+            "model": search_model,
+            "messages": [
+                { "role": "system", "content": "You are a web search assistant. Search the web for the user's query and answer concisely with the facts found, citing sources." },
+                { "role": "user", "content": query }
+            ],
+            "stream": true,
+            "max_tokens": 4096
+        }))
+        .send()
+        .await;
+    let upstream = match upstream {
+        Ok(r) => r,
+        Err(e) => return Err(SearchFailure::Upstream(502, format!("Search upstream error: {e}"))),
+    };
+    let status = upstream.status();
+    let text = upstream.text().await.unwrap_or_default();
+    if !status.is_success() {
+        let reason = serde_json::from_str::<Value>(&text)
+            .ok()
+            .and_then(|v| v.pointer("/error/message").and_then(Value::as_str).map(str::to_string))
+            .unwrap_or_else(|| text.chars().take(300).collect());
+        return Err(SearchFailure::Upstream(status.as_u16(), reason));
+    }
+    let mut answer = String::new();
+    let mut sources: Vec<(String, String)> = Vec::new();
+    for line in text.lines() {
+        let Some(data) = line.strip_prefix("data:") else { continue };
+        let data = data.trim();
+        if data.is_empty() || data == "[DONE]" { continue; }
+        let Ok(chunk) = serde_json::from_str::<Value>(data) else { continue };
+        if let Some(c) = chunk.pointer("/choices/0/delta/content").and_then(Value::as_str) {
+            answer.push_str(c);
+        }
+        if let Some(results) = chunk.get("search_results").and_then(Value::as_array) {
+            let found: Vec<(String, String)> = results
+                .iter()
+                .filter_map(|r| {
+                    let url = r["url"].as_str()?.to_string();
+                    let title = r["title"].as_str().unwrap_or(&url).to_string();
+                    Some((title, url))
+                })
+                .collect();
+            if !found.is_empty() { sources = found; }
+        }
+    }
+    // The search model thinks out loud in <think> tags - that is not part of
+    // the answer the agent should read back to the user.
+    let mut answer = answer;
+    while let (Some(a), Some(b)) = (answer.find("<think>"), answer.find("</think>")) {
+        if b > a { answer.replace_range(a..b + "</think>".len(), ""); } else { break; }
+    }
+    Ok((answer.trim().to_string(), sources))
+}
+
+/// The chat's research step: one search on the person's plan, or nothing.
+#[tauri::command]
+pub async fn web_search_once_cmd(app: AppHandle, query: String) -> Result<Value, String> {
+    match web_search_once(&app, "chat", &query).await {
+        Ok((answer, sources)) => Ok(json!({
+            "answer": answer,
+            "sources": sources.iter().map(|(t, u)| json!({ "title": t, "url": u })).collect::<Vec<_>>(),
+        })),
+        Err(SearchFailure::Auth) => Err("SEARCH_NEEDS_PLAN".into()),
+        Err(SearchFailure::Upstream(status, reason)) => Err(format!("SEARCH_UNAVAILABLE {status}: {reason}")),
+    }
+}
+
 static PROJECT_MEMORY_WRITE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 // ── web MCP endpoint ───────────────────────────────────────────────────────

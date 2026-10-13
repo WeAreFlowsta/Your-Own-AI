@@ -526,17 +526,74 @@ export function useChat(props: UseChatProps) {
         uiLog(`[web] ${urls.length} address(es) in the question, web ${webAllowed ? "on" : "off"}${options?.webOnce ? " (just this once)" : ""}`);
         if (urls.length && webAllowed) {
           const blocks: string[] = [];
+          const read: { title: string; url: string }[] = [];
+          type PageRead = { url: string; title: string | null; text: string; thin: boolean; links: { text: string; url: string; same_site: boolean }[] };
+          const firstReads: PageRead[] = [];
+          const hostOf = (url: string) => { try { return new URL(url).host; } catch { return url; } };
           for (const url of urls) {
-            const host = (() => { try { return new URL(url).host; } catch { return url; } })();
-            state.messages = state.messages.map((m) => (m.id === assistantId ? { ...m, statusText: `Reading ${host}..` } : m));
+            state.messages = state.messages.map((m) => (m.id === assistantId ? { ...m, statusText: `Reading ${hostOf(url)}..` } : m));
             try {
-              const text = await invoke<string>("web_read_page", { url, question: userInput });
-              blocks.push(`[Web page the person pointed at - read on this computer]\n--- web: ${url} ---\n${text}`);
+              const r = await invoke<PageRead>("web_read_page_full", { url, question: userInput });
+              firstReads.push(r);
+              read.push({ title: r.title ?? hostOf(url), url: r.url });
+              blocks.push(`[Web page the person pointed at - read on this computer]\n--- web: ${url} ---\n${r.text}`);
             } catch (e) {
               blocks.push(`[Web page the person pointed at - it could not be read]\n--- web: ${url} ---\n${String(e)}`);
             }
           }
-          state.messages = state.messages.map((m) => (m.id === assistantId ? { ...m, statusText: undefined } : m));
+          // One research step when the page was thin (a sign-in wall, a stub,
+          // a page drawn by scripts): a few of the site's own pages, then one
+          // web search when the plan has online models. The agent does this
+          // on its own in a tools session; here it is one bounded step.
+          let note: string | undefined;
+          let buildOffer = false;
+          const thin = firstReads.length > 0 && firstReads.every((r) => r.thin);
+          if (thin) {
+            const prefer = /about|product|spec|feature|pricing|price|docs|documentation|faq|help|overview|detail/i;
+            const candidates = firstReads
+              .flatMap((r) => r.links.filter((l) => l.same_site))
+              .sort((a, b) => Number(prefer.test(b.text + b.url)) - Number(prefer.test(a.text + a.url)))
+              .filter((l, i, arr) => arr.findIndex((x) => x.url === l.url) === i)
+              .slice(0, 3);
+            let more = 0;
+            for (const l of candidates) {
+              state.messages = state.messages.map((m) => (m.id === assistantId ? { ...m, statusText: `Reading more on ${hostOf(l.url)}..` } : m));
+              try {
+                const text = await invoke<string>("web_read_page", { url: l.url, question: userInput });
+                read.push({ title: l.text || hostOf(l.url), url: l.url });
+                blocks.push(`[Another page on the same site, read because the first had little to read]\n--- web: ${l.url} ---\n${text}`);
+                more++;
+              } catch { /* one link less */ }
+            }
+            let searched = false;
+            try {
+              const { lastKnownEntitled } = await import("../utils/entitlement");
+              if (lastKnownEntitled() === "yes") {
+                state.messages = state.messages.map((m) => (m.id === assistantId ? { ...m, statusText: "Searching the web.." } : m));
+                const s = await invoke<{ answer: string; sources: { title: string; url: string }[] }>("web_search_once_cmd", { query: userInput });
+                if (s.answer.trim()) {
+                  blocks.push(`[Web search, because the page had little to read]\n${s.answer}`);
+                  for (const src of s.sources) read.push(src);
+                  searched = true;
+                }
+              }
+            } catch (e) {
+              uiLog(`[web] search skipped: ${String(e).slice(0, 120)}`);
+            }
+            const parts: string[] = [];
+            if (more) parts.push(`looked at ${more} more page${more === 1 ? "" : "s"} on the site`);
+            if (searched) parts.push("searched the web");
+            note = parts.length
+              ? `That page had little to read, so I ${parts.join(" and ")}.`
+              : "That page had little to read, and the site offered nothing more to read.";
+            try {
+              const st = await invoke<{ installed: boolean }>("build_install_status");
+              buildOffer = !st.installed && localStorage.getItem("build-offer-off") !== "1";
+            } catch { /* no offer */ }
+            uiLog(`[web] thin page: ${more} more page(s), search ${searched ? "yes" : "no"}, build offer ${buildOffer}`);
+          }
+          state.messages = state.messages.map((m) => (m.id === assistantId ? { ...m, statusText: undefined, sources: read.length ? read : m.sources, webNote: note, buildOffer: buildOffer || undefined } : m));
+          updateTurn(assistantId, { assistant: { sources: read.length ? read : undefined, webNote: note, buildOffer: buildOffer || undefined } });
           const last = chatHistory[chatHistory.length - 1];
           if (last && last.role === "user") {
             const pages = blocks.join("\n\n");

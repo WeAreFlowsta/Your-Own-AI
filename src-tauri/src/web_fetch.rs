@@ -314,6 +314,15 @@ fn decode_entities(s: &str) -> String {
     out
 }
 
+/// A link on a page: its text and absolute address.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Link {
+    pub text: String,
+    pub url: String,
+    /// On the same site as the page it was found on.
+    pub same_site: bool,
+}
+
 /// A fetched page, as text.
 #[derive(Debug, Clone)]
 pub struct Page {
@@ -321,6 +330,65 @@ pub struct Page {
     pub title: Option<String>,
     pub text: String,
     pub truncated: bool,
+    /// Outbound links, same-site first, de-duplicated, capped.
+    pub links: Vec<Link>,
+}
+
+/// Under this much readable text a page is "thin" - a sign-in wall, a
+/// script-drawn page, a stub - and one read was not enough.
+pub const THIN_CHARS: usize = 600;
+
+impl Page {
+    pub fn is_thin(&self) -> bool {
+        self.text.chars().count() < THIN_CHARS
+    }
+}
+
+const MAX_LINKS: usize = 20;
+
+/// The page's links as absolute addresses that pass the address rules,
+/// same-site ones first, duplicates and fragments dropped.
+pub fn extract_links(html: &str, base: &Url) -> Vec<Link> {
+    let lower = html.to_ascii_lowercase();
+    let host = base.host_str().unwrap_or("").to_ascii_lowercase();
+    let mut seen = std::collections::HashSet::new();
+    let mut same: Vec<Link> = Vec::new();
+    let mut other: Vec<Link> = Vec::new();
+    let mut at = 0;
+    while let Some(i) = lower[at..].find("<a ") {
+        let start = at + i;
+        let Some(close) = lower[start..].find('>') else { break };
+        let tag_end = start + close + 1;
+        let tag = &html[start..tag_end];
+        let text_end = lower[tag_end..].find("</a").map(|j| tag_end + j).unwrap_or(tag_end);
+        at = text_end.max(tag_end);
+        let Some(h) = lower[start..tag_end].find("href=") else { continue };
+        let rest = &tag[h + 5..];
+        let href: String = match rest.chars().next() {
+            Some(q) if q == '"' || q == '\'' => rest[1..].chars().take_while(|c| *c != q).collect(),
+            _ => rest.chars().take_while(|c| !c.is_whitespace() && *c != '>').collect(),
+        };
+        let href = decode_entities(href.trim());
+        if href.is_empty() || href.starts_with('#') || href.starts_with("javascript:") || href.starts_with("mailto:") || href.starts_with("tel:") {
+            continue;
+        }
+        let Ok(mut abs) = base.join(&href) else { continue };
+        abs.set_fragment(None);
+        let Ok(checked) = check_url(abs.as_str()) else { continue };
+        let key = checked.as_str().trim_end_matches('/').to_string();
+        if key == base.as_str().trim_end_matches('/') || !seen.insert(key) {
+            continue;
+        }
+        let text = html_to_text(&html[tag_end..text_end]).split_whitespace().collect::<Vec<_>>().join(" ");
+        let text = if text.is_empty() { checked.path().trim_matches('/').replace(['-', '_'], " ") } else { text };
+        let same_site = checked.host_str().map(|h| h.eq_ignore_ascii_case(&host)).unwrap_or(false);
+        let link = Link { text: text.chars().take(80).collect(), url: checked.to_string(), same_site };
+        if same_site { same.push(link) } else { other.push(link) }
+        if same.len() + other.len() >= MAX_LINKS * 3 {
+            break;
+        }
+    }
+    same.into_iter().chain(other).take(MAX_LINKS).collect()
 }
 
 static CACHE: Mutex<Option<HashMap<String, (Instant, Page)>>> = Mutex::new(None);
@@ -418,12 +486,12 @@ pub async fn fetch_page(raw: &str) -> Result<Page, String> {
         }
         let raw_text = String::from_utf8_lossy(&body).to_string();
         let looks_html = ct.contains("html") || (ct.is_empty() && raw_text.contains('<'));
-        let (title, text) = if looks_html {
-            (extract_title(&raw_text), html_to_text(&raw_text))
+        let (title, text, links) = if looks_html {
+            (extract_title(&raw_text), html_to_text(&raw_text), extract_links(&raw_text, &url))
         } else {
-            (None, raw_text.trim().to_string())
+            (None, raw_text.trim().to_string(), Vec::new())
         };
-        let page = Page { url: url.to_string(), title, text, truncated };
+        let page = Page { url: url.to_string(), title, text, truncated, links };
         cache_put(&asked, &page);
         return Ok(page);
     }
@@ -441,11 +509,21 @@ pub async fn read_web_page(app: &AppHandle, raw: &str, question: Option<&str>) -
     );
     let q = question.map(str::trim).filter(|q| !q.is_empty());
     let len = page.text.chars().count();
+    // The page's links, so a reader can choose where to go next.
+    let links_block = if page.links.is_empty() {
+        String::new()
+    } else {
+        let mut b = String::from("\n\nLinks on this page:\n");
+        for l in page.links.iter().take(12) {
+            b.push_str(&format!("- {} - {}\n", l.text, l.url));
+        }
+        b
+    };
     if page.text.trim().is_empty() {
-        return Ok(format!("{head}(The page has no readable text - it may draw its content with scripts.)"));
+        return Ok(format!("{head}(The page has no readable text - it may draw its content with scripts.){links_block}"));
     }
     if q.is_none() && len <= DIRECT_CHARS {
-        return Ok(format!("{head}{}{}", page.text, if page.truncated { "\n\n(The page was longer than the 2 MB cap; this is the start of it.)" } else { "" }));
+        return Ok(format!("{head}{}{}{links_block}", page.text, if page.truncated { "\n\n(The page was longer than the 2 MB cap; this is the start of it.)" } else { "" }));
     }
     let excerpt: String = page.text.chars().take(HELPER_PAGE_CHARS).collect();
     let system = "You read a web page for someone and answer from it. Use only what the page says; if the page does not answer the question, say so plainly. Keep names, numbers, dates and quotations exact. Plain prose, under 400 words.";
@@ -455,7 +533,7 @@ pub async fn read_web_page(app: &AppHandle, raw: &str, question: Option<&str>) -
     };
     match crate::llm::memory_complete(app, crate::llm::UTILITY_MODEL_FILE, system, &user, None, 700, 0.2).await {
         Ok(answer) if !answer.trim().is_empty() => Ok(format!(
-            "{head}{}\n\n(Read by the helper model from the page's first {} characters{}.)",
+            "{head}{}\n\n(Read by the helper model from the page's first {} characters{}.){links_block}",
             answer.trim(),
             excerpt.chars().count().min(len),
             if len > HELPER_PAGE_CHARS { " of a longer page" } else { "" }
@@ -478,6 +556,25 @@ pub async fn read_web_page(app: &AppHandle, raw: &str, question: Option<&str>) -
 #[tauri::command]
 pub async fn web_read_page(app: AppHandle, url: String, question: Option<String>) -> Result<String, String> {
     read_web_page(&app, &url, question.as_deref()).await
+}
+
+/// What the chat's research step needs besides the text: was the page thin,
+/// and where could a reader go next.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PageRead {
+    pub url: String,
+    pub title: Option<String>,
+    pub text: String,
+    pub thin: bool,
+    pub links: Vec<Link>,
+}
+
+#[tauri::command]
+pub async fn web_read_page_full(app: AppHandle, url: String, question: Option<String>) -> Result<PageRead, String> {
+    let page = fetch_page(&url).await?;
+    let thin = page.is_thin();
+    let text = read_web_page(&app, &url, question.as_deref()).await?;
+    Ok(PageRead { url: page.url.clone(), title: page.title.clone(), text, thin, links: page.links.clone() })
 }
 
 #[cfg(test)]
@@ -530,6 +627,18 @@ mod tests {
         assert!(is_local_ip("::ffff:192.168.0.1".parse().unwrap()));
         assert!(!is_local_ip("1.1.1.1".parse().unwrap()));
         assert!(!is_local_ip("2606:4700::1111".parse().unwrap()));
+    }
+
+    #[test]
+    fn links_are_absolute_checked_and_same_site_first() {
+        let base = Url::parse("https://shop.example.com/products/kettle").unwrap();
+        let html = r##"<a href="/about">About us</a> <a href='specs#top'>Specs</a> <a href="https://other.example.org/x">Review</a>
+            <a href="http://localhost:8080/admin">admin</a> <a href="#top">top</a> <a href="/about">About again</a> <a href="mailto:a@b.c">mail</a>"##;
+        let links = extract_links(html, &base);
+        let urls: Vec<&str> = links.iter().map(|l| l.url.as_str()).collect();
+        assert_eq!(urls, vec!["https://shop.example.com/about", "https://shop.example.com/products/specs", "https://other.example.org/x"], "{urls:?}");
+        assert!(links[0].same_site && !links[2].same_site);
+        assert_eq!(links[0].text, "About us");
     }
 
     #[test]

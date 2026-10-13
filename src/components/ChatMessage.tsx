@@ -122,7 +122,7 @@ interface ChatMessageProps {
   onScrollNeeded$?: QRL<() => void>;
   onUpgradeClick$?: QRL<(originalQuery: string, triggerMessageId: string) => void>;
   /** Redo this turn on the other side ("Try online" / "Redo on your device"). */
-  onRouteRetry$?: QRL<(target: 'online' | 'device' | 'tools' | 'web-once' | 'web-on' | 'web-never') => void>;
+  onRouteRetry$?: QRL<(target: 'online' | 'device' | 'tools' | 'web-once' | 'web-on' | 'web-never' | 'build-install' | 'build-dismiss' | 'build-never') => void>;
   /** Whether this AI may go online at all (auto online-offline mode). */
   canRouteOnline?: boolean;
   /** This AI carries tools (a direct reply offers them). */
@@ -294,7 +294,7 @@ interface ActionBarProps {
   theme: 'light' | 'dark';
   onGround$?: QRL<() => void>;
   isLast?: boolean;
-  onRouteRetry$?: QRL<(target: 'online' | 'device' | 'tools' | 'web-once' | 'web-on' | 'web-never') => void>;
+  onRouteRetry$?: QRL<(target: 'online' | 'device' | 'tools' | 'web-once' | 'web-on' | 'web-never' | 'build-install' | 'build-dismiss' | 'build-never') => void>;
   canRouteOnline?: boolean;
   /** This AI carries tools (a direct reply offers them). */
   canUseTools?: boolean;
@@ -556,6 +556,29 @@ const ActionBar = component$<ActionBarProps>((props) => {
           </div>
         )}
 
+        {/* What the research step did, and - when one page was not enough and
+            the Build helper is not installed - the one-line offer of it. */}
+        {props.isLast && props.message.webNote && !props.message.isLoading && !!props.message.content && (
+          <span class="text-xs text-[var(--text-muted)]" data-testid="web-note">{props.message.webNote}</span>
+        )}
+        {props.isLast &&
+          props.message.buildOffer &&
+          !props.message.isLoading &&
+          !!props.message.content &&
+          props.onRouteRetry$ && (
+            <div class="flex flex-wrap items-center gap-2 text-xs text-[var(--text-muted)]" data-testid="build-offer">
+              <span>One page wasn't enough here. The Build helper can research further, reading on and searching when it needs to.</span>
+              <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={() => props.onRouteRetry$!('build-install')}>
+                Install
+              </button>
+              <button type="button" class="hover:text-[var(--text-secondary)]" onClick$={() => props.onRouteRetry$!('build-dismiss')}>
+                Not now
+              </button>
+              <button type="button" class="hover:text-[var(--text-secondary)]" onClick$={() => props.onRouteRetry$!('build-never')}>
+                Don't ask again
+              </button>
+            </div>
+          )}
         {/* The question needed the web and this AI's web access is off: one
             line, three doors - never a modal, only when the web was needed. */}
         {props.isLast &&

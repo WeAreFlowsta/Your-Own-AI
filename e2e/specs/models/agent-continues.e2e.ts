@@ -4,7 +4,7 @@
 // still on screen or finished, the page has taken it over, and it is in the
 // records. Needs the Build helper installed on this machine (skipped otherwise).
 import { homedir } from "node:os";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { shot, waitForChat, invoke, ask } from "./_helpers";
 
@@ -140,6 +140,45 @@ describe("an agent turn keeps going when you leave the chat", () => {
     await browser.execute(async () => { await (window as any).__yoaiCloseFolder?.(); });
     await (await $('[data-testid="new-chat"]')).click();
     await browser.waitUntil(async () => browser.execute(() => document.querySelectorAll('[data-testid="chat-message"]').length === 0), { timeout: 15_000 });
+    await invoke("stop_build_agent").catch(() => {});
+  });
+
+  it("sends a page question through the agent when Build is installed", async function () {
+    this.timeout(900_000);
+    await waitForChat();
+    if (!(await invoke<boolean>("path_is_file", { path: HELPER }))) this.skip();
+    const canRead = await browser.execute(async () => {
+      try { await (window as any).__TAURI__.core.invoke("web_read_page", { url: "https://example.com/" }); return true; } catch { return false; }
+    });
+    if (!canRead) { console.log("e2e: no network - skipping"); this.skip(); }
+    await browser.execute((p: string) => localStorage.setItem("build-binary-path", p), HELPER);
+    await browser.url("tauri://localhost/chat/");
+    await waitForChat();
+    await ask("Read https://example.com/ and tell me in one sentence what that page says.");
+    await browser.waitUntil(async () => (await turns()).some((t) => t.kind === "tools"), { timeout: 120_000, interval: 500, timeoutMsg: "the page question did not open a tools session" });
+    console.log(`e2e: turns ${JSON.stringify(await turns())}`);
+    // The tools turn itself finishes (a dropped prepared bubble would leave no turn at all).
+    await browser.waitUntil(async () => (await turns()).some((t) => t.kind === "tools" && t.state === "done" && t.chars > 20), { timeout: 600_000, interval: 1000, timeoutMsg: "the tools turn never finished with an answer" });
+    await browser.waitUntil(async () => browser.execute(() => ([...document.querySelectorAll('[data-testid="chat-message"][data-role="assistant"]')].pop() as HTMLElement | undefined)?.getAttribute("data-state") === "done"), { timeout: 60_000 });
+    const reply = await browser.execute(() => ([...document.querySelectorAll('[data-testid="chat-message"][data-role="assistant"]')].pop() as HTMLElement | undefined)?.innerText ?? "");
+    console.log(`e2e: agent reply ${JSON.stringify(reply.slice(0, 200))}`);
+    const r = reply.toLowerCase();
+    // Which tools the agent actually called, from the harness's own log.
+    const harnessLog = resolve(import.meta.dirname ?? ".", "../../profile/.your-own-ai-build/logs/unified.jsonl");
+    let tools: string[] = [];
+    try { tools = [...readFileSync(harnessLog, "utf8").matchAll(/"tool_name":"([^"]+)"/g)].map((m) => m[1]); } catch { /* no log */ }
+    console.log(`e2e: agent tool calls ${JSON.stringify(tools)}`);
+    if (tools.some((t) => t.includes("read_web_page"))) {
+      // The reader ran: the answer comes from the page, with no giving up.
+      expect(r.includes("documentation") || r.includes("illustrative") || r.includes("example domain") || r.includes("placeholder")).toBe(true);
+      expect(r.includes("cannot read") || r.includes("do not have access") || r.includes("unable to access")).toBe(false);
+    } else {
+      // The mechanism is proven (a tools session for a page question, the reader
+      // offered); whether the model picks the reader is model quality - the test
+      // box's small model reaches for web search (NEXT.md "Tools need an agentic model").
+      console.log("e2e: the model did not call the page reader - content check skipped (model quality)");
+    }
+    await browser.execute(async () => { await (window as any).__yoaiCloseFolder?.(); });
     await invoke("stop_build_agent").catch(() => {});
   });
 });

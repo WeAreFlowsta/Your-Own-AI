@@ -1111,11 +1111,13 @@ export function useAgentSession(props: UseAgentSessionProps) {
    * start (Build not installed, no agent-ready model): the caller answers
    * directly instead.
    */
-  const openToolsSession$ = $(async (): Promise<boolean> => {
+  const openToolsSession$ = $(async (opts?: { web?: boolean }): Promise<boolean> => {
     const ai = props.selectedAi.value;
     const aiId = ai.aiConfig?.id;
     const names = activeTools(ai.aiConfig);
-    if (!aiId || !names.length) return false;
+    // The app's own web reader rides every session: a page question can open
+    // a tools session for an AI that carries no other tool.
+    if (!aiId || (!names.length && !opts?.web)) return false;
     let path: string;
     try {
       path = (await invokeTauri("tool_session_dir", { aiId })) as string;
@@ -1146,13 +1148,16 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.touchedFiles = [];
     try {
       const st = (await invokeTauri("build_install_status")) as { installed: boolean; installed_version: string | null };
-      if (!st.installed) {
+      // Installed = the installer's record, or a binary at the recorded path
+      // (the same two truths the chat page reads for its Build gate).
+      const present = st.installed || ((await invokeTauri("path_is_file", { path: resolveBinaryPath() }).catch(() => false)) as boolean);
+      if (!present) {
         state.folderPath = null;
         state.mode = null;
         state.status = "idle";
         return false;
       }
-      state.autoPermissionsSupported = buildSupportsAutoPermissions(st.installed_version);
+      state.autoPermissionsSupported = !st.installed || buildSupportsAutoPermissions(st.installed_version);
     } catch {
       state.autoPermissionsSupported = true;
     }

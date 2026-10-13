@@ -715,6 +715,8 @@ pub fn run() {
             agent_bridge::set_agent_permission_mode,
             agent_bridge::stop_build_agent,
             web_fetch::web_read_page,
+            web_fetch::web_read_page_full,
+            inference_server::web_search_once_cmd,
             agent_bridge::build_agent_status,
             agent_bridge::read_agent_task_logs,
             build_install::build_install_status,

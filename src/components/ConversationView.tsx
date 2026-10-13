@@ -26,7 +26,7 @@ interface ConversationViewProps {
   /** Marks the end of real content (before the turn spacer) - the
    *  follow-the-tip scroll keeps this in view while an agent turn works. */
   tipRef?: Signal<HTMLDivElement | undefined>;
-  retry$: QRL<(id: string, target?: 'online' | 'device' | 'tools' | 'web-once' | 'web-on' | 'web-never') => void>;
+  retry$: QRL<(id: string, target?: 'online' | 'device' | 'tools' | 'web-once' | 'web-on' | 'web-never' | 'build-install' | 'build-dismiss' | 'build-never') => void>;
   canRouteOnline: boolean;
   /** This AI carries tools: a direct reply offers "Answer again with tools". */
   canUseTools?: boolean;
@@ -83,7 +83,7 @@ export default component$<ConversationViewProps>(({
           agentFolderName={agentFolderName}
           onUndoTurn$={onUndoTurn$}
           onRetry$={message.id ? $(() => retry$(message.id!)) : undefined}
-          onRouteRetry$={message.id ? $((target: 'online' | 'device' | 'tools' | 'web-once' | 'web-on' | 'web-never') => retry$(message.id!, target)) : undefined}
+          onRouteRetry$={message.id ? $((target: 'online' | 'device' | 'tools' | 'web-once' | 'web-on' | 'web-never' | 'build-install' | 'build-dismiss' | 'build-never') => retry$(message.id!, target)) : undefined}
           canRouteOnline={canRouteOnline}
           canUseTools={canUseTools}
           onGround$={message.groundingSource && message.id ? $(() => onGround$?.(message.id!)) : undefined}
