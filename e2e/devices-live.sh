@@ -81,8 +81,11 @@ echo "== V2 holds A's manifest"
 echo "== phase b: device B signs in fresh on Vault $P2"
 YOAI_E2E_HOME="$B" YOAI_VAULT_PORT="$P2" DEVICES_PHASE=b node e2e/run.mjs models --spec e2e/specs/devices/devices.e2e.ts
 echo "== phase c: both devices online - A unattended on the default ports, B driven on shifted ports (Vaults $P1 / $P2)"
-# A runs headless-ish on the rendezvous with its WebDriver on another port, so B's test driver (4445) is B's.
-YOAI_E2E_HOME="$A" YOAI_VAULT_PORT="$P1" YOAI_E2E_WITH_MODELS=1 YOAI_E2E_WITH_RENDEZVOUS=1 TAURI_WEBDRIVER_PORT=4446 e2e/launch-app.sh > "$LOGS/device-a-phase-c.log" 2>&1 &
+# A runs unattended on the rendezvous with its WebDriver on another port, so B's test driver (4445) is B's.
+# A holds the RECORDS, not a chat: it gets an empty models folder, so it never loads a model - two
+# instances each with a model exceeded 16 GB and the kernel killed the editor (2026-10-13).
+mkdir -p "$LOGS/no-models"
+YOAI_E2E_HOME="$A" YOAI_VAULT_PORT="$P1" YOAI_E2E_WITH_MODELS=1 YOAI_E2E_MODELS_DIR="$LOGS/no-models" YOAI_E2E_WITH_RENDEZVOUS=1 TAURI_WEBDRIVER_PORT=4446 e2e/launch-app.sh > "$LOGS/device-a-phase-c.log" 2>&1 &
 A_PID=$!
 killA() { for pid in $(pgrep -x app); do case "$(readlink /proc/$pid/exe 2>/dev/null)" in *"Your Own AI App"*target/debug*) kill "$pid" 2>/dev/null || true;; esac; done; }
 trap 'killA; killtests; sleep 2; killtests' EXIT

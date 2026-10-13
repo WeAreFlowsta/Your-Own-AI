@@ -202,8 +202,14 @@ describe(`devices, phase ${PHASE}`, () => {
       }, { timeout: 360_000, interval: 5_000, timeoutMsg: "A's conversation never arrived in B's own records (still only the Vault copy after 6 min)" });
       console.log(`e2e: arrived after ${Math.round((Date.now() - started) / 1000)} s: ${JSON.stringify(await drawer())}`);
       await shot("devices-c-arrived");
-      const arrived = await $('[data-testid="conversation-item"]:not([data-copy="1"])*=Devices test');
-      await (await arrived.$("button")).click();
+      // The arrived item: a conversation-item with the message's text that is
+      // no longer a copy (clicked from the page - the driver's selector
+      // language has no :not() with a text match).
+      await browser.execute(() => {
+        const items = [...document.querySelectorAll('[data-testid="conversation-item"]')] as HTMLElement[];
+        const hit = items.find((d) => d.innerText.includes("Devices test") && d.getAttribute("data-copy") !== "1");
+        (hit?.querySelector("button") as HTMLElement | null)?.click();
+      });
       await browser.waitUntil(async () => (await $$('[data-testid="chat-message"]')).length >= 2, { timeout: 60_000, timeoutMsg: "the arrived conversation showed no messages" });
       const texts = await browser.execute(() => [...document.querySelectorAll('[data-testid="chat-message"]')].map((m) => (m as HTMLElement).innerText.slice(0, 60)));
       console.log(`e2e: arrived messages ${JSON.stringify(texts)}`);
