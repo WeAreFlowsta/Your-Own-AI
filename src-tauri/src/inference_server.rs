@@ -842,8 +842,11 @@ async fn chat_completions(
             .unwrap_or(false)
     });
     let auto_mode = ai.model.strip_prefix("auto:").map(str::to_string);
-    // Set inside the routing below: this call is a subagent's, answered on this device.
-    let mut device_worker_on_device = false;
+    // Set inside the routing below: this call is a subagent's, answered on this
+    // device - its seat in the device queue is taken at that decision (two
+    // calls deciding at once must not both pass the cap) and held until the
+    // reply ends.
+    let mut device_slot: Option<DeviceWorkerSlot> = None;
     if let Some(m) = auto_mode {
         // "my-hardware" maps to offline HERE: this server has no
         // external-chat path yet, so a resolved external model couldn't be
@@ -968,17 +971,22 @@ async fn chat_completions(
                 }
                 None => (0, false),
             };
-            if let Some(m) = loaded.filter(|_| device_worker_takes_device(grade, ready, short, in_flight, cap)) {
-                device_worker_model = Some(m);
-                device_worker_where = "this computer";
-                device_worker_on_device = true;
+            let takes = device_worker_takes_device(grade, ready, short, in_flight, cap);
+            if takes || (mode == "offline" && loaded.is_some()) {
+                // On this device: the loaded model, never another local pick
+                // (that could load). An offline-only AI's worker waits its
+                // turn here even past the cap - there is nowhere else to go.
+                device_worker_model = loaded;
+                device_worker_where = if takes { "this computer" } else { "this computer (the AI is offline only)" };
+                DEVICE_WORKERS_IN_FLIGHT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                device_slot = Some(DeviceWorkerSlot);
             } else {
-                device_worker_where = if mode == "offline" { "this computer (the AI is offline only)" } else { "the leader's route" };
-                log::info!(
-                    "[inference] device worker for {} takes {}: loaded grade {grade}, ready {ready}, short {short}, {in_flight} of {cap} in flight",
-                    ai.name, device_worker_where
-                );
+                device_worker_where = "the leader's route";
             }
+            log::info!(
+                "[inference] device worker for {} takes {}: loaded grade {grade}, ready {ready}, short {short}, {in_flight} of {cap} in flight",
+                ai.name, device_worker_where
+            );
         }
         let route_mode = if device_worker_model.is_some() {
             "offline"
@@ -1449,12 +1457,6 @@ async fn chat_completions(
         format!("api-{}-{:08x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0), rand::thread_rng().gen::<u32>())
     });
     let mut local_permit: Option<tokio::sync::SemaphorePermit<'static>> = None;
-    let device_slot = if device_worker_on_device {
-        DEVICE_WORKERS_IN_FLIGHT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Some(DeviceWorkerSlot)
-    } else {
-        None
-    };
     // The token an online reply starts with - its stop is sent with it
     // (after an identity switch a fresh one is refused).
     let mut online_token: Option<String> = None;
