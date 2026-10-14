@@ -283,4 +283,67 @@ describe("an agent turn keeps going when you leave the chat", () => {
     await browser.execute(async () => { await (window as any).__yoaiCloseFolder?.(); });
     await invoke("stop_build_agent").catch(() => {});
   });
+
+  it("asks before reading an address the person did not give", async function () {
+    this.timeout(900_000);
+    await waitForChat();
+    if (!(await invoke<boolean>("path_is_file", { path: HELPER }))) this.skip();
+    const canRead = await browser.execute(async () => {
+      try { await (window as any).__TAURI__.core.invoke("web_read_page", { url: "https://example.com/" }); return true; } catch { return false; }
+    });
+    if (!canRead) { console.log("e2e: no network - skipping"); this.skip(); }
+    await browser.execute((p: string) => localStorage.setItem("build-binary-path", p), HELPER);
+    await browser.url("tauri://localhost/chat/");
+    await waitForChat();
+    // The person names ONE address. A second page the model finds on its own
+    // (an encyclopedia article, say) is outside the session's allow-set: the
+    // gate turns it into an ask instead of a silent read.
+    await ask("Research https://example.com/ and then the Wikipedia article about it; tell me one fact from each page.");
+    await browser.waitUntil(async () => (await turns()).some((t) => t.kind === "tools"), { timeout: 120_000, interval: 500, timeoutMsg: "the research question did not open a tools session" });
+    let asked = false;
+    await browser.waitUntil(async () => {
+      const ts = await turns();
+      asked = ts.some((t) => t.kind === "tools" && t.state === "waiting");
+      return asked || ts.every((t) => t.kind !== "tools" || t.state !== "running");
+    }, { timeout: 420_000, interval: 1000 }).catch(() => {});
+    const appLog = resolve(import.meta.dirname ?? ".", "../../profile/.local/share/com.solar.yourowai/logs/Your Own AI.log");
+    const gateLines = () => { try { return readFileSync(appLog, "utf8").split("\n").filter((l) => l.includes("[web] gate")); } catch { return []; } };
+    if (!asked) {
+      console.log(`e2e: the model composed no outside address - nothing to gate this run (model quality). gate lines: ${JSON.stringify(gateLines().slice(-3))}`);
+      await browser.execute(async () => { await (window as any).__yoaiCloseFolder?.(); });
+      await invoke("stop_build_agent").catch(() => {});
+      this.skip();
+    }
+    // The ask names the address, here and in the tray.
+    await (await $('button[title^="Menu"]')).click();
+    await browser.execute(() => {
+      const item = [...document.querySelectorAll('[role="menuitem"]')].find((b) => (b as HTMLElement).innerText.trim().startsWith("Settings")) as HTMLElement | undefined;
+      item?.click();
+    });
+    await browser.waitUntil(async () => (await browser.execute(() => location.pathname)) === "/settings/", { timeout: 30_000 });
+    const row = await $('[data-testid="turn-row"][data-turn-state="waiting"]');
+    await row.waitForDisplayed({ timeout: 15_000 });
+    const rowText = (await row.getText()).replace(/\s+/g, " ");
+    console.log(`e2e: gate row ${JSON.stringify(rowText.slice(0, 160))}; gate lines ${JSON.stringify(gateLines().slice(-2))}`);
+    expect(rowText).toContain("needs you");
+    expect(rowText.toLowerCase()).toContain("read http");
+    expect(gateLines().some((l) => l.includes("the person decides"))).toBe(true);
+    await shot("agent-gate-ask-in-tray");
+    await browser.execute(() => {
+      const r = document.querySelector('[data-testid="turn-row"][data-turn-state="waiting"]');
+      const b = [...(r?.querySelectorAll("button") ?? [])].find((x) => x.textContent?.trim() === "Allow") as HTMLElement | undefined;
+      b?.click();
+    });
+    await browser.waitUntil(async () => (await turns()).every((t) => t.kind !== "tools" || (t.state !== "waiting" && t.state !== "running")), { timeout: 600_000, interval: 1000, timeoutMsg: "the tools turn never finished after Allow" });
+    const read = (() => { try { return readFileSync(appLog, "utf8").split("\n").filter((l) => /\[web\] .* reads https?:\/\//.test(l)); } catch { return []; } })();
+    console.log(`e2e: pages read ${JSON.stringify(read.map((l) => l.replace(/^.*\[web\] /, "")).slice(-4))}`);
+    expect(read.length).toBeGreaterThanOrEqual(2);
+    await browser.execute(() => {
+      const img = [...document.querySelectorAll('img[alt="Your Own AI"]')].find((i) => (i as HTMLElement).offsetParent !== null) as HTMLElement | undefined;
+      (img?.closest("button") as HTMLElement | null)?.click();
+    });
+    await browser.waitUntil(async () => (await browser.execute(() => location.pathname)) === "/chat/", { timeout: 30_000 });
+    await browser.execute(async () => { await (window as any).__yoaiCloseFolder?.(); });
+    await invoke("stop_build_agent").catch(() => {});
+  });
 });
