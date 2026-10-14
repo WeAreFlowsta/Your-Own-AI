@@ -595,7 +595,9 @@ export default component$(() => {
           resumeState.value = "idle";
           openingTitle.value = null;
           uiLog(`resume ${who}: a reply is ${isLive(turnHere) ? "running" : "just done"} here - shown at once, records read behind it`);
-          jumpToLatest();
+          // No jump: the reply's bubble anchors its question to the top (the
+          // same resting position as a send); a jump to the end lands on
+          // the bubble's reserved space instead.
         }
         // A resume fired right after launch (the Memory-page handoff or the
         // hero Continue line) can outrun the conductor - reads would come
@@ -675,7 +677,7 @@ export default component$(() => {
           if (el) el.scrollIntoView({ block: "center" });
           else jumpToLatest();
         }, 150);
-      } else {
+      } else if (!turnHere) {
         jumpToLatest();
       }
       const firstUser = messages.find((m) => m.role === "user");
@@ -1519,7 +1521,7 @@ export default component$(() => {
     const researchWords = /\b(analy[sz]e|analysis|compare|comparison|research|investigate|evaluate|review|dig (?:deeper|into)|look into|find out|everything about|in depth|thorough)\b/i.test(finalInput);
     const webQuestion =
       buildInstalled.value &&
-      selectedAi.value.aiConfig?.webAccess !== false &&
+      (selectedAi.value.aiConfig?.webAccess !== false || webOnceNext.value) &&
       addresses.length > 0 &&
       (researchWords || addresses.length > 1 || digDeeperNext.value) &&
       attachedImages.value.length === 0;
@@ -1688,7 +1690,10 @@ export default component$(() => {
     input.value = asked.content;
     if (target === "tools") forceToolsNext.value = true;
     if (target === "web-once") webOnceNext.value = true;
-    if (target === "dig-deeper") digDeeperNext.value = true;
+    // Dig deeper is offered after a page was read: the person's press carries
+    // the web for this turn too (an AI on "just this once" stayed web-off
+    // and the agent read nothing, dev 10-14).
+    if (target === "dig-deeper") { digDeeperNext.value = true; webOnceNext.value = true; }
     try {
       await handleSubmit();
     } finally {

@@ -1028,6 +1028,11 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
   const thinkingPreviewRef = useSignal<HTMLDivElement>();
   const rootRef = useSignal<HTMLDivElement>();
   const hasAnchoredStart = useSignal(false);
+  // This reply streamed (or is streaming) in this view - the only case the
+  // scroll reservation below is for. A reopened conversation's last reply
+  // never did: reserving for it made the open's jump-to-the-end land on
+  // an empty viewport with the tail of the action bar (Eric 10-14).
+  const everLoading = useSignal(false);
   const isGenerationPhase = useSignal(false);
   const thinkingBoxVisible = useSignal(false);
   const dynamicStatus = useSignal('');
@@ -1220,12 +1225,14 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(({ track }) => {
     const isLast = track(() => props.isLast);
+    const loading = track(() => props.message.isLoading);
+    if (loading) everLoading.value = true;
     if (!rootRef.value) return;
     // Agent turns are ONE bubble too (the rail lives inside it), so the
     // same reservation applies - without it the question only reaches the
     // top once enough rail content happens to have streamed, which made
     // follow-up anchoring a coin flip.
-    if (isLast && props.message.role === 'assistant') {
+    if (isLast && props.message.role === 'assistant' && (loading || everLoading.value)) {
       const container = rootRef.value.closest('.overflow-y-auto') as HTMLElement | null;
       rootRef.value.style.minHeight = container ? `${container.clientHeight}px` : '';
     } else {
