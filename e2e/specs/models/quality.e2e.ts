@@ -2,11 +2,14 @@
 // §A0, Eric 2026-10-12): eight plain questions with a deterministic rubric,
 // graded per model, the registry's family score printed beside each measured
 // grade. Slow (a load per model, eight answers each): a long timeout.
-import { invoke } from "./_helpers";
+import { invoke, waitForChat } from "./_helpers";
 
 describe("answer quality leg", () => {
   it("grades the installed models on plain questions and shows the registry score beside each", async function () {
     this.timeout(2_400_000);
+    // The app reopens on the page it was left on; only the chat page loads a
+    // model on its own (in a suite run the previous spec may have left Offline Models).
+    await waitForChat();
     await browser.waitUntil(async () => !!(await invoke<string | null>("get_current_model").catch(() => null)), { timeout: 180_000, timeoutMsg: "no model loaded" });
     const stamp = `quality-${Date.now().toString(36)}`;
     await browser.execute((st: string) => {

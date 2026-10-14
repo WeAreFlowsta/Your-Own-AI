@@ -50,7 +50,9 @@ describe("two AIs on one engine", () => {
     await selectAi("Reeves");
 
     await ask(LONG);
-    await browser.waitUntil(async () => (await turns()).some((t) => t.state === "running" && t.chars > 20), { timeout: 180_000, interval: 500, timeoutMsg: "Reeves never started streaming" });
+    // In a suite run the AI may carry documents from an earlier spec (a recall
+    // step) and the window may grow for the long answer: allow for both.
+    await browser.waitUntil(async () => (await turns()).some((t) => t.state === "running" && t.chars > 20), { timeout: 300_000, interval: 500, timeoutMsg: "Reeves never started streaming" });
     const reeves = (await turns()).find((t) => t.state === "running")!;
     console.log(`e2e: Reeves streaming ${JSON.stringify(reeves)}`);
 

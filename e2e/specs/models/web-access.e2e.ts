@@ -31,7 +31,7 @@ const clickOffer = (label: string) => browser.execute((l: string) => {
 
 describe("web access per AI", () => {
   it("refuses local addresses before any network I/O", async function () {
-    this.timeout(120_000);
+    this.timeout(400_000); // waitForChat may load the model first (a fresh app in a suite run)
     await waitForChat();
     for (const url of ["http://127.0.0.1:11435/health", "http://localhost:27777/", "https://printer.local/", "http://10.0.0.1/"]) {
       const said = await browser.execute(async (u: string) => {
