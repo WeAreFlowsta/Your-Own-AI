@@ -1455,10 +1455,11 @@ export default component$(() => {
     // this AI's web access on: the agent's own loop reads on and searches
     // when one page is not enough - the built-in web reader counts as a
     // carried tool for such a question.
+    const { findWebAddresses } = await import("../../utils/webAddresses");
     const webQuestion =
       buildInstalled.value &&
       selectedAi.value.aiConfig?.webAccess !== false &&
-      /https?:\/\//i.test(finalInput) &&
+      findWebAddresses(finalInput).length > 0 &&
       attachedImages.value.length === 0;
     const mayGate = (activeTools(selectedAi.value.aiConfig).length > 0 || webQuestion) && attachedImages.value.length === 0;
     if (mayGate && agentState.status !== "working" && !chatState.isLoading) {

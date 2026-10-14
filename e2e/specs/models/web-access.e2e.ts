@@ -87,6 +87,13 @@ describe("web access per AI", () => {
     expect(research.note).toContain("little to read");
     expect(research.offer).toContain("One page wasn't enough here");
     await shot("web-access-read");
+    // A bare domain, the way people type one, is an address too.
+    await ask("What is on example.com? One sentence.");
+    const bare = await waitForReplyDone(300_000);
+    console.log(`e2e: bare-domain reply ${JSON.stringify(bare.text.slice(0, 200))}`);
+    const b = bare.text.toLowerCase();
+    expect(b.includes("example") || b.includes("documentation") || b.includes("placeholder")).toBe(true);
+    expect(await browser.execute(() => !!document.querySelector('[data-testid="web-note"]'))).toBe(true);
     await browser.execute(() => {
       const b = [...(document.querySelector('[data-testid="build-offer"]')?.querySelectorAll("button") ?? [])].find((x) => x.textContent?.trim() === "Don't ask again") as HTMLElement | undefined;
       b?.click();

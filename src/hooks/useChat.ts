@@ -521,7 +521,8 @@ export function useChat(props: UseChatProps) {
       // like an attached document. Web access off: the reply carries the
       // offer line instead (a page named, or a question about now).
       {
-        const urls = [...userInput.matchAll(/https?:\/\/[^\s<>()"'\]]+/gi)].map((m) => m[0].replace(/[.,;:!?]+$/, "")).slice(0, 2);
+        const { findWebAddresses } = await import("../utils/webAddresses");
+        const urls = findWebAddresses(userInput);
         const askAgain = (() => { try { return localStorage.getItem(`web-offer-off:${selectedAi.id}`) !== "1"; } catch { return true; } })();
         uiLog(`[web] ${urls.length} address(es) in the question, web ${webAllowed ? "on" : "off"}${options?.webOnce ? " (just this once)" : ""}`);
         if (urls.length && webAllowed) {
