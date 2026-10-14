@@ -6,7 +6,7 @@
 import { homedir } from "node:os";
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { shot, waitForChat, invoke, ask } from "./_helpers";
+import { shot, waitForChat, invoke, ask, resetAiModels } from "./_helpers";
 
 const HELPER = resolve(homedir(), ".local/share/com.solar.yourowai/build/your-own-ai-build");
 const QUESTION = "Without using any tools, write about 150 words on why tea became popular in Britain, in plain paragraphs.";
@@ -14,6 +14,15 @@ const QUESTION = "Without using any tools, write about 150 words on why tea beca
 const turns = () => browser.execute(() => (window as any).__yoaiTurns?.() ?? []) as Promise<{ kind: string; state: string; chars: number; conv: string | null }[]>;
 
 describe("an agent turn keeps going when you leave the chat", () => {
+  after(async () => {
+    // The Build helper's path and the model pins are this spec's; the specs
+    // after it expect Build absent (the Build offer line) and automatic models.
+    await browser.execute(() => localStorage.removeItem("build-binary-path")).catch(() => {});
+    await browser.execute(async () => { await (window as any).__yoaiCloseFolder?.(); }).catch(() => {});
+    await invoke("stop_build_agent").catch(() => {});
+    await resetAiModels();
+  });
+
   it("runs on while Settings is open and is on the page and in the records on return", async function () {
     this.timeout(1_200_000);
     await waitForChat();
