@@ -75,6 +75,24 @@ export async function waitForReplyDone(timeout = 180_000) {
   return (await lastReply())!;
 }
 
+/** Specs share one profile in a suite run: a spec that pinned the AIs' models
+ *  puts them back to automatic, so the next spec meets the AIs it expects. */
+export async function resetAiModels() {
+  try {
+    await browser.execute(async () => {
+      const t = (window as any).__TAURI__;
+      const path = await t.core.invoke("profile_store_path", { name: "ai-data.json" });
+      const store = await t.store.load(path);
+      const ais = ((await store.get("custom-ais")) || []) as { model?: string }[];
+      for (const a of ais) a.model = "auto:offline";
+      await store.set("custom-ais", ais);
+      await store.save();
+    });
+  } catch (e) {
+    console.log(`e2e: could not reset the AIs' models: ${String(e).slice(0, 120)}`);
+  }
+}
+
 /** Tauri's invoke from inside the page (withGlobalTauri). */
 export const invoke = <T = unknown>(cmd: string, args: Record<string, unknown> = {}) =>
   browser.execute((c: string, a: Record<string, unknown>) => (window as any).__TAURI__.core.invoke(c, a) as Promise<T>, cmd, args) as Promise<T>;

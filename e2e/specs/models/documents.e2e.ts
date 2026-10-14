@@ -4,7 +4,13 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { shot, waitForChat, ask, waitForReplyDone, invoke } from "./_helpers";
 
+let addedFolder: string | null = null;
+
 describe("documents", () => {
+  after(async () => {
+    if (addedFolder) await invoke("corpus_folder_remove", { folderId: addedFolder, removeDocuments: true }).catch(() => {});
+  });
+
   it("answers from a synced notes folder", async () => {
     await waitForChat();
     // A scratch notes folder with one fact nothing else in the model knows.
@@ -22,6 +28,9 @@ describe("documents", () => {
     expect(aiId).toBeTruthy();
     const folderId = await invoke<string>("corpus_folder_add", { path: dir, aiId, kind: null });
     console.log(`e2e: folder added ${folderId}`);
+    // Leave nothing behind: the folder and its documents go when the test ends
+    // (every later turn of this AI would otherwise carry a recall step).
+    addedFolder = folderId;
     // Adding registers the folder; reading it is a sync. Ask for one and wait
     // until the note is in the AI's documents with its passages ready
     // (chunk_count > 0), then ask. Asking earlier gets an honest "no notes".

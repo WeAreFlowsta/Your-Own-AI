@@ -7,7 +7,7 @@
 // finished row brings Reeves's conversation back.
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import { shot, waitForChat, invoke, ask } from "./_helpers";
+import { shot, waitForChat, invoke, ask, resetAiModels } from "./_helpers";
 
 const SECOND_MODEL = "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf";
 const LONG = "Write about 2500 words on the history of tea across China, Japan, India, Russia, Morocco and Britain, in plain paragraphs with no headings. Take your time and cover each country in depth.";
@@ -24,6 +24,8 @@ const selectAi = async (label: string) => {
 };
 
 describe("two AIs on one engine", () => {
+  after(async () => { await resetAiModels(); });
+
   it("queues the second local reply visibly and lets both finish", async function () {
     this.timeout(1_200_000);
     await waitForChat();

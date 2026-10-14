@@ -1,7 +1,7 @@
 // Web access per AI (NEXT.md: fetch for everyone, local, free; the switch is
 // ON by default; the offer line when it is off). Needs the network for
 // example.com; the page is read on this computer.
-import { shot, waitForChat, invoke, ask, waitForReplyDone, lastReply } from "./_helpers";
+import { shot, waitForChat, invoke, ask, waitForReplyDone, lastReply, resetAiModels } from "./_helpers";
 
 const PAGE_QUESTION = "Read https://example.com/ and tell me in one sentence what that page says.";
 const LIVE_QUESTION = "What is the weather in Paris right now?";
@@ -30,6 +30,21 @@ const clickOffer = (label: string) => browser.execute((l: string) => {
 }, label);
 
 describe("web access per AI", () => {
+  after(async () => {
+    // Web access back on for every AI (the last leg does this too, but a failed leg must not leave it off).
+    await browser.execute(async () => {
+      const t = (window as any).__TAURI__;
+      const path = await t.core.invoke("profile_store_path", { name: "ai-data.json" });
+      const store = await t.store.load(path);
+      const ais = ((await store.get("custom-ais")) || []) as { webAccess?: boolean }[];
+      for (const a of ais) a.webAccess = true;
+      await store.set("custom-ais", ais);
+      await store.save();
+    }).catch(() => {});
+    await browser.execute(() => { localStorage.removeItem("web-offer-off"); localStorage.removeItem("build-offer-off"); }).catch(() => {});
+    await resetAiModels();
+  });
+
   it("refuses local addresses before any network I/O", async function () {
     this.timeout(400_000); // waitForChat may load the model first (a fresh app in a suite run)
     await waitForChat();
