@@ -26,7 +26,7 @@ import { beginTurn, updateTurn, endTurn, dropTurn, getTurn, liveTurnFor, abortTu
 import { extractAndStoreFacts, looksLikeUserFact } from "../utils/memoryExtraction";
 import { isUtilityModelReady } from "../utils/utilityModel";
 import { groundDocument, type GroundedSource } from "../utils/grounding";
-import { loadMemoryBlock, loadDocumentContextUsed, followUpQuery, memoryLine } from "../utils/memory";
+import { loadMemoryBlock, loadDocumentContextUsed, followUpQuery, memoryLine, RECALL_BEST_FOR_PAGE_QUESTION } from "../utils/memory";
 import { indexTurn } from "../utils/transcriptMemory";
 import { boundaryIndex } from "../utils/replyBoundary";
 import { llamaServerApi } from "../utils/llamaServerApi";
@@ -522,9 +522,13 @@ export function useChat(props: UseChatProps) {
       // offer line instead (a page named, or a question about now).
       const pagesRead: { title: string; url: string }[] = [];
       let buildPresent = false;
+      // A question that names a page has its material in the page: the AI's
+      // documents join only on a strong match (see the recall below).
+      let addressesInQuestion = 0;
       {
         const { findWebAddresses } = await import("../utils/webAddresses");
         const urls = findWebAddresses(userInput);
+        addressesInQuestion = urls.length;
         const askAgain = (() => { try { return localStorage.getItem(`web-offer-off:${selectedAi.id}`) !== "1"; } catch { return true; } })();
         uiLog(`[web] ${urls.length} address(es) in the question, web ${webAllowed ? "on" : "off"}${options?.webOnce ? " (just this once)" : ""}`);
         if (urls.length && webAllowed) {
@@ -1570,7 +1574,10 @@ export function useChat(props: UseChatProps) {
           const followUpVec = followUp
             ? await import("../utils/embeddings").then(({ embedQuery }) => embedQuery(followUp)).catch(() => null)
             : null;
-          const recalled = await loadDocumentContextUsed(selectedAi.id, qvec, room, 8, followUpVec);
+          const recalled = await loadDocumentContextUsed(
+            selectedAi.id, qvec, room, 8, followUpVec,
+            addressesInQuestion > 0 ? RECALL_BEST_FOR_PAGE_QUESTION : undefined,
+          );
           docContext = recalled.text;
           libraryGiven = recalled.used;
           if (docContext) {

@@ -17,7 +17,7 @@ import { useAgentSession, readRecentFolders, resolveBinaryPath } from "../../hoo
 import { permissionModeForTools, setPermissionModeForTools, type AgentPermissionMode } from "../../utils/agentPermissions";
 import { ConversationsDrawer } from "../../components/ConversationsDrawer";
 import { useTurns } from "../../contexts/TurnsContext";
-import { abortTurn, isLive, liveAgentTurn, engineHolder, noteOpenConversation, takePendingOpen, TURN_OPEN_EVENT, type Turn, allTurns } from "../../utils/turns";
+import { abortTurn, isLive, liveAgentTurn, engineHolder, noteOpenConversation, takePendingOpen, TURN_OPEN_EVENT, type Turn, allTurns, getTurn, dropTurn } from "../../utils/turns";
 import OnlineModelsDoor from "../../components/OnlineModelsDoor";
 import { loadModelBounded } from "../../utils/loadModelBounded";
 import { uiLog } from "../../utils/uiLog";
@@ -1397,8 +1397,16 @@ export default component$(() => {
     copiedFrom.value = null;
     const dropReplacedTurn = () => {
       if (replaceTurnFrom.value < 0) return;
+      const replaced = chatState.messages.slice(replaceTurnFrom.value);
       chatState.messages = chatState.messages.slice(0, replaceTurnFrom.value);
       replaceTurnFrom.value = -1;
+      // The replaced reply's turn may still linger at the root (the tray's
+      // "answered" row): gone from here, or the page re-attaches it under
+      // the new bubble (10-14: the old answer came back below the resend).
+      for (const m of replaced) {
+        const t = getTurn(m.id);
+        if (t && !isLive(t)) dropTurn(m.id);
+      }
     };
     // What a session turn is told beside the question: attached files, AND
     // the passages of the AI's own documents that match it - the same ones a
@@ -1413,18 +1421,21 @@ export default component$(() => {
       let library: LibraryDocGiven[] = [];
       try {
         const { embedQuery } = await import("../../utils/embeddings");
-        const { loadDocumentContextUsed, followUpQuery } = await import("../../utils/memory");
+        const { loadDocumentContextUsed, followUpQuery, RECALL_BEST_FOR_PAGE_QUESTION } = await import("../../utils/memory");
+        const { findWebAddresses } = await import("../../utils/webAddresses");
         // A follow-up is also searched together with the question before it.
         const before = [...chatState.messages].reverse().find((m) => m.role === "user")?.content;
         const followUp = followUpQuery(before, question);
         // A session's own prompt and tool definitions are large: a modest,
-        // fixed share of the window, not everything that would fit.
+        // fixed share of the window, not everything that would fit. A
+        // question that names a page takes documents only on a strong match.
         const recalled = await loadDocumentContextUsed(
           selectedAi.value.id,
           await embedQuery(question),
           2000,
           6,
           followUp ? await embedQuery(followUp) : null,
+          findWebAddresses(question).length > 0 ? RECALL_BEST_FOR_PAGE_QUESTION : undefined,
         );
         remembered = recalled.text;
         library = recalled.used;

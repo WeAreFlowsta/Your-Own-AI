@@ -691,6 +691,10 @@ export function removePendingTurn(id: string): void {
  *  the wrong ones; verify on a real library through the `documents: best
  *  match` log line (bge's bar was 0.66 on a 0.62-0.75 band). */
 export const RECALL_BEST_AT_LEAST = 0.30;
+/** A question that names a web page has its material in the page: the AI's
+ *  documents join only on a strong match (Eric 10-14: "analyse flowsta.com"
+ *  pulled in diffusion-model papers at 0.34 and the reply was spent on them). */
+export const RECALL_BEST_FOR_PAGE_QUESTION = 0.50;
 /** How far below the best match a passage may score and still be given. */
 /** EmbeddingGemma spreads scores ~1.7x wider than bge (mean right-vs-wrong
  *  margin 0.37 vs 0.20), so the margin that keeps the same company grows. */
@@ -745,6 +749,7 @@ export async function loadDocumentContextUsed(
   roomTokens: number,
   maxPassages = 8,
   followUpVec: number[] | null = null,
+  bestAtLeast: number = RECALL_BEST_AT_LEAST,
 ): Promise<{ text: string; used: import("../types").LibraryDocGiven[] }> {
   const none = { text: "", used: [] };
   if (!aiId || roomTokens <= 0) return none;
@@ -803,13 +808,13 @@ export async function loadDocumentContextUsed(
       // unrelated one. A passage has to be within RECALL_MARGIN of the top.
       const found = hits.length;
       const top = found ? Math.max(...hits.map((h) => h.score)) : 0;
-      hits = keepNearBest(hits);
+      hits = keepNearBest(hits, RECALL_MARGIN, bestAtLeast);
       // Scores only, never a name or a passage - for tuning the two numbers.
       console.log(
-        `[Memory] documents: best match ${top.toFixed(2)} (bar ${RECALL_BEST_AT_LEAST}) - ${hits.length} of ${found} passages given`,
+        `[Memory] documents: best match ${top.toFixed(2)} (bar ${bestAtLeast}) - ${hits.length} of ${found} passages given`,
       );
       void import("./uiLog").then(({ uiLog }) =>
-        uiLog(`documents: best match ${top.toFixed(2)}, bar ${RECALL_BEST_AT_LEAST} - ${hits.length} of ${found} passages given`),
+        uiLog(`documents: best match ${top.toFixed(2)}, bar ${bestAtLeast} - ${hits.length} of ${found} passages given`),
       ).catch(() => {});
       if (hits.length > 0) {
         const byDoc = new Map<string, { name: string; texts: string[]; best: number }>();
