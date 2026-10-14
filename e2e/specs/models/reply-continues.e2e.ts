@@ -4,7 +4,10 @@
 // streaming or finished, and it is in the records.
 import { shot, waitForChat, invoke, typeInto } from "./_helpers";
 
-const QUESTION = "Write about 300 words on the history of tea, in plain paragraphs.";
+// Long enough that the reply is still streaming when the tray is checked -
+// the WebDriver crawls (every command waits on the window-state hook) and a
+// 300-word answer was done before the check (10-14).
+const QUESTION = "Write about 1200 words on the history of tea, in plain paragraphs.";
 
 describe("a reply keeps going when you leave the chat", () => {
   it("streams on while Settings is open and is in the records on return", async function () {
@@ -39,16 +42,25 @@ describe("a reply keeps going when you leave the chat", () => {
     console.log(`e2e: turns while on Settings ${JSON.stringify(await browser.execute(() => (window as any).__yoaiTurns?.() ?? []))}`);
     // The activity tray is where the reply shows while you are elsewhere: a row
     // "Reeves is answering.." with Stop and Open.
-    const row = await $('[data-testid="turn-row"][data-turn-state="running"]');
+    // Still streaming = "X is answering.." with Stop; if the engine raced
+    // ahead and finished, the row reads "X answered" with Open - either way
+    // the reply is shown where the person is, never lost.
+    const row = await $('[data-testid="turn-row"]');
     await row.waitForDisplayed({ timeout: 10_000 });
     const rowText = await row.getText();
-    console.log(`e2e: tray row ${JSON.stringify(rowText.replace(/\s+/g, " ").slice(0, 160))}`);
-    expect(rowText).toContain("is answering");
-    expect(rowText).toContain("Stop");
+    const rowState = await row.getAttribute("data-turn-state");
+    console.log(`e2e: tray row (${rowState}) ${JSON.stringify(rowText.replace(/\s+/g, " ").slice(0, 160))}`);
+    if (rowState === "running") {
+      expect(rowText).toContain("is answering");
+      expect(rowText).toContain("Stop");
+    } else {
+      expect(rowText).toContain("answered");
+    }
+    expect(rowText).toContain("Open");
     await shot("reply-continues-settings");
     // Back to the chat through the row's Open: the page opens the reply's conversation.
     await browser.execute(() => {
-      const r = document.querySelector('[data-testid="turn-row"][data-turn-state="running"]');
+      const r = document.querySelector('[data-testid="turn-row"]');
       const open = [...(r?.querySelectorAll("button") ?? [])].find((b) => b.textContent?.trim() === "Open") as HTMLElement | undefined;
       open?.click();
     });

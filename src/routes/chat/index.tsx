@@ -76,6 +76,14 @@ interface SystemInfo {
   total_vram_gb: number | null;
 }
 
+/** The turn's answer is already on the page - by id, or by text when the
+ *  records (which give resumed messages fresh ids) hold it. */
+function turnShown(t: Turn, messages: Message[]): boolean {
+  return messages.some(
+    (m) => m.id === t.assistant.id || (m.role === "assistant" && !!t.assistant.content && m.content === t.assistant.content),
+  );
+}
+
 export default component$(() => {
   const nav = useNavigate();
   const { theme } = useContext(ThemeContext);
@@ -172,13 +180,16 @@ export default component$(() => {
   const attached = useComputed$(() => {
     const hash = chatState.conversationHash;
     if (!hash) return null;
-    const t = turnsState.turns.find((x) => x.conversationHash === hash && !chatState.messages.some((m) => m.id === x.assistant.id));
+    // Records give resumed messages fresh ids, so a turn that ended and was
+    // recorded before the records were read is matched by its text too -
+    // otherwise the answer would show twice.
+    const t = turnsState.turns.find((x) => x.conversationHash === hash && !turnShown(x, chatState.messages));
     return t ?? null;
   });
   useTask$(({ track }) => {
     const t = track(() => attached.value);
     if (!t || isLive(t)) return;
-    if (!chatState.messages.some((m) => m.id === t.assistant.id)) {
+    if (!turnShown(t, chatState.messages)) {
       const base = withoutUnansweredPlaceholder(chatState.messages);
       // A bubble that never got anything (cancelled before output) is noise.
       const empty = t.assistant.content === "" && !(t.assistant.agentLog ?? []).length && !t.assistant.error;
@@ -553,6 +564,7 @@ export default component$(() => {
       conversationsOpen.value = false;
       let loaded: Awaited<ReturnType<typeof loadConversationMessages>>;
       let ai = selectedAi.value;
+      const turnHere = allTurns().find((x) => x.conversationHash === target.hash) ?? null;
       try {
         // Match the AI by agent key first (robust), then by id.
         ai =
@@ -572,6 +584,19 @@ export default component$(() => {
         // the next click, chunk cached, opened fine).
         await resetChat();
         copiedFrom.value = null;
+        // A reply of this conversation still running at the root (or done
+        // moments ago): show it NOW - setting the hash makes `attached`
+        // render it - and read the records behind it. A records read while
+        // the engine streams can take a minute (10-14: "Opening" for 70 s
+        // with the answer sitting at the root the whole time).
+        if (turnHere) {
+          chatState.conversationHash = target.hash;
+          chatState.cacheKey = target.hash;
+          resumeState.value = "idle";
+          openingTitle.value = null;
+          uiLog(`resume ${who}: a reply is ${isLive(turnHere) ? "running" : "just done"} here - shown at once, records read behind it`);
+          jumpToLatest();
+        }
         // A resume fired right after launch (the Memory-page handoff or the
         // hero Continue line) can outrun the conductor - reads would come
         // back empty and the conversation would look blank or unanswered.
@@ -581,7 +606,7 @@ export default component$(() => {
         // there made "Continue" a dead click - poll through the window with
         // a visible state instead (utils/recordsWarmup).
         loaded = await loadConversationMessages(target.agentKey, target.hash, ai, target.source);
-        while (loaded.messages.length === 0 && !loaded.copiedFrom && emptyMayBeWarmup() && resumeGeneration.value === gen) {
+        while (loaded.messages.length === 0 && !loaded.copiedFrom && !turnHere && emptyMayBeWarmup() && resumeGeneration.value === gen) {
           resumeState.value = "warming";
           await new Promise((r) => setTimeout(r, WARMUP_POLL_MS));
           loaded = await loadConversationMessages(target.agentKey, target.hash, ai, target.source);
@@ -611,7 +636,9 @@ export default component$(() => {
         messages.length === 0 ? "warn" : "info",
       );
       if (messages.length > 0) noteRecordsSeen();
-      if (messages.length === 0 && loaded.copiedFrom) {
+      if (messages.length === 0 && turnHere) {
+        // Nothing recorded yet, the reply here is the conversation so far.
+      } else if (messages.length === 0 && loaded.copiedFrom) {
         resumeWarning.value = `Couldn't read the copy from ${copiedFrom.value ?? "your other device"} just now. Try again in a moment.`;
       } else if (messages.length === 0) {
         // The read didn't answer (slow or unwell records cell) - say so.
@@ -620,7 +647,22 @@ export default component$(() => {
         return;
       }
       resumeWarning.value = null;
-      chatState.messages = messages;
+      if (turnHere) {
+        // The turn's messages may already be on the page (folded in when it
+        // ended while the records were read). Keep them unless the records
+        // hold the same text; the web-off notice rides along either way -
+        // it is not in the record (10-14: the notice was lost on return).
+        const base = withoutUnansweredPlaceholder(messages);
+        const folded = chatState.messages.filter((m) => m.id === turnHere.user.id || m.id === turnHere.assistant.id);
+        for (const m of folded) {
+          const i = base.findIndex((b) => b.id === m.id || (b.role === m.role && b.content === m.content));
+          if (i === -1) base.push(m);
+          else if (m.needsWeb) base[i] = { ...base[i], needsWeb: m.needsWeb };
+        }
+        chatState.messages = base;
+      } else {
+        chatState.messages = messages;
+      }
       chatState.conversationHash = target.hash;
       chatState.cacheKey = target.hash;
       chatState.messageSequence = nextSequence;

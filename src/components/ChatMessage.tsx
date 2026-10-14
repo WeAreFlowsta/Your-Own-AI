@@ -414,6 +414,8 @@ const ActionBar = component$<ActionBarProps>((props) => {
   const hasTokens = props.message.tokens && (props.message.tokens.total_tokens || 0) > 0;
   const hasThoughts = !!props.message.thinking && props.message.thinking.trim().length >= MIN_THINKING_DISPLAY_CHARS;
   const hasSources = props.message.sources && props.message.sources.length > 0;
+  // What the web step found (a thin page, nothing more on the site): provenance, shown with the sources.
+  const hasWebNote = !!props.message.webNote;
   const hasGrounded = !!props.message.grounded && props.message.grounded.length > 0;
   // The AI's own documents whose passages it was given for this reply.
   const hasLibrary = !!props.message.library && props.message.library.length > 0;
@@ -424,7 +426,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
   // The rail no longer folds whole: its header carries the summary and
   // the Simple | Detailed control, so the action bar has no Steps button.
   const hasSteps = false;
-  const hasButtons = hasSteps || hasTokens || hasThoughts || hasSources || hasGrounded || hasLibrary || canGround || !!props.message.groundingPending || !!props.message.groundingNote || hasModelInfo;
+  const hasButtons = hasSteps || hasTokens || hasThoughts || hasSources || hasWebNote || hasGrounded || hasLibrary || canGround || !!props.message.groundingPending || !!props.message.groundingNote || hasModelInfo;
   const showStatus = props.isLoading && !props.message.error;
 
   // Nothing to say and nothing to offer: render nothing. (The empty bar
@@ -556,61 +558,9 @@ const ActionBar = component$<ActionBarProps>((props) => {
           </div>
         )}
 
-        {/* What the research step did, and - when one page was not enough and
-            the Build helper is not installed - the one-line offer of it. */}
-        {props.isLast && props.message.webNote && !props.message.isLoading && !!props.message.content && (
-          <span class="text-xs text-[var(--text-muted)]" data-testid="web-note">{props.message.webNote}</span>
-        )}
-        {props.isLast &&
-          props.message.digDeeper &&
-          !props.message.isLoading &&
-          !!props.message.content &&
-          props.onRouteRetry$ && (
-            <div class="flex flex-wrap items-center gap-2 text-xs text-[var(--text-muted)]" data-testid="dig-deeper">
-              <span>Looked at {props.message.sources?.length === 1 ? "one page" : `${props.message.sources?.length ?? 0} pages`}.</span>
-              <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={() => props.onRouteRetry$!('dig-deeper')} title="Hand the same question to the Build helper: it reads on and searches when it needs to">
-                Dig deeper
-              </button>
-            </div>
-          )}
-        {props.isLast &&
-          props.message.buildOffer &&
-          !props.message.isLoading &&
-          !!props.message.content &&
-          props.onRouteRetry$ && (
-            <div class="flex flex-wrap items-center gap-2 text-xs text-[var(--text-muted)]" data-testid="build-offer">
-              <span>One page wasn't enough here. The Build helper can research further, reading on and searching when it needs to.</span>
-              <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={() => props.onRouteRetry$!('build-install')}>
-                Install
-              </button>
-              <button type="button" class="hover:text-[var(--text-secondary)]" onClick$={() => props.onRouteRetry$!('build-dismiss')}>
-                Not now
-              </button>
-              <button type="button" class="hover:text-[var(--text-secondary)]" onClick$={() => props.onRouteRetry$!('build-never')}>
-                Don't ask again
-              </button>
-            </div>
-          )}
-        {/* The question needed the web and this AI's web access is off: one
-            line, three doors - never a modal, only when the web was needed. */}
-        {props.isLast &&
-          props.message.needsWeb &&
-          !props.message.isLoading &&
-          !!props.message.content &&
-          props.onRouteRetry$ && (
-            <div class="flex flex-wrap items-center gap-2 text-xs text-[var(--text-muted)]" data-testid="web-offer">
-              <span>This needs the web, which is off for this AI.</span>
-              <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={() => props.onRouteRetry$!('web-on')}>
-                Turn on web access for this AI
-              </button>
-              <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={() => props.onRouteRetry$!('web-once')}>
-                Just this once
-              </button>
-              <button type="button" class="hover:text-[var(--text-secondary)]" onClick$={() => props.onRouteRetry$!('web-never')}>
-                Don't ask again for this AI
-              </button>
-            </div>
-          )}
+        {/* No sentences in the action bar (Eric 10-14): what the web step did
+            lives in Sources; the one offer for the last reply lives above the
+            composer (ChatInputBar). */}
 
         {/* Spacer to push buttons right */}
         <div class="flex-grow" />
@@ -742,7 +692,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
                 </span>
               </LiquidMetalButton>
             )}
-            {(hasSources || hasGrounded || hasLibrary || !!props.message.groundingNote) && (
+            {(hasSources || hasWebNote || hasGrounded || hasLibrary || !!props.message.groundingNote) && (
               <LiquidMetalButton
                 onClick$={() => toggleSection$('sources')}
                 testId="reply-sources"
@@ -894,7 +844,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
       )}
 
       {openSection.value === 'sources' &&
-        (hasSources || hasGrounded || hasLibrary || props.message.groundingPending || props.message.groundingNote) && (
+        (hasSources || hasWebNote || hasGrounded || hasLibrary || props.message.groundingPending || props.message.groundingNote) && (
         <div class="px-4 pb-4 -mt-2 text-[var(--text-primary)] text-base leading-relaxed tracking-normal font-light">
           <div class="pt-4 space-y-4">
             {/* Verify-sources outcome lives here, where located quotes would
@@ -932,7 +882,13 @@ const ActionBar = component$<ActionBarProps>((props) => {
                     </li>
                   ))}
                 </ul>
+                {hasWebNote && (
+                  <p class="mt-2 text-sm text-[var(--text-secondary)]" data-testid="web-note">{props.message.webNote}</p>
+                )}
               </div>
+            )}
+            {!hasSources && hasWebNote && (
+              <p class="text-sm text-[var(--text-secondary)]" data-testid="web-note">{props.message.webNote}</p>
             )}
             {hasGrounded && (
               <div>

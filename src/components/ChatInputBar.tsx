@@ -11,7 +11,17 @@ import type { AgentPermissionMode } from '../utils/agentPermissions';
 import type { UserDefinedAI } from '../types';
 import { CarryChip } from './CarryChip';
 
+/** The one door offered for the last reply, above the composer. */
+export type ReplyOffer =
+  | { messageId: string; kind: 'web-off'; needsWeb: 'page' | 'live' }
+  | { messageId: string; kind: 'dig-deeper'; pages: number }
+  | { messageId: string; kind: 'build' };
+export type ReplyOfferTarget = 'web-once' | 'web-on' | 'web-never' | 'build-install' | 'build-dismiss' | 'build-never' | 'dig-deeper';
+
 interface ChatInputBarProps {
+  /** See ReplyOffer: at most one, for the last reply, gone on the next message. */
+  replyOffer?: ReplyOffer | null;
+  onReplyOffer$?: QRL<(id: string, target: ReplyOfferTarget) => void>;
   input: Signal<string>;
   /** The chip beside the model chip: what this AI carries (tools, skills),
    *  each on or off, approvals for tools, and the helper install if missing. */
@@ -46,6 +56,8 @@ interface ChatInputBarProps {
 }
 
 export const ChatInputBar = component$<ChatInputBarProps>(({
+  replyOffer,
+  onReplyOffer$,
   carry,
   onCarryChanged$,
   onToolsPermission$,
@@ -138,6 +150,12 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
     : 'anything..';
 
   const aiSelectorPositionClass = isBottomBar ? 'absolute bottom-full mb-1' : 'absolute mt-1';
+  // The one offer for the last reply (see ReplyOffer) - plain consts here so
+  // the click closures below capture render-scope values only.
+  const offer = replyOffer ?? null;
+  const offerGo = onReplyOffer$;
+  const offerLink = "font-medium text-[var(--text-link)] hover:underline";
+  const offerQuiet = "text-[var(--text-muted)] hover:text-[var(--text-secondary)]";
 
   return (
     <div class="max-w-4xl mx-auto w-full">
@@ -145,6 +163,32 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
         <Callout intent="success" title="Your AIs can now go online" id={ONLINE_UNLOCK_TIP_ID} class="mb-3">
           Change to Auto - Online and Offline to let the AI pick a model, or choose an
           online model from the {showModelChip.value ? "list at the end of the Ask row" : "model list on each card in Your AIs"}.
+        </Callout>
+      )}
+      {offer && offerGo && (
+        <Callout intent={offer.kind === 'web-off' ? 'warning' : 'info'} class="mb-2 !p-3">
+          {offer.kind === 'web-off' && (
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="web-offer">
+              <span>{offer.needsWeb === 'page' ? 'Answered without reading the page.' : 'Answered without looking online.'} Web access is off for this AI.</span>
+              <button type="button" class={offerLink} onClick$={() => offerGo(offer.messageId, 'web-on')}>Turn on web access for this AI</button>
+              <button type="button" class={offerLink} onClick$={() => offerGo(offer.messageId, 'web-once')}>Just this once</button>
+              <button type="button" class={offerQuiet} onClick$={() => offerGo(offer.messageId, 'web-never')}>Don't ask again for this AI</button>
+            </div>
+          )}
+          {offer.kind === 'dig-deeper' && (
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="dig-deeper">
+              <span>Looked at {offer.pages === 1 ? 'one page' : `${offer.pages} pages`}.</span>
+              <button type="button" class={offerLink} onClick$={() => offerGo(offer.messageId, 'dig-deeper')} title="Hand the same question to the Build helper, which reads on and searches when it needs to">Dig deeper</button>
+            </div>
+          )}
+          {offer.kind === 'build' && (
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="build-offer">
+              <span>One page wasn't enough here. The Build helper can research further, reading on and searching when it needs to.</span>
+              <button type="button" class={offerLink} onClick$={() => offerGo(offer.messageId, 'build-install')}>Install</button>
+              <button type="button" class={offerQuiet} onClick$={() => offerGo(offer.messageId, 'build-dismiss')}>Not now</button>
+              <button type="button" class={offerQuiet} onClick$={() => offerGo(offer.messageId, 'build-never')}>Don't ask again</button>
+            </div>
+          )}
         </Callout>
       )}
       <div class={isBottomBar ? 'mb-2' : 'mb-3'}>

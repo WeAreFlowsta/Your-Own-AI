@@ -5,7 +5,7 @@ import { AgentPermissionCard } from './AgentPermissionCard';
 import InitialView from './InitialView';
 import ConversationView from './ConversationView';
 import SelectionRemember from './SelectionRemember';
-import { ChatInputBar } from './ChatInputBar';
+import { ChatInputBar, type ReplyOffer } from './ChatInputBar';
 import { Message, SelectedAiModel, ChatAction, AttachedFile, AttachedImage } from '../types';
 
 type SidePanelContent = { messageId: string; codeString: string; language: string; } | null;
@@ -153,6 +153,21 @@ export default component$<ChatContainerProps>((props) => {
   const setSidePanelContent$ = $((content: { messageId: string; codeString: string; language: string; } | null) => { props.sidePanelContent.value = content; });
   const setIsSidePanelVisible$ = $((v: boolean) => { props.isSidePanelVisible.value = v; });
 
+  // The one offer for the last reply, shown above the composer - never
+  // under the reply, never two at once (Eric 10-14). Web off outranks the
+  // rest: the person asked for a page and got an answer without it.
+  const lastReply = messages[messages.length - 1];
+  const replyOffer: ReplyOffer | null =
+    !props.isLoading && lastReply?.role === 'assistant' && !lastReply.isLoading && !!lastReply.content
+      ? lastReply.needsWeb
+        ? { messageId: lastReply.id, kind: 'web-off', needsWeb: lastReply.needsWeb }
+        : lastReply.digDeeper
+          ? { messageId: lastReply.id, kind: 'dig-deeper', pages: lastReply.sources?.length ?? 0 }
+          : lastReply.buildOffer
+            ? { messageId: lastReply.id, kind: 'build' }
+            : null
+      : null;
+
   // Show InitialView when there are no messages
   // (WelcomeModal handles first-time setup, banner handles errors when submitting without models)
   if (messages.length === 0) {
@@ -263,6 +278,8 @@ export default component$<ChatContainerProps>((props) => {
           handleSubmit$={props.handleSubmit$}
           isLoading={props.isLoading}
           aiSwitchLocked={props.aiSwitchLocked}
+          replyOffer={replyOffer}
+          onReplyOffer$={props.retry$}
           stopChat$={props.stopChat$}
           currentPlaceholder={props.currentPlaceholder}
           readOnlyReason={props.readOnlyReason}
