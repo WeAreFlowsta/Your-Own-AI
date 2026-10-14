@@ -127,9 +127,43 @@ describe("web access per AI", () => {
     // The same question again, this time with the page read: a new turn at the
     // root (the bubble itself can come and go between two slow polls).
     await browser.waitUntil(async () => ((await browser.execute(() => (window as any).__yoaiTurns?.() ?? [])) as { id: string }[]).some((t) => !before.includes(t.id)), { timeout: 120_000, timeoutMsg: "the question was not asked again" });
+    const turnOf = async () => ((await browser.execute(() => (window as any).__yoaiTurns?.() ?? [])) as { id: string; state: string }[]).find((t) => !before.includes(t.id));
+    // The loop Eric does by hand (10-14): leave the chat while the resend runs,
+    // come back through the tray - the page shows ONE question and ONE reply
+    // (the live one), never the replaced web-off answer above it.
+    await (await $('button[title^="Menu"]')).click();
+    await browser.execute(() => {
+      const item = [...document.querySelectorAll('[role="menuitem"]')].find((b) => (b as HTMLElement).innerText.trim().startsWith("Settings")) as HTMLElement | undefined;
+      item?.click();
+    });
+    await browser.waitUntil(async () => (await browser.execute(() => location.pathname)) === "/settings/", { timeout: 30_000, timeoutMsg: "Settings never opened" });
+    await new Promise((r) => setTimeout(r, 3000));
+    const rowOpened = await browser.execute(() => {
+      const r = document.querySelector('[data-testid="turn-row"]');
+      const open = [...(r?.querySelectorAll("button") ?? [])].find((b) => b.textContent?.trim() === "Open") as HTMLElement | undefined;
+      open?.click();
+      return !!open;
+    });
+    console.log(`e2e: tray Open on Settings: ${rowOpened}`);
+    if (!rowOpened) {
+      // The resend already ended and its row is gone: the drawer opens it instead.
+      await browser.url("tauri://localhost/chat/");
+      await waitForChat();
+    }
+    await browser.waitUntil(async () => (await browser.execute(() => location.pathname)) === "/chat/", { timeout: 30_000, timeoutMsg: "the chat never reopened" });
+    await new Promise((r) => setTimeout(r, 4000));
+    const onReturn = await browser.execute(() => ({
+      users: document.querySelectorAll('[data-testid="chat-message"][data-role="user"]').length,
+      assistants: document.querySelectorAll('[data-testid="chat-message"][data-role="assistant"]').length,
+      unanswered: document.body.innerText.includes("never got an answer"),
+    }));
+    console.log(`e2e: on return ${JSON.stringify(onReturn)}`);
+    expect(onReturn.users).toBe(1);
+    expect(onReturn.assistants).toBe(1);
+    expect(onReturn.unanswered).toBe(false);
+    await shot("web-access-once-return");
     // Judge the NEW turn (the bubble list is rebuilt under the resend): wait for
     // it to end, then read the last reply.
-    const turnOf = async () => ((await browser.execute(() => (window as any).__yoaiTurns?.() ?? [])) as { id: string; state: string }[]).find((t) => !before.includes(t.id));
     await browser.waitUntil(async () => { const t = await turnOf(); return !!t && t.state !== "running" && t.state !== "queued"; }, { timeout: 300_000, interval: 1000, timeoutMsg: "the resend never ended" });
     const resent = await turnOf();
     const again = await waitForReplyDone(60_000);
@@ -144,6 +178,40 @@ describe("web access per AI", () => {
     expect(t.includes("example") || t.includes("illustrative") || t.includes("documentation")).toBe(true);
     expect(await offerShown()).toBe(false);
     await shot("web-access-once");
+    // Reopened from the RECORDS (New chat, then the drawer): the records hold
+    // both answers, the page shows the question once with its latest answer,
+    // and the page it read is in Sources.
+    await (await $('[data-testid="new-chat"]')).click();
+    await browser.waitUntil(() => browser.execute(() => document.querySelectorAll('[data-testid="chat-message"]').length === 0), { timeout: 10_000, timeoutMsg: "New chat did not clear the page" });
+    await (await $('[data-testid="conversations-open"]')).click();
+    const item = await $('[data-testid="conversation-item"]');
+    await item.waitForDisplayed({ timeout: 20_000 });
+    // The row's first button is the open; a click on the row itself can land
+    // beside it.
+    const opened = await browser.execute(() => {
+      const items = [...document.querySelectorAll('[data-testid="conversation-item"]')];
+      const first = items[0];
+      const b = first?.querySelector("button") as HTMLElement | undefined;
+      b?.click();
+      return { count: items.length, title: (first as HTMLElement | undefined)?.innerText.replace(/\s+/g, " ").slice(0, 80) ?? "", clicked: !!b };
+    });
+    console.log(`e2e: drawer ${JSON.stringify(opened)}`);
+    expect(opened.clicked).toBe(true);
+    await browser.waitUntil(async () => {
+      const r = await lastReply();
+      return !!r && r.state === "done" && r.text.length > 20;
+    }, { timeout: 120_000, interval: 1000, timeoutMsg: "the conversation did not reopen from the records" });
+    const reopened = await browser.execute(() => ({
+      users: document.querySelectorAll('[data-testid="chat-message"][data-role="user"]').length,
+      assistants: document.querySelectorAll('[data-testid="chat-message"][data-role="assistant"]').length,
+      sources: !!document.querySelector('[data-testid="reply-sources"]'),
+      last: ([...document.querySelectorAll('[data-testid="chat-message"][data-role="assistant"]')].pop() as HTMLElement | undefined)?.innerText.slice(0, 120) ?? "",
+    }));
+    console.log(`e2e: reopened from records ${JSON.stringify(reopened)}`);
+    expect(reopened.users).toBe(1);
+    expect(reopened.assistants).toBe(1);
+    expect(reopened.sources).toBe(true);
+    await shot("web-access-once-reopened");
   });
 
   it("stops offering for this AI on request", async function () {

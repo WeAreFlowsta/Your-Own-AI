@@ -139,7 +139,7 @@ export async function loadConversationMessages(
   // time, then the hash, settles the order the same way everywhere.
   entries.sort((a, b) => a.sequence - b.sequence || a.timestamp - b.timestamp || a.hash.localeCompare(b.hash));
   let folderPath: string | undefined;
-  const messages = entries.map((e: HolochainTranscriptEntry): Message => {
+  let messages = entries.map((e: HolochainTranscriptEntry): Message => {
     if (e.folder_path) folderPath = e.folder_path;
     if (e.role === "user") {
       return {
@@ -222,6 +222,7 @@ export async function loadConversationMessages(
   });
   const nextSequence =
     entries.length > 0 ? Math.max(...entries.map((e) => e.sequence)) + 1 : 0;
+  messages = collapseRepeatedQuestions(messages);
   // A conversation can honestly end on an unanswered question (the turn was
   // stopped, or died before producing anything - only what really happened
   // is recorded). Say so, or the resume looks broken.
@@ -238,6 +239,25 @@ export async function loadConversationMessages(
     });
   }
   return { messages, nextSequence, folderPath, copiedFrom: copiedFrom ?? undefined };
+}
+
+/** A resend from an offer or a retry (just this once, dig deeper, answer
+ *  again with tools, online) REPLACES the earlier answer on screen, but the
+ *  records are append-only and hold both. On a reopen the page shows what the
+ *  person saw: the question once, with its latest answer. The shape of a
+ *  resend is the same question again right after its reply; a short
+ *  acknowledgement said twice ("ok", "yes") is not one and stays. */
+export function collapseRepeatedQuestions<T extends { role: string; content: string }>(messages: T[]): T[] {
+  const out: T[] = [];
+  for (const m of messages) {
+    if (m.role === "user" && m.content.trim().length >= 12) {
+      let j = out.length - 1;
+      while (j >= 0 && out[j].role === "assistant") j--;
+      if (j >= 0 && j < out.length - 1 && out[j].role === "user" && out[j].content === m.content) out.splice(j);
+    }
+    out.push(m);
+  }
+  return out;
 }
 
 /** The bubble a resume adds under a question the records never answered.
