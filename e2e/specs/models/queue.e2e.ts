@@ -10,7 +10,7 @@ import { resolve } from "node:path";
 import { shot, waitForChat, invoke, ask, resetAiModels } from "./_helpers";
 
 const SECOND_MODEL = "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf";
-const LONG = "Write about 2500 words on the history of tea across China, Japan, India, Russia, Morocco and Britain, in plain paragraphs with no headings. Take your time and cover each country in depth.";
+const LONG = "Write about 4000 words on the history of tea across China, Japan, India, Russia, Morocco, Turkey and Britain, in plain paragraphs with no headings. Take your time and cover each country in depth, with dates.";
 const SHORT = "In one sentence, what is the capital of France?";
 
 type T = { id: string; kind: string; state: string; chars: number; conv: string | null; ai: string };

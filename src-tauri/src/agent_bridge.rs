@@ -771,9 +771,13 @@ async fn handle_agent_message(
             // read-only memory tool ourselves and never show a card. Writes
             // (remember_for_project, remember) still ask - the note is shown on
             // the card, with what it would replace.
+            // The dispatched tool's name: at the top of the raw input, or - as
+            // some models shape the call - inside its tool_input.
             let tool_name = msg
                 .pointer("/params/toolCall/rawInput/tool_name")
                 .and_then(Value::as_str)
+                .filter(|n| !n.is_empty())
+                .or_else(|| msg.pointer("/params/toolCall/rawInput/tool_input/tool_name").and_then(Value::as_str))
                 .unwrap_or("");
             // Reading a public web page through the app's own reader is a read
             // as well: the address rules refuse anything local, the rail shows
@@ -821,6 +825,12 @@ async fn handle_agent_message(
                     return;
                 }
             }
+            log::info!(
+                "[agent] permission asked: tool {:?}, title {:?}, kind {:?}",
+                tool_name,
+                msg.pointer("/params/toolCall/title").and_then(Value::as_str).unwrap_or(""),
+                msg.pointer("/params/toolCall/kind").and_then(Value::as_str).unwrap_or("")
+            );
             let _ = app.emit("agent-permission", &msg);
         }
         // Every permission decision the harness made this session - auto-

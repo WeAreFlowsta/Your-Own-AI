@@ -148,8 +148,11 @@ export async function classifyTurnMode(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 6000);
     let out = '';
+    // Background on the engine: the classifier runs on whatever model is
+    // loaded and never loads one - its request used to land in the same
+    // second as a model switch for the turn and start a second load.
     for await (const chunk of llamaServerApi.chatCompletion(
-      msgs, sys, controller.signal, 3, false, model, GRAMMAR,
+      msgs, sys, controller.signal, 3, false, model, GRAMMAR, undefined, undefined, undefined, true,
     )) {
       if (chunk.type === 'text') out += chunk.content;
     }
