@@ -201,6 +201,9 @@ describe("web access per AI", () => {
       const r = await lastReply();
       return !!r && r.state === "done" && r.text.length > 20;
     }, { timeout: 120_000, interval: 1000, timeoutMsg: "the conversation did not reopen from the records" });
+    // The records land behind the first paint (a reply still at the root
+    // shows at once): give the Sources button a moment.
+    await browser.waitUntil(() => browser.execute(() => !!document.querySelector('[data-testid="reply-sources"]')), { timeout: 15_000, timeoutMsg: "no Sources on the reopened reply" }).catch(() => {});
     const reopened = await browser.execute(() => ({
       users: document.querySelectorAll('[data-testid="chat-message"][data-role="user"]').length,
       assistants: document.querySelectorAll('[data-testid="chat-message"][data-role="assistant"]').length,

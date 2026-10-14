@@ -659,7 +659,20 @@ export default component$(() => {
         for (const m of folded) {
           const i = base.findIndex((b) => b.id === m.id || (b.role === m.role && b.content === m.content));
           if (i === -1) base.push(m);
-          else if (m.needsWeb) base[i] = { ...base[i], needsWeb: m.needsWeb };
+          else {
+            // The records' copy wins, but what only the turn knows rides
+            // along: the web-off flag, and provenance the record may not
+            // carry yet (10-15: a reopen right after the reply showed no
+            // Sources for a page it had read).
+            const r = base[i];
+            base[i] = {
+              ...r,
+              needsWeb: r.needsWeb ?? m.needsWeb,
+              sources: r.sources?.length ? r.sources : m.sources,
+              webNote: r.webNote ?? m.webNote,
+              library: r.library?.length ? r.library : m.library,
+            };
+          }
         }
         chatState.messages = base;
       } else {
@@ -2113,6 +2126,7 @@ export default component$(() => {
                   ? agentState.folderPath.split(/[\\/]/).filter(Boolean).pop()
                   : undefined
               }
+              agentHelpers={agentState.helpers}
               onUndoTurn$={undoTurn$}
               onPermissionJump$={$(() => {
                 // Jump to the CARD, not the bottom of the chat - content

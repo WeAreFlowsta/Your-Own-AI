@@ -2078,6 +2078,7 @@ export function useChat(props: UseChatProps) {
 
             // Record assistant message - with full provenance: sources, the
             // exact system prompt it ran under, mode, and the runtime/build.
+            if (sources?.length) uiLog(`[web] recording the reply with ${sources.length} source(s)`);
             const assistantMsgHash = await recordMessage(
               holochainId,
               state.conversationHash!,
