@@ -85,8 +85,12 @@ export function pendingPermission(t: Turn): { requestId: number; title: string; 
 export function permissionSubject(p: { title: string; command?: string; detail?: string }): string {
   const generic = !p.title || /asks for permission/i.test(p.title);
   const raw = p.command || (generic ? p.detail : undefined) || p.title || p.detail || "";
-  // A path in the words: its last part is what a person recognises.
-  const s = raw.replace(/`?(\/[^\s`]+)`?/g, (_m, path: string) => "`" + (path.split("/").filter(Boolean).pop() ?? path) + "`");
+  // A path in the words: its last part is what a person recognises. Quoted
+  // paths may hold spaces ("Your Own AI App"); bare ones end at a space.
+  const base = (path: string) => path.split("/").filter(Boolean).pop() ?? path;
+  const s = raw
+    .replace(/`([^`]*\/[^`]*)`/g, (_m, path: string) => "`" + base(path) + "`")
+    .replace(/(^|\s)(\/[^\s`]+)/g, (_m, lead: string, path: string) => lead + "`" + base(path) + "`");
   return s.length > 48 ? s.slice(0, 45) + "..." : s;
 }
 

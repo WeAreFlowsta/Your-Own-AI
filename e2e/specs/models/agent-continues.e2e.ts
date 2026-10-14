@@ -225,8 +225,8 @@ describe("an agent turn keeps going when you leave the chat", () => {
     await browser.execute((p: string) => localStorage.setItem("build-binary-path", p), HELPER);
     await browser.url("tauri://localhost/chat/");
     await waitForChat();
-    await ask("Read https://example.com/ and tell me in one sentence what that page says.");
-    await browser.waitUntil(async () => (await turns()).some((t) => t.kind === "tools"), { timeout: 120_000, interval: 500, timeoutMsg: "the page question did not open a tools session" });
+    await ask("Research https://example.com/ and tell me in one sentence what that page says.");
+    await browser.waitUntil(async () => (await turns()).some((t) => t.kind === "tools"), { timeout: 120_000, interval: 500, timeoutMsg: "the research question did not open a tools session" });
     console.log(`e2e: turns ${JSON.stringify(await turns())}`);
     // The tools turn itself finishes (a dropped prepared bubble would leave no turn at all).
     let said = 0;

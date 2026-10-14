@@ -635,12 +635,13 @@ export function useAgentSession(props: UseAgentSessionProps) {
       // exactly like chat turns (the Settings ledger is only a live window).
       // Built from whatever the bubble carries - it used to exist only when
       // there was a routing reason, which would drop everything else.
-      bubble.routingReason || bubble.library?.length
+      bubble.routingReason || bubble.library?.length || bubble.sources?.length
         ? {
             ...(bubble.routingReason ? { routing_reason: bubble.routingReason, routing_task: "agent" } : {}),
             ...(bubble.library?.length
               ? { library: bubble.library.map(({ doc_id, name, passages, best }) => ({ doc_id, name, passages, best })) }
               : {}),
+            ...(bubble.sources?.length ? { sources: bubble.sources.map(({ url, title }) => ({ url, title })) } : {}),
           }
         : undefined,
       {
@@ -2148,7 +2149,10 @@ export function useAgentSession(props: UseAgentSessionProps) {
       const progress = Number(e.payload?.progress);
       if (!(tokens >= 1500) || !Number.isFinite(progress)) return;
       if (state.liveStatus === "Thinking.." || state.liveStatus.startsWith("Taking in ")) {
-        state.liveStatus = `Taking in the project so far · ${Math.round(progress * 100)}%`;
+        // Not thinking: the model server is reading the agent's long opening
+        // prompt (its instructions and tools) - say so, and say what it is.
+        const what = state.mode === "tools" ? "Taking in the question and the tools" : "Taking in the project so far";
+        state.liveStatus = `${what} · ${Math.round(progress * 100)}%`;
       }
     });
     const unTiming = await listen<any>("agent-call-timing", (e) => {
@@ -2664,7 +2668,14 @@ export function useAgentSession(props: UseAgentSessionProps) {
           content = promoted.content;
           log = promoted.log;
         }
-        return { ...m, isLoading: false, error: errorText ?? m.error, content, agentLog: log };
+        // The pages the agent read, as sources (the Sources tab and the record).
+        const sourcesFromLog = log.flatMap((i) =>
+          i.type === "action" && i.action.kind === "fetch" && typeof i.action.detail === "string" && /^https?:\/\//.test(i.action.detail)
+            ? [{ url: i.action.detail, title: i.action.labelDone?.replace(/^Read /, "") || i.action.label }]
+            : [],
+        );
+        const sources = m.sources?.length ? m.sources : sourcesFromLog.length ? sourcesFromLog : m.sources;
+        return { ...m, isLoading: false, error: errorText ?? m.error, content, agentLog: log, sources };
       });
       // A bubble that never got anything (cancelled before output) is noise.
       const id = turnId.value;

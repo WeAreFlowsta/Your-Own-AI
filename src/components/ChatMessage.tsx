@@ -122,7 +122,7 @@ interface ChatMessageProps {
   onScrollNeeded$?: QRL<() => void>;
   onUpgradeClick$?: QRL<(originalQuery: string, triggerMessageId: string) => void>;
   /** Redo this turn on the other side ("Try online" / "Redo on your device"). */
-  onRouteRetry$?: QRL<(target: 'online' | 'device' | 'tools' | 'web-once' | 'web-on' | 'web-never' | 'build-install' | 'build-dismiss' | 'build-never') => void>;
+  onRouteRetry$?: QRL<(target: 'online' | 'device' | 'tools' | 'web-once' | 'web-on' | 'web-never' | 'build-install' | 'build-dismiss' | 'build-never' | 'dig-deeper') => void>;
   /** Whether this AI may go online at all (auto online-offline mode). */
   canRouteOnline?: boolean;
   /** This AI carries tools (a direct reply offers them). */
@@ -294,7 +294,7 @@ interface ActionBarProps {
   theme: 'light' | 'dark';
   onGround$?: QRL<() => void>;
   isLast?: boolean;
-  onRouteRetry$?: QRL<(target: 'online' | 'device' | 'tools' | 'web-once' | 'web-on' | 'web-never' | 'build-install' | 'build-dismiss' | 'build-never') => void>;
+  onRouteRetry$?: QRL<(target: 'online' | 'device' | 'tools' | 'web-once' | 'web-on' | 'web-never' | 'build-install' | 'build-dismiss' | 'build-never' | 'dig-deeper') => void>;
   canRouteOnline?: boolean;
   /** This AI carries tools (a direct reply offers them). */
   canUseTools?: boolean;
@@ -561,6 +561,18 @@ const ActionBar = component$<ActionBarProps>((props) => {
         {props.isLast && props.message.webNote && !props.message.isLoading && !!props.message.content && (
           <span class="text-xs text-[var(--text-muted)]" data-testid="web-note">{props.message.webNote}</span>
         )}
+        {props.isLast &&
+          props.message.digDeeper &&
+          !props.message.isLoading &&
+          !!props.message.content &&
+          props.onRouteRetry$ && (
+            <div class="flex flex-wrap items-center gap-2 text-xs text-[var(--text-muted)]" data-testid="dig-deeper">
+              <span>Looked at {props.message.sources?.length === 1 ? "one page" : `${props.message.sources?.length ?? 0} pages`}.</span>
+              <button type="button" class="text-[var(--text-link)] hover:underline" onClick$={() => props.onRouteRetry$!('dig-deeper')} title="Hand the same question to the Build helper: it reads on and searches when it needs to">
+                Dig deeper
+              </button>
+            </div>
+          )}
         {props.isLast &&
           props.message.buildOffer &&
           !props.message.isLoading &&

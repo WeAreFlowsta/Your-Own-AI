@@ -520,6 +520,8 @@ export function useChat(props: UseChatProps) {
       // access on): its text rides with the question as a labelled block,
       // like an attached document. Web access off: the reply carries the
       // offer line instead (a page named, or a question about now).
+      const pagesRead: { title: string; url: string }[] = [];
+      let buildPresent = false;
       {
         const { findWebAddresses } = await import("../utils/webAddresses");
         const urls = findWebAddresses(userInput);
@@ -527,7 +529,7 @@ export function useChat(props: UseChatProps) {
         uiLog(`[web] ${urls.length} address(es) in the question, web ${webAllowed ? "on" : "off"}${options?.webOnce ? " (just this once)" : ""}`);
         if (urls.length && webAllowed) {
           const blocks: string[] = [];
-          const read: { title: string; url: string }[] = [];
+          const read: { title: string; url: string }[] = pagesRead;
           type PageRead = { url: string; title: string | null; text: string; thin: boolean; links: { text: string; url: string; same_site: boolean }[] };
           const firstReads: PageRead[] = [];
           const hostOf = (url: string) => { try { return new URL(url).host; } catch { return url; } };
@@ -587,14 +589,20 @@ export function useChat(props: UseChatProps) {
             note = parts.length
               ? `That page had little to read, so I ${parts.join(" and ")}.`
               : "That page had little to read, and the site offered nothing more to read.";
-            try {
-              const st = await invoke<{ installed: boolean }>("build_install_status");
-              buildOffer = !st.installed && localStorage.getItem("build-offer-off") !== "1";
-            } catch { /* no offer */ }
-            uiLog(`[web] thin page: ${more} more page(s), search ${searched ? "yes" : "no"}, build offer ${buildOffer}`);
+            uiLog(`[web] thin page: ${more} more page(s), search ${searched ? "yes" : "no"}`);
           }
-          state.messages = state.messages.map((m) => (m.id === assistantId ? { ...m, statusText: undefined, sources: read.length ? read : m.sources, webNote: note, buildOffer: buildOffer || undefined } : m));
-          updateTurn(assistantId, { assistant: { sources: read.length ? read : undefined, webNote: note, buildOffer: buildOffer || undefined } });
+          // Build present = the installer's record, or a binary at the recorded path.
+          try {
+            const st = await invoke<{ installed: boolean }>("build_install_status");
+            const { resolveBinaryPath } = await import("./useAgentSession");
+            buildPresent = st.installed || ((await invoke<boolean>("path_is_file", { path: resolveBinaryPath() }).catch(() => false)) as boolean);
+          } catch { /* unknown = absent */ }
+          if (thin && !buildPresent) buildOffer = localStorage.getItem("build-offer-off") !== "1";
+          // Pages read and the helper there: the agent can read on and search - one press away.
+          const digDeeper = read.length > 0 && buildPresent;
+          uiLog(`[web] ${read.length} page(s) read, build ${buildPresent ? "present" : "absent"}${buildOffer ? ", offer" : ""}${digDeeper ? ", dig deeper" : ""}`);
+          state.messages = state.messages.map((m) => (m.id === assistantId ? { ...m, statusText: undefined, sources: read.length ? read : m.sources, webNote: note, buildOffer: buildOffer || undefined, digDeeper: digDeeper || undefined } : m));
+          updateTurn(assistantId, { assistant: { sources: read.length ? read : undefined, webNote: note, buildOffer: buildOffer || undefined, digDeeper: digDeeper || undefined } });
           const last = chatHistory[chatHistory.length - 1];
           if (last && last.role === "user") {
             const pages = blocks.join("\n\n");
@@ -1505,7 +1513,9 @@ export function useChat(props: UseChatProps) {
           prompt_per_second?: number | null;
           engine?: string | null;
         } | null = null;
-        let sources: { url: string; title: string }[] | null = null;
+        // The pages the chat read ride into the record as sources (address
+        // and title, never the page text), like a search model's results.
+        let sources: { url: string; title: string }[] | null = pagesRead.length ? [...pagesRead] : null;
 
         // Thinking belongs to report mode (forces native reasoning via enable_thinking
         // → Thoughts button + transcript + live box). Dispositions are purely length.

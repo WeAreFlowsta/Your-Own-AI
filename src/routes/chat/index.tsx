@@ -1338,6 +1338,8 @@ export default component$(() => {
   const forceToolsNext = useSignal(false);
   // "Just this once" on the web offer line: the next submit may read the web.
   const webOnceNext = useSignal(false);
+  // "Dig deeper" under a page reply: the next submit goes to the agent.
+  const digDeeperNext = useSignal(false);
   // ...and the exchange it replaces: where it starts in the list, or -1. The
   // old question and reply stay on screen until the new turn is actually
   // sent (a session takes a couple of seconds to open; an empty list in the
@@ -1455,11 +1457,18 @@ export default component$(() => {
     // this AI's web access on: the agent's own loop reads on and searches
     // when one page is not enough - the built-in web reader counts as a
     // carried tool for such a question.
+    // A page question goes to the agent only when it asks for more than one
+    // read (research words, several addresses) or the person pressed "Dig
+    // deeper" under the chat's own read; one page is the chat's job, in one
+    // step, with no session to start.
     const { findWebAddresses } = await import("../../utils/webAddresses");
+    const addresses = findWebAddresses(finalInput);
+    const researchWords = /\b(analy[sz]e|analysis|compare|comparison|research|investigate|evaluate|review|dig (?:deeper|into)|look into|find out|everything about|in depth|thorough)\b/i.test(finalInput);
     const webQuestion =
       buildInstalled.value &&
       selectedAi.value.aiConfig?.webAccess !== false &&
-      findWebAddresses(finalInput).length > 0 &&
+      addresses.length > 0 &&
+      (researchWords || addresses.length > 1 || digDeeperNext.value) &&
       attachedImages.value.length === 0;
     const mayGate = (activeTools(selectedAi.value.aiConfig).length > 0 || webQuestion) && attachedImages.value.length === 0;
     if (mayGate && agentState.status !== "working" && !chatState.isLoading) {
@@ -1586,7 +1595,7 @@ export default component$(() => {
   // Retry, redo on the other side, or - for an AI that carries tools -
   // "Answer again with tools": the direct reply and its question leave the
   // list (as any retry does) and the same question goes through a session.
-  const retryOrTools$ = $(async (id: string, target?: "online" | "device" | "tools" | "web-once" | "web-on" | "web-never" | "build-install" | "build-dismiss" | "build-never") => {
+  const retryOrTools$ = $(async (id: string, target?: "online" | "device" | "tools" | "web-once" | "web-on" | "web-never" | "build-install" | "build-dismiss" | "build-never" | "dig-deeper") => {
     if (target === "build-install" || target === "build-dismiss" || target === "build-never") {
       // The offer line under a thin-page reply: the existing install flow
       // (consent given by the press; the header shows progress), or quiet.
@@ -1617,7 +1626,7 @@ export default component$(() => {
         selectedAi.value = { ...ai, aiConfig: { ...ai.aiConfig, webAccess: true } };
       }
     }
-    if (target !== "tools" && target !== "web-once" && target !== "web-on") return retry(id, target);
+    if (target !== "tools" && target !== "web-once" && target !== "web-on" && target !== "dig-deeper") return retry(id, target);
     const at = chatState.messages.findIndex((m) => m.id === id);
     const asked = at > 0 ? chatState.messages[at - 1] : undefined;
     uiLog(`[web] ${target} on ${id.slice(0, 8)}: at ${at}, asked ${asked?.role ?? "-"}, loading ${chatState.isLoading}`);
@@ -1626,11 +1635,13 @@ export default component$(() => {
     input.value = asked.content;
     if (target === "tools") forceToolsNext.value = true;
     if (target === "web-once") webOnceNext.value = true;
+    if (target === "dig-deeper") digDeeperNext.value = true;
     try {
       await handleSubmit();
     } finally {
       replaceTurnFrom.value = -1; // a submit that sent nothing replaces nothing
       webOnceNext.value = false;
+      digDeeperNext.value = false;
     }
   });
 

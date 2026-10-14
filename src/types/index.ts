@@ -170,6 +170,8 @@ export interface Message {
   webNote?: string;
   /** One page was not enough and the Build helper is not installed: the reply carries the one-line offer. */
   buildOffer?: boolean;
+  /** Pages were read by the chat itself and the Build helper is installed: "Dig deeper" hands the question to the agent. */
+  digDeeper?: boolean;
   turnMode?: TurnMode; // the mode this message was generated under — drives thinking-window presentation + live-thinking gate
   turnModeAuto?: boolean; // true when turnMode was chosen by the classifier (not a sparkle/default) — for the auto badge
   /** True when this turn routed to a web-search model: it researches for a
