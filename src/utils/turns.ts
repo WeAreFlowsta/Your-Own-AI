@@ -58,6 +58,15 @@ function logLine(line: string): void {
 
 // Test aids: the live list, readable from the page (the UI tests print it), and the full records-side ids.
 try { (window as any).__yoaiStopTurn = (id: string) => { const t = [...turns.values()].find((x) => x.id === id || x.id.startsWith(id)); return t ? abortTurn(t.id) : false; }; } catch { /* no window */ }
+// The UI test driver (@wdio/tauri-service) asks the app for its window
+// states before every element lookup and click, through a global it
+// expects the app to provide; absent, each lookup waited the full 5 s
+// timeout (fifty-odd per spec, 10-15). An alias of the core the app
+// already exposes; inert outside the test driver.
+try {
+  const w = window as any;
+  if (!w.__wdio_original_core__ && w.__TAURI__?.core) w.__wdio_original_core__ = w.__TAURI__.core;
+} catch { /* not in a webview */ }
 try { (window as any).__yoaiTurnsFull = () => allTurns().map((t) => ({ agentKey: t.agentKey, conversationHash: t.conversationHash, state: t.state })); } catch { /* no window */ }
 try { (window as any).__yoaiTurns = () => allTurns().map((t) => ({ id: t.id.slice(0, 8), kind: t.kind, ai: t.aiId.slice(0, 12), conv: t.conversationHash?.slice(0, 12) ?? null, state: t.state, chars: t.assistant.content.length, rail: t.assistant.agentLog?.length ?? 0 })); } catch { /* no window */ }
 
