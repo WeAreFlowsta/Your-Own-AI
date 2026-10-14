@@ -4,7 +4,7 @@
 // still on screen or finished, the page has taken it over, and it is in the
 // records. Needs the Build helper installed on this machine (skipped otherwise).
 import { homedir } from "node:os";
-import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { shot, waitForChat, invoke, ask, resetAiModels } from "./_helpers";
 
@@ -151,6 +151,66 @@ describe("an agent turn keeps going when you leave the chat", () => {
     await browser.execute(async () => { await (window as any).__yoaiCloseFolder?.(); });
     await (await $('[data-testid="new-chat"]')).click();
     await browser.waitUntil(async () => browser.execute(() => document.querySelectorAll('[data-testid="chat-message"]').length === 0), { timeout: 15_000 });
+    await invoke("stop_build_agent").catch(() => {});
+  });
+
+  it("lets you allow an agent's ask from the tray while you are elsewhere", async function () {
+    this.timeout(900_000);
+    await waitForChat();
+    if (!(await invoke<boolean>("path_is_file", { path: HELPER }))) this.skip();
+    await browser.execute((p: string) => localStorage.setItem("build-binary-path", p), HELPER);
+    const folder = resolve(import.meta.dirname ?? ".", "../../profile/project-scratch");
+    mkdirSync(folder, { recursive: true });
+    await browser.waitUntil(async () => browser.execute(() => typeof (window as any).__yoaiOpenFolder === "function"), { timeout: 30_000 });
+    await browser.execute((p: string) => (window as any).__yoaiOpenFolder(p), folder);
+    await browser.waitUntil(async () => {
+      const s = await invoke<{ running: boolean; sessionId: string | null }>("build_agent_status");
+      return s.running && !!s.sessionId;
+    }, { timeout: 180_000, interval: 1000, timeoutMsg: "the agent session never came up" });
+    await ask("Create a file named hello.txt in this folder containing the single word hello. Do nothing else.");
+    // A write asks for permission (the session opens in Ask mode). A model that
+    // never gets there within four minutes leaves nothing to test here.
+    let asked = false;
+    await browser.waitUntil(async () => {
+      const ts = await turns();
+      asked = ts.some((t) => t.kind === "project" && t.state === "waiting");
+      return asked || ts.every((t) => t.kind !== "project" || (t.state !== "running"));
+    }, { timeout: 240_000, interval: 1000 }).catch(() => {});
+    if (!asked) {
+      console.log("e2e: the agent did not ask for permission in time - skipping (model quality)");
+      await browser.execute(async () => { await (window as any).__yoaiCloseFolder?.(); });
+      this.skip();
+    }
+    // Away to Settings: the ask shows in the tray, with Allow.
+    await (await $('button[title^="Menu"]')).click();
+    await browser.execute(() => {
+      const item = [...document.querySelectorAll('[role="menuitem"]')].find((b) => (b as HTMLElement).innerText.trim().startsWith("Settings")) as HTMLElement | undefined;
+      item?.click();
+    });
+    await browser.waitUntil(async () => (await browser.execute(() => location.pathname)) === "/settings/", { timeout: 30_000 });
+    const row = await $('[data-testid="turn-row"][data-turn-state="waiting"]');
+    await row.waitForDisplayed({ timeout: 15_000 });
+    const rowText = (await row.getText()).replace(/\s+/g, " ");
+    console.log(`e2e: waiting row ${JSON.stringify(rowText.slice(0, 160))}`);
+    expect(rowText).toContain("needs you");
+    expect(rowText).toContain("Allow");
+    await shot("agent-ask-in-tray");
+    await browser.execute(() => {
+      const r = document.querySelector('[data-testid="turn-row"][data-turn-state="waiting"]');
+      const b = [...(r?.querySelectorAll("button") ?? [])].find((x) => x.textContent?.trim() === "Allow") as HTMLElement | undefined;
+      b?.click();
+    });
+    // The turn goes on and finishes; the file is there.
+    await browser.waitUntil(async () => (await turns()).every((t) => t.kind !== "project" || (t.state !== "waiting" && t.state !== "running")), { timeout: 600_000, interval: 1000, timeoutMsg: "the turn did not finish after Allow" });
+    const written = existsSync(resolve(folder, "hello.txt"));
+    console.log(`e2e: hello.txt written: ${written}`);
+    expect(written).toBe(true);
+    await browser.execute(() => {
+      const img = [...document.querySelectorAll('img[alt="Your Own AI"]')].find((i) => (i as HTMLElement).offsetParent !== null) as HTMLElement | undefined;
+      (img?.closest("button") as HTMLElement | null)?.click();
+    });
+    await browser.waitUntil(async () => (await browser.execute(() => location.pathname)) === "/chat/", { timeout: 30_000 });
+    await browser.execute(async () => { await (window as any).__yoaiCloseFolder?.(); });
     await invoke("stop_build_agent").catch(() => {});
   });
 

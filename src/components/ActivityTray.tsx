@@ -20,7 +20,7 @@
 import { component$, useStore, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
 import { useLocation, useNavigate } from "@builder.io/qwik-city";
 import { useTurns } from "../contexts/TurnsContext";
-import { abortTurn, engineHolder, isLive, requestOpen, type Turn } from "../utils/turns";
+import { abortTurn, answerPermission, engineHolder, isLive, pendingPermission, permissionSubject, requestOpen, type Turn } from "../utils/turns";
 import { listen } from "@tauri-apps/api/event";
 import { useVisionDownload } from "../contexts/VisionDownloadContext";
 import { useAiData } from "../contexts/AiDataContext";
@@ -284,8 +284,10 @@ export const ActivityTray = component$(() => {
   const now = Date.now();
   const turnRows = turnsState.turns.filter((t) => {
     if (dismissedTurns.value.includes(t.id)) return false;
-    // On screen already: the chat page shows that conversation.
-    if (onChat && t.conversationHash && t.conversationHash === turnsState.openConversation) return false;
+    // On screen already: the chat page shows that conversation - and a turn
+    // with no conversation yet is the one that page is sending (its records
+    // answer a few seconds in; the row used to flash until then).
+    if (onChat && (!t.conversationHash || t.conversationHash === turnsState.openConversation)) return false;
     if (isLive(t)) return true;
     if (t.state === "stopped") return false;
     return (t.endedAt ?? 0) > now - TURN_LINGER_MS;
@@ -366,15 +368,16 @@ export const ActivityTray = component$(() => {
 
       {turnRows.map((t) => {
         const holder = t.state === "queued" ? engineHolder(t.id, t.model) : null;
+        const ask = t.state === "waiting" ? pendingPermission(t) : null;
         const title =
           t.state === "queued" ? `${t.aiLabel} is waiting for the engine`
-          : t.state === "waiting" ? `${t.aiLabel} needs you`
+          : t.state === "waiting" ? (ask ? `${t.aiLabel} needs you: ${permissionSubject(ask)}` : `${t.aiLabel} needs you`)
           : t.state === "running" ? (t.kind === "chat" ? `${t.aiLabel} is answering..` : `${t.aiLabel} is working..`)
           : t.state === "error" ? `${t.aiLabel}'s reply failed`
           : `${t.aiLabel} answered`;
         const detail =
           t.state === "queued" && holder ? `${holder.aiLabel} is answering first`
-          : t.state === "waiting" ? "A permission card is waiting for your answer"
+          : t.state === "waiting" ? (ask && ask.command ? ask.title : "A permission card is waiting for your answer")
           : t.question;
         const live = isLive(t);
         return (
@@ -390,6 +393,25 @@ export const ActivityTray = component$(() => {
                 </span>
               </div>
               <div class="flex-shrink-0 flex items-center gap-3">
+                {ask && (
+                  <>
+                    <button
+                      type="button"
+                      onClick$={() => { answerPermission(t.id, ask.requestId, "allow"); }}
+                      class="text-xs text-[var(--text-link)] hover:underline"
+                      title="Allow this once - a standing grant is on the card itself"
+                    >
+                      Allow
+                    </button>
+                    <button
+                      type="button"
+                      onClick$={() => { answerPermission(t.id, ask.requestId, "reject"); }}
+                      class="text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                    >
+                      Don't allow
+                    </button>
+                  </>
+                )}
                 <button
                   type="button"
                   onClick$={() => openTurn(t)}

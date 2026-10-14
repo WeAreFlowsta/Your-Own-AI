@@ -35,6 +35,7 @@ import {
   claimAgentSession,
   ownsAgentSession,
   TURNS_EVENT,
+  PERMISSION_ANSWER_EVENT,
 } from "../utils/turns";
 import { lastKnownEntitled } from "../utils/entitlement";
 import { $, useSignal, useStore, useVisibleTask$, type Signal } from "@builder.io/qwik";
@@ -1508,6 +1509,17 @@ export function useAgentSession(props: UseAgentSessionProps) {
       }
     };
     window.addEventListener("yoai-agent-stop-task", onStopTask);
+    // "Allow" / "Don't allow" from the tray while this page is away: answered
+    // here, by the hook that owns the session (kept with the session
+    // listeners below, not with the page's own).
+    const onPermissionAnswer = (ev: Event) => {
+      if (!ownsAgentSession(ownerId.value)) return;
+      const d = (ev as CustomEvent).detail as { turnId: string; requestId: number; decision: "allow" | "reject" };
+      if (!d || d.turnId !== turnId.value) return;
+      uiLog(`[tray] ${d.decision === "allow" ? "allowed" : "declined"} ask ${d.requestId} from the tray`);
+      void respondPermission$(d.requestId, d.decision, false);
+    };
+    window.addEventListener(PERMISSION_ANSWER_EVENT, onPermissionAnswer);
 
     const unReady = await listen<{ sessionId: string }>("agent-ready", async () => {
       if (!ownsAgentSession(ownerId.value)) return;
@@ -2866,6 +2878,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     void adoptLiveTurn$();
 
     const unlistenAll = () => {
+      window.removeEventListener(PERMISSION_ANSWER_EVENT, onPermissionAnswer);
       unReady();
       unUpdate();
       unPermission();

@@ -68,6 +68,37 @@ export function liveAgentTurn(): Turn | null {
   return null;
 }
 
+/** An agent's pending ask on a turn (the permission card not yet answered). */
+export function pendingPermission(t: Turn): { requestId: number; title: string; command?: string; detail?: string; kind?: string } | null {
+  for (const i of t.assistant.agentLog ?? []) {
+    if (i.type === "permission" && i.permission.state === "pending") {
+      const p = i.permission;
+      return { requestId: p.requestId, title: p.title, command: p.command, detail: p.detail, kind: p.kind };
+    }
+  }
+  return null;
+}
+
+/** Short words for an ask: the command when there is one, else the card's
+ *  own title ("Write `hello.txt`", "Read example.com"); the raw payload only
+ *  when the title says nothing. */
+export function permissionSubject(p: { title: string; command?: string; detail?: string }): string {
+  const generic = !p.title || /asks for permission/i.test(p.title);
+  const raw = p.command || (generic ? p.detail : undefined) || p.title || p.detail || "";
+  // A path in the words: its last part is what a person recognises.
+  const s = raw.replace(/`?(\/[^\s`]+)`?/g, (m, path: string) => "`" + (path.split("/").filter(Boolean).pop() ?? path) + "`");
+  return s.length > 48 ? s.slice(0, 45) + "..." : s;
+}
+
+/** "Allow" / "Don't allow" from the tray: the agent hook that owns the
+ *  session answers it (its listeners stay up while the page is away). */
+export const PERMISSION_ANSWER_EVENT = "yoai-permission-answer";
+export function answerPermission(turnId: string, requestId: number, decision: "allow" | "reject"): void {
+  try {
+    window.dispatchEvent(new CustomEvent(PERMISSION_ANSWER_EVENT, { detail: { turnId, requestId, decision } }));
+  } catch { /* no window */ }
+}
+
 /** The live turn holding a permission card with this request id. */
 export function turnWithPermission(requestId: number): Turn | null {
   for (const t of turns.values()) {
