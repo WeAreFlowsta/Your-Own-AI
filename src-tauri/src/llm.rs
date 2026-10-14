@@ -2109,6 +2109,18 @@ pub(crate) async fn window_if_loaded(app: &AppHandle, filename: &str) -> Option<
 /// Before a load that will serve an agent session: ask the loader for at
 /// least the window the session was told, when this reading says the
 /// machine holds it for `filename`. Says in the log either way.
+/// The window a load of `filename` asked to hold `want` would get by this
+/// reading (the slot judged free) - what a session is told before the
+/// pre-load that will serve it. None: the machine cannot hold `want`.
+pub(crate) async fn rung_for_window(app: &AppHandle, filename: &str, want: u64) -> Option<u64> {
+    let dir = get_models_dir(app).ok()?;
+    let path = dir.join(filename);
+    let meta = crate::gguf::read_meta(&path).ok()?;
+    let size = crate::fit::model_bytes_on_disk(&path, &meta);
+    let f = crate::fit::figures_slot_free(app, &dir).await;
+    crate::fit::ctx_for_need(&meta, size, f.total_ram_gb, f.free_vram_gb, want)
+}
+
 pub(crate) async fn hold_window_for_next_load(app: &AppHandle, filename: &str, want: u64) -> Option<u64> {
     let dir = get_models_dir(app).ok()?;
     let path = dir.join(filename);
@@ -5405,6 +5417,22 @@ pub fn clear_load_sentinel(app_handle: &AppHandle) {
 /// way chat's own loads always did (field, 2026-09-24).
 static LOAD_ANNOUNCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// True when no reading-room request is pending, or the running window
+/// already gives it (then the request is cleared as met).
+fn held_window_satisfied() -> bool {
+    let want = MIN_CTX_NEXT_LOAD.load(std::sync::atomic::Ordering::SeqCst) as u64;
+    if want == 0 {
+        return true;
+    }
+    let have = current_ctx_size() as u64;
+    if have >= want {
+        MIN_CTX_NEXT_LOAD.store(0, std::sync::atomic::Ordering::SeqCst);
+        log::info!("[LLM] the running window ({have}) already gives the {want} asked for - nothing to reload");
+        return true;
+    }
+    false
+}
+
 #[tauri::command]
 pub async fn load_model(
     app_handle: AppHandle,
@@ -5417,7 +5445,21 @@ pub async fn load_model(
     let announce_app = app_handle.clone();
     let announced_file = filename.clone();
     let announced_reason = reason.clone();
-    let result = load_model_inner(app_handle, state, filename, with_vision, reason).await;
+    // A load asked to hold a window (an agent session's room) that then ran
+    // out of graphics memory is tried ONCE more at the loader's own sizing:
+    // the window was the ask, not the model, and a session with no model
+    // is worse than one that compacts early (10-13: the pick was marked too
+    // large for the whole session and the first turn had nothing to load).
+    let held = MIN_CTX_NEXT_LOAD.load(std::sync::atomic::Ordering::SeqCst) as u64;
+    let mut result = load_model_inner(app_handle.clone(), state, filename.clone(), with_vision, reason.clone()).await;
+    if held > 0 && result.as_ref().err().map(|e| e == "MODEL_TOO_LARGE").unwrap_or(false) {
+        log::warn!("[LLM] '{filename}' did not fit at the {held}-token window asked for - trying once at the loader's own sizing");
+        forgive_too_big(&filename);
+        MIN_CTX_NEXT_LOAD.store(0, std::sync::atomic::Ordering::SeqCst);
+        let keeper = app_handle.clone();
+        let state = keeper.state::<LLMState>();
+        result = load_model_inner(app_handle, state, filename, with_vision, reason).await;
+    }
     if LOAD_ANNOUNCED.swap(false, std::sync::atomic::Ordering::SeqCst) {
         let _ = announce_app.emit(
             "model-load",
@@ -5459,8 +5501,11 @@ async fn load_model_inner(
         let current = state.current_model.lock().await.clone();
         if current.as_deref() == Some(filename.as_str())
             && (!with_vision || state.current_mmproj.lock().await.is_some())
-            // A pending reading-room request means "reload with more" - not a duplicate.
-            && MIN_CTX_NEXT_LOAD.load(std::sync::atomic::Ordering::SeqCst) == 0
+            // A pending reading-room request means "reload with more" - not a
+            // duplicate; one the running window already gives is satisfied
+            // (10-15: two agent calls arriving under a session's pre-load
+            // each re-held the window and reloaded the model it had just got).
+            && held_window_satisfied()
             // An engine change (MLX artifact arrived or removed, engine
             // installed or removed) asks for the same model on the new engine.
             && !FORCE_RELOAD_NEXT.swap(false, std::sync::atomic::Ordering::SeqCst)

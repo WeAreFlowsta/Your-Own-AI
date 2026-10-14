@@ -604,6 +604,16 @@ pub async fn start_build_agent(
                 // (09-23), while the person is still typing the question.
                 // The proxy waits for a load in flight (inference_server).
                 log::info!("[agent] agent turns load '{s}' - loading it now at a {AGENT_ROOM}-token window");
+                // The session is told the window the pre-load will GET, not
+                // the loader's default sizing (10-15: told 8k, served 32k -
+                // compaction tripping four times too early).
+                if let Some(rung) = crate::llm::rung_for_window(&app_handle, s, AGENT_ROOM).await {
+                    if rung > agent_ctx {
+                        log::info!("[agent] session told {rung} tokens - the pre-load's window (was {agent_ctx})");
+                        agent_ctx = rung;
+                        plan_ctx = plan_ctx.max(rung.min(AGENT_ROOM / 2)).min(rung);
+                    }
+                }
                 let app = app_handle.clone();
                 let file = s.clone();
                 tauri::async_runtime::spawn(async move {
