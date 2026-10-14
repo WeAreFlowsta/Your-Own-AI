@@ -8,6 +8,9 @@ import {
   MEMORY_MAX_LINES,
 } from "../utils/workspaceMemory";
 import { getLocalCustomAis } from "../utils/localAiStorage";
+import { invoke } from "@tauri-apps/api/core";
+import MemoryRowsPanel from "./MemoryRowsPanel";
+import { listMemoryRows, projectScope } from "../utils/memoryRows";
 import { emptyMayBeWarmup } from "../utils/recordsWarmup";
 
 /**
@@ -30,6 +33,10 @@ export const WorkspaceMemoryModal = component$<{
   const dirty = useSignal(false);
   const saving = useSignal(false);
   const slowLoad = useSignal(false);
+  // The project's own rules ("How to work here", MEMORY_REDESIGN.md §8): rows
+  // by the project's identity - the same on every machine.
+  const projectId = useSignal("");
+  const agentsMdResult = useSignal("");
   const warmupLikely = useSignal(false);
 
   // useVisibleTask$, NOT useTask$: an async useTask$ blocks the first
@@ -38,6 +45,11 @@ export const WorkspaceMemoryModal = component$<{
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async ({ track, cleanup }) => {
     const folder = track(() => folderPath.value);
+    projectId.value = "";
+    agentsMdResult.value = "";
+    if (folder) {
+      invoke<string>("project_identity_for", { folder }).then((pid) => { projectId.value = pid; }).catch(() => {});
+    }
     if (!folder) return;
     loading.value = true;
     slowLoad.value = false;
@@ -97,6 +109,25 @@ export const WorkspaceMemoryModal = component$<{
     }
   });
 
+  // The pinned rules of this project, appended to the folder's AGENTS.md -
+  // the file every coding tool reads; never written unasked.
+  const saveAsAgentsMd = $(async () => {
+    const folder = folderPath.value;
+    if (!folder || !projectId.value) return;
+    try {
+      const rows = await listMemoryRows(projectScope(projectId.value));
+      const lines = rows.filter((r) => r.kind === "rule" && !r.deleted && r.pinned).map((r) => r.text);
+      if (!lines.length) {
+        agentsMdResult.value = "No pinned rules to save yet.";
+        return;
+      }
+      const r = await invoke<{ added: number }>("save_rules_as_agents_md", { folder, lines });
+      agentsMdResult.value = r.added ? `Added ${r.added} line${r.added === 1 ? "" : "s"} to AGENTS.md.` : "AGENTS.md already has these rules.";
+    } catch (e) {
+      agentsMdResult.value = `Couldn't write AGENTS.md: ${String(e)}`;
+    }
+  });
+
   if (!folderPath.value) return null;
   const folderLeaf = folderPath.value.split("/").filter(Boolean).pop();
 
@@ -130,6 +161,24 @@ export const WorkspaceMemoryModal = component$<{
         </div>
 
         <div class="flex-1 overflow-y-auto px-5 py-3">
+          {projectId.value && (
+            <div class="mb-4" data-testid="project-rules">
+              <MemoryRowsPanel scope={projectScope(projectId.value)} rulesHeading="How to work here" />
+              <div class="mt-2 flex flex-wrap items-center gap-3 text-xs">
+                <button
+                  type="button"
+                  data-testid="save-as-agents-md"
+                  class="text-[var(--text-link)] hover:underline bg-transparent border-none cursor-pointer"
+                  onClick$={saveAsAgentsMd}
+                >
+                  Save rules as AGENTS.md
+                </button>
+                {agentsMdResult.value && (
+                  <span class="text-[var(--text-muted)]" data-testid="agents-md-result">{agentsMdResult.value}</span>
+                )}
+              </div>
+            </div>
+          )}
           {loading.value && (
             <div class="flex items-start gap-3 py-2 text-sm text-[var(--text-muted)]">
               <span class="mt-0.5 inline-block h-4 w-4 flex-shrink-0 rounded-full border-2 border-[var(--border-subtle)] border-t-[var(--text-secondary)] animate-spin" />

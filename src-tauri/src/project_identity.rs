@@ -120,3 +120,78 @@ mod tests {
         }
     }
 }
+
+/// "Save as AGENTS.md" (MEMORY_REDESIGN.md §8): the project's pinned rules
+/// appended to `<folder>/AGENTS.md` under "How to work here"; lines the file
+/// already has are skipped, nothing is removed. Your Own AI never writes
+/// this file unasked - this command IS the person's ask.
+#[tauri::command]
+pub fn save_rules_as_agents_md(folder: String, lines: Vec<String>) -> Result<serde_json::Value, String> {
+    let path = Path::new(&folder).join("AGENTS.md");
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let (next, added) = append_rules(&existing, &lines);
+    if added > 0 {
+        std::fs::write(&path, next).map_err(|e| format!("could not write {}: {e}", path.display()))?;
+    }
+    log::info!("[memory] AGENTS.md in {folder}: {added} line(s) added");
+    Ok(serde_json::json!({ "added": added, "path": path.to_string_lossy() }))
+}
+
+/// The file with `lines` added as bullets under "## How to work here" - a
+/// line the file already carries (as a bullet or plain, case-insensitive)
+/// is not added again. Returns the new text and how many lines were added.
+pub(crate) fn append_rules(existing: &str, lines: &[String]) -> (String, usize) {
+    let have: std::collections::HashSet<String> = existing
+        .lines()
+        .map(|l| l.trim().trim_start_matches("- ").trim().to_lowercase())
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    let fresh: Vec<String> = lines
+        .iter()
+        .map(|l| l.trim().to_string())
+        .filter(|t| !t.is_empty() && !have.contains(&t.to_lowercase()) && seen.insert(t.to_lowercase()))
+        .collect();
+    if fresh.is_empty() {
+        return (existing.to_string(), 0);
+    }
+    let mut out = if existing.trim().is_empty() {
+        "# AGENTS.md\n\nRules for working in this project, kept by the people who work here.\n".to_string()
+    } else {
+        existing.to_string()
+    };
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    if !out.contains("## How to work here") {
+        out.push_str("\n## How to work here\n\n");
+    }
+    for l in &fresh {
+        out.push_str(&format!("- {l}\n"));
+    }
+    (out, fresh.len())
+}
+
+#[cfg(test)]
+mod agents_md_tests {
+    use super::append_rules;
+
+    #[test]
+    fn creates_appends_and_never_repeats() {
+        let rules = vec!["Run the tests before every commit".to_string(), "Never force-push".to_string()];
+        let (first, added) = append_rules("", &rules);
+        assert_eq!(added, 2);
+        assert!(first.starts_with("# AGENTS.md"));
+        assert!(first.contains("## How to work here\n\n- Run the tests before every commit\n- Never force-push\n"));
+        let (again, added) = append_rules(&first, &rules);
+        assert_eq!(added, 0, "nothing new, nothing written");
+        assert_eq!(again, first);
+        let (third, added) = append_rules(&first, &vec!["never FORCE-push".to_string(), "Use US spelling".to_string()]);
+        assert_eq!(added, 1, "a line already there in other case is not repeated");
+        assert!(third.ends_with("- Use US spelling\n"));
+        // A hand-written file keeps every line it had.
+        let hand = "# My project\n\nBuild with make.\n";
+        let (kept, added) = append_rules(hand, &vec!["Build with make.".to_string(), "Lint first".to_string()]);
+        assert_eq!(added, 1);
+        assert!(kept.starts_with(hand));
+    }
+}

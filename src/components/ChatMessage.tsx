@@ -145,6 +145,7 @@ interface ChatMessageProps {
   agentFolderName?: string;
   /** Live helper counts for the running agent turn (header note). */
   agentHelpers?: { device: number; online: number };
+  agentRulesFile?: { name: string; lines: number } | null;
   isDesktop: boolean;
   theme: 'light' | 'dark';
   isSidePanelVisible: boolean;
@@ -1634,6 +1635,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
                     aiName={getSenderName()}
                     folderName={props.message.isLoading ? props.agentFolderName : undefined}
                     helpers={props.message.isLoading ? props.agentHelpers : undefined}
+                    rulesFile={props.message.isLoading ? props.agentRulesFile : undefined}
                     undone={!!props.message.undone}
                     onUndoTurn$={
                       props.isLast && props.onUndoTurn$ && !props.message.undone

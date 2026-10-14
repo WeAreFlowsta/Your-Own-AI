@@ -2127,6 +2127,7 @@ export default component$(() => {
                   : undefined
               }
               agentHelpers={agentState.helpers}
+              agentRulesFile={agentState.rulesFile}
               onUndoTurn$={undoTurn$}
               onPermissionJump$={$(() => {
                 // Jump to the CARD, not the bottom of the chat - content

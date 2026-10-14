@@ -134,6 +134,8 @@ export interface AgentSessionState {
   routeReason: string;
   /** Helpers this turn spawned, by where their model calls ran (agent-route events with a role). */
   helpers: { device: number; online: number };
+  /** The project's rules file the harness reads, for the rail chip ("Rules: AGENTS.md · 14 lines"). */
+  rulesFile: { name: string; lines: number } | null;
   /** Generation tok/s of the latest model call, from the engine's own timings. */
   lastCallTps: number;
   /** Every file path the agent touched this session (viewer feed). */
@@ -373,6 +375,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     struggle: null,
     routeReason: "",
     helpers: { device: 0, online: 0 },
+    rulesFile: null,
     /** Generation tok/s of the latest model call, from the engine's own timings. */
     lastCallTps: 0,
     touchedFiles: [],
@@ -817,9 +820,10 @@ export function useAgentSession(props: UseAgentSessionProps) {
       if (projectRules.value) {
         wire = `For this project:\n${projectRules.value}\n\n` + wire;
       }
-      if (agentsMd.value) {
-        wire = `Rules for working in this project, from its AGENTS.md - the person wrote them; follow them exactly:\n${agentsMd.value}\n\n` + wire;
-      }
+      // AGENTS.md itself is read by the harness (repo root down to the
+      // working folder, deeper files first, CLAUDE.md and rules folders too)
+      // and put at the start of its context; the app's own copy only feeds
+      // the rail chip. Putting it on the wire here said it twice (10-15).
     }
     if (toolsPending.value) {
       toolsPending.value = false;
@@ -1591,6 +1595,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         // nearest file wins (the project root here), capped so it stays a
         // rules file and not a manual.
         agentsMd.value = "";
+        state.rulesFile = null;
         projectRules.value = "";
         // The project's own memory rows (rules, commands, locations) by its
         // id - the same project on every machine (MEMORY_REDESIGN.md §13.1).
@@ -1608,6 +1613,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
             const text = String(r?.content ?? "").trim();
             if (text) {
               agentsMd.value = text.length > 6000 ? text.slice(0, 6000) + "\n…" : text;
+              state.rulesFile = { name: "AGENTS.md", lines: text.split("\n").filter((l) => l.trim()).length };
               console.log(`[AgentSession] AGENTS.md read for ${folder} (${text.length} chars)`);
             }
           })

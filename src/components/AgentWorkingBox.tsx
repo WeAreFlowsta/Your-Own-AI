@@ -67,6 +67,8 @@ interface AgentWorkingBoxProps {
   folderName?: string;
   /** Helpers this turn spawned and where their model calls ran (live). */
   helpers?: { device: number; online: number };
+  /** The project's rules file the harness read ("Rules: AGENTS.md · 14 lines"). */
+  rulesFile?: { name: string; lines: number } | null;
   /** Passages from the AI's documents rode with the prompt: a turn with no
    *  steps answered from them, and the summary line says so. */
   fromDocuments?: boolean;
@@ -278,6 +280,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
     aiName,
     folderName,
     helpers,
+    rulesFile,
     onPermissionRespond$,
     onPermissionOffscreen$,
     onUndoTurn$,
@@ -589,6 +592,11 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                       {" in "}
                       <span class="text-[var(--text-primary)]">{folderName}</span>
                     </>
+                  ) : null}
+                  {rulesFile ? (
+                    <span class="text-[var(--text-muted)]" data-testid="rules-file-chip">
+                      {" · Rules: "}{rulesFile.name}{` · ${rulesFile.lines} line${rulesFile.lines === 1 ? "" : "s"}`}
+                    </span>
                   ) : null}
                   {helpers && helpers.device + helpers.online > 0 ? (
                     <span class="text-[var(--text-muted)]">

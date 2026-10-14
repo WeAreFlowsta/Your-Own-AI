@@ -205,4 +205,25 @@ describe("memory rules", () => {
     const said = (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).find((r) => r.text === SAID_RULE);
     if (said) await invoke("save_memory_row", { agentKey: null, row: { ...said, deleted: true, updated_at: Date.now(), action_hash: null } });
   });
+
+  it("saves the project's pinned rules as AGENTS.md, once", async () => {
+    const { mkdtempSync, readFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const folder = mkdtempSync(join(tmpdir(), "yoai-agentsmd-"));
+    const pid = await invoke<string>("project_identity_for", { folder });
+    const RULE = "Run the e2e suite before every release (e2e)";
+    await invoke("save_memory_row", { agentKey: null, row: {
+      id: `agentsmd-${Date.now().toString(36)}`, scope: `project:${pid}`, kind: "rule", text: RULE, structured: null,
+      as_of: Date.now(), valid_to: null, saved_by: "person", provenance: "authored", pinned: true, topics: [], replaces: [], deleted: false, updated_at: Date.now(),
+    } });
+    const first = await invoke<{ added: number; path: string }>("save_rules_as_agents_md", { folder, lines: [RULE] });
+    const again = await invoke<{ added: number; path: string }>("save_rules_as_agents_md", { folder, lines: [RULE] });
+    const text = readFileSync(join(folder, "AGENTS.md"), "utf8");
+    console.log(`e2e: AGENTS.md added ${first.added} then ${again.added}; file:\n${text}`);
+    expect(first.added).toBe(1);
+    expect(again.added).toBe(0);
+    expect(text).toContain("## How to work here");
+    expect(text).toContain(`- ${RULE}`);
+  });
 });
