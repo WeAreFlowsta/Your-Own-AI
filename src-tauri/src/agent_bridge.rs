@@ -175,6 +175,27 @@ const CLIENT_IDENTIFIER: &str = "your-own-ai";
 /// discovered from the local server's model list. So before starting the
 /// agent, make sure the conversation's AI has an entry - appending a new
 /// `[model.<slug>]` table is valid TOML and leaves the user's file intact.
+/// The harness's subagent model map: general-purpose helpers plan through
+/// the Planning slot (the AI's own routing); explore helpers go to the
+/// device worker when a local model is agent-ready, where the inference
+/// server decides per call whether this device answers (never a load,
+/// never under memory pressure, never beyond the device queue's cap).
+pub(crate) fn subagent_models_block(device_workers: bool) -> String {
+    if device_workers {
+        "[subagents.models]\n\"general-purpose\" = \"planning\"\n\"explore\" = \"device-worker\"\n".to_string()
+    } else {
+        "[subagents.models]\n\"general-purpose\" = \"planning\"\n".to_string()
+    }
+}
+
+/// The harness's own caps on helpers: at most this many at once (the rest
+/// queue, never fail), nested one level (a helper's helper is where cost
+/// runs away unseen).
+pub(crate) const SUBAGENTS_MAX_CONCURRENT: u32 = 4;
+pub(crate) fn subagents_block() -> String {
+    format!("[subagents]\nmax_concurrent = {SUBAGENTS_MAX_CONCURRENT}\nlimit_behavior = \"queue\"\nmax_depth = 1\n")
+}
+
 fn ensure_agent_model_entry(
     home: &std::path::Path,
     slug: &str,
@@ -247,11 +268,7 @@ fn ensure_agent_model_entry(
         format!("{}\n{}", content, dw_entry)
     };
     let sub_header = "[subagents.models]";
-    let sub_entry = if device_workers {
-        format!("{sub_header}\n\"general-purpose\" = \"planning\"\n\"explore\" = \"device-worker\"\n")
-    } else {
-        format!("{sub_header}\n\"general-purpose\" = \"planning\"\n")
-    };
+    let sub_entry = subagent_models_block(device_workers);
     let content = if let Some(start) = content.find(sub_header) {
         let after = &content[start + sub_header.len()..];
         let end = after
@@ -261,6 +278,18 @@ fn ensure_agent_model_entry(
         format!("{}{}{}", &content[..start], sub_entry, &content[end..])
     } else {
         format!("{}\n{}", content, sub_entry)
+    };
+    let caps_header = "[subagents]\n";
+    let caps_entry = subagents_block();
+    let content = if let Some(start) = content.find(caps_header) {
+        let after = &content[start + caps_header.len()..];
+        let end = after
+            .find("\n[")
+            .map(|i| start + caps_header.len() + i + 1)
+            .unwrap_or(content.len());
+        format!("{}{}{}", &content[..start], caps_entry, &content[end..])
+    } else {
+        format!("{}\n{}", content, caps_entry)
     };
 
     // The agent's ROLE models (compaction summaries etc.) follow the current
@@ -384,6 +413,17 @@ pub(crate) fn tool_result_cap_bytes(ctx_tokens: u64) -> usize {
 #[cfg(test)]
 mod tool_result_cap_tests {
     use super::tool_result_cap_bytes;
+
+    #[test]
+    fn subagent_blocks_name_the_caps_and_the_workers() {
+        let caps = super::subagents_block();
+        assert!(caps.starts_with("[subagents]\n"));
+        assert!(caps.contains("max_concurrent = 4\n"));
+        assert!(caps.contains("limit_behavior = \"queue\"\n"));
+        assert!(caps.contains("max_depth = 1\n"));
+        assert!(super::subagent_models_block(true).contains("\"explore\" = \"device-worker\""));
+        assert!(!super::subagent_models_block(false).contains("explore"));
+    }
 
     #[test]
     fn cap_scales_with_the_window_inside_the_bounds() {
@@ -612,7 +652,7 @@ pub async fn start_build_agent(
             agent_ctx,
             plan_ctx,
             device_workers,
-            if web_allowed { "on" } else { "off (this AI's switch)" }
+            if web_allowed { "on (this AI's switch, or a once-only consent)" } else { "off (this AI's switch)" }
         );
         ensure_agent_model_entry(&home, slug, agent_ctx, plan_ctx, device_workers, web_allowed)?;
         ensure_agent_permission_config(&home)?;
@@ -663,6 +703,9 @@ pub async fn start_build_agent(
         ai_label.clone().unwrap_or_default(),
     );
     let session_auto_mode = auto_mode;
+    // The page reader joins the session only with the web allowed: the AI's
+    // switch, or the person's once-only consent carried in web_access.
+    let session_web = web_access.unwrap_or(true);
     let session_approve_all = approve_all;
     let (session_mcp, skipped_tools) = crate::mcp::acp_entries_checked(&app_handle, &mcp_names.unwrap_or_default());
     for t in &skipped_tools {
@@ -690,7 +733,7 @@ pub async fn start_build_agent(
                     let Ok(msg) = serde_json::from_str::<Value>(&text) else {
                         continue;
                     };
-                    handle_agent_message(&reader_app, &workspace, &session_model, &memory_identity, &session_mcp, session_auto_mode, session_approve_all, msg).await;
+                    handle_agent_message(&reader_app, &workspace, &session_model, &memory_identity, &session_mcp, session_auto_mode, session_approve_all, session_web, msg).await;
                 }
                 CommandEvent::Stderr(line) => {
                     if !stale {
@@ -755,6 +798,7 @@ async fn handle_agent_message(
     extra_mcp: &[Value],
     session_auto_mode: bool,
     session_approve_all: bool,
+    session_web: bool,
     msg: Value,
 ) {
     let state = app.state::<AgentBridgeState>();
@@ -867,9 +911,14 @@ async fn handle_agent_message(
                 }])
             };
             // Reading web pages: our own tool, on this computer, under the
-            // address rules (web_fetch.rs); the AI's web switch is checked
-            // at every call by its key.
-            if let Some(arr) = mcp_servers.as_array_mut() {
+            // address rules (web_fetch.rs). The server joins the session only
+            // when the web is allowed for it (the AI's switch, or a once-only
+            // consent) - a tools session has no agent key, so the per-call
+            // gate cannot tell the AI's switch and would let the read through.
+            if !session_web {
+                log::info!("[agent] no page reader for this session: web is off for this AI");
+            }
+            if let Some(arr) = mcp_servers.as_array_mut().filter(|_| session_web) {
                 // Only headers with a value: a tools session has no memory
                 // identity, and an empty header value is not a header.
                 let mut headers = Vec::new();

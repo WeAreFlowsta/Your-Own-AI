@@ -1382,6 +1382,16 @@ mod give_back_tests {
 /// on every reply). This watch reads the machine every ten seconds and,
 /// under pressure, stops an IDLE helper on the processor and says so; it
 /// starts again on demand, through the same room check as any start.
+/// The pressure watch's latest verdict: the machine is short of memory
+/// (two low readings in a row, or the kernel's stall figure). Read by the
+/// inference server before it puts a subagent's call on this device.
+pub static MACHINE_SHORT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// True while the pressure watch says the machine is short of memory.
+pub fn machine_short_now() -> bool {
+    MACHINE_SHORT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub(crate) fn start_memory_pressure_watch(app: &AppHandle) {
     use std::sync::atomic::Ordering::SeqCst;
     let app = app.clone();
@@ -1394,6 +1404,7 @@ pub(crate) fn start_memory_pressure_watch(app: &AppHandle) {
             let pressure = memory_pressure_full_avg10();
             let short;
             (short, low_readings) = machine_is_short(free_gb, pressure, low_readings);
+            MACHINE_SHORT.store(short, std::sync::atomic::Ordering::Relaxed);
             if !short {
                 continue;
             }

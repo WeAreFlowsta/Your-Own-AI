@@ -143,6 +143,8 @@ interface ChatMessageProps {
   /** Online model the agent's current call is waiting on (bare id), if any. */
   agentWaitingOn?: string;
   agentFolderName?: string;
+  /** Live helper counts for the running agent turn (header note). */
+  agentHelpers?: { device: number; online: number };
   isDesktop: boolean;
   theme: 'light' | 'dark';
   isSidePanelVisible: boolean;
@@ -1631,6 +1633,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
                     surface={props.message.agentSurface ?? "project"}
                     aiName={getSenderName()}
                     folderName={props.message.isLoading ? props.agentFolderName : undefined}
+                    helpers={props.message.isLoading ? props.agentHelpers : undefined}
                     undone={!!props.message.undone}
                     onUndoTurn$={
                       props.isLast && props.onUndoTurn$ && !props.message.undone

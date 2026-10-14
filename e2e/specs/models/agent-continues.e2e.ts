@@ -225,6 +225,14 @@ describe("an agent turn keeps going when you leave the chat", () => {
     await browser.execute((p: string) => localStorage.setItem("build-binary-path", p), HELPER);
     await browser.url("tauri://localhost/chat/");
     await waitForChat();
+    // Every routing decision of the session, leader and helpers alike: the
+    // app emits one agent-route event per model call with a role and, for
+    // a helper, where its call ran (this computer or the leader's route).
+    await browser.execute(async () => {
+      const w = window as any;
+      w.__yoaiRoutes = [];
+      await w.__TAURI__.event.listen("agent-route", (e: any) => w.__yoaiRoutes.push(e.payload));
+    });
     await ask("Research https://example.com/ and tell me in one sentence what that page says.");
     await browser.waitUntil(async () => (await turns()).some((t) => t.kind === "tools"), { timeout: 120_000, interval: 500, timeoutMsg: "the research question did not open a tools session" });
     console.log(`e2e: turns ${JSON.stringify(await turns())}`);
@@ -253,6 +261,15 @@ describe("an agent turn keeps going when you leave the chat", () => {
       readerCalled = log.includes("read_web_page");
     } catch { /* no log */ }
     console.log(`e2e: agent tool calls ${JSON.stringify(tools)}, reader called: ${readerCalled}`);
+    // Helpers, if the model spawned any, ran where the app decided per call -
+    // on this computer only with the loaded model fit for it, else the
+    // leader's route - and never anywhere else.
+    const routes = (await browser.execute(() => (window as any).__yoaiRoutes ?? [])) as { role?: string; where?: string; model?: string }[];
+    const helpers = routes.filter((x) => x.role === "device-worker");
+    console.log(`e2e: ${routes.length} route event(s), ${helpers.length} helper call(s), ${tools.filter((t) => t === "spawn_subagent").length} spawn(s): ${JSON.stringify(helpers.map((h) => ({ where: h.where, model: h.model })))}`);
+    for (const h of helpers) {
+      expect(["this computer", "the leader's route", "this computer (the AI is offline only)"]).toContain(h.where ?? "");
+    }
     if (readerCalled) {
       // The reader ran: the answer comes from the page, with no giving up.
       expect(r.includes("documentation") || r.includes("illustrative") || r.includes("example domain") || r.includes("placeholder")).toBe(true);

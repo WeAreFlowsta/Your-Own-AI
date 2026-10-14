@@ -77,6 +77,7 @@ interface ChatContainerProps {
   agentRetryStatus?: string;
   agentWaitingOn?: string;
   agentFolderName?: string;
+  agentHelpers?: { device: number; online: number };
   /** Undo the file changes of a finished agent turn. */
   onUndoTurn$?: QRL<(messageId: string) => void>;
   /** Hero continuity line: the last conversation, one click to re-enter. */
@@ -218,6 +219,7 @@ export default component$<ChatContainerProps>((props) => {
           agentRetryStatus={props.agentRetryStatus}
           agentWaitingOn={props.agentWaitingOn}
           agentFolderName={props.agentFolderName}
+          agentHelpers={props.agentHelpers}
           onUndoTurn$={props.onUndoTurn$}
           agentStreaming={props.agentStreaming}
           tipRef={tipRef}

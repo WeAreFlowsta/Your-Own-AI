@@ -731,6 +731,59 @@ async fn online_smoke_dev(
 /// `POST /v1/chat/completions` — resolve the AI, ensure its model is loaded,
 /// prepend the persona, and reverse-proxy to llama-server, streaming the
 /// response straight through.
+/// Subagent calls on this device right now (device workers in flight).
+pub static DEVICE_WORKERS_IN_FLIGHT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Decrements the in-flight count when the worker's reply ends.
+struct DeviceWorkerSlot;
+impl Drop for DeviceWorkerSlot {
+    fn drop(&mut self) {
+        DEVICE_WORKERS_IN_FLIGHT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// How many subagent calls may sit on this device at once: one on a small
+/// card or no card, two up to 16 GB, three beyond. The engine serves local
+/// calls one at a time, so this bounds the queue a worker may join, not
+/// parallelism.
+pub fn device_worker_cap(total_vram_gb: Option<f64>) -> usize {
+    match total_vram_gb {
+        Some(v) if v >= 16.0 => 3,
+        Some(v) if v >= 8.0 => 2,
+        _ => 1,
+    }
+}
+
+/// A subagent's call is answered on this device only when the LOADED model
+/// grades for agent work and is fast, the machine is not short of memory,
+/// and the device queue has room. Otherwise it takes the leader's route
+/// (online when the AI may). Never a load for a worker.
+pub fn device_worker_takes_device(loaded_grade: u8, loaded_ready: bool, machine_short: bool, in_flight: usize, cap: usize) -> bool {
+    loaded_grade >= 6 && loaded_ready && !machine_short && in_flight < cap
+}
+
+#[cfg(test)]
+mod device_worker_tests {
+    use super::{device_worker_cap, device_worker_takes_device};
+    #[test]
+    fn cap_follows_the_card() {
+        assert_eq!(device_worker_cap(None), 1);
+        assert_eq!(device_worker_cap(Some(4.2)), 1);
+        assert_eq!(device_worker_cap(Some(8.0)), 2);
+        assert_eq!(device_worker_cap(Some(12.0)), 2);
+        assert_eq!(device_worker_cap(Some(24.0)), 3);
+    }
+    #[test]
+    fn device_only_when_everything_holds() {
+        assert!(device_worker_takes_device(6, true, false, 0, 1));
+        assert!(!device_worker_takes_device(5, true, false, 0, 1), "a weak loaded model");
+        assert!(!device_worker_takes_device(8, false, false, 0, 1), "slow or not fitting");
+        assert!(!device_worker_takes_device(8, true, true, 0, 1), "the machine is short");
+        assert!(!device_worker_takes_device(8, true, false, 1, 1), "the device queue is full");
+        assert!(device_worker_takes_device(8, true, false, 1, 2));
+    }
+}
+
 async fn chat_completions(
     State(app): State<AppHandle>,
     headers: HeaderMap,
@@ -789,6 +842,8 @@ async fn chat_completions(
             .unwrap_or(false)
     });
     let auto_mode = ai.model.strip_prefix("auto:").map(str::to_string);
+    // Set inside the routing below: this call is a subagent's, answered on this device.
+    let mut device_worker_on_device = false;
     if let Some(m) = auto_mode {
         // "my-hardware" maps to offline HERE: this server has no
         // external-chat path yet, so a resolved external model couldn't be
@@ -892,7 +947,40 @@ async fn chat_completions(
             marked_doc || has_image
         });
         let attachments_may_go_online = crate::router::store_pref_bool(&app, "allowAttachmentsOnline");
-        let route_mode = if device_only {
+        // A device worker (":agent-device") is answered on the LOADED model
+        // when that holds, else it takes the leader's route - decided now,
+        // per call, not once at session start (the machine twenty minutes
+        // in is not the machine the session opened on).
+        let mut device_worker_model: Option<String> = None;
+        let mut device_worker_where = "";
+        if device_only {
+            let loaded = app.state::<crate::llm::LLMState>().current_model.lock().await.clone();
+            let in_flight = DEVICE_WORKERS_IN_FLIGHT.load(std::sync::atomic::Ordering::SeqCst);
+            let cap = device_worker_cap(crate::llm::get_system_info().ok().and_then(|i| i.total_vram_gb));
+            let short = crate::llm::machine_short_now();
+            let (grade, ready) = match loaded.as_deref() {
+                Some(m) => {
+                    let fits = crate::fit::assess(&app).await;
+                    (
+                        crate::model_caps::agent_caps(m),
+                        fits.iter().find(|f| f.name == m).map(crate::router::agent_ready).unwrap_or(false),
+                    )
+                }
+                None => (0, false),
+            };
+            if let Some(m) = loaded.filter(|_| device_worker_takes_device(grade, ready, short, in_flight, cap)) {
+                device_worker_model = Some(m);
+                device_worker_where = "this computer";
+                device_worker_on_device = true;
+            } else {
+                device_worker_where = if mode == "offline" { "this computer (the AI is offline only)" } else { "the leader's route" };
+                log::info!(
+                    "[inference] device worker for {} takes {}: loaded grade {grade}, ready {ready}, short {short}, {in_flight} of {cap} in flight",
+                    ai.name, device_worker_where
+                );
+            }
+        }
+        let route_mode = if device_worker_model.is_some() {
             "offline"
         } else if mode == "online-offline" && carries_attachment && !attachments_may_go_online {
             log::info!("[inference] attachment without online consent - routing {} offline", ai.name);
@@ -904,7 +992,9 @@ async fn chat_completions(
         // takes the memory slot's pick when a warm model qualifies; else it
         // routes locally as any offline turn (never online, never a load
         // of the helper onto the chat server).
-        let routed_result = if task.starts_with("memory") {
+        let routed_result = if let Some(m) = device_worker_model.clone() {
+            Ok(crate::router::RouteResult { model: m, reason: "device worker on the loaded model".to_string(), think: Some(false) })
+        } else if task.starts_with("memory") {
             let pick = crate::memory_slot::pick(&app, task);
             if pick.via == "loaded" {
                 Ok(crate::router::RouteResult { model: pick.model, reason: format!("memory slot: {}", pick.reason), think: Some(false) })
@@ -925,7 +1015,11 @@ async fn chat_completions(
                     use tauri::Emitter as _;
                     let _ = app.emit(
                         "agent-route",
-                        json!({ "ai": ai.name, "model": r.model, "online": r.model.starts_with("online:"), "server": r.model.starts_with("external:"), "reason": r.reason }),
+                        json!({
+                            "ai": ai.name, "model": r.model, "online": r.model.starts_with("online:"), "server": r.model.starts_with("external:"), "reason": r.reason,
+                            "role": if device_only { "device-worker" } else { "leader" },
+                            "where": if device_only { device_worker_where } else { "" },
+                        }),
                     );
                 }
                 // Settings > Routing "Project work runs on" has the last word
@@ -1355,6 +1449,12 @@ async fn chat_completions(
         format!("api-{}-{:08x}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0), rand::thread_rng().gen::<u32>())
     });
     let mut local_permit: Option<tokio::sync::SemaphorePermit<'static>> = None;
+    let device_slot = if device_worker_on_device {
+        DEVICE_WORKERS_IN_FLIGHT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Some(DeviceWorkerSlot)
+    } else {
+        None
+    };
     // The token an online reply starts with - its stop is sent with it
     // (after an identity switch a fresh one is refused).
     let mut online_token: Option<String> = None;
@@ -1457,6 +1557,7 @@ async fn chat_completions(
         let stream_app = app.clone();
         let body_stream = async_stream::stream! {
             let _turn = local_permit; // released when the stream ends
+            let _device_slot = device_slot; // the device queue's seat, released with it
             let mut s = upstream.bytes_stream();
             let mut raw: Vec<u8> = Vec::new();      // full body (incl. <think>) → recording
             let mut pending: Vec<u8> = Vec::new();  // bytes not yet split into events

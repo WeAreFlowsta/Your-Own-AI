@@ -132,6 +132,8 @@ export interface AgentSessionState {
   struggle: { text: string; bigger?: string; entitled: boolean } | null;
   /** Why routing picked the serving model (from the agent-route event). */
   routeReason: string;
+  /** Helpers this turn spawned, by where their model calls ran (agent-route events with a role). */
+  helpers: { device: number; online: number };
   /** Generation tok/s of the latest model call, from the engine's own timings. */
   lastCallTps: number;
   /** Every file path the agent touched this session (viewer feed). */
@@ -370,6 +372,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     struggleShown: false,
     struggle: null,
     routeReason: "",
+    helpers: { device: 0, online: 0 },
     /** Generation tok/s of the latest model call, from the engine's own timings. */
     lastCallTps: 0,
     touchedFiles: [],
@@ -787,6 +790,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.status = "working";
     state.lastFinishedAt = null;
     state.lastRouteServer = false;
+    state.helpers = { device: 0, online: 0 };
     state.liveStatus = "Thinking..";
     props.chatState.isLoading = true;
     // First prompt after a resume: the restored-context digest rides ahead
@@ -1176,7 +1180,9 @@ export function useAgentSession(props: UseAgentSessionProps) {
         aiLabel: ai.label ?? null,
         permissionMode: state.permissionMode,
         mcpNames: names,
-        webAccess: ai.aiConfig?.webAccess ?? true,
+        // The person's once-only consent (Just this once, Dig deeper) carries
+        // into the session: the page reader is there for this session only.
+        webAccess: opts?.web ? true : (ai.aiConfig?.webAccess ?? true),
       });
       return true;
       // Warm the embedding model now, while the person types: the
@@ -2163,6 +2169,13 @@ export function useAgentSession(props: UseAgentSessionProps) {
     const unRoute = await listen<any>("agent-route", (e) => {
       if (!ownsAgentSession(ownerId.value)) return;
       const model = typeof e.payload?.model === "string" ? e.payload.model : "";
+      // A helper's call: count it where it ran and leave the leader's
+      // waiting line and reason alone.
+      if (e.payload?.role === "device-worker") {
+        const onDevice = !(e.payload?.online || e.payload?.server);
+        state.helpers = { device: state.helpers.device + (onDevice ? 1 : 0), online: state.helpers.online + (onDevice ? 0 : 1) };
+        return;
+      }
       // The pearl names what the turn waits on: an online model, or the
       // person's own server (Settings > Engines) serving the turn.
       state.waitingOn = e.payload?.online

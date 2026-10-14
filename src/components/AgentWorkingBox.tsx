@@ -65,6 +65,8 @@ interface AgentWorkingBoxProps {
   /** For the header: "Teresa is working in Website". */
   aiName?: string;
   folderName?: string;
+  /** Helpers this turn spawned and where their model calls ran (live). */
+  helpers?: { device: number; online: number };
   /** Passages from the AI's documents rode with the prompt: a turn with no
    *  steps answered from them, and the summary line says so. */
   fromDocuments?: boolean;
@@ -275,6 +277,7 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
     onRetryWithTool$,
     aiName,
     folderName,
+    helpers,
     onPermissionRespond$,
     onPermissionOffscreen$,
     onUndoTurn$,
@@ -586,6 +589,15 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                       {" in "}
                       <span class="text-[var(--text-primary)]">{folderName}</span>
                     </>
+                  ) : null}
+                  {helpers && helpers.device + helpers.online > 0 ? (
+                    <span class="text-[var(--text-muted)]">
+                      {" · "}
+                      {[
+                        helpers.device ? `${helpers.device} helper${helpers.device === 1 ? "" : "s"} on this computer` : "",
+                        helpers.online ? `${helpers.online} online` : "",
+                      ].filter(Boolean).join(", ")}
+                    </span>
                   ) : null}
                 </span>
               </>
