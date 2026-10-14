@@ -53,6 +53,8 @@ fn startup_ms(app: &AppHandle) -> u128 {
 pub struct AgentBridgeState {
     child: Mutex<Option<CommandChild>>,
     session_id: Mutex<Option<String>>,
+    /// This session's web gate id (web_gate): which addresses the agent may read without asking.
+    gate_id: Mutex<String>,
     /// The open workspace folder - the single source of truth, so every
     /// page (not just the chat route) can render the workspace slot.
     folder: Mutex<Option<String>>,
@@ -99,6 +101,7 @@ impl AgentBridgeState {
         Self {
             child: Mutex::new(None),
             session_id: Mutex::new(None),
+            gate_id: Mutex::new(String::new()),
             folder: Mutex::new(None),
             next_id: AtomicU64::new(1),
             pending: Mutex::new(std::collections::HashMap::new()),
@@ -705,6 +708,12 @@ pub async fn start_build_agent(
     *state.started_at.lock().unwrap() = Some(std::time::Instant::now());
     *state.folder.lock().await = Some(cwd.clone());
     state.next_id.store(4, Ordering::SeqCst); // 1..=3 = handshake requests
+    {
+        // A fresh gate per session; the old session's allow-set goes with it.
+        let mut g = state.gate_id.lock().await;
+        crate::web_gate::forget(&g);
+        *g = format!("gate-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0));
+    }
 
     let workspace = cwd.clone();
     let session_model = model.clone();
@@ -764,6 +773,7 @@ pub async fn start_build_agent(
         if bridge.generation.load(Ordering::SeqCst) == my_gen {
             *bridge.child.lock().await = None;
             *bridge.session_id.lock().await = None;
+            crate::web_gate::forget(&bridge.gate_id.lock().await);
             // Keep `folder` - a crashed agent leaves the workspace open in
             // "stopped" state rather than silently closing it.
             let _ = reader_app.emit("agent-exit", json!({ "code": exit_code }));
@@ -798,6 +808,20 @@ pub async fn start_build_agent(
         }),
     )
     .await
+}
+
+/// The address a page-reader call asks for, wherever the model put it.
+fn reader_url_of(msg: &Value) -> Option<String> {
+    [
+        "/params/toolCall/rawInput/url",
+        "/params/toolCall/rawInput/tool_input/url",
+        "/params/toolCall/rawInput/input/url",
+        "/params/toolCall/rawInput/arguments/url",
+    ]
+    .iter()
+    .find_map(|p| msg.pointer(p).and_then(Value::as_str))
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty())
 }
 
 async fn handle_agent_message(
@@ -841,7 +865,21 @@ async fn handle_agent_message(
             let read_only_own_tool = tool_name == "project-memory__read_project_memory"
                 || tool_name == "project-memory__read_memory"
                 || tool_name == "page-reader__read_web_page";
-            if read_only_own_tool {
+            // The exfiltration gate (decided 10-15): a page read goes without a
+            // card only for an address the person gave or on a site a read page
+            // linked to (web_gate); any other address is the person's call.
+            let reader_url = if tool_name == "page-reader__read_web_page" { reader_url_of(&msg) } else { None };
+            let outside = match &reader_url {
+                Some(u) => !crate::web_gate::allowed(&state.gate_id.lock().await, u),
+                None => false,
+            };
+            if let (true, Some(u)) = (outside, &reader_url) {
+                log::info!(
+                    "[web] gate: {} is not an address the person gave or a page already read - the person decides",
+                    u.chars().take(120).collect::<String>()
+                );
+            }
+            if read_only_own_tool && !outside {
                 let allow = msg
                     .pointer("/params/options")
                     .and_then(Value::as_array)
@@ -885,7 +923,18 @@ async fn handle_agent_message(
                 msg.pointer("/params/toolCall/title").and_then(Value::as_str).unwrap_or(""),
                 msg.pointer("/params/toolCall/kind").and_then(Value::as_str).unwrap_or("")
             );
-            let _ = app.emit("agent-permission", &msg);
+            // The card and the tray row name the address when the gate asked.
+            let shown = match (outside, &reader_url) {
+                (true, Some(u)) => {
+                    let mut m = msg.clone();
+                    if let Some(t) = m.pointer_mut("/params/toolCall/title") {
+                        *t = json!(format!("Read {u}"));
+                    }
+                    m
+                }
+                _ => msg.clone(),
+            };
+            let _ = app.emit("agent-permission", &shown);
         }
         // Every permission decision the harness made this session - auto-
         // approved, policy-allowed, prompted, denied - for the user's record.
@@ -938,6 +987,7 @@ async fn handle_agent_message(
                 if !memory_identity.1.is_empty() {
                     headers.push(json!({ "name": "x-agent-label", "value": memory_identity.1 }));
                 }
+                headers.push(json!({ "name": "x-yoai-gate", "value": state.gate_id.lock().await.clone() }));
                 // "page-reader", not "web": the harness has native tools of
                 // kind web, and a server of that name never received its
                 // tool calls (10-14) while initialize and tools/list did.
@@ -1075,6 +1125,14 @@ pub async fn send_agent_prompt(
         .await
         .clone()
         .ok_or("agent session is not ready")?;
+    {
+        // Addresses in the person's words may be read without asking (web_gate).
+        let found = crate::web_gate::addresses_in_text(&text);
+        if !found.is_empty() {
+            let n = crate::web_gate::allow(&state.gate_id.lock().await, found);
+            log::info!("[web] gate: the session may read {n} site(s) from the person's words");
+        }
+    }
     let id = state.next_id.fetch_add(1, Ordering::SeqCst);
     write_line(
         &state,

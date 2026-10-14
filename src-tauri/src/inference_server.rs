@@ -2645,6 +2645,8 @@ async fn mcp_web_post(
     let agent_key = header_str(&headers, "x-agent-key").unwrap_or_default();
     let agent_label = header_str(&headers, "x-agent-label").unwrap_or_else(|| "your AI".into());
     log::info!("[web] mcp {} from {}", req["method"].as_str().unwrap_or("?"), agent_label);
+    // The session's gate id (web_gate): the pages this read links to join its allow-set.
+    let gate = header_str(&headers, "x-yoai-gate");
     match req["method"].as_str() {
         Some("initialize") => {
             let mut resp = mcp_result(
@@ -2705,7 +2707,7 @@ async fn mcp_web_post(
             }
             let question = a["question"].as_str();
             log::info!("[web] {} reads {}", agent_label, url.chars().take(120).collect::<String>());
-            match crate::web_fetch::read_web_page(&app, url, question).await {
+            match crate::web_fetch::read_web_page(&app, url, question, gate.as_deref()).await {
                 Ok(text) => mcp_tool_text(&id, text, false),
                 Err(e) => {
                     log::info!("[web] not read: {e}");

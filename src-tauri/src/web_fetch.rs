@@ -500,8 +500,12 @@ pub async fn fetch_page(raw: &str) -> Result<Page, String> {
 
 /// Read a page for an AI: the text itself when it is short and no question
 /// was asked; otherwise the local helper model reads it and answers.
-pub async fn read_web_page(app: &AppHandle, raw: &str, question: Option<&str>) -> Result<String, String> {
+pub async fn read_web_page(app: &AppHandle, raw: &str, question: Option<&str>, gate: Option<&str>) -> Result<String, String> {
     let page = fetch_page(raw).await?;
+    // The pages this page links to may be read next without asking (web_gate).
+    if let Some(g) = gate {
+        crate::web_gate::allow(g, std::iter::once(page.url.clone()).chain(page.links.iter().map(|l| l.url.clone())));
+    }
     let head = format!(
         "{}{}\n\n",
         page.title.as_deref().map(|t| format!("{t}\n")).unwrap_or_default(),
@@ -565,7 +569,7 @@ pub async fn read_web_page(app: &AppHandle, raw: &str, question: Option<&str>) -
 /// read on this computer under the rules above.
 #[tauri::command]
 pub async fn web_read_page(app: AppHandle, url: String, question: Option<String>) -> Result<String, String> {
-    read_web_page(&app, &url, question.as_deref()).await
+    read_web_page(&app, &url, question.as_deref(), None).await
 }
 
 /// What the chat's research step needs besides the text: was the page thin,
@@ -583,7 +587,7 @@ pub struct PageRead {
 pub async fn web_read_page_full(app: AppHandle, url: String, question: Option<String>) -> Result<PageRead, String> {
     let page = fetch_page(&url).await?;
     let thin = page.is_thin();
-    let text = read_web_page(&app, &url, question.as_deref()).await?;
+    let text = read_web_page(&app, &url, question.as_deref(), None).await?;
     Ok(PageRead { url: page.url.clone(), title: page.title.clone(), text, thin, links: page.links.clone() })
 }
 
