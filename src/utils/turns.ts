@@ -86,7 +86,7 @@ export function permissionSubject(p: { title: string; command?: string; detail?:
   const generic = !p.title || /asks for permission/i.test(p.title);
   const raw = p.command || (generic ? p.detail : undefined) || p.title || p.detail || "";
   // A path in the words: its last part is what a person recognises.
-  const s = raw.replace(/`?(\/[^\s`]+)`?/g, (m, path: string) => "`" + (path.split("/").filter(Boolean).pop() ?? path) + "`");
+  const s = raw.replace(/`?(\/[^\s`]+)`?/g, (_m, path: string) => "`" + (path.split("/").filter(Boolean).pop() ?? path) + "`");
   return s.length > 48 ? s.slice(0, 45) + "..." : s;
 }
 
