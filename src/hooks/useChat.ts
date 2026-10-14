@@ -342,6 +342,37 @@ async function turnTokensFor(
   return counted + 1500 + imageCount * 1000;
 }
 
+/** How much of each conversation already has an episode (messages counted at
+ *  the last write) - a conversation left again with nothing new writes nothing. */
+const episodeMarks = new Map<string, number>();
+
+/** The episode of a conversation being left: the first question and the
+ *  latest answer, one row per conversation (a stable id revises it). */
+async function leaveEpisode(hash: string | null, messages: Message[], ai: SelectedAiModel): Promise<void> {
+  if (!hash) return;
+  const users = messages.filter((m) => m.role === "user" && m.content.trim());
+  const answers = messages.filter((m) => m.role === "assistant" && m.content.trim() && !m.error);
+  if (users.length < 2 || answers.length === 0) return;
+  if (episodeMarks.get(hash) === messages.length) return;
+  const founding = ai.aiConfig?.foundingKey ?? ai.aiConfig?.agentPubKey ?? "";
+  if (!founding || !ai.aiConfig?.agentPubKey) return;
+  const cut = (t: string, n: number) => (t.length > n ? t.slice(0, n) + "…" : t);
+  const text = cut(
+    `Conversation: ${cut(users[0].content.trim(), 300)}\nLatest answer: ${cut(answers[answers.length - 1].content.trim(), 700)}\n(${users.length} questions)`,
+    2000,
+  );
+  try {
+    const { saveMemoryRow, newRow, aiScope } = await import("../utils/memoryRows");
+    const row = newRow(aiScope(founding), "episode", text, { saved_by: `ai:${founding}`, provenance: `distilled:chat:${hash}` });
+    row.id = `chat-episode-${hash.slice(0, 16)}`;
+    await saveMemoryRow(row, ai.aiConfig.agentPubKey);
+    episodeMarks.set(hash, messages.length);
+    uiLog(`[memory] episode kept for ${hash.slice(0, 12)}.. (${users.length} questions)`);
+  } catch (e) {
+    console.warn("[Chat] episode row failed:", e);
+  }
+}
+
 export function useChat(props: UseChatProps) {
   const state = useStore<UseChatState>({
     messages: [],
@@ -2396,6 +2427,12 @@ export function useChat(props: UseChatProps) {
   });
 
   const resetChat = $(() => {
+    // Leaving a conversation is a plain chat's session boundary
+    // (MEMORY_REDESIGN.md §5.5): one episode row in the AI's own memory,
+    // raw and deterministic - the question that opened it and the latest
+    // answer - revised in place when the conversation is left again with
+    // more said, never rewritten here (dreaming consolidates later).
+    void leaveEpisode(state.conversationHash, state.messages, props.selectedAi.value);
     // A reply in flight stays at the app root (utils/turns.ts): the page
     // lets go of it - it finishes and records on its own, Stop reaches it
     // from the tray or when its conversation is opened again.
