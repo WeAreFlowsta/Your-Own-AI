@@ -775,7 +775,15 @@ async fn handle_agent_message(
                 .pointer("/params/toolCall/rawInput/tool_name")
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            if tool_name == "project-memory__read_project_memory" || tool_name == "project-memory__read_memory" {
+            // Reading a public web page through the app's own reader is a read
+            // as well: the address rules refuse anything local, the rail shows
+            // "Read example.com", and a card for every page would make the
+            // reader useless. (Open question in NEXT.md: an address the person
+            // did not give could carry data out - gate those later.)
+            let read_only_own_tool = tool_name == "project-memory__read_project_memory"
+                || tool_name == "project-memory__read_memory"
+                || tool_name == "page-reader__read_web_page";
+            if read_only_own_tool {
                 let allow = msg
                     .pointer("/params/options")
                     .and_then(Value::as_array)
@@ -789,7 +797,7 @@ async fn handle_agent_message(
                     .and_then(|o| o.get("optionId").and_then(Value::as_str))
                     .map(str::to_string);
                 if let Some(opt) = allow {
-                    log::info!("[agent] auto-allowed read of the project's memory");
+                    log::info!("[agent] auto-allowed {}", if tool_name.starts_with("page-reader") { "a page read" } else { "read of the project's memory" });
                     // The grant the app made on the user's behalf belongs in
                     // the same audit record as the ones they answered - the
                     // UI logs it as an already-answered permission item.
@@ -852,14 +860,23 @@ async fn handle_agent_message(
             // address rules (web_fetch.rs); the AI's web switch is checked
             // at every call by its key.
             if let Some(arr) = mcp_servers.as_array_mut() {
+                // Only headers with a value: a tools session has no memory
+                // identity, and an empty header value is not a header.
+                let mut headers = Vec::new();
+                if !memory_identity.0.is_empty() {
+                    headers.push(json!({ "name": "x-agent-key", "value": memory_identity.0 }));
+                }
+                if !memory_identity.1.is_empty() {
+                    headers.push(json!({ "name": "x-agent-label", "value": memory_identity.1 }));
+                }
+                // "page-reader", not "web": the harness has native tools of
+                // kind web, and a server of that name never received its
+                // tool calls (10-14) while initialize and tools/list did.
                 arr.push(json!({
                     "type": "http",
-                    "name": "web",
-                    "url": format!("http://127.0.0.1:{}/mcp/web", crate::ports::inference()),
-                    "headers": [
-                        { "name": "x-agent-key", "value": memory_identity.0 },
-                        { "name": "x-agent-label", "value": memory_identity.1 }
-                    ]
+                    "name": "page-reader",
+                    "url": format!("http://127.0.0.1:{}/mcp/page-reader", crate::ports::inference()),
+                    "headers": headers
                 }));
             }
             // The AI's own tools (Add-ons > Tools) ride beside project memory.
@@ -879,7 +896,10 @@ async fn handle_agent_message(
                     // default can never turn Auto on behind the user's back.
                     // "Approve everything" arrives right after session/new
                     // as the harness's always-approve notification (below).
-                    "_meta": { "clientIdentifier": CLIENT_IDENTIFIER, "autoMode": session_auto_mode }
+                    // A page read is bounded on our side (fetch 20 s, helper
+                    // 120 s); the harness's default per-call timeout is 100
+                    // minutes, so give this server its own.
+                    "_meta": { "clientIdentifier": CLIENT_IDENTIFIER, "autoMode": session_auto_mode, "mcpConfig": { "page-reader": { "toolTimeoutMs": 180000 } } }
                 }
             });
             let _ = write_line(&state, &request).await;

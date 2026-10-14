@@ -37,7 +37,9 @@ describe("an agent turn keeps going when you leave the chat", () => {
     // hold (a 4 GB card: the 4B coder at a 32k window fails to load). Pin every
     // AI to the chat model already loaded, then reopen the chat so it reads it.
     const loaded = await invoke<string | null>("get_current_model");
-    const pinned = await browser.execute(async (file: string) => {
+    // YOAI_E2E_NO_PIN=1 leaves the AIs on automatic: the agent's own pick (a
+    // 4B coder at a 32k window) does not fit this card - what happens then?
+    const pinned = process.env.YOAI_E2E_NO_PIN ? ["(not pinned)"] : await browser.execute(async (file: string) => {
       const t = (window as any).__TAURI__;
       const path = await t.core.invoke("profile_store_path", { name: "ai-data.json" });
       const store = await t.store.load(path);
@@ -167,7 +169,16 @@ describe("an agent turn keeps going when you leave the chat", () => {
     await browser.waitUntil(async () => (await turns()).some((t) => t.kind === "tools"), { timeout: 120_000, interval: 500, timeoutMsg: "the page question did not open a tools session" });
     console.log(`e2e: turns ${JSON.stringify(await turns())}`);
     // The tools turn itself finishes (a dropped prepared bubble would leave no turn at all).
-    await browser.waitUntil(async () => (await turns()).some((t) => t.kind === "tools" && t.state === "done" && t.chars > 20), { timeout: 600_000, interval: 1000, timeoutMsg: "the tools turn never finished with an answer" });
+    let said = 0;
+    await browser.waitUntil(async () => {
+      const ts = await turns();
+      if (Date.now() - said > 60_000) {
+        said = Date.now();
+        const bubble = await browser.execute(() => ([...document.querySelectorAll('[data-testid="chat-message"][data-role="assistant"]')].pop() as HTMLElement | undefined)?.innerText.replace(/\s+/g, " ").slice(0, 240) ?? "");
+        console.log(`e2e: agent turn ${JSON.stringify(ts.filter((t) => t.kind === "tools"))} bubble ${JSON.stringify(bubble)}`);
+      }
+      return ts.some((t) => t.kind === "tools" && t.state === "done" && t.chars > 20);
+    }, { timeout: 600_000, interval: 1000, timeoutMsg: "the tools turn never finished with an answer" });
     await browser.waitUntil(async () => browser.execute(() => ([...document.querySelectorAll('[data-testid="chat-message"][data-role="assistant"]')].pop() as HTMLElement | undefined)?.getAttribute("data-state") === "done"), { timeout: 60_000 });
     const reply = await browser.execute(() => ([...document.querySelectorAll('[data-testid="chat-message"][data-role="assistant"]')].pop() as HTMLElement | undefined)?.innerText ?? "");
     console.log(`e2e: agent reply ${JSON.stringify(reply.slice(0, 200))}`);
@@ -175,9 +186,14 @@ describe("an agent turn keeps going when you leave the chat", () => {
     // Which tools the agent actually called, from the harness's own log.
     const harnessLog = resolve(import.meta.dirname ?? ".", "../../profile/.your-own-ai-build/logs/unified.jsonl");
     let tools: string[] = [];
-    try { tools = [...readFileSync(harnessLog, "utf8").matchAll(/"tool_name":"([^"]+)"/g)].map((m) => m[1]); } catch { /* no log */ }
-    console.log(`e2e: agent tool calls ${JSON.stringify(tools)}`);
-    if (tools.some((t) => t.includes("read_web_page"))) {
+    let readerCalled = false;
+    try {
+      const log = readFileSync(harnessLog, "utf8");
+      tools = [...log.matchAll(/"tool_name":"([^"]+)"/g)].map((m) => m[1]);
+      readerCalled = log.includes("read_web_page");
+    } catch { /* no log */ }
+    console.log(`e2e: agent tool calls ${JSON.stringify(tools)}, reader called: ${readerCalled}`);
+    if (readerCalled) {
       // The reader ran: the answer comes from the page, with no giving up.
       expect(r.includes("documentation") || r.includes("illustrative") || r.includes("example domain") || r.includes("placeholder")).toBe(true);
       expect(r.includes("cannot read") || r.includes("do not have access") || r.includes("unable to access")).toBe(false);

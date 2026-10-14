@@ -1555,7 +1555,7 @@ export default component$(() => {
           forcedTools ? "Answer this through the tools you carry - read or search with them first. Do not answer from memory or from earlier turns." : undefined,
           // The reader is the app's own tool; without this line a small model
           // reaches for web search, is refused, and gives up (10-14).
-          webQuestion ? "The question names a web page. Read it first with the read_web_page tool from the web server (use_tool with tool_name web__read_web_page and the address as url); follow the links it returns if one page is not enough, and answer from what the pages say. Web search may not be available; the reader always is." : undefined,
+          webQuestion ? "The question names a web page. Read it first with the read_web_page tool from the page-reader server (use_tool with tool_name page-reader__read_web_page and the address as url); follow the links it returns if one page is not enough, and answer from what the pages say. Web search may not be available; the reader always is." : undefined,
           given.context,
         ]
           .filter(Boolean)

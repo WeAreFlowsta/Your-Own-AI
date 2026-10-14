@@ -522,7 +522,10 @@ pub async fn read_web_page(app: &AppHandle, raw: &str, question: Option<&str>) -
     if page.text.trim().is_empty() {
         return Ok(format!("{head}(The page has no readable text - it may draw its content with scripts.){links_block}"));
     }
-    if q.is_none() && len <= DIRECT_CHARS {
+    // A page the asking model can read itself goes over as text, question or
+    // not: the helper only pays for itself on a long page (and loading it
+    // beside an agent's model can take minutes on a small card).
+    if len <= DIRECT_CHARS {
         return Ok(format!("{head}{}{}{links_block}", page.text, if page.truncated { "\n\n(The page was longer than the 2 MB cap; this is the start of it.)" } else { "" }));
     }
     let excerpt: String = page.text.chars().take(HELPER_PAGE_CHARS).collect();
@@ -531,7 +534,14 @@ pub async fn read_web_page(app: &AppHandle, raw: &str, question: Option<&str>) -
         Some(q) => format!("Question: {q}\n\nPage ({}):\n{excerpt}", page.url),
         None => format!("Summarize this page faithfully: what it is, what it says, the key facts.\n\nPage ({}):\n{excerpt}", page.url),
     };
-    match crate::llm::memory_complete(app, crate::llm::UTILITY_MODEL_FILE, system, &user, None, 700, 0.2).await {
+    // Bounded: a tool call must never hold an agent's turn open for good.
+    let read = tokio::time::timeout(
+        Duration::from_secs(120),
+        crate::llm::memory_complete(app, crate::llm::UTILITY_MODEL_FILE, system, &user, None, 700, 0.2),
+    )
+    .await
+    .unwrap_or_else(|_| Err("the helper model took too long".into()));
+    match read {
         Ok(answer) if !answer.trim().is_empty() => Ok(format!(
             "{head}{}\n\n(Read by the helper model from the page's first {} characters{}.){links_block}",
             answer.trim(),

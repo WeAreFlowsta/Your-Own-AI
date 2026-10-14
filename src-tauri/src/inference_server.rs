@@ -222,7 +222,7 @@ pub fn spawn(app: AppHandle, pre_bound: Option<std::net::TcpListener>) {
             .route("/v1/chat/completions", post(chat_completions))
             .route("/v1/responses", post(responses_web_search))
             .route("/mcp", post(mcp_post).get(mcp_get))
-            .route("/mcp/web", post(mcp_web_post).get(mcp_get))
+            .route("/mcp/page-reader", post(mcp_web_post).get(mcp_get))
             .route("/internal/route-preview", get(route_preview))
         .route("/internal/matrix-run", get(matrix_run_dev))
         .route("/internal/online-smoke", get(online_smoke_dev))
@@ -2541,6 +2541,7 @@ async fn mcp_web_post(
     let id = req["id"].clone();
     let agent_key = header_str(&headers, "x-agent-key").unwrap_or_default();
     let agent_label = header_str(&headers, "x-agent-label").unwrap_or_else(|| "your AI".into());
+    log::info!("[web] mcp {} from {}", req["method"].as_str().unwrap_or("?"), agent_label);
     match req["method"].as_str() {
         Some("initialize") => {
             let mut resp = mcp_result(
@@ -2548,11 +2549,11 @@ async fn mcp_web_post(
                 json!({
                     "protocolVersion": req["params"]["protocolVersion"].clone(),
                     "capabilities": { "tools": {} },
-                    "serverInfo": { "name": "web", "version": env!("CARGO_PKG_VERSION") },
+                    "serverInfo": { "name": "page-reader", "version": env!("CARGO_PKG_VERSION") },
                 }),
             );
             resp.headers_mut()
-                .insert("mcp-session-id", header::HeaderValue::from_static("web"));
+                .insert("mcp-session-id", header::HeaderValue::from_static("page-reader"));
             resp
         }
         Some("tools/list") => mcp_result(

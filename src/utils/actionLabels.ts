@@ -113,7 +113,7 @@ const KNOWN_MCP: Record<string, [string, string]> = {
   "project-memory__read_project_memory": ["Reading the project's memory", "Read the project's memory"],
   "project-memory__read_memory": ["Reading your memory", "Read your memory"],
   "project-memory__remember": ["Remembering something for you", "Remembered something for you"],
-  "web__read_web_page": ["Reading a web page", "Read a web page"],
+  "page-reader__read_web_page": ["Reading a web page", "Read a web page"],
 };
 
 function titleClean(title: string): string {
@@ -299,7 +299,7 @@ export function describeAction(update: any, ctx: DescribeContext = {}): ActionDe
       const [server, tool] = splitMcp(toolName);
       if (known) {
         // Our own page reader: the address is the detail, the icon says web.
-        if (toolName === "web__read_web_page") {
+        if (toolName === "page-reader__read_web_page") {
           const url = typeof input.tool_input?.url === "string" ? input.tool_input.url : undefined;
           const host = (() => { try { return url ? new URL(url).host : undefined; } catch { return undefined; } })();
           return {
