@@ -111,6 +111,9 @@ export default component$<FlowstaAccountProps>((props) => {
   const session = useSignal<FlowstaSession | null>(null);
   const busy = useSignal(false);
   const error = useSignal("");
+  // Said BEFORE the browser opens (rule 3 of the connection UX): the dashboard
+  // opens signed in through the hand-off, so nothing in the browser asks again.
+  const opening = useSignal("");
   const escrow = useSignal<EscrowStatus | null>(null);
   const configSync = useSignal<ConfigSyncState | null>(null);
   // Outcome of the most recent backup attempt - a held or failed backup
@@ -366,12 +369,16 @@ export default component$<FlowstaAccountProps>((props) => {
   });
 
   const handleLinkPlan = $(async () => {
+    opening.value = "Your browser will open signed in.";
     try {
-      const url = await invoke<string>("flowsta_link_url");
+      const url = await invoke<string>("flowsta_handoff_url");
       await openUrl(url);
     } catch (e) {
+      opening.value = "";
       error.value = String(e);
+      return;
     }
+    setTimeout(() => { opening.value = ""; }, 6000);
   });
 
   const signedIn = () => !!session.value?.signed_in;
@@ -624,6 +631,9 @@ export default component$<FlowstaAccountProps>((props) => {
                   <span class="px-5 py-2 text-sm">See plans</span>
                 </LiquidMetalButton>
               </div>
+              {opening.value && (
+                <p class="mt-2 text-xs text-[var(--text-secondary)]" data-testid="plans-opening">{opening.value}</p>
+              )}
               <p class="mt-2 text-xs text-[var(--text-muted)]">
                 Already subscribed on yourownai.net? The same button links
                 this device to your plan - or{" "}

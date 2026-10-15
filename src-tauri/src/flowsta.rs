@@ -46,6 +46,24 @@ pub fn proxy_url() -> String {
     PROD.to_string()
 }
 
+/// The Flowsta auth API: only for the desktop-to-web hand-off (the OAuth
+/// code for the website), the one thing a browser session needs the API for.
+pub fn auth_api_url() -> String {
+    const PROD: &str = "https://auth-api.flowsta.com";
+    #[cfg(debug_assertions)]
+    {
+        return dev_override("YOAI_AUTH_API", "auth_api").unwrap_or_else(|| PROD.to_string());
+    }
+    #[cfg(not(debug_assertions))]
+    PROD.to_string()
+}
+
+/// The website's OAuth client (yourownai.net) - the desktop app's companion
+/// web client in the dev portal; the hand-off asks the Vault to sign the
+/// web-login challenge for it.
+pub(crate) const YOAI_WEB_CLIENT_ID: &str = "flowsta_app_6a1d801a0c327b55ea84530926c9b9e8cd7abb3cea07375449dfa35bfdb74668";
+pub(crate) const YOAI_WEB_CALLBACK: &str = "https://yourownai.net/auth/callback/";
+
 pub fn account_url() -> String {
     const PROD: &str = "https://yourownai.net/dashboard/";
     #[cfg(debug_assertions)]
@@ -724,6 +742,183 @@ pub async fn flowsta_link_url(app: tauri::AppHandle) -> Result<String, String> {
         .and_then(|v| v.as_str().map(String::from))
         .ok_or("not signed in")?;
     Ok(format!("{}?link={}", account_url(), key))
+}
+
+/// The desktop-to-web hand-off (build-docs VAULT_CONNECTION_UX.md §4): the
+/// dashboard opens SIGNED IN as the identity this app already holds, with
+/// the device linked by its claims - the browser never has to find the
+/// Vault, no second dialog, no code, no "link this device". The API's own
+/// web sign-in, made from here: a challenge for the WEB client; the Vault
+/// signs it over loopback (a linked app may sign for its companion web
+/// client - silently when its trust setting allows); the API's session;
+/// the OAuth authorize step as a Bearer, which yields the website's
+/// callback URL with the code. The PKCE verifier and the state ride in the
+/// URL fragment, which never reaches a server. When any step refuses (an
+/// older Vault, a registration without the companion, no network) the
+/// plain `?link=` URL is returned - the way it worked before, never a dead end.
+#[tauri::command]
+pub async fn flowsta_handoff_url(app: tauri::AppHandle) -> Result<String, String> {
+    let fallback = flowsta_link_url(app.clone()).await?;
+    match handoff_url(&app).await {
+        Ok(url) => {
+            log::info!("[flowsta] hand-off: the dashboard opens signed in");
+            Ok(url)
+        }
+        Err(why) => {
+            log::warn!("[flowsta] hand-off not available ({why}) - opening the dashboard the plain way");
+            Ok(fallback)
+        }
+    }
+}
+
+async fn handoff_url(app: &tauri::AppHandle) -> Result<String, String> {
+    let port = match find_vault().await {
+        VaultStatus { installed: true, unlocked: true, port: Some(p), .. } => p,
+        VaultStatus { installed: true, .. } => return Err("vault_locked".into()),
+        _ => return Err("vault_not_found".into()),
+    };
+    let client = http();
+    let api = auth_api_url();
+    // 1. A challenge for the WEB client.
+    let ch: serde_json::Value = client
+        .post(format!("{api}/auth/vault/challenge"))
+        .json(&serde_json::json!({ "client_id": YOAI_WEB_CLIENT_ID }))
+        .send()
+        .await
+        .map_err(|e| format!("api unreachable: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("bad challenge: {e}"))?;
+    let challenge = ch["challenge"].as_str().ok_or("no challenge")?.to_string();
+    // 2. The Vault signs it (this linked app, its own loopback call).
+    use base64::Engine as _;
+    let challenge_b64 = base64::engine::general_purpose::STANDARD.encode(challenge.as_bytes());
+    let auth_resp = client
+        .post(format!("http://127.0.0.1:{port}/authenticate"))
+        .header("Origin", VAULT_ORIGIN)
+        .timeout(std::time::Duration::from_secs(125))
+        .json(&serde_json::json!({
+            "app_name": "Your Own AI",
+            "challenge": challenge_b64,
+            "reason": "Open yourownai.net signed in",
+            "client_id": YOAI_WEB_CLIENT_ID,
+            "scopes": ["openid", "display_name", "username", "profile_picture"],
+        }))
+        .send()
+        .await
+        .map_err(|_| "vault_interrupted".to_string())?;
+    if !auth_resp.status().is_success() {
+        let body: serde_json::Value = auth_resp.json().await.unwrap_or_default();
+        return Err(body["error"].as_str().unwrap_or("vault_refused").to_string());
+    }
+    let auth: serde_json::Value = auth_resp.json().await.map_err(|e| format!("bad vault response: {e}"))?;
+    let (agent_pub_key, did, signature) = (
+        auth["agent_pub_key"].as_str().unwrap_or_default().to_string(),
+        auth["did"].as_str().unwrap_or_default().to_string(),
+        auth["signature"].as_str().unwrap_or_default().to_string(),
+    );
+    if signature.is_empty() {
+        return Err("no signature".into());
+    }
+    // 3. The API's session, from the signature.
+    let tok_resp = client
+        .post(format!("{api}/auth/vault/token"))
+        .json(&serde_json::json!({ "challenge": challenge, "agent_pub_key": agent_pub_key, "did": did, "signature": signature }))
+        .send()
+        .await
+        .map_err(|e| format!("api unreachable: {e}"))?;
+    if !tok_resp.status().is_success() {
+        let body: serde_json::Value = tok_resp.json().await.unwrap_or_default();
+        return Err(body["error"].as_str().unwrap_or("token_refused").to_string());
+    }
+    let tok: serde_json::Value = tok_resp.json().await.map_err(|e| format!("bad token response: {e}"))?;
+    let token = tok["token"].as_str().ok_or("no session")?.to_string();
+    // 4. The OAuth code for the website, as the signed-in person.
+    let (verifier, code_challenge) = pkce_pair();
+    let state = random_url_safe(24);
+    let q = format!(
+        "client_id={}&redirect_uri={}&response_type=code&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
+        YOAI_WEB_CLIENT_ID,
+        pct(YOAI_WEB_CALLBACK),
+        pct("openid display_name username profile_picture"),
+        state,
+        code_challenge,
+    );
+    let auth_resp = client
+        .get(format!("{api}/oauth/authorize?{q}"))
+        .bearer_auth(&token)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("api unreachable: {e}"))?;
+    if !auth_resp.status().is_success() {
+        let body: serde_json::Value = auth_resp.json().await.unwrap_or_default();
+        return Err(body["error"].as_str().unwrap_or("authorize_refused").to_string());
+    }
+    let authz: serde_json::Value = auth_resp.json().await.map_err(|e| format!("bad authorize response: {e}"))?;
+    let redirect_url = authz["redirect_url"].as_str().ok_or("consent_required")?;
+    Ok(handoff_callback_url(redirect_url, &verifier, &state, &agent_pub_key))
+}
+
+/// Percent-encode a query value (RFC 3986 unreserved characters pass).
+fn pct(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// The website's callback URL with the verifier, the state and the identity's
+/// agent key in the fragment (the dashboard links the key to the plan from
+/// there - the key came with a code bound to this identity, not from a bare
+/// URL parameter).
+pub(crate) fn handoff_callback_url(redirect_url: &str, verifier: &str, state: &str, agent_pub_key: &str) -> String {
+    format!("{redirect_url}#v={verifier}&s={state}&a={}", pct(agent_pub_key))
+}
+
+fn random_url_safe(bytes: usize) -> String {
+    use base64::Engine as _;
+    use rand::RngCore as _;
+    let mut raw = vec![0u8; bytes];
+    rand::thread_rng().fill_bytes(&mut raw);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw)
+}
+
+/// PKCE S256: a 43-char verifier and its challenge, both base64url, no padding.
+pub(crate) fn pkce_pair() -> (String, String) {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    let verifier = random_url_safe(32);
+    let digest = sha2::Sha256::digest(verifier.as_bytes());
+    (verifier, base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest))
+}
+
+#[cfg(test)]
+mod handoff_tests {
+    use super::{handoff_callback_url, pkce_pair};
+    use base64::Engine as _;
+    use sha2::Digest as _;
+
+    #[test]
+    fn pkce_pair_is_s256_over_the_verifier() {
+        let (v, c) = pkce_pair();
+        assert_eq!(v.len(), 43);
+        assert!(v.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'));
+        let expect = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(v.as_bytes()));
+        assert_eq!(c, expect);
+    }
+
+    #[test]
+    fn the_fragment_carries_verifier_and_state() {
+        let url = handoff_callback_url("https://yourownai.net/auth/callback/?code=abc&state=xyz", "VERIFIER", "xyz", "uhCAkAb+/c");
+        assert_eq!(url, "https://yourownai.net/auth/callback/?code=abc&state=xyz#v=VERIFIER&s=xyz&a=uhCAkAb%2B%2Fc");
+        assert_eq!(super::pct("a b/c"), "a%20b%2Fc");
+    }
 }
 
 /// Plain account URL (no `?link=`) — for "Manage plan" when the device is

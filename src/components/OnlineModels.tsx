@@ -229,7 +229,7 @@ export const OnlineModels = component$(() => {
   // "Choose a plan" / link a not-yet-linked device → carries ?link=<key>.
   const handleLinkPlan = $(async () => {
     try {
-      const url = await invoke<string>('flowsta_link_url');
+      const url = await invoke<string>('flowsta_handoff_url');
       await openUrl(url);
     } catch (e) {
       store.error = String(e);

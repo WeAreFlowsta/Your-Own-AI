@@ -609,6 +609,7 @@ pub fn run() {
             flowsta::flowsta_session,
             flowsta::flowsta_usage,
             flowsta::flowsta_link_url,
+            flowsta::flowsta_handoff_url,
             flowsta::flowsta_account_url,
             flowsta::list_online_models,
             flowsta::vault_sign_document,
