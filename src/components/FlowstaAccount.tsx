@@ -331,7 +331,12 @@ export default component$<FlowstaAccountProps>((props) => {
     const onFocus = () => { if (session.value?.signed_in && !busy.value) void refresh(); };
     window.addEventListener("focus", onFocus);
     cleanup(() => window.removeEventListener("focus", onFocus));
-    const unlistenSession = await listen("flowsta-session-changed", () => { if (!busy.value) void refresh(); });
+    const unlistenSession = await listen<{ reason?: string }>("flowsta-session-changed", (ev) => {
+      // Told, not inferred: a Disconnect in the Vault (on this device or
+      // another) says so here instead of the card quietly going signed-out.
+      if (ev.payload?.reason === "revoked") error.value = "Your Vault disconnected Your Own AI. Sign in again to continue.";
+      if (!busy.value) void refresh();
+    });
     cleanup(() => unlistenSession());
   });
 
