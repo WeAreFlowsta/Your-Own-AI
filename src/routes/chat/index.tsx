@@ -2383,9 +2383,7 @@ export default component$(() => {
                           Sign in to use online models
                         </p>
                         <p class="text-sm text-yellow-700 dark:text-yellow-300 mb-4">
-                          Online models are powered by your Flowsta identity,
-                          via Flowsta Vault on this device. Local models keep
-                          working without it.
+                          Online models use your Flowsta identity, through Flowsta Vault on this computer. Offline models keep working without it.
                         </p>
                         <LiquidMetalButton onClick$={() => nav("/settings")} class="px-4 py-2 text-sm">
                           Go to Settings
@@ -2400,9 +2398,7 @@ export default component$(() => {
                           Online models need a plan
                         </p>
                         <p class="text-sm text-yellow-700 dark:text-yellow-300 mb-4">
-                          This device isn't linked to a Your Own AI plan yet.
-                          Link it (or subscribe) in the browser — it takes a
-                          few seconds — then try again.
+                          This device isn't on a plan yet. Your browser opens signed in; choose or link a plan there, then try again.
                         </p>
                         <LiquidMetalButton
                           onClick$={async () => {
@@ -2417,7 +2413,7 @@ export default component$(() => {
                           }}
                           class="px-4 py-2 text-sm"
                         >
-                          Link my plan
+                          See plans
                         </LiquidMetalButton>
                       </div>
                     );
@@ -2428,7 +2424,7 @@ export default component$(() => {
                         <p class="text-sm font-medium text-yellow-800 dark:text-yellow-200 mb-3">
                           {online.code === "allowance_exceeded"
                             ? "You've reached your monthly allowance"
-                            : "An overage invoice is waiting to be paid"}
+                            : "An overage invoice is waiting"}
                         </p>
                         <p class="text-sm text-yellow-700 dark:text-yellow-300 mb-4">
                           {online.message ||

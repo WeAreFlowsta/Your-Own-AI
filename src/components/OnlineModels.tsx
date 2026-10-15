@@ -31,6 +31,8 @@ import { noteEntitlement } from '../utils/entitlement';
 interface VaultStatus {
   installed: boolean;
   unlocked: boolean;
+  /** Installed on this computer (found on disk) even when nothing answered. */
+  present?: boolean;
 }
 
 interface FlowstaSession {
@@ -157,6 +159,8 @@ export const OnlineModels = component$(() => {
     busy: false,
     error: '',
     modelsError: false,
+    /** "Open Flowsta Vault" clicked; the re-probe flips the card when it answers. */
+    openingVault: false,
   });
 
   const refresh = $(async () => {
@@ -208,16 +212,16 @@ export const OnlineModels = component$(() => {
     } catch (e) {
       const msg = String(e);
       if (msg.includes('vault_locked')) {
-        store.error = 'Your Vault is locked - unlock it and try again.';
+        store.error = 'Your Vault is locked. Unlock it and try again.';
       } else if (msg.includes('vault_not_found')) {
-        store.error = "Flowsta Vault isn't running - start it and try again.";
+        store.error = "Flowsta Vault isn't running. Start it and try again.";
       } else if (msg.includes('vault_interrupted')) {
         store.error =
-          'Vault stopped responding before sign-in finished (it may have locked). Unlock Vault and try again.';
+          'Your Vault stopped answering before the sign-in finished. It may have locked. Unlock it and try again.';
       } else if (msg.includes('denied') || msg.includes('rejected') || msg.includes('user_denied')) {
-        store.error = 'Sign-in was declined in Vault.';
+        store.error = 'You declined the sign-in in your Vault.';
       } else {
-        store.error = `Sign-in failed: ${msg}`;
+        store.error = msg.includes('link_denied') ? 'You declined the connection in your Vault.' : msg.includes('identity_switched') || msg.includes('identity_mismatch') ? 'Your Vault holds a different identity now. Sign out here, then sign in again.' : 'Sign-in failed. Try again. If it keeps happening, the log file has the detail.'; console.warn('[flowsta] sign-in failed:', msg);
       }
       await refresh();
     } finally {
@@ -279,31 +283,25 @@ export const OnlineModels = component$(() => {
           Online Models
         </h2>
         <p class="text-sm text-[var(--text-secondary)] mb-4">
-          Powerful cloud models you reach through Flowsta - for tasks beyond what
-          your own hardware can run.
+          Cloud models you reach through Flowsta, for tasks beyond what your own computer can run.
         </p>
 
         <div class="space-y-3">
           <Callout intent="premium" title="What you get" id="online-what-you-get">
             <ul class="list-disc space-y-1.5 pl-5 marker:text-[var(--text-muted)]">
-              <li>More capable than the models your own computer can run - for harder or bigger tasks.</li>
-              <li>Some can search the web for current, up-to-date answers - look for "Web" in the model name.</li>
+              <li>More capable than the models your computer can run, for harder or bigger tasks.</li>
+              <li>Some search the web for current answers. Look for "Web" in the model name.</li>
             </ul>
           </Callout>
 
           <Callout intent="info" title="Your privacy" id="online-privacy">
             <ul class="list-disc space-y-1.5 pl-5 marker:text-[var(--text-muted)]">
-              <li>When Flowsta forwards your message to a provider, it doesn't attach your name, account, or any personal details.</li>
+              <li>When Flowsta forwards a message to a provider, your name and account do not go with it.</li>
               <li>
-                But the message itself reaches that provider, and we can't control what
-                they do with it. If you'd rather no one outside ever sees a query, use an{' '}
-                <strong class="text-[var(--text-primary)]">Offline model</strong> - it
-                never leaves your device.
+                The message itself does reach that provider. If no one outside should ever see a question, use an{' '} <strong class="text-[var(--text-primary)]">offline model</strong>; it never leaves your device.
               </li>
               <li>
-                Either way, your chat history - online and offline - is{' '}
-                <strong class="text-[var(--text-primary)]">encrypted inside Your Own AI</strong>.
-                No one can read it unless you grant access.
+                Your chat history, online and offline, is{' '} <strong class="text-[var(--text-primary)]">encrypted inside Your Own AI</strong>.
               </li>
             </ul>
           </Callout>
@@ -322,28 +320,43 @@ export const OnlineModels = component$(() => {
         <div class="generic-container rounded-2xl p-6 mb-8">
           <p class="text-sm text-[var(--text-muted)]">Checking for Flowsta Vault…</p>
         </div>
+      ) : !store.vault.installed && store.vault.present ? (
+        <div class="generic-container rounded-2xl p-6 mb-8 space-y-3" data-testid="vault-closed">
+          <h3 class="text-lg font-semibold text-[var(--text-primary)]">
+            Open Flowsta Vault to sign in
+          </h3>
+          <p class="text-sm text-[var(--text-secondary)]">
+            Flowsta Vault is on this computer but not open.
+          </p>
+          <div>
+            <LiquidMetalButton onClick$={async () => { store.openingVault = true; await openUrl('flowsta://open/v1'); setTimeout(() => { store.openingVault = false; }, 15000); }}>
+              <span class="px-5 py-2.5 text-sm">Open Flowsta Vault</span>
+            </LiquidMetalButton>
+            <button
+              class="ml-3 text-sm text-[var(--text-link)] hover:underline"
+              onClick$={refresh}
+            >
+              Not showing up? Check again
+            </button>
+          </div>
+          {store.openingVault && (
+            <p class="text-xs text-[var(--text-muted)]">Opening Flowsta Vault… this page notices the moment it is ready.</p>
+          )}
+        </div>
       ) : !store.vault.installed ? (
         <div class="generic-container rounded-2xl p-6 mb-8 space-y-3">
           <h3 class="text-lg font-semibold text-[var(--text-primary)]">
             Online models, the most private way there is
           </h3>
           <p class="text-sm text-[var(--text-secondary)]">
-            Online models come with a Flowsta identity, which lives in Flowsta
-            Vault - a free app on your own computer. No password, nothing of
-            yours on our servers, and nobody can lock you out, not even us.
-            The Vault signs you in, and your name and account never travel
-            with your messages. It also backs up your AIs and conversations
-            and signs your exports.
+            Online models use your Flowsta identity, which lives in Flowsta Vault, a free app on your own computer. No password, and nobody can lock you out, not even us. Your Vault signs you in, and your name never travels with your messages. It also backs up your AIs and conversations.
           </p>
           <p class="text-xs text-[var(--text-muted)]">
-            Free, about two minutes. The Vault gives you 24 recovery words to
-            keep on paper - the only way back in, which is exactly why no one
-            can take it from you. Get it, create your identity, and come
-            back: this page notices the moment it is ready.
+            Free, about two minutes. The Vault gives you 24 recovery words to keep on paper; they are the only way back in. Get it, create your identity, and come back. This page notices the moment it is ready.
           </p>
           <div>
             <LiquidMetalButton onClick$={() => openUrl(VAULT_DOWNLOAD_URL)}>
-              <span class="px-5 py-2.5 text-sm">Get Flowsta Vault</span>
+              <span class="px-5 py-2.5 text-sm">Get Flowsta Vault - free</span>
             </LiquidMetalButton>
             <button
               class="ml-3 text-sm text-[var(--text-link)] hover:underline"
@@ -362,7 +375,7 @@ export const OnlineModels = component$(() => {
                 Sign in to turn on online models
               </h3>
               <p class="text-sm text-[var(--text-secondary)]">
-                Online models come with the optional plan. How it works:
+                Three steps:
               </p>
             </div>
           </div>
@@ -371,8 +384,7 @@ export const OnlineModels = component$(() => {
             <li class="flex gap-2">
               <span class="text-[var(--text-muted)]">1.</span>
               <span>
-                <span class="text-[var(--text-primary)] font-medium">Install &amp; unlock Flowsta Vault</span>
-                {' '}- it holds your Flowsta identity on this device.
+                <span class="text-[var(--text-primary)] font-medium">Open Flowsta Vault.</span> {' '}It holds your identity on this device.
                 {store.vault.installed && (
                   <span class="text-emerald-400"> ✓ installed</span>
                 )}
@@ -381,22 +393,20 @@ export const OnlineModels = component$(() => {
             <li class="flex gap-2">
               <span class="text-[var(--text-muted)]">2.</span>
               <span>
-                <span class="text-[var(--text-primary)] font-medium">Sign in with Flowsta</span>
-                {' '}- Vault asks you to approve; nothing happens without your say-so.
+                <span class="text-[var(--text-primary)] font-medium">Sign in with Flowsta.</span> {' '}Your Vault asks you to approve.
               </span>
             </li>
             <li class="flex gap-2">
               <span class="text-[var(--text-muted)]">3.</span>
               <span>
-                <span class="text-[var(--text-primary)] font-medium">Choose a plan</span>
-                {' '}at yourownai.net - usage metered, no lock-in, every price shown up front.
+                <span class="text-[var(--text-primary)] font-medium">Choose a plan.</span> {' '}Every price is shown up front, and you can cancel any time.
               </span>
             </li>
           </ol>
 
           {!store.vault.unlocked && (
             <p class="text-sm text-amber-300 mb-3">
-              Vault is locked - unlock it, then sign in.
+              Your Vault is locked. Unlock it, then sign in.
             </p>
           )}
 
@@ -417,8 +427,7 @@ export const OnlineModels = component$(() => {
           </button>
           <p class="text-xs text-[var(--text-muted)] mt-2">
             {store.busy
-              ? 'Waiting for Vault approval…'
-              : 'Vault will ask you to approve the sign-in.'}
+              ? 'Waiting for your Vault…' : 'Your Vault asks you to approve.'}
           </p>
         </div>
       ) : needsPlan ? (
@@ -430,11 +439,7 @@ export const OnlineModels = component$(() => {
             Give your AIs the online frontier
           </h3>
           <p class="text-sm text-[var(--text-secondary)]">
-            One plan adds GPT, Grok, Kimi, DeepSeek, Qwen, GLM, and Perplexity
-            web search alongside your offline models. Smart routing sends each
-            message to the model that suits it, and your AIs remember you
-            everywhere - online or off. From $20/month, and every dollar comes
-            back as model credit. Everything local stays free forever.
+            One plan adds models from OpenAI (GPT), Grok, Meta, Kimi, DeepSeek, Qwen and GLM, plus Perplexity web search, next to your offline models. Smart routing picks the model for each message, and your AIs remember you online or off. From $20 a month, every dollar back as model credit. Everything offline stays free.
           </p>
           <div>
             <LiquidMetalButton onClick$={handleLinkPlan}>
@@ -442,15 +447,12 @@ export const OnlineModels = component$(() => {
             </LiquidMetalButton>
           </div>
           <p class="text-xs text-[var(--text-muted)]">
-            Already subscribed on yourownai.net? The same button links this
-            device to your plan - or{' '}
+            Already subscribed? See plans links this device to your plan too. Just did it?{' '}
             <button
               class="text-[var(--text-link)] hover:underline"
               onClick$={refresh}
             >
-              refresh
-            </button>{' '}
-            if you just did.
+              Refresh </button>
           </p>
         </div>
       ) : (

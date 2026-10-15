@@ -88,10 +88,50 @@ pub(crate) const VAULT_ORIGIN: &str = "yoai://app";
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct VaultStatus {
+    /// A Vault answered on loopback (running).
     pub installed: bool,
     pub unlocked: bool,
     pub port: Option<u16>,
     pub agent_pub_key: Option<String>,
+    /// A Vault is on this computer (install location found) even when none
+    /// answered: "open it", never "get it".
+    #[serde(default)]
+    pub present: bool,
+}
+
+/// Is Flowsta Vault installed on this computer? Looks where its installers
+/// put it (Tauri bundle defaults for the product name "Flowsta Vault" /
+/// binary "flowsta-vault"); false means "not found there", not "absent".
+pub(crate) fn vault_app_present() -> bool {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    #[cfg(target_os = "macos")]
+    {
+        candidates.push("/Applications/Flowsta Vault.app".into());
+        if let Some(h) = &home { candidates.push(h.join("Applications/Flowsta Vault.app")); }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        for var in ["LOCALAPPDATA", "PROGRAMFILES", "ProgramFiles(x86)"] {
+            if let Some(base) = std::env::var_os(var) {
+                candidates.push(std::path::PathBuf::from(&base).join("Flowsta Vault").join("Flowsta Vault.exe"));
+                candidates.push(std::path::PathBuf::from(&base).join("Programs").join("Flowsta Vault").join("Flowsta Vault.exe"));
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        candidates.push("/usr/bin/flowsta-vault".into());
+        candidates.push("/usr/local/bin/flowsta-vault".into());
+        candidates.push("/usr/share/applications/Flowsta Vault.desktop".into());
+        candidates.push("/usr/share/applications/flowsta-vault.desktop".into());
+        if let Some(h) = &home {
+            candidates.push(h.join(".local/share/applications/Flowsta Vault.desktop"));
+            candidates.push(h.join(".local/share/applications/flowsta-vault.desktop"));
+        }
+    }
+    let _ = &home;
+    candidates.iter().any(|p| p.exists())
 }
 
 #[derive(Serialize, Clone)]
@@ -368,11 +408,12 @@ pub async fn find_vault() -> VaultStatus {
                 unlocked: v["unlocked"].as_bool().unwrap_or(false),
                 port: Some(*port),
                 agent_pub_key: v["agent_pub_key"].as_str().map(String::from),
+                present: true,
             }
         }
         None => {
             *cached_port().lock().unwrap() = None;
-            VaultStatus::default()
+            VaultStatus { present: vault_app_present(), ..VaultStatus::default() }
         }
     }
 }

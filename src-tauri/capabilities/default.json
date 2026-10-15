@@ -23,6 +23,9 @@
           "url": "https://flowsta.com/*"
         },
         {
+          "url": "flowsta://*"
+        },
+        {
           "url": "https://docs.astral.sh/*"
         },
         {

@@ -197,10 +197,7 @@ export default component$(() => {
             onModelSelected$={handleModelSelected}
           />
           <p class="mx-auto mt-6 max-w-2xl px-4 text-center text-xs text-[var(--text-muted)]">
-            Setting up a new device? If your previous install backed up to
-            your Flowsta Vault, restore it first (Settings → Your Flowsta
-            Account → Restore conversations from Vault) so your AIs and
-            conversations come back before you start anything new.
+            Setting up a new device? If your last install backed up to your Flowsta Vault, restore it first, in Settings under Your Flowsta Identity, so your AIs and conversations come back before you start anything new.
           </p>
         </div>
       </div>

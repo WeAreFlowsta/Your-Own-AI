@@ -19,6 +19,8 @@ import {
 interface VaultStatus {
   installed: boolean;
   unlocked: boolean;
+  /** Installed on this computer (found on disk) even when nothing answered. */
+  present?: boolean;
 }
 
 interface FlowstaSession {
@@ -114,6 +116,9 @@ export default component$<FlowstaAccountProps>((props) => {
   // Said BEFORE the browser opens (rule 3 of the connection UX): the dashboard
   // opens signed in through the hand-off, so nothing in the browser asks again.
   const opening = useSignal("");
+  // "Open Flowsta Vault" was clicked: the deep link is on its way; the 5 s
+  // re-probe flips this card the moment the Vault answers.
+  const openingVault = useSignal(false);
   const escrow = useSignal<EscrowStatus | null>(null);
   const configSync = useSignal<ConfigSyncState | null>(null);
   // Outcome of the most recent backup attempt - a held or failed backup
@@ -271,9 +276,9 @@ export default component$<FlowstaAccountProps>((props) => {
         error.value =
           "Your Vault is signed in as someone else. Unlock the identity this device belongs to, or restore from this Vault to make the device theirs.";
       } else if (msg.includes("vault_locked")) {
-        error.value = "Your Vault is locked - unlock it and try again.";
+        error.value = "Your Vault is locked. Unlock it and try again.";
       } else if (msg.includes("vault_unavailable")) {
-        error.value = "Flowsta Vault isn't running - start it and try again.";
+        error.value = "Flowsta Vault isn't running. Start it and try again.";
       } else {
         error.value = `Restore failed: ${msg}`;
       }
@@ -348,16 +353,16 @@ export default component$<FlowstaAccountProps>((props) => {
     } catch (e) {
       const msg = String(e);
       if (msg.includes("vault_locked")) {
-        error.value = "Your Vault is locked - unlock it and try again.";
+        error.value = "Your Vault is locked. Unlock it and try again.";
       } else if (msg.includes("vault_not_found")) {
-        error.value = "Flowsta Vault isn't running - start it and try again.";
+        error.value = "Flowsta Vault isn't running. Start it and try again.";
       } else if (msg.includes("vault_interrupted")) {
         error.value =
-          "Vault stopped responding before sign-in finished (it may have locked). Unlock Vault and try again.";
+          "Your Vault stopped answering before the sign-in finished. It may have locked. Unlock it and try again.";
       } else if (msg.includes("denied") || msg.includes("rejected") || msg.includes("user_denied")) {
-        error.value = "Sign-in was declined in Vault.";
+        error.value = "You declined the sign-in in your Vault.";
       } else {
-        error.value = `Sign-in failed: ${msg}`;
+        error.value = msg.includes("link_denied") ? "You declined the connection in your Vault." : msg.includes("identity_switched") || msg.includes("identity_mismatch") ? "Your Vault holds a different identity now. Sign out here, then sign in again." : "Sign-in failed. Try again. If it keeps happening, the log file has the detail."; console.warn("[flowsta] sign-in failed:", msg);
       }
       // Re-probe so the section reflects Vault's real current state
       // (locked / gone) and offers the right next action.
@@ -374,7 +379,7 @@ export default component$<FlowstaAccountProps>((props) => {
   });
 
   const handleLinkPlan = $(async () => {
-    opening.value = "Your browser will open signed in.";
+    opening.value = "Your browser opens signed in.";
     try {
       const url = await invoke<string>("flowsta_handoff_url");
       await openUrl(url);
@@ -396,10 +401,7 @@ export default component$<FlowstaAccountProps>((props) => {
         Your Flowsta Identity
       </h2>
       <p class="text-sm text-[var(--text-secondary)] mb-3">
-        Everything local works without an account, forever. Flowsta Vault is
-        a free app that holds your identity on your own computer - no
-        password, nothing of yours on our servers, and nobody can lock you
-        out, not even us. Connect it and Your Own AI can:
+        Everything offline works without this, forever. Flowsta Vault is a free app that keeps your identity on your own computer. No password, and nobody can lock you out, not even us. Connect it and Your Own AI can:
       </p>
       {!signedIn() && (
         <>
@@ -407,31 +409,24 @@ export default component$<FlowstaAccountProps>((props) => {
             <li class="flex items-start gap-2">
               <span class="text-emerald-400 mt-0.5">✓</span>
               <span>
-                Back up your AI world automatically - conversations, memory,
-                and your AIs - and bring it all back on a new device with one
-                click.
+                Back up your AIs, conversations and memory, and sync them between devices.
               </span>
             </li>
             <li class="flex items-start gap-2">
               <span class="text-emerald-400 mt-0.5">✓</span>
               <span>
-                Sign your exports with your identity, so anyone can verify
-                they really came from you.
+                Sign your exports, so anyone can check they came from you.
               </span>
             </li>
             <li class="flex items-start gap-2">
               <span class="text-emerald-400 mt-0.5">✓</span>
               <span>
-                Run online models the most private way there is: the Vault
-                signs you in, and your name and account never travel with
-                your messages.
+                Use online models with your Vault signing you in. The most private way possible to use online models.
               </span>
             </li>
           </ul>
           <p class="mb-4 text-xs text-[var(--text-muted)]">
-            Free, about two minutes. The Vault gives you 24 recovery words to
-            keep on paper - the only way back in, which is exactly why no one
-            can take it from you.
+            Free, about two minutes. The Vault gives you 24 recovery words to keep on paper. They are the only way back in, which is why no one can take it from you.
           </p>
         </>
       )}
@@ -444,11 +439,28 @@ export default component$<FlowstaAccountProps>((props) => {
 
       {!vault.value ? (
         <p class="text-sm text-[var(--text-muted)]">Checking for Flowsta Vault…</p>
+      ) : !vault.value.installed && vault.value.present ? (
+        <div class="space-y-3" data-testid="vault-closed">
+          <p class="text-sm text-[var(--text-secondary)]">
+            Flowsta Vault is on this computer but not open.
+          </p>
+          <LiquidMetalButton onClick$={async () => { openingVault.value = true; await openUrl("flowsta://open/v1"); setTimeout(() => { openingVault.value = false; }, 15000); }}>
+            <span class="px-5 py-2.5 text-sm">Open Flowsta Vault</span>
+          </LiquidMetalButton>
+          <button
+            class="ml-3 text-sm text-[var(--text-link)] hover:underline"
+            onClick$={refresh}
+          >
+            Not showing up? Check again
+          </button>
+          {openingVault.value && (
+            <p class="text-xs text-[var(--text-muted)]">Opening Flowsta Vault… this page notices the moment it is ready.</p>
+          )}
+        </div>
       ) : !vault.value.installed ? (
         <div class="space-y-3">
           <p class="text-sm text-[var(--text-secondary)]">
-            Get the Vault, create your identity in it, and come back - this
-            page notices the moment it is ready and signs you in.
+            Get the Vault and create your identity in it. This page notices the moment it is ready.
           </p>
           <LiquidMetalButton onClick$={() => openUrl(VAULT_DOWNLOAD_URL)}>
             <span class="px-5 py-2.5 text-sm">Get Flowsta Vault - free</span>
@@ -465,7 +477,7 @@ export default component$<FlowstaAccountProps>((props) => {
           {!vault.value.unlocked && (
             <div class="space-y-2">
               <p class="text-sm text-amber-300">
-                A Flowsta Vault on this computer is locked - unlock it, then sign in.
+                Your Vault is locked. Unlock it, then sign in.
               </p>
               {/* A Vault answering on this computer is not always YOURS:
                   another Windows or macOS account still signed in keeps
@@ -473,15 +485,13 @@ export default component$<FlowstaAccountProps>((props) => {
                   install path visible so a fresh account is never told
                   to unlock something it never installed. */}
               <p class="text-sm text-[var(--text-muted)]">
-                Not your Vault (another account on this computer)?{" "}
+                Is this Vault from another user account on this computer? Install{" "}
                 <button
                   type="button"
                   class="text-[var(--text-link)] hover:underline"
                   onClick$={() => openUrl(VAULT_DOWNLOAD_URL)}
                 >
-                  Get Flowsta Vault - free
-                </button>
-                , install it under this account, then check again.
+                  Flowsta Vault </button>{" "} under this account too, then check again.
               </p>
             </div>
           )}
@@ -502,8 +512,7 @@ export default component$<FlowstaAccountProps>((props) => {
           </button>
           <p class="text-xs text-[var(--text-muted)]">
             {busy.value
-              ? "Waiting for Vault approval…"
-              : "Vault will ask you to approve the sign-in."}
+              ? "Waiting for your Vault…" : "Your Vault asks you to approve."}
           </p>
         </div>
       ) : (
@@ -525,7 +534,7 @@ export default component$<FlowstaAccountProps>((props) => {
               )}
               <div class="min-w-0">
                 <p class="truncate text-sm text-[var(--text-primary)]">
-                  {session.value.display_name || "Signed in via Vault"}
+                  {session.value.display_name || "Signed in with Flowsta"}
                   {session.value.web_username && (
                     <span class="ml-2 text-xs text-[var(--text-muted)]">@{session.value.web_username}</span>
                   )}
@@ -624,12 +633,7 @@ export default component$<FlowstaAccountProps>((props) => {
                 Give your AIs the online frontier
               </p>
               <p class="mt-1 text-xs text-[var(--text-muted)]">
-                One plan adds GPT, Grok, Kimi, DeepSeek, Qwen, GLM, and
-                Perplexity web search alongside your offline models. Smart
-                routing sends each message to the model that suits it, and
-                your AIs remember you everywhere - online or off. From
-                $20/month, and every dollar comes back as model credit.
-                Everything local stays free forever.
+                One plan adds models from OpenAI (GPT), Grok, Meta, Kimi, DeepSeek, Qwen and GLM, plus Perplexity web search, next to your offline models. Smart routing picks the model for each message, and your AIs remember you online or off. From $20 a month, every dollar back as model credit. Everything offline stays free.
               </p>
               <div class="mt-3">
                 <LiquidMetalButton onClick$={handleLinkPlan}>
@@ -640,15 +644,12 @@ export default component$<FlowstaAccountProps>((props) => {
                 <p class="mt-2 text-xs text-[var(--text-secondary)]" data-testid="plans-opening">{opening.value}</p>
               )}
               <p class="mt-2 text-xs text-[var(--text-muted)]">
-                Already subscribed on yourownai.net? The same button links
-                this device to your plan - or{" "}
+                Already subscribed? See plans links this device to your plan too. Just did it?{" "}
                 <button
                   class="text-[var(--text-link)] hover:underline"
                   onClick$={refresh}
                 >
-                  refresh
-                </button>{" "}
-                if you just did.
+                  Refresh </button>
               </p>
             </div>
           )}
@@ -663,7 +664,7 @@ export default component$<FlowstaAccountProps>((props) => {
                   await openUrl(url);
                 }}
               >
-                Manage plan on yourownai.net
+                Manage plan
               </button>
             )}
 
