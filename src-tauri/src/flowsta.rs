@@ -523,6 +523,15 @@ async fn fetch_vault_profile(
     }
 }
 
+/// The install key this app linked with (`app_agent_pub_key` at
+/// /link-identity). Sent on every /authenticate: the Vault signs silently
+/// for a remembered native origin only when this key matches the link,
+/// since any local process can send an Origin header.
+pub(crate) fn stored_link_key(app: &tauri::AppHandle) -> Option<String> {
+    let store = app.store(crate::profile::store_path(app, AUTH_STORE)).ok()?;
+    store.get("app_link_key").and_then(|v| v.as_str().map(String::from))
+}
+
 #[tauri::command]
 pub async fn flowsta_sign_in(app: tauri::AppHandle) -> Result<FlowstaSession, String> {
     // After a switch this profile still belongs to the previous identity;
@@ -578,6 +587,7 @@ pub async fn flowsta_sign_in(app: tauri::AppHandle) -> Result<FlowstaSession, St
             "challenge": challenge,
             "reason": "Sign in to use online models",
             "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
+            "app_agent_pub_key": stored_link_key(&app),
         }))
         .send()
         .await
@@ -844,6 +854,7 @@ async fn handoff_url(app: &tauri::AppHandle) -> Result<String, String> {
             "reason": "Open yourownai.net signed in",
             "client_id": YOAI_WEB_CLIENT_ID,
             "scopes": ["openid", "display_name", "username", "profile_picture"],
+            "app_agent_pub_key": stored_link_key(app),
         }))
         .send()
         .await
