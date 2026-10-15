@@ -588,18 +588,23 @@ async fn vault_escrow_sync_inner(app: &tauri::AppHandle) -> EscrowStatus {
             schedule_full_backup(app);
             EscrowStatus::state("synced")
         }
-        Ok(Some(ref m)) => {
+        Ok(Some(_)) => {
             // This device never backed anything up under its own material
             // and the identity already has a network: an island. Fold it in
             // - no door (MULTI_DEVICE.md §5.1). A device that HAS backed up
             // under its material is the older "conflict" (the person's choice).
             if load_sync_state(app).is_empty() {
-                match island_merge_start(app, m).await {
-                    Ok(n) => {
-                        return EscrowStatus { state: "island_merging".into(), local_conversations: Some(n), error: None, backups_held: false };
-                    }
-                    Err(e) => log::warn!("[escrow] island merge did not start ({}); reporting the conflict", e),
-                }
+                // The merge is not a choice (no door), but the RESTART is
+                // announced and timed by the person: the card offers
+                // "Restart now" (vault_escrow_island_join) or "Later" (this
+                // session; asked again at the next launch).
+                let count = count_local_conversations(app).await.ok();
+                return EscrowStatus {
+                    state: if island_deferred() { "island_deferred".into() } else { "island_pending".into() },
+                    local_conversations: count,
+                    error: None,
+                    backups_held: false,
+                };
             }
             let count = count_local_conversations(app).await.ok();
             EscrowStatus {
@@ -667,6 +672,35 @@ pub async fn vault_escrow_restore(
 /// file - it may be the only copy of an old key, and transcripts encrypted
 /// under it (e.g. on another machine's export) would otherwise become
 /// unrecoverable with no warning.
+static ISLAND_DEFERRED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+fn island_deferred() -> bool { ISLAND_DEFERRED.load(std::sync::atomic::Ordering::Relaxed) }
+
+/// "Later" on the join card: stop asking for this session. The next launch
+/// asks again (the flag is process-local on purpose).
+#[tauri::command]
+pub fn vault_escrow_island_later() -> EscrowStatus {
+    ISLAND_DEFERRED.store(true, std::sync::atomic::Ordering::Relaxed);
+    EscrowStatus::state("island_deferred")
+}
+
+/// "Restart now" on the join card: export this device's conversations, swap
+/// to the identity's material and relaunch (the pending marker replays the
+/// export on the way back up). Everything island_merge_start checks still
+/// applies; a refusal is reported, nothing is touched.
+#[tauri::command]
+pub async fn vault_escrow_island_join(app: tauri::AppHandle) -> Result<EscrowStatus, String> {
+    let vault = crate::flowsta::find_vault().await;
+    let port = vault.port.ok_or("vault_unavailable")?;
+    if !vault.unlocked { return Err("vault_locked".into()); }
+    let identity = match fetch_escrow(port).await {
+        Ok(Some(m)) => m,
+        Ok(None) => return Err("nothing_to_join".into()),
+        Err(e) => return Err(e),
+    };
+    let n = island_merge_start(&app, &identity).await?;
+    Ok(EscrowStatus { state: "island_merging".into(), local_conversations: Some(n), error: None, backups_held: false })
+}
+
 #[tauri::command]
 pub async fn vault_escrow_keep_local(app: tauri::AppHandle) -> Result<EscrowStatus, String> {
     let port = match escrow_port(&app, true).await {
