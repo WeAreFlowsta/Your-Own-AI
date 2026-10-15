@@ -64,6 +64,17 @@ pub fn auth_api_url() -> String {
 pub(crate) const YOAI_WEB_CLIENT_ID: &str = "flowsta_app_6a1d801a0c327b55ea84530926c9b9e8cd7abb3cea07375449dfa35bfdb74668";
 pub(crate) const YOAI_WEB_CALLBACK: &str = "https://yourownai.net/auth/callback/";
 
+/// Flowsta's sign-in site: its consent page takes a hand-off's first time.
+pub(crate) fn login_url() -> String {
+    const PROD: &str = "https://login.flowsta.com";
+    #[cfg(debug_assertions)]
+    {
+        return dev_override("YOAI_LOGIN_URL", "login_url").unwrap_or_else(|| PROD.to_string());
+    }
+    #[cfg(not(debug_assertions))]
+    PROD.to_string()
+}
+
 pub fn account_url() -> String {
     const PROD: &str = "https://yourownai.net/dashboard/";
     #[cfg(debug_assertions)]
@@ -890,11 +901,13 @@ async fn handoff_url(app: &tauri::AppHandle) -> Result<String, String> {
     // 4. The OAuth code for the website, as the signed-in person.
     let (verifier, code_challenge) = pkce_pair();
     let state = random_url_safe(24);
+    // The dashboard's own sign-in asks for the same, so one consent is all.
+    let scope = "openid display_name username profile_picture did";
     let q = format!(
         "client_id={}&redirect_uri={}&response_type=code&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
         YOAI_WEB_CLIENT_ID,
         pct(YOAI_WEB_CALLBACK),
-        pct("openid display_name username profile_picture"),
+        pct(scope),
         state,
         code_challenge,
     );
@@ -910,8 +923,46 @@ async fn handoff_url(app: &tauri::AppHandle) -> Result<String, String> {
         return Err(body["error"].as_str().unwrap_or("authorize_refused").to_string());
     }
     let authz: serde_json::Value = auth_resp.json().await.map_err(|e| format!("bad authorize response: {e}"))?;
-    let redirect_url = authz["redirect_url"].as_str().ok_or("consent_required")?;
-    Ok(handoff_callback_url(redirect_url, &verifier, &state, &agent_pub_key))
+    if let Some(redirect_url) = authz["redirect_url"].as_str() {
+        return Ok(handoff_callback_url(redirect_url, &verifier, &state, &agent_pub_key));
+    }
+    // 5. The first time, the person has not yet said what the website may
+    // know: a single-use consent ticket opens Flowsta's consent page already
+    // signed in, and Allow carries on to the dashboard as above.
+    let ticket_resp = client
+        .post(format!("{api}/oauth/consent-ticket"))
+        .bearer_auth(&token)
+        .json(&serde_json::json!({
+            "client_id": YOAI_WEB_CLIENT_ID,
+            "redirect_uri": YOAI_WEB_CALLBACK,
+            "scope": scope,
+            "state": state,
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("api unreachable: {e}"))?;
+    if !ticket_resp.status().is_success() {
+        let body: serde_json::Value = ticket_resp.json().await.unwrap_or_default();
+        return Err(body["error"].as_str().unwrap_or("consent_required").to_string());
+    }
+    let ticket: serde_json::Value = ticket_resp.json().await.map_err(|e| format!("bad ticket response: {e}"))?;
+    let ticket = ticket["ticket"].as_str().ok_or("consent_required")?;
+    log::info!("[flowsta] hand-off: first time - the consent page opens signed in");
+    Ok(consent_ticket_url(&login_url(), ticket, &verifier, &state, &agent_pub_key))
+}
+
+/// Flowsta's consent page for a hand-off's first time: the ticket, then the
+/// same verifier, state and identity key the callback takes, all in the
+/// fragment (never sent to a server). The page passes the last three on.
+pub(crate) fn consent_ticket_url(login: &str, ticket: &str, verifier: &str, state: &str, agent_pub_key: &str) -> String {
+    format!(
+        "{}/consent/#ticket={}&v={verifier}&s={state}&a={}",
+        login.trim_end_matches('/'),
+        pct(ticket),
+        pct(agent_pub_key)
+    )
 }
 
 /// Percent-encode a query value (RFC 3986 unreserved characters pass).
@@ -954,7 +1005,22 @@ pub(crate) fn pkce_pair() -> (String, String) {
 
 #[cfg(test)]
 mod handoff_tests {
-    use super::{handoff_callback_url, pkce_pair};
+    use super::{consent_ticket_url, handoff_callback_url, pkce_pair};
+
+    #[test]
+    fn the_consent_page_gets_the_ticket_and_the_callback_fragment() {
+        let url = consent_ticket_url(
+            "https://login.flowsta.com/",
+            "Tk_-0123456789abcdefghijklmnopqrstuvwxyzABC",
+            "VERIFIER",
+            "STATE",
+            "uhCAkAb+/c",
+        );
+        assert_eq!(
+            url,
+            "https://login.flowsta.com/consent/#ticket=Tk_-0123456789abcdefghijklmnopqrstuvwxyzABC&v=VERIFIER&s=STATE&a=uhCAkAb%2B%2Fc"
+        );
+    }
     use base64::Engine as _;
     use sha2::Digest as _;
 
