@@ -823,9 +823,11 @@ pub async fn flowsta_handoff_url(app: tauri::AppHandle) -> Result<String, String
 }
 
 async fn handoff_url(app: &tauri::AppHandle) -> Result<String, String> {
+    // A locked Vault is fine: it holds the request and asks the person to
+    // unlock ("A sign-in is waiting"), so the hand-off still opens the site
+    // signed in instead of falling back to the link prompt.
     let port = match find_vault().await {
-        VaultStatus { installed: true, unlocked: true, port: Some(p), .. } => p,
-        VaultStatus { installed: true, .. } => return Err("vault_locked".into()),
+        VaultStatus { installed: true, port: Some(p), .. } => p,
         _ => return Err("vault_not_found".into()),
     };
     let client = http();
