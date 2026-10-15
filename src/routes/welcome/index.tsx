@@ -21,6 +21,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, emit } from "@tauri-apps/api/event";
 import { LuHardDriveDownload, LuCheck, LuAlertTriangle, LuPencil, LuArrowRight } from "@qwikest/icons/lucide";
 import LiquidMetalButton from "../../components/LiquidMetalButton";
+import FlowstaWizardStep from "../../components/FlowstaWizardStep";
 import { ThemeContext } from "../layout";
 import logoLight from "../../assets/logo-light.svg";
 import logo from "../../assets/logo.svg";
@@ -629,6 +630,7 @@ export default component$(() => {
                   )}
                 </>
               )}
+              <FlowstaWizardStep />
               <div class="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-4">
                 <button
                   type="button"
