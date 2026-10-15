@@ -81,6 +81,8 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 ### Flowsta
 - See plans opens yourownai.net signed in as you, with this computer
   linked to your plan, and the dashboard says who is signed in.
+- With the Vault locked, See plans waits for you to unlock it instead of
+  falling back to a separate sign-in in the browser.
 - When Flowsta Vault is installed but closed, Settings and Online Models
   offer Open Flowsta Vault.
 - When you disconnect Your Own AI in the Vault, Settings says so instead
