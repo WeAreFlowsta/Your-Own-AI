@@ -3,6 +3,109 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [0.9.0] - 2026-10-15
+
+### Highlights
+- **Your AIs on every computer you own.** Sign in with the same Flowsta
+  Vault on a second computer and your AIs, their settings and your
+  conversations arrive there. A conversation started on one device
+  appears on the other; a delete on one removes it from both. (Devices)
+- **Memory that knows what kind of thing it is keeping.** Rules you set,
+  facts, decisions and what happened in a session are kept as separate,
+  dated entries, follow you to every device, and are tidied while the
+  app is idle, with Undo for anything it changed. (Memory)
+- **Replies keep going when you leave the chat.** Ask, go to another
+  page, and the answer is there when you come back; the activity tray
+  shows what is still running and lets you answer an agent's ask from
+  there. (Working in the background)
+- **Web access per AI.** Each AI has its own switch for reading web
+  pages, and a reply that needs the web asks once instead of guessing.
+  (Web)
+- **Signing in is one step at a time.** See plans opens the dashboard
+  already signed in, a closed Vault gets an Open button instead of
+  "get it", and nothing restarts without asking. (Flowsta)
+
+### Devices
+- One Flowsta identity, several computers: a second device signed in
+  with the Vault joins your AIs' private network and picks up their
+  conversations, settings, pictures and hand-given knowledge.
+- Each AI keeps its first address on every device, so its conversations
+  list in one place wherever you open them.
+- Settings shows which devices this one syncs with and when it last did,
+  or that another device needs the update.
+- A conversation from another device opens read-only until it has fully
+  arrived.
+- A device you used before signing in joins your identity: its
+  conversations are carried over. It asks before the restart this needs
+  (Restart now or Later).
+- When Flowsta's meeting point is down, devices still find each other
+  through an open community node.
+
+### Memory
+- Rules, facts, decisions and session notes are separate, dated entries
+  in your own network, sealed to you, and they reach your other devices,
+  even from a device that is switched off (through its backup copy).
+- Your rules lead every reply's memory, ahead of the facts.
+- Say "remember this" or correct the AI and it is kept at that moment;
+  the remember card says what the new line would replace.
+- Projects: a project is the same project on every computer, with "How
+  to work here" in the project window and Save as AGENTS.md; a project's
+  AGENTS.md leads its sessions.
+- Dreaming: while the app is idle (and not on battery) a local model
+  dates, splits and tidies your notes. Your Memory shows every standing
+  entry and what dreaming changed, with Undo.
+- Each installed model is graded for memory work; the best local one
+  does it, and a small helper model is offered only when none is good
+  enough. No memory work runs on an online model.
+- The memory component is now EmbeddingGemma-300M; existing memory is
+  re-indexed once, with progress shown on its card.
+
+### Working in the background
+- Replies and agent turns keep running when you leave the chat; coming
+  back opens the running reply at once and lands on your question.
+- The activity tray lists replies you are not looking at, never repeats
+  the page you are on, and lets you allow or decline an agent's ask.
+- Resending a question replaces the old answer instead of adding a
+  second one.
+
+### Web
+- A switch per AI for reading web pages; when it is off, a reply that
+  needs the web says so in one line above the message box, with "Just
+  this once".
+- When one page is not enough the AI reads on or searches once, and can
+  offer the Build helper for bigger jobs.
+- An agent asks before reading an address you did not give it.
+- A question about a page you shared is answered in the chat; Dig deeper
+  hands it to an agent with the web allowed.
+
+### Flowsta
+- See plans opens yourownai.net signed in as you, with this computer
+  linked to your plan, and the dashboard says who is signed in.
+- When Flowsta Vault is installed but closed, Settings and Online Models
+  offer Open Flowsta Vault.
+- When you disconnect Your Own AI in the Vault, Settings says so instead
+  of quietly signing out.
+- The welcome wizard offers an optional sign-in on its last step.
+- Clearer sign-in messages that name the fix; the plan card names
+  OpenAI and Meta among the online models.
+
+### Engine and models
+- llama.cpp v0.6.0 (b11429).
+- Background work never loads a model, and loads wait for a reply that
+  is streaming.
+- Agent sessions load the model once with the context window they need,
+  and retry with a smaller one when it does not fit.
+- Model downloads use about 30% less processor per megabyte.
+- Each model's reasoning setting follows its own template.
+
+### Fixed
+- Personalities describe how they greet you instead of quoting a line
+  the model then repeated.
+- Each bundled personality is listed once.
+- Welcome wizard: the AI cards keep their order and names while they are
+  set up, and step 1 continues a download instead of starting it again.
+- A reply lost to a duplicated request ends the turn instead of hanging.
+
 ## [0.8.1] - 2026-09-30
 
 ### Fixed
