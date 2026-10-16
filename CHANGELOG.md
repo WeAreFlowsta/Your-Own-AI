@@ -26,6 +26,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   "get it", and nothing restarts without asking. (Flowsta)
 
 ### Devices
+- Signing in on another device shows what is syncing in the activity
+  tray: your AIs, their pictures and your memory arrive at once, then one
+  Restart brings in their conversations.
 - One Flowsta identity, several computers: a second device signed in
   with the Vault joins your AIs' private network and picks up their
   conversations, settings, pictures and hand-given knowledge.
@@ -109,6 +112,8 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - Each model's reasoning setting follows its own template.
 
 ### Fixed
+- AI pictures from another device now show on this one.
+- A conversation from another device that can't open yet says why.
 - A computer that opened Your Own AI before signing in now offers to join
   your other devices, and their conversations arrive after the restart.
 - macOS: the window comes to the front once the app has started, instead
