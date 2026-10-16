@@ -5309,7 +5309,7 @@ pub(crate) fn model_draft_for(models_dir: &std::path::Path, model: &str) -> Opti
     let raw = std::fs::read_to_string(draft_sidecar_path(models_dir, model)).ok()?;
     let d: ModelDraft = serde_json::from_str(&raw).ok()?;
     // Only the engine's draft kinds we ship files for; a junk sidecar is ignored.
-    if !matches!(d.draft_type.as_str(), "draft-mtp" | "draft-dspark" | "draft-simple") {
+    if !matches!(d.draft_type.as_str(), "draft-mtp" | "draft-dspark" | "draft-dflash" | "draft-simple") {
         return None;
     }
     let path = models_dir.join(&d.draft);
@@ -5351,7 +5351,7 @@ pub async fn register_model_draft(
     draft: String,
     draft_type: String,
 ) -> Result<(), String> {
-    if !matches!(draft_type.as_str(), "draft-mtp" | "draft-dspark" | "draft-simple") {
+    if !matches!(draft_type.as_str(), "draft-mtp" | "draft-dspark" | "draft-dflash" | "draft-simple") {
         return Err(format!("unknown draft type {draft_type}"));
     }
     let models_dir = get_models_dir(&app_handle)?;

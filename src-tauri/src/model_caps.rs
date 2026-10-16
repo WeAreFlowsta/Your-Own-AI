@@ -61,6 +61,15 @@ pub fn known_caps(model_name: &str) -> Option<Caps> {
     if n.contains("gpt-oss") || n.contains("gpt_oss") || n.contains("gptoss") {
         return Some(Caps { overall: 8, coding: 7, reasoning: 8, math: 7, vision: 0, medical: 6 });
     }
+    // NVIDIA Nemotron 3.5 Super VL (2026-10, 120B-A12B, images) and Bolt
+    // (74B-A9B distilled from it, images): the maker's own claims, vision
+    // through the paired projector. Re-rank after field use.
+    if n.contains("nemotron-3.5-super-vl") || n.contains("nemotron-3-5-super-vl") {
+        return Some(Caps { overall: 9, coding: 8, reasoning: 9, math: 8, vision: 7, medical: 3 });
+    }
+    if n.contains("nemotron-3.5-bolt") || n.contains("nemotron-3-5-bolt") {
+        return Some(Caps { overall: 8, coding: 8, reasoning: 8, math: 7, vision: 7, medical: 3 });
+    }
     // NVIDIA Nemotron 3.5 Lightning (2026-08): 30B-A3B hybrid reasoning model -
     // reasoning/agentic/coding in the gpt-oss class. Re-rank after field use.
     if n.contains("nemotron-3.5") || n.contains("nemotron-3-5") {

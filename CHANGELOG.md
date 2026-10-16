@@ -94,7 +94,13 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   OpenAI and Meta among the online models.
 
 ### Engine and models
-- llama.cpp v0.6.0 (b11429).
+- llama.cpp v0.7.0 (b11669): the new-model support, leaner embedding
+  memory, and the speculative-decoding fixes.
+- New in the catalog: NVIDIA's Nemotron 3.5 Bolt (74B mixture-of-experts,
+  9B active, 22 GB, 256K context, images; for a 24 GB graphics card or a
+  32 GB machine) with NVIDIA's own speculative-decoding draft, and
+  Nemotron 3.5 Super VL (120B, 12B active, 1M context, images; for a
+  96 GB-plus workstation) with its multi-token-prediction head.
 - Background work never loads a model, and loads wait for a reply that
   is streaming.
 - Agent sessions load the model once with the context window they need,
@@ -103,6 +109,8 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - Each model's reasoning setting follows its own template.
 
 ### Fixed
+- macOS: the window comes to the front once the app has started, instead
+  of opening behind other apps.
 - Personalities describe how they greet you instead of quoting a line
   the model then repeated.
 - Each bundled personality is listed once.

@@ -152,7 +152,7 @@ export type Trait = 'new' | 'thinking' | 'uncensored' | 'moe' | 'distilled';
 export type ModelRole = 'chat' | 'embedding' | 'voice-tts' | 'voice-stt' | 'vision-projector' | 'ocr' | 'utility';
 
 /** The engine's speculative-decoding kinds we ship files for. */
-export type DraftType = 'draft-mtp' | 'draft-dspark' | 'draft-simple';
+export type DraftType = 'draft-mtp' | 'draft-dspark' | 'draft-dflash' | 'draft-simple';
 export interface ModelDraft {
   type: DraftType;
   filename: string;
@@ -349,6 +349,32 @@ export const VISION_PROJECTORS: CapabilityModel[] = [
     downloadUrl:
       'https://huggingface.co/unsloth/Muse-Glimmer-30B-GGUF/resolve/c3ac2ebf47426591b4c6d408103c8c15a1e2afd6/mmproj-Muse-Glimmer-30B-Q8_0.gguf',
     size: 2.1,
+  },
+  {
+    id: 'nemotron-3-5-bolt-vision',
+    name: 'Nemotron 3.5 Bolt vision',
+    role: 'vision-projector',
+    description:
+      'Lets Nemotron 3.5 Bolt see images you attach - screenshots, charts, documents. Needs the Nemotron 3.5 Bolt model downloaded.',
+    // Saved under OUR model-first name: "<key>-mmproj" must prefix the model
+    // filename to pair (upstream is mmproj-first).
+    filename: 'NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-mmproj.gguf',
+    downloadUrl:
+      'https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-GGUF/resolve/724e3fee41becc4048998e2204748147876ed56b/mmproj-NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB.gguf',
+    sha256: '0ee891eadc7bf0cae6289b249c74eb1ef420534351f6ef8b64d49f0ca6a926b0',
+    size: 1.7,
+  },
+  {
+    id: 'nemotron-3-5-super-vl-vision',
+    name: 'Nemotron 3.5 Super VL vision',
+    role: 'vision-projector',
+    description:
+      'Lets Nemotron 3.5 Super VL see images you attach - screenshots, charts, documents. Needs the Nemotron 3.5 Super VL model downloaded.',
+    filename: 'NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-mmproj-Q8_0.gguf',
+    downloadUrl:
+      'https://huggingface.co/ggml-org/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-GGUF/resolve/dc20c918fd4db93e917b1eb3be41c3dd92361e08/mmproj-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-Q8_0.gguf',
+    sha256: '5687736375f1056b25441f07293ad043107fe8418ed62795da8cae1e61f0aa88',
+    size: 1.0,
   },
   {
     id: 'gemma-4-e2b-vision',
@@ -928,6 +954,87 @@ export const modelFamilies: ModelFamily[] = [
           downloadUrl: 'https://huggingface.co/ggml-org/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF/resolve/6058d29faf9df73eb1c1ac7bbcc70023b9ec9d8e/mtp-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf',
           size: 1.2,
           sha256: '19f964207d5236dc88662686f00604a5494974c23fb04dd16a5ad7b2eebbd5b4',
+        },
+      }
+    ]
+  },
+  {
+    // NVIDIA's Nemotron 3.5 Bolt (2026-10-15): the 120B Super VL distilled to
+    // 74B total / 9B active (Mamba-2 + Transformer hybrid MoE, 496 experts,
+    // 9 used per MoE layer), shipped by NVIDIA at a native 2-bit quantization
+    // that fits 24 GB; 256K context; sees images with its projector. NVIDIA's
+    // own GGUF and NVIDIA's own LiLiCorr draft (llama.cpp `draft-dflash`, the
+    // invocation in NVIDIA's README). Needs llama.cpp v0.7.0 (b11669) -
+    // pre-flighted and load-checked on it 2026-10-16. OpenMDW-1.1.
+    id: 'nemotron-3-5-bolt',
+    maker: 'NVIDIA',
+    quantizedBy: 'NVIDIA',
+    contextWindow: 262144,
+    released: '2026-10-15',
+    name: 'Nemotron 3.5 Bolt',
+    description: 'NVIDIA\'s edge agent model - a 74B mixture-of-experts with 9B active per token, packed into 22 GB at a native 2-bit quantization, with a 256K context and image understanding. Built for local agents on a 24 GB graphics card, or a 32 GB machine with the experts in main memory.',
+    category: 'quality',
+    recommended: false,
+    capabilities: ['agentic', 'reasoning', 'coding', 'long-context', 'analysis', 'chat'],
+    traits: ['new', 'moe', 'thinking'],
+    modality: { in: ['text', 'vision'], out: ['text'] },
+    variants: [
+      {
+        parameterCount: '74B-A9B (MoE)',
+        size: 22.0,
+        minRAM: 32,
+        downloadUrl: 'https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-GGUF/resolve/724e3fee41becc4048998e2204748147876ed56b/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB.gguf',
+        filename: 'NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB.gguf',
+        sha256: '91d63363e782c8a3d5f4be42816eba8e0d42dd2530bd07a7d0d2dc440599af75',
+        quantization: 'IQ2_XXS',
+        // NVIDIA's LiLiCorr speculative-decoding draft for this exact file
+        // (1.1B, five dense layers): several drafted tokens verified per pass.
+        draft: {
+          type: 'draft-dflash',
+          filename: 'NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-LiLiCorr.gguf',
+          downloadUrl: 'https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-LiLiCorr-GGUF/resolve/182d2987939e12f458298b5d5f6ef98912f4ad6c/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-LiLiCorr.gguf',
+          size: 1.0,
+          sha256: '080e1ea41c9562a7804dbf30c6fbd4d17e216c6b8ff666f88e6edb1816010194',
+        },
+      }
+    ]
+  },
+  {
+    // NVIDIA's Nemotron 3.5 Super VL (2026-10-15): 120B total / 12B active
+    // hybrid MoE (512 experts, 22 used, one shared), 1M context, images;
+    // llama.cpp's own GGUF with NVIDIA's multi-token-prediction head.
+    // Workstation class - a big card and 96 GB or more of main memory with
+    // the experts in main memory; the fit gate hides it below that. Needs
+    // llama.cpp v0.7.0 (b11669) - pre-flighted and load-checked on it
+    // 2026-10-16 (model, projector, MTP pair). OpenMDW-1.1.
+    id: 'nemotron-3-5-super-vl',
+    maker: 'NVIDIA',
+    quantizedBy: 'the llama.cpp team (ggml-org)',
+    contextWindow: 1048576,
+    released: '2026-10-15',
+    name: 'Nemotron 3.5 Super VL',
+    description: 'NVIDIA\'s flagship open agent model - a 120B mixture-of-experts with 12B active per token, a 1M-token context and image understanding. For a workstation with a big graphics card and 96 GB or more of main memory, experts in main memory.',
+    category: 'quality',
+    recommended: false,
+    capabilities: ['reasoning', 'agentic', 'coding', 'long-context', 'analysis', 'chat'],
+    traits: ['new', 'moe', 'thinking'],
+    modality: { in: ['text', 'vision'], out: ['text'] },
+    variants: [
+      {
+        parameterCount: '120B-A12B (MoE)',
+        size: 71.8,
+        minRAM: 96,
+        downloadUrl: 'https://huggingface.co/ggml-org/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-GGUF/resolve/dc20c918fd4db93e917b1eb3be41c3dd92361e08/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-Q4_0.gguf',
+        filename: 'NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-Q4_0.gguf',
+        sha256: '1d51968bb20cd34760fb75a1e4a03b6dea247bcb4bf5d6e27b0964a558d7f922',
+        quantization: 'Q4_0',
+        // NVIDIA's multi-token-prediction head (llama.cpp's own GGUF).
+        draft: {
+          type: 'draft-mtp',
+          filename: 'mtp-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-Q4_0.gguf',
+          downloadUrl: 'https://huggingface.co/ggml-org/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-GGUF/resolve/dc20c918fd4db93e917b1eb3be41c3dd92361e08/mtp-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-Q4_0.gguf',
+          size: 2.3,
+          sha256: 'e0e2da5e6537bd060d79141b39b6348548e0485dba0248fff30aec4346ee1531',
         },
       }
     ]

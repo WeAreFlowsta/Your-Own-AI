@@ -19,7 +19,7 @@ use tauri::{AppHandle, Emitter, Manager};
 /// installer build fails when they disagree. Optional engine downloads
 /// use the same tag, so the bundled engine and any downloaded backend
 /// stay version-locked.
-pub const LLAMA_ENGINE_TAG: &str = "llama-b11429";
+pub const LLAMA_ENGINE_TAG: &str = "llama-b11669";
 
 /// Repo whose `llama-<tag>` releases hold the bundled binaries AND the
 /// optional engine zips (built by build-llama-binaries.yml).
@@ -32,8 +32,8 @@ const ENGINE_RELEASE_REPO: &str = "WeAreFlowsta/Your-Own-AI";
 /// the release page is the only thing standing between a download and a
 /// swapped binary otherwise. Update WITH every LLAMA_ENGINE_TAG bump.
 const CUDA_ZIP_SHA256: &[(&str, &str)] = &[
-    ("x86_64-unknown-linux-gnu", "7a2167de09e6d36d3450f7e315ddb2a4c3f5f4301987199a4a9b8c591bd9c0e4"),
-    ("x86_64-pc-windows-msvc", "7472d147a8bbb1b3ef0b46ca70d7bc63fb4803fe808bbe66bc957dba5fee4af0"),
+    ("x86_64-unknown-linux-gnu", "02b03fdd420312b6b5bcf25c5ffa7e97c140dbd3c19119c81cfb6dcffcb3e876"),
+    ("x86_64-pc-windows-msvc", "c34165dc9bb02672352382e66907f9beec43f1b8df40e1d5a2f7eaca2a277e77"),
 ];
 
 fn cuda_zip_expected_sha256() -> Option<&'static str> {
