@@ -109,6 +109,8 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - Each model's reasoning setting follows its own template.
 
 ### Fixed
+- A computer that opened Your Own AI before signing in now offers to join
+  your other devices, and their conversations arrive after the restart.
 - macOS: the window comes to the front once the app has started, instead
   of opening behind other apps.
 - Personalities describe how they greet you instead of quoting a line
