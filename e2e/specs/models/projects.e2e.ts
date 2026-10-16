@@ -13,7 +13,7 @@ import { homedir } from "node:os";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { SHOTS } from "../../wdio.conf";
-import { shot, invoke, waitForChat, ask, lastReply, resetAiModels } from "./_helpers";
+import { shot, invoke, waitForChat, ask, lastReply, resetAiModels, seedConversations } from "./_helpers";
 
 const RUN = Date.now().toString(36);
 const FOLDER = resolve(import.meta.dirname ?? ".", `../../profile/project-${RUN}`);
@@ -277,27 +277,13 @@ describe(`projects at the size of a well-used AI (${BIG} conversations)`, () => 
     await waitForChat();
     w = (await writers())[0];
     // These legs need no model: free the chat and helper models' memory
-    // (the run's 8 GB cap stopped a first attempt with both loaded). The
-    // agent legs below load the chat model again.
+    // (the run's 8 GB cap stopped a first attempt with both loaded).
     await invoke("stop_llama_server").catch(() => {});
     await invoke("stop_utility_server").catch(() => {});
     // Veebo had 1,071 conversations on 10-16; every save and read walked
-    // them. Give one AI as many, the way the app writes them - in small
-    // batches, so no browser call outlives the driver's script limit.
+    // them. Give one AI as many, the way the app writes them.
     const t0 = Date.now();
-    let made = 0;
-    for (let i = 0; i < BIG; i += 25) {
-      made += await browser.execute(async (key: string, name: string, from: number, count: number) => {
-        const invoke = (window as any).__TAURI__.core.invoke;
-        let done = 0;
-        for (let k = 0; k < count; k += 5) {
-          await Promise.all(Array.from({ length: Math.min(5, count - k) }, (_, x) =>
-            invoke("start_conversation", { agentKey: key, aiName: name, model: "e2e", title: `Seeded conversation ${from + k + x}`, source: null }).then(() => done++),
-          ));
-        }
-        return done;
-      }, w.key, w.name, i, Math.min(25, BIG - i));
-    }
+    const made = await seedConversations(w.key, w.name, BIG);
     timings[`seed: ${BIG} conversations`] = { ms: Date.now() - t0, budget: 1_800_000 };
     console.log(`e2e: seeded ${made} conversations on ${w.name} in ${Date.now() - t0} ms`);
   });

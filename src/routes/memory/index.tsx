@@ -420,6 +420,7 @@ export default component$(() => {
               Conversations
             </button>
             <button
+              data-testid="memory-tab-projects"
               onClick$={() => (activeTab.value = "workspaces")}
               class={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
                 activeTab.value === "workspaces"
@@ -505,6 +506,8 @@ export default component$(() => {
               {workspaceMemories.value.map((w) => (
                 <button
                   key={w.folderPath}
+                  data-testid="project-item"
+                  data-folder={w.folderPath}
                   onClick$={() => (memoryFolder.value = w.folderPath)}
                   class="flex w-full items-center gap-3 px-4 py-3 mb-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] hover:bg-[var(--bg-dropdown-hover)] text-left"
                 >

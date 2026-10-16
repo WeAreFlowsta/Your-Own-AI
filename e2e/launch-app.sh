@@ -37,6 +37,15 @@ if [ -n "${YOAI_E2E_WITH_CUDA:-}" ]; then
   ENGINES="${YOAI_E2E_ENGINES_DIR:-$REAL_HOME/.local/share/com.solar.yourowai/engines}"
   if [ -d "$ENGINES" ]; then mkdir -p "$XDG_DATA_HOME/com.solar.yourowai"; ln -sfn "$ENGINES" "$XDG_DATA_HOME/com.solar.yourowai/engines"; fi
 fi
+# YOAI_E2E_ONLINE=1 - online models through the STAGING proxy (test plans
+# only, never a person's), signed in as the e2e test identity the online
+# specs bring (~/.config/yoai-e2e/staging-identity.json). The Vault port is
+# pinned to one where nothing answers, so the installed Vault - another
+# identity - can never sign the test session out.
+if [ -n "${YOAI_E2E_ONLINE:-}" ]; then
+  export YOAI_PROXY_URL="${YOAI_PROXY_URL:-https://yoai-model-proxy-staging-386500392150.us-central1.run.app}"
+  export YOAI_VAULT_PORT="${YOAI_VAULT_PORT:-27990}"
+fi
 # YOAI_E2E_WITH_RENDEZVOUS=1 - the conductor meets the person's other devices
 # through the STAGING rendezvous (the app reads these at run time), with the
 # Vault's staging test material; without it the conductor stays alone.

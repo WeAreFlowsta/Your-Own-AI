@@ -124,7 +124,15 @@ export const config: WebdriverIO.Config = {
   runner: "local",
   // Spec sets by launch mode (e2e/run.mjs): fresh profile (the welcome
   // flow), the installed models (the chat flows), or the video captures.
-  specs: [CAPTURE ? "./capture/**/*.capture.ts" : process.env.YOAI_E2E_WITH_MODELS ? "./specs/models/**/*.e2e.ts" : "./specs/fresh/**/*.e2e.ts"],
+  specs: [
+    CAPTURE
+      ? "./capture/**/*.capture.ts"
+      : process.env.YOAI_E2E_ONLINE
+        ? "./specs/online/**/*.e2e.ts"
+        : process.env.YOAI_E2E_WITH_MODELS
+          ? "./specs/models/**/*.e2e.ts"
+          : "./specs/fresh/**/*.e2e.ts",
+  ],
   maxInstances: 1,
   capabilities: [
     {

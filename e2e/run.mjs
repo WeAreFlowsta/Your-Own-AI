@@ -3,12 +3,18 @@
 //   node e2e/run.mjs              fresh profile: the welcome flow
 //   node e2e/run.mjs models       the machine's installed models: the chat flows
 //   node e2e/run.mjs capture      screen captures for videos (see e2e/CAPTURE.md)
+//   node e2e/run.mjs online       online models through the staging proxy (e2e/specs/online)
 // Anything after the mode goes to wdio (e.g. --spec e2e/specs/models/chat.e2e.ts).
 import { spawnSync } from "node:child_process";
 
 const [mode = "fresh", ...rest] = process.argv.slice(2);
 const env = { ...process.env };
-if (mode === "models" || mode === "capture") env.YOAI_E2E_WITH_MODELS = "1";
+if (mode === "models" || mode === "capture" || mode === "online") env.YOAI_E2E_WITH_MODELS = "1";
+// Online: the staging proxy and the e2e test identity (e2e/launch-app.sh).
+if (mode === "online") {
+  env.YOAI_E2E_ONLINE = "1";
+  env.YOAI_E2E_WITH_CUDA ??= "1";
+}
 if (mode === "capture") {
   env.YOAI_CAPTURE = "1";
   // Videos run on the machine's real engine: the installed CUDA build when there is one.

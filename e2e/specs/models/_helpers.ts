@@ -103,3 +103,23 @@ export const invoke = <T = unknown>(cmd: string, args: Record<string, unknown> =
 export async function scrollTo(sel: string) {
   await browser.execute((s: string) => document.querySelector(s)?.scrollIntoView({ block: "center", behavior: "instant" as ScrollBehavior }), sel);
 }
+
+/** Start `n` conversations on one AI the way the app writes them - in
+ *  batches of 25 per browser call, so no call outlives the driver's script
+ *  limit (one call for 1,000 timed out and was retried four times over). */
+export async function seedConversations(agentKey: string, aiName: string, n: number): Promise<number> {
+  let made = 0;
+  for (let i = 0; i < n; i += 25) {
+    made += await browser.execute(async (key: string, name: string, from: number, count: number) => {
+      const call = (window as any).__TAURI__.core.invoke;
+      let done = 0;
+      for (let k = 0; k < count; k += 5) {
+        await Promise.all(Array.from({ length: Math.min(5, count - k) }, (_, x) =>
+          call("start_conversation", { agentKey: key, aiName: name, model: "e2e", title: `Seeded conversation ${from + k + x}`, source: null }).then(() => done++),
+        ));
+      }
+      return done;
+    }, agentKey, aiName, i, Math.min(25, n - i));
+  }
+  return made;
+}
