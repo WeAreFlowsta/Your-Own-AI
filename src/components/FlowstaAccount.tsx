@@ -729,45 +729,9 @@ export default component$<FlowstaAccountProps>((props) => {
             with the rest of it, framed as the two steps it actually is.
             (It used to sit in the account card above, which read as a
             second, competing "restore from Vault" narrative.) */}
-        {signedIn() && escrow.value?.state === "island_pending" && (
-          <div class="mt-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] p-4" data-testid="island-join">
-            <p class="text-sm font-medium">Join your other devices</p>
-            <p class="mt-1 text-xs text-[var(--text-secondary)]">
-              This device used Your Own AI before it was signed in. Its conversations
-              {(escrow.value.local_conversations ?? 0) > 0 ? ` (${escrow.value.local_conversations} record${escrow.value.local_conversations === 1 ? "" : "s"})` : ""}
-              {" "}join your identity, so every device shows the same ones. Your Own AI restarts to do it.
-            </p>
-            <div class="mt-3 flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-end">
-              <button
-                class="text-sm text-[var(--text-link)] hover:underline"
-                onClick$={async () => { escrow.value = await invoke<EscrowStatus>("vault_escrow_island_later"); }}
-              >
-                Later
-              </button>
-              <LiquidMetalButton
-                onClick$={async () => {
-                  busy.value = true;
-                  error.value = "";
-                  try {
-                    escrow.value = await invoke<EscrowStatus>("vault_escrow_island_join");
-                  } catch (e) {
-                    const msg = String(e);
-                    error.value = msg.includes("vault_locked")
-                      ? "Your Vault is locked. Unlock it and try again."
-                      : msg.includes("vault_unavailable")
-                        ? "Flowsta Vault isn't running. Start it and try again."
-                        : "Could not join your other devices yet. Try again in a moment.";
-                    console.warn("[escrow] island join failed:", msg);
-                  } finally {
-                    busy.value = false;
-                  }
-                }}
-              >
-                <span class="px-5 py-2 text-sm">{busy.value ? "Restarting…" : "Restart now"}</span>
-              </LiquidMetalButton>
-            </div>
-          </div>
-        )}
+        {/* No join card: joining the identity's network is part of signing
+            in - the activity tray says what syncs and offers the one restart
+            the conversations need (device_sync.rs, Eric 2026-10-16). */}
         {signedIn() && escrow.value?.state === "island_deferred" && (
           <p class="mt-3 text-xs text-[var(--text-muted)]" data-testid="island-later">
             Your other devices join at the next launch.

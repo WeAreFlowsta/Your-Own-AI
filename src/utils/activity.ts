@@ -18,12 +18,15 @@ export interface ActivityNote {
   id: string;
   title: string;
   detail?: string;
-  state: "done" | "error";
+  /** "running" = still working (a spinner, no Dismiss). */
+  state: "running" | "done" | "error";
   /** How long the note stays before it clears itself; 0 = until dismissed. */
   ttlMs?: number;
   /** The page that shows this work itself (a route prefix): the tray never
    *  repeats the page the person is on, so the row is hidden there. */
   home?: string;
+  /** One button on the row: a backend command run when pressed. */
+  action?: { label: string; command: string };
 }
 
 /** The page where a download's own progress shows: the tray hides the row

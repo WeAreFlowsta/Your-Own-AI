@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod config_sync;          // AI configs across the person's devices (sibling manifests)
+mod device_sync;          // the tray notice for what syncs with the other devices
 mod memory_rows;          // typed, dated, sealed memory rows at scope anchors (MEMORY_REDESIGN)
 mod project_identity;     // a folder's project id: git root commit / id file / path hash
 mod dreaming;             // memory consolidation when idle (MEMORY_REDESIGN §6)
@@ -955,6 +956,22 @@ pub fn run() {
                 // Settings). Covers signed-in users who never open Settings.
                 let status = vault_escrow::vault_escrow_sync(link_app_handle.clone()).await;
                 log::info!("[escrow] launch sync: {}", status.state);
+                // A join waiting since the last session (its tray notice was
+                // dismissed, or the app closed first) happens now, at launch,
+                // before anything is in use: the swap relaunches in seconds.
+                if status.state == "island_pending" {
+                    match vault_escrow::vault_escrow_island_join(link_app_handle.clone()).await {
+                        Ok(_) => return,
+                        Err(e) => {
+                            log::warn!("[escrow] join at launch did not run: {}", e);
+                            if let Ok(port) = vault_escrow::escrow_port(&link_app_handle, true).await {
+                                if let Some(devices) = device_sync::sibling_names(port).await {
+                                    device_sync::report(&link_app_handle, &status.state, &devices);
+                                }
+                            }
+                        }
+                    }
+                }
                 // A Vault that is locked at launch is the common case for
                 // someone who opens the app first: back up when it unlocks,
                 // and once a day regardless of writes.

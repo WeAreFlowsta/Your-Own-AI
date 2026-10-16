@@ -808,6 +808,14 @@ pub async fn vault_restore_conversations(
             .and_then(|b| serde_json::from_slice(&b).ok())
             .ok_or("island_export_unreadable")?;
         let source = backup["island"]["source"].as_str().unwrap_or("island").to_string();
+        let port = vault_escrow::escrow_port(&app, true).await.ok();
+        let devices = match port {
+            Some(p) => crate::device_sync::sibling_names(p).await,
+            None => None,
+        };
+        if let Some(d) = &devices {
+            crate::device_sync::emit(&app, "bringing", d);
+        }
         // The merge runs at the first start after the swap, while the cells
         // are still being provisioned and re-enabled: a transient refusal
         // is reported as "still starting" so the caller tries again.
@@ -821,6 +829,9 @@ pub async fn vault_restore_conversations(
         };
         crate::conversation_cache::drop_all(&app);
         vault_escrow::clear_island_pending(&app);
+        if let Some(d) = &devices {
+            crate::device_sync::emit(&app, "done", d);
+        }
         return Ok(result);
     }
     let port = match vault_escrow::escrow_port(&app, true).await {

@@ -653,7 +653,7 @@ export default component$(() => {
           joinWaiting = st.state === "island_pending" || st.state === "island_deferred";
         } catch { /* no Vault: the plain message */ }
         resumeWarning.value = joinWaiting
-          ? "This computer hasn't joined your other devices yet, so their conversations can't open here. Join them in Settings, under Backups: Join your other devices."
+          ? "This device hasn't joined your other devices yet, so their conversations can't open here. Restart Your Own AI to join them."
           : `${ai.label}'s records didn't answer, so this didn't open. Nothing is lost - try again in a moment.`;
         return;
       }

@@ -508,6 +508,8 @@ async fn ensure_linked(
     }
     store.set("link_done", serde_json::json!(true));
     store.save().map_err(|e| e.to_string())?;
+    // What syncs with the other devices, in the activity tray.
+    tauri::async_runtime::spawn(crate::device_sync::after_sign_in(app.clone()));
     Ok(())
 }
 

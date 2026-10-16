@@ -2653,6 +2653,14 @@ pub fn start_startup_escrow_sync(app: &tauri::AppHandle) {
         tokio::time::sleep(std::time::Duration::from_secs(25)).await;
         let status = vault_escrow_sync_inner(&app).await;
         log::info!("[escrow] startup sync: {}", status.state);
+        // A Vault unlocked after launch: the join notice now.
+        if status.state == "island_pending" {
+            if let Ok(port) = escrow_port(&app, true).await {
+                if let Some(devices) = crate::device_sync::sibling_names(port).await {
+                    crate::device_sync::report(&app, &status.state, &devices);
+                }
+            }
+        }
     });
 }
 

@@ -41,6 +41,8 @@ interface Row {
   startedAt: number;
   /** The page that shows this work itself; the row is hidden there. */
   home?: string;
+  /** One button: a backend command run when pressed. */
+  action?: { label: string; command: string };
 }
 
 const LINGER_MS = 8000;
@@ -225,7 +227,7 @@ export const ActivityTray = component$(() => {
     const onNote = (ev: Event) => {
       const n = (ev as CustomEvent<ActivityNote>).detail;
       if (!n?.id) return;
-      upsert(`note:${n.id}`, { kind: "note", home: n.home, title: n.title, detail: n.detail ?? "", state: n.state, percent: null });
+      upsert(`note:${n.id}`, { kind: "note", home: n.home, title: n.title, detail: n.detail ?? "", state: n.state, percent: null, action: n.action });
       linger(`note:${n.id}`, n.ttlMs ?? 0);
     };
     window.addEventListener(ACTIVITY_EVENT, onNote);
@@ -243,7 +245,35 @@ export const ActivityTray = component$(() => {
       linger("note:helper-gave-back", LINGER_MS * 2);
     });
 
+    // Syncing with the person's other devices (device_sync.rs): ONE row
+    // that changes in place - syncing, restart, bringing, done.
+    const unDeviceSync = await listen<{ stage: string; devices: string }>("device-sync", (e) => {
+      const { stage, devices } = e.payload;
+      const id = "note:device-sync";
+      if (stage === "syncing") {
+        upsert(id, { kind: "note", title: `Syncing with ${devices}`, detail: "Your AIs, their pictures and your memory", state: "running", percent: null, action: undefined });
+        linger(id, 0);
+      } else if (stage === "restart") {
+        upsert(id, {
+          kind: "note",
+          title: `Your AIs from ${devices} are here`,
+          detail: "Restart to bring in their conversations",
+          state: "done",
+          percent: null,
+          action: { label: "Restart", command: "vault_escrow_island_join" },
+        });
+        linger(id, 0);
+      } else if (stage === "bringing") {
+        upsert(id, { kind: "note", title: `Bringing in your conversations from ${devices}`, detail: "They open here as they arrive", state: "running", percent: null, action: undefined });
+        linger(id, 0);
+      } else if (stage === "done") {
+        upsert(id, { kind: "note", title: `In sync with ${devices}`, detail: "", state: "done", percent: null, action: undefined });
+        linger(id, LINGER_MS);
+      }
+    });
+
     cleanup(() => {
+      unDeviceSync();
       unProgress();
       unComplete();
       unFailed();
@@ -257,6 +287,25 @@ export const ActivityTray = component$(() => {
 
   const dismiss = $((id: string) => {
     store.rows = store.rows.filter((r) => r.id !== id);
+  });
+
+  // A row's one button: run its backend command (the device-sync Restart).
+  const runAction = $(async (id: string, command: string) => {
+    const row = store.rows.find((r) => r.id === id);
+    if (row) row.action = undefined;
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke(command);
+    } catch (e) {
+      const msg = String(e);
+      if (row) {
+        row.state = "error";
+        row.detail = msg.includes("vault_locked")
+          ? "Unlock your Vault, then restart Your Own AI."
+          : "Couldn't restart just now. It happens the next time Your Own AI opens.";
+      }
+      console.warn(`[tray] ${command} failed:`, msg);
+    }
   });
 
   const stopReading = $(async () => {
@@ -463,6 +512,15 @@ export const ActivityTray = component$(() => {
                 class="flex-shrink-0 text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] disabled:opacity-60"
               >
                 {stopping.value ? "Stopping..." : "Stop"}
+              </button>
+            )}
+            {r.action && (
+              <button
+                type="button"
+                onClick$={() => runAction(r.id, r.action!.command)}
+                class="flex-shrink-0 text-xs font-medium text-[var(--text-link)] hover:underline"
+              >
+                {r.action.label}
               </button>
             )}
             {r.state !== "running" && (
