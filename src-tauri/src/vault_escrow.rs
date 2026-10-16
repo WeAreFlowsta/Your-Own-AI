@@ -252,6 +252,108 @@ pub(crate) async fn other_devices(port: u16) -> Result<Vec<String>, String> {
     Ok(sibling_devices(port).await?.into_iter().map(|d| d.id).collect())
 }
 
+/// One named device's copy of a label (`/backup/retrieve` with `across` +
+/// `device`, Vault 1.6.1+). `Ok(None)` = that device holds no such copy.
+async fn retrieve_from_device(port: u16, label: &str, device: &str) -> Result<Option<serde_json::Value>, String> {
+    let resp = http()
+        .post(format!("http://127.0.0.1:{}/backup/retrieve", port))
+        .header("Origin", VAULT_ORIGIN)
+        .json(&serde_json::json!({
+            "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
+            "label": label,
+            "across": "devices",
+            "device": device,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("vault unreachable: {}", e))?;
+    match resp.status() {
+        reqwest::StatusCode::NOT_FOUND => return Ok(None),
+        s if s.is_success() => {}
+        _ => {
+            let body: serde_json::Value = resp.json().await.unwrap_or_default();
+            return Err(body["error"].as_str().unwrap_or("retrieve_failed").to_string());
+        }
+    }
+    let v: serde_json::Value = resp.json().await.map_err(|e| format!("bad retrieve response: {}", e))?;
+    Ok(Some(v))
+}
+
+/// Every other device's `recovery` material, with whether that device has
+/// backed up any conversation (its manifest lists one).
+async fn sibling_materials(port: u16) -> Vec<(RecoveryMaterial, bool)> {
+    let mut out = Vec::new();
+    for d in sibling_devices(port).await.unwrap_or_default() {
+        let material = match retrieve_from_device(port, ESCROW_LABEL, &d.id).await {
+            Ok(Some(v)) => parse_escrow(&v["data"]),
+            _ => None,
+        };
+        let Some(m) = material else { continue };
+        let has_data = match retrieve_from_device(port, MANIFEST_LABEL, &d.id).await {
+            Ok(Some(v)) => v["data"]["conversations"].as_array().map(|a| !a.is_empty()).unwrap_or(false),
+            _ => false,
+        };
+        out.push((m, has_data));
+    }
+    out
+}
+
+/// What this device does about the transcript network, given the other
+/// devices' material (build-docs MULTI_DEVICE.md §5.1).
+#[derive(Debug, PartialEq)]
+pub(crate) enum NetworkDecision {
+    /// No other device disagrees, or the others join this one.
+    Stay,
+    /// This device holds nothing of its own yet: join this material.
+    Join(RecoveryMaterial),
+    /// Both sides hold conversations under different material: the
+    /// person's choice (the older "conflict").
+    Conflict,
+}
+
+/// A device that has backed nothing up joins the network that holds
+/// conversations. When no device holds any, exactly one side moves: the one
+/// whose network seed sorts higher, so two fresh devices never swap into
+/// each other's network.
+pub(crate) fn decide_network(local: &RecoveryMaterial, local_has_data: bool, others: &[(RecoveryMaterial, bool)]) -> NetworkDecision {
+    let differing: Vec<&(RecoveryMaterial, bool)> = others.iter().filter(|(m, _)| m != local).collect();
+    if differing.is_empty() {
+        return NetworkDecision::Stay;
+    }
+    if local_has_data {
+        return if differing.iter().any(|(_, has)| *has) { NetworkDecision::Conflict } else { NetworkDecision::Stay };
+    }
+    if let Some((m, _)) = differing.iter().find(|(_, has)| *has) {
+        return NetworkDecision::Join(m.clone());
+    }
+    let lowest = differing.iter().map(|(m, _)| m).min_by(|a, b| a.network_seed.cmp(&b.network_seed)).unwrap();
+    if lowest.network_seed < local.network_seed {
+        NetworkDecision::Join(lowest.clone())
+    } else {
+        NetworkDecision::Stay
+    }
+}
+
+/// Keep a Vault copy of material this device is about to write over: it
+/// may be the only copy of an old key.
+fn preserve_replaced(app: &tauri::AppHandle, old: &RecoveryMaterial) -> Result<(), String> {
+    let data_dir = crate::profile::root(app).map_err(|e| format!("no app data dir: {}", e))?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let path = data_dir.join(format!("transcript-recovery.vault-replaced-{}.json", ts));
+    let json = serde_json::to_string_pretty(old).map_err(|e| e.to_string())?;
+    std::fs::write(&path, &json).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    log::info!("[escrow] previous Vault key preserved at {:?}", path.file_name());
+    Ok(())
+}
+
 /// Before the first conductor start on a profile with no material of its
 /// own: the identity's material, so a second device joins the person's
 /// network instead of founding one (build-docs MULTI_DEVICE.md §3.1). In
@@ -574,7 +676,44 @@ async fn vault_escrow_sync_inner(app: &tauri::AppHandle) -> EscrowStatus {
         Ok(r) => r,
         Err(e) => return EscrowStatus::error(e),
     };
+    // The other devices decide which network is the identity's. Reading
+    // only this device's own slot missed a device whose first start came
+    // before sign-in: its slot was empty, it escrowed its own new seed and
+    // never offered to join (Linux + Windows, 2026-10-16).
+    let others = sibling_materials(port).await;
+    match decide_network(&local, !load_sync_state(app).is_empty(), &others) {
+        NetworkDecision::Join(_) => {
+            log::info!("[escrow] another device holds the identity's network - this device joins it");
+            let count = count_local_conversations(app).await.ok();
+            return EscrowStatus {
+                state: if island_deferred() { "island_deferred".into() } else { "island_pending".into() },
+                local_conversations: count,
+                error: None,
+                backups_held: false,
+            };
+        }
+        NetworkDecision::Conflict => {
+            let count = count_local_conversations(app).await.ok();
+            return EscrowStatus { state: "conflict".into(), local_conversations: count, error: None, backups_held: false };
+        }
+        NetworkDecision::Stay => {}
+    }
     match fetch_escrow(port).await {
+        // This device's own slot is stale (it held an island's key before a
+        // join) while the other devices agree with this one: follow them.
+        Ok(Some(ref old)) if *old != local && others.iter().any(|(m, _)| *m == local) => {
+            if let Err(e) = preserve_replaced(app, old) {
+                return EscrowStatus::error(e);
+            }
+            match write_escrow(port, &local).await {
+                Ok(()) => {
+                    log::info!("[escrow] this device's Vault slot now holds the identity's key");
+                    schedule_full_backup(app);
+                    EscrowStatus::state("synced")
+                }
+                Err(e) => EscrowStatus::error(e),
+            }
+        }
         Ok(None) => match write_escrow(port, &local).await {
             Ok(()) => {
                 log::info!("[escrow] transcript recovery material escrowed to Vault");
@@ -692,10 +831,17 @@ pub async fn vault_escrow_island_join(app: tauri::AppHandle) -> Result<EscrowSta
     let vault = crate::flowsta::find_vault().await;
     let port = vault.port.ok_or("vault_unavailable")?;
     if !vault.unlocked { return Err("vault_locked".into()); }
-    let identity = match fetch_escrow(port).await {
-        Ok(Some(m)) => m,
-        Ok(None) => return Err("nothing_to_join".into()),
-        Err(e) => return Err(e),
+    let local = local_recovery(&app)?;
+    let others = sibling_materials(port).await;
+    let identity = match decide_network(&local, !load_sync_state(&app).is_empty(), &others) {
+        NetworkDecision::Join(m) => m,
+        // No other device to follow: this device's own Vault slot (the
+        // single-device island case).
+        _ => match fetch_escrow(port).await {
+            Ok(Some(m)) if m != local => m,
+            Ok(_) => return Err("nothing_to_join".into()),
+            Err(e) => return Err(e),
+        },
     };
     let n = island_merge_start(&app, &identity).await?;
     Ok(EscrowStatus { state: "island_merging".into(), local_conversations: Some(n), error: None, backups_held: false })
@@ -710,21 +856,7 @@ pub async fn vault_escrow_keep_local(app: tauri::AppHandle) -> Result<EscrowStat
     let local = local_recovery(&app)?;
     if let Some(old) = fetch_escrow(port).await? {
         if old != local {
-            let data_dir = crate::profile::root(&app)
-                .map_err(|e| format!("no app data dir: {}", e))?;
-            let ts = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let path = data_dir.join(format!("transcript-recovery.vault-replaced-{}.json", ts));
-            let json = serde_json::to_string_pretty(&old).map_err(|e| e.to_string())?;
-            std::fs::write(&path, &json).map_err(|e| e.to_string())?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-            }
-            log::info!("[escrow] previous Vault key preserved at {:?}", path.file_name());
+            preserve_replaced(&app, &old)?;
         }
     }
     write_escrow(port, &local).await?;
@@ -3049,5 +3181,59 @@ mod corpus_budget_tests {
         assert!(r.documents[4].meta.summary.is_some());
         assert_eq!(r.documents.len(), 5, "no document record is ever dropped");
         assert!(serde_json::to_vec(&r).unwrap().len() <= full - 300);
+    }
+}
+
+#[cfg(test)]
+mod network_decision_tests {
+    use super::{decide_network, NetworkDecision};
+    use crate::transcript_crypto::RecoveryMaterial;
+
+    fn m(seed: &str) -> RecoveryMaterial {
+        RecoveryMaterial { network_seed: seed.into(), data_key_hex: format!("{:0>64}", seed.len()), version: 1 }
+    }
+
+    #[test]
+    fn a_device_started_before_sign_in_joins_the_device_with_conversations() {
+        // Linux + Windows, 2026-10-16: Linux started unlinked (its own seed,
+        // nothing backed up), Windows holds the chats.
+        let linux = m("yoai-user-aaaa");
+        let windows = m("yoai-user-zzzz");
+        assert_eq!(decide_network(&linux, false, &[(windows.clone(), true)]), NetworkDecision::Join(windows));
+    }
+
+    #[test]
+    fn the_device_with_conversations_never_moves() {
+        let windows = m("yoai-user-zzzz");
+        assert_eq!(decide_network(&windows, true, &[(m("yoai-user-aaaa"), false)]), NetworkDecision::Stay);
+    }
+
+    #[test]
+    fn conversations_on_both_sides_are_the_persons_choice() {
+        assert_eq!(decide_network(&m("a"), true, &[(m("b"), true)]), NetworkDecision::Conflict);
+    }
+
+    #[test]
+    fn agreeing_devices_stay() {
+        let same = m("yoai-user-same");
+        assert_eq!(decide_network(&same, false, &[(same.clone(), true)]), NetworkDecision::Stay);
+        assert_eq!(decide_network(&same, false, &[]), NetworkDecision::Stay);
+    }
+
+    #[test]
+    fn two_fresh_devices_never_swap_into_each_other() {
+        let a = m("yoai-user-aaaa");
+        let b = m("yoai-user-bbbb");
+        // Exactly one side moves: the higher seed joins the lower.
+        assert_eq!(decide_network(&b, false, &[(a.clone(), false)]), NetworkDecision::Join(a.clone()));
+        assert_eq!(decide_network(&a, false, &[(b, false)]), NetworkDecision::Stay);
+    }
+
+    #[test]
+    fn a_device_with_conversations_wins_over_a_lower_fresh_seed() {
+        let fresh_low = m("yoai-user-0000");
+        let used = m("yoai-user-9999");
+        let me = m("yoai-user-5555");
+        assert_eq!(decide_network(&me, false, &[(fresh_low, false), (used.clone(), true)]), NetworkDecision::Join(used));
     }
 }
