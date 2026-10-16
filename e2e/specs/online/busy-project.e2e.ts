@@ -9,22 +9,17 @@
 // staging's subscriptions_test - never a person's plan), on GPT-6 Luna, the
 // cheapest tool-capable model (a run costs a few cents). Needs the Build
 // helper on this machine. Timings go to e2e/shots/online-timings.json.
-import { createPrivateKey, sign } from "node:crypto";
 import { homedir } from "node:os";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { SHOTS } from "../../wdio.conf";
 import { shot, invoke, waitForChat, ask, lastReply, resetAiModels, seedConversations } from "../models/_helpers";
+import { APP_LOG as LOG, IDENTITY, ONLINE_MODEL as MODEL, PROFILE, haveIdentity, setAiModel, signInAsTestIdentity } from "./_online";
 
 const RUN = Date.now().toString(36);
-const PROXY = process.env.YOAI_PROXY_URL ?? "https://yoai-model-proxy-staging-386500392150.us-central1.run.app";
-const IDENTITY = process.env.YOAI_E2E_STAGING_IDENTITY ?? resolve(homedir(), ".config/yoai-e2e/staging-identity.json");
 const HELPER = resolve(homedir(), ".local/share/com.solar.yourowai/build/your-own-ai-build");
-const MODEL = process.env.YOAI_E2E_ONLINE_MODEL ?? "gpt-6-luna";
 const BIG = Number(process.env.YOAI_E2E_BIG_N ?? 1000);
-const PROFILE = resolve(import.meta.dirname ?? ".", "../../profile");
 const FOLDER = resolve(PROFILE, `online-project-${RUN}`);
-const LOG = resolve(PROFILE, ".local/share/com.solar.yourowai/logs/Your Own AI.log");
 
 const timings: Record<string, unknown> = {};
 const save = () => writeFileSync(resolve(SHOTS, "online-timings.json"), JSON.stringify({ run: RUN, model: MODEL, big: BIG, at: new Date().toISOString(), timings }, null, 2));
@@ -36,20 +31,6 @@ async function timed<T>(name: string, budget: number, step: () => Promise<T>): P
   console.log(`e2e: ${name} ${ms} ms (budget ${budget})`);
   expect(ms).toBeLessThan(budget);
   return out;
-}
-
-/** The test identity signs the proxy's challenge, as the Vault would. */
-async function stagingTokens() {
-  const id = JSON.parse(readFileSync(IDENTITY, "utf8")) as { agent_pub_key: string; did: string; seed_b64: string };
-  const der = Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), Buffer.from(id.seed_b64, "base64")]);
-  const key = createPrivateKey({ key: der, format: "der", type: "pkcs8" });
-  const post = (path: string, body: unknown) =>
-    fetch(`${PROXY}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
-  const { challenge } = await post("/auth/vault/challenge", {});
-  const signature = sign(null, Buffer.from(challenge, "base64"), key).toString("base64");
-  const tokens = await post("/auth/vault/token", { challenge, agent_pub_key: id.agent_pub_key, did: id.did, signature });
-  if (!tokens.access_token) throw new Error(`staging sign-in failed: ${JSON.stringify(tokens).slice(0, 200)}`);
-  return { ...tokens, agent_pub_key: id.agent_pub_key, did: id.did };
 }
 
 type Writer = { key: string; name: string };
@@ -88,7 +69,7 @@ describe(`online: a busy ${MODEL} agent in a project on an AI with ${BIG} conver
 
   before(async function () {
     this.timeout(1_800_000);
-    if (!existsSync(IDENTITY)) {
+    if (!haveIdentity()) {
       console.log(`e2e: no staging test identity at ${IDENTITY} - skipping`);
       return;
     }
@@ -98,18 +79,7 @@ describe(`online: a busy ${MODEL} agent in a project on an AI with ${BIG} conver
       return;
     }
     // Signed in as the test identity: the tokens the Vault sign-in would store.
-    const tokens = await stagingTokens();
-    await browser.execute(async (t: Record<string, unknown>) => {
-      const T = (window as any).__TAURI__;
-      const store = await T.store.load(await T.core.invoke("profile_store_path", { name: "flowsta-auth.json" }));
-      await store.set("access_token", t.access_token);
-      await store.set("refresh_token", t.refresh_token);
-      await store.set("agent_pub_key", t.agent_pub_key);
-      await store.set("did", t.did);
-      await store.set("expires_at", Math.floor(Date.now() / 1000) + 86_000);
-      await store.save();
-    }, tokens);
-    const session = await invoke<{ signed_in: boolean; tier: string | null }>("flowsta_session");
+    const session = await signInAsTestIdentity();
     console.log(`e2e: session ${JSON.stringify(session)}`);
     expect(session.signed_in).toBe(true);
     expect(session.tier).toBe("pro");
@@ -138,14 +108,7 @@ describe(`online: a busy ${MODEL} agent in a project on an AI with ${BIG} conver
 
     // The AI works on the online model.
     await browser.execute((p: string) => localStorage.setItem("build-binary-path", p), HELPER);
-    await browser.execute(async (model: string, key: string) => {
-      const T = (window as any).__TAURI__;
-      const store = await T.store.load(await T.core.invoke("profile_store_path", { name: "ai-data.json" }));
-      const ais = ((await store.get("custom-ais")) || []) as { agentPubKey?: string; model?: string }[];
-      for (const a of ais) if (a.agentPubKey === key) a.model = `online:${model}`;
-      await store.set("custom-ais", ais);
-      await store.save();
-    }, MODEL, w.key);
+    await setAiModel(w.key, `online:${MODEL}`);
     await browser.url("tauri://localhost/chat/");
     await (await $('[data-testid="chat-input"]')).waitForDisplayed({ timeout: 60_000 });
     ready = true;

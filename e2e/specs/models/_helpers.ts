@@ -123,3 +123,36 @@ export async function seedConversations(agentKey: string, aiName: string, n: num
   }
   return made;
 }
+
+/** Run one truth-matrix leg to the end and hand back its lines. A WebDriver
+ *  script call cannot wait minutes: fire it, watch its progress events. */
+export async function runMatrixLeg(leg: string, timeoutMs = 1_800_000): Promise<{ lines: string[]; error?: string }> {
+  const stamp = `${leg}-${Date.now().toString(36)}`;
+  await browser.execute((st: string, l: string) => {
+    const w = window as any;
+    w.__matrixDone = false;
+    w.__matrixLines = [];
+    w.__matrixError = undefined;
+    w.__TAURI__.event.listen("matrix-progress", (e: any) => {
+      const line = String(e.payload ?? "");
+      w.__matrixLines.push(line);
+      if (line.includes("MATRIX COMPLETE")) w.__matrixDone = true;
+    });
+    w.__TAURI__.core.invoke("matrix_run", { stamp: st, legs: [l] }).then(() => { w.__matrixDone = true; }).catch((e: unknown) => { w.__matrixError = String(e); w.__matrixDone = true; });
+  }, stamp, leg);
+  await browser.waitUntil(async () => browser.execute(() => (window as any).__matrixDone === true), { timeout: timeoutMs, interval: 10_000, timeoutMsg: `the ${leg} leg never finished` });
+  const lines = await browser.execute(() => (window as any).__matrixLines as string[]);
+  const error = await browser.execute(() => (window as any).__matrixError as string | undefined);
+  return { lines, error };
+}
+
+/** The routing battery's verdict from its lines: failures listed, and the
+ *  time per decision (from "N decisions in X s"). */
+export function routingVerdict(lines: string[]) {
+  const failures = lines.filter((l) => /^\s*FAIL /.test(l) || /^routing: /.test(l.trim()));
+  const timing = lines.map((l) => /\((\d+) decisions in (\d+) s\)/.exec(l)).find(Boolean);
+  const decided = timing ? Number(timing[1]) : 0;
+  const msPer = timing && decided ? (Number(timing[2]) * 1000) / decided : null;
+  const complete = lines.find((l) => l.includes("MATRIX COMPLETE")) ?? "";
+  return { failures, decided, msPer, complete };
+}
