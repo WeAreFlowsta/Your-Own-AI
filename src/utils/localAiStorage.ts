@@ -172,6 +172,22 @@ export async function seedDefaultAisIfNeeded(): Promise<void> {
         await invoke<number[]>('get_ai_thumbnail', { aiId: ai.id });
         // Already exists, skip
       } catch {
+        // A picture still under an earlier key (a synced AI re-keyed before
+        // pictures followed it, 0.9.0-beta.3..5) is this AI's own: move it
+        // rather than cover it with the character's face.
+        const earlier = [ai.foundingKey, (ai as { restoredFromId?: string }).restoredFromId]
+          .filter((k): k is string => !!k && k !== ai.id);
+        let moved = false;
+        for (const key of earlier) {
+          try {
+            const data = await invoke<number[]>('get_ai_thumbnail', { aiId: key });
+            await invoke('save_ai_thumbnail', { aiId: ai.id, thumbnailData: data });
+            await invoke('delete_ai_thumbnail', { aiId: key });
+            moved = true;
+            break;
+          } catch { /* not under this key */ }
+        }
+        if (moved) continue;
         // No custom thumbnail on disk — save the default character face
         try {
           const response = await fetch(thumbSource);
