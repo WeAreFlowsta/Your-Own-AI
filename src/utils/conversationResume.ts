@@ -62,7 +62,7 @@ export async function listAllConversations(
         // pass (seen live: a cell timing out reads at 60s apiece kept
         // the drawer on "Loading" forever).
         const conversations = await Promise.race([
-          getConversations(ai.aiConfig.agentPubKey!),
+          getConversations(ai.aiConfig.agentPubKey!, undefined, "conversations drawer"),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error("conversation read timed out")), 20000),
           ),

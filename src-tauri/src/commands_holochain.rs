@@ -868,44 +868,48 @@ pub async fn project_memory_read(
 /// The records themselves (index first, full walk as fallback); the result
 /// is written through to the cache and the disk copy.
 async fn project_memory_read_records(app: &tauri::AppHandle, folder: &str) -> Result<String, String> {
-    let content = project_memory_read_records_inner(app, folder).await?;
-    project_memory_cache_set(app, folder, Some(&content)).await;
-    Ok(content)
+    let info = project_memory_read_records_info(app, folder).await?;
+    project_memory_cache_set(app, folder, Some(&info.content)).await;
+    Ok(info.content)
 }
 
-async fn project_memory_read_records_inner(
+/// Newest revision across the conversations, and how many there are.
+fn newest_revision(info: &mut ProjectMemoryInfo, entries: Vec<TranscriptEntryInfo>) {
+    info.revisions += entries.len() as u32;
+    for e in entries {
+        if e.timestamp > info.updated_at {
+            info.updated_at = e.timestamp;
+            info.content = e.content;
+        }
+    }
+}
+
+async fn project_memory_read_records_info(
     app: &tauri::AppHandle,
     folder: &str,
-) -> Result<String, String> {
+) -> Result<ProjectMemoryInfo, String> {
     use tauri::Manager;
     let started = std::time::Instant::now();
     let hc_state = app.state::<Arc<HolochainState>>();
     let manager = hc_state.get()?;
-    // Fast path: the index names the memory conversations - read just those.
+    let mut info = ProjectMemoryInfo { folder_path: folder.to_string(), ..Default::default() };
+    // Fast path: the index names the memory conversations - read just
+    // those, all at once (one at a time took 412 s for 21 under load, 10-16).
     let indexed = project_memory_index_load(app).remove(folder).unwrap_or_default();
     if !indexed.is_empty() {
-        let mut best_ts = 0i64;
-        let mut best = String::new();
-        let mut ok = true;
-        for (agent, hash) in &indexed {
-            match get_conversation_transcript(agent.clone(), hash.clone(), app.state()).await {
-                Ok(entries) => {
-                    for e in entries {
-                        if e.timestamp > best_ts {
-                            best_ts = e.timestamp;
-                            best = e.content;
-                        }
-                    }
-                }
-                Err(_) => { ok = false; break; }
+        let reads = futures::future::join_all(
+            indexed.iter().map(|(agent, hash)| get_conversation_transcript(agent.clone(), hash.clone(), app.state())),
+        )
+        .await;
+        if reads.iter().all(|r| r.is_ok()) {
+            for entries in reads.into_iter().flatten() {
+                newest_revision(&mut info, entries);
             }
-        }
-        if ok {
             log::info!(
                 "[project-memory] read {} via index ({} conv, {} ms)",
                 folder, indexed.len(), started.elapsed().as_millis()
             );
-            return Ok(best);
+            return Ok(info);
         }
         // An indexed conversation could not be read (rare: cell not up yet) -
         // fall through to the full walk, which rebuilds the index.
@@ -914,30 +918,18 @@ async fn project_memory_read_records_inner(
         let agents = manager.agents.lock().await;
         agents.keys().cloned().collect()
     };
-    let mut best_ts = 0i64;
-    let mut best = String::new();
     let mut found: Vec<(String, String)> = Vec::new();
     for key in agent_keys {
-        let Ok(conversations) = get_conversations(app.clone(), key.clone(), app.state(), None).await else {
+        let Ok(conversations) = get_conversations(app.clone(), key.clone(), app.state(), Some(600), Some("project-memory walk".into())).await else {
             continue;
         };
         for c in conversations {
-            if c.source.as_deref() != Some(WORKSPACE_MEMORY_SOURCE) {
-                continue;
-            }
-            if c.title.as_deref() != Some(folder) {
+            if c.source.as_deref() != Some(WORKSPACE_MEMORY_SOURCE) || c.title.as_deref() != Some(folder) {
                 continue;
             }
             found.push((c.agent_key.clone(), c.hash.clone()));
-            let Ok(entries) = get_conversation_transcript(c.agent_key.clone(), c.hash.clone(), app.state()).await
-            else {
-                continue;
-            };
-            for e in entries {
-                if e.timestamp > best_ts {
-                    best_ts = e.timestamp;
-                    best = e.content;
-                }
+            if let Ok(entries) = get_conversation_transcript(c.agent_key.clone(), c.hash.clone(), app.state()).await {
+                newest_revision(&mut info, entries);
             }
         }
     }
@@ -950,7 +942,7 @@ async fn project_memory_read_records_inner(
         idx.insert(folder.to_string(), found);
         project_memory_index_save(app, &idx);
     }
-    Ok(best)
+    Ok(info)
 }
 
 /// Append a note row to the folder's memory as a new revision on the
@@ -960,10 +952,10 @@ pub async fn project_memory_append_note(
     app: &tauri::AppHandle,
     writer_key: &str,
     writer_label: &str,
+    saved_by: &str,
     folder: &str,
     note: &str,
 ) -> Result<(), String> {
-    use tauri::Manager;
     let capped: String = note
         .lines()
         .take(12)
@@ -977,7 +969,7 @@ pub async fn project_memory_append_note(
         return Err("empty note".to_string());
     }
     let current = project_memory_read(app, folder).await?;
-    let row = format!("- [saved by {}] {}", writer_label, capped);
+    let row = format!("- [saved by {}] {}", saved_by, capped);
     let mut lines: Vec<String> = current
         .lines()
         .filter(|l| !l.trim().is_empty())
@@ -988,40 +980,88 @@ pub async fn project_memory_append_note(
         let cut = lines.len() - WORKSPACE_MEMORY_MAX_LINES;
         lines.drain(0..cut);
     }
-    let content = lines.join("\n");
+    project_memory_write(app, writer_key, writer_label, folder, &lines.join("\n")).await
+}
 
-    // Reuse the writer's memory conversation for this folder, else start one.
-    let conversations = get_conversations(app.clone(), writer_key.to_string(), app.state(), None).await?;
-    let existing = conversations.into_iter().find(|c| {
-        c.source.as_deref() == Some(WORKSPACE_MEMORY_SOURCE) && c.title.as_deref() == Some(folder)
-    });
-    let (conv_key, hash, seq) = match existing {
-        Some(c) => {
-            let entries = get_conversation_transcript(c.agent_key.clone(), c.hash.clone(), app.state()).await?;
+/// One project-memory write at a time: two writers reading the same last
+/// revision would otherwise each append beside the other.
+static PROJECT_MEMORY_WRITE: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+/// Write `content` as the folder's newest memory revision, on the writer's
+/// memory conversation for the folder. The project-memory index names that
+/// conversation, so no conversation list is read (on an AI with a thousand
+/// conversations that read took minutes under load, and a failed or slow
+/// one used to start a NEW memory conversation - one folder had 18 on one
+/// AI, 10-16). The list is read only for a folder the index does not know
+/// yet, and a read that fails is an error, never "none here".
+pub async fn project_memory_write(
+    app: &tauri::AppHandle,
+    writer_key: &str,
+    writer_label: &str,
+    folder: &str,
+    content: &str,
+) -> Result<(), String> {
+    use tauri::Manager;
+    let _one = PROJECT_MEMORY_WRITE.lock().await;
+    let hc_state = app.state::<Arc<HolochainState>>();
+    let manager = hc_state.get()?;
+    let lineage = manager.agent_lineage(writer_key).await;
+    let indexed = project_memory_index_load(app).remove(folder).unwrap_or_default();
+    // The newest conversation this AI has for the folder (the index appends).
+    let mine = indexed
+        .iter()
+        .rev()
+        .find(|(agent, _)| agent == writer_key || lineage.iter().any(|l| l == agent))
+        .cloned();
+    let (conv_key, hash, seq) = match mine {
+        Some((agent, hash)) => {
+            let entries = get_conversation_transcript(agent.clone(), hash.clone(), app.state()).await?;
             let seq = entries.iter().map(|e| e.sequence).max().map(|s| s + 1).unwrap_or(0);
-            (c.agent_key, c.hash, seq)
+            (agent, hash, seq)
         }
         None => {
-            let hash = start_conversation(
+            let conversations = get_conversations(
                 app.clone(),
                 writer_key.to_string(),
-                writer_label.to_string(),
-                "workspace-memory".to_string(),
-                Some(folder.to_string()),
-                Some(WORKSPACE_MEMORY_SOURCE.to_string()),
                 app.state(),
+                Some(600),
+                Some("project-memory save".into()),
             )
             .await?;
-            (writer_key.to_string(), hash, 0)
+            let existing = conversations.into_iter().find(|c| {
+                c.source.as_deref() == Some(WORKSPACE_MEMORY_SOURCE) && c.title.as_deref() == Some(folder)
+            });
+            match existing {
+                Some(c) => {
+                    let entries = get_conversation_transcript(c.agent_key.clone(), c.hash.clone(), app.state()).await?;
+                    let seq = entries.iter().map(|e| e.sequence).max().map(|s| s + 1).unwrap_or(0);
+                    project_memory_index_add(app, folder, &c.agent_key, &c.hash);
+                    (c.agent_key, c.hash, seq)
+                }
+                None => {
+                    // start_conversation files it in the index.
+                    let hash = start_conversation(
+                        app.clone(),
+                        writer_key.to_string(),
+                        writer_label.to_string(),
+                        "workspace-memory".to_string(),
+                        Some(folder.to_string()),
+                        Some(WORKSPACE_MEMORY_SOURCE.to_string()),
+                        app.state(),
+                    )
+                    .await?;
+                    (writer_key.to_string(), hash, 0)
+                }
+            }
         }
     };
-    let content_for_cache = content.clone();
     record_transcript_entry(
         app.clone(),
         conv_key,
         hash,
         "assistant".to_string(),
-        content,
+        content.to_string(),
         seq,
         "workspace-memory".to_string(),
         None,
@@ -1034,8 +1074,65 @@ pub async fn project_memory_append_note(
     .await?;
     // record_transcript_entry wrote through (folder from the index); belt
     // and braces with the folder we know for certain.
-    project_memory_cache_set(app, folder, Some(&content_for_cache)).await;
+    project_memory_cache_set(app, folder, Some(content)).await;
     Ok(())
+}
+
+/// A folder's memory with what the Projects dialog shows beside it.
+#[derive(Serialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectMemoryInfo {
+    pub folder_path: String,
+    pub content: String,
+    /// Microseconds of the newest revision; 0 when served from the copy.
+    pub updated_at: i64,
+    /// Revisions in the records; 0 when served from the copy.
+    pub revisions: u32,
+}
+
+/// The folder's current memory. `fresh` reads the records (the dialog's
+/// count and date); otherwise the in-memory or disk copy answers at once,
+/// as it does for the agent's own read tool.
+#[tauri::command]
+pub async fn project_memory_get(app: tauri::AppHandle, folder: String, fresh: Option<bool>) -> Result<ProjectMemoryInfo, String> {
+    if fresh.unwrap_or(false) {
+        let info = project_memory_read_records_info(&app, &folder).await?;
+        project_memory_cache_set(&app, &folder, Some(&info.content)).await;
+        return Ok(info);
+    }
+    let content = project_memory_read(&app, &folder).await?;
+    Ok(ProjectMemoryInfo { folder_path: folder, content, ..Default::default() })
+}
+
+/// Save the whole memory for a folder (the session-end revision, an edit
+/// in the dialog).
+#[tauri::command]
+pub async fn project_memory_save(
+    app: tauri::AppHandle,
+    writer_key: String,
+    writer_label: String,
+    folder: String,
+    content: String,
+) -> Result<(), String> {
+    let started = std::time::Instant::now();
+    let r = project_memory_write(&app, &writer_key, &writer_label, &folder, &content).await;
+    log::info!("[project-memory] saved {} in {} ms{}", folder, started.elapsed().as_millis(), r.as_ref().err().map(|e| format!(" - failed: {e}")).unwrap_or_default());
+    r
+}
+
+/// The person's own note (the Remember button on a reply).
+#[tauri::command]
+pub async fn project_memory_note(
+    app: tauri::AppHandle,
+    writer_key: String,
+    writer_label: String,
+    folder: String,
+    note: String,
+) -> Result<(), String> {
+    let started = std::time::Instant::now();
+    let r = project_memory_append_note(&app, &writer_key, &writer_label, "you", &folder, &note).await;
+    log::info!("[project-memory] note saved for {} in {} ms{}", folder, started.elapsed().as_millis(), r.as_ref().err().map(|e| format!(" - failed: {e}")).unwrap_or_default());
+    r
 }
 
 /// Tidy v2 (cell-lineage recovery Phase B, reworked): disable exactly the
@@ -1131,6 +1228,9 @@ pub async fn get_conversations(
     // longer pays a sixty-second read per page open (a delete
     // session, 09-04: three zome timeouts).
     max_age_secs: Option<u64>,
+    // Who asked, for the log line a live read writes (10-16: something
+    // asked for two AIs' lists every few seconds and no line said what).
+    caller: Option<String>,
 ) -> Result<Vec<ConversationInfo>, String> {
     let manager = hc_state.get()?;
     if let Some(secs) = max_age_secs {
@@ -1142,6 +1242,16 @@ pub async fn get_conversations(
             }
         }
     }
+    let caller = caller.unwrap_or_else(|| "unnamed".to_string());
+    // One live read per AI at a time; a read that just finished answers
+    // the callers behind it (conversation_cache::LIVE_REUSE).
+    let gate = crate::conversation_cache::live_gate(&agent_key);
+    let _turn = gate.lock().await;
+    if let Some(list) = crate::conversation_cache::recent_live(&agent_key) {
+        log::debug!("[records] conversation list {} reused for {}", &agent_key[..agent_key.len().min(12)], caller);
+        return Ok(list);
+    }
+    let started = std::time::Instant::now();
 
     // Merge conversations across the AI's whole agent lineage — earlier
     // generations hold conversations recorded before the AI was re-keyed
@@ -1304,6 +1414,14 @@ pub async fn get_conversations(
     } else if unanswered.is_empty() {
         crate::conversation_cache::clear_stale(&app, &agent_key);
     }
+    crate::conversation_cache::remember_live(&agent_key, &conversations);
+    log::info!(
+        "[records] conversation list {} live for {}: {} conversation(s) in {} ms",
+        &agent_key[..agent_key.len().min(12)],
+        caller,
+        conversations.len(),
+        started.elapsed().as_millis()
+    );
 
     Ok(conversations)
 }

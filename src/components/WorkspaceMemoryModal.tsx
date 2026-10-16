@@ -65,7 +65,7 @@ export const WorkspaceMemoryModal = component$<{
     }, 4000);
     cleanup(() => clearTimeout(slowTimer));
     try {
-      const m = await getWorkspaceMemory(folder);
+      const m = await getWorkspaceMemory(folder, true);
       rows.value = memoryRows(m.content);
       updatedAt.value = m.updatedAt;
       revisions.value = m.revisions;
@@ -132,7 +132,7 @@ export const WorkspaceMemoryModal = component$<{
   const folderLeaf = folderPath.value.split("/").filter(Boolean).pop();
 
   return (
-    <div class="fixed inset-0 z-[70]">
+    <div class="fixed inset-0 z-[70]" data-testid="project-memory-dialog" data-loading={loading.value ? "1" : "0"}>
       <div class="absolute inset-0 bg-black/40" onClick$={() => (folderPath.value = null)} />
       <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[560px] max-w-[92vw] max-h-[80vh] flex flex-col rounded-xl border border-[var(--border-primary)] bg-[var(--bg-card)] shadow-2xl">
         <div class="flex items-center justify-between px-5 py-3 border-b border-[var(--border-subtle)]">
@@ -140,9 +140,9 @@ export const WorkspaceMemoryModal = component$<{
             <h2 class="text-base font-semibold text-[var(--text-primary)] font-varela truncate">
               Project memory - {folderLeaf}
             </h2>
-            <p class="text-xs text-[var(--text-muted)] truncate">
+            <p class="text-xs text-[var(--text-muted)] truncate" data-testid="project-memory-status">
               {loading.value
-                ? "Reading from your records.."
+                ? "Reading from your records..."
                 : revisions.value > 0
                 ? `${rows.value.length} note${rows.value.length === 1 ? "" : "s"}${
                     rows.value.length >= MEMORY_MAX_LINES * 0.8

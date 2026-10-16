@@ -37,7 +37,7 @@ export async function summarizeAdoptedConversations(aiId: string): Promise<void>
   try {
     if (!(await isEmbeddingModelReady()) || !(await isUtilityModelReady())) return;
 
-    const conversations = (await getConversations(aiId)).filter((c) =>
+    const conversations = (await getConversations(aiId, undefined, "import summaries")).filter((c) =>
       c.source?.startsWith("import:"),
     );
     if (conversations.length === 0) return;

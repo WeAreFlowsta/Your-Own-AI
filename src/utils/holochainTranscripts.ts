@@ -170,11 +170,14 @@ export async function getConversations(
   /** Serve the cached list when it was written within this many seconds
    *  (the cache is write-through); omit for a live read. */
   maxAgeSecs?: number,
+  /** Who asks - named in the log line a live read writes. */
+  caller?: string,
 ): Promise<HolochainConversation[]> {
   try {
     return await invoke<HolochainConversation[]>("get_conversations", {
       agentKey,
       maxAgeSecs: maxAgeSecs ?? null,
+      caller: caller ?? null,
     });
   } catch (e) {
     console.warn("[Holochain] Failed to get conversations:", e);

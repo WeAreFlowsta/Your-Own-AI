@@ -13,8 +13,6 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   getConversations,
   getTranscript,
-  startConversation,
-  recordMessage,
 } from "./holochainTranscripts";
 import { getLocalCustomAis } from "./localAiStorage";
 
@@ -56,7 +54,7 @@ async function scanAgentProjectNotes(
   agentKey: string,
   folderPath?: string,
 ): Promise<ScannedNotes[]> {
-  const conversations = await getConversations(agentKey);
+  const conversations = await getConversations(agentKey, 600, "projects list");
   const matches = conversations.filter(
     (c) =>
       c.source === WORKSPACE_MEMORY_SOURCE &&
@@ -105,22 +103,22 @@ export function cachedWorkspaceMemories(): WorkspaceMemory[] | null {
   return lastScan;
 }
 
-/** The current memory for one folder - newest revision across all chains. */
-export async function getWorkspaceMemory(folderPath: string): Promise<WorkspaceMemory> {
-  const agents = await provisionedAgents();
-  const scans = await Promise.all(
-    agents.map((a) => scanAgentProjectNotes(a.agentKey, folderPath)),
-  );
-  const byFolder = new Map<string, WorkspaceMemory>();
-  foldScans(scans.flat(), byFolder);
-  return (
-    byFolder.get(folderPath) ?? {
-      folderPath,
-      content: "",
-      updatedAt: 0,
-      revisions: 0,
-    }
-  );
+/** The current memory for one folder - newest revision across all chains.
+ *  Read in the backend from its copy (instant) or, with `fresh`, from the
+ *  records through the project-memory index (the dialog's count and date).
+ *  It used to read EVERY AI's whole conversation list to find the folder's
+ *  memory conversations - minutes on a busy install (10-16). */
+export async function getWorkspaceMemory(folderPath: string, fresh = false): Promise<WorkspaceMemory> {
+  try {
+    const m = await invoke<{ folderPath: string; content: string; updatedAt: number; revisions: number }>(
+      "project_memory_get",
+      { folder: folderPath, fresh },
+    );
+    return { folderPath, content: m.content, updatedAt: m.updatedAt, revisions: m.revisions };
+  } catch (e) {
+    console.warn("[WorkspaceMemory] read failed:", e);
+    return { folderPath, content: "", updatedAt: 0, revisions: 0 };
+  }
 }
 
 /** All folders that have memory anywhere (Memory page's Projects list). */
@@ -137,81 +135,51 @@ export async function listWorkspaceMemories(): Promise<WorkspaceMemory[]> {
 }
 
 /** Write a new revision. `writer` = the AI whose chain takes it (the one in
- *  the session, or any provisioned AI for manual edits). */
+ *  the session, or any provisioned AI for manual edits). The backend finds
+ *  the writer's memory conversation through the project-memory index and
+ *  never starts a second one because a read was slow or failed. */
 export async function saveWorkspaceMemory(
   writer: { agentPubKey: string; label: string },
   folderPath: string,
   content: string,
 ): Promise<boolean> {
-  const trimmed = clampMemory(content);
-  // Reuse this AI's existing memory conversation for the folder, else start one.
-  const conversations = await getConversations(writer.agentPubKey);
-  let conv = conversations.find(
-    (c) => c.source === WORKSPACE_MEMORY_SOURCE && c.title === folderPath,
-  );
-  let hash = conv?.hash;
-  let seq = 0;
-  if (conv) {
-    const entries = await getTranscript(conv.agent_key || writer.agentPubKey, conv.hash);
-    seq = entries.length ? Math.max(...entries.map((e) => e.sequence)) + 1 : 0;
-  } else {
-    hash =
-      (await startConversation(
-        writer.agentPubKey,
-        writer.label,
-        "workspace-memory",
-        folderPath,
-        WORKSPACE_MEMORY_SOURCE,
-      )) ?? undefined;
-  }
-  if (!hash) {
-    console.error("[WorkspaceMemory] Could not start the memory conversation");
+  try {
+    await invoke("project_memory_save", {
+      writerKey: writer.agentPubKey,
+      writerLabel: writer.label,
+      folder: folderPath,
+      content: clampMemory(content),
+    });
+    return true;
+  } catch (e) {
+    console.error("[WorkspaceMemory] Revision write FAILED:", e);
     return false;
   }
-  const actionHash = await recordMessage(
-    conv?.agent_key || writer.agentPubKey,
-    hash,
-    "assistant",
-    trimmed,
-    seq,
-    "workspace-memory",
-  );
-  if (!actionHash) {
-    console.error("[WorkspaceMemory] Revision write FAILED - see warning above");
-    return false;
-  }
-  return true;
 }
 
 /** A user-saved note from the Remember button: appended as its own row,
  *  marked as the user's, trimmed oldest-first when the cap would drop it
  *  (the next automatic revision curates it into shape). */
 export async function appendWorkspaceNote(folderPath: string, note: string): Promise<boolean> {
-  const capped = note
-    .split("\n")
-    .slice(0, 12)
-    .join("\n")
-    .slice(0, 1000)
-    .trim();
-  if (!capped) return false;
-  const current = await getWorkspaceMemory(folderPath);
-  const row = `- [saved by you] ${capped.replace(/\n/g, " / ")}`;
-  let lines = (current.content ? current.content.split("\n") : []).filter(
-    (l) => l.trim() !== "",
-  );
-  lines.push(row);
-  if (lines.length > MEMORY_MAX_LINES) lines = lines.slice(lines.length - MEMORY_MAX_LINES);
+  if (!note.trim()) return false;
   const ais = await getLocalCustomAis();
   const writer = ais.find((a) => a.agentPubKey);
   if (!writer) {
     console.error("[WorkspaceMemory] No provisioned AI to write the note");
     return false;
   }
-  return saveWorkspaceMemory(
-    { agentPubKey: writer.agentPubKey!, label: writer.name },
-    folderPath,
-    lines.join("\n"),
-  );
+  try {
+    await invoke("project_memory_note", {
+      writerKey: writer.agentPubKey,
+      writerLabel: writer.name,
+      folder: folderPath,
+      note,
+    });
+    return true;
+  } catch (e) {
+    console.error("[WorkspaceMemory] Note write FAILED:", e);
+    return false;
+  }
 }
 
 /** Enforce the line cap + tidy blank runs. */

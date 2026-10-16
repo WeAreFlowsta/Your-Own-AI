@@ -734,7 +734,7 @@ export async function rebuildMemoryIndexIfPending(): Promise<void> {
       if (fast) {
         for (const e of fast) keep(e.role, e.content, e.conversation_hash, e.timestamp);
       } else {
-        for (const conv of await getConversations(agentKey)) {
+        for (const conv of await getConversations(agentKey, undefined, "memory rebuild")) {
           for (const entry of await getTranscript(conv.agent_key ?? agentKey, conv.hash)) {
             keep(entry.role, entry.content, conv.hash, entry.timestamp);
           }

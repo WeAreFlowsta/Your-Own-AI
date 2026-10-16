@@ -443,8 +443,13 @@ export function useAgentSession(props: UseAgentSessionProps) {
         console.warn("[WorkspaceMemory] episode row failed (the distillation still runs):", e);
       }
     }
-    const revised = await reviseWorkspaceMemory(ai.id, workspaceMemory.value, digest);
-    if (!revised || revised === workspaceMemory.value.trim()) {
+    // Revise what the memory says NOW, not what it said when the session
+    // opened: a note the agent saved during the session (remember_for_project)
+    // is in the records and the copy, not in workspaceMemory - revising the
+    // session-start text wrote over it. The copy answers in milliseconds.
+    const current = (await getWorkspaceMemory(folderPath)).content || workspaceMemory.value;
+    const revised = await reviseWorkspaceMemory(ai.id, current, digest);
+    if (!revised || revised === current.trim()) {
       clearPending();
       return;
     }

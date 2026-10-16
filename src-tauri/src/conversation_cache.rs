@@ -50,6 +50,87 @@ fn data_key(app: &tauri::AppHandle) -> Result<[u8; 32], String> {
         .data_key()
 }
 
+/// How long a finished live list answers the next caller for the same AI.
+/// A busy app asked for one AI's list every two or three seconds while
+/// each read took five to thirty (10-16: 368 reads in eleven minutes, and
+/// a project note that waited five minutes behind them). Every write the
+/// app makes keeps this copy current exactly as it keeps the file, so a
+/// reused list is the live list.
+pub(crate) const LIVE_REUSE: std::time::Duration = std::time::Duration::from_secs(15);
+
+struct RecentList {
+    at: std::time::Instant,
+    list: Vec<ConversationInfo>,
+}
+
+static RECENT: std::sync::Mutex<Option<std::collections::HashMap<String, RecentList>>> = std::sync::Mutex::new(None);
+static GATES: std::sync::Mutex<Option<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>> =
+    std::sync::Mutex::new(None);
+
+fn with_recent<R>(f: impl FnOnce(&mut std::collections::HashMap<String, RecentList>) -> R) -> R {
+    let mut guard = RECENT.lock().unwrap_or_else(|e| e.into_inner());
+    f(guard.get_or_insert_with(Default::default))
+}
+
+/// One live list read per AI at a time: a caller that arrives while one
+/// runs waits for it and takes its answer.
+pub(crate) fn live_gate(agent_key: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    let mut guard = GATES.lock().unwrap_or_else(|e| e.into_inner());
+    guard.get_or_insert_with(Default::default).entry(agent_key.to_string()).or_default().clone()
+}
+
+/// The list a live read finished within `LIVE_REUSE`, empty lists included
+/// (an AI with no conversations has no cache file, so before this every
+/// call for it was a live read).
+pub(crate) fn recent_live(agent_key: &str) -> Option<Vec<ConversationInfo>> {
+    with_recent(|m| m.get(agent_key).filter(|r| r.at.elapsed() < LIVE_REUSE).map(|r| r.list.clone()))
+}
+
+pub(crate) fn remember_live(agent_key: &str, list: &[ConversationInfo]) {
+    with_recent(|m| {
+        m.insert(agent_key.to_string(), RecentList { at: std::time::Instant::now(), list: list.to_vec() });
+    });
+}
+
+// The write-through steps for the in-memory copy, beside the file's.
+fn recent_insert(agent_key: &str, info: &ConversationInfo) {
+    with_recent(|m| {
+        if let Some(r) = m.get_mut(agent_key) {
+            r.list.retain(|c| c.hash != info.hash);
+            r.list.insert(0, info.clone());
+        }
+    });
+}
+
+fn recent_remove(agent_key: &str, hash: &str) {
+    with_recent(|m| {
+        if let Some(r) = m.get_mut(agent_key) {
+            r.list.retain(|c| c.hash != hash);
+        }
+    });
+}
+
+fn recent_touch(hash: &str, at_micros: i64) {
+    with_recent(|m| {
+        for r in m.values_mut() {
+            if let Some(pos) = r.list.iter().position(|c| c.hash == hash) {
+                let mut conv = r.list.remove(pos);
+                conv.last_active_at = Some(at_micros);
+                r.list.insert(0, conv);
+            }
+        }
+    });
+}
+
+fn forget_live(agent_key: Option<&str>) {
+    with_recent(|m| match agent_key {
+        Some(k) => {
+            m.remove(k);
+        }
+        None => m.clear(),
+    });
+}
+
 pub(crate) fn read_cache(
     app: &tauri::AppHandle,
     agent_key: &str,
@@ -87,6 +168,7 @@ pub(crate) fn fresh_within(app: &tauri::AppHandle, agent_key: &str, secs: u64) -
 /// The next list read must be live: the chain changed outside the
 /// write-through path (an import, a restore).
 pub(crate) fn mark_stale(app: &tauri::AppHandle, agent_key: &str) {
+    forget_live(Some(agent_key));
     let Ok(marker) = stale_marker_for(app, agent_key) else { return };
     if let Err(e) = std::fs::write(&marker, b"") {
         log::warn!("[conv-cache] could not mark the list stale: {}", e);
@@ -155,6 +237,7 @@ fn write_at(app: &tauri::AppHandle, path: &PathBuf, list: &[ConversationInfo]) -
 /// large chain) confirms the removal. Deleting the last row removes the
 /// file itself, since write_cache refuses empty lists by design.
 pub(crate) fn remove_from_cache(app: &tauri::AppHandle, agent_key: &str, hash: &str) {
+    recent_remove(agent_key, hash);
     let Ok(mut list) = read_cache(app, agent_key) else { return };
     let before = list.len();
     list.retain(|c| c.hash != hash);
@@ -223,6 +306,7 @@ pub(crate) fn record_deleted(app: &tauri::AppHandle, agent_key: &str, hash: &str
 /// Write-through for a conversation that just started: the cache stays
 /// fresh even while full reads are failing on a loaded machine.
 pub(crate) fn append_to_cache(app: &tauri::AppHandle, agent_key: &str, info: ConversationInfo) {
+    recent_insert(agent_key, &info);
     let mut list = read_cache(app, agent_key).unwrap_or_default();
     list.retain(|c| c.hash != info.hash);
     list.insert(0, info);
@@ -242,6 +326,7 @@ pub(crate) fn append_to_cache(app: &tauri::AppHandle, agent_key: &str, info: Con
 /// filed under the AI's current key would otherwise be served as fresh and
 /// empty. The next live read rebuilds each list.
 pub(crate) fn drop_all(app: &tauri::AppHandle) {
+    forget_live(None);
     let Ok(dir) = crate::profile::root(&app) else { return };
     let Ok(entries) = std::fs::read_dir(&dir) else { return };
     for entry in entries.flatten() {
@@ -253,6 +338,7 @@ pub(crate) fn drop_all(app: &tauri::AppHandle) {
 }
 
 pub(crate) fn touch(app: &tauri::AppHandle, hash: &str, at_micros: i64) {
+    recent_touch(hash, at_micros);
     let Ok(dir) = crate::profile::root(&app) else { return };
     let Ok(entries) = std::fs::read_dir(&dir) else { return };
     for entry in entries.flatten() {
@@ -270,5 +356,51 @@ pub(crate) fn touch(app: &tauri::AppHandle, hash: &str, at_micros: i64) {
             log::warn!("[conv-cache] touch failed: {}", e);
         }
         return;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn conv(hash: &str) -> ConversationInfo {
+        ConversationInfo {
+            hash: hash.into(),
+            ai_personality_id: String::new(),
+            ai_personality_name: String::new(),
+            model_used: String::new(),
+            started_at: 1,
+            last_active_at: None,
+            title: None,
+            source: None,
+            agent_key: "agent".into(),
+        }
+    }
+
+    #[test]
+    fn a_finished_read_answers_the_next_caller_and_every_write_keeps_it_current() {
+        let ai = "recent-test-ai";
+        assert!(recent_live(ai).is_none(), "nothing read yet: the next caller reads live");
+        remember_live(ai, &[]);
+        assert_eq!(recent_live(ai).map(|l| l.len()), Some(0), "an AI with no conversations is an answer too");
+        recent_insert(ai, &conv("a"));
+        recent_insert(ai, &conv("b"));
+        let hashes = |l: Vec<ConversationInfo>| l.into_iter().map(|c| c.hash).collect::<Vec<_>>();
+        assert_eq!(hashes(recent_live(ai).unwrap()), vec!["b", "a"], "a new conversation shows at once, on top");
+        recent_touch("a", 99);
+        let l = recent_live(ai).unwrap();
+        assert_eq!(l[0].hash, "a", "a turn moves its conversation to the top");
+        assert_eq!(l[0].last_active_at, Some(99));
+        recent_remove(ai, "b");
+        assert_eq!(hashes(recent_live(ai).unwrap()), vec!["a"], "a delete leaves at once");
+        forget_live(Some(ai));
+        assert!(recent_live(ai).is_none(), "an import or restore makes the next read live");
+    }
+
+    #[test]
+    fn a_write_for_an_ai_nobody_read_yet_does_not_invent_a_list() {
+        let ai = "recent-test-unread";
+        recent_insert(ai, &conv("x"));
+        assert!(recent_live(ai).is_none(), "the first read is still live - a list of one would hide the rest");
     }
 }

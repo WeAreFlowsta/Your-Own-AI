@@ -2340,10 +2340,10 @@ async fn mcp_post(
                     if note.trim().is_empty() {
                         return mcp_tool_text(&id, "Nothing to remember - the note was empty.".to_string(), true);
                     }
-                    // The save walks every AI's records and writes to the
-                    // chain - minutes on a busy machine - and the agent's
-                    // whole turn used to block on it. Answer now, write in
-                    // the background, one write at a time so two notes can
+                    // The save writes to the chain (seconds; it once walked
+                    // every AI's records and took minutes), and the agent's
+                    // turn must not wait on it. Answer now, write in the
+                    // background, one write at a time so two notes can
                     // never race for the same memory conversation. A
                     // failure is logged app-side; the note is not lost
                     // silently, it is lost loudly.
@@ -2353,7 +2353,7 @@ async fn mcp_post(
                         let _one_at_a_time = PROJECT_MEMORY_WRITE_LOCK.lock().await;
                         let started = std::time::Instant::now();
                         match crate::commands_holochain::project_memory_append_note(
-                            &app2, &key, &label, &folder2, &note,
+                            &app2, &key, &label, &label, &folder2, &note,
                         )
                         .await
                         {

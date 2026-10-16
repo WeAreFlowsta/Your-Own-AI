@@ -340,6 +340,7 @@ export default component$<AppHeaderProps>(
                 never see this. */}
             {buildInstalled && folderPath && (
               <span
+                data-testid="project-pill"
                 class="relative text-xs text-[var(--text-secondary)] flex items-center gap-2 px-3 h-9 bg-[var(--bg-dropdown)] rounded-full border border-[var(--border-subtle)] cursor-pointer"
                 onClick$={() => (workspaceMenuOpen.value = !workspaceMenuOpen.value)}
                 title={
@@ -536,6 +537,7 @@ export default component$<AppHeaderProps>(
                       <span class="grid grid-cols-2 gap-2 p-3">
                         <button
                           type="button"
+                          data-testid="open-project-memory"
                           onClick$={() => {
                             workspaceMenuOpen.value = false;
                             memoryFolder.value = folderPath;

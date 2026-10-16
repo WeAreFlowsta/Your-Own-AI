@@ -234,6 +234,7 @@ export const AgentPermissionCard = component$<AgentPermissionCardProps>(
             <LiquidMetalButton
               variant="secondary"
               class="px-4 py-2 text-sm"
+              testId="permission-deny"
               onClick$={() => {
                 if (localAnswer.value) return;
                 localAnswer.value = "reject";
@@ -244,6 +245,7 @@ export const AgentPermissionCard = component$<AgentPermissionCardProps>(
             </LiquidMetalButton>
             <LiquidMetalButton
               class="px-4 py-2 text-sm"
+              testId="permission-allow"
               onClick$={() => {
                 if (localAnswer.value) return;
                 localAnswer.value = "allow";

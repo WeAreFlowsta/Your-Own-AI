@@ -247,7 +247,7 @@ async fn build(app: &AppHandle, agent_key: &str) -> Result<(), String> {
     use futures::stream::{self, StreamExt};
     let key = data_key(app)?;
     // The list the drawer shows (its cache is write-through, so a fresh one IS the list).
-    let convs = crate::commands_holochain::get_conversations(app.clone(), agent_key.to_string(), app.state(), Some(600)).await?;
+    let convs = crate::commands_holochain::get_conversations(app.clone(), agent_key.to_string(), app.state(), Some(600), Some("search index".into())).await?;
     let total = convs.len();
     let t0 = std::time::Instant::now();
     // Known and untouched since the cache read it: nothing to read. A turn
