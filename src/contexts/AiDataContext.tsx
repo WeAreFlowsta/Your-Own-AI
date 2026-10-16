@@ -668,7 +668,8 @@ export function useAiDataActions() {
         state.thumbnailObjectUrls = urls;
         const { announceActivity } = await import("../utils/activity");
         const n = (e.payload?.updated ?? 0) + (e.payload?.added ?? 0);
-        announceActivity({
+        // Pictures filled in alone: they show; no notice for that.
+        if (n > 0) announceActivity({
           id: "ai-configs-changed",
           title: "Your AIs were updated from another of your devices",
           detail: n === 1 ? "1 AI" : `${n} AIs`,

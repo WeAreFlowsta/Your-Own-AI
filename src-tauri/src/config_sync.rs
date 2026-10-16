@@ -131,6 +131,26 @@ pub(crate) fn merge_sibling_configs(
     (merged, updated, added, touched)
 }
 
+/// (local id, picture) for every local AI with no picture file whose
+/// founding key has a picture on another device.
+pub(crate) fn missing_pictures(
+    local: &[serde_json::Value],
+    sibling_pictures: &std::collections::HashMap<String, String>,
+    has_file: impl Fn(&str) -> bool,
+) -> Vec<(String, String)> {
+    local
+        .iter()
+        .filter_map(|l| {
+            let id = l["id"].as_str().filter(|i| !i.is_empty())?;
+            if has_file(id) {
+                return None;
+            }
+            let b64 = sibling_pictures.get(&founding_of(l)?)?;
+            Some((id.to_string(), b64.clone()))
+        })
+        .collect()
+}
+
 /// One sibling's manifest copy (Vault 1.6.1 reads the named device's; a
 /// 1.6.0 Vault answers with the newest copy across devices instead).
 async fn sibling_manifest(port: u16, device: &str) -> Result<Option<serde_json::Value>, String> {
@@ -321,6 +341,8 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle) -> Result<(u32, u
     };
     let (mut total_updated, mut total_added) = (0u32, 0u32);
     let thumb_dir = crate::profile::root(app).map_err(|e| e.to_string())?.join("thumbnails");
+    // Every sibling AI's picture by founding key, first device first.
+    let mut sibling_pictures: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for device in &devices {
         let manifest = match sibling_manifest(port, &device.id).await {
             Ok(m) => m,
@@ -349,6 +371,12 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle) -> Result<(u32, u
         if sibling.is_empty() {
             continue;
         }
+        if let Some(thumbs) = manifest["thumbnails"]["data"].as_object() {
+            for s in &sibling {
+                let (Some(founding), Some(b64)) = (founding_of(s), s["id"].as_str().and_then(|id| thumbs.get(id)).and_then(|v| v.as_str())) else { continue };
+                sibling_pictures.entry(founding).or_insert_with(|| b64.to_string());
+            }
+        }
         let (merged, updated, added, touched) = merge_sibling_configs(local, &sibling);
         local = merged;
         total_updated += updated;
@@ -364,6 +392,23 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle) -> Result<(u32, u
                 }
             }
         }
+    }
+    // An AI here with no picture at all takes the one its other devices
+    // have: whatever step lost or never wrote it, the pictures converge.
+    let missing = missing_pictures(&local, &sibling_pictures, |id| thumb_dir.join(format!("{}.jpg", id)).exists());
+    if !missing.is_empty() {
+        use base64::Engine;
+        let _ = std::fs::create_dir_all(&thumb_dir);
+        let mut filled = 0;
+        for (local_id, b64) in &missing {
+            if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
+                if std::fs::write(thumb_dir.join(format!("{}.jpg", local_id)), bytes).is_ok() {
+                    filled += 1;
+                }
+            }
+        }
+        log::info!("[config-sync] {} picture(s) filled in from the other devices", filled);
+        let _ = app.emit("ai-configs-changed", serde_json::json!({ "updated": 0, "added": 0, "pictures": filled }));
     }
     if let Some(p) = sibling_conversations_path(app) {
         if let Ok(json) = serde_json::to_vec(&sibling_index) {
@@ -412,7 +457,7 @@ pub fn start_config_sync_rounds(app: &tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{merge_sibling_configs, sibling_needs_update};
+    use super::{merge_sibling_configs, missing_pictures, sibling_needs_update};
     use crate::vault_escrow::SiblingDevice;
 
     #[test]
@@ -487,6 +532,19 @@ mod tests {
         let (again, u2, a2, _) = merge_sibling_configs(merged.clone(), &sibling);
         assert_eq!((u2, a2), (0, 0));
         assert_eq!(again.len(), 2);
+    }
+
+    #[test]
+    fn an_ai_with_no_picture_takes_the_one_its_other_devices_have() {
+        let pics: std::collections::HashMap<String, String> =
+            [("found-1".to_string(), "PIC1".to_string()), ("found-2".to_string(), "PIC2".to_string())].into_iter().collect();
+        let local = vec![
+            ai("here-1", "found-1", "Has none", 0),   // no file: takes PIC1
+            ai("here-2", "found-2", "Has its own", 0), // a file already: left alone
+            ai("here-3", "found-3", "Nobody has one", 0),
+        ];
+        let missing = missing_pictures(&local, &pics, |id| id == "here-2");
+        assert_eq!(missing, vec![("here-1".to_string(), "PIC1".to_string())]);
     }
 
     #[test]
