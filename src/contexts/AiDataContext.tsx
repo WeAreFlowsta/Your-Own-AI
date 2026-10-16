@@ -56,6 +56,22 @@ export interface AiDataState {
 
 export const AiDataContext = createContextId<AiDataState>("app.aidata");
 
+
+/** An AI's picture: under its id, else under its founding key (an AI that
+ *  arrived from another device took its picture under that key; a re-key
+ *  before 0.9.0-beta.6 left it there) - moved to the id when found. */
+async function readAiThumbnail(ai: { id: string; foundingKey?: string }): Promise<number[]> {
+  try {
+    return await invoke<number[]>("get_ai_thumbnail", { aiId: ai.id });
+  } catch (e) {
+    if (!ai.foundingKey || ai.foundingKey === ai.id) throw e;
+    const data = await invoke<number[]>("get_ai_thumbnail", { aiId: ai.foundingKey });
+    await invoke("save_ai_thumbnail", { aiId: ai.id, thumbnailData: data });
+    await invoke("delete_ai_thumbnail", { aiId: ai.foundingKey });
+    return data;
+  }
+}
+
 export const AiDataProvider = component$(() => {
   const state = useStore<AiDataState>(
     {
@@ -314,9 +330,7 @@ export const AiDataProvider = component$(() => {
       const newUrls: Record<string, string> = {};
       for (const ai of state.userDefinedAis) {
         try {
-          const thumbnailData = await invoke<number[]>("get_ai_thumbnail", {
-            aiId: ai.id,
-          });
+          const thumbnailData = await readAiThumbnail(ai);
           const uint8Array = new Uint8Array(thumbnailData);
           const blob = new Blob([uint8Array], { type: "image/jpeg" });
           newUrls[ai.id] = URL.createObjectURL(blob);
@@ -629,11 +643,29 @@ export function useAiDataActions() {
             ai.id = agentKey;
             ai.foundingKey = ai.foundingKey || oldId;
             await updateLocalCustomAi(oldId, { id: agentKey, agentPubKey: agentKey, foundingKey: ai.foundingKey } as any);
+            // Its picture arrived under the stand-in id: it follows the AI.
+            try {
+              const thumbData = await invoke<number[]>("get_ai_thumbnail", { aiId: oldId });
+              await invoke("save_ai_thumbnail", { aiId: agentKey, thumbnailData: thumbData });
+              await invoke("delete_ai_thumbnail", { aiId: oldId });
+            } catch { /* no picture came with it */ }
           } catch (err) {
             console.warn("[AiDataContext] agent for an AI from another device failed:", err);
           }
         }
         state.userDefinedAis = [...state.userDefinedAis];
+        // Pictures may have changed for AIs that were already here too.
+        const urls: Record<string, string> = {};
+        for (const ai of state.userDefinedAis) {
+          try {
+            const data = await readAiThumbnail(ai);
+            urls[ai.id] = URL.createObjectURL(new Blob([new Uint8Array(data)], { type: "image/jpeg" }));
+          } catch { /* the archetype default */ }
+        }
+        for (const old of Object.values(state.thumbnailObjectUrls)) {
+          if (old.startsWith("blob:")) URL.revokeObjectURL(old);
+        }
+        state.thumbnailObjectUrls = urls;
         const { announceActivity } = await import("../utils/activity");
         const n = (e.payload?.updated ?? 0) + (e.payload?.added ?? 0);
         announceActivity({

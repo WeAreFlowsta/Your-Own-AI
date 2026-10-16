@@ -643,9 +643,18 @@ export default component$(() => {
       } else if (messages.length === 0 && loaded.copiedFrom) {
         resumeWarning.value = `Couldn't read the copy from ${copiedFrom.value ?? "your other device"} just now. Try again in a moment.`;
       } else if (messages.length === 0) {
-        // The read didn't answer (slow or unwell records cell) - say so.
-        // Nothing is lost; the records are still on this device.
-        resumeWarning.value = `${ai.label}'s records didn't answer, so this didn't open. Nothing is lost - try again in a moment.`;
+        // A device that has not joined the identity's network yet cannot
+        // read another device's conversation (neither its records nor the
+        // Vault's copy, which is under the identity's key): say THAT, and
+        // where the join is - not "didn't answer" (Linux, 2026-10-16).
+        let joinWaiting = false;
+        try {
+          const st = await invoke<{ state: string }>("vault_escrow_sync");
+          joinWaiting = st.state === "island_pending" || st.state === "island_deferred";
+        } catch { /* no Vault: the plain message */ }
+        resumeWarning.value = joinWaiting
+          ? "This computer hasn't joined your other devices yet, so their conversations can't open here. Join them in Settings, under Backups: Join your other devices."
+          : `${ai.label}'s records didn't answer, so this didn't open. Nothing is lost - try again in a moment.`;
         return;
       }
       resumeWarning.value = null;
