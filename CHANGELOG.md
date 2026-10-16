@@ -113,6 +113,8 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 
 ### Fixed
 - AI pictures from another device now show on this one.
+- An AI that has no picture on this device takes the one your other
+  devices have, and a built-in face never covers an AI's own picture.
 - A conversation from another device that can't open yet says why.
 - A computer that opened Your Own AI before signing in now offers to join
   your other devices, and their conversations arrive after the restart.
