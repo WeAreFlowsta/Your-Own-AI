@@ -1060,6 +1060,19 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
         .run(|app_handle, event| {
+            // macOS: the slow start (identity probe, profiles, sidecars) can
+            // finish after another app took the front, leaving the new window
+            // behind it. Launching an app means using it: come forward once.
+            #[cfg(target_os = "macos")]
+            {
+                if let RunEvent::Ready = event {
+                    if let Some(w) = app_handle.get_webview_window("main") {
+                        let _ = w.unminimize();
+                        let _ = w.show();
+                        let _ = w.set_focus();
+                    }
+                }
+            }
             // Handle app exit - stop llama-server
             if let RunEvent::ExitRequested { .. } = event {
                 // Clean exit → clear the GPU crash sentinel so this run isn't
