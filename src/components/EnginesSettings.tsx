@@ -16,6 +16,7 @@ import TuneSlider from "./TuneSlider";
 import ThemedSelect from "./ThemedSelect";
 import HelperModelOfferCallout from "./HelperModelOfferCallout";
 import { helperFilesMissing } from "../utils/homeOffers";
+import { formatBytes } from "../utils/activity";
 
 interface ExternalEngineInfo {
   url: string | null;
@@ -41,6 +42,8 @@ interface EngineStatus {
   running_backend: "bundled" | "cuda" | null;
   tag: string;
   download_url: string | null;
+  /** The CUDA download's size here, in bytes. */
+  download_bytes?: number | null;
 }
 
 /** The zip filename the Rust download emits progress events under. */
@@ -383,7 +386,9 @@ export default component$(() => {
             <div class="min-w-0 flex-1">
               <h3 class="text-base font-semibold text-[var(--text-primary)] flex items-center gap-2">
                 CUDA engine
-                <span class="text-xs font-normal text-[var(--text-muted)]">~850 MB</span>
+                {!!status.value?.download_bytes && (
+                  <span class="text-xs font-normal text-[var(--text-muted)]">{formatBytes(status.value.download_bytes)}</span>
+                )}
               </h3>
               <p class="text-sm text-[var(--text-secondary)] mt-0.5">
                 Built for NVIDIA graphics cards. Reads long prompts and

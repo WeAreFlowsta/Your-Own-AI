@@ -38,13 +38,15 @@ export interface CudaOffer {
   /** An older engine version is installed: say "update", never "install". */
   isUpdate: boolean;
   tag: string;
+  /** The download's size on this platform, in bytes (0 = unknown). */
+  bytes: number;
 }
 
 /** Is the NVIDIA engine offer (install or update) due on this machine? */
 export async function cudaOffer(): Promise<CudaOffer> {
   try {
     const [status, info, safe] = await Promise.all([
-      invoke<{ supported: boolean; gpu_supported: boolean; installed: boolean; stale_version_installed: boolean; tag: string }>('engine_status'),
+      invoke<{ supported: boolean; gpu_supported: boolean; installed: boolean; stale_version_installed: boolean; tag: string; download_bytes?: number | null }>('engine_status'),
       invoke<{ gpu_name?: string | null }>('get_system_info'),
       invoke<{ cuda_disabled?: boolean }>('gpu_safe_mode_status').catch(() => ({ cuda_disabled: false })),
     ]);
@@ -55,9 +57,10 @@ export async function cudaOffer(): Promise<CudaOffer> {
       eligible: nvidia && status.supported && status.gpu_supported && !status.installed && !safe.cuda_disabled,
       isUpdate: status.stale_version_installed && !status.installed,
       tag: status.tag,
+      bytes: status.download_bytes ?? 0,
     };
   } catch {
-    return { eligible: false, isUpdate: false, tag: '' };
+    return { eligible: false, isUpdate: false, tag: '', bytes: 0 };
   }
 }
 

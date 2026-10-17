@@ -46,6 +46,12 @@ interface Row {
 }
 
 const LINGER_MS = 8000;
+
+/** A row's text as drawn now. A plain call, so the text is read on every
+ *  draw: a bare `{r.detail}` stayed bound to the row object it was first
+ *  drawn with, and an update after another row came or went never showed
+ *  (e2e tray-download). */
+const drawn = (v: string | number | null | undefined): string => (v == null ? "" : String(v));
 /** A finished turn's row ("X answered · Open") stays this long. */
 const TURN_LINGER_MS = 60_000;
 const SHOWN = 3;
@@ -107,10 +113,13 @@ export const ActivityTray = component$(() => {
     const upsert = (id: string, patch: Partial<Row> & Pick<Row, "kind" | "title">) => {
       const i = store.rows.findIndex((r) => r.id === id);
       if (i >= 0) {
-        // Assign field by field: the store tracks each property, and the
-        // drawn text follows. Swapping the whole object left a row's bar
-        // moving while its "x of y" text stood still (Windows, 0.7.2).
-        Object.assign(store.rows[i], patch);
+        // A new list with a new object for this row, every time: once
+        // another row had come or gone, an update made in place drew the
+        // state but left the text as it was - "11% · 80 MB of 728 MB" next
+        // to Dismiss after the CUDA engine had installed (Windows, 10-17;
+        // e2e tray-download). Before that, swapping only the row object
+        // left the bar moving and the text still (Windows, 0.7.2).
+        store.rows = store.rows.map((r) => (r.id === id ? { ...r, ...patch } : r));
       } else {
         store.rows = [
           ...store.rows,
@@ -160,8 +169,27 @@ export const ActivityTray = component$(() => {
         remove(id);
         return;
       }
+      // The NVIDIA engine is unpacked and put in use next (engine-installed).
+      if (e.payload.filename.toLowerCase().startsWith("llama-server-cuda-")) {
+        upsert(id, { kind: "download", title: downloadTitle(e.payload.filename), percent: null, state: "running", detail: "Installing..." });
+        return;
+      }
       upsert(id, { kind: "download", title: downloadTitle(e.payload.filename), percent: 100, state: "done", detail: "Downloaded" });
       linger(id, LINGER_MS);
+    });
+    // The NVIDIA engine: after its download it is unpacked and put in use.
+    // The row says so, not "Downloaded" while the offer says "Installing".
+    const engineRow = () => store.rows.find((r) => r.id.startsWith("dl:llama-server-cuda-"))?.id;
+    const unEngineDone = await listen("engine-installed", () => {
+      const id = engineRow();
+      if (!id) return;
+      upsert(id, { kind: "download", title: "CUDA engine", percent: 100, state: "done", detail: "Installed - your models use it now" });
+      linger(id, LINGER_MS);
+    });
+    const unEngineFailed = await listen<string>("engine-install-failed", (e) => {
+      const id = engineRow();
+      if (!id) return;
+      upsert(id, { kind: "download", title: "CUDA engine", state: "error", detail: e.payload });
     });
     const unFailed = await listen<{ filename: string; error: string }>("model-download-failed", (e) => {
       const id = `dl:${e.payload.filename}`;
@@ -277,6 +305,8 @@ export const ActivityTray = component$(() => {
       unProgress();
       unComplete();
       unFailed();
+      unEngineDone();
+      unEngineFailed();
       unCorpus();
       unCards();
       window.removeEventListener(ACTIVITY_EVENT, onNote);
@@ -501,7 +531,7 @@ export const ActivityTray = component$(() => {
                 status={r.state === "running" ? "in_progress" : r.state === "error" ? "failed" : "completed"}
               />
               <span class={`text-sm font-medium truncate ${r.state === "error" ? "text-red-400" : "text-[var(--text-primary)]"}`}>
-                {r.title}
+                {drawn(r.title)}
               </span>
             </div>
             {r.state === "running" && r.stoppable && (
@@ -533,10 +563,10 @@ export const ActivityTray = component$(() => {
               </button>
             )}
           </div>
-          <p class="text-xs text-[var(--text-muted)] mt-0.5 break-words">{r.detail}</p>
+          <p class="text-xs text-[var(--text-muted)] mt-0.5 break-words">{drawn(r.detail)}</p>
           {r.state === "running" && r.percent !== null && (
             <div class="w-full h-2 mt-1.5 rounded-full bg-[var(--bg-main)] overflow-hidden">
-              <div class="h-full bg-[var(--bg-button-primary)] transition-all duration-200" style={{ width: `${r.percent}%` }} />
+              <div class="h-full bg-[var(--bg-button-primary)] transition-all duration-200" style={{ width: drawn(`${r.percent}%`) }} />
             </div>
           )}
           {r.kind === "read" && r.state === "running" && (

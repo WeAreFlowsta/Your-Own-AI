@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { cudaOffer } from '../utils/homeOffers';
 import { listen } from '@tauri-apps/api/event';
 import { Callout } from './Callout';
+import { formatBytes } from '../utils/activity';
 import LiquidMetalButton from './LiquidMetalButton';
 
 /** The zip filename the Rust download emits progress events under. */
@@ -23,6 +24,8 @@ export default component$(() => {
   // the first-install pitch reads as "didn't I already do this?".
   const isUpdate = useSignal(false);
   const tag = useSignal('');
+  /** The download's size here, as the tray counts it ("728 MB"). */
+  const size = useSignal('');
   const downloading = useSignal(false);
   const percent = useSignal(0);
   const done = useSignal(false);
@@ -32,6 +35,7 @@ export default component$(() => {
   useVisibleTask$(async ({ cleanup }) => {
     const offer = await cudaOffer();
     tag.value = offer.tag;
+    size.value = offer.bytes > 0 ? formatBytes(offer.bytes) : '';
     isUpdate.value = offer.isUpdate;
     eligible.value = offer.eligible;
     // A download started on an earlier visit is still running in the app
@@ -113,8 +117,8 @@ export default component$(() => {
         <>
           <p class="mb-2.5">
             {isUpdate.value
-              ? 'This app update comes with a newer version of the high-performance NVIDIA engine you installed earlier. One download (about 850 MB) and you keep your full speed - until then, models run on the standard engine.'
-              : 'An optional high-performance engine is available for NVIDIA cards like yours - faster reading and quicker replies. One download (about 850 MB), no setup, and you can remove it anytime in Settings.'}
+              ? `This app update comes with a newer version of the high-performance NVIDIA engine you installed earlier. One download${size.value ? ` (${size.value})` : ''} and you keep your full speed - until then, models run on the standard engine.`
+              : `An optional high-performance engine is available for NVIDIA cards like yours - faster reading and quicker replies. One download${size.value ? ` (${size.value})` : ''}, no setup, and you can remove it anytime in Settings.`}
           </p>
           {downloading.value ? (
             <div class="flex items-center gap-3">

@@ -36,6 +36,20 @@ const CUDA_ZIP_SHA256: &[(&str, &str)] = &[
     ("x86_64-pc-windows-msvc", "c34165dc9bb02672352382e66907f9beec43f1b8df40e1d5a2f7eaca2a277e77"),
 ];
 
+/// Size in bytes of each CUDA engine zip on the pinned release (GitHub's
+/// asset sizes: `gh release view <tag> --repo <repo> --json assets`). The
+/// offer and Settings say this number - the tray counts the same bytes.
+/// Update WITH every LLAMA_ENGINE_TAG bump, beside the checksums.
+const CUDA_ZIP_BYTES: &[(&str, u64)] = &[
+    ("x86_64-unknown-linux-gnu", 801_995_225),
+    ("x86_64-pc-windows-msvc", 763_739_906),
+];
+
+fn cuda_zip_bytes() -> Option<u64> {
+    let triple = cuda_triple()?;
+    CUDA_ZIP_BYTES.iter().find(|(t, _)| *t == triple).map(|(_, b)| *b)
+}
+
 fn cuda_zip_expected_sha256() -> Option<&'static str> {
     let triple = cuda_triple()?;
     CUDA_ZIP_SHA256.iter().find(|(t, _)| *t == triple).map(|(_, h)| *h)
@@ -218,6 +232,9 @@ pub struct EngineStatus {
     pub running_backend: Option<String>,
     pub tag: String,
     pub download_url: Option<String>,
+    /// The CUDA download's size on this platform, in bytes (None where
+    /// there is no CUDA build).
+    pub download_bytes: Option<u64>,
 }
 
 #[tauri::command]
@@ -246,6 +263,7 @@ pub async fn engine_status(
         running_backend,
         tag: LLAMA_ENGINE_TAG.to_string(),
         download_url: cuda_download_url(),
+        download_bytes: cuda_zip_bytes(),
     })
 }
 
@@ -677,6 +695,13 @@ pub fn remove_external_engine(app: AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn every_pinned_cuda_zip_has_a_size() {
+        for (triple, _) in super::CUDA_ZIP_SHA256 {
+            assert!(super::CUDA_ZIP_BYTES.iter().any(|(t, b)| t == triple && *b > 100_000_000), "no size pinned for {triple}");
+        }
+    }
+
     use super::*;
 
     #[test]
