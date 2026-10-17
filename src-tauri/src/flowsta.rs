@@ -1143,6 +1143,18 @@ pub struct OnlineModel {
     /// to "another provider" and the provider-health view key on it.
     pub provider: Option<String>,
 }
+/// A provider in the catalog's providers block (beside `data` in
+/// /v1/models): its name, where the company is based, and whether automatic
+/// routing uses its models unless the person says otherwise. Empty on a
+/// catalog without the block - then every provider counts as allowed.
+#[derive(Serialize, Clone, Debug)]
+pub struct OnlineProvider {
+    pub id: String,
+    pub name: String,
+    pub based_in: Option<String>,
+    pub auto_default: bool,
+}
+
 // ⚠️ This struct is the bridge for /v1/models: a field the frontend reads
 // but isn't parsed here silently vanishes - the frontend types are optional,
 // so neither tsc nor cargo notices. "Newest" sorted alphabetically and
@@ -1156,17 +1168,18 @@ pub struct OnlineModel {
 /// catalog changes on the order of days. 60 s is far longer than any gap
 /// between agent steps and far shorter than a catalog change matters;
 /// failures are not cached so a flaky moment retries next call.
+type Catalog = (Vec<OnlineModel>, Vec<OnlineProvider>);
 static ONLINE_MODELS_CACHE: std::sync::OnceLock<
-    tokio::sync::Mutex<Option<(std::time::Instant, Vec<OnlineModel>)>>,
+    tokio::sync::Mutex<Option<(std::time::Instant, Catalog)>>,
 > = std::sync::OnceLock::new();
 const ONLINE_MODELS_TTL: std::time::Duration = std::time::Duration::from_secs(60);
 
-#[tauri::command]
-pub async fn list_online_models() -> Result<Vec<OnlineModel>, String> {
+/// The online catalog - models and providers from one fetch, cached together.
+pub async fn online_catalog() -> Result<Catalog, String> {
     let cache = ONLINE_MODELS_CACHE.get_or_init(|| tokio::sync::Mutex::new(None));
-    if let Some((at, list)) = cache.lock().await.as_ref() {
+    if let Some((at, both)) = cache.lock().await.as_ref() {
         if at.elapsed() < ONLINE_MODELS_TTL {
-            return Ok(list.clone());
+            return Ok(both.clone());
         }
     }
     let fresh = fetch_online_models().await?;
@@ -1174,7 +1187,19 @@ pub async fn list_online_models() -> Result<Vec<OnlineModel>, String> {
     Ok(fresh)
 }
 
-async fn fetch_online_models() -> Result<Vec<OnlineModel>, String> {
+#[tauri::command]
+pub async fn list_online_models() -> Result<Vec<OnlineModel>, String> {
+    Ok(online_catalog().await?.0)
+}
+
+/// The catalog's providers (name, where based, routing default), for the
+/// list of models automatic routing may use.
+#[tauri::command]
+pub async fn list_online_providers() -> Result<Vec<OnlineProvider>, String> {
+    Ok(online_catalog().await?.1)
+}
+
+async fn fetch_online_models() -> Result<Catalog, String> {
     let v: serde_json::Value = http()
         .get(format!("{}/v1/models", proxy_url()))
         .send()
@@ -1232,7 +1257,24 @@ async fn fetch_online_models() -> Result<Vec<OnlineModel>, String> {
                 .collect()
         })
         .unwrap_or_default();
-    Ok(list)
+    let providers = v["providers"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|p| {
+                    let id = p["id"].as_str().filter(|s| !s.is_empty())?.to_string();
+                    Some(OnlineProvider {
+                        name: p["name"].as_str().filter(|s| !s.is_empty()).unwrap_or(&id).to_string(),
+                        based_in: p["based_in"].as_str().filter(|s| !s.is_empty()).map(str::to_string),
+                        // Unknown = allowed, as the proxy says.
+                        auto_default: p["auto_default"].as_bool().unwrap_or(true),
+                        id,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok((list, providers))
 }
 
 /// Every key written during sign-in, link ceremony included. Used to wipe a

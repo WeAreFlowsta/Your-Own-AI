@@ -47,6 +47,19 @@ const PROVIDER_ERROR_TEXT: Record<string, string> = {
   online_error: "The online model couldn't answer. Try again.",
 };
 
+/** Failures another provider's model can answer instead: the provider is
+ *  busy, erroring, timing out, or the model is not there. Never a refused
+ *  request (the same request elsewhere may fail the same way), never the
+ *  plan, sign-in or allowance codes, never our own rate limit. */
+export const FALLBACK_CODES = new Set([
+  "provider_busy",
+  "provider_timeout",
+  "provider_error",
+  "provider_model_unavailable",
+  "provider_not_configured",
+  "unknown_model",
+]);
+
 /** The coded failure in an error string, if it is one we can say plainly. */
 export function providerErrorCode(raw: string): string | null {
   const m = raw.match(/"code\\?"\s*:\s*\\?"([a-z_]+)/);

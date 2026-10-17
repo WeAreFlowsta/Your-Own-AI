@@ -120,7 +120,7 @@ interface ChatMessageProps {
   onGround$?: QRL<() => void>;
   onScrollNeeded$?: QRL<() => void>;
   /** Redo this turn on the other side ("Try online" / "Redo on your device"). */
-  onRouteRetry$?: QRL<(target: 'online' | 'device' | 'tools' | 'web-once' | 'web-on' | 'web-never' | 'build-install' | 'build-dismiss' | 'build-never' | 'dig-deeper') => void>;
+  onRouteRetry$?: QRL<(target: 'online' | 'device' | 'alt' | 'tools' | 'web-once' | 'web-on' | 'web-never' | 'build-install' | 'build-dismiss' | 'build-never' | 'dig-deeper') => void>;
   /** Whether this AI may go online at all (auto online-offline mode). */
   canRouteOnline?: boolean;
   /** This AI carries tools (a direct reply offers them). */
@@ -295,7 +295,7 @@ interface ActionBarProps {
   theme: 'light' | 'dark';
   onGround$?: QRL<() => void>;
   isLast?: boolean;
-  onRouteRetry$?: QRL<(target: 'online' | 'device' | 'tools' | 'web-once' | 'web-on' | 'web-never' | 'build-install' | 'build-dismiss' | 'build-never' | 'dig-deeper') => void>;
+  onRouteRetry$?: QRL<(target: 'online' | 'device' | 'alt' | 'tools' | 'web-once' | 'web-on' | 'web-never' | 'build-install' | 'build-dismiss' | 'build-never' | 'dig-deeper') => void>;
   canRouteOnline?: boolean;
   /** This AI carries tools (a direct reply offers them). */
   canUseTools?: boolean;
@@ -1713,6 +1713,19 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
                   class="px-2 py-1 text-xs bg-[var(--bg-button-secondary)] hover:bg-[var(--bg-button-secondary-hover)] border border-[var(--border-secondary)] hover:border-[var(--border-secondary-hover)] text-[var(--text-button-secondary)] hover:text-[var(--text-button-secondary-hover)] rounded transition-colors flex-shrink-0"
                 >
                   Retry
+                </button>
+              )}
+            {/* A pinned online model failed before its first word: another
+                provider's model, this once - never switched on its own. */}
+            {props.message.role === 'assistant' &&
+              props.message.altModel &&
+              props.onRouteRetry$ && (
+                <button
+                  data-testid="reply-alt"
+                  onClick$={() => props.onRouteRetry$!('alt')}
+                  class="px-2 py-1 text-xs bg-[var(--bg-button-secondary)] hover:bg-[var(--bg-button-secondary-hover)] border border-[var(--border-secondary)] hover:border-[var(--border-secondary-hover)] text-[var(--text-button-secondary)] hover:text-[var(--text-button-secondary-hover)] rounded transition-colors flex-shrink-0"
+                >
+                  Ask {props.message.altModel.name} instead
                 </button>
               )}
           </div>

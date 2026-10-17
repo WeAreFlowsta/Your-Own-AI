@@ -1133,6 +1133,68 @@ impl OnlinePicks {
     }
 }
 
+/// "Models automatic routing may use" (Settings > Routing, and the switch
+/// on each Online Models card). settings.json `routingAutoAllow` holds only
+/// what the person changed: `{providers: {id: bool}, models: {id: bool}}`.
+/// A model's own switch wins, then its provider's, then the catalog's
+/// default for the provider (the providers block of /v1/models); a provider
+/// the catalog does not describe is allowed.
+pub(crate) fn auto_allowed(
+    model_id: &str,
+    provider: Option<&str>,
+    model_switches: &std::collections::HashMap<String, bool>,
+    provider_switches: &std::collections::HashMap<String, bool>,
+    providers: &[crate::flowsta::OnlineProvider],
+) -> bool {
+    let id = model_id.strip_prefix("online:").unwrap_or(model_id);
+    if let Some(on) = model_switches.get(id) {
+        return *on;
+    }
+    let Some(p) = provider else { return true };
+    if let Some(on) = provider_switches.get(p) {
+        return *on;
+    }
+    providers.iter().find(|x| x.id == p).map_or(true, |x| x.auto_default)
+}
+
+/// The person's switches from settings.json (model ids without "online:").
+pub(crate) fn auto_switches(
+    app: &AppHandle,
+) -> (std::collections::HashMap<String, bool>, std::collections::HashMap<String, bool>) {
+    use tauri_plugin_store::StoreExt;
+    let v = app.store("settings.json").ok().and_then(|s| s.get("routingAutoAllow")).unwrap_or_default();
+    let map = |k: &str| -> std::collections::HashMap<String, bool> {
+        v.get(k)
+            .and_then(|o| o.as_object())
+            .map(|o| {
+                o.iter()
+                    .filter_map(|(id, on)| on.as_bool().map(|b| (id.strip_prefix("online:").unwrap_or(id).to_string(), b)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    (map("models"), map("providers"))
+}
+
+/// The online models automatic routing may choose from: the allowed ones,
+/// plus every model the person picked by name - an explicit pick is theirs
+/// to use whatever the switches say. None when the catalog is unreachable.
+pub(crate) async fn routing_models(app: &AppHandle, picks: &[Option<&str>]) -> Option<Vec<crate::flowsta::OnlineModel>> {
+    let (models, providers) = crate::flowsta::online_catalog().await.ok()?;
+    let (model_switches, provider_switches) = auto_switches(app);
+    let bare = |id: &str| id.strip_prefix("online:").unwrap_or(id).to_string();
+    let picked: std::collections::HashSet<String> = picks.iter().flatten().map(|p| bare(p)).collect();
+    Some(
+        models
+            .into_iter()
+            .filter(|m| {
+                picked.contains(&bare(&m.id))
+                    || auto_allowed(&m.id, m.provider.as_deref(), &model_switches, &provider_switches, &providers)
+            })
+            .collect(),
+    )
+}
+
 /// The catalog's own default for a slot: the first listed model whose
 /// routing block names the slot. None when the catalog is silent (older
 /// catalog) - the baked defaults below are the floor.
@@ -1392,7 +1454,7 @@ pub async fn agent_serving_window(
     {
         return (local, true);
     }
-    if let Ok(models) = crate::flowsta::list_online_models().await {
+    {
         let pref = if plan {
             store_pref(app, "routingOnlinePlanning")
         } else {
@@ -1403,9 +1465,11 @@ pub async fn agent_serving_window(
                         .filter(|id| crate::model_caps::online_agent_caps(id) >= 6)
                 })
         };
-        if let Some(id) = select_online_agent_slot(&models, pref.as_deref(), if plan { "plan" } else { "agent" }) {
-            if let Some(c) = catalog_ctx(&models, &id) {
-                return (c, false);
+        if let Some(models) = routing_models(app, &[pref.as_deref()]).await {
+            if let Some(id) = select_online_agent_slot(&models, pref.as_deref(), if plan { "plan" } else { "agent" }) {
+                if let Some(c) = catalog_ctx(&models, &id) {
+                    return (c, false);
+                }
             }
         }
     }
@@ -1513,8 +1577,8 @@ async fn local_can_hold(app: &AppHandle, need: u64) -> bool {
 
 /// An online model whose context holds `need` tokens: the user's slot pick
 /// when it does, else the best general pick among those that do.
-async fn pick_online_holding(need: u64, task: &str, pref: Option<&str>) -> Option<String> {
-    let models = crate::flowsta::list_online_models().await.ok()?;
+async fn pick_online_holding(app: &AppHandle, need: u64, task: &str, pref: Option<&str>) -> Option<String> {
+    let models = routing_models(app, &[pref]).await?;
     let roomy: Vec<crate::flowsta::OnlineModel> = models
         .into_iter()
         .filter(|m| m.context_window >= need)
@@ -1525,8 +1589,8 @@ async fn pick_online_holding(need: u64, task: &str, pref: Option<&str>) -> Optio
     select_online(&roomy, task, false, pref)
 }
 
-async fn pick_online(task: &str, fresh: bool, pref: Option<&str>) -> Option<String> {
-    let models = crate::flowsta::list_online_models().await.ok()?;
+async fn pick_online(app: &AppHandle, task: &str, fresh: bool, pref: Option<&str>) -> Option<String> {
+    let models = routing_models(app, &[pref]).await?;
     select_online(&models, task, fresh, pref)
 }
 
@@ -1566,7 +1630,10 @@ async fn inherit_followup(
             let same = prev.model.as_deref().and_then(by_id);
             let model = match same {
                 Some(m) => m,
-                None => orphaned_followup_model(&models, prev.model.as_deref(), prev_task, picks)?,
+                None => {
+                    let pool = routing_models(app, &[picks.fresh.as_deref(), picks.everyday.as_deref(), picks.hard.as_deref()]).await?;
+                    orphaned_followup_model(&pool, prev.model.as_deref(), prev_task, picks)?
+                }
             };
             Some(RouteResult { think: None, model, reason: "online: continuing the conversation".to_string() })
         }
@@ -1654,8 +1721,8 @@ pub(crate) fn orphaned_followup_model(
     }
 }
 
-async fn pick_online_everyday(pref: Option<&str>) -> Option<(String, crate::model_caps::Caps)> {
-    let models = crate::flowsta::list_online_models().await.ok()?;
+async fn pick_online_everyday(app: &AppHandle, pref: Option<&str>) -> Option<(String, crate::model_caps::Caps)> {
+    let models = routing_models(app, &[pref]).await?;
     let m = select_online_everyday(&models, pref)?;
     Some((m.id.clone(), crate::model_caps::online_caps_of(&m)))
 }
@@ -2010,6 +2077,108 @@ pub async fn agent_best_local(app: AppHandle) -> Option<String> {
     agent_local_pick(&app, "code", "balanced").await
 }
 
+/// Search-capable: the catalog's search tier, or the marks the live-web
+/// slot looks for (select_online).
+fn is_search_model(m: &crate::flowsta::OnlineModel) -> bool {
+    let t = format!("{} {} {}", m.id, m.display_name, m.description).to_lowercase();
+    m.routing.as_ref().and_then(|r| r.tier.as_deref()) == Some("search")
+        || t.contains("search")
+        || t.contains("sonar")
+        || t.contains("perplexity")
+        || m.pricing.as_ref().and_then(|p| p.search_per_call_usd).is_some()
+}
+
+/// The stand-in for an online model that failed before its first word
+/// (pure; see online_fallback): the same kind of model - a search model for
+/// a search model, the Everyday chooser for an everyday model, the task's
+/// Hard chooser otherwise - from ANOTHER provider, able to hold the turn and
+/// to see its image. `failed` is None when the model has left the catalog.
+pub(crate) fn fallback_model(
+    pool: &[crate::flowsta::OnlineModel],
+    failed_id: &str,
+    failed: Option<&crate::flowsta::OnlineModel>,
+    task: &str,
+    need_tokens: u64,
+    vision: bool,
+) -> Option<String> {
+    let bare = |id: &str| id.strip_prefix("online:").unwrap_or(id).to_string();
+    let failed_provider = failed.and_then(|f| f.provider.clone());
+    let others: Vec<crate::flowsta::OnlineModel> = pool
+        .iter()
+        .filter(|m| bare(&m.id) != bare(failed_id))
+        .filter(|m| failed_provider.is_none() || m.provider != failed_provider)
+        .filter(|m| m.context_window == 0 || m.context_window >= need_tokens)
+        .filter(|m| !vision || m.vision)
+        .cloned()
+        .collect();
+    if failed.is_some_and(is_search_model) {
+        let searchers: Vec<_> = others.into_iter().filter(is_search_model).collect();
+        return select_online(&searchers, task, true, None);
+    }
+    let plain: Vec<_> = others.into_iter().filter(|m| !is_search_model(m)).collect();
+    if failed.and_then(|f| f.routing.as_ref()).and_then(|r| r.tier.as_deref()) == Some("everyday") {
+        if let Some(m) = select_online_everyday(&plain, None) {
+            return Some(m.id);
+        }
+    }
+    select_online(&plain, task, false, None)
+}
+
+#[derive(serde::Serialize)]
+pub struct OnlineFallback {
+    pub model: String,
+    pub name: String,
+    pub failed_name: String,
+    /// For the reply's routing note and the decision log.
+    pub reason: String,
+}
+
+/// A chat turn's online model failed before its first word (busy, down,
+/// timing out, or gone from the catalog): the model to ask instead, from
+/// the models automatic routing may use. The decision log names it. None =
+/// nothing fits, and the error stays on the reply. `offer_only`: an AI
+/// pinned to the failed model - the error line offers the model, nothing is
+/// switched or logged.
+#[tauri::command]
+pub async fn online_fallback(
+    app: AppHandle,
+    failed: String,
+    code: String,
+    task: Option<String>,
+    need_tokens: Option<u64>,
+    vision: Option<bool>,
+    offer_only: Option<bool>,
+) -> Option<OnlineFallback> {
+    let (all, _) = crate::flowsta::online_catalog().await.ok()?;
+    let bare = |id: &str| id.strip_prefix("online:").unwrap_or(id).to_string();
+    let failed_m = all.iter().find(|m| bare(&m.id) == bare(&failed));
+    let pool = routing_models(&app, &[]).await?;
+    let task = task.filter(|t| !t.is_empty()).unwrap_or_else(|| "general".to_string());
+    let id = fallback_model(&pool, &failed, failed_m, &task, need_tokens.unwrap_or(0), vision.unwrap_or(false))?;
+    let name_of = |id: &str| {
+        all.iter()
+            .find(|m| bare(&m.id) == bare(id))
+            .map(|m| m.display_name.clone())
+            .unwrap_or_else(|| bare(id))
+    };
+    let failed_name = name_of(&failed);
+    let name = name_of(&id);
+    let why = match code.as_str() {
+        "provider_busy" => "was busy",
+        "provider_timeout" => "didn't answer in time",
+        "provider_error" => "had an error",
+        _ => "wasn't available",
+    };
+    let reason = format!("online: {failed_name} {why}, so {name} answered");
+    if offer_only == Some(true) {
+        // A pinned model is never switched: the error line offers this one.
+        return Some(OnlineFallback { model: id, name, failed_name, reason });
+    }
+    log::info!("[router] fallback: {failed} ({code}) -> {id}");
+    remember_decision(&app, "online-offline", &current_share(&app), &task, "", &id, &reason, None);
+    Some(OnlineFallback { model: id, name, failed_name, reason })
+}
+
 #[derive(serde::Serialize)]
 pub struct AgentAlternate {
     /// What agent routing picks right now (the model that just failed).
@@ -2025,8 +2194,8 @@ pub struct AgentAlternate {
 /// catalog has no capable alternative - then there is nothing to offer.
 #[tauri::command]
 pub async fn alternate_online_agent(app: AppHandle) -> Option<AgentAlternate> {
-    let models = crate::flowsta::list_online_models().await.ok()?;
     let pref = agent_online_override().or_else(|| store_pref(&app, "routingOnlineAgent"));
+    let models = routing_models(&app, &[pref.as_deref()]).await?;
     let failed = select_online_agent(&models, pref.as_deref())?;
     let rest: Vec<crate::flowsta::OnlineModel> =
         models.iter().filter(|m| m.id != failed).cloned().collect();
@@ -2331,7 +2500,7 @@ async fn route_core(
             log::info!("[router] cost-saver set but no green-fit agent model - routing online");
         }
         let t1 = std::time::Instant::now();
-        let models_res = crate::flowsta::list_online_models().await;
+        let models_res = routing_models(app, &[agent_pref.as_deref()]).await.ok_or(());
         log::info!(
             "[router] agent pick timings: offline {}ms, green-check {}ms, online-list {}ms",
             t_offline,
@@ -2401,7 +2570,7 @@ async fn route_core(
         if let Some(need) = turn_tokens {
             let need = (need as u64).saturating_add(REPLY_ROOM_TOKENS as u64);
             if !known_not_entitled && !local_can_hold(app, need).await {
-                if let Some(model) = pick_online_holding(need, task, hard_pref()).await {
+                if let Some(model) = pick_online_holding(app, need, task, hard_pref()).await {
                     log::info!("[router] ~{need} tokens is more than any model here holds - online");
                     return Ok(RouteResult {
                         think: None,
@@ -2457,7 +2626,7 @@ async fn route_core(
         // No plan: nothing goes online (the offer above the composer says
         // the answer may be out of date instead).
         if let Some(why) = fresh_why.filter(|_| !known_not_entitled) {
-            if let Some(model) = pick_online(task, true, picks.fresh.as_deref()).await {
+            if let Some(model) = pick_online(app, task, true, picks.fresh.as_deref()).await {
                 return Ok(RouteResult { think: None, model, reason: format!("online: {why}") });
             }
             // No online model available → fall through.
@@ -2479,7 +2648,7 @@ async fn route_core(
         // local-first (a weaker local answer beats sending it out), and
         // never on an unknown verdict.
         if difficulty == "hard" && !local_first && !known_not_entitled {
-            if let Some(model) = pick_online(task, false, hard_pref()).await {
+            if let Some(model) = pick_online(app, task, false, hard_pref()).await {
                 return Ok(RouteResult {
                     think: None,
                     model,
@@ -2494,7 +2663,7 @@ async fn route_core(
         // question is known easy. Unknown difficulty (no helper model)
         // goes online: the safe direction for quality.
         if !local_first && !known_not_entitled {
-            match pick_online_everyday(picks.everyday.as_deref()).await {
+            match pick_online_everyday(app, picks.everyday.as_deref()).await {
                 Some((everyday, ecaps)) => {
                     let local = pick_offline_detail(app, task, lean, false, turn_tokens).await.ok();
                     let adj = learned_adjustments(app);
@@ -2673,28 +2842,25 @@ pub async fn routing_specialist_tasks(app: AppHandle) -> Result<Vec<String>, Str
     Ok(out)
 }
 
-/// The router's recommended online model per slot - Settings names them
-/// from here, so the labels can never drift from the defaults again.
+/// The router's recommended online model per slot - what automatic routing
+/// uses when the person has not picked one, the allowed list included.
+/// Settings and the Online Models page name them from here, so a label can
+/// never say something routing is not doing. The baked defaults are the
+/// floor when the catalog is unreachable.
 #[tauri::command]
-pub async fn routing_defaults() -> std::collections::HashMap<String, String> {
-    let catalog = crate::flowsta::list_online_models().await.unwrap_or_default();
+pub async fn routing_defaults(app: AppHandle) -> std::collections::HashMap<String, String> {
+    let pool = routing_models(&app, &[]).await.unwrap_or_default();
+    let everyday = select_online_everyday(&pool, None).map(|m| m.id);
     [
-        ("fresh", DEFAULT_FRESH),
-        ("everyday", DEFAULT_EVERYDAY),
-        ("hard_code", DEFAULT_HARD_CODE),
-        ("hard_general", DEFAULT_HARD_GENERAL),
-        ("agent", DEFAULT_AGENT),
-        ("plan", DEFAULT_PLAN),
+        ("fresh", select_online(&pool, "general", true, None), DEFAULT_FRESH),
+        ("everyday", everyday, DEFAULT_EVERYDAY),
+        ("hard_code", select_online(&pool, "code", false, None), DEFAULT_HARD_CODE),
+        ("hard_general", select_online(&pool, "general", false, None), DEFAULT_HARD_GENERAL),
+        ("agent", select_online_agent_slot(&pool, None, "agent"), DEFAULT_AGENT),
+        ("plan", select_online_agent_slot(&pool, None, "plan"), DEFAULT_PLAN),
     ]
     .into_iter()
-    .map(|(k, baked)| {
-        // The catalog's word first (a slot promoted without a release), the
-        // baked default as the floor - the same order the selectors use.
-        let from_catalog = catalog_slot_default(&catalog, k)
-            .or_else(|| if k == "plan" { catalog_slot_default(&catalog, "agent") } else { None })
-            .or_else(|| if k == "hard_code" || k == "hard_general" { catalog_slot_default(&catalog, "hard") } else { None });
-        (k.to_string(), from_catalog.unwrap_or_else(|| baked.to_string()))
-    })
+    .map(|(k, chosen, baked)| (k.to_string(), chosen.unwrap_or_else(|| baked.to_string())))
     .collect()
 }
 
@@ -3198,6 +3364,68 @@ mod tests {
         assert_eq!(select_online(&models, "reasoning", false, None).unwrap(), "online:newgpt-9");
         // Empty catalog → None (router falls through to offline).
         assert_eq!(select_online(&[], "code", false, None), None);
+    }
+
+    fn op(id: &str, name: &str, provider: &str, tier: Option<&str>, ctx: u64, vision: bool, fee: Option<f64>) -> crate::flowsta::OnlineModel {
+        let mut m = om(id, name, "", fee);
+        m.provider = Some(provider.to_string());
+        m.context_window = ctx;
+        m.vision = vision;
+        m.routing = tier.map(|t| crate::flowsta::OnlineRouting { tier: Some(t.to_string()), ..Default::default() });
+        m
+    }
+
+    #[test]
+    fn auto_allowed_model_switch_then_provider_switch_then_catalog_default() {
+        use std::collections::HashMap;
+        let providers = vec![
+            crate::flowsta::OnlineProvider { id: "openai".into(), name: "OpenAI".into(), based_in: None, auto_default: true },
+            crate::flowsta::OnlineProvider { id: "deepseek".into(), name: "DeepSeek".into(), based_in: None, auto_default: false },
+        ];
+        let none: HashMap<String, bool> = HashMap::new();
+        // The catalog's default per provider; an undescribed provider is allowed.
+        assert!(auto_allowed("online:gpt-6-luna", Some("openai"), &none, &none, &providers));
+        assert!(!auto_allowed("online:deepseek-v4", Some("deepseek"), &none, &none, &providers));
+        assert!(auto_allowed("online:new", Some("newco"), &none, &none, &providers));
+        assert!(auto_allowed("online:old", None, &none, &none, &providers));
+        // The provider's switch beats the default; the model's beats both.
+        let deepseek_on: HashMap<String, bool> = [("deepseek".to_string(), true)].into();
+        assert!(auto_allowed("online:deepseek-v4", Some("deepseek"), &none, &deepseek_on, &providers));
+        let model_off: HashMap<String, bool> = [("deepseek-v4".to_string(), false)].into();
+        assert!(!auto_allowed("online:deepseek-v4", Some("deepseek"), &model_off, &deepseek_on, &providers));
+        let luna_on: HashMap<String, bool> = [("gpt-6-luna".to_string(), true)].into();
+        let openai_off: HashMap<String, bool> = [("openai".to_string(), false)].into();
+        assert!(auto_allowed("gpt-6-luna", Some("openai"), &luna_on, &openai_off, &providers));
+        assert!(!auto_allowed("online:gpt-6-astra", Some("openai"), &luna_on, &openai_off, &providers));
+    }
+
+    #[test]
+    fn fallback_goes_to_another_provider_of_the_same_kind() {
+        let luna = op("gpt-6-luna", "GPT-6 Luna", "openai", Some("everyday"), 400_000, true, None);
+        let astra = op("gpt-6-astra", "GPT-6 Astra", "openai", Some("flagship"), 400_000, true, None);
+        let flash = op("argon-flash", "Argon Flash", "google", Some("everyday"), 1_000_000, true, None);
+        let argon = op("gemini-4-argon", "Gemini 4 Argon", "google", Some("flagship"), 1_000_000, true, None);
+        let grok_s = op("grok-4.7-search", "Grok 4.7 (Web)", "xai", Some("search"), 256_000, false, Some(0.005));
+        let sonar = op("sonar", "Sonar", "perplexity", Some("search"), 128_000, false, Some(0.005));
+        // The cheapest everyday model, but small and blind.
+        let mut small = op("tiny", "Tiny", "meta", Some("everyday"), 8_000, false, None);
+        small.pricing.as_mut().unwrap().input_per_mtok = 0.1;
+        let pool = vec![luna.clone(), astra.clone(), flash.clone(), argon.clone(), grok_s.clone(), sonar.clone(), small.clone()];
+        // Everyday fails: another provider's everyday model, never the same provider's flagship.
+        assert_eq!(fallback_model(&pool, &luna.id, Some(&luna), "general", 1_000, false).as_deref(), Some("online:tiny"));
+        // ...unless the turn is too long for it.
+        assert_eq!(fallback_model(&pool, &luna.id, Some(&luna), "general", 50_000, false).as_deref(), Some("online:argon-flash"));
+        // ...or it carries an image the cheaper one can't see.
+        assert_eq!(fallback_model(&pool, &luna.id, Some(&luna), "general", 1_000, true).as_deref(), Some("online:argon-flash"));
+        // A search model fails: another search model.
+        assert_eq!(fallback_model(&pool, &grok_s.id, Some(&grok_s), "general", 1_000, false).as_deref(), Some("online:sonar"));
+        // The flagship fails: not another OpenAI model, not a search model.
+        let hard = fallback_model(&pool, &astra.id, Some(&astra), "code", 1_000, false).unwrap();
+        assert!(hard != astra.id && hard != luna.id && hard != grok_s.id && hard != sonar.id, "got {hard}");
+        // Nothing of the kind from another provider: nothing.
+        assert_eq!(fallback_model(&[grok_s.clone(), luna.clone()], &grok_s.id, Some(&grok_s), "general", 1_000, false), None);
+        // A model gone from the catalog: any other model fits.
+        assert!(fallback_model(&pool, "online:gone", None, "general", 1_000, false).is_some());
     }
 
     fn agent_catalog() -> Vec<crate::flowsta::OnlineModel> {

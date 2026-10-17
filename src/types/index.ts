@@ -169,6 +169,9 @@ export interface Message {
   /** The question needed live information and this AI could not look it up (Offline Only,
    *  or no plan): true = the offer above the composer; false = offered once, then dismissed. */
   liveOffer?: boolean;
+  /** An AI pinned to an online model that failed before its first word: the
+   *  error line offers this model, from another provider, one tap away. */
+  altModel?: { model: string; name: string };
   /** What the research step did for this reply ("That page had little to read, so I looked at 2 more pages on the site."). */
   webNote?: string;
   /** One page was not enough and the Build helper is not installed: the reply carries the one-line offer. */

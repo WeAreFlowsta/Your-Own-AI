@@ -1678,7 +1678,7 @@ export default component$(() => {
   // Retry, redo on the other side, or - for an AI that carries tools -
   // "Answer again with tools": the direct reply and its question leave the
   // list (as any retry does) and the same question goes through a session.
-  const retryOrTools$ = $(async (id: string, target?: "online" | "device" | "tools" | "web-once" | "web-on" | "web-never" | "live-online" | "live-use-online" | "live-never" | "build-install" | "build-dismiss" | "build-never" | "dig-deeper") => {
+  const retryOrTools$ = $(async (id: string, target?: "online" | "device" | "alt" | "tools" | "web-once" | "web-on" | "web-never" | "live-online" | "live-use-online" | "live-never" | "build-install" | "build-dismiss" | "build-never" | "dig-deeper") => {
     if (target === "build-install" || target === "build-dismiss" || target === "build-never") {
       // The offer line under a thin-page reply: the existing install flow
       // (consent given by the press; the header shows progress), or quiet.

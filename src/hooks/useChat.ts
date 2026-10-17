@@ -13,7 +13,7 @@ import { firstModelInFlight, setHeldTurn } from "../utils/firstModel";
 import { skillsPromptBlock } from "../utils/skills";
 import { wireSampling } from "../utils/sampling";
 import { activeSkills, activeTools } from "../utils/carry";
-import { useStore, useSignal, $, noSerialize, type Signal, type NoSerialize } from "@builder.io/qwik";
+import { useStore, useSignal, useVisibleTask$, $, noSerialize, type Signal, type NoSerialize } from "@builder.io/qwik";
 import type { Message, ChatMessage, SelectedAiModel, ChatAction, TurnMode, LibraryDocGiven } from "../types";
 import { v4 as uuidv4 } from "uuid";
 import {
@@ -40,7 +40,7 @@ import { resolveRoutingSignals, type RoutingTask } from "../utils/routingTaskCla
 import { responseLengthOptions } from "../data/response-lengths";
 import { getArchetypeById } from "../data/bundled-archetypes";
 import { MISSION_CORE } from "../data/missionCore";
-import { extractOnlineError, providerErrorText } from "../utils/onlineErrors";
+import { extractOnlineError, providerErrorCode, providerErrorText, FALLBACK_CODES } from "../utils/onlineErrors";
 import {
   getMedicalModel,
   isOnlineMedicalChoice,
@@ -284,6 +284,20 @@ export interface UseChatState {
     fileContext?: string;
     visionModel: string; // the vision model to switch to ("" if none / N/A)
   } | null;
+  /** An online model failed before its first word and the router chose a
+   *  stand-in from another provider: the same question goes once to it as
+   *  soon as the failed turn has ended (see the task under sendMessage). */
+  fallbackPending?: {
+    userInput: string;
+    chatAction: ChatAction;
+    fileContext?: string;
+    images: string[];
+    model: string;
+    reason: string;
+    task?: string;
+    webOnce?: boolean;
+    consentGranted: boolean;
+  } | null;
   /** The previous user turn's embedding (never recorded): follow-up
    *  stickiness measures topic drift against it. */
   lastUserVec?: number[] | null;
@@ -381,6 +395,7 @@ export function useChat(props: UseChatProps) {
     skipNextUserRecord: false,
     stopAtBoundary: null,
     pendingTurn: null,
+    fallbackPending: null,
     firstModelWait: null,
     conversationHash: null,
     cacheKey: newCacheKey(),
@@ -398,7 +413,7 @@ export function useChat(props: UseChatProps) {
       images: string[] = [],
       modelOverride?: string,
       consentGranted: boolean = false,
-      options?: { webOnce?: boolean },
+      options?: { webOnce?: boolean; fallback?: { reason: string; task?: string } },
     ) => {
       if (!userInput.trim() || state.isLoading) return;
       // Attached document names for the bubble's file chips - parsed from
@@ -830,6 +845,11 @@ export function useChat(props: UseChatProps) {
       // Reasoning budget as a routing output (see router.rs think_for).
       let routedThink: boolean | undefined;
       let routedTask: string | undefined;
+      // A fallback resend: the router chose this model and logged why.
+      if (options?.fallback) {
+        routedReason = options.fallback.reason;
+        routedTask = options.fallback.task;
+      }
       // Auto modes may transparently switch an image turn to a vision model; a
       // pinned model is left as-is (we ask before switching - see vision block).
       // An "auto:" override is a request to ROUTE this turn (the banner's
@@ -1405,6 +1425,9 @@ export function useChat(props: UseChatProps) {
       // this page (utils/turns.ts). "chat" here - a tools session is the
       // agent path (useAgentSession), registered there.
       let turnOutcome: "done" | "stopped" | "error" = "done";
+      // Set when the online model failed before its first word and a stand-in
+      // was found (see the error handling below).
+      let fallbackTo: { model: string; reason: string; task?: string } | null = null;
       beginTurn({
         id: assistantId,
         kind: "chat",
@@ -2397,21 +2420,77 @@ export function useChat(props: UseChatProps) {
             state.messages = state.messages.filter((m) => m.id !== assistantId);
             state.error = JSON.stringify(extractOnlineError(errorMsg));
           } else {
-            // A coded provider failure reads as one plain sentence (the error
-            // line keeps its Retry button), never as raw JSON.
-            const shown = providerErrorText(errorMsg) ?? errorMsg;
-            state.messages = state.messages.map((m) =>
-              m.id === assistantId
-                ? {
-                    ...m,
-                    content: `Error: ${shown}`,
-                    error: shown,
-                    isLoading: false,
-                  }
-                : m
-            );
-            turnOutcome = "error";
-            updateTurn(assistantId, { assistant: { content: `Error: ${shown}`, error: shown, isLoading: false } });
+            // The online model failed before its first word on an AI that
+            // routes automatically: another provider's model of the same kind
+            // takes the question, once (never a fallback of a fallback, never
+            // a pinned model - that one gets the error and its Retry).
+            const code = providerErrorCode(errorMsg);
+            const replied = state.messages.find((m) => m.id === assistantId);
+            if (
+              code &&
+              FALLBACK_CODES.has(code) &&
+              isAutoMode &&
+              !options?.fallback &&
+              preferredModel?.startsWith("online:") &&
+              !replied?.content?.trim() &&
+              !replied?.thinking?.trim()
+            ) {
+              const fb = await invoke<{ model: string; name: string; failed_name: string; reason: string } | null>("online_fallback", {
+                failed: preferredModel,
+                code,
+                task: routedTask,
+                needTokens: await turnTokensFor(state.messages, userInput, fileContext, images.length),
+                vision: images.length > 0,
+              }).catch(() => null);
+              if (fb) {
+                uiLog(`[online] ${fb.failed_name} failed (${code}) before its first word - asking ${fb.name}`);
+                fallbackTo = { model: fb.model, reason: fb.reason, task: routedTask };
+              } else {
+                uiLog(`[online] ${preferredModel} failed (${code}); no stand-in fits`);
+              }
+            }
+            // Pinned to that model: never switched, but the error line offers
+            // another provider's model one tap away.
+            let altModel: { model: string; name: string } | undefined;
+            if (
+              !fallbackTo &&
+              code &&
+              FALLBACK_CODES.has(code) &&
+              !isAutoMode &&
+              !modelOverride &&
+              preferredModel?.startsWith("online:") &&
+              !replied?.content?.trim()
+            ) {
+              const fb = await invoke<{ model: string; name: string } | null>("online_fallback", {
+                failed: preferredModel,
+                code,
+                task: routedTask,
+                needTokens: await turnTokensFor(state.messages, userInput, fileContext, images.length),
+                vision: images.length > 0,
+                offerOnly: true,
+              }).catch(() => null);
+              if (fb) altModel = { model: fb.model, name: fb.name };
+            }
+            if (fallbackTo) {
+              turnOutcome = "error";
+            } else {
+              // A coded provider failure reads as one plain sentence (the error
+              // line keeps its Retry button), never as raw JSON.
+              const shown = providerErrorText(errorMsg) ?? errorMsg;
+              state.messages = state.messages.map((m) =>
+                m.id === assistantId
+                  ? {
+                      ...m,
+                      content: `Error: ${shown}`,
+                      error: shown,
+                      isLoading: false,
+                      altModel,
+                    }
+                  : m
+              );
+              turnOutcome = "error";
+              updateTurn(assistantId, { assistant: { content: `Error: ${shown}`, error: shown, isLoading: false, altModel } });
+            }
           }
         }
       } finally {
@@ -2426,8 +2505,43 @@ export function useChat(props: UseChatProps) {
           abortControllerRef.value = null;
         }
       }
+      // The online model failed before its first word: the failed bubble and
+      // its question leave (sending adds the question back), and the task
+      // below asks the stand-in once this turn has ended.
+      if (fallbackTo) {
+        const at = state.messages.findIndex((m) => m.id === assistantId);
+        dropTurn(assistantId);
+        if (at > 0) state.messages = state.messages.slice(0, at - 1);
+        state.fallbackPending = {
+          userInput,
+          chatAction,
+          fileContext,
+          images,
+          model: fallbackTo.model,
+          reason: fallbackTo.reason,
+          task: fallbackTo.task,
+          webOnce: options?.webOnce,
+          consentGranted,
+        };
+      }
     }
   );
+
+  // The stand-in for an online model that failed before its first word
+  // (fallbackPending, set above): asked once, as soon as the failed turn has
+  // ended. The question is already in the records from the failed attempt.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    const p = track(() => state.fallbackPending);
+    const busy = track(() => state.isLoading);
+    if (!p || busy) return;
+    state.fallbackPending = null;
+    state.skipNextUserRecord = true;
+    void sendMessage(p.userInput, p.chatAction, p.fileContext, p.images, p.model, p.consentGranted, {
+      webOnce: p.webOnce,
+      fallback: { reason: p.reason, task: p.task },
+    });
+  });
 
   /** The person has something to say NOW: let the streaming reply finish its
    *  sentence, then stop it. Before the first visible word there is nothing
@@ -2487,7 +2601,7 @@ export function useChat(props: UseChatProps) {
     state.messageSequence = 0;
   });
 
-  const retry = $(async (messageId: string, target?: "online" | "device" | "live") => {
+  const retry = $(async (messageId: string, target?: "online" | "device" | "live" | "alt") => {
     const messageIndex = state.messages.findIndex((m) => m.id === messageId);
     if (messageIndex === -1 || messageIndex === 0) return;
 
@@ -2500,7 +2614,11 @@ export function useChat(props: UseChatProps) {
     // can't deliver the asked-for side. "Look it up online" (live) takes the
     // router's own pick for a question about now: the live-web slot.
     let override: string | undefined;
-    if (target === "live") {
+    if (target === "alt") {
+      // "Ask <model> instead" on a pinned model's error: that model, this once.
+      override = state.messages[messageIndex]?.altModel?.model;
+      if (!override) return;
+    } else if (target === "live") {
       try {
         const { invoke } = await import("@tauri-apps/api/core");
         const r = await invoke<{ model: string; reason: string }>("route_model", {
@@ -2556,7 +2674,7 @@ export function useChat(props: UseChatProps) {
     {
       const answered = state.messages[messageIndex];
       // A live lookup says nothing about the device answer's quality.
-      if (answered?.servedBy && !answered.agentTurn && target !== "live") {
+      if (answered?.servedBy && !answered.agentTurn && target !== "live" && target !== "alt") {
         const verdict = target === "device" ? "redo_device" : target === "online" ? "try_online" : "regenerate";
         import("@tauri-apps/api/core")
           .then(({ invoke }) =>
@@ -2576,7 +2694,9 @@ export function useChat(props: UseChatProps) {
     for (const m of state.messages.slice(messageIndex)) {
       if (m.role === "assistant" && m.id) dropTurn(m.id);
     }
-    state.messages = state.messages.slice(0, messageIndex);
+    // The question goes too: sending it adds it back, and kept here it
+    // showed twice and reached the model twice in a row.
+    state.messages = state.messages.slice(0, messageIndex - 1);
     await sendMessage(userMessage.content, null, undefined, userMessage.images || [], override);
   });
 

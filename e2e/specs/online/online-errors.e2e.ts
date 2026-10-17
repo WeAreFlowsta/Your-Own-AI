@@ -76,6 +76,11 @@ describe("online errors, said plainly", () => {
         const e = await replyError();
         return r?.state === "done" && e?.failed === false && r.text.trim().length > 0;
       }, { timeout: 90_000, timeoutMsg: `Retry after the ${c.mode} failure never answered` });
+      // One question, one answer: Retry asks the question once (it used to
+      // show twice, and reach the model twice in a row).
+      const roles = (await browser.execute(() => [...document.querySelectorAll('[data-testid="chat-message"]')].map((m) => (m as HTMLElement).dataset.role ?? ""))) as string[];
+      expect(roles.slice(-2)).toEqual(["user", "assistant"]);
+      if (roles.length >= 3) expect(roles[roles.length - 3]).not.toBe("user");
     });
   }
 });
