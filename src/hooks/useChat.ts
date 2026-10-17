@@ -1423,6 +1423,20 @@ export function useChat(props: UseChatProps) {
       }
       const controller = new AbortController();
       abortControllerRef.value = noSerialize(controller);
+      // This turn's own conversation and place in it. New lets go of a reply
+      // in flight (resetChat): the reply goes on recording where it started -
+      // it used to read the PAGE's conversation when it finished, recording
+      // into a new conversation, or into none, and a conversation started
+      // after New was written onto the new page. The page is told only while
+      // it still belongs to this turn.
+      let turnConv: string | null = state.conversationHash;
+      let turnSeq = state.messageSequence;
+      const pageOwns = () => abortControllerRef.value === controller;
+      const takeSeq = (): number => {
+        const n = turnSeq++;
+        if (pageOwns()) state.messageSequence = turnSeq;
+        return n;
+      };
       state.stopAtBoundary = null;
       // The turn is registered at the app root from here on: it outlives
       // this page (utils/turns.ts). "chat" here - a tools session is the
@@ -1724,7 +1738,7 @@ export function useChat(props: UseChatProps) {
             return { userMsgHash: null, userAttachment, imageInfos, appVersion };
           }
           try {
-            if (!state.conversationHash) {
+            if (!turnConv) {
               // Use the first user message as the conversation title
               const title = userInput.length > 80
                 ? userInput.substring(0, 80) + "..."
@@ -1740,7 +1754,8 @@ export function useChat(props: UseChatProps) {
                 console.warn("[Holochain] Failed to start conversation");
                 return null;
               }
-              state.conversationHash = hash;
+              turnConv = hash;
+              if (pageOwns()) state.conversationHash = hash;
               updateTurn(assistantId, { conversationHash: hash });
             }
             const appVersion = await import("@tauri-apps/api/app")
@@ -1759,10 +1774,10 @@ export function useChat(props: UseChatProps) {
                 : undefined;
             const userMsgHash = await recordMessage(
               recHolochainId,
-              state.conversationHash!,
+              turnConv!,
               "user",
               userInput,
-              state.messageSequence,
+              takeSeq(),
               "user",
               undefined,
               undefined,
@@ -1772,7 +1787,6 @@ export function useChat(props: UseChatProps) {
                 images: imageInfos,
               },
             );
-            state.messageSequence++;
             console.log("[Holochain] User message recorded");
             return { userMsgHash, userAttachment, imageInfos, appVersion };
           } catch (e) {
@@ -2177,10 +2191,10 @@ export function useChat(props: UseChatProps) {
             if (sources?.length) uiLog(`[web] recording the reply with ${sources.length} source(s)`);
             const assistantMsgHash = await recordMessage(
               holochainId,
-              state.conversationHash!,
+              turnConv!,
               "assistant",
               displayContent,
-              state.messageSequence,
+              takeSeq(),
               modelName,
               finalThinking || undefined,
               tokenUsage ? {
@@ -2213,7 +2227,6 @@ export function useChat(props: UseChatProps) {
                 provider_fingerprint: tokenUsage?.provider_fingerprint || undefined,
               },
             );
-            state.messageSequence++;
             // Remember the assistant entry's hash so the on-demand "Verify
             // sources" button can persist its grounding linked to this message.
             if (assistantMsgHash) {
@@ -2237,7 +2250,7 @@ export function useChat(props: UseChatProps) {
             if (!isOnlineModel) {
               void indexTurn({
                 aiId: selectedAi.id,
-                conversationHash: state.conversationHash!,
+                conversationHash: turnConv!,
                 userText: userInput,
                 assistantText: displayContent,
               });
@@ -2273,14 +2286,14 @@ export function useChat(props: UseChatProps) {
             const stoppedPre = preRecord;
             // Take this partial's place in the order NOW: the message that
             // interrupted it is sent straight after and takes the next one.
-            const stoppedSeq = state.messageSequence++;
+            const stoppedSeq = takeSeq();
             void (async () => {
               const pre = stoppedPre ? await stoppedPre : null;
-              if (!pre || !recordCtx.holochainId || !state.conversationHash) return;
+              if (!pre || !recordCtx.holochainId || !turnConv) return;
               try {
                 await recordMessage(
                   recordCtx.holochainId,
-                  state.conversationHash,
+                  turnConv,
                   "assistant",
                   partialText,
                   stoppedSeq,

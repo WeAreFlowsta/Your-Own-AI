@@ -386,6 +386,9 @@ export const ActivityTray = component$(() => {
     if (onChat && (!t.conversationHash || t.conversationHash === turnsState.openConversation)) return false;
     if (isLive(t)) return true;
     if (t.state === "stopped") return false;
+    // Watched to the end, or opened since: not news (Eric 10-17: two
+    // "answered" rows after New, for replies he had just watched finish).
+    if (t.seen) return false;
     return (t.endedAt ?? 0) > now - TURN_LINGER_MS;
   });
   const total = rows.length + turnRows.length + (vis ? 1 : 0);

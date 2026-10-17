@@ -32,6 +32,10 @@ export interface Turn {
   state: TurnState;
   startedAt: number;
   endedAt?: number;
+  /** The person saw it end: its conversation was on the chat page when it
+   *  ended, or was opened after. The tray lists only replies that finished
+   *  while the person was elsewhere - never what they watched happen. */
+  seen?: boolean;
   /** The two messages of the turn, as the page would render them. */
   user: Message;
   assistant: Message;
@@ -67,7 +71,7 @@ try {
   const w = window as any;
   if (!w.__wdio_original_core__ && w.__TAURI__?.core) w.__wdio_original_core__ = w.__TAURI__.core;
 } catch { /* not in a webview */ }
-try { (window as any).__yoaiTurnsFull = () => allTurns().map((t) => ({ agentKey: t.agentKey, conversationHash: t.conversationHash, state: t.state })); } catch { /* no window */ }
+try { (window as any).__yoaiTurnsFull = () => allTurns().map((t) => ({ agentKey: t.agentKey, conversationHash: t.conversationHash, state: t.state, question: t.question })); } catch { /* no window */ }
 try { (window as any).__yoaiTurns = () => allTurns().map((t) => ({ id: t.id.slice(0, 8), kind: t.kind, ai: t.aiId.slice(0, 12), conv: t.conversationHash?.slice(0, 12) ?? null, state: t.state, chars: t.assistant.content.length, rail: t.assistant.agentLog?.length ?? 0 })); } catch { /* no window */ }
 
 /** The live agent (tools / project) turn, if any. The Rust bridge runs one
@@ -150,6 +154,8 @@ let openHash: string | null = null;
 export function noteOpenConversation(hash: string | null): void {
   if (openHash === hash) return;
   openHash = hash;
+  // Opening a conversation shows its finished replies: they are seen.
+  if (hash) for (const t of turns.values()) if (t.conversationHash === hash && t.endedAt) t.seen = true;
   changed();
 }
 export function openConversation(): string | null {
@@ -231,6 +237,8 @@ export function endTurn(id: string, state: "done" | "stopped" | "error"): void {
   if (!t || t.state === "done" || t.state === "stopped" || t.state === "error") return;
   t.state = state;
   t.endedAt = Date.now();
+  // Ended on screen: the person watched it (the tray will not list it).
+  if (openHash && t.conversationHash === openHash) t.seen = true;
   logLine(`end ${id.slice(0, 8)} ${state} conv ${t.conversationHash?.slice(0, 12) ?? "-"} ${t.assistant.content.length} chars`);
   t.assistant = { ...t.assistant, isLoading: false, statusText: undefined, stopped: state === "stopped" ? true : t.assistant.stopped };
   changed();
