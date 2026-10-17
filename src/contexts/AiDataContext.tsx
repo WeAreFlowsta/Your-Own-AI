@@ -147,9 +147,10 @@ export const AiDataProvider = component$(() => {
               "vault_restore_conversations"
             );
             console.log("[AiDataContext] Startup restore complete:", stats);
-            if (stats.island) {
-              // This device's own earlier conversations joined the identity's network.
-              const n = (stats.conversations_restored ?? 0) + (stats.conversations_preserved ?? 0);
+            const n = (stats.conversations_restored ?? 0) + (stats.conversations_preserved ?? 0);
+            if (stats.island && n > 0) {
+              // This device's own earlier conversations joined the identity's
+              // network (none: nothing to say - 10-17 showed "0 conversations").
               const { announceActivity } = await import("../utils/activity");
               announceActivity({
                 id: "island-merge",
@@ -204,6 +205,21 @@ export const AiDataProvider = component$(() => {
     } finally {
       state.isLoadingUserAis = false;
     }
+
+    // Ids changed by provisioning (old -> new). Provisioning can run in the
+    // background while the pictures load below; both ends apply this, so the
+    // pictures end up under the new ids whichever finishes first.
+    const renamedIds = new Map<string, string>();
+    const followRenames = (urls: Record<string, string>): Record<string, string> => {
+      const out = { ...urls };
+      for (const [oldId, newId] of renamedIds) {
+        if (out[oldId]) {
+          out[newId] = out[oldId];
+          delete out[oldId];
+        }
+      }
+      return out;
+    };
 
     // Provision Holochain agents for all AIs (assigns agent pub keys)
     if (state.userDefinedAis.length > 0) {
@@ -269,10 +285,16 @@ export const AiDataProvider = component$(() => {
                 // No thumbnail to migrate
               }
               console.log(`[AiDataContext] AI ${ai.name}: ${oldId} → ${pubKey.slice(0, 16)}...`);
+              renamedIds.set(oldId, pubKey);
             } else if (pubKey) {
               ai.agentPubKey = pubKey;
             }
           }
+          // Pictures already shown follow the new ids. This runs in the
+          // background after the pictures loaded when every AI had a key:
+          // after a join's restart re-keyed every AI, the cards looked under
+          // the new ids and showed the character faces until a reload (10-17).
+          if (renamedIds.size > 0) state.thumbnailObjectUrls = followRenames(state.thumbnailObjectUrls);
           // The ids changed in place: hand out a new array so anything that
           // tracks the list (the welcome wizard's three slots) sees it. The
           // chat page stops waiting for startup after 10 s and can land on
@@ -338,7 +360,7 @@ export const AiDataProvider = component$(() => {
           // No custom thumbnail, will use archetype default
         }
       }
-      state.thumbnailObjectUrls = newUrls;
+      state.thumbnailObjectUrls = followRenames(newUrls);
     }
 
     state.isInitialized = true;

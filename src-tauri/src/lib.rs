@@ -154,18 +154,22 @@ fn get_thumbnails_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(thumbnails_dir)
 }
 
-/// Save an AI thumbnail to the filesystem
+/// Save an AI thumbnail to the filesystem. `is_default` marks a character's
+/// default face: a picture the AI's other devices or a restore may replace
+/// with its own (any other save is the AI's own picture).
 #[tauri::command]
 async fn save_ai_thumbnail(
     app: AppHandle,
     ai_id: String,
     thumbnail_data: Vec<u8>,
+    is_default: Option<bool>,
 ) -> Result<String, String> {
     let thumbnails_dir = get_thumbnails_dir(&app)?;
     let thumbnail_path = thumbnails_dir.join(format!("{}.jpg", ai_id));
     
     fs::write(&thumbnail_path, thumbnail_data)
         .map_err(|e| format!("Failed to write thumbnail: {}", e))?;
+    config_sync::mark_picture(&thumbnails_dir, &ai_id, is_default.unwrap_or(false));
     
     Ok(thumbnail_path
         .to_str()
@@ -203,6 +207,7 @@ async fn delete_ai_thumbnail(
         fs::remove_file(&thumbnail_path)
             .map_err(|e| format!("Failed to delete thumbnail: {}", e))?;
     }
+    config_sync::mark_picture(&thumbnails_dir, &ai_id, false);
     
     Ok(())
 }

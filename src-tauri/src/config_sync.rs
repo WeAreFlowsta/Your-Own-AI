@@ -32,6 +32,25 @@ const SYNCED_FIELDS: &[&str] = &[
     "updatedAt",
 ];
 
+/// Whether an AI has a picture of its own here. A character's default face
+/// (saved at start for an AI with none, marked `<id>.default`) does not
+/// count: a picture from the AI's other devices or a restore replaces it.
+/// 10-17: default faces saved before a joining Mac's restore covered every
+/// AI's own picture, and nothing replaced them.
+pub(crate) fn has_own_picture(thumb_dir: &std::path::Path, id: &str) -> bool {
+    thumb_dir.join(format!("{}.jpg", id)).exists() && !thumb_dir.join(format!("{}.default", id)).exists()
+}
+
+/// Mark the picture just written for `id` as a default face, or as the AI's own.
+pub(crate) fn mark_picture(thumb_dir: &std::path::Path, id: &str, is_default: bool) {
+    let marker = thumb_dir.join(format!("{}.default", id));
+    if is_default {
+        let _ = std::fs::write(&marker, b"");
+    } else {
+        let _ = std::fs::remove_file(&marker);
+    }
+}
+
 fn founding_of(ai: &serde_json::Value) -> Option<String> {
     ai["foundingKey"]
         .as_str()
@@ -388,14 +407,16 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle) -> Result<(u32, u
                 let Some(b64) = thumbs.get(sibling_id).and_then(|v| v.as_str()) else { continue };
                 use base64::Engine;
                 if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
-                    let _ = std::fs::write(thumb_dir.join(format!("{}.jpg", local_id)), bytes);
+                    if std::fs::write(thumb_dir.join(format!("{}.jpg", local_id)), bytes).is_ok() {
+                        mark_picture(&thumb_dir, local_id, false);
+                    }
                 }
             }
         }
     }
     // An AI here with no picture at all takes the one its other devices
     // have: whatever step lost or never wrote it, the pictures converge.
-    let missing = missing_pictures(&local, &sibling_pictures, |id| thumb_dir.join(format!("{}.jpg", id)).exists());
+    let missing = missing_pictures(&local, &sibling_pictures, |id| has_own_picture(&thumb_dir, id));
     if !missing.is_empty() {
         use base64::Engine;
         let _ = std::fs::create_dir_all(&thumb_dir);
@@ -403,6 +424,7 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle) -> Result<(u32, u
         for (local_id, b64) in &missing {
             if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
                 if std::fs::write(thumb_dir.join(format!("{}.jpg", local_id)), bytes).is_ok() {
+                    mark_picture(&thumb_dir, local_id, false);
                     filled += 1;
                 }
             }
@@ -457,7 +479,7 @@ pub fn start_config_sync_rounds(app: &tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{merge_sibling_configs, missing_pictures, sibling_needs_update};
+    use super::{has_own_picture, mark_picture, merge_sibling_configs, missing_pictures, sibling_needs_update};
     use crate::vault_escrow::SiblingDevice;
 
     #[test]
@@ -545,6 +567,26 @@ mod tests {
         ];
         let missing = missing_pictures(&local, &pics, |id| id == "here-2");
         assert_eq!(missing, vec![("here-1".to_string(), "PIC1".to_string())]);
+    }
+
+    /// A character's default face does not count as the AI's own picture:
+    /// the picture its other devices have replaces it, and once replaced (or
+    /// chosen by the person) it is the AI's own.
+    #[test]
+    fn a_default_face_gives_way_to_the_ais_own_picture() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        assert!(!has_own_picture(d, "teresa"), "no file at all");
+        std::fs::write(d.join("teresa.jpg"), b"default face").unwrap();
+        mark_picture(d, "teresa", true);
+        assert!(!has_own_picture(d, "teresa"), "the default face is not her own");
+        let pics: std::collections::HashMap<String, String> = [("found-t".to_string(), "HERS".to_string())].into_iter().collect();
+        let missing = missing_pictures(&[ai("teresa", "found-t", "Teresa", 0)], &pics, |id| has_own_picture(d, id));
+        assert_eq!(missing, vec![("teresa".to_string(), "HERS".to_string())]);
+        std::fs::write(d.join("teresa.jpg"), b"her own").unwrap();
+        mark_picture(d, "teresa", false);
+        assert!(has_own_picture(d, "teresa"));
+        assert!(missing_pictures(&[ai("teresa", "found-t", "Teresa", 0)], &pics, |id| has_own_picture(d, id)).is_empty());
     }
 
     #[test]

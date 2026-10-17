@@ -164,13 +164,32 @@ export async function seedDefaultAisIfNeeded(): Promise<void> {
       reeves: '/bundled/reeves.jpg',
     };
     const allAis = await store.get<UserDefinedAI[]>(CUSTOM_AIS_KEY) || [];
+    // The character faces, read once: a picture equal to one is a default
+    // face, which the AI's own picture from another device may replace.
+    const defaultFaces: Record<string, Uint8Array | null> = {};
+    const defaultFace = async (source: string): Promise<Uint8Array | null> => {
+      if (!(source in defaultFaces)) {
+        try {
+          defaultFaces[source] = new Uint8Array(await (await fetch(source)).arrayBuffer());
+        } catch {
+          defaultFaces[source] = null;
+        }
+      }
+      return defaultFaces[source];
+    };
+    const sameBytes = (a: number[], b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
     for (const ai of allAis) {
       const thumbSource = defaultThumbSources[ai.baseArchetypeId];
       if (!thumbSource) continue;
       // Check if custom thumbnail already exists on disk
       try {
-        await invoke<number[]>('get_ai_thumbnail', { aiId: ai.id });
-        // Already exists, skip
+        const existing = await invoke<number[]>('get_ai_thumbnail', { aiId: ai.id });
+        // A default face saved before it was marked as one (before 0.9.0-beta.9)
+        // is marked now, so the AI's own picture can still arrive.
+        const face = await defaultFace(thumbSource);
+        if (face && sameBytes(existing, face)) {
+          await invoke('save_ai_thumbnail', { aiId: ai.id, thumbnailData: existing, isDefault: true });
+        }
       } catch {
         // A picture still under an earlier key (a synced AI re-keyed before
         // pictures followed it, 0.9.0-beta.3..5) is this AI's own: move it
@@ -188,14 +207,15 @@ export async function seedDefaultAisIfNeeded(): Promise<void> {
           } catch { /* not under this key */ }
         }
         if (moved) continue;
-        // No custom thumbnail on disk — save the default character face
+        // No custom thumbnail on disk — save the default character face,
+        // marked as one: the AI's own picture replaces it when it arrives.
         try {
-          const response = await fetch(thumbSource);
-          const blob = await response.blob();
-          const buffer = await blob.arrayBuffer();
+          const face = await defaultFace(thumbSource);
+          if (!face) throw new Error('the default face did not load');
           await invoke('save_ai_thumbnail', {
             aiId: ai.id,
-            thumbnailData: Array.from(new Uint8Array(buffer)),
+            thumbnailData: Array.from(face),
+            isDefault: true,
           });
           console.log(`[LocalAiStorage] Saved default thumbnail for ${ai.name}`);
         } catch (err) {

@@ -651,7 +651,7 @@ fn restore_thumbnails(
     for (backup_id, b64) in map {
         let Some(local_id) = resolve_local_ai_id(merged, backup_id) else { continue };
         let path = thumb_dir.join(format!("{}.jpg", local_id));
-        if path.exists() {
+        if crate::config_sync::has_own_picture(&thumb_dir, &local_id) {
             continue;
         }
         let Some(bytes) = b64
@@ -659,6 +659,7 @@ fn restore_thumbnails(
             .and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok())
         else { continue };
         if std::fs::write(&path, &bytes).is_ok() {
+            crate::config_sync::mark_picture(&thumb_dir, &local_id, false);
             written += 1;
         }
     }

@@ -152,7 +152,12 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 ### Fixed
 - AI pictures from another device now show on this one.
 - An AI that has no picture on this device takes the one your other
-  devices have, and a built-in face never covers an AI's own picture.
+  devices have, and a built-in face never covers an AI's own picture: its
+  own picture replaces the face when it arrives, after a restore too.
+- After a device joins, your AIs show their own pictures straight away
+  (they showed the built-in faces until the page was reloaded).
+- The activity tray no longer says "0 conversations" joined your identity
+  when none did.
 - Project memory saves and reads in well under a second, even for an AI
   with a thousand conversations (it used to take minutes on a busy
   computer), and each AI keeps one memory conversation per project.
