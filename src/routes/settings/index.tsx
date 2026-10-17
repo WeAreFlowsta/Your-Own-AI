@@ -46,6 +46,8 @@ import {
   type AgentPermissionMode,
 } from "../../utils/agentPermissions";
 import { LuChevronDown, LuChevronLeft } from "@qwikest/icons/lucide";
+import { AutoRoutingModels } from "../../components/AutoRoutingModels";
+import { AUTO_ROUTING_CHANGED } from "../../utils/autoRouting";
 
 /** One "which online model answers" row: label + recommended-or-override
     dropdown. Native <select> popups are GTK-themed on webkit (they ignore our
@@ -357,6 +359,16 @@ export default component$(() => {
   // The router's recommended id per slot (Rust DEFAULT_*), named through the
   // online list - the labels can never drift from the defaults.
   const routingDefaults = useSignal<Record<string, string>>({});
+  // The recommended names follow the list of models automatic routing may use.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ cleanup }) => {
+    const refresh = async () => {
+      const { invoke } = await import("@tauri-apps/api/core");
+      routingDefaults.value = await invoke<Record<string, string>>("routing_defaults").catch(() => routingDefaults.value);
+    };
+    window.addEventListener(AUTO_ROUTING_CHANGED, refresh);
+    cleanup(() => window.removeEventListener(AUTO_ROUTING_CHANGED, refresh));
+  });
   const recName = (slot: string): string => {
     const id = routingDefaults.value[slot];
     if (!id) return "recommended";
@@ -1473,6 +1485,7 @@ export default component$(() => {
                   selected={onlineFresh}
                   models={onlineModels}
                 />
+                <AutoRoutingModels />
                 {buildInstalled.value && (
                   <>
                     <div class="border-t border-[var(--border-subtle)] my-5" />

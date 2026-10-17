@@ -25,8 +25,21 @@ import {
 } from '@qwikest/icons/lucide';
 import LiquidMetalButton from './LiquidMetalButton';
 import { Callout } from './Callout';
-import { getPausedModels, setModelPaused } from '../utils/modelPrefs';
+import { getPausedModels, mirrorPausedModels, setModelPaused } from '../utils/modelPrefs';
 import { noteEntitlement } from '../utils/entitlement';
+import {
+  AUTO_ROUTING_CHANGED,
+  ROUTING_SLOTS,
+  autoAllowedMap,
+  providerAllows,
+  readAutoAllow,
+  setModelAllowed,
+  setSlotPick,
+  slotModels,
+  slotPick,
+  type AutoAllow,
+  type OnlineProvider,
+} from '../utils/autoRouting';
 
 interface VaultStatus {
   installed: boolean;
@@ -65,6 +78,8 @@ interface OnlineModel {
   /** The catalog's routing block: the slots this model is the Auto default
    *  for (everyday | fresh | hard_code | hard_general | agent | plan). */
   routing?: { slots?: string[] } | null;
+  /** The provider the proxy sends it to (owned_by). */
+  provider?: string | null;
 }
 
 const SORT_OPTIONS = [
@@ -99,34 +114,13 @@ function modelGroupKeys(m: OnlineModel): string[] {
   return [...new Set(keys)];
 }
 
-// The Auto router's per-slot defaults, read from the catalog's own routing
-// block so a slot that moves (GPT-6 Luna took Everyday, Grok 4.7 (Web) took
-// Fresh, 2026-09-25) shows on the right card without an app release.
-// Surfaced as badges so the page answers "which of these does Auto already
-// use for me?" without the user opening Settings. The baked map is the
-// floor for an older catalog with no routing block (mirrors router.rs).
-const SLOT_LABELS: Record<string, string> = {
-  everyday: 'Auto pick · everyday questions',
-  fresh: 'Auto pick · fresh info',
-  hard_code: 'Auto pick · hard coding',
-  hard_general: 'Auto pick · hard questions',
-  agent: 'Auto pick · project work',
-  plan: 'Auto pick · planning',
-};
-const BAKED_SLOTS: Record<string, string[]> = {
-  'online:gpt-6-luna': ['everyday'],
-  'online:grok-4.7-search': ['fresh'],
-  'online:gpt-6-astra': ['hard_code', 'hard_general', 'agent', 'plan'],
-};
-/** The Auto badges for a card: the catalog's slots, else the baked floor. */
-function autoBadges(m: OnlineModel): string[] {
-  const slots = m.routing?.slots?.length ? m.routing.slots : (BAKED_SLOTS[m.id] ?? []);
-  // Astra's two Hard slots read as one badge.
-  const seen = new Set<string>();
-  return slots
-    .map((s) => (s === 'hard_general' && slots.includes('hard_code') ? 'hard_code' : s))
-    .map((s) => SLOT_LABELS[s])
-    .filter((l): l is string => !!l && !seen.has(l) && !!seen.add(l));
+// What routing actually uses each model for: the person's pick for a kind
+// of question, else the router's recommended model (routing_defaults - the
+// catalog's slots, the allowed list and the baked floor, all in the router).
+// Before 10-17 these badges read the catalog's slots alone and could name a
+// model the person had replaced in Settings.
+function isSearchModel(m: OnlineModel): boolean {
+  return modelGroupKeys(m).includes('web_search') || (m.pricing?.search_per_call_usd ?? 0) > 0;
 }
 
 const VAULT_DOWNLOAD_URL = 'https://flowsta.com/vault/?from=app&app=your-own-ai';
@@ -161,6 +155,19 @@ export const OnlineModels = component$(() => {
     modelsError: false,
     /** "Open Flowsta Vault" clicked; the re-probe flips the card when it answers. */
     openingVault: false,
+    /** Routing: each model's standing for automatic routing, the router's
+     *  recommended model per kind of question, which models drive tools. */
+    allowed: {} as Record<string, boolean>,
+    defaults: {} as Record<string, string>,
+    tools: {} as Record<string, boolean>,
+    providers: [] as OnlineProvider[],
+    switches: { providers: {}, models: {} } as AutoAllow,
+    /** Bumped when a pick changes, so the badges read storage again. */
+    picksRev: 0,
+    /** The card whose "Use for..." menu is open. */
+    useForOpen: '',
+    /** Project work and planning are offered only with the Build helper. */
+    buildInstalled: false,
   });
 
   const refresh = $(async () => {
@@ -177,10 +184,30 @@ export const OnlineModels = component$(() => {
     }
   });
 
+  const loadRouting = $(async () => {
+    const [allowed, defaults, providers, switches] = await Promise.all([
+      autoAllowedMap(),
+      invoke<Record<string, string>>('routing_defaults').catch(() => ({})),
+      invoke<OnlineProvider[]>('list_online_providers').catch(() => []),
+      readAutoAllow(),
+    ]);
+    store.allowed = allowed;
+    store.defaults = defaults;
+    store.providers = providers;
+    store.switches = switches;
+    store.picksRev++;
+  });
+
   const loadModels = $(async () => {
     try {
       store.models = await invoke<OnlineModel[]>('list_online_models');
       store.modelsError = false;
+      await loadRouting();
+      const caps = await Promise.all(
+        store.models.map(async (m) => [m.id, (await invoke<number>('agent_capability', { model: m.id }).catch(() => 0)) >= 6] as const),
+      );
+      store.tools = Object.fromEntries(caps);
+      store.buildInstalled = (await invoke<{ installed: boolean }>('build_install_status').catch(() => ({ installed: false }))).installed;
     } catch {
       store.modelsError = true;
     }
@@ -202,6 +229,10 @@ export const OnlineModels = component$(() => {
     const onEntitlement = () => { if (!store.busy) void refresh(); };
     window.addEventListener('entitlementChanged', onEntitlement);
     cleanup(() => window.removeEventListener('entitlementChanged', onEntitlement));
+    // Settings > Routing changes the same switches and picks.
+    const onRouting = () => void loadRouting();
+    window.addEventListener(AUTO_ROUTING_CHANGED, onRouting);
+    cleanup(() => window.removeEventListener(AUTO_ROUTING_CHANGED, onRouting));
   });
 
   const handleSignIn = $(async () => {
@@ -256,12 +287,16 @@ export const OnlineModels = component$(() => {
     await refresh();
   });
 
-  const handleTogglePause = $((id: string) => {
+  const handleTogglePause = $(async (id: string) => {
     const paused = !store.paused.includes(id);
     setModelPaused(id, paused);
+    // The router reads Pause from the store: wait for it before the re-read.
+    await mirrorPausedModels();
     store.paused = paused
       ? [...store.paused, id]
       : store.paused.filter((n) => n !== id);
+    // A paused model is out of automatic routing too.
+    window.dispatchEvent(new CustomEvent(AUTO_ROUTING_CHANGED));
   });
 
   const signedIn = !!store.session?.signed_in;
@@ -597,6 +632,18 @@ export const OnlineModels = component$(() => {
               .map((model) => {
               const isPaused = store.paused.includes(model.id);
               const ctx = formatContext(model.context_window);
+              // Routing, as it stands: what routing uses this model for, and
+              // the kinds of question it can take ("Use for...").
+              void store.picksRev;
+              const name = (id: string) => store.models.find((m) => m.id === id)?.display_name ?? id.replace(/^online:/, '');
+              const uses = ROUTING_SLOTS.map((slot) => ({ slot, ...slotModels(slot, store.defaults) })).filter((u) => u.ids.includes(model.id));
+              const picks = uses.filter((u) => u.picked);
+              const fits = ROUTING_SLOTS.filter((slot) =>
+                slot.needs === 'search' ? isSearchModel(model) : slot.needs === 'tools' ? store.buildInstalled && !!store.tools[model.id] : !isSearchModel(model),
+              );
+              const autoOn = store.allowed[model.id] !== false;
+              const provider = store.providers.find((p) => p.id === model.provider);
+              const providerOn = provider ? providerAllows(provider, store.switches) : true;
               return (
                 <div
                   key={model.id}
@@ -632,15 +679,21 @@ export const OnlineModels = component$(() => {
                     </p>
 
                     <div class="space-y-2">
-                      {autoBadges(model).map((label) => (
+                      {usable && uses.map((u) => (
                         <span
-                          key={label}
+                          key={u.slot.key}
+                          data-testid="model-use-badge"
                           class="inline-block px-2 py-0.5 mr-1.5 rounded-full bg-emerald-900/50 text-emerald-300 text-[10px] font-semibold whitespace-nowrap"
-                          title="When an AI is set to Auto, this is the model the router picks for this kind of question (changeable in Settings - Routing)"
+                          title="When an AI is set to Auto, routing uses this model for this kind of question. Change it with Use for, or in Settings - Routing."
                         >
-                          {label}
+                          {u.slot.label} · {u.picked ? 'your pick' : 'recommended'}
                         </span>
                       ))}
+                      {usable && !autoOn && picks.length > 0 && (
+                        <p class="text-xs text-[var(--text-muted)]">
+                          Off for automatic routing · still your pick for {picks.map((u) => u.slot.label.toLowerCase()).join(', ')}
+                        </p>
+                      )}
                       {ctx && (
                         <span class="inline-block px-2 py-0.5 bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] rounded text-xs text-[var(--text-primary)]">
                           {ctx}
@@ -681,11 +734,87 @@ export const OnlineModels = component$(() => {
 
                   <div class="px-5 py-3 mt-auto">
                     {usable ? (
-                      <div class="flex justify-end">
+                      <div class="flex items-center gap-3">
+                        {/* Use for...: the kinds of question this model can
+                            take, each naming its model now. */}
+                        <div class="relative">
+                          <button
+                            type="button"
+                            data-testid="use-for"
+                            class="inline-flex items-center gap-1 text-xs text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                            aria-expanded={store.useForOpen === model.id}
+                            onClick$={() => {
+                              store.useForOpen = store.useForOpen === model.id ? '' : model.id;
+                            }}
+                          >
+                            Use for
+                            <LuChevronDown class="w-3.5 h-3.5" />
+                          </button>
+                          {store.useForOpen === model.id && (
+                            <>
+                              <div class="fixed inset-0 z-40" onClick$={() => { store.useForOpen = ''; }} />
+                              <div class="absolute left-0 bottom-full mb-1 z-50 w-64 max-w-[calc(100vw-2rem)] rounded-lg bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] shadow-xl py-1">
+                                {fits.map((slot) => {
+                                  const now = slotModels(slot, store.defaults);
+                                  const mine = slotPick(slot.storageKey) === model.id;
+                                  return (
+                                    <div key={slot.key}>
+                                      <button
+                                        type="button"
+                                        class="block w-full text-left px-3 py-1.5 hover:bg-[var(--bg-card)]"
+                                        onClick$={async () => {
+                                          store.useForOpen = '';
+                                          if (!mine) await setSlotPick(slot.storageKey, model.id);
+                                        }}
+                                      >
+                                        <span class={`block text-sm ${mine ? 'font-medium text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'}`}>
+                                          {mine ? '✓ ' : ''}{slot.label}
+                                        </span>
+                                        <span class="block text-[11px] text-[var(--text-muted)] truncate">
+                                          Now: {now.ids.map(name).join(' / ') || 'none'}{now.picked ? ' (your pick)' : ''}
+                                        </span>
+                                      </button>
+                                      {mine && (
+                                        <button
+                                          type="button"
+                                          class="block w-full text-left px-3 pb-1.5 text-[11px] text-[var(--text-link)] hover:underline"
+                                          onClick$={async () => {
+                                            store.useForOpen = '';
+                                            await setSlotPick(slot.storageKey, '');
+                                          }}
+                                        >
+                                          Back to the recommended model
+                                        </button>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </>
+                          )}
+                        </div>
+                        <span class="ml-auto inline-flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
+                          Auto
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={autoOn}
+                            aria-label={`Automatic routing may use ${model.display_name}`}
+                            data-testid="model-auto-switch"
+                            disabled={isPaused}
+                            title={isPaused ? 'Paused - resume it to let automatic routing use it' : 'Automatic routing may use this model. A kind of question you give it with Use for keeps it either way.'}
+                            class={`relative inline-block h-4 w-7 flex-shrink-0 rounded-full transition-colors disabled:opacity-50 ${autoOn ? 'bg-[var(--text-link)]' : 'bg-[var(--border-subtle)]'}`}
+                            onClick$={async () => {
+                              await setModelAllowed(model.id, providerOn, !autoOn);
+                            }}
+                          >
+                            <span class={`absolute top-0.5 h-3 w-3 rounded-full bg-white shadow transition-all ${autoOn ? 'left-3.5' : 'left-0.5'}`} />
+                          </button>
+                        </span>
                         <LiquidMetalButton
                           variant="secondary"
                           onClick$={() => handleTogglePause(model.id)}
-                          title={isPaused ? 'Resume - offer this model again when you choose a model for an AI, and let automatic routing pick it' : 'Pause - hide this model wherever you choose a model for an AI, and keep automatic routing from picking it. It stays downloaded, and any AI already set to it keeps it.'}
+                          title={isPaused ? 'Resume - offer this model again when you choose a model for an AI, and let automatic routing use it' : 'Pause - hide this model wherever you choose a model for an AI, and keep automatic routing from using it. Any AI already set to it keeps it.'}
                           class="p-2 transition-colors"
                         >
                           {isPaused ? (

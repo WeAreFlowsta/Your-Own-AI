@@ -1176,12 +1176,14 @@ pub(crate) fn auto_switches(
     (map("models"), map("providers"))
 }
 
-/// The online models automatic routing may choose from: the allowed ones,
-/// plus every model the person picked by name - an explicit pick is theirs
-/// to use whatever the switches say. None when the catalog is unreachable.
+/// The online models automatic routing may choose from: the allowed ones
+/// that are not paused (Pause on an Online Models card), plus every model
+/// the person picked by name - an explicit pick is theirs to use whatever
+/// the switches say. None when the catalog is unreachable.
 pub(crate) async fn routing_models(app: &AppHandle, picks: &[Option<&str>]) -> Option<Vec<crate::flowsta::OnlineModel>> {
     let (models, providers) = crate::flowsta::online_catalog().await.ok()?;
     let (model_switches, provider_switches) = auto_switches(app);
+    let paused = paused_models(app);
     let bare = |id: &str| id.strip_prefix("online:").unwrap_or(id).to_string();
     let picked: std::collections::HashSet<String> = picks.iter().flatten().map(|p| bare(p)).collect();
     Some(
@@ -1189,10 +1191,29 @@ pub(crate) async fn routing_models(app: &AppHandle, picks: &[Option<&str>]) -> O
             .into_iter()
             .filter(|m| {
                 picked.contains(&bare(&m.id))
-                    || auto_allowed(&m.id, m.provider.as_deref(), &model_switches, &provider_switches, &providers)
+                    || (!paused.contains(&m.id)
+                        && auto_allowed(&m.id, m.provider.as_deref(), &model_switches, &provider_switches, &providers))
             })
             .collect(),
     )
+}
+
+/// Each catalog model's standing for automatic routing ("online:<id>" ->
+/// allowed), by the same rule the router uses - Settings and the Online
+/// Models page draw their switches from it.
+#[tauri::command]
+pub async fn online_auto_allowed(app: AppHandle) -> std::collections::HashMap<String, bool> {
+    let Ok((models, providers)) = crate::flowsta::online_catalog().await else { return Default::default() };
+    let (model_switches, provider_switches) = auto_switches(&app);
+    let paused = paused_models(&app);
+    models
+        .iter()
+        .map(|m| {
+            let on = !paused.contains(&m.id)
+                && auto_allowed(&m.id, m.provider.as_deref(), &model_switches, &provider_switches, &providers);
+            (m.id.clone(), on)
+        })
+        .collect()
 }
 
 /// The catalog's own default for a slot: the first listed model whose

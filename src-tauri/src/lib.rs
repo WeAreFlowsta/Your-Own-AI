@@ -747,6 +747,7 @@ pub fn run() {
             router::set_agent_online_override,
             router::alternate_online_agent,
             router::online_fallback,
+            router::online_auto_allowed,
             llm::stream_chat_completion,
             llm::cancel_chat_completion,
             save_ai_thumbnail,
