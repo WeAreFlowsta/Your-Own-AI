@@ -1475,8 +1475,7 @@ async fn chat_completions(
             }
         };
         online_token = Some(token.clone());
-        client
-            .post(format!("{}/v1/chat/completions", crate::flowsta::proxy_url()))
+        crate::flowsta::with_test_failure(client.post(format!("{}/v1/chat/completions", crate::flowsta::proxy_url())))
             .header("x-yoai-request-id", online_request_id.as_deref().unwrap_or_default())
             .bearer_auth(token)
             .json(&body)
@@ -2543,8 +2542,7 @@ pub(crate) async fn web_search_once(app: &AppHandle, who: &str, query: &str) -> 
     };
     let search_model = crate::router::DEFAULT_FRESH.trim_start_matches("online:");
     log::info!("[inference] web search for {} via {} ({} chars)", who, search_model, query.len());
-    let upstream = reqwest::Client::new()
-        .post(format!("{}/v1/chat/completions", crate::flowsta::proxy_url()))
+    let upstream = crate::flowsta::with_test_failure(reqwest::Client::new().post(format!("{}/v1/chat/completions", crate::flowsta::proxy_url())))
         .bearer_auth(token)
         .json(&json!({
             "model": search_model,

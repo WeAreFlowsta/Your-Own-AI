@@ -36,6 +36,39 @@ fn dev_override(env_key: &str, json_key: &str) -> Option<String> {
     cfg.get(json_key).and_then(|v| v.as_str()).map(String::from)
 }
 
+/// End-to-end tests: the failure the staging proxy is asked to simulate
+/// (`x-yoai-test-fail`, honoured by the STAGING proxy only). Debug builds
+/// only - a release build never carries the header.
+#[cfg(debug_assertions)]
+static TEST_FAIL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Set or clear the simulated provider failure (e2e specs). Refused in
+/// release builds.
+#[tauri::command]
+pub fn e2e_set_online_failure(mode: Option<String>) -> Result<(), String> {
+    #[cfg(debug_assertions)]
+    {
+        *TEST_FAIL.lock().unwrap_or_else(|e| e.into_inner()) = mode.filter(|m| !m.is_empty());
+        Ok(())
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = mode;
+        Err("not available in this build".into())
+    }
+}
+
+/// Add the simulated-failure header to a proxy request, when a test set one.
+pub(crate) fn with_test_failure(rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    #[cfg(debug_assertions)]
+    {
+        if let Some(mode) = TEST_FAIL.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+            return rb.header("x-yoai-test-fail", mode);
+        }
+    }
+    rb
+}
+
 pub fn proxy_url() -> String {
     const PROD: &str = "https://yoai-model-proxy-386500392150.us-central1.run.app";
     #[cfg(debug_assertions)]
@@ -1066,6 +1099,10 @@ pub struct OnlinePricing {
     /// when the provider has no cache pricing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cached_input_per_mtok: Option<f64>,
+    /// Rate for input tokens WRITTEN to the provider's prompt cache (some
+    /// providers bill this above the input rate); None when not billed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write_per_mtok: Option<f64>,
 }
 
 /// The catalog's routing block for a model (optional; absent on older
@@ -1101,6 +1138,10 @@ pub struct OnlineModel {
     pub pricing: Option<OnlinePricing>,
     /// Catalog routing block (see OnlineRouting); None on older catalogs.
     pub routing: Option<OnlineRouting>,
+    /// The provider account the proxy sends this model's requests to
+    /// (`owned_by`: openai, google, xai, moonshot, deepseek, ...). A fallback
+    /// to "another provider" and the provider-health view key on it.
+    pub provider: Option<String>,
 }
 // ⚠️ This struct is the bridge for /v1/models: a field the frontend reads
 // but isn't parsed here silently vanishes - the frontend types are optional,
@@ -1165,6 +1206,7 @@ async fn fetch_online_models() -> Result<Vec<OnlineModel>, String> {
                             vec![m["category"].as_str().unwrap_or("chat").to_string()]
                         }),
                     released: m["released"].as_str().map(str::to_string),
+                    provider: m["owned_by"].as_str().filter(|p| !p.is_empty()).map(str::to_string),
                     routing: m["routing"].as_object().map(|r| {
                         let u8_of = |k: &str| r.get("caps").and_then(|c| c.get(k)).and_then(|x| x.as_u64()).map(|x| x.min(10) as u8);
                         let caps = match (u8_of("overall"), u8_of("coding"), u8_of("reasoning"), u8_of("math")) {
@@ -1184,6 +1226,7 @@ async fn fetch_online_models() -> Result<Vec<OnlineModel>, String> {
                         request_fee_usd: p.get("request_fee_usd").and_then(|x| x.as_f64()).unwrap_or(0.0),
                         search_per_call_usd: p.get("search_per_call_usd").and_then(|x| x.as_f64()),
                         cached_input_per_mtok: p.get("cached_input_per_mtok").and_then(|x| x.as_f64()),
+                        cache_write_per_mtok: p.get("cache_write_per_mtok").and_then(|x| x.as_f64()),
                     }),
                 })
                 .collect()

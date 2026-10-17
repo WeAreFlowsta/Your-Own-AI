@@ -764,6 +764,7 @@ pub fn run() {
             commands_holochain::holochain_ready,
             commands_holochain::get_my_transcript_turns,
             commands_holochain::get_conversations,
+            flowsta::e2e_set_online_failure,
             commands_holochain::project_memory_get,
             commands_holochain::project_memory_save,
             commands_holochain::project_memory_note,

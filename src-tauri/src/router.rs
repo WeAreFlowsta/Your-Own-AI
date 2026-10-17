@@ -1449,10 +1449,7 @@ async fn inherit_followup(
             let same = prev.model.as_deref().and_then(by_id);
             let model = match same {
                 Some(m) => m,
-                None => {
-                    let was_search = prev.model.as_deref().is_some_and(|m| m.contains("search") || m.contains("sonar"));
-                    select_online(&models, prev_task, was_search, if was_search { picks.fresh.as_deref() } else { picks.everyday.as_deref() })?
-                }
+                None => orphaned_followup_model(&models, prev.model.as_deref(), prev_task, picks)?,
             };
             Some(RouteResult { think: None, model, reason: "online — continuing the conversation".to_string() })
         }
@@ -1519,6 +1516,27 @@ fn select_online_everyday(
 }
 
 /// The Everyday model and its capability scores (for the as-good rung).
+/// A follow-up whose previous online model has left the catalog: the slot
+/// this kind of turn would get. Search stays search; an ordinary question
+/// goes to the Everyday chooser (it went through the Hard chooser, which -
+/// with no Everyday pick of the person's - landed every such follow-up on
+/// the flagship); a code, maths or reasoning turn keeps its task's chooser.
+pub(crate) fn orphaned_followup_model(
+    models: &[crate::flowsta::OnlineModel],
+    prev_model: Option<&str>,
+    prev_task: &str,
+    picks: &OnlinePicks,
+) -> Option<String> {
+    let was_search = prev_model.is_some_and(|m| m.contains("search") || m.contains("sonar"));
+    if was_search {
+        select_online(models, prev_task, true, picks.fresh.as_deref())
+    } else if prev_task == "general" {
+        select_online_everyday(models, picks.everyday.as_deref()).map(|m| m.id.clone())
+    } else {
+        select_online(models, prev_task, false, picks.hard.as_deref())
+    }
+}
+
 async fn pick_online_everyday(pref: Option<&str>) -> Option<(String, crate::model_caps::Caps)> {
     let models = crate::flowsta::list_online_models().await.ok()?;
     let m = select_online_everyday(&models, pref)?;
@@ -1966,9 +1984,27 @@ pub async fn route_with(
 ) -> Result<RouteResult, String> {
     let result = route_inner(app, mode, query, share, task, difficulty, lean, picks, query_vec, agent, plan, turn_tokens, prev).await;
     if let Ok(r) = &result {
-        remember_decision(app, mode, effective_share(app, share).as_str(), task, difficulty, &r.model, &r.reason, r.think);
+        // Agent work routes again on every step of a session (same model,
+        // same reason): one entry per session, until the decision changes.
+        // Every step used to be its own entry - the log (200 entries)
+        // flooded, and Settings' "N in 10 went online" counted steps.
+        if !(agent && repeats_last_agent_decision(plan, &r.model, &r.reason)) {
+            remember_decision(app, mode, effective_share(app, share).as_str(), task, difficulty, &r.model, &r.reason, r.think);
+        }
     }
     result
+}
+
+/// The last agent-work decision recorded (planning and acting kept apart),
+/// and when. A repeat within half an hour is the same session's next step.
+static LAST_AGENT_DECISION: std::sync::Mutex<[Option<(String, String, std::time::Instant)>; 2]> = std::sync::Mutex::new([None, None]);
+
+fn repeats_last_agent_decision(plan: bool, model: &str, reason: &str) -> bool {
+    let mut last = LAST_AGENT_DECISION.lock().unwrap_or_else(|e| e.into_inner());
+    let slot = &mut last[plan as usize];
+    let repeat = slot.as_ref().is_some_and(|(m, r, at)| m == model && r == reason && at.elapsed() < std::time::Duration::from_secs(30 * 60));
+    *slot = Some((model.to_string(), reason.to_string(), std::time::Instant::now()));
+    repeat
 }
 
 /// The dial as Settings has it (for reports).
@@ -2630,6 +2666,7 @@ mod tests {
 
     fn pm(id: &str, name: &str, desc: &str, input: f64, output: f64, search: Option<f64>) -> crate::flowsta::OnlineModel {
         crate::flowsta::OnlineModel {
+            provider: None,
             id: id.to_string(),
             display_name: name.to_string(),
             description: desc.to_string(),
@@ -2640,6 +2677,7 @@ mod tests {
             released: None,
             routing: None,
             pricing: Some(crate::flowsta::OnlinePricing {
+                cache_write_per_mtok: None,
                 input_per_mtok: input,
                 output_per_mtok: output,
                 request_fee_usd: 0.0,
@@ -2806,6 +2844,7 @@ mod tests {
 
     fn om(id: &str, name: &str, desc: &str, search_fee: Option<f64>) -> crate::flowsta::OnlineModel {
         crate::flowsta::OnlineModel {
+            provider: None,
             id: format!("online:{id}"),
             display_name: name.to_string(),
             description: desc.to_string(),
@@ -2816,6 +2855,7 @@ mod tests {
             released: None,
             routing: None,
             pricing: Some(crate::flowsta::OnlinePricing {
+                cache_write_per_mtok: None,
                 input_per_mtok: 1.0,
                 output_per_mtok: 1.0,
                 request_fee_usd: 0.0,
@@ -2834,6 +2874,40 @@ mod tests {
             om("gpt-5.6-terra", "GPT-5.6 Terra", "balanced flagship", None),
             om("sonar", "Sonar", "Perplexity search", Some(0.005)),
         ]
+    }
+
+    #[test]
+    fn an_agent_sessions_steps_are_one_entry_until_the_decision_changes() {
+        assert!(!repeats_last_agent_decision(false, "online:x", "agent work online"), "the first step is recorded");
+        assert!(repeats_last_agent_decision(false, "online:x", "agent work online"), "the same step again is not");
+        assert!(!repeats_last_agent_decision(true, "online:x", "agent work online"), "planning is kept apart");
+        assert!(!repeats_last_agent_decision(false, "online:y", "agent work online"), "a new model is recorded");
+        assert!(!repeats_last_agent_decision(false, "online:y", "fallback"), "a new reason is recorded");
+    }
+
+    #[test]
+    fn a_follow_up_whose_model_left_the_catalog_takes_its_own_slot() {
+        let mut models = catalog();
+        let mut luna = om("gpt-6-luna", "GPT-6 Luna", "everyday", None);
+        if let Some(p) = luna.pricing.as_mut() {
+            p.input_per_mtok = 0.1;
+            p.output_per_mtok = 0.5;
+        }
+        models.push(luna);
+        let picks = OnlinePicks::default();
+        // An ordinary question: the Everyday chooser (the cheapest model),
+        // never the Hard chooser's flagship.
+        let m = orphaned_followup_model(&models, Some("online:gone-everyday"), "general", &picks).unwrap();
+        assert_eq!(m, "online:gpt-6-luna");
+        // The person's Everyday pick wins when it is listed.
+        let picked = OnlinePicks { everyday: Some("online:gpt-5.6-terra".into()), ..Default::default() };
+        assert_eq!(orphaned_followup_model(&models, Some("online:gone"), "general", &picked).unwrap(), "online:gpt-5.6-terra");
+        // A search follow-up stays on a search model.
+        let s = orphaned_followup_model(&models, Some("online:grok-4.6-search"), "general", &picks).unwrap();
+        assert!(s.contains("search") || s.contains("sonar"), "{s}");
+        // A code turn keeps its task's chooser.
+        let c = orphaned_followup_model(&models, Some("online:gone"), "code", &picks).unwrap();
+        assert!(!c.contains("search") && c != "online:gpt-6-luna", "{c}");
     }
 
     #[test]

@@ -6286,8 +6286,7 @@ pub async fn stream_chat_completion(
             );
             "auth_required".to_string()
         })?;
-        client
-            .post(format!("{}/v1/chat/completions", crate::flowsta::proxy_url()))
+        crate::flowsta::with_test_failure(client.post(format!("{}/v1/chat/completions", crate::flowsta::proxy_url())))
             .header("Content-Type", "application/json")
             // The id Stop names, so the service can end the provider call.
             .header("x-yoai-request-id", &request_id)
@@ -6524,6 +6523,25 @@ pub async fn stream_chat_completion(
 
                         // Parse JSON chunk
                         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                            // An error event inside the stream: the provider
+                            // failed after the reply started (the proxy says so
+                            // with a coded error, never as a finished reply), or
+                            // llama-server failed mid-generation. End the turn
+                            // with it - it was read past before, and a cut-off
+                            // reply looked complete.
+                            if let Some(err) = parsed.get("error").filter(|e| !e.is_null()) {
+                                let payload = if err.is_object() {
+                                    err.to_string()
+                                } else {
+                                    serde_json::json!({ "code": "stream_error", "message": err.to_string() }).to_string()
+                                };
+                                log::warn!("[LLM] the stream ended with an error: {}", payload.chars().take(200).collect::<String>());
+                                let _ = app.emit(
+                                    &format!("chat-stream-error-{}", request_id),
+                                    StreamErrorData { error: payload },
+                                );
+                                return Ok(());
+                            }
                             // The provider's backend fingerprint rides on every
                             // chunk (OpenAI-compatible `system_fingerprint`);
                             // keep the first non-empty one for the record.

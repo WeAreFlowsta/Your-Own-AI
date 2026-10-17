@@ -1532,6 +1532,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
       data-testid="chat-message"
       data-role={props.message.role}
       data-state={props.message.isLoading && !props.message.content ? "thinking" : props.message.isLoading ? "streaming" : "done"}
+      data-error={props.message.error ? "1" : "0"}
       data-stopped={props.message.stopped ? "1" : undefined}
       {...(props.message.role === 'assistant' && props.message.content
         ? { 'data-remember-aiid': props.message.model }
@@ -1700,7 +1701,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
 
         {props.message.error && (
           <div class="mt-2 text-red-500 dark:text-red-400 text-sm flex items-center gap-2 pl-2 md:pl-10 lg:pl-10">
-            <span>{props.message.error}</span>
+            <span data-testid="reply-error">{props.message.error}</span>
 
             {props.message.showUpgradeButton &&
               props.onUpgradeClick$ &&
@@ -1720,11 +1721,14 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
                 </button>
               )}
 
+            {/* Retry redoes the turn by this message's id (the chat's own
+                retry); it waited on a field nothing ever set, so no error
+                reply had a working Retry. */}
             {!props.message.showUpgradeButton &&
               props.message.role === 'assistant' &&
-              props.message.originalUserMessageContent &&
               props.onRetry$ && (
                 <button
+                  data-testid="reply-retry"
                   onClick$={() => props.onRetry$!(props.message.originalUserMessageContent)}
                   class="px-2 py-1 text-xs bg-[var(--bg-button-secondary)] hover:bg-[var(--bg-button-secondary-hover)] border border-[var(--border-secondary)] hover:border-[var(--border-secondary-hover)] text-[var(--text-button-secondary)] hover:text-[var(--text-button-secondary-hover)] rounded transition-colors flex-shrink-0"
                 >

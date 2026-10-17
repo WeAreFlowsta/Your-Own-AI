@@ -25,14 +25,18 @@ function reapSidecars() {
   if (process.platform === "win32") return;
   try {
     const bin = resolve(here, "..", "src-tauri", "bin") + "/";
+    // The CUDA engine runs from the scratch profile's engines folder
+    // (YOAI_E2E_WITH_CUDA links it in): its servers are the test's too.
+    const profileBin = PROFILE + "/";
     const appBin = resolve(here, "..", "src-tauri", "target", "debug", "app");
     const rows = execFileSync("ps", ["-eo", "pid=,ppid=,args="], { encoding: "utf8" }).split("\n");
     const parsed = rows.map((r) => r.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)).filter(Boolean) as RegExpMatchArray[];
     const liveApps = new Set(parsed.filter((m) => m[3] === appBin || m[3].startsWith(appBin + " ")).map((m) => m[1]));
     for (const m of parsed) {
       const [, pid, ppid, args] = m;
-      if (args.startsWith(bin) && !liveApps.has(ppid)) {
-        try { process.kill(Number(pid), "SIGTERM"); console.log(`e2e: reaped orphaned sidecar ${pid}: ${args.slice(bin.length, bin.length + 40)}`); } catch { /* gone */ }
+      const from = args.startsWith(bin) ? bin : args.startsWith(profileBin) && /llama-server|holochain|lair-keystore/.test(args.split(" ")[0]) ? profileBin : null;
+      if (from && !liveApps.has(ppid)) {
+        try { process.kill(Number(pid), "SIGTERM"); console.log(`e2e: reaped orphaned sidecar ${pid}: ${args.slice(from.length, from.length + 60)}`); } catch { /* gone */ }
       }
     }
   } catch (e) {
@@ -176,8 +180,11 @@ export const config: WebdriverIO.Config = {
     // Something else on the desktop may have taken focus mid-run.
     activateWindow();
   },
-  onComplete() {
+  async onComplete() {
     idleInhibitor?.kill();
+    // The last session's servers outlive it by a moment: none stays behind.
+    await new Promise((r) => setTimeout(r, 3_000));
+    reapSidecars();
   },
   afterSession() {
     reapSidecars();

@@ -40,7 +40,7 @@ import { resolveRoutingSignals, type RoutingTask } from "../utils/routingTaskCla
 import { responseLengthOptions } from "../data/response-lengths";
 import { getArchetypeById } from "../data/bundled-archetypes";
 import { MISSION_CORE } from "../data/missionCore";
-import { extractOnlineError } from "../utils/onlineErrors";
+import { extractOnlineError, providerErrorText } from "../utils/onlineErrors";
 import {
   getMedicalModel,
   isOnlineMedicalChoice,
@@ -2358,18 +2358,21 @@ export function useChat(props: UseChatProps) {
             state.messages = state.messages.filter((m) => m.id !== assistantId);
             state.error = JSON.stringify(extractOnlineError(errorMsg));
           } else {
+            // A coded provider failure reads as one plain sentence (the error
+            // line keeps its Retry button), never as raw JSON.
+            const shown = providerErrorText(errorMsg) ?? errorMsg;
             state.messages = state.messages.map((m) =>
               m.id === assistantId
                 ? {
                     ...m,
-                    content: `Error: ${errorMsg}`,
-                    error: errorMsg,
+                    content: `Error: ${shown}`,
+                    error: shown,
                     isLoading: false,
                   }
                 : m
             );
             turnOutcome = "error";
-            updateTurn(assistantId, { assistant: { content: `Error: ${errorMsg}`, error: errorMsg, isLoading: false } });
+            updateTurn(assistantId, { assistant: { content: `Error: ${shown}`, error: shown, isLoading: false } });
           }
         }
       } finally {
@@ -2507,6 +2510,12 @@ export function useChat(props: UseChatProps) {
           )
           .catch(() => {});
       }
+    }
+    // The replies being redone leave the turn record too: left there, the
+    // page adopted them back, and a retried error stayed on screen under the
+    // new answer.
+    for (const m of state.messages.slice(messageIndex)) {
+      if (m.role === "assistant" && m.id) dropTurn(m.id);
     }
     state.messages = state.messages.slice(0, messageIndex);
     await sendMessage(userMessage.content, null, undefined, userMessage.images || [], override);

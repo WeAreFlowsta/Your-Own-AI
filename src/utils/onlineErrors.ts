@@ -28,3 +28,33 @@ export function extractOnlineError(
   }
   return null;
 }
+
+/** Provider and service failures (the proxy's coded errors, and the app's
+ *  own for a stream that ended in an error), in plain words for the reply's
+ *  error line - which keeps its Retry button. Before this every one of them
+ *  printed as raw JSON ("Error: {"message":...}"). */
+const PROVIDER_ERROR_TEXT: Record<string, string> = {
+  provider_busy: "The model's provider is busy right now. Try again in a moment.",
+  provider_timeout: "The model's provider didn't answer in time. Try again.",
+  provider_error: "The model's provider had an error. Try again, or pick another model.",
+  provider_model_unavailable: "This model isn't available from its provider right now. Pick another model, or try again later.",
+  provider_not_configured: "This model isn't available right now. Pick another model.",
+  unknown_model: "This model isn't in the online catalog any more. Pick another model.",
+  provider_rejected: "The model's provider refused this request. Try rephrasing it, or pick another model.",
+  provider_stream_failed: "The model stopped partway through the reply. Try again.",
+  stream_error: "The reply stopped partway through. Try again.",
+  rate_limited: "Too many requests in a minute. Wait a moment, then try again.",
+  online_error: "The online model couldn't answer. Try again.",
+};
+
+/** The coded failure in an error string, if it is one we can say plainly. */
+export function providerErrorCode(raw: string): string | null {
+  const m = raw.match(/"code\\?"\s*:\s*\\?"([a-z_]+)/);
+  return m && m[1] in PROVIDER_ERROR_TEXT ? m[1] : null;
+}
+
+/** Plain words for a coded failure; null when the error is not one. */
+export function providerErrorText(raw: string): string | null {
+  const code = providerErrorCode(raw);
+  return code ? PROVIDER_ERROR_TEXT[code] : null;
+}
