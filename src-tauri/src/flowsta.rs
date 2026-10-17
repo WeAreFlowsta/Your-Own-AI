@@ -1142,6 +1142,10 @@ pub struct OnlineModel {
     /// (`owned_by`: openai, google, xai, moonshot, deepseek, ...). A fallback
     /// to "another provider" and the provider-health view key on it.
     pub provider: Option<String>,
+    /// The proxy's health flag right now: "failing" | "slow" (None =
+    /// healthy, or too few calls to say). From the `health` block beside
+    /// `data` in /v1/models.
+    pub health: Option<String>,
 }
 /// A provider in the catalog's providers block (beside `data` in
 /// /v1/models): its name, where the company is based, and whether automatic
@@ -1232,6 +1236,7 @@ async fn fetch_online_models() -> Result<Catalog, String> {
                         }),
                     released: m["released"].as_str().map(str::to_string),
                     provider: m["owned_by"].as_str().filter(|p| !p.is_empty()).map(str::to_string),
+                    health: m["id"].as_str().and_then(|id| v["health"][id].as_str()).filter(|f| !f.is_empty()).map(str::to_string),
                     routing: m["routing"].as_object().map(|r| {
                         let u8_of = |k: &str| r.get("caps").and_then(|c| c.get(k)).and_then(|x| x.as_u64()).map(|x| x.min(10) as u8);
                         let caps = match (u8_of("overall"), u8_of("coding"), u8_of("reasoning"), u8_of("math")) {

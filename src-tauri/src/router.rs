@@ -1181,6 +1181,17 @@ pub(crate) fn auto_switches(
 /// the person picked by name - an explicit pick is theirs to use whatever
 /// the switches say. None when the catalog is unreachable.
 pub(crate) async fn routing_models(app: &AppHandle, picks: &[Option<&str>]) -> Option<Vec<crate::flowsta::OnlineModel>> {
+    routing_models_with(app, picks, false).await
+}
+
+/// routing_models for a single chat turn, without the models the proxy
+/// flags as failing right now (unless picked by name). Agent sessions do
+/// not use it: a health change must not switch a session's model midway.
+pub(crate) async fn routing_models_now(app: &AppHandle, picks: &[Option<&str>]) -> Option<Vec<crate::flowsta::OnlineModel>> {
+    routing_models_with(app, picks, true).await
+}
+
+async fn routing_models_with(app: &AppHandle, picks: &[Option<&str>], skip_failing: bool) -> Option<Vec<crate::flowsta::OnlineModel>> {
     let (models, providers) = crate::flowsta::online_catalog().await.ok()?;
     let (model_switches, provider_switches) = auto_switches(app);
     let paused = paused_models(app);
@@ -1192,6 +1203,7 @@ pub(crate) async fn routing_models(app: &AppHandle, picks: &[Option<&str>]) -> O
             .filter(|m| {
                 picked.contains(&bare(&m.id))
                     || (!paused.contains(&m.id)
+                        && !(skip_failing && m.health.as_deref() == Some("failing"))
                         && auto_allowed(&m.id, m.provider.as_deref(), &model_switches, &provider_switches, &providers))
             })
             .collect(),
@@ -1599,7 +1611,7 @@ async fn local_can_hold(app: &AppHandle, need: u64) -> bool {
 /// An online model whose context holds `need` tokens: the user's slot pick
 /// when it does, else the best general pick among those that do.
 async fn pick_online_holding(app: &AppHandle, need: u64, task: &str, pref: Option<&str>) -> Option<String> {
-    let models = routing_models(app, &[pref]).await?;
+    let models = routing_models_now(app, &[pref]).await?;
     let roomy: Vec<crate::flowsta::OnlineModel> = models
         .into_iter()
         .filter(|m| m.context_window >= need)
@@ -1611,7 +1623,7 @@ async fn pick_online_holding(app: &AppHandle, need: u64, task: &str, pref: Optio
 }
 
 async fn pick_online(app: &AppHandle, task: &str, fresh: bool, pref: Option<&str>) -> Option<String> {
-    let models = routing_models(app, &[pref]).await?;
+    let models = routing_models_now(app, &[pref]).await?;
     select_online(&models, task, fresh, pref)
 }
 
@@ -1652,7 +1664,7 @@ async fn inherit_followup(
             let model = match same {
                 Some(m) => m,
                 None => {
-                    let pool = routing_models(app, &[picks.fresh.as_deref(), picks.everyday.as_deref(), picks.hard.as_deref()]).await?;
+                    let pool = routing_models_now(app, &[picks.fresh.as_deref(), picks.everyday.as_deref(), picks.hard.as_deref()]).await?;
                     orphaned_followup_model(&pool, prev.model.as_deref(), prev_task, picks)?
                 }
             };
@@ -1743,7 +1755,7 @@ pub(crate) fn orphaned_followup_model(
 }
 
 async fn pick_online_everyday(app: &AppHandle, pref: Option<&str>) -> Option<(String, crate::model_caps::Caps)> {
-    let models = routing_models(app, &[pref]).await?;
+    let models = routing_models_now(app, &[pref]).await?;
     let m = select_online_everyday(&models, pref)?;
     Some((m.id.clone(), crate::model_caps::online_caps_of(&m)))
 }
@@ -2173,7 +2185,7 @@ pub async fn online_fallback(
     let (all, _) = crate::flowsta::online_catalog().await.ok()?;
     let bare = |id: &str| id.strip_prefix("online:").unwrap_or(id).to_string();
     let failed_m = all.iter().find(|m| bare(&m.id) == bare(&failed));
-    let pool = routing_models(&app, &[]).await?;
+    let pool = routing_models_now(&app, &[]).await?;
     let task = task.filter(|t| !t.is_empty()).unwrap_or_else(|| "general".to_string());
     let id = fallback_model(&pool, &failed, failed_m, &task, need_tokens.unwrap_or(0), vision.unwrap_or(false))?;
     let name_of = |id: &str| {
@@ -2216,7 +2228,7 @@ pub struct AgentAlternate {
 #[tauri::command]
 pub async fn alternate_online_agent(app: AppHandle) -> Option<AgentAlternate> {
     let pref = agent_online_override().or_else(|| store_pref(&app, "routingOnlineAgent"));
-    let models = routing_models(&app, &[pref.as_deref()]).await?;
+    let models = routing_models_now(&app, &[pref.as_deref()]).await?;
     let failed = select_online_agent(&models, pref.as_deref())?;
     let rest: Vec<crate::flowsta::OnlineModel> =
         models.iter().filter(|m| m.id != failed).cloned().collect();
@@ -2973,6 +2985,7 @@ mod tests {
     fn pm(id: &str, name: &str, desc: &str, input: f64, output: f64, search: Option<f64>) -> crate::flowsta::OnlineModel {
         crate::flowsta::OnlineModel {
             provider: None,
+            health: None,
             id: id.to_string(),
             display_name: name.to_string(),
             description: desc.to_string(),
@@ -3151,6 +3164,7 @@ mod tests {
     fn om(id: &str, name: &str, desc: &str, search_fee: Option<f64>) -> crate::flowsta::OnlineModel {
         crate::flowsta::OnlineModel {
             provider: None,
+            health: None,
             id: format!("online:{id}"),
             display_name: name.to_string(),
             description: desc.to_string(),

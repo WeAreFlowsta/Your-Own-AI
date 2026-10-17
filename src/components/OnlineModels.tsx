@@ -80,6 +80,8 @@ interface OnlineModel {
   routing?: { slots?: string[] } | null;
   /** The provider the proxy sends it to (owned_by). */
   provider?: string | null;
+  /** The proxy's flag right now: "failing" | "slow" (absent = fine). */
+  health?: string | null;
 }
 
 const SORT_OPTIONS = [
@@ -661,6 +663,17 @@ export const OnlineModels = component$(() => {
                         {usable && isPaused && (
                           <span class="px-2 py-0.5 bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] text-[var(--text-muted)] text-[10px] rounded-full font-semibold whitespace-nowrap">
                             Paused
+                          </span>
+                        )}
+                        {usable && (model.health === 'failing' || model.health === 'slow') && (
+                          <span
+                            data-testid="model-health"
+                            class="px-2 py-0.5 bg-amber-900/40 text-amber-300 text-[10px] rounded-full font-semibold whitespace-nowrap"
+                            title={model.health === 'failing'
+                              ? 'Many requests to this model failed in the last few minutes. Automatic routing uses another model while it lasts; a model you picked is still used.'
+                              : 'Slower to start answering than usual in the last few minutes.'}
+                          >
+                            {model.health === 'failing' ? 'Having trouble right now' : 'Slower than usual'}
                           </span>
                         )}
                         {modelGroupKeys(model).map((k) => (
