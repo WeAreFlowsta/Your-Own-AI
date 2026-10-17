@@ -75,7 +75,7 @@ export const ROUTING_SLOTS = [
   { key: "hard", storageKey: "routingOnlineHard", label: "Hard questions", needs: "chat" },
   { key: "fresh", storageKey: "routingOnlineFresh", label: "Needs current information", needs: "search" },
   { key: "agent", storageKey: "routingOnlineAgent", label: "Project work", needs: "tools" },
-  { key: "plan", storageKey: "routingOnlinePlanning", label: "Planning and helper agents", needs: "tools" },
+  { key: "plan", storageKey: "routingOnlinePlanning", label: "Planning", needs: "tools" },
 ] as const;
 export type RoutingSlot = (typeof ROUTING_SLOTS)[number];
 

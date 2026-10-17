@@ -178,16 +178,21 @@ const CLIENT_IDENTIFIER: &str = "your-own-ai";
 /// discovered from the local server's model list. So before starting the
 /// agent, make sure the conversation's AI has an entry - appending a new
 /// `[model.<slug>]` table is valid TOML and leaves the user's file intact.
-/// The harness's subagent model map: general-purpose helpers plan through
-/// the Planning slot (the AI's own routing); explore helpers go to the
-/// device worker when a local model is agent-ready, where the inference
-/// server decides per call whether this device answers (never a load,
-/// never under memory pressure, never beyond the device queue's cap).
+/// The harness's subagent model map, by what each helper does (its own
+/// descriptions): `plan` - "software architect for planning implementation
+/// strategies", read-only - takes the Planning slot (the AI's own routing);
+/// `explore` - read-only searching - goes to the device worker when a local
+/// model is agent-ready, where the inference server decides per call
+/// whether this device answers (never a load, never under memory pressure,
+/// never beyond the device queue's cap); `general-purpose` - the helpers the
+/// agent hands ALL file changes, builds and tests to - is left unmapped, so
+/// it inherits the agent's own model (the Agent slot). Before 10-17 it took
+/// the Planning slot and `plan` the agent's model: the wrong way round.
 pub(crate) fn subagent_models_block(device_workers: bool) -> String {
     if device_workers {
-        "[subagents.models]\n\"general-purpose\" = \"planning\"\n\"explore\" = \"device-worker\"\n".to_string()
+        "[subagents.models]\n\"plan\" = \"planning\"\n\"explore\" = \"device-worker\"\n".to_string()
     } else {
-        "[subagents.models]\n\"general-purpose\" = \"planning\"\n".to_string()
+        "[subagents.models]\n\"plan\" = \"planning\"\n".to_string()
     }
 }
 
@@ -426,6 +431,13 @@ mod tool_result_cap_tests {
         assert!(caps.contains("max_depth = 1\n"));
         assert!(super::subagent_models_block(true).contains("\"explore\" = \"device-worker\""));
         assert!(!super::subagent_models_block(false).contains("explore"));
+        // The planner plans on the Planning slot; the helpers that change
+        // files and run tests inherit the agent's model.
+        for dw in [true, false] {
+            let b = super::subagent_models_block(dw);
+            assert!(b.contains("\"plan\" = \"planning\""));
+            assert!(!b.contains("general-purpose"));
+        }
     }
 
     #[test]

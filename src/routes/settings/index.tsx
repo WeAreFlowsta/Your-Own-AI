@@ -1412,22 +1412,22 @@ export default component$(() => {
                       Project work online
                     </h4>
                     <p class="text-sm text-[var(--text-secondary)] mt-1 mb-3">
-                      Project work routes differently: only models that can drive
-                      tools are ever used, and the model never changes
-                      mid-session. Offline, the most capable tool-driving model
-                      you've downloaded takes it. Online, this one does:
+                      Only models that can drive tools are used, and a session
+                      never changes model midway. Online, these take it; a
+                      helper that searches the project runs on this computer
+                      when a capable model fits (below).
                     </p>
                     <OnlineModelPicker
                       label="Agent work on projects"
-                      hint="The online model that drives tools in project work - only capable ones are listed"
+                      hint="The agent, and the helpers it hands file changes, builds and tests to - only models that can drive tools are listed"
                       recommended={recName("agent")}
                       storageKey="routingOnlineAgent"
                       selected={onlineAgent}
                       models={onlineAgentModels}
                     />
                     <OnlineModelPicker
-                      label="Planning and helper agents"
-                      hint="The online model for the subagents that explore and plan - reasoning-lean, still tool-capable"
+                      label="Planning"
+                      hint="The helper that plans before changes: it reads the project and writes the plan, and changes nothing"
                       recommended={recName("plan")}
                       selected={onlinePlanning}
                       storageKey="routingOnlinePlanning"
