@@ -1313,7 +1313,7 @@ export default component$(() => {
                 </p>
                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-5">
                   {[
-                    { id: "frontier", label: "Frontier-first", hint: "Online unless a model here is better for the question" },
+                    { id: "frontier", label: "Online-first", hint: "Online unless a model here is better for the question" },
                     { id: "balanced", label: "Balanced", hint: "Your device answers when it is nearly as good" },
                     { id: "local", label: "Local-first", hint: "Online only for the live web; hard questions stay home" },
                   ].map((opt) => (

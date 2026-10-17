@@ -55,7 +55,7 @@ export default component$(() => {
         const store = await Store.load("settings.json");
         let dirty = false;
         // 0.7.0: the online dial replaces "eagerness" - privacy became
-        // Local-first, freshness Frontier-first, balanced Balanced. Once.
+        // Local-first, freshness Online-first, balanced Balanced. Once.
         if (localStorage.getItem("routingOnlineShare") === null) {
           const old = localStorage.getItem("smartRoutingEagerness");
           const mapped =

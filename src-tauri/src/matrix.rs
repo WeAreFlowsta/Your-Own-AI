@@ -1497,7 +1497,7 @@ pub async fn leg_components(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<
             }
         }
     } else {
-        sink("embedding model: not installed (memory recall, freshness and the semantic health check are off; Frontier-first stays on the device by design)".into());
+        sink("embedding model: not installed (memory recall, freshness and the semantic health check are off; Online-first stays on the device by design)".into());
     }
     if dir.join(HELPER_FILE).exists() {
         const BASE: &str = "Classify the user's message for model routing. Output exactly TWO words: the TASK then the DIFFICULTY.\nTASK = CODE | MATH | REASONING | GENERAL.\nDIFFICULTY = HARD if it needs a powerful model (complex, multi-step, deep, expert-level); EASY otherwise.";
@@ -1847,7 +1847,7 @@ pub async fn leg_routing(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<Str
                     // it fires only when the registry scores the model that
                     // answers here above the Everyday model on that task (a
                     // coding specialist on the 4060 Ti box kept code home under
-                    // Frontier-first - correct by the rule). The dev battery
+                    // Online-first - correct by the rule). The dev battery
                     // stays strict; the field leg accepts it.
                     if side == "device" && (reason.contains("could not run") || reason.contains("unavailable") || reason.contains("as good for this question")) { None } else { Some(format!("expected {expected_side}, got {side}")) }
                 } else if bucket == "long_turn" && side == "online" && !reason.contains("too long") {
