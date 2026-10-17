@@ -34,7 +34,10 @@ function reapSidecars() {
     const liveApps = new Set(parsed.filter((m) => m[3] === appBin || m[3].startsWith(appBin + " ")).map((m) => m[1]));
     for (const m of parsed) {
       const [, pid, ppid, args] = m;
-      const from = args.startsWith(bin) ? bin : args.startsWith(profileBin) && /llama-server|holochain|lair-keystore/.test(args.split(" ")[0]) ? profileBin : null;
+      // The program is what follows the profile path up to its first space:
+      // the path itself has spaces ("Your Own AI App"), so splitting the whole
+      // line at its first space never saw the program and left servers running.
+      const from = args.startsWith(bin) ? bin : args.startsWith(profileBin) && /llama-server|holochain|lair-keystore/.test(args.slice(profileBin.length).split(" ")[0]) ? profileBin : null;
       if (from && !liveApps.has(ppid)) {
         try { process.kill(Number(pid), "SIGTERM"); console.log(`e2e: reaped orphaned sidecar ${pid}: ${args.slice(from.length, from.length + 60)}`); } catch { /* gone */ }
       }
