@@ -722,7 +722,10 @@ export function useChat(props: UseChatProps) {
         !state.messages.some((m) => m.liveOffer !== undefined) &&
         (() => { try { return localStorage.getItem(`live-offer-off:${selectedAi.id}`) !== "1"; } catch { return true; } })()
       ) {
-        void queryVecPromise
+        // The turn's vector when it is ready soon; else the check embeds the
+        // question itself (the first turn after launch waits on a cold
+        // embedding server, and the line came after the person had moved on).
+        void Promise.race([queryVecPromise, new Promise<null>((r) => setTimeout(() => r(null), 1500))])
           .then((vec) => invoke<boolean>("live_info_need", { text: userInput, queryVec: vec ?? undefined }))
           .then((need) => {
             if (!need) return;

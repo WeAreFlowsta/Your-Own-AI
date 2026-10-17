@@ -1720,16 +1720,29 @@ fn select_online_everyday(
     let cost = |m: &crate::flowsta::OnlineModel| {
         m.pricing.as_ref().map(|p| p.input_per_mtok + p.output_per_mtok)
     };
-    models
-        .iter()
-        .filter(|m| !is_search(m) && cost(m).is_some())
-        .min_by(|a, b| {
-            cost(a)
-                .unwrap_or(f64::MAX)
-                .partial_cmp(&cost(b).unwrap_or(f64::MAX))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .cloned()
+    let cheapest = |pool: Vec<&crate::flowsta::OnlineModel>| {
+        pool.into_iter()
+            .min_by(|a, b| {
+                cost(a)
+                    .unwrap_or(f64::MAX)
+                    .partial_cmp(&cost(b).unwrap_or(f64::MAX))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .cloned()
+    };
+    // The cheapest CAPABLE chat model - on the Chat shelf, 7+ overall - else
+    // the cheapest non-search model at all. Price alone picked a coding-only
+    // model for "why do cats purr" once the everyday tier's other models
+    // were off for automatic routing (fallback e2e, 2026-10-17).
+    let priced: Vec<&crate::flowsta::OnlineModel> = models.iter().filter(|m| !is_search(m) && cost(m).is_some()).collect();
+    cheapest(
+        priced
+            .iter()
+            .copied()
+            .filter(|m| m.categories.iter().any(|c| c == "chat") && crate::model_caps::online_caps_of(m).overall >= 7)
+            .collect(),
+    )
+    .or_else(|| cheapest(priced))
 }
 
 /// The Everyday model and its capability scores (for the as-good rung).
@@ -3512,6 +3525,22 @@ mod tests {
     }
 
     #[test]
+    fn everyday_last_resort_is_a_capable_chat_model_not_the_cheapest_coder() {
+        let mut coder = op("grok-build-0.1", "Grok Build 0.1", "xai", None, 256_000, false, None);
+        coder.categories = vec!["coding".to_string()];
+        coder.pricing.as_mut().unwrap().input_per_mtok = 0.2;
+        let mut muse = op("muse-spark-1.3", "Muse Spark 1.3", "meta", Some("flagship"), 256_000, true, None);
+        muse.routing.as_mut().unwrap().caps = Some([9, 9, 9, 8, 8, 3]);
+        let mut weak = op("tiny-chat", "Tiny Chat", "meta", None, 8_000, false, None);
+        weak.routing = Some(crate::flowsta::OnlineRouting { caps: Some([5, 4, 4, 4, 0, 3]), ..Default::default() });
+        weak.pricing.as_mut().unwrap().input_per_mtok = 0.1;
+        let pool = vec![coder.clone(), muse.clone(), weak.clone()];
+        assert_eq!(select_online_everyday(&pool, None).map(|m| m.id).as_deref(), Some("online:muse-spark-1.3"));
+        // Nothing capable on the Chat shelf: the cheapest at all, as before.
+        assert_eq!(select_online_everyday(&[coder.clone(), weak.clone()], None).map(|m| m.id).as_deref(), Some("online:tiny-chat"));
+    }
+
+    #[test]
     fn fallback_goes_to_another_provider_of_the_same_kind() {
         let luna = op("gpt-6-luna", "GPT-6 Luna", "openai", Some("everyday"), 400_000, true, None);
         let astra = op("gpt-6-astra", "GPT-6 Astra", "openai", Some("flagship"), 400_000, true, None);
@@ -3519,9 +3548,10 @@ mod tests {
         let argon = op("gemini-4-argon", "Gemini 4 Argon", "google", Some("flagship"), 1_000_000, true, None);
         let grok_s = op("grok-4.7-search", "Grok 4.7 (Web)", "xai", Some("search"), 256_000, false, Some(0.005));
         let sonar = op("sonar", "Sonar", "perplexity", Some("search"), 128_000, false, Some(0.005));
-        // The cheapest everyday model, but small and blind.
+        // The cheapest capable everyday model, but small and blind.
         let mut small = op("tiny", "Tiny", "meta", Some("everyday"), 8_000, false, None);
         small.pricing.as_mut().unwrap().input_per_mtok = 0.1;
+        small.routing.as_mut().unwrap().caps = Some([8, 7, 7, 7, 0, 3]);
         let pool = vec![luna.clone(), astra.clone(), flash.clone(), argon.clone(), grok_s.clone(), sonar.clone(), small.clone()];
         // Everyday fails: another provider's everyday model, never the same provider's flagship.
         assert_eq!(fallback_model(&pool, &luna.id, Some(&luna), "general", 1_000, false).as_deref(), Some("online:tiny"));

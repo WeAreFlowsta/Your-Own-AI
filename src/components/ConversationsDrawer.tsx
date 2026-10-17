@@ -16,6 +16,10 @@ interface ConversationsDrawerProps {
   onRename$: QRL<(hash: string, title: string) => void>;
 }
 
+/** Rows drawn when the drawer opens, and how many more as it scrolls. */
+const ROWS_FIRST = 80;
+const ROWS_MORE = 200;
+
 /** Timestamps arrive in microseconds. */
 function toMs(us: number): number {
   return us > 1e14 ? us / 1000 : us;
@@ -58,6 +62,9 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
     const liveAis = new Set(turnsState.turns.filter((t) => isLive(t)).map((t) => t.aiId));
     const stripAtStart = useSignal(true);
     const stripAtEnd = useSignal(false);
+    // Rows drawn so far: the first screens at once, more as the list scrolls
+    // near its end. Drawing a thousand rows held the drawer for seconds.
+    const drawn = useSignal(ROWS_FIRST);
     if (!open) return null;
     // The AIs that have conversations, in list order - the filter row.
     const ais: { id: string; label: string; imageUrl?: string | null }[] = [];
@@ -159,7 +166,12 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
               )}
             </div>
           )}
-          <div class="flex-1 overflow-y-auto py-1">
+          <div
+            class="flex-1 overflow-y-auto py-1"
+            onScroll$={(_, el) => {
+              if (drawn.value < shown.length && el.scrollHeight - el.scrollTop - el.clientHeight < 600) drawn.value += ROWS_MORE;
+            }}
+          >
             {loading && !warming && (
               <p class="px-4 py-3 text-sm text-[var(--text-muted)]">
                 Loading your conversations..
@@ -180,7 +192,7 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
                 pick back up.
               </p>
             )}
-            {shown.map((item) => (
+            {shown.slice(0, drawn.value).map((item) => (
               <div
                 key={item.conversation.hash}
                 data-testid="conversation-item"

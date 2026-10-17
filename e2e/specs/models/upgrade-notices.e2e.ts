@@ -20,9 +20,16 @@ async function firstAi(patch: Record<string, unknown>) {
 
 async function scrollToText(text: string) {
   return browser.execute((t: string) => {
-    const el = [...document.querySelectorAll("h1,h2,h3,h4,p,span,div,label")].find((e) => e.childElementCount === 0 && e.textContent?.includes(t)) as HTMLElement | undefined;
-    el?.scrollIntoView({ block: "center", behavior: "instant" as ScrollBehavior });
-    return !!el;
+    // A text node holding the words (its element may also hold a link).
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node: Node | null;
+    while ((node = walker.nextNode())) {
+      if (node.textContent?.includes(t) && node.parentElement) {
+        node.parentElement.scrollIntoView({ block: "center", behavior: "instant" as ScrollBehavior });
+        return true;
+      }
+    }
+    return false;
   }, text);
 }
 

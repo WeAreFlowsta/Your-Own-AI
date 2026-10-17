@@ -62,6 +62,13 @@ describe("fallback to another provider, and the models automatic routing may use
       const store = await T.store.load(await T.core.invoke("profile_store_path", { name: "ai-data.json" }));
       return (((await store.get("custom-ais")) || []) as { agentPubKey?: string }[]).find((a) => a.agentPubKey)?.agentPubKey ?? "";
     })) as string;
+    // The app records the plan when a page reads the session (the router
+    // keeps everything on the device until it has): the Online Models page.
+    await browser.url("tauri://localhost/online-models/");
+    await browser.waitUntil(async () => browser.execute(async () => {
+      const store = await (window as any).__TAURI__.store.load("settings.json");
+      return (await store.get("onlineEntitled")) === "yes";
+    }), { timeout: 60_000, interval: 1000, timeoutMsg: "the plan was never recorded" });
     models = await invoke<Model[]>("list_online_models");
     providers = await invoke<Provider[]>("list_online_providers");
     console.log(`e2e: ${models.length} online models, providers ${providers.map((p) => `${p.id}${p.auto_default ? "" : " (off)"}`).join(", ")}`);
@@ -77,38 +84,42 @@ describe("fallback to another provider, and the models automatic routing may use
   it("leaves the providers that are off by default out of automatic picks, and an explicit pick still wins", async function () {
     if (!haveIdentity()) this.skip();
     this.timeout(120_000);
-    expect(providers.length).toBeGreaterThan(0);
-    const off = providers.filter((p) => !p.auto_default).map((p) => p.id);
-    console.log(`e2e: off by default: ${off.join(", ")}`);
-    await setAutoAllow(null);
-    const defaults = await invoke<Record<string, string>>("routing_defaults");
-    console.log(`e2e: routing defaults ${JSON.stringify(defaults)}`);
-    for (const [slot, id] of Object.entries(defaults)) {
-      expect({ slot, provider: providerOf(id), off: off.includes(providerOf(id) ?? "") }).toEqual({ slot, provider: providerOf(id), off: false });
+    try {
+      expect(providers.length).toBeGreaterThan(0);
+      const off = providers.filter((p) => !p.auto_default).map((p) => p.id);
+      console.log(`e2e: off by default: ${off.join(", ")}`);
+      await setAutoAllow(null);
+      const defaults = await invoke<Record<string, string>>("routing_defaults");
+      console.log(`e2e: routing defaults ${JSON.stringify(defaults)}`);
+      for (const [slot, id] of Object.entries(defaults)) {
+        expect({ slot, provider: providerOf(id), off: off.includes(providerOf(id) ?? "") }).toEqual({ slot, provider: providerOf(id), off: false });
+      }
+      // The person turns a provider off: its models leave the automatic picks.
+      const everydayProvider = providerOf(defaults.everyday);
+      await setAutoAllow({ providers: { [everydayProvider ?? ""]: false } });
+      const without = await invoke<Record<string, string>>("routing_defaults");
+      console.log(`e2e: with ${everydayProvider} off, everyday -> ${without.everyday}`);
+      expect(providerOf(without.everyday)).not.toBe(everydayProvider);
+      // ...but a model of that provider picked by name is still used.
+      const r = await invoke<{ model: string; reason: string }>("route_model", {
+        mode: "online-offline",
+        query: "write a two-line poem about tea",
+        task: "general",
+        difficulty: "easy",
+        onlineShare: "frontier",
+        onlineEveryday: defaults.everyday,
+      });
+      console.log(`e2e: explicit pick of ${defaults.everyday} -> ${r.model} (${r.reason})`);
+      expect(r.model).toBe(defaults.everyday);
+    } finally {
+      await setAutoAllow(null);
     }
-    // The person turns a provider off: its models leave the automatic picks.
-    const everydayProvider = providerOf(defaults.everyday);
-    await setAutoAllow({ providers: { [everydayProvider ?? ""]: false } });
-    const without = await invoke<Record<string, string>>("routing_defaults");
-    console.log(`e2e: with ${everydayProvider} off, everyday -> ${without.everyday}`);
-    expect(providerOf(without.everyday)).not.toBe(everydayProvider);
-    // ...but a model of that provider picked by name is still used.
-    const r = await invoke<{ model: string; reason: string }>("route_model", {
-      mode: "online-offline",
-      query: "write a two-line poem about tea",
-      task: "general",
-      difficulty: "easy",
-      onlineShare: "frontier",
-      onlineEveryday: defaults.everyday,
-    });
-    console.log(`e2e: explicit pick of ${defaults.everyday} -> ${r.model} (${r.reason})`);
-    expect(r.model).toBe(defaults.everyday);
-    await setAutoAllow(null);
   });
 
   it("shows the list in Settings and the switch and Use for on each Online Models card", async function () {
     if (!haveIdentity()) this.skip();
     this.timeout(180_000);
+    await setAutoAllow(null);
     await browser.url("tauri://localhost/settings/");
     await (await $('[data-testid="auto-routing-models"]')).waitForDisplayed({ timeout: 60_000 });
     const rows = (await browser.execute(() =>

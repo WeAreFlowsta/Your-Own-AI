@@ -32,11 +32,13 @@ async function newChat() {
   await waitForChat();
 }
 
-/** The reply, then a moment for the check that runs beside it. */
-async function answered(q: string) {
+/** The reply, then the line: waited for when it should come, a few seconds
+ *  of quiet when it should not. */
+async function answered(q: string, expectLine = true) {
   await ask(q);
   await waitForReplyDone(300_000);
-  await browser.pause(2_500);
+  if (expectLine) await browser.waitUntil(async () => !!(await offer()), { timeout: 30_000, interval: 500 }).catch(() => {});
+  else await browser.pause(5_000);
   return offer();
 }
 
@@ -70,7 +72,7 @@ describe("a question about now, on an AI that can't look it up", () => {
     await shot("live-offer-no-plan");
 
     // The same conversation, another question about now: no second offer.
-    const second = await answered("And what's the forecast for tomorrow there?");
+    const second = await answered("And what's the forecast for tomorrow there?", false);
     console.log(`e2e: second live question ${JSON.stringify(second)}`);
     expect(second).toBeNull();
   });
@@ -78,7 +80,7 @@ describe("a question about now, on an AI that can't look it up", () => {
   it("never offers online for a health question", async function () {
     this.timeout(600_000);
     await newChat();
-    const health = await answered("What's the latest advice today on blood pressure medication?");
+    const health = await answered("What's the latest advice today on blood pressure medication?", false);
     console.log(`e2e: health question ${JSON.stringify(health)}`);
     expect(health).toBeNull();
   });
@@ -105,7 +107,7 @@ describe("a question about now, on an AI that can't look it up", () => {
     });
     await browser.waitUntil(async () => (await offer()) === null, { timeout: 10_000, timeoutMsg: "the live offer stayed" });
     await newChat();
-    const after = await answered("What's the weather today in Chicago?");
+    const after = await answered("What's the weather today in Chicago?", false);
     console.log(`e2e: after don't ask again ${JSON.stringify(after)}`);
     expect(after).toBeNull();
   });
