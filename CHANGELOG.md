@@ -24,6 +24,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - **Signing in is one step at a time.** See plans opens the dashboard
   already signed in, a closed Vault gets an Open button instead of
   "get it", and nothing restarts without asking. (Flowsta)
+- **Online models that keep answering.** When a model's provider is busy
+  or down, the question goes to another provider you allow; Settings
+  lists the models routing may use, by provider, and shows where your
+  answers came from. (Online models)
 
 ### Devices
 - Signing in on another device shows what is syncing in the activity
@@ -81,6 +85,40 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - A question about a page you shared is answered in the chat; Dig deeper
   hands it to an agent with the web allowed.
 
+### Online models
+- When an online model's provider is busy, erroring or not answering
+  before its first word, the question goes once to a model of the same
+  kind from another provider; the reply's model note says which and why.
+  An AI set to one online model is never switched: its error offers the
+  other model beside Retry.
+- Settings › Routing lists the models automatic routing may use, grouped
+  by provider with where each is based. DeepSeek, Moonshot AI, Qwen and
+  Z.ai start off. A model you pick by name is used either way.
+- Each card on the Online Models page has the same switch, a Use for
+  menu, and labels for what routing uses the model for.
+- A model that is failing for many people right now is left out of
+  automatic picks until it recovers, and its card says so.
+- Where your answers came from: Settings shows your recent questions by
+  where they were answered, and this plan period's online cost by kind
+  of model.
+- A provider's failure reads as one plain sentence, and Retry asks the
+  question once.
+
+### Routing
+- A question about now on an AI that can't look things up (Offline Only,
+  or no plan) gets one line above the message box saying the answer may
+  be out of date, with the way to look it up online on a plan.
+- The check for questions that need current information was rebuilt for
+  the new memory component and catches far more of them, on every
+  routing setting.
+- Settings › Routing has two parts, Offline models and Online models.
+  Choosing a model, health questions and project work on your server
+  show without a plan. The dial's first option is now Online-first.
+- In projects, the helper that plans uses the Planning model, and the
+  helpers that change files and run tests use the agent's model.
+- Offers of online models link to the Online Models page, say the plan
+  is optional, and put the offline fix first.
+
 ### Flowsta
 - See plans opens yourownai.net signed in as you, with this computer
   linked to your plan, and the dashboard says who is signed in.
@@ -131,6 +169,17 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - Welcome wizard: the AI cards keep their order and names while they are
   set up, and step 1 continues a download instead of starting it again.
 - A reply lost to a duplicated request ends the turn instead of hanging.
+- A reply left mid-way with New is recorded in its own conversation, and
+  the next question starts a new one.
+- The activity tray lists only replies you did not see finish, and its
+  download rows follow every update to the end (an engine download showed
+  11% after it had installed). The NVIDIA engine and the Projects helper
+  say when they are installed.
+- The NVIDIA engine offer and Settings show the real download size.
+- The conversations drawer opens quickly with a thousand conversations.
+- Online models are named by their catalog name in the model menu.
+- Pausing an online model keeps automatic routing from using it, as its
+  button says.
 
 ## [0.8.1] - 2026-09-30
 
