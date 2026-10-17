@@ -54,7 +54,7 @@ export function labelForFile(filename: string): string {
   if (f.startsWith("llama-server-cuda-")) return "CUDA engine";
   if (f.startsWith("your-own-ai-build-")) return "Projects helper";
   if (f.includes("mmproj")) return "Vision add-on";
-  if (f.startsWith("bge-")) return "Memory model";
+  if (f.startsWith("bge-") || f.includes("embeddinggemma")) return "Memory model";
   for (const family of modelFamilies) {
     for (const v of family.variants) {
       if (v.filename === filename) return family.name;

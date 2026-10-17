@@ -241,6 +241,12 @@ function getUserFriendlyErrorMessage(error: unknown): string {
   return errorMessage.startsWith('Download Failed:') ? errorMessage : `Download Failed: ${errorMessage}`;
 }
 
+
+/** A progress bar's width, read on every draw (a plain call): a bare
+ *  template stays bound to the object it was first drawn with, and these
+ *  objects are rebuilt on every progress event (tray, 10-17). */
+const barWidth = (percent: number | null | undefined): string => `${Math.max(0, Math.min(100, percent ?? 0))}%`;
+
 export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo }) => {
   const aiData = useAiData();
   const {
@@ -1622,7 +1628,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                   <div class="w-full bg-[var(--border-subtle)] rounded-full h-2 overflow-hidden mb-1">
                     <div
                       class="bg-blue-600 h-full transition-all duration-300"
-                      style={{ width: `${download.progress.percent}%` }}
+                      style={{ width: barWidth(download.progress.percent) }}
                     />
                   </div>
                   <p class="text-xs text-[var(--text-muted)] text-center">

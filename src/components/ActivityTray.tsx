@@ -169,17 +169,32 @@ export const ActivityTray = component$(() => {
         remove(id);
         return;
       }
-      // The NVIDIA engine is unpacked and put in use next (engine-installed).
-      if (e.payload.filename.toLowerCase().startsWith("llama-server-cuda-")) {
+      // The NVIDIA engine and the Projects helper are unpacked next
+      // (engine-installed / build-install-done).
+      const fl = e.payload.filename.toLowerCase();
+      if (fl.startsWith("llama-server-cuda-") || fl.startsWith("your-own-ai-build-")) {
         upsert(id, { kind: "download", title: downloadTitle(e.payload.filename), percent: null, state: "running", detail: "Installing..." });
         return;
       }
       upsert(id, { kind: "download", title: downloadTitle(e.payload.filename), percent: 100, state: "done", detail: "Downloaded" });
       linger(id, LINGER_MS);
     });
-    // The NVIDIA engine: after its download it is unpacked and put in use.
-    // The row says so, not "Downloaded" while the offer says "Installing".
+    // The NVIDIA engine and the Projects helper are unpacked and put in use
+    // after their download. The row says so, not "Downloaded" while the
+    // page beside it says "Installing".
     const engineRow = () => store.rows.find((r) => r.id.startsWith("dl:llama-server-cuda-"))?.id;
+    const helperRow = () => store.rows.find((r) => r.id.startsWith("dl:your-own-ai-build-"))?.id;
+    const unHelperDone = await listen("build-install-done", () => {
+      const id = helperRow();
+      if (!id) return;
+      upsert(id, { kind: "download", title: "Projects helper", percent: 100, state: "done", detail: "Installed - open a project folder to use it" });
+      linger(id, LINGER_MS);
+    });
+    const unHelperFailed = await listen<{ error?: string }>("build-install-failed", (e) => {
+      const id = helperRow();
+      if (!id) return;
+      upsert(id, { kind: "download", title: "Projects helper", state: "error", detail: e.payload?.error ?? "The install did not finish" });
+    });
     const unEngineDone = await listen("engine-installed", () => {
       const id = engineRow();
       if (!id) return;
@@ -307,6 +322,8 @@ export const ActivityTray = component$(() => {
       unFailed();
       unEngineDone();
       unEngineFailed();
+      unHelperDone();
+      unHelperFailed();
       unCorpus();
       unCards();
       window.removeEventListener(ACTIVITY_EVENT, onNote);
@@ -409,14 +426,14 @@ export const ActivityTray = component$(() => {
                 <span class="text-sm font-medium text-[var(--text-primary)]">Downloading vision model</span>
               </div>
               <p class="text-xs text-[var(--text-muted)] mb-1.5 truncate">
-                {visFile?.label}
-                {vis.files.length > 1 ? ` (${vis.currentIndex + 1} of ${vis.files.length})` : ""}
+                {drawn(visFile?.label)}
+                {drawn(vis.files.length > 1 ? ` (${vis.currentIndex + 1} of ${vis.files.length})` : "")}
               </p>
               <div class="w-full h-2 rounded-full bg-[var(--bg-main)] overflow-hidden">
-                <div class="h-full bg-[var(--bg-button-primary)] transition-all duration-200" style={{ width: `${vis.percent}%` }} />
+                <div class="h-full bg-[var(--bg-button-primary)] transition-all duration-200" style={{ width: drawn(`${vis.percent}%`) }} />
               </div>
               <p class="text-xs text-[var(--text-muted)] mt-1">
-                {vis.percent}%{vis.total ? ` · ${formatBytes(vis.downloaded)} of ${formatBytes(vis.total)}` : ""}
+                {drawn(`${vis.percent}%${vis.total ? ` · ${formatBytes(vis.downloaded)} of ${formatBytes(vis.total)}` : ""}`)}
               </p>
             </>
           )}
