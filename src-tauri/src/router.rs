@@ -2032,6 +2032,83 @@ pub fn routing_online_share_recent(app: AppHandle) -> OnlineShareRecent {
     OnlineShareRecent { online, total }
 }
 
+#[derive(serde::Serialize, Default, Clone, Copy)]
+pub struct BreakdownGroup {
+    pub requests: u64,
+    pub cost_usd: f64,
+}
+
+/// "Where your answers came from" (Settings > Routing): the last decisions
+/// on this computer, and this plan period's online use by kind of model.
+#[derive(serde::Serialize, Default)]
+pub struct RoutingBreakdown {
+    /// The last routing decisions here (up to the log's 200).
+    pub recent_total: u32,
+    pub recent_device: u32,
+    pub recent_server: u32,
+    pub recent_online: u32,
+    /// This period online, from the proxy's per-model totals.
+    pub everyday: BreakdownGroup,
+    pub strong: BreakdownGroup,
+    pub search: BreakdownGroup,
+    /// At list prices, the period's everyday and strong questions all on
+    /// the strongest model: an ESTIMATE (caching, reasoning and answer
+    /// length change real costs), shown only labelled as one.
+    pub estimate_all_strong_usd: Option<f64>,
+    pub strongest_name: Option<String>,
+}
+
+/// The kind of model, for the breakdown: search, everyday (the catalog's
+/// everyday tier), else strong.
+fn breakdown_kind(m: Option<&crate::flowsta::OnlineModel>) -> &'static str {
+    match m {
+        Some(m) if is_search_model(m) => "search",
+        Some(m) if m.routing.as_ref().and_then(|r| r.tier.as_deref()) == Some("everyday") => "everyday",
+        _ => "strong",
+    }
+}
+
+#[tauri::command]
+pub async fn routing_breakdown(app: AppHandle) -> RoutingBreakdown {
+    let mut out = RoutingBreakdown::default();
+    for d in read_routing_log(&app) {
+        out.recent_total += 1;
+        match d.side.as_str() {
+            "online" => out.recent_online += 1,
+            "server" => out.recent_server += 1,
+            _ => out.recent_device += 1,
+        }
+    }
+    let Ok(Some(usage)) = crate::flowsta::flowsta_usage(app.clone()).await else { return out };
+    let catalog = crate::flowsta::list_online_models().await.unwrap_or_default();
+    let find = |id: &str| catalog.iter().find(|m| m.id.strip_prefix("online:").unwrap_or(&m.id) == id.strip_prefix("online:").unwrap_or(id));
+    let strongest = routing_models(&app, &[]).await.and_then(|pool| select_online(&pool, "general", false, None)).and_then(|id| find(&id).cloned());
+    let mut est = 0.0f64;
+    let mut est_tokens = 0u64;
+    for (id, u) in &usage.by_model {
+        let kind = breakdown_kind(find(id));
+        let g = match kind {
+            "search" => &mut out.search,
+            "everyday" => &mut out.everyday,
+            _ => &mut out.strong,
+        };
+        g.requests += u.requests;
+        g.cost_usd += u.cost_usd;
+        if kind != "search" {
+            if let Some(p) = strongest.as_ref().and_then(|s| s.pricing.as_ref()) {
+                est += (u.input_tokens as f64 * p.input_per_mtok + u.output_tokens as f64 * p.output_per_mtok) / 1e6
+                    + u.requests as f64 * p.request_fee_usd;
+                est_tokens += u.input_tokens + u.output_tokens;
+            }
+        }
+    }
+    if est_tokens > 0 {
+        out.estimate_all_strong_usd = Some((est * 100.0).round() / 100.0);
+        out.strongest_name = strongest.map(|s| s.display_name);
+    }
+    out
+}
+
 static RECENT_DECISIONS: std::sync::OnceLock<std::sync::Mutex<std::collections::VecDeque<RoutingDecision>>> =
     std::sync::OnceLock::new();
 

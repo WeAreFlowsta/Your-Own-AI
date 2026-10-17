@@ -734,6 +734,15 @@ pub async fn flowsta_session(app: tauri::AppHandle) -> Result<FlowstaSession, St
     session_from_store(&app).await
 }
 
+/// One model's use this plan period (the period's per-model totals).
+#[derive(Debug, serde::Serialize, Clone, Default)]
+pub struct ModelUsage {
+    pub requests: u64,
+    pub cost_usd: f64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
 /// This month's online usage against the plan allowance, for the Settings
 /// account card and the optional header ticker. None when signed out or the
 /// proxy is unreachable - display surfaces simply hide.
@@ -753,6 +762,10 @@ pub struct UsageSummary {
     /// the allowance until it is paid. Absent on older proxies.
     #[serde(default)]
     pub overage_hold: Option<OverageHold>,
+    /// This period per model ("<id>" without "online:"): requests, cost,
+    /// tokens. Empty on older proxies and for usage before 2026-10-17.
+    #[serde(default)]
+    pub by_model: std::collections::HashMap<String, ModelUsage>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -793,6 +806,24 @@ pub async fn flowsta_usage(app: tauri::AppHandle) -> Result<Option<UsageSummary>
         overage_opt_in: v["overage_opt_in"].as_bool().unwrap_or(false),
         requests: v["requests"].as_u64().unwrap_or(0),
         overage_hold: serde_json::from_value::<Option<OverageHold>>(v["overage_hold"].clone()).unwrap_or(None),
+        by_model: v["by_model"]
+            .as_object()
+            .map(|o| {
+                o.iter()
+                    .map(|(id, u)| {
+                        (
+                            id.clone(),
+                            ModelUsage {
+                                requests: u["requests"].as_u64().unwrap_or(0),
+                                cost_usd: u["cost_usd"].as_f64().unwrap_or(0.0),
+                                input_tokens: u["input_tokens"].as_u64().unwrap_or(0),
+                                output_tokens: u["output_tokens"].as_u64().unwrap_or(0),
+                            },
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
     }))
 }
 

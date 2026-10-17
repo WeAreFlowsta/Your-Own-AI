@@ -126,6 +126,15 @@ describe("fallback to another provider, and the models automatic routing may use
     });
     await browser.pause(600);
     await shot("routing-list-settings");
+    // Where answers came from: the last decisions here and this period online.
+    const breakdown = await browser.execute(() => {
+      const d = document.querySelector('[data-testid="routing-breakdown"]') as HTMLDetailsElement | null;
+      if (d) { d.open = true; d.scrollIntoView({ block: "center", behavior: "instant" as ScrollBehavior }); }
+      return d?.innerText ?? "";
+    });
+    console.log(`e2e: breakdown ${JSON.stringify(breakdown)}`);
+    await browser.pause(400);
+    await shot("routing-breakdown");
     await browser.url("tauri://localhost/online-models/");
     await browser.waitUntil(async () => browser.execute(() => document.querySelectorAll('[data-testid="model-auto-switch"]').length > 0), { timeout: 60_000, timeoutMsg: "no Auto switch on the cards" });
     await browser.pause(1_000);

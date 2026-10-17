@@ -47,6 +47,7 @@ import {
 } from "../../utils/agentPermissions";
 import { LuChevronDown, LuChevronLeft } from "@qwikest/icons/lucide";
 import { AutoRoutingModels } from "../../components/AutoRoutingModels";
+import { RoutingBreakdown } from "../../components/RoutingBreakdown";
 import { AUTO_ROUTING_CHANGED } from "../../utils/autoRouting";
 
 /** One "which online model answers" row: label + recommended-or-override
@@ -1332,6 +1333,8 @@ export default component$(() => {
                     </button>
                   ))}
                 </div>
+
+                <RoutingBreakdown />
 
                 {/* Health questions: always answered on the device; this
                     picks WHICH installed model answers them. Starts as the
