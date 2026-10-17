@@ -1475,7 +1475,11 @@ export default component$(() => {
                 <OnlineModelPicker
                   label="Hard questions"
                   hint="Deep reasoning, tricky code, complex math"
-                  recommended={`${recName("hard_code")} for technical, ${recName("hard_general")} otherwise`}
+                  recommended={
+                    recName("hard_code") === recName("hard_general")
+                      ? recName("hard_code")
+                      : `${recName("hard_code")} for technical, ${recName("hard_general")} otherwise`
+                  }
                   storageKey="routingOnlineHard"
                   selected={onlineHard}
                   models={onlineModels}

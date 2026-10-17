@@ -90,6 +90,19 @@ export const ModelChip = component$<ModelChipProps>((props) => {
     fits: {} as FitMap,
   });
 
+  // An online model's name comes from the catalog (Rust caches it): fetch it
+  // once when the chip shows one, so the label is right before any open.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    const id = track(() => current.value);
+    if (!id.startsWith('online:') || store.onlineModels.length) return;
+    refreshOnlineModels()
+      .then((m) => {
+        store.onlineModels = m;
+      })
+      .catch(() => {});
+  });
+
   const load = $(async () => {
     if (store.loading) return;
     store.loading = true;
@@ -166,7 +179,11 @@ export const ModelChip = component$<ModelChipProps>((props) => {
           }
         }}
       >
-        <span class="truncate">{formatModelForCard(current.value)}</span>
+        <span class="truncate">
+          {/* An online model by its catalog name ("GPT-6 Luna", not "Gpt 6 Luna"). */}
+          {(current.value.startsWith('online:') && (store.onlineModels.find((m) => m.id === current.value)?.display_name ?? getCachedModels().online?.find((m) => m.id === current.value)?.display_name)) ||
+            formatModelForCard(current.value)}
+        </span>
         <LuChevronDown class="w-3 h-3 flex-shrink-0" />
       </button>
       {open.value && (
