@@ -1065,21 +1065,449 @@ export default component$(() => {
                 <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela mb-2">
                   Routing
                 </h2>
-                <p class="text-sm text-[var(--text-secondary)] mb-1">
-                  How the Auto modes pick a model for each question. AIs set to a
-                  specific model are never affected.
+                <p class="text-sm text-[var(--text-secondary)] mb-5">
+                  How the Auto modes pick a model for each question. Offline
+                  routing chooses among the models on this computer; online
+                  routing decides when a question goes to an online model, and
+                  which one. AIs set to a specific model are never routed. You
+                  don't need to change anything here.
                 </p>
-                <p class="text-sm text-[var(--text-primary)] mb-4">
-                  Auto picks the best model that runs well on this machine, and
-                  an "Online and Offline" AI answers with a frontier online model
-                  unless your device is better for the question. Over time it
-                  learns from what you do with answers - Redo on your device, Try
-                  this answer online, regenerate - and nudges its choices by at
-                  most a point, never for health questions. You don't need to
-                  change anything here - the rest of this section is for when you
-                  want to.
+
+                {/* Offline routing: for everyone, both Auto modes. */}
+                <h3 class="text-lg font-semibold text-[var(--text-primary)]">
+                  Offline models
+                </h3>
+                <p class="text-sm text-[var(--text-secondary)] mt-1 mb-4">
+                  The models on this computer, from the Offline Models page.
+                  Both Auto modes - Offline Only and Online and Offline - pick
+                  from them.
                 </p>
-                <p class="text-xs text-[var(--text-muted)] -mt-2 mb-4">
+                {/* Biases the fit-aware offline pick. */}
+                <h4 class="text-base font-semibold text-[var(--text-primary)]">
+                  Choosing a model
+                </h4>
+                <p class="text-sm text-[var(--text-secondary)] mt-1 mb-3">
+                  What the pick leans toward among the models you've downloaded.
+                </p>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2">
+                  {[
+                    { id: "speed", label: "Prefer fastest", hint: "Measured speed on this computer wins; until measured, a model that fits fully on your GPU" },
+                    { id: "balanced", label: "Balanced", hint: "Best capability that still runs well" },
+                    { id: "quality", label: "Prefer strongest", hint: "The most capable model, even if slower" },
+                  ].map((opt) => (
+                    <button
+                      key={opt.id}
+                      onClick$={() => setLean(opt.id as "speed" | "balanced" | "quality")}
+                      class={`text-left rounded-xl p-3 border transition-colors ${
+                        routingLean.value === opt.id
+                          ? "bg-[var(--bg-button-primary)] text-[var(--text-button-primary)] border-[var(--border-subtle)]"
+                          : "bg-[var(--bg-main)] text-[var(--text-primary)] border-[var(--border-subtle)] hover:opacity-90"
+                      }`}
+                      aria-pressed={routingLean.value === opt.id}
+                    >
+                      <div class="font-semibold text-sm">{opt.label}</div>
+                      <div
+                        class={`text-xs mt-1 ${
+                          routingLean.value === opt.id ? "" : "text-[var(--text-secondary)]"
+                        }`}
+                      >
+                        {opt.hint}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                <p class="text-xs text-[var(--text-muted)] mb-5">
+                  Tip: pausing a model on the Offline Models page also removes it
+                  from the Auto pool.
+                </p>
+
+                {/* Health questions: always answered on the device; this
+                    picks WHICH installed model answers them. Starts as the
+                    first model downloaded; installing a medical specialist
+                    asks once whether to switch (never a silent hijack). */}
+                {installedChatModels.value.length > 0 && (
+                  <>
+                    <h4 class="text-base font-semibold text-[var(--text-primary)]">
+                      Health questions
+                    </h4>
+                    <p class="text-sm text-[var(--text-secondary)] mt-1 mb-2">
+                      Health questions stay on your device. This chooses which
+                      model answers them - a medical model gives more grounded
+                      health answers when you have one.
+                      {onlineEntitled.value &&
+                        " Choosing an online model is possible too: each health question then asks before anything leaves your device."}
+                    </p>
+                    <div class="relative inline-block mb-2">
+                      <button
+                        type="button"
+                        onClick$={() => { medicalPickerOpen.value = !medicalPickerOpen.value; }}
+                        class="flex items-center justify-between gap-2 min-w-[16rem] px-3 py-2 rounded-xl text-sm bg-[var(--bg-main)] text-[var(--text-primary)] border border-[var(--border-subtle)] hover:opacity-90 focus:outline-none"
+                      >
+                        <span class="truncate">
+                          {medicalModel.value.startsWith("online:")
+                            ? (onlineModelIds.value.find((m) => m.id === medicalModel.value)?.name ??
+                              medicalModel.value.replace(/^online:/, "")) + " (online)"
+                            : medicalModel.value.replace(/\.gguf$/i, "") +
+                              (isMedicalSpecialist(medicalModel.value) ? " (medical)" : "")}
+                        </span>
+                        <LuChevronDown class="w-4 h-4 text-[var(--text-muted)] flex-shrink-0" />
+                      </button>
+                      {medicalPickerOpen.value && (
+                        <>
+                          <div class="fixed inset-0 z-40" onClick$={() => { medicalPickerOpen.value = false; }} />
+                          <div class="absolute left-0 top-full mt-1 min-w-[16rem] max-h-64 overflow-y-auto z-50 rounded-lg bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] shadow-xl py-1">
+                            <div class="px-3 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+                              On your device
+                            </div>
+                            {installedChatModels.value.map((name) => (
+                              <button
+                                key={name}
+                                type="button"
+                                onClick$={async () => {
+                                  medicalModel.value = name;
+                                  medicalPickerOpen.value = false;
+                                  await setMedicalModel(name);
+                                }}
+                                class={`block w-full text-left px-3 py-1.5 text-sm hover:bg-[var(--bg-card)] transition-colors ${
+                                  medicalModel.value === name
+                                    ? "text-[var(--text-primary)] font-medium"
+                                    : "text-[var(--text-secondary)]"
+                                }`}
+                              >
+                                {name.replace(/\.gguf$/i, "") + (isMedicalSpecialist(name) ? "  (medical)" : "")}
+                              </button>
+                            ))}
+                            {onlineEntitled.value && onlineModelIds.value.length > 0 && (
+                              <>
+                                <div class="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)] border-t border-[var(--border-subtle)] mt-1">
+                                  Online - asks before each question
+                                </div>
+                                {onlineModelIds.value.map((m) => (
+                                  <button
+                                    key={m.id}
+                                    type="button"
+                                    onClick$={async () => {
+                                      medicalModel.value = m.id;
+                                      medicalPickerOpen.value = false;
+                                      await setMedicalModel(m.id);
+                                    }}
+                                    class={`block w-full text-left px-3 py-1.5 text-sm hover:bg-[var(--bg-card)] transition-colors ${
+                                      medicalModel.value === m.id
+                                        ? "text-[var(--text-primary)] font-medium"
+                                        : "text-[var(--text-secondary)]"
+                                    }`}
+                                  >
+                                    {m.name}
+                                  </button>
+                                ))}
+                              </>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                    {medicalModel.value.startsWith("online:") && (
+                      <p class="text-xs text-[var(--text-muted)] mb-5">
+                        {medicalOnlineAlwaysSig.value ? (
+                          <>
+                            Sending health questions online without asking
+                            (you chose "always").{" "}
+                            <button
+                              class="underline"
+                              onClick$={() => {
+                                setMedicalOnlineAlways(false);
+                                medicalOnlineAlwaysSig.value = false;
+                              }}
+                            >
+                              Ask again each time
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            Each health question shows a card before it goes
+                            online - answer on your device stays one tap away.
+                          </>
+                        )}
+                      </p>
+                    )}
+                    {!medicalModel.value.startsWith("online:") && <span class="block mb-3" />}
+                  </>
+                )}
+
+                {buildInstalled.value && (
+                  <>
+                    <div class="mt-5">
+                      <h4 class="text-base font-semibold text-[var(--text-primary)]">Project work and your server</h4>
+                      <p class="text-xs text-[var(--text-secondary)] mt-1 mb-2">
+                        With a server connected (Engines): let the stronger model win, keep project work
+                        here, or send it to your server whenever it answers. Chat keeps the Auto rule.
+                      </p>
+                      <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        {[
+                          { id: "auto", label: "Auto", hint: "The stronger model for the job wins" },
+                          { id: "device", label: "This computer", hint: "Never the server" },
+                          { id: "server", label: "Your server", hint: "Whenever it answers and its window fits the session" },
+                        ].map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            onClick$={async () => {
+                              projectServerPref.value = opt.id;
+                              localStorage.setItem("projectServerPref", opt.id);
+                              try {
+                                const { Store } = await import("@tauri-apps/plugin-store");
+                                const store = await Store.load("settings.json");
+                                await store.set("projectServerPref", opt.id);
+                                await store.save();
+                              } catch { /* store mirror is best-effort */ }
+                            }}
+                            class={`text-left rounded-xl p-3 border transition-colors ${
+                              projectServerPref.value === opt.id
+                                ? "bg-[var(--bg-button-primary)] text-[var(--text-button-primary)] border-[var(--border-subtle)]"
+                                : "bg-[var(--bg-main)] text-[var(--text-primary)] border-[var(--border-subtle)] hover:opacity-90"
+                            }`}
+                            aria-pressed={projectServerPref.value === opt.id}
+                          >
+                            <div class="font-semibold text-sm">{opt.label}</div>
+                            <div class={`text-xs mt-1 ${projectServerPref.value === opt.id ? "" : "text-[var(--text-secondary)]"}`}>
+                              {opt.hint}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                <div class="border-t border-[var(--border-subtle)] my-5" />
+
+                {/* Online routing: only OFFERED with a plan - a door line
+                    otherwise (settings already made keep working; billing is
+                    enforced per request). */}
+                <h3 class="text-lg font-semibold text-[var(--text-primary)]">
+                  Online models
+                </h3>
+                {!onlineEntitled.value ? (
+                  <p class="text-sm text-[var(--text-secondary)] mt-1">
+                    With a plan, Auto - Online and Offline sends a question
+                    online when an online model answers it better, and keeps
+                    the rest on your device. Plans are an optional paid
+                    service; everything offline stays free.{' '}
+                    <a href="/online-models" class="text-[var(--text-link)] hover:underline">See online models</a>
+                  </p>
+                ) : (
+                <>
+                <p class="text-sm text-[var(--text-secondary)] mt-1">
+                  Only for AIs set to "Auto - Online and Offline". Health
+                  questions always stay on your device, and "Offline Only" AIs
+                  never go online.
+                </p>
+                {/* The one online dial. */}
+                <h4 class="text-base font-semibold text-[var(--text-primary)] mt-5">
+                  How much goes online
+                </h4>
+                <p class="text-sm text-[var(--text-secondary)] mt-1 mb-3">
+                  {shareRecent.value && shareRecent.value.total >= 5
+                    ? `About ${Math.round((10 * shareRecent.value.online) / shareRecent.value.total)} in 10 of your recent questions went online.`
+                    : "Where an ordinary question is answered. Questions that need the live web always go online; health questions never do."}
+                </p>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-5">
+                  {[
+                    { id: "frontier", label: "Frontier-first", hint: "Online unless a model here is better for the question" },
+                    { id: "balanced", label: "Balanced", hint: "Your device answers when it is nearly as good" },
+                    { id: "local", label: "Local-first", hint: "Online only for the live web; hard questions stay home" },
+                  ].map((opt) => (
+                    <button
+                      key={opt.id}
+                      onClick$={() => setShare(opt.id as "frontier" | "balanced" | "local")}
+                      class={`text-left rounded-xl p-3 border transition-colors ${
+                        routingShare.value === opt.id
+                          ? "bg-[var(--bg-button-primary)] text-[var(--text-button-primary)] border-[var(--border-subtle)]"
+                          : "bg-[var(--bg-main)] text-[var(--text-primary)] border-[var(--border-subtle)] hover:opacity-90"
+                      }`}
+                      aria-pressed={routingShare.value === opt.id}
+                    >
+                      <div class="font-semibold text-sm">{opt.label}</div>
+                      <div
+                        class={`text-xs mt-1 ${
+                          routingShare.value === opt.id ? "" : "text-[var(--text-secondary)]"
+                        }`}
+                      >
+                        {opt.hint}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+
+                <RoutingBreakdown />
+
+                {/* Per-slot online model picks. Escalation itself has no
+                    toggle: choosing online-offline mode IS the consent to go
+                    online when it helps (auto:Offline is the never-online
+                    choice). Recommended names must match the router's
+                    DEFAULT_* ids in router.rs. */}
+                <h4 class="text-base font-semibold text-[var(--text-primary)] mt-5">
+                  Online models by job
+                </h4>
+                <p class="text-sm text-[var(--text-secondary)] mt-1 mb-1">
+                  When a question goes online, these are the models that take
+                  it. Recommended picks are chosen for each job; change them if
+                  you'd rather use a different one. Your downloaded models are
+                  set under Offline models above.
+                </p>
+                <OnlineModelPicker
+                  label="Everyday questions"
+                  hint="Frontier quality at the lowest price - most questions"
+                  recommended={recName("everyday")}
+                  storageKey="routingOnlineEveryday"
+                  selected={onlineEveryday}
+                  models={onlineModels}
+                />
+                <OnlineModelPicker
+                  label="Hard questions"
+                  hint="Deep reasoning, tricky code, complex math"
+                  recommended={
+                    recName("hard_code") === recName("hard_general")
+                      ? recName("hard_code")
+                      : `${recName("hard_code")} for technical, ${recName("hard_general")} otherwise`
+                  }
+                  storageKey="routingOnlineHard"
+                  selected={onlineHard}
+                  models={onlineModels}
+                />
+                <OnlineModelPicker
+                  label="Needs current information"
+                  hint="Searches the live web and cites sources"
+                  recommended={recName("fresh")}
+                  storageKey="routingOnlineFresh"
+                  selected={onlineFresh}
+                  models={onlineModels}
+                />
+                <AutoRoutingModels />
+                {/* Attachments: one control with one meaning - the standing
+                    answer to "may my documents and images go to online
+                    models?". Off (default): the router keeps attachment turns
+                    on your device, and picking an online model by hand asks
+                    first. On: the router may route them online when that is
+                    better, with no per-turn ask. */}
+                <div class="mt-5 mb-5">
+                  <SettingToggle
+                    title="Send attachments to online models"
+                    checked={allowAttachmentsOnline}
+                    onToggle$={toggleAttachmentsOnline}
+                  >
+                    Off: a question with an image or document attached stays on
+                    your device, even for an "Auto - Online and Offline" AI, and
+                    choosing an online model yourself asks before anything
+                    leaves. On: online models may be used for attachments when
+                    they'd do a better job, without asking each time. Offline
+                    AIs never send anything anywhere.
+                  </SettingToggle>
+                </div>
+
+                {buildInstalled.value && (
+                  <>
+                    <div class="border-t border-[var(--border-subtle)] my-5" />
+                    <h4 class="text-base font-semibold text-[var(--text-primary)]">
+                      Project work online
+                    </h4>
+                    <p class="text-sm text-[var(--text-secondary)] mt-1 mb-3">
+                      Project work routes differently: only models that can drive
+                      tools are ever used, and the model never changes
+                      mid-session. Offline, the most capable tool-driving model
+                      you've downloaded takes it. Online, this one does:
+                    </p>
+                    <OnlineModelPicker
+                      label="Agent work on projects"
+                      hint="The online model that drives tools in project work - only capable ones are listed"
+                      recommended={recName("agent")}
+                      storageKey="routingOnlineAgent"
+                      selected={onlineAgent}
+                      models={onlineAgentModels}
+                    />
+                    <OnlineModelPicker
+                      label="Planning and helper agents"
+                      hint="The online model for the subagents that explore and plan - reasoning-lean, still tool-capable"
+                      recommended={recName("plan")}
+                      selected={onlinePlanning}
+                      storageKey="routingOnlinePlanning"
+                      models={onlineAgentModels}
+                    />
+                    {/* Cost levers - both mirrored to the Rust-readable
+                        store; the router reads them at session start. */}
+                    <label class="flex items-start gap-3 mt-4 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={projectDeviceSubagents.value}
+                        onChange$={async (_, el) => {
+                          projectDeviceSubagents.value = el.checked;
+                          localStorage.setItem("routingProjectDeviceSubagents", el.checked ? "1" : "0");
+                          try {
+                            const { Store } = await import("@tauri-apps/plugin-store");
+                            const store = await Store.load("settings.json");
+                            await store.set("routingProjectDeviceSubagents", el.checked ? "1" : "0");
+                            await store.save();
+                          } catch { /* store mirror is best-effort */ }
+                        }}
+                        class="rounded mt-0.5"
+                      />
+                      <span>
+                        <span class="block text-sm text-[var(--text-primary)]">
+                          Do simple project side-work on this device
+                        </span>
+                        <span class="block text-xs text-[var(--text-muted)]">
+                          Searching and reading fan-outs run on your device when a
+                          capable model runs comfortably on your hardware - free
+                          and private. Otherwise they use the session's online
+                          model. Takes effect next project open.
+                        </span>
+                      </span>
+                    </label>
+                    <label class="flex items-start gap-3 mt-3 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={projectThrifty.value}
+                        onChange$={async (_, el) => {
+                          projectThrifty.value = el.checked;
+                          localStorage.setItem("routingProjectThrifty", el.checked ? "1" : "0");
+                          try {
+                            const { Store } = await import("@tauri-apps/plugin-store");
+                            const store = await Store.load("settings.json");
+                            await store.set("routingProjectThrifty", el.checked ? "1" : "0");
+                            await store.save();
+                          } catch { /* store mirror is best-effort */ }
+                        }}
+                        class="rounded mt-0.5"
+                      />
+                      <span>
+                        <span class="block text-sm text-[var(--text-primary)]">
+                          Keep whole project sessions on this device when possible
+                        </span>
+                        <span class="block text-xs text-[var(--text-muted)]">
+                          When a capable model fits your hardware, project
+                          sessions stay fully on-device - slower, but free and
+                          private. Otherwise they go online as usual.
+                        </span>
+                      </span>
+                    </label>
+                  </>
+                )}
+                </>
+                )}
+
+                <div class="border-t border-[var(--border-subtle)] my-5" />
+
+                {/* How routing decides: the guide, what it has learned here,
+                    and the data (collapsed). */}
+                <h3 class="text-lg font-semibold text-[var(--text-primary)] mb-1">
+                  How routing decides
+                </h3>
+                <p class="text-sm text-[var(--text-secondary)] mb-2">
+                  Routing learns from what you do with answers - Redo on your
+                  device, Try this answer online, regenerate - and nudges its
+                  choices by at most a point, never for health questions.
+                </p>
+                <p class="text-xs text-[var(--text-muted)] mb-4">
                   {feedbackReset.value ? (
                     "What routing had learned on this computer has been reset."
                   ) : (
@@ -1096,13 +1524,12 @@ export default component$(() => {
                     </button>
                   )}
                 </p>
-
                 {/* The rules live in the public guide, not in a settings
                     dropdown: one link. The data - how routing sees your models
                     and its recent decisions - stays here, collapsed. */}
                 <p class="text-sm text-[var(--text-secondary)] mb-4">
-                  How routing decides - the rules, the modes, health, attachments -
-                  is written up in the guide:{" "}
+                  The rules - the modes, health questions, attachments - are
+                  written up in the guide:{" "}
                   <button
                     type="button"
                     onClick$={async () => {
@@ -1210,418 +1637,6 @@ export default component$(() => {
                   )}
                 </div>
 
-                {/* On your device — biases the fit-aware offline pick. */}
-                <h3 class="text-lg font-semibold text-[var(--text-primary)]">
-                  Choosing a model on this device
-                </h3>
-                <p class="text-sm text-[var(--text-secondary)] mt-1 mb-3">
-                  Both Auto modes pick from the models you've downloaded (the
-                  Offline Models page is their library). This sets what the
-                  pick leans toward.
-                </p>
-                <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2">
-                  {[
-                    { id: "speed", label: "Prefer fastest", hint: "Measured speed on this computer wins; until measured, a model that fits fully on your GPU" },
-                    { id: "balanced", label: "Balanced", hint: "Best capability that still runs well" },
-                    { id: "quality", label: "Prefer strongest", hint: "The most capable model, even if slower" },
-                  ].map((opt) => (
-                    <button
-                      key={opt.id}
-                      onClick$={() => setLean(opt.id as "speed" | "balanced" | "quality")}
-                      class={`text-left rounded-xl p-3 border transition-colors ${
-                        routingLean.value === opt.id
-                          ? "bg-[var(--bg-button-primary)] text-[var(--text-button-primary)] border-[var(--border-subtle)]"
-                          : "bg-[var(--bg-main)] text-[var(--text-primary)] border-[var(--border-subtle)] hover:opacity-90"
-                      }`}
-                      aria-pressed={routingLean.value === opt.id}
-                    >
-                      <div class="font-semibold text-sm">{opt.label}</div>
-                      <div
-                        class={`text-xs mt-1 ${
-                          routingLean.value === opt.id ? "" : "text-[var(--text-secondary)]"
-                        }`}
-                      >
-                        {opt.hint}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-                <p class="text-xs text-[var(--text-muted)] mb-5">
-                  Tip: pausing a model on the Offline Models page also removes it
-                  from the Auto pool.
-                </p>
-
-                <div class="border-t border-[var(--border-subtle)] my-5" />
-
-                {/* Online routing controls are only OFFERED with a plan — a
-                    quiet unlock note otherwise (settings already made keep
-                    working; billing is enforced per request). */}
-                {!onlineEntitled.value ? (
-                  <p class="text-sm text-[var(--text-muted)]">
-                    With a plan, Auto - Online and Offline sends a question
-                    online when an online model answers it better, and keeps
-                    the rest on your device. Plans are an optional paid
-                    service; everything offline stays free.{' '}
-                    <a href="/online-models" class="text-[var(--text-link)] hover:underline">See online models</a>
-                  </p>
-                ) : (
-                <>
-                <h3 class="text-lg font-semibold text-[var(--text-primary)]">
-                  Going online (Auto - Online and Offline)
-                </h3>
-                <p class="text-sm text-[var(--text-secondary)] mt-1 mb-4">
-                  Only for AIs set to "Auto - Online and Offline". By default a
-                  question goes to a frontier online model, and stays on your
-                  device when a model here is better for it. Health questions
-                  always stay home. "Offline Only" AIs never go online.
-                </p>
-
-                {/* Attachments: one control with one meaning - the standing
-                    answer to "may my documents and images go to online
-                    models?". Off (default): the router keeps attachment turns
-                    on your device, and picking an online model by hand asks
-                    first. On: the router may route them online when that is
-                    better, with no per-turn ask. */}
-                <div class="mb-5">
-                  <SettingToggle
-                    title="Send attachments to online models"
-                    checked={allowAttachmentsOnline}
-                    onToggle$={toggleAttachmentsOnline}
-                  >
-                    Off: a question with an image or document attached stays on
-                    your device, even for an "Auto - Online and Offline" AI, and
-                    choosing an online model yourself asks before anything
-                    leaves. On: online models may be used for attachments when
-                    they'd do a better job, without asking each time. Offline
-                    AIs never send anything anywhere.
-                  </SettingToggle>
-                </div>
-
-                {/* The one online dial. */}
-                <h4 class="text-base font-semibold text-[var(--text-primary)]">
-                  How much goes online
-                </h4>
-                <p class="text-sm text-[var(--text-secondary)] mt-1 mb-3">
-                  {shareRecent.value && shareRecent.value.total >= 5
-                    ? `About ${Math.round((10 * shareRecent.value.online) / shareRecent.value.total)} in 10 of your recent questions went online.`
-                    : "Where an ordinary question is answered. Questions that need the live web always go online; health questions never do."}
-                </p>
-                <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-5">
-                  {[
-                    { id: "frontier", label: "Frontier-first", hint: "Online unless a model here is better for the question" },
-                    { id: "balanced", label: "Balanced", hint: "Your device answers when it is nearly as good" },
-                    { id: "local", label: "Local-first", hint: "Online only for the live web; hard questions stay home" },
-                  ].map((opt) => (
-                    <button
-                      key={opt.id}
-                      onClick$={() => setShare(opt.id as "frontier" | "balanced" | "local")}
-                      class={`text-left rounded-xl p-3 border transition-colors ${
-                        routingShare.value === opt.id
-                          ? "bg-[var(--bg-button-primary)] text-[var(--text-button-primary)] border-[var(--border-subtle)]"
-                          : "bg-[var(--bg-main)] text-[var(--text-primary)] border-[var(--border-subtle)] hover:opacity-90"
-                      }`}
-                      aria-pressed={routingShare.value === opt.id}
-                    >
-                      <div class="font-semibold text-sm">{opt.label}</div>
-                      <div
-                        class={`text-xs mt-1 ${
-                          routingShare.value === opt.id ? "" : "text-[var(--text-secondary)]"
-                        }`}
-                      >
-                        {opt.hint}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-
-                <RoutingBreakdown />
-
-                {/* Health questions: always answered on the device; this
-                    picks WHICH installed model answers them. Starts as the
-                    first model downloaded; installing a medical specialist
-                    asks once whether to switch (never a silent hijack). */}
-                {installedChatModels.value.length > 0 && (
-                  <>
-                    <h4 class="text-base font-semibold text-[var(--text-primary)] mt-5">
-                      Health questions
-                    </h4>
-                    <p class="text-sm text-[var(--text-secondary)] mt-1 mb-2">
-                      Health questions stay on your device by default. This
-                      chooses which model answers them - a medical model gives
-                      more grounded health answers when you have one. Choosing
-                      an online model is possible too: each health question
-                      then asks before anything leaves your device.
-                    </p>
-                    <div class="relative inline-block mb-2">
-                      <button
-                        type="button"
-                        onClick$={() => { medicalPickerOpen.value = !medicalPickerOpen.value; }}
-                        class="flex items-center justify-between gap-2 min-w-[16rem] px-3 py-2 rounded-xl text-sm bg-[var(--bg-main)] text-[var(--text-primary)] border border-[var(--border-subtle)] hover:opacity-90 focus:outline-none"
-                      >
-                        <span class="truncate">
-                          {medicalModel.value.startsWith("online:")
-                            ? (onlineModelIds.value.find((m) => m.id === medicalModel.value)?.name ??
-                              medicalModel.value.replace(/^online:/, "")) + " (online)"
-                            : medicalModel.value.replace(/\.gguf$/i, "") +
-                              (isMedicalSpecialist(medicalModel.value) ? " (medical)" : "")}
-                        </span>
-                        <LuChevronDown class="w-4 h-4 text-[var(--text-muted)] flex-shrink-0" />
-                      </button>
-                      {medicalPickerOpen.value && (
-                        <>
-                          <div class="fixed inset-0 z-40" onClick$={() => { medicalPickerOpen.value = false; }} />
-                          <div class="absolute left-0 top-full mt-1 min-w-[16rem] max-h-64 overflow-y-auto z-50 rounded-lg bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] shadow-xl py-1">
-                            <div class="px-3 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-                              On your device
-                            </div>
-                            {installedChatModels.value.map((name) => (
-                              <button
-                                key={name}
-                                type="button"
-                                onClick$={async () => {
-                                  medicalModel.value = name;
-                                  medicalPickerOpen.value = false;
-                                  await setMedicalModel(name);
-                                }}
-                                class={`block w-full text-left px-3 py-1.5 text-sm hover:bg-[var(--bg-card)] transition-colors ${
-                                  medicalModel.value === name
-                                    ? "text-[var(--text-primary)] font-medium"
-                                    : "text-[var(--text-secondary)]"
-                                }`}
-                              >
-                                {name.replace(/\.gguf$/i, "") + (isMedicalSpecialist(name) ? "  (medical)" : "")}
-                              </button>
-                            ))}
-                            {onlineModelIds.value.length > 0 && (
-                              <>
-                                <div class="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)] border-t border-[var(--border-subtle)] mt-1">
-                                  Online - asks before each question
-                                </div>
-                                {onlineModelIds.value.map((m) => (
-                                  <button
-                                    key={m.id}
-                                    type="button"
-                                    onClick$={async () => {
-                                      medicalModel.value = m.id;
-                                      medicalPickerOpen.value = false;
-                                      await setMedicalModel(m.id);
-                                    }}
-                                    class={`block w-full text-left px-3 py-1.5 text-sm hover:bg-[var(--bg-card)] transition-colors ${
-                                      medicalModel.value === m.id
-                                        ? "text-[var(--text-primary)] font-medium"
-                                        : "text-[var(--text-secondary)]"
-                                    }`}
-                                  >
-                                    {m.name}
-                                  </button>
-                                ))}
-                              </>
-                            )}
-                          </div>
-                        </>
-                      )}
-                    </div>
-                    {medicalModel.value.startsWith("online:") && (
-                      <p class="text-xs text-[var(--text-muted)] mb-5">
-                        {medicalOnlineAlwaysSig.value ? (
-                          <>
-                            Sending health questions online without asking
-                            (you chose "always").{" "}
-                            <button
-                              class="underline"
-                              onClick$={() => {
-                                setMedicalOnlineAlways(false);
-                                medicalOnlineAlwaysSig.value = false;
-                              }}
-                            >
-                              Ask again each time
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            Each health question shows a card before it goes
-                            online - answer on your device stays one tap away.
-                          </>
-                        )}
-                      </p>
-                    )}
-                    {!medicalModel.value.startsWith("online:") && <span class="block mb-3" />}
-                  </>
-                )}
-
-                {/* Per-slot online model picks. Escalation itself has no
-                    toggle: choosing online-offline mode IS the consent to go
-                    online when it helps (auto:Offline is the never-online
-                    choice). Recommended names must match the router's
-                    DEFAULT_* ids in router.rs. */}
-                <h4 class="text-base font-semibold text-[var(--text-primary)] mt-5">
-                  Online models by job
-                </h4>
-                <p class="text-sm text-[var(--text-secondary)] mt-1 mb-1">
-                  When a question goes online, these are the models that take
-                  it. Recommended picks are chosen for each job; change them if
-                  you'd rather use a different one. Your downloaded models
-                  aren't listed here - they're picked automatically, tuned
-                  under "Choosing a model on this device".
-                </p>
-                <OnlineModelPicker
-                  label="Everyday questions"
-                  hint="Frontier quality at the lowest price - most questions"
-                  recommended={recName("everyday")}
-                  storageKey="routingOnlineEveryday"
-                  selected={onlineEveryday}
-                  models={onlineModels}
-                />
-                <OnlineModelPicker
-                  label="Hard questions"
-                  hint="Deep reasoning, tricky code, complex math"
-                  recommended={
-                    recName("hard_code") === recName("hard_general")
-                      ? recName("hard_code")
-                      : `${recName("hard_code")} for technical, ${recName("hard_general")} otherwise`
-                  }
-                  storageKey="routingOnlineHard"
-                  selected={onlineHard}
-                  models={onlineModels}
-                />
-                <OnlineModelPicker
-                  label="Needs current information"
-                  hint="Searches the live web and cites sources"
-                  recommended={recName("fresh")}
-                  storageKey="routingOnlineFresh"
-                  selected={onlineFresh}
-                  models={onlineModels}
-                />
-                <AutoRoutingModels />
-                {buildInstalled.value && (
-                  <>
-                    <div class="border-t border-[var(--border-subtle)] my-5" />
-                    <h4 class="text-base font-semibold text-[var(--text-primary)]">
-                      Working on projects
-                    </h4>
-                    <p class="text-sm text-[var(--text-secondary)] mt-1 mb-3">
-                      Project work routes differently: only models that can drive
-                      tools are ever used, and the model never changes
-                      mid-session. Offline, the most capable tool-driving model
-                      you've downloaded takes it. Online, this one does:
-                    </p>
-                    <OnlineModelPicker
-                      label="Agent work on projects"
-                      hint="The online model that drives tools in project work - only capable ones are listed"
-                      recommended={recName("agent")}
-                      storageKey="routingOnlineAgent"
-                      selected={onlineAgent}
-                      models={onlineAgentModels}
-                    />
-                    <OnlineModelPicker
-                      label="Planning and helper agents"
-                      hint="The online model for the subagents that explore and plan - reasoning-lean, still tool-capable"
-                      recommended={recName("plan")}
-                      selected={onlinePlanning}
-                      storageKey="routingOnlinePlanning"
-                      models={onlineAgentModels}
-                    />
-                    {/* Cost levers - both mirrored to the Rust-readable
-                        store; the router reads them at session start. */}
-                    <label class="flex items-start gap-3 mt-4 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={projectDeviceSubagents.value}
-                        onChange$={async (_, el) => {
-                          projectDeviceSubagents.value = el.checked;
-                          localStorage.setItem("routingProjectDeviceSubagents", el.checked ? "1" : "0");
-                          try {
-                            const { Store } = await import("@tauri-apps/plugin-store");
-                            const store = await Store.load("settings.json");
-                            await store.set("routingProjectDeviceSubagents", el.checked ? "1" : "0");
-                            await store.save();
-                          } catch { /* store mirror is best-effort */ }
-                        }}
-                        class="rounded mt-0.5"
-                      />
-                      <span>
-                        <span class="block text-sm text-[var(--text-primary)]">
-                          Do simple project side-work on this device
-                        </span>
-                        <span class="block text-xs text-[var(--text-muted)]">
-                          Searching and reading fan-outs run on your device when a
-                          capable model runs comfortably on your hardware - free
-                          and private. Otherwise they use the session's online
-                          model. Takes effect next project open.
-                        </span>
-                      </span>
-                    </label>
-                    <label class="flex items-start gap-3 mt-3 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={projectThrifty.value}
-                        onChange$={async (_, el) => {
-                          projectThrifty.value = el.checked;
-                          localStorage.setItem("routingProjectThrifty", el.checked ? "1" : "0");
-                          try {
-                            const { Store } = await import("@tauri-apps/plugin-store");
-                            const store = await Store.load("settings.json");
-                            await store.set("routingProjectThrifty", el.checked ? "1" : "0");
-                            await store.save();
-                          } catch { /* store mirror is best-effort */ }
-                        }}
-                        class="rounded mt-0.5"
-                      />
-                      <span>
-                        <span class="block text-sm text-[var(--text-primary)]">
-                          Keep whole project sessions on this device when possible
-                        </span>
-                        <span class="block text-xs text-[var(--text-muted)]">
-                          When a capable model fits your hardware, project
-                          sessions stay fully on-device - slower, but free and
-                          private. Otherwise they go online as usual.
-                        </span>
-                      </span>
-                    </label>
-                    <div class="mt-4">
-                      <div class="text-sm text-[var(--text-primary)]">Project work runs on</div>
-                      <p class="text-xs text-[var(--text-secondary)] mt-1 mb-2">
-                        With a server connected (Engines): let the stronger model win, keep project work
-                        here, or send it to your server whenever it answers. Chat keeps the Auto rule.
-                      </p>
-                      <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                        {[
-                          { id: "auto", label: "Auto", hint: "The stronger model for the job wins" },
-                          { id: "device", label: "This computer", hint: "Never the server" },
-                          { id: "server", label: "Your server", hint: "Whenever it answers and its window fits the session" },
-                        ].map((opt) => (
-                          <button
-                            key={opt.id}
-                            type="button"
-                            onClick$={async () => {
-                              projectServerPref.value = opt.id;
-                              localStorage.setItem("projectServerPref", opt.id);
-                              try {
-                                const { Store } = await import("@tauri-apps/plugin-store");
-                                const store = await Store.load("settings.json");
-                                await store.set("projectServerPref", opt.id);
-                                await store.save();
-                              } catch { /* store mirror is best-effort */ }
-                            }}
-                            class={`text-left rounded-xl p-3 border transition-colors ${
-                              projectServerPref.value === opt.id
-                                ? "bg-[var(--bg-button-primary)] text-[var(--text-button-primary)] border-[var(--border-subtle)]"
-                                : "bg-[var(--bg-main)] text-[var(--text-primary)] border-[var(--border-subtle)] hover:opacity-90"
-                            }`}
-                            aria-pressed={projectServerPref.value === opt.id}
-                          >
-                            <div class="font-semibold text-sm">{opt.label}</div>
-                            <div class={`text-xs mt-1 ${projectServerPref.value === opt.id ? "" : "text-[var(--text-secondary)]"}`}>
-                              {opt.hint}
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </>
-                )}
-                </>
-                )}
               </section>
 
               {/* Agent - how the coding/project agent asks before it acts.
