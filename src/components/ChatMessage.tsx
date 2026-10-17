@@ -11,7 +11,6 @@ import 'highlight.js/styles/vs2015.css';
 import { renderMarkdown } from '../utils/renderMarkdown';
 import { Message } from '../types';
 import {
-  LuArrowUpCircle,
   LuBot,
   LuFileText,
 } from '@qwikest/icons/lucide';
@@ -120,7 +119,6 @@ interface ChatMessageProps {
   onRetry$?: QRL<(originalContent: string | undefined) => void>;
   onGround$?: QRL<() => void>;
   onScrollNeeded$?: QRL<() => void>;
-  onUpgradeClick$?: QRL<(originalQuery: string, triggerMessageId: string) => void>;
   /** Redo this turn on the other side ("Try online" / "Redo on your device"). */
   onRouteRetry$?: QRL<(target: 'online' | 'device' | 'tools' | 'web-once' | 'web-on' | 'web-never' | 'build-install' | 'build-dismiss' | 'build-never' | 'dig-deeper') => void>;
   /** Whether this AI may go online at all (auto online-offline mode). */
@@ -1533,6 +1531,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
       data-role={props.message.role}
       data-state={props.message.isLoading && !props.message.content ? "thinking" : props.message.isLoading ? "streaming" : "done"}
       data-error={props.message.error ? "1" : "0"}
+      data-served={props.message.servedBy ?? ""}
       data-stopped={props.message.stopped ? "1" : undefined}
       {...(props.message.role === 'assistant' && props.message.content
         ? { 'data-remember-aiid': props.message.model }
@@ -1703,29 +1702,10 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
           <div class="mt-2 text-red-500 dark:text-red-400 text-sm flex items-center gap-2 pl-2 md:pl-10 lg:pl-10">
             <span data-testid="reply-error">{props.message.error}</span>
 
-            {props.message.showUpgradeButton &&
-              props.onUpgradeClick$ &&
-              props.message.originalUserQuery &&
-              props.message.id && (
-                <button
-                  onClick$={() =>
-                    props.onUpgradeClick$!(
-                      props.message.originalUserQuery!,
-                      props.message.id!
-                    )
-                  }
-                  class="px-3 py-1.5 text-xs bg-sky-500 hover:bg-sky-600 text-white rounded-md transition-colors flex-shrink-0 flex items-center gap-1.5"
-                >
-                  <LuArrowUpCircle style={{ width: '14px', height: '14px' }} />
-                  Upgrade Plan
-                </button>
-              )}
-
             {/* Retry redoes the turn by this message's id (the chat's own
                 retry); it waited on a field nothing ever set, so no error
                 reply had a working Retry. */}
-            {!props.message.showUpgradeButton &&
-              props.message.role === 'assistant' &&
+            {props.message.role === 'assistant' &&
               props.onRetry$ && (
                 <button
                   data-testid="reply-retry"

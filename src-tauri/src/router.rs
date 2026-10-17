@@ -172,15 +172,16 @@ pub(crate) fn normalize_share(s: &str) -> &'static str {
 }
 
 /// Freshness threshold (max cosine vs the reference phrases) per dial
-/// position. Calibrated against bge-small on real queries: fresh queries
-/// cluster ≥0.57, evergreen ≤0.564. Balanced (0.58) keeps evergreen local
-/// while catching clearly-fresh paraphrases; local-first only escalates
-/// obvious cases; frontier leans online.
+/// position, on EmbeddingGemma's scale (2026-10-17; the old bars were
+/// bge-small's and caught 4 in 10 live questions). The contrast margin
+/// does most of the separating; the bar keeps faint matches home. Measured
+/// with build-docs fresh-bench.mjs - held-out set B: frontier and balanced
+/// 55/60 live caught, 3/60 ordinary sent online; local-first 50/60, 3/60.
 fn threshold_for(share: &str) -> f32 {
     match share {
-        "local" => 0.62,
-        "frontier" => 0.55,
-        _ => 0.58, // balanced
+        "local" => 0.46,
+        "frontier" => 0.33,
+        _ => 0.36, // balanced
     }
 }
 
@@ -242,6 +243,60 @@ const FRESH_REFERENCES: &[&str] = &[
     "what is the latest score in the game",
     "is there a storm warning this week",
     "who won the election",
+    // EmbeddingGemma recalibration (2026-10-17, fresh-bench set A to tune,
+    // set B held out): live-information SHAPES the list was missing.
+    // Service status.
+    "is the website down right now",
+    "is the app having an outage today",
+    "is anyone else having problems with the service",
+    // Transport now.
+    "is the train running on time today",
+    "are there traffic delays or road closures right now",
+    "has the road reopened yet",
+    // Results and fixtures.
+    "did my team win last night",
+    "when is the next game",
+    "how did they do in the tournament",
+    // Markets and rates now.
+    "how did the stock market do today",
+    "what are interest rates now",
+    "is inflation going up",
+    // Releases and announcements.
+    "has the new version been released yet",
+    "when is the next launch event",
+    "what did the company announce",
+    "what is new in the latest update",
+    // Open now, availability, queues.
+    "is the shop open right now",
+    "what time does it close today",
+    "are tickets still available",
+    "how long is the wait right now",
+    // News follow-ups and who holds office.
+    "any updates on that story",
+    "has the law been passed yet",
+    "who holds the office now",
+    // Entertainment now.
+    "what is playing tonight",
+    "what is number one this week",
+    "when does the next season come out",
+    // Natural events now.
+    "has there been an earthquake",
+    "where are the fires burning now",
+    "how much snow fell overnight",
+    // Prices and rules now.
+    "how much does it cost these days",
+    "what are the current entry requirements for travel",
+    "is there a travel warning in place",
+    // People now.
+    "what is she doing these days",
+    "who is the richest person now",
+    // Current figures, sales, recalls, dates this year, the sky tonight.
+    "what is the current figure now",
+    "is it on sale anywhere right now",
+    "has the recall been lifted",
+    "when do the clocks change this year",
+    "can I see it in the sky tonight",
+    "what happened at the meeting yesterday",
 ];
 
 pub(crate) fn cosine(a: &[f32], b: &[f32]) -> f32 {
@@ -283,6 +338,51 @@ const FRESH_BENIGN_REFERENCES: &[&str] = &[
     "what causes thunder and lightning",
     "how do clouds form",
     "why do we have seasons",
+    // EmbeddingGemma recalibration (2026-10-17): the ordinary shapes the
+    // new references sit next to. How things work, what words mean.
+    "how does the stock market work",
+    "explain how forecasting works",
+    "what does this term mean",
+    "what is the difference between these two ideas",
+    "explain this economic concept",
+    "how does this technology work in general",
+    "what does this word mean in journalism",
+    "explain how this affects the economy",
+    "what causes this to happen",
+    "what causes this everyday problem",
+    "what does this organization do",
+    "what is this sport's rule",
+    // History.
+    "who won that famous battle in history",
+    "what happened in the past century",
+    "tell me about the history of this",
+    "who was the first person to hold this office",
+    "how did people do this in ancient times",
+    // The person's own material (their notes, file, schedule).
+    "summarize my notes",
+    "summarize the article I pasted",
+    "what is in this file",
+    "turn these notes into a to-do list",
+    "what is on my schedule",
+    // Writing and make-believe.
+    "write a headline for my poster",
+    "make up a news report for my story",
+    "write a short story set in a fantasy world",
+    // Coding.
+    "how do I update my project dependencies",
+    "write this code using modern syntax",
+    "what version does my project use",
+    // Advice, planning, facts about a place.
+    "what should I wear",
+    "how do I stay motivated",
+    "help me plan my week",
+    "give me tips to sleep better",
+    "how can I check this for myself",
+    "what is the polite way to do this",
+    "what time zone and language does that country use",
+    // School science.
+    "explain the stages of cell division",
+    "what is the difference between weather and climate",
 ];
 static FRESH_BENIGN_REFS: tokio::sync::OnceCell<Vec<Vec<f32>>> = tokio::sync::OnceCell::const_new();
 
@@ -339,9 +439,13 @@ async fn semantic_fresh_score(
 /// local-first twist. Returns `(fresh, semantic_ran)`; `semantic_ran ==
 /// false` means only the keyword stage could run (no memory component).
 pub(crate) async fn fresh_gate_preview(app: &AppHandle, query: &str) -> (bool, bool) {
+    fresh_gate_balanced(app, query, None).await
+}
+
+async fn fresh_gate_balanced(app: &AppHandle, query: &str, query_vec: Option<&[f32]>) -> (bool, bool) {
     let mut semantic = false;
     let cue_confirmed = if looks_time_sensitive(query) {
-        match fresh_scores(app, query, None).await {
+        match fresh_scores(app, query, query_vec).await {
             Some((f, b)) => {
                 semantic = true;
                 f >= b
@@ -354,10 +458,23 @@ pub(crate) async fn fresh_gate_preview(app: &AppHandle, query: &str) -> (bool, b
     if cue_confirmed {
         return (true, semantic);
     }
-    match semantic_fresh_score(app, query, None).await {
+    match semantic_fresh_score(app, query, query_vec).await {
         Some(s) => (s >= threshold_for("balanced"), true),
         None => (false, semantic),
     }
+}
+
+/// Did this question need live information? The freshness gate at the
+/// Balanced bar, for the offer above the composer when the AI answered
+/// without looking anything up (Offline Only, or no plan). Never for a
+/// health question: those stay on the device whatever the mode.
+#[tauri::command]
+pub async fn live_info_need(app: AppHandle, text: String, query_vec: Option<Vec<f32>>) -> bool {
+    let vec = query_vec.as_deref().filter(|v| !v.is_empty());
+    if !fresh_gate_balanced(&app, &text, vec).await.0 {
+        return false;
+    }
+    !is_medical_turn(&app, &text, vec).await
 }
 
 /// Dev preview / calibration: both raw scores.
@@ -1451,7 +1568,7 @@ async fn inherit_followup(
                 Some(m) => m,
                 None => orphaned_followup_model(&models, prev.model.as_deref(), prev_task, picks)?,
             };
-            Some(RouteResult { think: None, model, reason: "online — continuing the conversation".to_string() })
+            Some(RouteResult { think: None, model, reason: "online: continuing the conversation".to_string() })
         }
         "device" => {
             let pick = pick_offline_detail(app, prev_task, lean, false, turn_tokens).await.ok()?;
@@ -1461,7 +1578,7 @@ async fn inherit_followup(
                 Some(m) if crate::fit::assess(app).await.iter().any(|f| f.name == m && f.fit.tier() > 0) => m.to_string(),
                 _ => pick.name,
             };
-            Some(RouteResult { think: None, model, reason: "kept on your device — continuing the conversation".to_string() })
+            Some(RouteResult { think: None, model, reason: "kept on your device: continuing the conversation".to_string() })
         }
         _ => None,
     }
@@ -2289,7 +2406,7 @@ async fn route_core(
                     return Ok(RouteResult {
                         think: None,
                         model,
-                        reason: "online — too long for any model on this device".to_string(),
+                        reason: "online: too long for any model on this device".to_string(),
                     });
                 }
             }
@@ -2337,9 +2454,11 @@ async fn route_core(
         } else {
             None
         };
-        if let Some(why) = fresh_why {
+        // No plan: nothing goes online (the offer above the composer says
+        // the answer may be out of date instead).
+        if let Some(why) = fresh_why.filter(|_| !known_not_entitled) {
             if let Some(model) = pick_online(task, true, picks.fresh.as_deref()).await {
-                return Ok(RouteResult { think: None, model, reason: format!("online — {why}") });
+                return Ok(RouteResult { think: None, model, reason: format!("online: {why}") });
             }
             // No online model available → fall through.
         }
@@ -2353,7 +2472,7 @@ async fn route_core(
             return Ok(RouteResult {
                 think: None,
                 model,
-                reason: "kept on your device — the health check could not run (memory component)".to_string(),
+                reason: "kept on your device: the health check could not run (memory component)".to_string(),
             });
         }
         // Hard: a known-hard question goes to the Hard slot. Never in
@@ -2364,7 +2483,7 @@ async fn route_core(
                 return Ok(RouteResult {
                     think: None,
                     model,
-                    reason: "online — a hard question, using a stronger model".to_string(),
+                    reason: "online: a hard question, using a stronger model".to_string(),
                 });
             }
         }
@@ -2394,10 +2513,10 @@ async fn route_core(
                         return Ok(RouteResult {
                             think: None,
                             model: l.name,
-                            reason: "kept on your device — as good for this question".to_string(),
+                            reason: "kept on your device: as good for this question".to_string(),
                         });
                     }
-                    return Ok(RouteResult { think: None, model: everyday, reason: "online — everyday model".to_string() });
+                    return Ok(RouteResult { think: None, model: everyday, reason: "online: everyday model".to_string() });
                 }
                 None => {
                     // Catalog unreachable (offline, proxy down): the device
@@ -2406,7 +2525,7 @@ async fn route_core(
                     return Ok(RouteResult {
                         think: None,
                         model,
-                        reason: "offline — online models unavailable right now".to_string(),
+                        reason: "offline: online models unavailable right now".to_string(),
                     });
                 }
             }
@@ -2431,12 +2550,12 @@ async fn route_core(
         // The visible promise: this is the receipt line users see. Name the
         // specialist when one took the question.
         if model.to_lowercase().contains("medgemma") {
-            "a health question — kept on your device, answered by your medical model".to_string()
+            "a health question: kept on your device, answered by your medical model".to_string()
         } else {
-            "a health question — kept on your device".to_string()
+            "a health question: kept on your device".to_string()
         }
     } else if mode == "online-offline" {
-        "offline — no fresh info needed".to_string()
+        "offline: no fresh info needed".to_string()
     } else {
         "offline".to_string()
     };
@@ -2476,9 +2595,9 @@ pub(crate) async fn pick_device_or_server(
                 log::warn!("[Router] your server's window cannot hold this turn — using the local pick");
             } else if crate::engine::external_reachable(app).await {
                 let why = if local.is_ok() {
-                    "your server — stronger for this task"
+                    "your server: stronger for this task"
                 } else {
-                    "your server — no local model fits"
+                    "your server: no local model fits"
                 };
                 return Ok(RouteResult { think: None, model: format!("external:{ext_id}"), reason: why.to_string() });
             } else {

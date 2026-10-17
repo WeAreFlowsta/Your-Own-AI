@@ -166,6 +166,9 @@ export interface Message {
   /** The question needed the web (a page it named, or current information) while this AI's
    *  web access is off - the reply carries the one-line offer to turn it on. */
   needsWeb?: 'page' | 'live';
+  /** The question needed live information and this AI could not look it up (Offline Only,
+   *  or no plan): true = the offer above the composer; false = offered once, then dismissed. */
+  liveOffer?: boolean;
   /** What the research step did for this reply ("That page had little to read, so I looked at 2 more pages on the site."). */
   webNote?: string;
   /** One page was not enough and the Build helper is not installed: the reply carries the one-line offer. */
@@ -223,8 +226,6 @@ export interface Message {
   /** The classified routing task at send time — reused when the user retries
    *  this turn online or on device. */
   routingTask?: string;
-  showUpgradeButton?: boolean;
-  originalUserQuery?: string;
   originalUserMessageContent?: string;
   /** The reply bubble of a folder-agent turn (ONE per turn). Skips
    *  ChatMessage's per-bubble min-height reservation - the agent turn

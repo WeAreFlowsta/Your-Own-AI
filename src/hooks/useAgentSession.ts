@@ -2669,18 +2669,6 @@ export function useAgentSession(props: UseAgentSessionProps) {
             uiLog(`[rail] struggle: ${red} red step(s), tools turn ${toolsTurn} ok ${toolOk}, ai ${aiModel}, entitled ${entitled}`);
           }
         }
-        if (errorText && state.smallCoder) {
-          // The door again, on the failure itself (the rail draws it under
-          // any notice whose id starts with hint-small-coder).
-          log = [
-            ...log,
-            {
-              id: `hint-small-coder-fail-${m.id}`,
-              type: "notice" as const,
-              text: "That failed on the small model running on this computer. Online routing would hand a step like this to a bigger model.",
-            },
-          ];
-        }
         // The turn's last words ARE the answer: promote the last spoken
         // passage into the bubble body (content goes "" -> answer exactly
         // once - it must never shrink). WHEREVER it sits: a turn that speaks

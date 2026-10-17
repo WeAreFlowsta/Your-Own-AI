@@ -702,14 +702,11 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
         >
           {flow.value.map((el) => {
             if (el.kind === "notice") {
-              // The small-coder notice carries the online door under it:
-              // the one sentence that says where a bigger model lives.
+              // The small-coder notice (once a session) carries the online
+              // door under it: the one sentence that says where a bigger
+              // model lives. Never on a failed turn - a crash or a server
+              // away is ours, not a reason for a plan.
               const door = el.id.startsWith("hint-small-coder");
-              // A turn that struggled on a small model: the way up, in the
-              // person's words. Door = see the page; online = the plan's
-              // models, one click to switch this AI and send again.
-              const struggleDoor = false;
-              const struggleOnline = false;
               return (
                 <div key={el.id} class="flex flex-col gap-1 py-1 text-sm leading-snug text-[var(--text-secondary)]">
                   <div class="flex items-start gap-2">
@@ -717,24 +714,6 @@ export const AgentWorkingBox = component$<AgentWorkingBoxProps>(
                     <span class="min-w-0 break-words">{el.text}</span>
                   </div>
                   {door && <OnlineModelsDoor class="ml-[22px] text-sm text-[var(--text-secondary)]" />}
-                  {struggleDoor && (
-                    <a href="/online-models" class="ml-[22px] text-sm text-[var(--text-link)] hover:underline">
-                      See online models
-                    </a>
-                  )}
-                  {struggleOnline && (
-                    <div class="ml-[22px] flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        onClick$={() => window.dispatchEvent(new CustomEvent("yoai-go-online"))}
-                        class="btn-liquid-metal btn-secondary-metal px-3 py-1 text-xs"
-                      >
-                        <span class="shader-inner-fill" />
-                        <span class="btn-content">Use online models for this AI</span>
-                      </button>
-                      <span class="text-xs text-[var(--text-muted)]">Sets this AI to Auto - Online and Offline and sends this again.</span>
-                    </div>
-                  )}
                 </div>
               );
             }

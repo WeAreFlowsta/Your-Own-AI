@@ -431,6 +431,8 @@ export default component$(() => {
     path: string;
     currentLabel: string;
     suggestion?: SelectedAiModel;
+    /** Has a plan: the notice says how to use it. */
+    planned?: boolean;
   } | null>(null);
   // Any attempt to open a project without the Build add-on funnels here -
   // one modal, one download, installs in the background.
@@ -458,6 +460,7 @@ export default component$(() => {
           folderGuard.value = {
             path,
             currentLabel: selectedAi.value.label,
+            planned: lastKnownEntitled() === "yes",
             suggestion: undefined,
             offlineAuto: true,
           };
@@ -467,6 +470,7 @@ export default component$(() => {
           folderGuard.value = {
             path,
             currentLabel: selectedAi.value.label,
+            planned: lastKnownEntitled() === "yes",
             suggestion: undefined,
             offlineUncomfortable: true,
           };
@@ -488,6 +492,7 @@ export default component$(() => {
         folderGuard.value = {
           path,
           currentLabel: selectedAi.value.label,
+          planned: lastKnownEntitled() === "yes",
           suggestion,
         };
       }
@@ -677,6 +682,7 @@ export default component$(() => {
             base[i] = {
               ...r,
               needsWeb: r.needsWeb ?? m.needsWeb,
+              liveOffer: r.liveOffer ?? m.liveOffer,
               sources: r.sources?.length ? r.sources : m.sources,
               webNote: r.webNote ?? m.webNote,
               library: r.library?.length ? r.library : m.library,
@@ -1672,7 +1678,7 @@ export default component$(() => {
   // Retry, redo on the other side, or - for an AI that carries tools -
   // "Answer again with tools": the direct reply and its question leave the
   // list (as any retry does) and the same question goes through a session.
-  const retryOrTools$ = $(async (id: string, target?: "online" | "device" | "tools" | "web-once" | "web-on" | "web-never" | "build-install" | "build-dismiss" | "build-never" | "dig-deeper") => {
+  const retryOrTools$ = $(async (id: string, target?: "online" | "device" | "tools" | "web-once" | "web-on" | "web-never" | "live-online" | "live-use-online" | "live-never" | "build-install" | "build-dismiss" | "build-never" | "dig-deeper") => {
     if (target === "build-install" || target === "build-dismiss" || target === "build-never") {
       // The offer line under a thin-page reply: the existing install flow
       // (consent given by the press; the header shows progress), or quiet.
@@ -1691,6 +1697,33 @@ export default component$(() => {
       chatState.messages = chatState.messages.map((m) => (m.id === id ? { ...m, needsWeb: undefined } : m));
       return;
     }
+    // The live-information offer (Offline Only, or no plan). Don't ask
+    // again: no more offers for this AI. Look it up online: the same
+    // question again on the live-web model, this once (the press is the
+    // consent, web switch included). Let this AI go online: the setting
+    // the person would make in Edit, then the same question again.
+    if (target === "live-never") {
+      try { localStorage.setItem(`live-offer-off:${selectedAi.value.id}`, "1"); } catch { /* preference */ }
+      chatState.messages = chatState.messages.map((m) => (m.id === id ? { ...m, liveOffer: false } : m));
+      return;
+    }
+    if (target === "live-online") {
+      if (chatState.isLoading) return;
+      uiLog(`[live] look it up online on ${id.slice(0, 8)}`);
+      return retry(id, "live");
+    }
+    if (target === "live-use-online") {
+      const ai = selectedAi.value;
+      if (!ai.aiConfig?.id) return;
+      try {
+        await updateCustomAi(ai.aiConfig.id, { model: "auto:online-offline" });
+      } catch (e) {
+        console.warn("[Live] could not switch the AI to Auto - Online and Offline:", e);
+        return;
+      }
+      selectedAi.value = { ...ai, aiConfig: { ...ai.aiConfig, model: "auto:online-offline" } };
+      uiLog(`[live] ${ai.label} now Auto - Online and Offline; asking again`);
+    }
     if (target === "web-on") {
       // The switch itself, then the same question again with the web.
       const ai = selectedAi.value;
@@ -1703,7 +1736,7 @@ export default component$(() => {
         selectedAi.value = { ...ai, aiConfig: { ...ai.aiConfig, webAccess: true } };
       }
     }
-    if (target !== "tools" && target !== "web-once" && target !== "web-on" && target !== "dig-deeper") return retry(id, target);
+    if (target !== "tools" && target !== "web-once" && target !== "web-on" && target !== "live-use-online" && target !== "dig-deeper") return retry(id, target);
     const at = chatState.messages.findIndex((m) => m.id === id);
     const asked = at > 0 ? chatState.messages[at - 1] : undefined;
     uiLog(`[web] ${target} on ${id.slice(0, 8)}: at ${at}, asked ${asked?.role ?? "-"}, loading ${chatState.isLoading}`);
@@ -1712,6 +1745,9 @@ export default component$(() => {
     input.value = asked.content;
     if (target === "tools") forceToolsNext.value = true;
     if (target === "web-once") webOnceNext.value = true;
+    // Switched to online for a question about now: the web comes with it this
+    // once, or a web-off AI would answer from the everyday model unsearched.
+    if (target === "live-use-online") webOnceNext.value = true;
     // Dig deeper is offered after a page was read: the person's press carries
     // the web for this turn too (an AI on "just this once" stayed web-off
     // and the agent read nothing, dev 10-14).
@@ -1940,12 +1976,6 @@ export default component$(() => {
     nav("/setup");
   });
 
-  const handleUpgradeClick = $(() => {
-    const websiteUrl =
-      (import.meta as any).env?.VITE_WEBSITE_URL || "https://yourownai.net";
-    import("@tauri-apps/plugin-opener").then((m) => m.openUrl(`${websiteUrl}/pricing`));
-  });
-
 
   // --- Derived state ---
   const isDesktop = true;
@@ -2024,7 +2054,6 @@ export default component$(() => {
               canRouteOnline={selectedAi.value.aiConfig?.model === 'auto:online-offline'}
               onGround$={groundMessage$}
               scrollToBottom$={scrollToBottom}
-              handleUpgradeClick$={handleUpgradeClick}
               input={input}
               handleSubmit$={handleSubmit}
               readOnlyReason={copiedFrom.value ? `From ${copiedFrom.value} · read-only until it arrives` : undefined}
@@ -2394,8 +2423,8 @@ export default component$(() => {
                         <p class="text-sm text-yellow-700 dark:text-yellow-300 mb-4">
                           Online models use your Flowsta identity, through Flowsta Vault on this computer. Offline models keep working without it.
                         </p>
-                        <LiquidMetalButton onClick$={() => nav("/settings")} class="px-4 py-2 text-sm">
-                          Go to Settings
+                        <LiquidMetalButton onClick$={() => nav("/online-models")} class="px-4 py-2 text-sm">
+                          Sign in
                         </LiquidMetalButton>
                       </div>
                     );
@@ -2407,22 +2436,10 @@ export default component$(() => {
                           Online models need a plan
                         </p>
                         <p class="text-sm text-yellow-700 dark:text-yellow-300 mb-4">
-                          This device isn't on a plan yet. Your browser opens signed in; choose or link a plan there, then try again.
+                          This device isn't on a plan yet. Plans are an optional paid service, and everything offline stays free.
                         </p>
-                        <LiquidMetalButton
-                          onClick$={async () => {
-                            try {
-                              const { invoke } = await import("@tauri-apps/api/core");
-                              const { openUrl } = await import("@tauri-apps/plugin-opener");
-                              const url = await invoke<string>("flowsta_handoff_url");
-                              await openUrl(url);
-                            } catch {
-                              nav("/settings");
-                            }
-                          }}
-                          class="px-4 py-2 text-sm"
-                        >
-                          See plans
+                        <LiquidMetalButton onClick$={() => nav("/online-models")} class="px-4 py-2 text-sm">
+                          See online models
                         </LiquidMetalButton>
                       </div>
                     );
@@ -2504,13 +2521,20 @@ export default component$(() => {
                             ? "Shorten it, or let Auto pick the roomiest model here."
                             : medical
                               ? "Health questions stay on your device, whatever the mode. Shorten it, or use a medical model with more room."
-                              : onlineOffline
-                              ? entitled
-                                ? `An online model can hold it - that means sending ${what} online.`
-                                : "An online model could hold it - online models are an optional paid service (Settings → Online Models). Or shorten it."
                               : entitled
-                                ? `This AI never goes online. Switching it to Auto - Online and Offline would let an online model take it - and send ${what} online.`
-                                : "This AI never goes online, and online models are an optional paid service (Settings → Online Models). Shorten it, or try a smaller attachment."}
+                                ? onlineOffline
+                                  ? `An online model can hold it - that means sending ${what} online.`
+                                  : `This AI never goes online. Switching it to Auto - Online and Offline would let an online model take it - and send ${what} online.`
+                                : c.hasAttachment
+                                  ? "Try a smaller attachment."
+                                  : "Start a new conversation, or shorten your message."}
+                          {!pinned && !medical && !entitled && (
+                            <>
+                              {" "}
+                              <a href="/online-models" class="font-medium underline">Online models</a> can hold more.
+                              They are an optional paid service; everything offline stays free.
+                            </>
+                          )}
                         </p>
                         <div class="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
                           <LiquidMetalButton
@@ -2646,14 +2670,14 @@ export default component$(() => {
                   // use, an OS the engine can't start on). Said plainly, with
                   // the offline way forward first and the online door second.
                   if (online?.code === "hardware_limit") {
-                    const h = online as { title?: string; message?: string; offlineModels?: boolean };
+                    const h = online as { title?: string; message?: string; offlineModels?: boolean; noDoor?: boolean };
                     return (
                       <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-700 rounded-lg p-4">
                         <p class="text-sm font-medium text-yellow-800 dark:text-yellow-200 mb-1">
                           {h.title ?? "This computer can't run that model"}
                         </p>
-                        <p class="text-sm text-yellow-700 dark:text-yellow-300 mb-2">{h.message}</p>
-                        <OnlineModelsDoor class="text-sm text-yellow-700 dark:text-yellow-300 mb-4" />
+                        <p class={`text-sm text-yellow-700 dark:text-yellow-300 ${h.noDoor ? "mb-4" : "mb-2"}`}>{h.message}</p>
+                        {!h.noDoor && <OnlineModelsDoor class="text-sm text-yellow-700 dark:text-yellow-300 mb-4" />}
                         <div class="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
                           <LiquidMetalButton
                             variant="secondary"
@@ -2768,13 +2792,20 @@ export default component$(() => {
         isOpen={folderGuard.value !== null}
         title={`${folderGuard.value?.currentLabel ?? "This AI"} may struggle with project work`}
         message={
-          folderGuard.value?.offlineAuto
-            ? `${folderGuard.value.currentLabel} routes offline only, and none of your downloaded models can drive project work. Download a model marked "Agentic" from the Offline Models page, or switch this AI to a mode that can use online models.`
+          // The offline fix first; online models after it, as the optional
+          // paid service they are, or how to use them with a plan.
+          (folderGuard.value?.offlineAuto
+            ? `${folderGuard.value.currentLabel} is set to Offline Only, and none of your downloaded models can drive project work. Download a model marked "Agentic" from the Offline Models page.`
             : folderGuard.value?.offlineUncomfortable
-              ? `${folderGuard.value.currentLabel} routes offline only, and your project-capable models don't fit comfortably on this hardware - project work may load very slowly or fail. A smaller model marked "Agentic", or a mode that can use online models, will work much better.`
+              ? `${folderGuard.value.currentLabel} is set to Offline Only, and your project-capable models don't fit comfortably on this hardware, so project work may load very slowly or fail. A smaller model marked "Agentic" will work much better.`
             : folderGuard.value?.suggestion
               ? `${folderGuard.value.currentLabel}'s model isn't built for tool work, so project tasks may stall or fail. ${folderGuard.value.suggestion.label} can drive them properly - switch this project to ${folderGuard.value.suggestion.label}? To stay offline instead, pick a model marked "Agentic" on the Offline Models page.`
-              : `${folderGuard.value?.currentLabel ?? "This AI"}'s model isn't built for tool work, so project tasks may stall or fail. An online model like GPT-6 Astra works best - or to stay offline, download a model marked "Agentic" from the Offline Models page.`
+              : `${folderGuard.value?.currentLabel ?? "This AI"}'s model isn't built for tool work, so project tasks may stall or fail. Download a model marked "Agentic" from the Offline Models page.`) +
+          (folderGuard.value?.suggestion
+            ? ""
+            : folderGuard.value?.planned
+              ? " Or set this AI to Auto - Online and Offline to use your plan's online models."
+              : " Online models can do it too; they are an optional paid service, and everything offline stays free.")
         }
         confirmLabel={
           folderGuard.value?.suggestion

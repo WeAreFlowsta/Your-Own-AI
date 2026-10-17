@@ -6,6 +6,7 @@ import InitialView from './InitialView';
 import ConversationView from './ConversationView';
 import SelectionRemember from './SelectionRemember';
 import { ChatInputBar, type ReplyOffer } from './ChatInputBar';
+import { lastKnownEntitled } from '../utils/entitlement';
 import { Message, SelectedAiModel, ChatAction, AttachedFile, AttachedImage } from '../types';
 
 type SidePanelContent = { messageId: string; codeString: string; language: string; } | null;
@@ -13,12 +14,11 @@ type SidePanelContent = { messageId: string; codeString: string; language: strin
 interface ChatContainerProps {
   messages: Message[];
   messagesEndRef: Signal<HTMLDivElement | undefined>;
-  retry$: QRL<(id: string, target?: 'online' | 'device' | 'tools' | 'web-once' | 'web-on' | 'web-never' | 'build-install' | 'build-dismiss' | 'build-never' | 'dig-deeper') => void>;
+  retry$: QRL<(id: string, target?: 'online' | 'device' | 'tools' | 'web-once' | 'web-on' | 'web-never' | 'live-online' | 'live-use-online' | 'live-never' | 'build-install' | 'build-dismiss' | 'build-never' | 'dig-deeper') => void>;
   canRouteOnline: boolean;
   canUseTools?: boolean;
   onGround$?: QRL<(id: string) => void>;
   scrollToBottom$: QRL<(behavior?: ScrollBehavior) => void>;
-  handleUpgradeClick$: QRL<() => void>;
   input: Signal<string>;
   handleSubmit$: QRL<() => void>;
   isLoading: boolean;
@@ -157,17 +157,21 @@ export default component$<ChatContainerProps>((props) => {
 
   // The one offer for the last reply, shown above the composer - never
   // under the reply, never two at once (Eric 10-14). Web off outranks the
-  // rest: the person asked for a page and got an answer without it.
+  // rest: the person asked for a page and got an answer without it. Live
+  // information the AI could not look up comes next (Offline Only, or no
+  // plan: the answer may be out of date).
   const lastReply = messages[messages.length - 1];
   const replyOffer: ReplyOffer | null =
     !props.isLoading && lastReply?.role === 'assistant' && !lastReply.isLoading && !!lastReply.content
       ? lastReply.needsWeb
         ? { messageId: lastReply.id, kind: 'web-off', needsWeb: lastReply.needsWeb }
-        : lastReply.digDeeper
-          ? { messageId: lastReply.id, kind: 'dig-deeper', pages: lastReply.sources?.length ?? 0 }
-          : lastReply.buildOffer
-            ? { messageId: lastReply.id, kind: 'build' }
-            : null
+        : lastReply.liveOffer
+          ? { messageId: lastReply.id, kind: 'live-info', plan: (() => { try { return lastKnownEntitled() === 'yes'; } catch { return false; } })() }
+          : lastReply.digDeeper
+            ? { messageId: lastReply.id, kind: 'dig-deeper', pages: lastReply.sources?.length ?? 0 }
+            : lastReply.buildOffer
+              ? { messageId: lastReply.id, kind: 'build' }
+              : null
       : null;
 
   // Show InitialView when there are no messages
@@ -230,7 +234,6 @@ export default component$<ChatContainerProps>((props) => {
           canUseTools={props.canUseTools}
           onGround$={props.onGround$}
           scrollToBottom$={props.scrollToBottom$}
-          handleUpgradeClick$={props.handleUpgradeClick$}
           setSidePanelContent$={setSidePanelContent$}
           isDesktop={props.isDesktop}
           theme={props.theme}

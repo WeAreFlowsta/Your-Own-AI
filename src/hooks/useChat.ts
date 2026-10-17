@@ -556,6 +556,15 @@ export function useChat(props: UseChatProps) {
       // A question that names a page has its material in the page: the AI's
       // documents join only on a strong match (see the recall below).
       let addressesInQuestion = 0;
+      // Can this AI look anything up live? Only on Auto - Online and Offline
+      // with a plan (a pinned online model has its own cards when it fails).
+      // When it cannot, turning the web on would not help a question about
+      // now: the live-information offer covers it instead.
+      const aiMode = selectedAi.aiConfig?.model || "";
+      const liveOfferable =
+        !aiMode.startsWith("online:") &&
+        (aiMode !== "auto:online-offline" ||
+          (await import("../utils/entitlement")).lastKnownEntitled() === "no");
       {
         const { findWebAddresses } = await import("../utils/webAddresses");
         const urls = findWebAddresses(userInput);
@@ -654,6 +663,7 @@ export function useChat(props: UseChatProps) {
               if (await invoke<boolean>("live_web_cue", { text: userInput })) needs = "live";
             } catch { /* the cue is a nicety */ }
           }
+          if (needs === "live" && liveOfferable) needs = null;
           if (needs) {
             const n = needs;
             state.messages = state.messages.map((m) => (m.id === assistantId ? { ...m, needsWeb: n } : m));
@@ -686,6 +696,27 @@ export function useChat(props: UseChatProps) {
         queryVec: queryVecPromise,
       }).catch(() => "");
       void aiModelSetting;
+
+      // Live information this AI could not look up: the reply carries the
+      // offer above the composer. At most once a conversation, never for a
+      // health question (live_info_need), never on a resend that already
+      // went online.
+      if (
+        liveOfferable &&
+        !modelOverride?.startsWith("online:") &&
+        !state.messages.some((m) => m.liveOffer !== undefined) &&
+        (() => { try { return localStorage.getItem(`live-offer-off:${selectedAi.id}`) !== "1"; } catch { return true; } })()
+      ) {
+        void queryVecPromise
+          .then((vec) => invoke<boolean>("live_info_need", { text: userInput, queryVec: vec ?? undefined }))
+          .then((need) => {
+            if (!need) return;
+            uiLog("[live] the question needs live information this AI cannot look up - offer");
+            state.messages = state.messages.map((m) => (m.id === assistantId ? { ...m, liveOffer: true } : m));
+            updateTurn(assistantId, { assistant: { liveOffer: true } });
+          })
+          .catch(() => { /* the offer is a nicety */ });
+      }
 
       // Phase D: NOW that the bubble + action bar are on screen, classify the turn  - 
       // the classify call no longer makes Enter feel laggy (it's absorbed into the
@@ -1096,6 +1127,9 @@ export function useChat(props: UseChatProps) {
         } catch (error) {
           const errorMessage =
             error instanceof Error ? error.message : String(error);
+          // The online door never follows a health question: those stay on
+          // the device whatever the mode.
+          const healthTurn = () => invoke<boolean>("is_medical_query", { query: userInput }).catch(() => false);
           if (errorMessage.includes("MODEL_ENGINE_CANNOT_START")) {
             // The OS will not run the engine binary: no model can load, so
             // never suggest a smaller model or a restart.
@@ -1105,6 +1139,7 @@ export function useChat(props: UseChatProps) {
             abortWith(JSON.stringify({
               code: "hardware_limit",
               title: "Offline models can't start on this computer yet",
+              noDoor: await healthTurn(),
               message: `The AI engine in this version of Your Own AI needs a newer release of your operating system than this computer is running, so offline models will not load. Your computer and ${selectedAi.label}'s model are fine. A new version of Your Own AI, or an operating system update, fixes it.`,
             }));
           } else if (errorMessage.includes("MODEL_DEVICE_UNSUPPORTED")) {
@@ -1117,6 +1152,8 @@ export function useChat(props: UseChatProps) {
               code: "hardware_limit",
               title: "Your graphics card can't run AI models right now",
               message: `The app will use your processor instead. The retry didn't complete - restarting the app usually finishes the switch. On the processor, smaller models run best.`,
+              // The retry not completing is ours: no door on it.
+              noDoor: true,
             }));
           } else if (errorMessage.includes("MODEL_LOAD_CRASHED")) {
             props.currentModel.value = preferredModel;
@@ -1153,6 +1190,7 @@ export function useChat(props: UseChatProps) {
                     title: `${selectedAi.label}'s model is too large for this computer`,
                     message: `It needs more graphics memory than this machine has. A smaller model will run - on the Offline Models page, look for the "Full speed" badge.`,
                     offlineModels: true,
+                    noDoor: await healthTurn(),
                   })
             );
           } else if (errorMessage.includes("MODEL_LOAD_TIMEOUT")) {
@@ -1164,6 +1202,7 @@ export function useChat(props: UseChatProps) {
               title: `${selectedAi.label}'s model took too long to load on this computer`,
               message: `The attempt was stopped and won't be retried this session. A smaller model will load quickly - on the Offline Models page, look for the "Full speed" badge.`,
               offlineModels: true,
+              noDoor: await healthTurn(),
             }));
           } else if (errorMessage.includes("MODEL_FILE_UNREADABLE")) {
             props.currentModel.value = preferredModel;
@@ -2448,7 +2487,7 @@ export function useChat(props: UseChatProps) {
     state.messageSequence = 0;
   });
 
-  const retry = $(async (messageId: string, target?: "online" | "device") => {
+  const retry = $(async (messageId: string, target?: "online" | "device" | "live") => {
     const messageIndex = state.messages.findIndex((m) => m.id === messageId);
     if (messageIndex === -1 || messageIndex === 0) return;
 
@@ -2458,9 +2497,28 @@ export function useChat(props: UseChatProps) {
     // "Try online" / "Redo on device": resolve the destination through the
     // router so the user's per-slot online picks and offline lean apply, then
     // resend with the concrete model. Falls back to a plain retry if routing
-    // can't deliver the asked-for side.
+    // can't deliver the asked-for side. "Look it up online" (live) takes the
+    // router's own pick for a question about now: the live-web slot.
     let override: string | undefined;
-    if (target) {
+    if (target === "live") {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const r = await invoke<{ model: string; reason: string }>("route_model", {
+          mode: "online-offline",
+          query: userMessage.content,
+          task: state.messages[messageIndex]?.routingTask || "general",
+          difficulty: "easy",
+          onlineShare: "frontier",
+          lean: localStorage.getItem("routingOfflineLean") || "balanced",
+          onlineFresh: localStorage.getItem("routingOnlineFresh") || undefined,
+          onlineEveryday: localStorage.getItem("routingOnlineEveryday") || undefined,
+        });
+        if (r.model.startsWith("online:")) override = r.model;
+      } catch (e) {
+        console.warn("[Router] look-it-up-online resolve failed:", e);
+      }
+      if (!override) return;
+    } else if (target) {
       const task = state.messages[messageIndex]?.routingTask || "general";
       try {
         const { invoke } = await import("@tauri-apps/api/core");
@@ -2497,7 +2555,8 @@ export function useChat(props: UseChatProps) {
     // online, or a plain regenerate.
     {
       const answered = state.messages[messageIndex];
-      if (answered?.servedBy && !answered.agentTurn) {
+      // A live lookup says nothing about the device answer's quality.
+      if (answered?.servedBy && !answered.agentTurn && target !== "live") {
         const verdict = target === "device" ? "redo_device" : target === "online" ? "try_online" : "regenerate";
         import("@tauri-apps/api/core")
           .then(({ invoke }) =>

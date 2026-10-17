@@ -45,7 +45,7 @@ describe("online-model offers, as someone without a plan sees them", () => {
     });
     console.log(`e2e: model picker opened: ${opened}`);
     await browser.pause(800);
-    console.log(`e2e: picker footer found: ${await scrollToText("unlock with a plan")}`);
+    console.log(`e2e: picker footer found: ${await scrollToText("come with a plan")}`);
     await browser.pause(300);
     await shot("notice-02-model-picker");
     await browser.keys("Escape");
@@ -53,7 +53,7 @@ describe("online-model offers, as someone without a plan sees them", () => {
     // Settings: the routing section's no-plan text.
     await browser.url("tauri://localhost/settings/");
     await browser.pause(2_500);
-    console.log(`e2e: settings routing text found: ${await scrollToText("unlocks with a plan")}`);
+    console.log(`e2e: settings routing text found: ${await scrollToText("Plans are an optional paid")}`);
     await browser.pause(300);
     await shot("notice-03-settings-routing");
 

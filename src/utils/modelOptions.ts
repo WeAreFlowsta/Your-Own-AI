@@ -23,7 +23,7 @@ export function autoOptions(args: {
   currentModel: string;
 }): AutoOption[] {
   const opts: AutoOption[] = [
-    { id: 'auto:offline', label: 'Auto — Offline Only', hint: 'best of your offline models' },
+    { id: 'auto:offline', label: 'Auto - Offline Only', hint: 'best of your offline models' },
   ];
   // A connected server is part of Offline Only (and of Online and
   // Offline): no third mode since 09-24. An AI still set to the old
@@ -34,7 +34,7 @@ export function autoOptions(args: {
   ) {
     opts.push({
       id: 'auto:online-offline',
-      label: 'Auto — Online and Offline',
+      label: 'Auto - Online and Offline',
       hint: 'offline, + online for up-to-date questions',
     });
   }

@@ -430,9 +430,9 @@ export default component$(() => {
                 )}
                 {recommended.tight && (
                   <p class="mt-3 text-xs text-amber-500">
-                    Expect slow answers on this machine. For fast ones, the optional plan adds GPT, Grok, Kimi,
-                    DeepSeek and more, running online at full speed on any computer - every price shown up front,
-                    in Settings after this download.
+                    Expect slow answers on this machine. Online models run at full speed on any computer; they are
+                    an optional paid service, on the Online Models page after this download. Everything offline
+                    stays free.
                   </p>
                 )}
               </div>

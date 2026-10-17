@@ -152,7 +152,7 @@ describe("routing in real conversations", () => {
     report["offline: proxy requests"] = { before: requestsBefore, after: requestsAfter };
     console.log(`e2e: proxy requests for the test plan ${requestsBefore} -> ${requestsAfter}`);
     expect(judge(rows)).toEqual([]);
-    for (const r of rows) expect(r.reason.toLowerCase()).not.toContain("online —");
+    for (const r of rows) expect(r.reason.toLowerCase()).not.toContain("online:");
     expect(requestsAfter).toBe(requestsBefore);
     // A specialist (the medical model, a coder) may load by design; reloading
     // the model the previous device turn already had never should.

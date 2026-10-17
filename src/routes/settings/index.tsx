@@ -1245,14 +1245,16 @@ export default component$(() => {
                     working; billing is enforced per request). */}
                 {!onlineEntitled.value ? (
                   <p class="text-sm text-[var(--text-muted)]">
-                    Online routing - answering with frontier online models,
-                    and keeping a question on your device when it is as good -
-                    unlocks with a plan. Set it up on the Online Models page.
+                    With a plan, Auto - Online and Offline sends a question
+                    online when an online model answers it better, and keeps
+                    the rest on your device. Plans are an optional paid
+                    service; everything offline stays free.{' '}
+                    <a href="/online-models" class="text-[var(--text-link)] hover:underline">See online models</a>
                   </p>
                 ) : (
                 <>
                 <h3 class="text-lg font-semibold text-[var(--text-primary)]">
-                  Going online (Auto — Online and Offline)
+                  Going online (Auto - Online and Offline)
                 </h3>
                 <p class="text-sm text-[var(--text-secondary)] mt-1 mb-4">
                   Only for AIs set to "Auto - Online and Offline". By default a
@@ -1274,7 +1276,7 @@ export default component$(() => {
                     onToggle$={toggleAttachmentsOnline}
                   >
                     Off: a question with an image or document attached stays on
-                    your device, even for an "Auto — Online and Offline" AI, and
+                    your device, even for an "Auto - Online and Offline" AI, and
                     choosing an online model yourself asks before anything
                     leaves. On: online models may be used for attachments when
                     they'd do a better job, without asking each time. Offline

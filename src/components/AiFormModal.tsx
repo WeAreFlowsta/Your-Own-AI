@@ -1087,11 +1087,11 @@ const AiFormModal = component$<AiFormModalProps>(
                         : !store.model || store.model === ''
                           ? 'Select a model...'
                           : store.model === 'auto:offline'
-                            ? 'Auto — Offline Only'
+                            ? 'Auto - Offline Only'
                             : store.model === 'auto:online-offline'
-                              ? 'Auto — Online and Offline'
+                              ? 'Auto - Online and Offline'
                               : store.model === 'auto:my-hardware'
-                                ? 'Auto — Offline Only'
+                                ? 'Auto - Offline Only'
                                 : store.model.startsWith('online:')
                                 ? `${store.onlineModels.find((m) => m.id === store.model)?.display_name || store.model.slice(7)} (online)`
                                 : store.model.startsWith('external:')
@@ -1175,9 +1175,9 @@ const AiFormModal = component$<AiFormModalProps>(
                                     : 'bg-red-500';
                               const title =
                                 fit === 'green'
-                                  ? 'Fits fully on your GPU — fast'
+                                  ? 'Fits fully on your GPU, fast'
                                   : fit === 'split'
-                                    ? 'GPU + RAM — its experts run from main memory, fast for its size'
+                                    ? 'GPU + RAM: its experts run from main memory, fast for its size'
                                     : fit === 'yellow'
                                       ? 'Runs slower on this machine'
                                       : 'Needs more memory than this machine has';
@@ -1200,8 +1200,9 @@ const AiFormModal = component$<AiFormModalProps>(
                       ))}
                       {store.onlineModels.length > 0 && !store.onlineEntitled && (
                         <li class="select-none border-t border-[var(--border-subtle)] mt-1 pt-2 pb-2 pl-4 pr-4 text-xs text-[var(--text-muted)]">
-                          Online models (and Auto — Online and Offline) unlock with a
-                          plan — set up on the Online Models page.
+                          Online models and Auto - Online and Offline come with a plan, an
+                          optional paid service. Everything offline stays free.{' '}
+                          <a href="/online-models" class="select-auto text-[var(--text-link)] hover:underline">See online models</a>
                         </li>
                       )}
                       {store.onlineModels.length > 0 && store.onlineEntitled && (

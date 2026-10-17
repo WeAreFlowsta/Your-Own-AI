@@ -2,6 +2,7 @@ import { component$, useSignal, useVisibleTask$, $ } from '@builder.io/qwik';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Callout } from './Callout';
+import OnlineModelsDoor from './OnlineModelsDoor';
 
 /**
  * Amber notice in the same slot and style as the CUDA offer: the engine
@@ -64,19 +65,10 @@ export default component$(() => {
           ? "Your graphics card's driver can't run AI models, so they run on your processor instead - everything works, just slower. Installing the full driver from your graphics card maker (for NVIDIA cards, nvidia.com) may restore full speed - then choose \"Try my graphics card again\" in Settings, Engines."
           : "Your graphics card's generation isn't supported by the AI engine, so models run on your processor instead - everything works, just slower."}
       </p>
-      <p class="mb-2.5">
-        Smaller models run best on your processor - and{' '}
-        {/* A door, not a pitch: this goes to the Online Models page (the
-            storefront with its own explanation and gating), never toward a
-            checkout from an error surface. */}
-        <a
-          href="/online-models"
-          class="text-[var(--text-link)] hover:underline"
-        >
-          online models
-        </a>{' '}
-        run at full speed on any machine, if you ever want them.
-      </p>
+      <p class="mb-2.5">Smaller models run best on your processor.</p>
+      {/* A door, not a pitch: the shared sentence (plan-aware), linking only
+          to the Online Models page, never toward a checkout. */}
+      <OnlineModelsDoor class="mb-2.5" />
       <button
         type="button"
         onClick$={dismiss}

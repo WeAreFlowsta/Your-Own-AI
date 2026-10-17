@@ -240,8 +240,9 @@ export const ModelChip = component$<ModelChipProps>((props) => {
                   ))}
                 {store.onlineModels.length > 0 && !store.onlineEntitled && (
                   <div class="select-none border-t border-[var(--border-subtle)] mt-1 pt-2 pb-2 pl-4 pr-4 text-xs text-[var(--text-muted)]">
-                    Online models (and Auto — Online and Offline) unlock with a plan
-                    - set up on the Online Models page.
+                    Online models and Auto - Online and Offline come with a plan, an
+                    optional paid service. Everything offline stays free.{' '}
+                    <a href="/online-models" class="select-auto text-[var(--text-link)] hover:underline">See online models</a>
                   </div>
                 )}
                 {store.onlineModels.length > 0 && store.onlineEntitled && (

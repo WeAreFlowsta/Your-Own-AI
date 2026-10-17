@@ -667,6 +667,7 @@ pub fn run() {
             router::route_model,
             router::agent_best_local,
             router::live_web_cue,
+            router::live_info_need,
             router::is_medical_query,
             router::routing_specialist_tasks,
             router::routing_defaults,

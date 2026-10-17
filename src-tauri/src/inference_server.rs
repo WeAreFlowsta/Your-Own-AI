@@ -2457,7 +2457,7 @@ async fn responses_web_search(
         return err(
             StatusCode::FORBIDDEN,
             &format!(
-                "Web search is off for '{}': this AI is set to stay offline. Fetch a specific URL you already know instead, or ask the user to set the AI to Auto - Online and Offline (or an online model) if live web results are needed.",
+                "Web search is off for '{}': the person turned web access off for this AI. Answer from what you know and say that you could not search; they can turn web access on in this AI's settings (Edit AI > Web access).",
                 ai.name
             ),
             "web_search_offline",

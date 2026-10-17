@@ -14,9 +14,10 @@ import { CarryChip } from './CarryChip';
 /** The one door offered for the last reply, above the composer. */
 export type ReplyOffer =
   | { messageId: string; kind: 'web-off'; needsWeb: 'page' | 'live' }
+  | { messageId: string; kind: 'live-info'; plan: boolean }
   | { messageId: string; kind: 'dig-deeper'; pages: number }
   | { messageId: string; kind: 'build' };
-export type ReplyOfferTarget = 'web-once' | 'web-on' | 'web-never' | 'build-install' | 'build-dismiss' | 'build-never' | 'dig-deeper';
+export type ReplyOfferTarget = 'web-once' | 'web-on' | 'web-never' | 'live-online' | 'live-use-online' | 'live-never' | 'build-install' | 'build-dismiss' | 'build-never' | 'dig-deeper';
 
 interface ChatInputBarProps {
   /** See ReplyOffer: at most one, for the last reply, gone on the next message. */
@@ -166,13 +167,30 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
         </Callout>
       )}
       {offer && offerGo && (
-        <Callout intent={offer.kind === 'web-off' ? 'warning' : 'info'} class="mb-2 !p-3">
+        <Callout intent={offer.kind === 'web-off' || offer.kind === 'live-info' ? 'warning' : 'info'} class="mb-2 !p-3">
           {offer.kind === 'web-off' && (
             <div class="flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="web-offer">
               <span>{offer.needsWeb === 'page' ? 'Answered without reading the page.' : 'Answered without looking online.'} Web access is off for this AI.</span>
               <button type="button" class={offerLink} onClick$={() => offerGo(offer.messageId, 'web-on')}>Turn on web access for this AI</button>
               <button type="button" class={offerLink} onClick$={() => offerGo(offer.messageId, 'web-once')}>Just this once</button>
               <button type="button" class={offerQuiet} onClick$={() => offerGo(offer.messageId, 'web-never')}>Don't ask again for this AI</button>
+            </div>
+          )}
+          {offer.kind === 'live-info' && (
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="live-offer" data-plan={offer.plan ? 'yes' : 'no'}>
+              {offer.plan ? (
+                <>
+                  <span>This may be out of date. Offline models can't look up live information.</span>
+                  <button type="button" class={offerLink} onClick$={() => offerGo(offer.messageId, 'live-online')}>Look it up online</button>
+                  <button type="button" class={offerLink} title="Sets this AI to Auto - Online and Offline" onClick$={() => offerGo(offer.messageId, 'live-use-online')}>Let this AI go online</button>
+                </>
+              ) : (
+                <>
+                  <span>This may be out of date. Offline models can't look up live information; online models can, as an optional paid service. Everything offline stays free.</span>
+                  <a href="/online-models" class={offerLink}>See online models</a>
+                </>
+              )}
+              <button type="button" class={offerQuiet} onClick$={() => offerGo(offer.messageId, 'live-never')}>Don't ask again for this AI</button>
             </div>
           )}
           {offer.kind === 'dig-deeper' && (

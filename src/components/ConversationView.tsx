@@ -34,7 +34,6 @@ interface ConversationViewProps {
   canUseTools?: boolean;
   onGround$?: QRL<(id: string) => void>;
   scrollToBottom$: QRL<(behavior?: ScrollBehavior) => void>;
-  handleUpgradeClick$: QRL<() => void>;
   setSidePanelContent$: QRL<(content: { messageId: string; codeString: string; language: string; } | null) => void>;
   isDesktop: boolean;
   theme: 'light' | 'dark';
@@ -63,7 +62,6 @@ export default component$<ConversationViewProps>(({
   canUseTools,
   onGround$,
   scrollToBottom$,
-  handleUpgradeClick$,
   setSidePanelContent$,
   isDesktop,
   theme,
@@ -94,7 +92,6 @@ export default component$<ConversationViewProps>(({
           canUseTools={canUseTools}
           onGround$={message.groundingSource && message.id ? $(() => onGround$?.(message.id!)) : undefined}
           onScrollNeeded$={scrollToBottom$}
-          onUpgradeClick$={message.showUpgradeButton && message.originalUserQuery && message.id ? $(() => handleUpgradeClick$()) : undefined}
           aiLabel={message.aiLabel}
           aiImageUrl={message.aiImageUrl}
           setSidePanelContent$={setSidePanelContent$}

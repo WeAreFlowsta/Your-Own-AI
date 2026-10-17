@@ -654,7 +654,7 @@ pub async fn start_build_agent(
                     let _ = app_handle.emit("agent-hint", json!({
                         "kind": "small-coder",
                         "sticky": true,
-                        "text": "Project work is slow and weaker on the small models this computer runs. Online routing lets the AI hand the hard steps to a bigger model, and keeps the rest here."
+                        "text": "Project work is slow and weaker on the small models this computer runs. A larger model marked \"Agentic\" on the Offline Models page does better, if this computer can hold one."
                     }));
                 }
             }
