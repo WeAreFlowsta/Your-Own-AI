@@ -106,6 +106,42 @@ describe("fallback to another provider, and the models automatic routing may use
     await setAutoAllow(null);
   });
 
+  it("shows the list in Settings and the switch and Use for on each Online Models card", async function () {
+    if (!haveIdentity()) this.skip();
+    this.timeout(180_000);
+    await browser.url("tauri://localhost/settings/");
+    await (await $('[data-testid="auto-routing-models"]')).waitForDisplayed({ timeout: 60_000 });
+    const rows = (await browser.execute(() =>
+      [...document.querySelectorAll('[data-testid="auto-routing-models"] [data-provider]')].map((r) => ({
+        id: (r as HTMLElement).dataset.provider,
+        on: r.querySelector('[data-testid="auto-provider-switch"]')?.getAttribute("aria-checked"),
+      })),
+    )) as { id: string; on: string }[];
+    console.log(`e2e: settings rows ${JSON.stringify(rows)}`);
+    for (const p of providers) expect(rows.find((r) => r.id === p.id)?.on).toBe(String(p.auto_default));
+    await browser.execute(() => {
+      const list = document.querySelector('[data-testid="auto-routing-models"]') as HTMLElement;
+      (list.querySelector("[aria-expanded]") as HTMLElement | null)?.click();
+      list.scrollIntoView({ block: "center", behavior: "instant" as ScrollBehavior });
+    });
+    await browser.pause(600);
+    await shot("routing-list-settings");
+    await browser.url("tauri://localhost/online-models/");
+    await browser.waitUntil(async () => browser.execute(() => document.querySelectorAll('[data-testid="model-auto-switch"]').length > 0), { timeout: 60_000, timeoutMsg: "no Auto switch on the cards" });
+    await browser.pause(1_000);
+    const badges = (await browser.execute(() => [...document.querySelectorAll('[data-testid="model-use-badge"]')].map((b) => b.textContent))) as string[];
+    console.log(`e2e: use badges ${JSON.stringify(badges)}`);
+    expect(badges.length).toBeGreaterThan(0);
+    await browser.execute(() => {
+      const b = document.querySelector('[data-testid="use-for"]') as HTMLElement | null;
+      b?.scrollIntoView({ block: "center", behavior: "instant" as ScrollBehavior });
+      b?.click();
+    });
+    await browser.pause(500);
+    await shot("routing-online-models-use-for");
+    await browser.keys("Escape");
+  });
+
   it("answers from another provider when the online model is busy, and the reply says why", async function () {
     if (!haveIdentity()) this.skip();
     this.timeout(600_000);
