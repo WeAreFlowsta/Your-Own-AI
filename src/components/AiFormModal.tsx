@@ -893,7 +893,8 @@ const AiFormModal = component$<AiFormModalProps>(
                 </label>
                 <p class="text-xs text-[var(--text-muted)] mb-2">
                   On: this AI can read web pages you point it to, downloaded on this computer. Searching the web
-                  also needs online models on your plan. Off: nothing from the web, whatever models answer.
+                  is done by an online model, so it also needs this AI's models to include online ones. Off:
+                  nothing from the web, whatever models answer.
                 </p>
                 <LiquidMetalBorder borderRadius="9999px">
                   <div class="flex rounded-full overflow-hidden bg-[var(--bg-card)]" data-testid="ai-web-access">
