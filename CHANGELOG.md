@@ -269,6 +269,12 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   button says.
 
 ### Diagnostics
+- Running the truth matrix can no longer run the computer out of memory:
+  each test load starts only with room for it (a model graded too big is
+  not loaded to confirm it when memory is short), and the app's own model
+  waits until the matrix finishes. The Devices section says which identity
+  it describes and numbers your other devices; the report names no device
+  or identity, so it stays safe to share.
 - The truth matrix has a Devices section: the Vault, when this device
   last backed up its AIs and everything else, how old this Vault's copies
   of your other devices are, the last check for their changes, and where

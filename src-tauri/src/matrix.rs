@@ -15,6 +15,14 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::tuning::{arms_for, bench_one, bench_port, TuneArm};
 
 static MATRIX_RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// The matrix owns the machine while it runs: the app's own model loads
+/// wait (10-20: the chat page loaded Gemma at 16k context a minute into
+/// the run, the fit step's first test load landed on top of it, and the
+/// out-of-memory killer took VS Code and the app).
+pub(crate) fn matrix_running() -> bool {
+    MATRIX_RUNNING.load(Ordering::SeqCst)
+}
 pub static MATRIX_CANCEL: AtomicBool = AtomicBool::new(false);
 
 fn cancelled() -> bool {
@@ -1090,6 +1098,14 @@ pub async fn leg_turn_mode(bin: &Path, dir: &Path, loaded: Option<&str>, sink: S
 
 /// LIED GREEN (claimed ok, did not load); a conservative red that runs is
 /// reported but not a failure.
+/// Free memory a test load needs before it is started: the app loader's
+/// gate (2 GiB and a tenth of the file), plus the whole file when the model
+/// is graded too big - that check loads it to see it fail.
+pub(crate) fn load_room_needed(file_bytes: u64, graded_too_big: bool) -> u64 {
+    let gate = 2u64 * 1024 * 1024 * 1024 + file_bytes / 10;
+    if graded_too_big { gate + file_bytes } else { gate }
+}
+
 pub async fn leg_fit_truth(app: Option<&AppHandle>, bin: &Path, dir: &Path, only: &[String], sink: Sink<'_>) -> Vec<String> {
     let free_vram = || free_vram_gb(bin);
     // The grade column is the APP's grade (assess: MoE split, tune pins,
@@ -1154,6 +1170,25 @@ pub async fn leg_fit_truth(app: Option<&AppHandle>, bin: &Path, dir: &Path, only
             .copied()
             .unwrap_or_else(|| crate::fit::grade(need, free, avail_ram));
         let arm = TuneArm { ctx, moe_cpu_layers: moe_decision(&meta, size, ctx, free), draft: false, kv_q8: false, ubatch: 0, cpu: false, gpu: None };
+        // Room for this load, measured now: the app's loader gate (2 GiB plus
+        // a tenth of the file), and for a model graded too big, its whole
+        // file on top - a "does it really not load?" check is only safe
+        // with the memory to fail in (10-20: a 4 GB card, swap full, 3.7 GB
+        // free, and the check took the machine's memory down).
+        let free_now = crate::llm::grading_memory_bytes();
+        let room_needed = load_room_needed(size, grade == crate::fit::Fit::Red);
+        if free_now > 0 && free_now < room_needed {
+            sink(format!(
+                "{:<38} {:>5} {:>6} {:>6.2}        | not tried: {:.1} GB of memory free, a safe load needs about {:.1} GB (close other apps and run again)",
+                name,
+                format!("{:?}", grade),
+                ctx,
+                need,
+                free_now as f64 / 1024f64.powi(3),
+                room_needed as f64 / 1024f64.powi(3),
+            ));
+            continue;
+        }
         let before = free_vram();
         let r = bench_one(bin, dir, &name, arm, None, None, &[], Some(&free_vram), false).await;
         let after_kill = free_vram();
@@ -1660,6 +1695,17 @@ pub async fn leg_headroom(
     failures
 }
 
+/// A rendezvous for a report anyone may read: Flowsta's own servers by
+/// name, anything else (a person's own server) unnamed.
+pub(crate) fn public_server_name(url: &str) -> String {
+    let host = url.trim_start_matches("https://").trim_start_matches("http://").split(['/', ':']).next().unwrap_or("").trim_end_matches('.');
+    if host == "flowsta.com" || host.ends_with(".flowsta.com") {
+        host.to_string()
+    } else {
+        "your own server".to_string()
+    }
+}
+
 /// How long ago, in words a report reader takes in at a glance.
 fn ago(secs_then: u64, now: u64) -> String {
     let d = now.saturating_sub(secs_then);
@@ -1688,6 +1734,18 @@ pub async fn leg_devices(app: &AppHandle, sink: Sink<'_>) -> Vec<String> {
         return Vec::new();
     };
     sink(format!("Vault: on port {port}, {}", if vault.unlocked { "unlocked" } else { "locked (backups wait for it)" }));
+    // Which identity the lines below describe - by count, never by name: the
+    // report is made to be shared (10-20: the Vault had been unlocked as
+    // another identity, and its lines read as faults).
+    let identities = crate::profile::device_root(app)
+        .ok()
+        .and_then(|r| std::fs::read_dir(crate::profile::profiles_dir(&r)).ok())
+        .map(|d| d.flatten().filter(|e| e.path().is_dir()).count())
+        .unwrap_or(0);
+    sink(format!(
+        "identity: the one unlocked in the Vault now{}",
+        if identities > 1 { format!(" ({identities} identities have used Your Own AI on this computer)") } else { String::new() }
+    ));
     let ai_count = crate::profile::root(app)
         .ok()
         .and_then(|d| std::fs::read_to_string(d.join("ai-data.json")).ok())
@@ -1707,11 +1765,11 @@ pub async fn leg_devices(app: &AppHandle, sink: Sink<'_>) -> Vec<String> {
         match crate::vault_escrow::sibling_devices(port).await {
             Ok(devs) if devs.is_empty() => sink("other devices: none on this identity".into()),
             Ok(devs) => {
-                for d in devs {
+                for (n, d) in devs.into_iter().enumerate() {
                     let age = |s: &Option<String>| s.as_deref().and_then(|v| v.trim_matches('"').parse::<u64>().ok()).map(|t| ago(t, now)).unwrap_or_else(|| "none".into());
                     sink(format!(
-                        "other device {}: {} | copies here - AIs {}, full {} | network {}",
-                        d.name.as_deref().unwrap_or("(unnamed)"),
+                        "other device {} ({}) | copies here - AIs {}, full {} | network {}",
+                        n + 1,
                         d.platform.as_deref().unwrap_or("?"),
                         age(&d.ais_at),
                         age(&d.manifest_at),
@@ -1729,7 +1787,7 @@ pub async fn leg_devices(app: &AppHandle, sink: Sink<'_>) -> Vec<String> {
     match crate::rendezvous_keeper::last_status() {
         Some(k) => sink(format!(
             "rendezvous: conductor started on {} | last round {} - {}/{} server(s) answered, conductor registered {} note(s){}{}",
-            k.conductor.as_deref().unwrap_or("(unknown)"),
+            k.conductor.as_deref().map(public_server_name).unwrap_or_else(|| "(unknown)".into()),
             ago(k.at_secs, now),
             k.reached,
             k.servers,
@@ -2394,6 +2452,22 @@ pub async fn matrix_run(
 }
 
 #[cfg(test)]
+mod fit_room_tests {
+    use super::load_room_needed;
+    const GB: u64 = 1024 * 1024 * 1024;
+    #[test]
+    fn a_test_load_needs_the_loader_gate_and_a_too_big_one_its_whole_file_on_top() {
+        assert_eq!(load_room_needed(4 * GB, false), 2 * GB + 4 * GB / 10);
+        assert_eq!(load_room_needed(4 * GB, true), 2 * GB + 4 * GB / 10 + 4 * GB);
+        // 10-20: 3.7 GB free - a 3.2 GB model that fits is tried, one graded
+        // too big is not.
+        let free = 37 * GB / 10;
+        assert!(free >= load_room_needed(32 * GB / 10, false));
+        assert!(free < load_room_needed(32 * GB / 10, true));
+    }
+}
+
+#[cfg(test)]
 mod devices_leg_tests {
     use super::{ago, devices_failures};
     #[test]
@@ -2405,6 +2479,16 @@ mod devices_leg_tests {
         assert!(devices_failures(false, false, 3, false, false).is_empty(), "no Vault: this device keeps to itself");
         assert!(devices_failures(true, true, 0, false, false).is_empty(), "no AIs, nothing to hold");
     }
+    #[test]
+    fn only_flowstas_own_servers_are_named_in_a_report() {
+        use super::public_server_name;
+        assert_eq!(public_server_name("https://bootstrap.flowsta.com"), "bootstrap.flowsta.com");
+        assert_eq!(public_server_name("https://bootstrap.flowsta.com./"), "bootstrap.flowsta.com");
+        assert_eq!(public_server_name("https://node1.flowsta.com"), "node1.flowsta.com");
+        assert_eq!(public_server_name("https://rendezvous.example-family.net"), "your own server");
+        assert_eq!(public_server_name("https://notflowsta.com"), "your own server");
+    }
+
     #[test]
     fn ages_read_at_a_glance() {
         assert_eq!(ago(1_000, 1_030), "30 s ago");

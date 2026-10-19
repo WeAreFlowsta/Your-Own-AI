@@ -5442,6 +5442,10 @@ pub async fn load_model(
     reason: String,
 ) -> Result<(), String> {
     use tauri::Emitter as _;
+    if crate::matrix::matrix_running() && !reason.starts_with("matrix") {
+        log::info!("[LLM] load of '{}' ({}) held: the truth matrix is running", filename, reason);
+        return Err("The truth matrix is running - models load again when it finishes.".to_string());
+    }
     let announce_app = app_handle.clone();
     let announced_file = filename.clone();
     let announced_reason = reason.clone();
