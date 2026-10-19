@@ -20,6 +20,10 @@ const BUILD_REPO: &str = "WeAreFlowsta/Your-Own-AI-Build";
 static DOWNLOADING: AtomicBool = AtomicBool::new(false);
 static LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
 
+pub(crate) fn pinned_version() -> &'static str {
+    version()
+}
+
 fn version() -> &'static str {
     BUILD_RELEASE_TAG.trim_start_matches('v')
 }

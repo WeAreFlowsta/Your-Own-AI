@@ -1480,6 +1480,11 @@ const HELPER_FILE: &str = "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf";
 /// engine), so the matrix proves them on every machine.
 pub async fn leg_components(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<String> {
     let mut failures = Vec::new();
+    match crate::build_install::installed_version(app) {
+        Some(v) if v == crate::build_install::pinned_version() => sink(format!("agent program: v{v} (what this app ships)")),
+        Some(v) => sink(format!("agent program: v{v} installed, this app ships v{} - update in Add-ons > Components", crate::build_install::pinned_version())),
+        None => sink("agent program: not installed (project work installs it)".into()),
+    }
     let st = app.state::<crate::llm::LLMState>();
     if dir.join(crate::router::EMBED_MODEL).exists() {
         let texts = vec!["hello world".to_string(), "a second phrase".to_string(), "and a third".to_string()];
@@ -1653,6 +1658,154 @@ pub async fn leg_headroom(
     sink(format!("helpers with {b} loaded: memory model on the {}, helper on the {}", e.word(), u.word()));
     crate::llm::stop_chat_server_for_maintenance(&state).await;
     failures
+}
+
+/// How long ago, in words a report reader takes in at a glance.
+fn ago(secs_then: u64, now: u64) -> String {
+    let d = now.saturating_sub(secs_then);
+    if d < 120 { format!("{d} s ago") } else if d < 7200 { format!("{} min ago", d / 60) } else if d < 172_800 { format!("{} h ago", d / 3600) } else { format!("{} days ago", d / 86_400) }
+}
+
+/// What counts as broken in the Devices section: only what is plainly
+/// wrong on THIS machine. Another device being asleep or off is a fact,
+/// not a failure.
+pub(crate) fn devices_failures(vault_reachable: bool, unlocked: bool, ai_count: usize, holds_ais: bool, holds_manifest: bool) -> Vec<String> {
+    let mut f = Vec::new();
+    if vault_reachable && unlocked && ai_count > 0 && !holds_ais && !holds_manifest {
+        f.push(format!("devices: the Vault holds no backup of your {ai_count} AI(s) - they cannot reach your other devices"));
+    }
+    f
+}
+
+/// The multi-device picture on this machine, read only: the Vault, what
+/// this device has backed up and when, each other device's copies, the
+/// last check for their changes, and the rendezvous keeper.
+pub async fn leg_devices(app: &AppHandle, sink: Sink<'_>) -> Vec<String> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let vault = crate::flowsta::find_vault().await;
+    let Some(port) = vault.port else {
+        sink("Vault: not found on this computer (this device keeps everything to itself)".into());
+        return Vec::new();
+    };
+    sink(format!("Vault: on port {port}, {}", if vault.unlocked { "unlocked" } else { "locked (backups wait for it)" }));
+    let ai_count = crate::profile::root(app)
+        .ok()
+        .and_then(|d| std::fs::read_to_string(d.join("ai-data.json")).ok())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v["custom-ais"].as_array().map(|a| a.len()))
+        .unwrap_or(0);
+    let labels = if vault.unlocked { crate::vault_escrow::own_backup_labels(port).await } else { Default::default() };
+    let (holds_ais, holds_manifest) = (labels.contains(crate::vault_escrow::AIS_LABEL), labels.contains(crate::vault_escrow::MANIFEST_LABEL));
+    let written = crate::vault_escrow::backup_write_times(app);
+    let when = |label: &str| written.iter().find(|(l, _)| l == label).map(|(_, t)| ago(*t, now)).unwrap_or_else(|| "not yet".into());
+    sink(format!(
+        "this device: {ai_count} AI(s) | small AI backup {} ({}) | full backup {} ({})",
+        if holds_ais { "held" } else { "missing" }, when(crate::vault_escrow::AIS_LABEL),
+        if holds_manifest { "held" } else { "missing" }, when(crate::vault_escrow::MANIFEST_LABEL),
+    ));
+    if vault.unlocked {
+        match crate::vault_escrow::sibling_devices(port).await {
+            Ok(devs) if devs.is_empty() => sink("other devices: none on this identity".into()),
+            Ok(devs) => {
+                for d in devs {
+                    let age = |s: &Option<String>| s.as_deref().and_then(|v| v.trim_matches('"').parse::<u64>().ok()).map(|t| ago(t, now)).unwrap_or_else(|| "none".into());
+                    sink(format!(
+                        "other device {}: {} | copies here - AIs {}, full {} | network {}",
+                        d.name.as_deref().unwrap_or("(unnamed)"),
+                        d.platform.as_deref().unwrap_or("?"),
+                        age(&d.ais_at),
+                        age(&d.manifest_at),
+                        d.generation.as_deref().unwrap_or("?"),
+                    ));
+                }
+            }
+            Err(e) => sink(format!("other devices: not read ({e})")),
+        }
+    }
+    match crate::config_sync::config_sync_status(app.clone()) {
+        Some(st) => sink(format!("last check for other devices' changes: {} ({} updated, {} added)", ago(st.checked_at / 1000, now), st.updated, st.added)),
+        None => sink("last check for other devices' changes: none yet on this profile".into()),
+    }
+    match crate::rendezvous_keeper::last_status() {
+        Some(k) => sink(format!(
+            "rendezvous: conductor started on {} | last round {} - {}/{} server(s) answered, conductor registered {} note(s){}{}",
+            k.conductor.as_deref().unwrap_or("(unknown)"),
+            ago(k.at_secs, now),
+            k.reached,
+            k.servers,
+            k.conductor_registered,
+            if k.put_elsewhere > 0 { format!(", listed on fallbacks too ({})", k.put_elsewhere) } else { String::new() },
+            match k.stalled_min { Some(m) => format!(" | COVERING for a stalled registration ({m} min)"), None => String::new() },
+        )),
+        None => sink("rendezvous: the keeper has not run yet (it starts about a minute after the conductor)".into()),
+    }
+    let failures = devices_failures(true, vault.unlocked, ai_count, holds_ais, holds_manifest);
+    for f in &failures {
+        sink(format!("FAIL: {f}"));
+    }
+    failures
+}
+
+/// The loaded chat model, asked for ONE named tool the way a program asks
+/// (the OpenAI object form, normalized as :11435 does), answers with that
+/// tool call. A failure on a model graded for agent work is a failure; on a
+/// smaller one it is noted.
+pub async fn leg_tool_call(app: &AppHandle, sink: Sink<'_>) -> Vec<String> {
+    let loaded = app.state::<crate::llm::LLMState>().current_model.lock().await.clone();
+    let Some(model) = loaded else {
+        sink("no chat model loaded - skipped (load one and run again)".into());
+        return Vec::new();
+    };
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": [{"role": "user", "content": "Record that the build passed."}],
+        "tools": [{"type": "function", "function": {
+            "name": "emit",
+            "description": "Record a status line.",
+            "parameters": {"type": "object", "properties": {"status": {"type": "string"}}, "required": ["status"]}
+        }}],
+        "tool_choice": {"type": "function", "function": {"name": "emit"}},
+        "max_tokens": 1024,
+        "stream": false,
+    });
+    crate::inference_server::normalize_tool_choice(&mut body);
+    let started = std::time::Instant::now();
+    let reply = crate::llm::local_http()
+        .post(format!("http://127.0.0.1:{}/v1/chat/completions", crate::llm::chat_port()))
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(180))
+        .send()
+        .await;
+    let called = match reply {
+        Ok(r) => match r.json::<serde_json::Value>().await {
+            Ok(v) => v["choices"][0]["message"]["tool_calls"][0]["function"]["name"].as_str().map(str::to_string),
+            Err(e) => {
+                sink(format!("{model}: FAIL - reply unreadable: {e}"));
+                return vec![format!("tool call: {model} reply unreadable")];
+            }
+        },
+        Err(e) => {
+            sink(format!("{model}: FAIL - no answer: {e}"));
+            return vec![format!("tool call: {model} did not answer")];
+        }
+    };
+    let grade = crate::model_caps::agent_caps(&model);
+    match called.as_deref() {
+        Some("emit") => {
+            sink(format!("{model}: ok - called emit ({} ms)", started.elapsed().as_millis()));
+            Vec::new()
+        }
+        other => {
+            let what = other.map(|n| format!("called {n}")).unwrap_or_else(|| "answered in words".into());
+            if grade >= 6 {
+                sink(format!("{model}: FAIL - asked for emit, {what}"));
+                vec![format!("tool call: {model} {what} when asked for one named tool")]
+            } else {
+                sink(format!("{model}: {what} (grade {grade}: not an agent model - noted, not a failure)"));
+                Vec::new()
+            }
+        }
+    }
 }
 
 pub async fn leg_routing(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<String> {
@@ -2073,6 +2226,18 @@ pub async fn matrix_run(
         sink(String::new());
     }
 
+    if !cancelled() && want("devices") {
+        sink("== Devices (this machine and your others) ==".into());
+        failures.extend(leg_devices(&app, sink).await);
+        sink(String::new());
+    }
+
+    if !cancelled() && want("toolcall") {
+        sink("== Tool call (one named tool, asked the way a program asks) ==".into());
+        failures.extend(leg_tool_call(&app, sink).await);
+        sink(String::new());
+    }
+
     if want("fit") {
         sink("== Fit truth (claim vs real load) ==".into());
         failures.extend(leg_fit_truth(Some(&app), &bin, &dir, &[], sink).await);
@@ -2226,6 +2391,27 @@ pub async fn matrix_run(
     }
     let _ = app.emit("matrix-done", path.display().to_string());
     Ok(path.display().to_string())
+}
+
+#[cfg(test)]
+mod devices_leg_tests {
+    use super::{ago, devices_failures};
+    #[test]
+    fn only_a_vault_holding_nothing_of_your_ais_is_a_failure() {
+        assert!(devices_failures(true, true, 3, false, false).len() == 1, "AIs, an unlocked Vault, nothing held");
+        assert!(devices_failures(true, true, 3, true, false).is_empty(), "the small object alone is enough");
+        assert!(devices_failures(true, true, 3, false, true).is_empty(), "an older app's full backup alone too");
+        assert!(devices_failures(true, false, 3, false, false).is_empty(), "locked: backups wait, not broken");
+        assert!(devices_failures(false, false, 3, false, false).is_empty(), "no Vault: this device keeps to itself");
+        assert!(devices_failures(true, true, 0, false, false).is_empty(), "no AIs, nothing to hold");
+    }
+    #[test]
+    fn ages_read_at_a_glance() {
+        assert_eq!(ago(1_000, 1_030), "30 s ago");
+        assert_eq!(ago(1_000, 1_000 + 600), "10 min ago");
+        assert_eq!(ago(1_000, 1_000 + 3 * 3600), "3 h ago");
+        assert_eq!(ago(1_000, 1_000 + 3 * 86_400), "3 days ago");
+    }
 }
 
 #[cfg(test)]

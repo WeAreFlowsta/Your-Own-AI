@@ -263,6 +263,14 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - Pausing an online model keeps automatic routing from using it, as its
   button says.
 
+### Diagnostics
+- The truth matrix has a Devices section: the Vault, when this device
+  last backed up its AIs and everything else, how old this Vault's copies
+  of your other devices are, the last check for their changes, and where
+  this device is listed for them. It also asks the loaded model for one
+  named tool the way a program does, and says when the agent program
+  installed is older than the one this app ships.
+
 ## [0.8.1] - 2026-09-30
 
 ### Fixed

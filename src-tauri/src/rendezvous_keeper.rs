@@ -258,6 +258,26 @@ pub(crate) fn is_conductors(url: &str, index: usize, conductor: Option<&str>) ->
     }
 }
 
+/// The last round, for the truth matrix's Devices section.
+#[derive(Clone, Debug)]
+pub(crate) struct KeeperStatus {
+    pub at_secs: u64,
+    pub servers: usize,
+    pub reached: usize,
+    pub put: usize,
+    pub put_elsewhere: usize,
+    pub conductor_registered: usize,
+    /// Minutes the keeper has been covering for the conductor, if it is.
+    pub stalled_min: Option<u64>,
+    pub conductor: Option<String>,
+}
+
+static LAST_STATUS: std::sync::Mutex<Option<KeeperStatus>> = std::sync::Mutex::new(None);
+
+pub(crate) fn last_status() -> Option<KeeperStatus> {
+    LAST_STATUS.lock().ok().and_then(|g| g.clone())
+}
+
 pub(crate) struct Keeper {
     servers: Vec<Server>,
     client: reqwest::Client,
@@ -374,6 +394,7 @@ impl Keeper {
         }
 
         self.report(&round, &put_on);
+        self.remember(&round, conductor.as_deref());
         for url in put_elsewhere_on {
             if self.told_elsewhere.insert(url.clone()) {
                 log::info!(
@@ -384,6 +405,22 @@ impl Keeper {
             }
         }
         Ok(round)
+    }
+
+    fn remember(&self, round: &Round, conductor: Option<&str>) {
+        let status = KeeperStatus {
+            at_secs: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
+            servers: self.servers.len(),
+            reached: round.reached,
+            put: round.put,
+            put_elsewhere: round.put_elsewhere,
+            conductor_registered: round.conductor_registered,
+            stalled_min: self.stalled_since.map(|s| s.elapsed().as_secs() / 60),
+            conductor: conductor.map(str::to_string),
+        };
+        if let Ok(mut g) = LAST_STATUS.lock() {
+            *g = Some(status);
+        }
     }
 
     /// Say something only when the picture changes: the first time we had

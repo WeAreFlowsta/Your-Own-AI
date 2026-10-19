@@ -955,7 +955,7 @@ async fn fetch_vault_label(port: u16, label: &str) -> Option<serde_json::Value> 
 
 /// The labels this device's app backup holds in the Vault (the list is one
 /// cheap call; it says whether an object we may skip rewriting is there).
-async fn own_backup_labels(port: u16) -> std::collections::HashSet<String> {
+pub(crate) async fn own_backup_labels(port: u16) -> std::collections::HashSet<String> {
     let Ok(resp) = http()
         .get(format!("http://127.0.0.1:{}/backup/list", port))
         .header("Origin", VAULT_ORIGIN)
@@ -989,6 +989,14 @@ fn load_fingerprints(app: &tauri::AppHandle) -> std::collections::HashMap<String
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
+}
+
+/// When each backup object was last written (seconds since the epoch), by
+/// label - the truth matrix's Devices section.
+pub(crate) fn backup_write_times(app: &tauri::AppHandle) -> Vec<(String, u64)> {
+    let mut v: Vec<(String, u64)> = load_fingerprints(app).into_iter().map(|(k, f)| (k, f.written_at)).collect();
+    v.sort();
+    v
 }
 
 fn save_fingerprints(app: &tauri::AppHandle, prints: &std::collections::HashMap<String, Fingerprint>) {

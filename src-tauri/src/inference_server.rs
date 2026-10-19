@@ -1898,7 +1898,7 @@ fn pretty_model_name(model: &str) -> String {
 /// {"name":..}}`) makes it warn and drop the field, so a caller that forced a
 /// tool (the Build agent's structured output does) got a free-text answer and
 /// no tool call. Naming a function means a tool call is required: say so.
-fn normalize_tool_choice(body: &mut Value) {
+pub(crate) fn normalize_tool_choice(body: &mut Value) {
     let Some(choice) = body.get("tool_choice") else { return };
     if choice.is_object() {
         let name = choice
