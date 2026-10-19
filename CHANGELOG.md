@@ -101,6 +101,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   re-indexed once, with progress shown on its card.
 
 ### Working in the background
+- The first question in a project on a model this computer runs no
+  longer ends with "The agent stopped before finishing": when the model
+  was being reloaded with more room, an earlier start of the session
+  could replace the one the question was running in.
 - Opening a project the AI has no memory of yet answers at once; it used
   to read every AI's whole conversation list first (three minutes on a
   busy install) and forget that it had found nothing.

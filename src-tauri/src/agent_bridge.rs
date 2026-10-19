@@ -461,6 +461,33 @@ async fn write_line(state: &AgentBridgeState, value: &Value) -> Result<(), Strin
         .map_err(|e| format!("failed to write to agent: {}", e))
 }
 
+
+/// A newer session start bumped the generation while this one waited: it
+/// stands down and leaves the session to the newer start. Not an error -
+/// the front end already shows the newer start's session.
+fn superseded(state: &AgentBridgeState, my_gen: u64) -> bool {
+    let now = state.generation.load(Ordering::SeqCst);
+    if now != my_gen {
+        log::info!("[agent] a newer session start took over while this one waited - standing down (start {my_gen}, now {now})");
+        return true;
+    }
+    false
+}
+
+#[cfg(test)]
+mod start_tests {
+    #[test]
+    fn a_start_stands_down_once_a_newer_one_bumped_the_generation() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let gen = AtomicU64::new(0);
+        let a = gen.fetch_add(1, Ordering::SeqCst) + 1;
+        assert_eq!(gen.load(Ordering::SeqCst), a, "alone: carries on");
+        let b = gen.fetch_add(1, Ordering::SeqCst) + 1;
+        assert_ne!(gen.load(Ordering::SeqCst), a, "the older start sees it was replaced");
+        assert_eq!(gen.load(Ordering::SeqCst), b, "the newer start carries on");
+    }
+}
+
 #[tauri::command]
 pub async fn start_build_agent(
     app_handle: AppHandle,
@@ -641,6 +668,14 @@ pub async fn start_build_agent(
                 });
             }
         }
+        // Growing the context can wait out a model reload (30 s on a small
+        // card). A newer start that ran meanwhile owns the session now: this
+        // one stops here, before it rewrites the model entries or replaces
+        // the live process under a turn already running there (10-19: "The
+        // agent stopped before finishing" on the first question).
+        if superseded(&state, my_gen) {
+            return Ok(());
+        }
         AGENT_WINDOW.store(if local_window { agent_ctx } else { 0 }, Ordering::SeqCst);
         let device_workers = crate::router::device_subagents_enabled(&app_handle).await;
         // The web is this AI's own switch (Edit AI > Web access, on unless
@@ -711,6 +746,9 @@ pub async fn start_build_agent(
         // a 16k local window and a million-token online one each get a
         // cap that fits.
         command = command.env("GROK_MAX_MCP_OUTPUT_BYTES", cap.to_string());
+    }
+    if superseded(&state, my_gen) {
+        return Ok(());
     }
     let (mut rx, child) = command
         .spawn()
