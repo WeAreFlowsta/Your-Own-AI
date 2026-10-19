@@ -263,7 +263,7 @@ function humanizeMcpName(name: string): string {
     "project-memory__remember_for_project": "Remember something for this project",
     "project-memory__read_project_memory": "Read the project's memory",
     "project-memory__read_memory": "Read your memory",
-    "project-memory__remember": "Remembered something for you",
+    "project-memory__remember": "Remember something",
   };
   if (known[name]) return known[name];
   // "<server>__<tool>" -> "Tool words (server)": the server half says WHICH
@@ -2054,7 +2054,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
           return undefined;
         };
         const serverLabel = (server: string) => MCP_PRESETS.find((m) => m.id === server)?.title;
-        const human = describeAction(update, { subjectOf, skillNameFromPath, serverLabel });
+        const human = describeAction(update, { subjectOf, skillNameFromPath, serverLabel, aiName: props.selectedAi.value.aiConfig?.name ?? props.selectedAi.value.label });
         if (human.specificity === 0 && kind === "tool_call") {
           // A tool the table does not know: say so in the log, so the next
           // fixture can be added (the label falls back to the agent's title).
@@ -2177,6 +2177,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
                 liveLine: finished ? undefined : prev.liveLine,
                 error: error ?? prev.error,
                 exitCode: exitNoted ?? prev.exitCode,
+                memoryScope: human.memoryScope ?? prev.memoryScope,
+                memoryOwner: prev.memoryOwner ?? (human.memoryScope === "ai" ? props.selectedAi.value.id : undefined),
               },
             };
           } else {
@@ -2204,6 +2206,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
                 endedAt: finished ? Date.now() : undefined,
                 error,
                 exitCode: exitNoted,
+                memoryScope: human.memoryScope,
+                memoryOwner: human.memoryScope === "ai" ? props.selectedAi.value.id : undefined,
                 ...out,
               },
             });

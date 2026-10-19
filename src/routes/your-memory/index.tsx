@@ -13,6 +13,7 @@ import { useHeaderWorkspace } from "../../hooks/useHeaderWorkspace";
 import LiquidMetalButton from "../../components/LiquidMetalButton";
 import ProfileMemory from "../../components/ProfileMemory";
 import ImportHistoryCard from "../../components/ImportHistoryCard";
+import MemoryOwners from "../../components/MemoryOwners";
 
 export default component$(() => {
   const nav = useNavigate();
@@ -57,6 +58,8 @@ export default component$(() => {
               </p>
             </div>
           </div>
+
+          <MemoryOwners selected="you" />
 
           <ProfileMemory readOnly={false} />
 

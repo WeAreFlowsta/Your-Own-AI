@@ -53,12 +53,18 @@ export interface ActionDescription {
   name?: string;
   /** The MCP server for a `use_tool` call ("obsidian", "project-memory"). */
   server?: string;
+  /** A remember step: whose memory it went into - every AI's (the
+   *  person's), this AI's own, or the project's. The rail shows the owner's
+   *  face and says it in the label. */
+  memoryScope?: "person" | "ai" | "project";
   /** 3 = named tool with its subject; 2 = named tool, no subject;
    *  1 = ACP kind; 0 = the agent's title. */
   specificity: number;
 }
 
 export interface DescribeContext {
+  /** The AI doing the work, for "Remembered for Newsta only". */
+  aiName?: string;
   /** The subject of an earlier step by its tool-call id ("generate.sh",
    *  "the helper: find every page without a title") - names a wait. */
   subjectOf?: (toolCallId: string) => string | undefined;
@@ -312,6 +318,21 @@ export function describeAction(update: any, ctx: DescribeContext = {}): ActionDe
             server,
             specificity: 3,
           };
+        }
+        if (toolName === "project-memory__remember") {
+          const args = typeof input.tool_input === "string" ? (() => { try { return JSON.parse(input.tool_input); } catch { return {}; } })() : input.tool_input ?? {};
+          const scope: "person" | "ai" | "project" = args.scope === "ai" || args.scope === "project" ? args.scope : "person";
+          const who = ctx.aiName || "this AI";
+          const [label, labelDone] =
+            scope === "ai"
+              ? [`Remembering this for ${who} only`, `Remembered for ${who} only`]
+              : scope === "project"
+                ? ["Remembering this for the project", "Remembered for the project"]
+                : ["Remembering this for all your AIs", "Remembered for all your AIs"];
+          return { label, labelDone, kind: "mcp", icon: "mcp", detail, name, server, specificity: 3, memoryScope: scope };
+        }
+        if (toolName === "project-memory__remember_for_project") {
+          return { label: known[0], labelDone: known[1], kind: "mcp", icon: "mcp", detail, name, server, specificity: 3, memoryScope: "project" };
         }
         return { label: known[0], labelDone: known[1], kind: "mcp", icon: "mcp", detail, name, server, specificity: 3 };
       }

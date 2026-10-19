@@ -20,9 +20,10 @@ import {
   listWorkspaceMemories,
   type WorkspaceMemory,
 } from "../../utils/workspaceMemory";
-import { Link, useNavigate, type DocumentHead } from "@builder.io/qwik-city";
+import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
 import { LuArrowLeft, LuMessageSquare, LuChevronDown, LuChevronUp, LuInfo, LuDownload, LuPencil, LuShieldCheck, LuBrain, LuUser, LuTrash2 } from "@qwikest/icons/lucide";
 import ConfirmModal from "../../components/ConfirmModal";
+import MemoryOwners from "../../components/MemoryOwners";
 import AppHeader from "../../components/AppHeader";
 import { useHeaderWorkspace } from "../../hooks/useHeaderWorkspace";
 import { ProjectMemoryContext } from "../layout";
@@ -317,6 +318,23 @@ export default component$(() => {
   // Tabs: Conversations (the per-AI ledger, default) | Knows (read-only
   // mirror) | Workspaces (per-folder memory, shared by all AIs).
   const activeTab = useSignal<"knows" | "conversations" | "workspaces">("conversations");
+  // The faces row on this page switches AI in place (the page reads its AI
+  // from session storage once; a reload keeps the choice).
+  const pickAi = $((id: string, key: string) => {
+    sessionStorage.setItem("memory-ai-id", id);
+    sessionStorage.setItem("memory-agent-key", key);
+    aiId.value = id;
+    agentKey.value = key;
+  });
+
+  // From the faces row on Your Memory: straight to what this AI keeps.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(() => {
+    if (sessionStorage.getItem("memory-tab") === "knows") {
+      sessionStorage.removeItem("memory-tab");
+      activeTab.value = "knows";
+    }
+  }, { strategy: "document-ready" });
   const workspaceMemories = useSignal<WorkspaceMemory[]>([]);
   const workspacesLoading = useSignal(false);
   // The modal renders at the layout root (route stacking contexts
@@ -405,6 +423,8 @@ export default component$(() => {
             </div>
 
           </div>
+
+          <MemoryOwners selected={aiId.value} onPick$={pickAi} />
 
           {/* Tabs */}
           <div class="flex items-center gap-1 mb-6 border-b border-[var(--border-subtle)]">
@@ -529,7 +549,7 @@ export default component$(() => {
           )}
 
           {activeTab.value === "knows" && (
-            <div class="space-y-8">
+            <div class="space-y-8" key={`knows-${aiId.value}`}>
               <Callout intent="premium" title={`${aiName.value || "This AI"}'s memory`} id="memory-tip-knowledge" class="mb-2">
                 One memory, two kinds of entries: things you've{" "}
                 <span class="font-semibold">given</span> it (backstory, world,
@@ -554,14 +574,6 @@ export default component$(() => {
                 </h3>
                 <AiEpisodicMemory aiId={aiId.value} aiName={aiName.value} />
               </div>
-              <p class="border-t border-[var(--border-subtle)] pt-5 text-sm text-[var(--text-secondary)]">
-                What <span class="font-semibold">every</span> AI knows about you
-                - your name, preferences, projects - lives in one place:{" "}
-                <Link href="/your-memory/" class="text-[var(--text-link)] hover:underline">
-                  Your Memory
-                </Link>
-                .
-              </p>
             </div>
           )}
 

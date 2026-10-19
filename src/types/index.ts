@@ -305,6 +305,9 @@ export interface AgentAction {
    *  command of a chain failing, `git status` outside a repo): shown on
    *  the row, not a failed step. */
   exitCode?: number;
+  /** A remember step: whose memory it went into, and for "ai" which AI. */
+  memoryScope?: 'person' | 'ai' | 'project';
+  memoryOwner?: string;
   /** File paths this action touched (feeds the changed-files viewer). */
   locations?: string[];
   /** The full input (path, command...) for the expanded view. */

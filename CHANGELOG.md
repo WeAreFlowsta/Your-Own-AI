@@ -80,6 +80,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   character's stock face.
 
 ### Memory
+- Your Memory and each AI's memory page open with a row of faces: You
+  (what every AI knows about you), then each AI with how much it keeps for
+  itself. Pick a face to see that memory. When an AI remembers something
+  while working, the step shows whose memory it went into: every AI's,
+  its own, or the project's.
 - A note an AI saves for a project that corrects an earlier one (the
   build command changed, say) takes the old note's place; before, both
   stood and the next session read both.

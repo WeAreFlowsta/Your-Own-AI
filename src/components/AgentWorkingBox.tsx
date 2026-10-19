@@ -18,7 +18,10 @@ import {
   LuRotateCcw,
   LuCopy,
   LuExternalLink,
+  LuUsers,
+  LuFolderOpen,
 } from "@qwikest/icons/lucide";
+import { useAiData } from "../contexts/AiDataContext";
 import { AgentPermissionCard } from "./AgentPermissionCard";
 import { AgentDiffBlock } from "./AgentDiffBlock";
 import { ActionIcon, formatElapsed, iconForKind } from "./ActionIcon";
@@ -976,6 +979,8 @@ interface ActionRowProps {
  *  under it, when open, the diff, the output or the live log. */
 const ActionRow = component$<ActionRowProps>(({ action: a, open, onToggle$, working, now, waitLine, steps, openChildren, onToggleChild$ }) => {
   const { failed, running, still } = stepState(a, working);
+  const aiData = useAiData();
+  const ownerFace = a.memoryScope === "ai" && a.memoryOwner ? aiData.thumbnailObjectUrls[a.memoryOwner] : undefined;
   const elapsed = elapsedOf(a, running, now);
   const live = a.liveLine !== undefined && (working || still);
   const line = a.liveLine ?? waitLine ?? (!working && (a.taskId || a.icon === "helper") ? a.lastLine : undefined);
@@ -996,7 +1001,26 @@ const ActionRow = component$<ActionRowProps>(({ action: a, open, onToggle$, work
         } ${hasOutput ? "hover:bg-[var(--bg-card)] cursor-pointer" : "cursor-default"}`}
       >
         <div class="flex min-w-0 max-w-full items-center gap-2.5">
-          <ActionIcon icon={a.icon} kind={a.kind} brand={a.server} glyph={a.glyph} status={failed ? "failed" : running ? "in_progress" : "completed"} />
+          {a.memoryScope && !failed ? (
+            // Whose memory it went into: every AI's, this AI's own, the project's.
+            <span class="w-5 h-5 shrink-0 flex items-center justify-center" data-testid="memory-step-owner" data-scope={a.memoryScope}>
+              {a.memoryScope === "ai" ? (
+                ownerFace ? (
+                  <img src={ownerFace} alt="" width={20} height={20} class="w-5 h-5 rounded-full object-cover" />
+                ) : (
+                  <span class="w-5 h-5 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600" />
+                )
+              ) : a.memoryScope === "project" ? (
+                <LuFolderOpen class="w-4 h-4 text-[var(--text-secondary)]" />
+              ) : (
+                <span class="w-5 h-5 rounded-full flex items-center justify-center bg-gradient-to-br from-purple-500 to-indigo-600 text-white">
+                  <LuUsers class="w-3 h-3" />
+                </span>
+              )}
+            </span>
+          ) : (
+            <ActionIcon icon={a.icon} kind={a.kind} brand={a.server} glyph={a.glyph} status={failed ? "failed" : running ? "in_progress" : "completed"} />
+          )}
           <span
             class={`min-w-0 truncate whitespace-nowrap ${
               failed ? "text-red-500 dark:text-red-400" : running ? "text-[var(--text-primary)]" : "text-[var(--text-secondary)]"
