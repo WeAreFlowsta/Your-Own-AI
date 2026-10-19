@@ -360,6 +360,14 @@ export async function getLocalCustomAis(): Promise<UserDefinedAI[]> {
 /**
  * Save a new custom AI locally
  */
+/** Tell the Rust side an AI was saved here: the AIs reach the person's
+ *  other devices in the Vault backup, which this schedules (debounced). */
+function noteAiConfigsChanged(): void {
+  import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke('note_ai_configs_changed'))
+    .catch(() => {});
+}
+
 export async function saveLocalCustomAi(ai: Omit<UserDefinedAI, 'id' | 'status'>): Promise<UserDefinedAI> {
   try {
     const store = await getStore();
@@ -376,6 +384,7 @@ export async function saveLocalCustomAi(ai: Omit<UserDefinedAI, 'id' | 'status'>
     const updatedAis = [...existingAis, newAi];
     await store.set(CUSTOM_AIS_KEY, updatedAis);
     await store.save();
+    noteAiConfigsChanged();
     
     console.log('[LocalAiStorage] Saved new custom AI:', newAi.id, newAi.name);
     return newAi;
@@ -415,6 +424,7 @@ export async function updateLocalCustomAi(
     existingAis[aiIndex] = updatedAi;
     await store.set(CUSTOM_AIS_KEY, existingAis);
     await store.save();
+    noteAiConfigsChanged();
     
     console.log('[LocalAiStorage] Updated custom AI:', id, updatedAi.name);
     return updatedAi;
@@ -441,6 +451,7 @@ export async function deleteLocalCustomAi(id: string): Promise<boolean> {
     
     await store.set(CUSTOM_AIS_KEY, filteredAis);
     await store.save();
+    noteAiConfigsChanged();
     
     console.log('[LocalAiStorage] Deleted custom AI:', id);
     return true;

@@ -340,12 +340,29 @@ fn sibling_needs_update(manifest: Option<&serde_json::Value>, device: &crate::va
 
 /// One round: every sibling's manifest copy, merged into this device's AI
 /// list. Returns (updated, added). Silent when not signed in or no Vault.
-pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle) -> Result<(u32, u32), String> {
+/// The manifest stamps the last completed round saw, per sibling. Reading a
+/// sibling's manifest is the cost of a round; the stamps are free (they ride
+/// the backup list), so a round that would read the same manifests again is
+/// skipped - which is what lets the rounds run every minute.
+static LAST_STAMPS: std::sync::Mutex<Option<Vec<(String, Option<String>)>>> = std::sync::Mutex::new(None);
+
+fn stamps_of(devices: &[crate::vault_escrow::SiblingDevice]) -> Vec<(String, Option<String>)> {
+    devices.iter().map(|d| (d.id.clone(), d.manifest_at.clone())).collect()
+}
+
+/// `force`: read every manifest even when no sibling's has moved (Settings'
+/// "sync now", and every fifth background round, so a stamp the list did
+/// not carry cannot hide a change for long).
+pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle, force: bool) -> Result<(u32, u32), String> {
     use tauri_plugin_store::StoreExt;
     let port = crate::vault_escrow::escrow_port(app, true).await.map_err(|s| s.error.unwrap_or(s.state))?;
     let devices = crate::vault_escrow::sibling_devices(port).await?;
     if devices.is_empty() {
         save_state(app, &ConfigSyncState { checked_at: now_ms(), ..Default::default() });
+        return Ok((0, 0));
+    }
+    let stamps = stamps_of(&devices);
+    if !force && LAST_STAMPS.lock().unwrap().as_ref() == Some(&stamps) {
         return Ok((0, 0));
     }
     let mut synced: Vec<SyncedDevice> = Vec::new();
@@ -444,6 +461,7 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle) -> Result<(u32, u
         log::info!("[config-sync] AIs from the other devices: {} updated, {} added", total_updated, total_added);
         let _ = app.emit("ai-configs-changed", serde_json::json!({ "updated": total_updated, "added": total_added }));
     }
+    *LAST_STAMPS.lock().unwrap() = Some(stamps);
     Ok((total_updated, total_added))
 }
 
@@ -451,23 +469,29 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle) -> Result<(u32, u
 /// records.
 #[tauri::command]
 pub async fn config_sync_now(app: tauri::AppHandle) -> Result<ConfigSyncState, String> {
-    sync_from_siblings(&app).await?;
+    sync_from_siblings(&app, true).await?;
     Ok(config_sync_status(app).unwrap_or_default())
 }
 
-/// Rounds like the Vault's: the first shortly after start, then every five
-/// minutes while the app is open.
+/// Rounds: the first shortly after start, then every minute while the app
+/// is open. A round reads the siblings' manifests only when one of them
+/// moved (the stamps on the backup list say so), and in full every fifth
+/// minute regardless - so a change on another device shows here within a
+/// minute or two, at the cost of one cheap list call a minute.
 pub fn start_config_sync_rounds(app: &tauri::AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let mut wait = std::time::Duration::from_secs(40);
+        let mut pass: u32 = 0;
         loop {
             tokio::time::sleep(wait).await;
-            wait = std::time::Duration::from_secs(300);
+            wait = std::time::Duration::from_secs(60);
             if flowsta::find_vault().await.port.is_none() {
                 continue;
             }
-            match sync_from_siblings(&app).await {
+            let force = pass % 5 == 0;
+            pass += 1;
+            match sync_from_siblings(&app, force).await {
                 Ok((0, 0)) => {}
                 Ok((u, a)) => log::info!("[config-sync] round: {} updated, {} added", u, a),
                 Err(e) if e == "unlinked" || e == "vault_unavailable" || e == "vault_locked" || e == "identity_switched" => {}

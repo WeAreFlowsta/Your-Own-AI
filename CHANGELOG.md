@@ -51,6 +51,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   with no connection, puts itself back within a minute and tells its
   conductor about devices it had not heard of. No restart needed. The
   conductor's logs from the previous run are kept.
+- A new or changed AI, or a new picture, reaches your other devices on
+  its own. Before, only a conversation carried it across, so an AI you had
+  not yet talked to stayed on one device.
+- Changes from your other devices show here within a minute or two, not
+  five: each minute the app checks what moved and reads only that.
 
 ### Memory
 - Rules, facts, decisions and session notes are separate, dated entries

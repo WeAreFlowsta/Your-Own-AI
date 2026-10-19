@@ -221,6 +221,10 @@ pub(crate) struct SiblingDevice {
     pub name: Option<String>,
     pub platform: Option<String>,
     pub generation: Option<String>,
+    /// When this device's copy of the sibling's manifest was made (the
+    /// backup list's `created_at`, as text): a config-sync round reads the
+    /// manifest only when this moved.
+    pub manifest_at: Option<String>,
 }
 
 pub(crate) async fn sibling_devices(port: u16) -> Result<Vec<SiblingDevice>, String> {
@@ -241,7 +245,13 @@ pub(crate) async fn sibling_devices(port: u16) -> Result<Vec<SiblingDevice>, Str
         .map(|a| {
             a.iter()
                 .filter_map(|d| {
-                    s(d, "device").map(|id| SiblingDevice { id, name: s(d, "name"), platform: s(d, "platform"), generation: s(d, "generation") })
+                    // When this device's copy of the sibling's manifest was made: a
+                    // config-sync round reads the manifest only when this moved.
+                    let manifest_at = d["backups"]
+                        .as_array()
+                        .and_then(|b| b.iter().find(|x| x["label"].as_str() == Some(MANIFEST_LABEL)))
+                        .map(|x| x["created_at"].to_string());
+                    s(d, "device").map(|id| SiblingDevice { id, name: s(d, "name"), platform: s(d, "platform"), generation: s(d, "generation"), manifest_at })
                 })
                 .collect()
         })

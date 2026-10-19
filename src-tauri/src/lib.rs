@@ -171,6 +171,11 @@ async fn save_ai_thumbnail(
     fs::write(&thumbnail_path, thumbnail_data)
         .map_err(|e| format!("Failed to write thumbnail: {}", e))?;
     config_sync::mark_picture(&thumbnails_dir, &ai_id, is_default.unwrap_or(false));
+    // A picture the person chose travels to their other devices in the
+    // backup; a seeded default face is not worth a backup of its own.
+    if is_default != Some(true) {
+        vault_escrow::schedule_full_backup(&app);
+    }
     
     Ok(thumbnail_path
         .to_str()
@@ -209,8 +214,18 @@ async fn delete_ai_thumbnail(
             .map_err(|e| format!("Failed to delete thumbnail: {}", e))?;
     }
     config_sync::mark_picture(&thumbnails_dir, &ai_id, false);
+    vault_escrow::schedule_full_backup(&app);
     
     Ok(())
+}
+
+/// The UI saved an AI (new, changed or deleted): the AIs travel to the
+/// person's other devices in the Vault backup, which until 0.9.0 only a
+/// conversation write, an import or the daily check scheduled - a new AI
+/// with no conversation yet never left the device (found 2026-10-19).
+#[tauri::command]
+fn note_ai_configs_changed(app: AppHandle) {
+    vault_escrow::schedule_full_backup(&app);
 }
 
 // ============================================================================
@@ -758,6 +773,7 @@ pub fn run() {
             llm::stream_chat_completion,
             llm::cancel_chat_completion,
             save_ai_thumbnail,
+            note_ai_configs_changed,
             get_ai_thumbnail,
             delete_ai_thumbnail,
             read_file_for_context,

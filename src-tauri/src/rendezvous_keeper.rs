@@ -62,6 +62,28 @@ pub(crate) fn id_core(hash: &[u8]) -> String {
 const PUT_MIN_AGE_US: i64 = 45_000_000;
 /// The server refuses anything older than 3 min.
 const PUT_MAX_AGE_US: i64 = 170_000_000;
+/// A note lives this long; what we registered longer ago can be forgotten.
+const NOTE_LIFETIME_US: i64 = 1_200_000_000;
+/// kitsune2-bootstrap-srv keeps at most this many notes per network and
+/// evicts one when a new one arrives. In a network with more agents than
+/// this (Flowsta's public identity network), a note missing from the
+/// listing says nothing about the conductor: it may simply have been
+/// evicted. Registering is still right - once per note, as the conductor
+/// itself would - but it is no sign of a stall.
+const SERVER_CAP: usize = 32;
+
+/// A listing this long may be the cap, not the whole network.
+pub(crate) fn listing_full(listed: usize) -> bool {
+    listed >= SERVER_CAP
+}
+
+/// True the first time a note is seen, so each note is registered once no
+/// matter how many rounds pass before the server lists it (the conductor
+/// sends each note once too; this matches that rate, and in a crowded
+/// network evicts nobody needlessly).
+pub(crate) fn first_time(registered: &mut HashSet<(String, String, i64)>, note: &Note) -> bool {
+    registered.insert((note.space.clone(), note.agent.clone(), note.created_at))
+}
 
 /// Our own notes the server should have and does not: fresh enough to be
 /// accepted, old enough that the conductor has had its chance, and newer
@@ -211,8 +233,10 @@ pub(crate) fn parse_token(body: &str) -> Option<String> {
 /// What one round did.
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct Round {
-    /// Our notes we registered ourselves.
+    /// Our notes we registered ourselves in a network whose listing we could trust.
     pub put: usize,
+    /// Our notes we registered in a network whose listing was full: needed or not, no one can tell.
+    pub registered_blind: usize,
     /// Other devices' notes we handed the conductor.
     pub added: usize,
     /// Servers that answered.
@@ -224,6 +248,8 @@ pub(crate) struct Round {
 pub(crate) struct Keeper {
     servers: Vec<Server>,
     client: reqwest::Client,
+    /// Notes we have registered: (space, agent, created_at).
+    registered: HashSet<(String, String, i64)>,
     /// When we first had to register for the conductor, until it registers again.
     stalled_since: Option<std::time::Instant>,
     every_server_dark: bool,
@@ -235,7 +261,7 @@ impl Keeper {
             .timeout(std::time::Duration::from_secs(15))
             .build()
             .unwrap_or_default();
-        Self { servers, client, stalled_since: None, every_server_dark: false }
+        Self { servers, client, registered: HashSet::new(), stalled_since: None, every_server_dark: false }
     }
 
     /// Read the conductor's own notes and peers, compare with every server,
@@ -279,6 +305,7 @@ impl Keeper {
             .map(|d| d.as_micros() as i64)
             .unwrap_or(0);
 
+        self.registered.retain(|(_, _, created)| now_us - created < NOTE_LIFETIME_US);
         let mut round = Round::default();
         let mut listings: Vec<Note> = Vec::new();
         let mut reached: HashSet<String> = HashSet::new();
@@ -299,8 +326,13 @@ impl Keeper {
                     .filter(|n| now_us - n.created_at <= PUT_MAX_AGE_US)
                     .filter(|n| listed.iter().any(|l| l.agent == n.agent && l.created_at >= n.created_at))
                     .count();
+                let full = listing_full(listed.len());
                 for note in notes_to_put(&own_here, &listed, now_us) {
+                    if !first_time(&mut self.registered, note) {
+                        continue;
+                    }
                     match server.put(&self.client, note).await {
+                        Ok(()) if full => round.registered_blind += 1,
                         Ok(()) => {
                             round.put += 1;
                             put_on.push(server.url.clone());
@@ -361,6 +393,9 @@ impl Keeper {
         }
         if round.added > 0 {
             log::info!("[rendezvous] handed the conductor {} note(s) of other devices it had not heard of", round.added);
+        }
+        if round.registered_blind > 0 {
+            log::debug!("[rendezvous] registered {} note(s) in a network whose listing is full (no sign of a stall)", round.registered_blind);
         }
     }
 }
@@ -480,6 +515,17 @@ mod tests {
         let mut got: Vec<(String, String, i64)> = newest_per_agent([&a1, &a2, &b, &a_other_space]).into_iter().map(|n| (n.space.clone(), n.agent.clone(), n.created_at)).collect();
         got.sort();
         assert_eq!(got, vec![("sp".into(), "a".into(), 300), ("sp".into(), "b".into(), 100), ("sp2".into(), "a".into(), 50)]);
+    }
+
+    #[test]
+    fn a_note_is_registered_once_and_a_full_listing_is_no_stall() {
+        let mut seen = HashSet::new();
+        let n = note("sp", "a", 100, false);
+        assert!(first_time(&mut seen, &n));
+        assert!(!first_time(&mut seen, &n), "the same note again is not registered twice");
+        assert!(first_time(&mut seen, &note("sp", "a", 200, false)), "a re-signed note is new");
+        assert!(!listing_full(31));
+        assert!(listing_full(32), "the server keeps 32 per network");
     }
 
     #[test]

@@ -55,7 +55,7 @@ pub(crate) async fn after_sign_in(app: tauri::AppHandle) {
     let Ok(port) = crate::vault_escrow::escrow_port(&app, true).await else { return };
     let Some(devices) = sibling_names(port).await else { return };
     emit(&app, "syncing", &devices);
-    match crate::config_sync::sync_from_siblings(&app).await {
+    match crate::config_sync::sync_from_siblings(&app, true).await {
         Ok((u, a)) => log::info!("[device-sync] AIs from the other devices: {} updated, {} added", u, a),
         Err(e) => log::warn!("[device-sync] config round after sign-in: {}", e),
     }
