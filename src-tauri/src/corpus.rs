@@ -110,6 +110,10 @@ pub struct DocLink {
     /// It belongs to a folder kept in sync.
     #[serde(default)]
     pub in_folder: bool,
+    /// The person's other device it was added on, while this machine has
+    /// not read the file (the card came over in that device's backup).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_on: Option<String>,
 }
 
 impl DocLink {
@@ -1540,7 +1544,7 @@ pub fn corpus_import_prepared(
 
 fn read_records(conn: &Connection, key: &[u8; 32], ai_id: Option<&str>) -> Result<Vec<DocRecord>, String> {
     let mut stmt = conn
-        .prepare("SELECT doc_id, added_at, byte_size, chunk_count, meta_enc, offline_since, online_only, reread_at, folder_id FROM documents ORDER BY added_at DESC")
+        .prepare("SELECT doc_id, added_at, byte_size, chunk_count, meta_enc, offline_since, online_only, reread_at, folder_id, held_on FROM documents ORDER BY added_at DESC")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |r| {
@@ -1555,6 +1559,9 @@ fn read_records(conn: &Connection, key: &[u8; 32], ai_id: Option<&str>) -> Resul
                     online_only: r.get::<_, Option<i64>>(6)?.unwrap_or(0) != 0,
                     reread_at: r.get::<_, Option<i64>>(7)?,
                     in_folder: r.get::<_, Option<String>>(8)?.is_some(),
+                    // Only while the text is missing: once read here, the
+                    // document is this machine's too.
+                    held_on: if r.get::<_, i64>(3)? == 0 { r.get::<_, Option<String>>(9)? } else { None },
                 },
             ))
         })
@@ -1839,7 +1846,9 @@ fn records_from(conn: &Connection, key: &[u8; 32]) -> Result<CorpusRecords, Stri
     // The path rides along: after a restore the file is looked for where
     // it was last seen (and under this machine's home folder when the old
     // one differs) before anyone is asked to point at it.
-    let documents = read_records(conn, key, None)?;
+    // A record held on another device is that device's to back up, not
+    // ours: carrying it would tell a third device it lives here.
+    let documents: Vec<DocRecord> = read_records(conn, key, None)?.into_iter().filter(|d| d.link.held_on.is_none()).collect();
     Ok(CorpusRecords { version: 1, documents, folders: Vec::new() })
 }
 
@@ -1874,6 +1883,53 @@ fn restore_records_into(conn: &mut Connection, key: &[u8; 32], records: &CorpusR
         tx.commit().map_err(|e| e.to_string())?;
     }
     Ok(restored)
+}
+
+/// Another device's document records, folded into this library so the
+/// person sees every document their AIs were given and where it lives
+/// (MULTI_DEVICE.md: the cards ride the manifest; files travel later).
+/// A record already here by id, or the same file by content id, only
+/// gains the grants; a new one is listed with `held_on` = the device and
+/// no text, exactly like a record back from a backup - the relink paths
+/// read it the moment the same file is on this machine. Returns how
+/// many were newly listed.
+pub(crate) fn fold_sibling_records(app: &AppHandle, key: &[u8; 32], records: &CorpusRecords, device: &str) -> Result<usize, String> {
+    fold_sibling_records_into(&mut open(app)?, key, records, device)
+}
+
+fn fold_sibling_records_into(conn: &mut Connection, key: &[u8; 32], records: &CorpusRecords, device: &str) -> Result<usize, String> {
+    let same_file = sync::by_content_id(conn, key)?;
+    let mut listed = 0usize;
+    for d in &records.documents {
+        if d.ai_ids.is_empty() {
+            continue;
+        }
+        let exists: Option<String> = conn
+            .query_row("SELECT doc_id FROM documents WHERE doc_id = ?1", params![d.doc_id], |r| r.get(0))
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let target = exists.or_else(|| d.meta.content_id.as_ref().and_then(|c| same_file.get(c)).map(|(id, _)| id.clone()));
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let doc_id = match target {
+            Some(id) => id,
+            None => {
+                let meta_json = serde_json::to_vec(&d.meta).map_err(|e| e.to_string())?;
+                tx.execute(
+                    "INSERT INTO documents (doc_id, added_at, byte_size, chunk_count, path_hash, meta_enc, held_on) VALUES (?1, ?2, ?3, 0, NULL, ?4, ?5)",
+                    params![d.doc_id, d.added_at, d.byte_size, enc(key, &meta_json)?, device],
+                )
+                .map_err(|e| e.to_string())?;
+                listed += 1;
+                d.doc_id.clone()
+            }
+        };
+        for ai in &d.ai_ids {
+            tx.execute("INSERT OR IGNORE INTO grants (doc_id, ai_id) VALUES (?1, ?2)", params![doc_id, ai])
+                .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+    }
+    Ok(listed)
 }
 
 /// The folders a backup kept in sync, brought back on THIS machine: by the
@@ -2084,6 +2140,49 @@ mod tests {
     /// machine B, and re-read from the person's files with a fake embedder.
     /// The exact code the app runs, minus the escrow payload that carries
     /// the JSON (proven daily by the facts and thumbnails it already holds).
+    #[test]
+    fn another_devices_cards_are_listed_once_with_the_device_and_stay_out_of_our_backup() {
+        let key = [9u8; 32];
+        let dir = std::env::temp_dir().join(format!("corpus-fold-{}", new_doc_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let text = "The harbour tides turn twice a day and the ferries follow them.".repeat(20);
+        std::fs::write(dir.join("tides.txt"), &text).unwrap();
+        let size = std::fs::metadata(dir.join("tides.txt")).unwrap().len() as i64;
+        let fake_embed = |passages: &[String]| -> Vec<Vec<f32>> { passages.iter().map(|_| vec![1.0, 0.5, 0.25]).collect() };
+        let pa = chunk_text(&text, PASSAGE_CHARS);
+
+        // The Mac has two documents; one of them this machine also has (same bytes).
+        let shared_cid = links::content_id_of(text.as_bytes());
+        let mac = CorpusRecords {
+            version: 1,
+            documents: vec![
+                DocRecord { doc_id: "mac-doc-1".into(), added_at: 1, byte_size: 10, chunk_count: 3, meta: DocMeta { filename: "paper.pdf".into(), path: Some("/Users/e/paper.pdf".into()), ..Default::default() }, ai_ids: vec!["lin-1".into()], link: DocLink::default() },
+                DocRecord { doc_id: "mac-doc-2".into(), added_at: 2, byte_size: size, chunk_count: 3, meta: DocMeta { filename: "tides.txt".into(), path: Some("/Users/e/tides.txt".into()), content_id: Some(shared_cid.clone()), ..Default::default() }, ai_ids: vec!["lin-2".into()], link: DocLink::default() },
+                DocRecord { doc_id: "mac-doc-3".into(), added_at: 3, byte_size: 5, chunk_count: 1, meta: DocMeta { filename: "unmapped.txt".into(), ..Default::default() }, ai_ids: vec![], link: DocLink::default() },
+            ],
+            folders: vec![],
+        };
+        let path_b = std::env::temp_dir().join(format!("corpus-{}.sqlite", new_doc_id()));
+        let mut b = open_at(&path_b).unwrap();
+        let meta = DocMeta { filename: "tides.txt".into(), path: Some(dir.join("tides.txt").to_string_lossy().into()), content_id: Some(shared_cid), ..Default::default() };
+        let here = insert_document(&mut b, &key, &meta, size, &pa, &fake_embed(&pa), "lin-1").unwrap();
+
+        assert_eq!(fold_sibling_records_into(&mut b, &key, &mac, "Erics-MacBook-Air").unwrap(), 1, "one new card; the shared file only gains a grant; no AI here, no card");
+        assert_eq!(fold_sibling_records_into(&mut b, &key, &mac, "Erics-MacBook-Air").unwrap(), 0, "folding again lists nothing new");
+        let all = read_records(&b, &key, None).unwrap();
+        let listed = all.iter().find(|d| d.doc_id == "mac-doc-1").expect("the Mac's card is here");
+        assert_eq!(listed.chunk_count, 0);
+        assert_eq!(listed.link.held_on.as_deref(), Some("Erics-MacBook-Air"));
+        assert_eq!(listed.ai_ids, vec!["lin-1".to_string()]);
+        let ours = all.iter().find(|d| d.doc_id == here.doc_id).unwrap();
+        assert!(ours.link.held_on.is_none(), "a document read here is ours");
+        assert!(ours.ai_ids.contains(&"lin-2".to_string()) && ours.ai_ids.contains(&"lin-1".to_string()), "the shared file gained the Mac's grant");
+        assert!(all.iter().all(|d| d.doc_id != "mac-doc-3"));
+        let backup = records_from(&b, &key).unwrap();
+        assert!(backup.documents.iter().all(|d| d.doc_id != "mac-doc-1"), "a card held on the Mac is the Mac's to back up");
+        assert!(backup.documents.iter().any(|d| d.doc_id == here.doc_id));
+    }
+
     #[test]
     fn restore_drill_records_only_then_reread_from_folder() {
         let key = [3u8; 32];

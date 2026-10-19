@@ -7,6 +7,7 @@ import { KnowledgeDocumentRow } from './KnowledgeDocumentRow';
 import DocumentsSelectBar from './DocumentsSelectBar';
 import { DocumentsNeedingFiles } from './DocumentsNeedingFiles';
 import { isServer } from '@builder.io/qwik/build';
+import { listen } from '@tauri-apps/api/event';
 import { useCorpusProgress, useLibraryChanged, progressText } from '../hooks/useCorpusProgress';
 import LiquidMetalButton from './LiquidMetalButton';
 import {
@@ -71,10 +72,15 @@ export default component$<AiKnowledgeDocumentsProps>((props) => {
     }
   });
   // eslint-disable-next-line qwik/no-use-visible-task
-  useVisibleTask$(async () => {
+  useVisibleTask$(async ({ cleanup }) => {
     ready.value = await isEmbeddingModelReady();
     // Opening the list is when a moved or edited file should be known.
     void import('../utils/corpus').then((m) => m.lookAtDocumentsSoon());
+    // Cards from the person's other devices land between rounds.
+    const un = await listen('knowledge-documents-changed', () => {
+      void listKnowledgeDocuments(props.aiId).then((d) => (docs.value = d));
+    });
+    cleanup(() => un());
   });
 
   // eslint-disable-next-line qwik/no-use-visible-task

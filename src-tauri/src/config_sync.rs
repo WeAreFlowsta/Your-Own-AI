@@ -51,6 +51,24 @@ pub(crate) fn mark_picture(thumb_dir: &std::path::Path, id: &str, is_default: bo
     }
 }
 
+/// A sibling's AI ids → this device's ids for the same AIs, by founding
+/// key (the address an AI keeps on every device). An AI not here yet is
+/// absent from the map.
+pub(crate) fn sibling_ai_map(sibling: &[serde_json::Value], local: &[serde_json::Value]) -> std::collections::HashMap<String, String> {
+    let here: std::collections::HashMap<String, String> = local
+        .iter()
+        .filter_map(|l| Some((founding_of(l)?, l["id"].as_str()?.to_string())))
+        .collect();
+    sibling
+        .iter()
+        .filter_map(|s| {
+            let sid = s["id"].as_str()?.to_string();
+            let local_id = here.get(&founding_of(s)?)?.clone();
+            Some((sid, local_id))
+        })
+        .collect()
+}
+
 fn founding_of(ai: &serde_json::Value) -> Option<String> {
     ai["foundingKey"]
         .as_str()
@@ -417,6 +435,32 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle, force: bool) -> R
         local = merged;
         total_updated += updated;
         total_added += added;
+        // The sibling's document cards: listed here, marked with the device,
+        // grants mapped to this device's ids for the same AIs.
+        if let Some(corpus) = manifest.get("corpus").and_then(|c| c.get("data")).cloned() {
+            if let Ok(mut records) = serde_json::from_value::<crate::corpus::CorpusRecords>(corpus) {
+                let ids = sibling_ai_map(&sibling, &local);
+                for d in records.documents.iter_mut() {
+                    d.ai_ids = d.ai_ids.iter().filter_map(|id| ids.get(id).cloned()).collect();
+                }
+                records.documents.retain(|d| !d.ai_ids.is_empty());
+                if !records.documents.is_empty() {
+                    if let Some(hc) = app.try_state::<std::sync::Arc<crate::commands_holochain::HolochainState>>() {
+                        if let Ok(key) = hc.get().and_then(|m| m.data_key()) {
+                            let name = device.name.clone().unwrap_or_else(|| "another device".to_string());
+                            match crate::corpus::fold_sibling_records(app, &key, &records, &name) {
+                                Ok(n) if n > 0 => {
+                                    log::info!("[config-sync] {} document card(s) listed from {}", n, name);
+                                    let _ = app.emit("knowledge-documents-changed", serde_json::json!({ "device": name, "listed": n }));
+                                }
+                                Ok(_) => {}
+                                Err(e) => log::warn!("[config-sync] document cards from {}: {}", name, e),
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // The sibling's thumbnails for every AI that just took its config.
         if let Some(thumbs) = manifest["thumbnails"]["data"].as_object() {
             let _ = std::fs::create_dir_all(&thumb_dir);
@@ -578,6 +622,16 @@ mod tests {
         let (again, u2, a2, _) = merge_sibling_configs(merged.clone(), &sibling);
         assert_eq!((u2, a2), (0, 0));
         assert_eq!(again.len(), 2);
+    }
+
+    #[test]
+    fn a_siblings_ai_ids_map_to_this_devices_by_founding_key() {
+        let sibling = vec![ai("mac-1", "F1", "Teresa", 1), ai("mac-2", "F2", "Rook", 1), ai("mac-3", "F3", "New", 1)];
+        let local = vec![ai("lin-1", "F1", "Teresa", 1), ai("lin-2", "F2", "Rook", 1)];
+        let map = super::sibling_ai_map(&sibling, &local);
+        assert_eq!(map.get("mac-1").map(String::as_str), Some("lin-1"));
+        assert_eq!(map.get("mac-2").map(String::as_str), Some("lin-2"));
+        assert!(map.get("mac-3").is_none(), "an AI not here yet has no local id");
     }
 
     #[test]

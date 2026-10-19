@@ -34,7 +34,8 @@ export const DocumentsNeedingFiles = component$<{
   const busy = useSignal('');
   const result = useSignal('');
   const confirmRemove = useSignal(false);
-  const needing = props.docs.filter((d) => d.chunkCount === 0 || !!d.offlineSince);
+  // Held on another device: its row says so; nothing to find here unless the file is.
+  const needing = props.docs.filter((d) => (d.chunkCount === 0 && !d.heldOn) || !!d.offlineSince);
 
   // First, quietly look where restored records were last seen: the files may
   // simply be there (the restore tried once; this catches files put back).
@@ -56,7 +57,9 @@ export const DocumentsNeedingFiles = component$<{
 
   const groups = new Map<string, KnowledgeDocument[]>();
   for (const d of needing) {
-    if (!d.path) continue;
+    // A document held on another device has that device's path, not one
+    // to look in here; its row says where it is.
+    if (!d.path || d.heldOn) continue;
     const where = dirOf(d.path);
     groups.set(where, [...(groups.get(where) ?? []), d]);
   }

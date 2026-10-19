@@ -23,7 +23,7 @@ export interface DocRecord {
   meta: DocMeta;
   ai_ids: string[];
   /** How its link to the file stands (absent = linked, nothing to say). */
-  link?: { offline_since?: number | null; online_only?: boolean; reread_at?: number | null; in_folder?: boolean };
+  link?: { offline_since?: number | null; online_only?: boolean; reread_at?: number | null; in_folder?: boolean; held_on?: string | null };
 }
 
 export interface ImportReport {

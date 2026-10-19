@@ -61,6 +61,8 @@ export interface KnowledgeDocument {
   rereadAt?: number;
   /** Part of a folder kept in sync. */
   inFolder?: boolean;
+  /** The person's other device it was added on, while this computer has not read its file. */
+  heldOn?: string;
 }
 
 /** Cap EPISODIC entries per AI (drop oldest) so the per-AI blob can't grow
@@ -566,6 +568,7 @@ export async function listKnowledgeDocuments(aiId: string): Promise<KnowledgeDoc
     title: d.meta.title,
     path: d.meta.path,
     offlineSince: d.link?.offline_since ?? undefined,
+    heldOn: d.link?.held_on ?? undefined,
     onlineOnly: d.link?.online_only || undefined,
     rereadAt: d.link?.reread_at ?? undefined,
     inFolder: d.link?.in_folder || undefined,

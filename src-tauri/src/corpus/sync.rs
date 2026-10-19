@@ -58,6 +58,10 @@ pub(super) fn ensure_schema(conn: &Connection) -> Result<(), String> {
         // Set while the file is a cloud placeholder (named here, stored elsewhere).
         ("online_only", "INTEGER"),
         ("reread_at", "INTEGER"),
+        // The device a record came from when its file was never added here:
+        // listed so the person knows the document exists and where. Cleared
+        // when this machine reads the file.
+        ("held_on", "TEXT"),
     ] {
         if !have.contains(col) {
             conn.execute(&format!("ALTER TABLE documents ADD COLUMN {col} {ty}"), [])
@@ -675,7 +679,7 @@ impl LinkReport {
 /// "new" to the folder while its old record still looks fine (seen in the field: the
 /// boat survey twice, 2026-09-22). A same-words file whose old copy still
 /// exists is a copy in two places: a new document.
-fn by_content_id(conn: &Connection, key: &[u8; 32]) -> Result<HashMap<String, (String, Option<String>)>, String> {
+pub(crate) fn by_content_id(conn: &Connection, key: &[u8; 32]) -> Result<HashMap<String, (String, Option<String>)>, String> {
     let mut stmt = conn
         .prepare("SELECT doc_id, meta_enc FROM documents WHERE chunk_count > 0")
         .map_err(|e| e.to_string())?;

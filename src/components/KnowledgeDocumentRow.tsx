@@ -15,6 +15,9 @@ function day(secs: number): string {
 /** What the document's link to its file needs the person to know - or null
  *  when it is simply linked. One place, so both lists say the same thing. */
 export function linkState(doc: KnowledgeDocument): { kind: 'waiting' | 'offline' | 'online'; text: string } | null {
+  if (doc.chunkCount === 0 && doc.heldOn) {
+    return { kind: 'waiting', text: `On ${doc.heldOn} - it was added there, not on this computer. Add the same file here and it links itself; its words stay on that device until then.` };
+  }
   if (doc.chunkCount === 0) {
     return { kind: 'waiting', text: 'Needs its file - it came back from a backup without its text, so there is nothing to quote yet.' };
   }

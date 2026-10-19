@@ -56,6 +56,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   not yet talked to stayed on one device.
 - Changes from your other devices show here within a minute or two, not
   five: each minute the app checks what moved and reads only that.
+- Documents an AI was given on another of your devices are listed on
+  this one too, marked with the device they are on. Add the same file
+  here and it links itself; until then the document's words stay there.
 
 ### Memory
 - A correction replaces the note it corrects, whatever kind the AI
