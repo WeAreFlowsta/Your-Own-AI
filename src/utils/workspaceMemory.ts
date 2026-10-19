@@ -131,6 +131,12 @@ export async function listWorkspaceMemories(): Promise<WorkspaceMemory[]> {
   foldScans(scans.flat(), byFolder);
   const out = [...byFolder.values()].sort((a, b) => b.updatedAt - a.updatedAt);
   if (out.length > 0) lastScan = out;
+  // The scan just saw every memory conversation there is (other devices'
+  // included): the backend's project-memory index takes them, so opening
+  // a project reads straight from them and never walks the catalogue.
+  invoke("project_memory_index_merge", {
+    entries: scans.flat().map(({ agentKey, conv }) => ({ folder: conv.title!, agentKey: conv.agent_key || agentKey, hash: conv.hash })),
+  }).catch(() => { /* older backend */ });
   return out;
 }
 

@@ -86,6 +86,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   re-indexed once, with progress shown on its card.
 
 ### Working in the background
+- Opening a project the AI has no memory of yet answers at once; it used
+  to read every AI's whole conversation list first (three minutes on a
+  busy install) and forget that it had found nothing.
 - A program that asks the AI at `:11435` to call one named tool (the
   OpenAI `tool_choice` object) now gets the tool call from a model on
   this computer; the engine understood only auto / required / none and

@@ -895,8 +895,16 @@ async fn project_memory_read_records_info(
     let mut info = ProjectMemoryInfo { folder_path: folder.to_string(), ..Default::default() };
     // Fast path: the index names the memory conversations - read just
     // those, all at once (one at a time took 412 s for 21 under load, 10-16).
-    let indexed = project_memory_index_load(app).remove(folder).unwrap_or_default();
-    if !indexed.is_empty() {
+    // A folder the index knows with NO conversation is a folder that was
+    // walked and found empty (or one the Memory page's scan saw nothing
+    // for): answer empty at once. The walk below ran on every first open
+    // of a new folder before (186 s for nothing, 10-19). A memory written
+    // here is added to the index as it is created; one written on another
+    // device reaches the index through the Memory page's scan.
+    let mut idx = project_memory_index_load(app);
+    let walked = idx.contains_key(INDEX_WALKED);
+    let indexed = idx.remove(folder).or_else(|| if walked { Some(vec![]) } else { None });
+    if let Some(indexed) = indexed {
         let reads = futures::future::join_all(
             indexed.iter().map(|(agent, hash)| get_conversation_transcript(agent.clone(), hash.clone(), app.state())),
         )
@@ -919,12 +927,21 @@ async fn project_memory_read_records_info(
         agents.keys().cloned().collect()
     };
     let mut found: Vec<(String, String)> = Vec::new();
+    // Every other folder's memory conversations the walk passes go into the
+    // index too: one walk, every folder known.
+    let mut seen: Vec<(String, String, String)> = Vec::new();
     for key in agent_keys {
         let Ok(conversations) = get_conversations(app.clone(), key.clone(), app.state(), Some(600), Some("project-memory walk".into())).await else {
             continue;
         };
         for c in conversations {
-            if c.source.as_deref() != Some(WORKSPACE_MEMORY_SOURCE) || c.title.as_deref() != Some(folder) {
+            if c.source.as_deref() != Some(WORKSPACE_MEMORY_SOURCE) {
+                continue;
+            }
+            if c.title.as_deref() != Some(folder) {
+                if let Some(t) = c.title.clone() {
+                    seen.push((t, c.agent_key.clone(), c.hash.clone()));
+                }
                 continue;
             }
             found.push((c.agent_key.clone(), c.hash.clone()));
@@ -937,12 +954,82 @@ async fn project_memory_read_records_info(
         "[project-memory] read {} via full walk ({} conv found, {} ms)",
         folder, found.len(), started.elapsed().as_millis()
     );
-    if !found.is_empty() {
-        let mut idx = project_memory_index_load(app);
-        idx.insert(folder.to_string(), found);
-        project_memory_index_save(app, &idx);
-    }
+    let mut idx = project_memory_index_load(app);
+    idx.insert(folder.to_string(), found);
+    index_merge_into(&mut idx, seen);
+    idx.entry(INDEX_WALKED.to_string()).or_default();
+    project_memory_index_save(app, &idx);
     Ok(info)
+}
+
+/// Marker in the index: the whole catalogue has been read once (a walk, or
+/// the Memory page's scan), so a folder the index does not name has no
+/// memory conversation anywhere we know of. Folders are absolute paths and
+/// never start with '#'.
+const INDEX_WALKED: &str = "#walked";
+
+fn index_merge_into(
+    idx: &mut std::collections::HashMap<String, Vec<(String, String)>>,
+    entries: Vec<(String, String, String)>,
+) {
+    for (folder, agent, hash) in entries {
+        let list = idx.entry(folder).or_default();
+        if !list.iter().any(|(a, h)| *a == agent && *h == hash) {
+            list.push((agent, hash));
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct ProjectMemoryIndexEntry {
+    pub folder: String,
+    #[serde(rename = "agentKey")]
+    pub agent_key: String,
+    pub hash: String,
+}
+
+/// The Memory page's scan saw these memory conversations (every AI, every
+/// folder, other devices' included): the index takes them, and folders in
+/// the scan with none are marked empty, so a project open never walks.
+#[tauri::command]
+pub async fn project_memory_index_merge(app: tauri::AppHandle, entries: Vec<ProjectMemoryIndexEntry>) -> Result<(), String> {
+    let mut idx = project_memory_index_load(&app);
+    let before: usize = idx.values().map(Vec::len).sum();
+    index_merge_into(&mut idx, entries.into_iter().map(|e| (e.folder, e.agent_key, e.hash)).collect());
+    idx.entry(INDEX_WALKED.to_string()).or_default();
+    let after: usize = idx.values().map(Vec::len).sum();
+    if after != before {
+        log::info!("[project-memory] index took {} conversation(s) from the Memory page's scan", after - before);
+    }
+    project_memory_index_save(&app, &idx);
+    Ok(())
+}
+
+#[cfg(test)]
+mod index_tests {
+    use super::index_merge_into;
+    #[test]
+    fn merging_keeps_each_conversation_once_and_an_empty_folder_stays_known() {
+        let mut idx = std::collections::HashMap::new();
+        idx.insert("/empty".to_string(), vec![]);
+        idx.insert("/a".to_string(), vec![("k1".to_string(), "h1".to_string())]);
+        index_merge_into(&mut idx, vec![
+            ("/a".into(), "k1".into(), "h1".into()),
+            ("/a".into(), "k2".into(), "h2".into()),
+            ("/b".into(), "k1".into(), "h3".into()),
+        ]);
+        assert_eq!(idx["/a"].len(), 2);
+        assert_eq!(idx["/b"], vec![("k1".to_string(), "h3".to_string())]);
+        assert!(idx.contains_key("/empty") && idx["/empty"].is_empty());
+    }
+    #[test]
+    fn after_one_walk_an_unknown_folder_is_empty_not_a_walk() {
+        let mut idx: std::collections::HashMap<String, Vec<(String, String)>> = std::collections::HashMap::new();
+        assert!(idx.remove("/new").or_else(|| if idx.contains_key(super::INDEX_WALKED) { Some(vec![]) } else { None }).is_none());
+        idx.entry(super::INDEX_WALKED.to_string()).or_default();
+        let walked = idx.contains_key(super::INDEX_WALKED);
+        assert_eq!(idx.remove("/new").or_else(|| if walked { Some(vec![]) } else { None }), Some(vec![]));
+    }
 }
 
 /// Append a note row to the folder's memory as a new revision on the

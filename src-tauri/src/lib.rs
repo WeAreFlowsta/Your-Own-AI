@@ -793,6 +793,7 @@ pub fn run() {
             commands_holochain::get_conversations,
             flowsta::e2e_set_online_failure,
             commands_holochain::project_memory_get,
+            commands_holochain::project_memory_index_merge,
             commands_holochain::project_memory_save,
             commands_holochain::project_memory_note,
             commands_holochain::get_conversation_transcript,
