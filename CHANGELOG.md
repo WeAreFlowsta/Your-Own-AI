@@ -101,6 +101,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   re-indexed once, with progress shown on its card.
 
 ### Working in the background
+- A command that printed its output and then exited with an error code
+  (the last command of a chain, `git status` outside a repository) shows
+  as "exit 128" on the step, not as a failed step. Red is for a command
+  that printed nothing, timed out or was stopped. The upgrade line counts
+  only those.
 - The first question in a project on a model this computer runs no
   longer ends with "The agent stopped before finishing": when the model
   was being reloaded with more room, an earlier start of the session

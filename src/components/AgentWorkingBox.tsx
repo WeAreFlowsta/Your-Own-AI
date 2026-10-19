@@ -1012,6 +1012,9 @@ const ActionRow = component$<ActionRowProps>(({ action: a, open, onToggle$, work
           ) : a.outputLines && !failed ? (
             <span class="shrink-0 text-xs text-[var(--text-muted)]">{a.outputLines} lines</span>
           ) : null}
+          {!failed && a.exitCode !== undefined && (
+            <span class="shrink-0 text-xs text-amber-600 dark:text-amber-400" title="The last command in this step exited with this code; what it printed is above it" data-testid="step-exit-code">exit {a.exitCode}</span>
+          )}
           {failed && (
             <span class="shrink-0 text-xs text-red-500 dark:text-red-400">{elapsed ? `Failed after ${elapsed}` : "Failed"}</span>
           )}

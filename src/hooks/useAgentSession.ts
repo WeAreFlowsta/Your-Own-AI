@@ -2038,7 +2038,16 @@ export function useAgentSession(props: UseAgentSessionProps) {
         const exitCode = ro && typeof ro === "object" && typeof ro.exit_code === "number" ? (ro.exit_code as number) : undefined;
         const timedOut = !!(ro && typeof ro === "object" && ro.timed_out);
         const signal = ro && typeof ro === "object" && typeof ro.signal === "string" ? (ro.signal as string) : undefined;
-        const commandFailed = (exitCode !== undefined && exitCode !== 0) || timedOut || !!signal;
+        // A non-zero exit with output behind it is not a failed step: the
+        // last command of a chain failing (`git status` outside a repo,
+        // `cat` of a file that is not there) while everything before it
+        // printed - the model reads the output and carries on (10-19: two
+        // such steps on a healthy online turn showed red and counted as a
+        // struggle). The row says "exit 128"; red is for a command that
+        // printed nothing, timed out or was killed.
+        const printed = !!(out.output ?? "").trim();
+        const commandFailed = (exitCode !== undefined && exitCode !== 0 && !printed) || timedOut || !!signal;
+        const exitNoted = exitCode !== undefined && exitCode !== 0 && !commandFailed ? exitCode : undefined;
         const status = refused || commandFailed ? "failed" : update.status;
         const error = refused
           ? out.output!.slice(0, 500)
@@ -2116,6 +2125,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
                 // printed stays behind the row, not under it.
                 liveLine: finished ? undefined : prev.liveLine,
                 error: error ?? prev.error,
+                exitCode: exitNoted ?? prev.exitCode,
               },
             };
           } else {
@@ -2142,6 +2152,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
                 startedAt: Date.now(),
                 endedAt: finished ? Date.now() : undefined,
                 error,
+                exitCode: exitNoted,
                 ...out,
               },
             });

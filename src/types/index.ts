@@ -301,6 +301,10 @@ export interface AgentAction {
   /** ACP/x.ai tool kind: read | edit | list | search | execute | fetch... */
   kind?: string;
   status: 'pending' | 'in_progress' | 'completed' | 'failed';
+  /** A command's non-zero exit when it still printed output (the last
+   *  command of a chain failing, `git status` outside a repo): shown on
+   *  the row, not a failed step. */
+  exitCode?: number;
   /** File paths this action touched (feeds the changed-files viewer). */
   locations?: string[];
   /** The full input (path, command...) for the expanded view. */
