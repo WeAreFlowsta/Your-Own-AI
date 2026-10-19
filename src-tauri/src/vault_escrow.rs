@@ -225,6 +225,9 @@ pub(crate) struct SiblingDevice {
     /// backup list's `created_at`, as text): a config-sync round reads the
     /// manifest only when this moved.
     pub manifest_at: Option<String>,
+    /// The same for the sibling's small `ais` object (None: the sibling
+    /// writes none yet - an older app).
+    pub ais_at: Option<String>,
 }
 
 pub(crate) async fn sibling_devices(port: u16) -> Result<Vec<SiblingDevice>, String> {
@@ -247,11 +250,14 @@ pub(crate) async fn sibling_devices(port: u16) -> Result<Vec<SiblingDevice>, Str
                 .filter_map(|d| {
                     // When this device's copy of the sibling's manifest was made: a
                     // config-sync round reads the manifest only when this moved.
-                    let manifest_at = d["backups"]
-                        .as_array()
-                        .and_then(|b| b.iter().find(|x| x["label"].as_str() == Some(MANIFEST_LABEL)))
-                        .map(|x| x["created_at"].to_string());
-                    s(d, "device").map(|id| SiblingDevice { id, name: s(d, "name"), platform: s(d, "platform"), generation: s(d, "generation"), manifest_at })
+                    let stamp = |label: &str| {
+                        d["backups"]
+                            .as_array()
+                            .and_then(|b| b.iter().find(|x| x["label"].as_str() == Some(label)))
+                            .map(|x| x["created_at"].to_string())
+                    };
+                    let (manifest_at, ais_at) = (stamp(MANIFEST_LABEL), stamp(AIS_LABEL));
+                    s(d, "device").map(|id| SiblingDevice { id, name: s(d, "name"), platform: s(d, "platform"), generation: s(d, "generation"), manifest_at, ais_at })
                 })
                 .collect()
         })
@@ -896,6 +902,18 @@ const CORPUS_RECORDS_BUDGET_BYTES: usize = 4 * 1024 * 1024;
 /// AI configs + everything small. Conversation records live in their own
 /// per-conversation objects listed under `conversations[].labels`.
 pub(crate) const MANIFEST_LABEL: &str = "manifest";
+/// Incremental mode: the small, fast-moving part of the manifest as its own
+/// object - the AIs, their pictures, their knowledge and the document cards
+/// (~400 KB) - so a new AI reaches the other devices without the 2 MB
+/// manifest moving with it. The manifest still carries everything (a restore
+/// and an older device read only it); it is rewritten at most every
+/// `MANIFEST_MIN_GAP_SECS`, and neither object is rewritten unchanged (10-19:
+/// 27 backups in a day, each a fresh 2 MB manifest, each cancelling the
+/// other device's fetch of the one before).
+pub(crate) const AIS_LABEL: &str = "ais";
+const MANIFEST_MIN_GAP_SECS: u64 = 600;
+/// Fingerprints of the objects last written, by label.
+const FINGERPRINTS_FILE: &str = "backup-fingerprints.json";
 /// Local record of what each conversation object last uploaded, so backup
 /// runs only re-send conversations with new records.
 pub(crate) const SYNC_STATE_FILE: &str = "backup-sync-state.json";
@@ -914,22 +932,149 @@ const MAX_TOMBSTONES: usize = 5_000;
 
 /// The `deleted` list of the manifest the Vault holds now (empty when there
 /// is none, or it cannot be read - a missing list never blocks a backup).
-async fn fetch_manifest_tombstones(port: u16) -> Vec<crate::conversation_cache::DeletedConversation> {
-    let resp = match http()
+fn tombstones_of(manifest: Option<&serde_json::Value>) -> Vec<crate::conversation_cache::DeletedConversation> {
+    manifest
+        .and_then(|m| serde_json::from_value(m["deleted"].clone()).ok())
+        .unwrap_or_default()
+}
+
+/// This device's own copy of one named object in the Vault (None when there
+/// is none, or it cannot be read).
+async fn fetch_vault_label(port: u16, label: &str) -> Option<serde_json::Value> {
+    let resp = http()
         .post(format!("http://127.0.0.1:{}/backup/retrieve", port))
         .header("Origin", VAULT_ORIGIN)
-        .json(&serde_json::json!({ "client_id": YOAI_HOLOCHAIN_CLIENT_ID, "label": MANIFEST_LABEL }))
+        .json(&serde_json::json!({ "client_id": YOAI_HOLOCHAIN_CLIENT_ID, "label": label }))
         .send()
         .await
-    {
-        Ok(r) if r.status().is_success() => r,
-        _ => return Vec::new(),
-    };
-    let v: serde_json::Value = match resp.json().await {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
-    };
-    serde_json::from_value(v["data"]["deleted"].clone()).unwrap_or_default()
+        .ok()
+        .filter(|r| r.status().is_success())?;
+    let v: serde_json::Value = resp.json().await.ok()?;
+    Some(v["data"].clone())
+}
+
+/// The labels this device's app backup holds in the Vault (the list is one
+/// cheap call; it says whether an object we may skip rewriting is there).
+async fn own_backup_labels(port: u16) -> std::collections::HashSet<String> {
+    let Ok(resp) = http()
+        .get(format!("http://127.0.0.1:{}/backup/list", port))
+        .header("Origin", VAULT_ORIGIN)
+        .send()
+        .await
+    else { return Default::default() };
+    let Ok(v) = resp.json::<serde_json::Value>().await else { return Default::default() };
+    v["apps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|a| a["client_id"].as_str() == Some(YOAI_HOLOCHAIN_CLIENT_ID))
+        .flat_map(|a| a["labels"].as_array().into_iter().flatten())
+        .filter_map(|l| l.as_str().map(String::from))
+        .collect()
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+pub(crate) struct Fingerprint {
+    hash: String,
+    /// Seconds since the epoch when the object was last written.
+    written_at: u64,
+}
+
+fn fingerprints_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    crate::profile::root(&app).ok().map(|d| d.join(FINGERPRINTS_FILE))
+}
+
+fn load_fingerprints(app: &tauri::AppHandle) -> std::collections::HashMap<String, Fingerprint> {
+    fingerprints_path(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_fingerprints(app: &tauri::AppHandle, prints: &std::collections::HashMap<String, Fingerprint>) {
+    if let (Some(p), Ok(json)) = (fingerprints_path(app), serde_json::to_string(prints)) {
+        let _ = std::fs::write(p, json);
+    }
+}
+
+/// What an object says, apart from when it was said: the time stamp is new
+/// on every run and must not make an unchanged object look changed.
+pub(crate) fn fingerprint_of(object: &serde_json::Value) -> String {
+    use sha2::Digest as _;
+    let mut v = object.clone();
+    if let Some(o) = v.as_object_mut() {
+        o.remove("exported_at_iso");
+    }
+    hex::encode(sha2::Sha256::digest(serde_json::to_vec(&v).unwrap_or_default()))
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) enum WriteDecision {
+    Write,
+    Unchanged,
+    /// Changed, but written too recently: again in this many seconds.
+    Later(u64),
+}
+
+/// Write an object the Vault holds only when it changed, and the big one
+/// only when its last write is `min_gap` behind; an object the Vault lacks
+/// is always written.
+pub(crate) fn write_decision(changed: bool, in_vault: bool, last: Option<&Fingerprint>, now: u64, min_gap: u64) -> WriteDecision {
+    let Some(last) = last.filter(|_| in_vault) else { return WriteDecision::Write };
+    if !changed {
+        return WriteDecision::Unchanged;
+    }
+    let since = now.saturating_sub(last.written_at);
+    if since < min_gap {
+        WriteDecision::Later(min_gap - since)
+    } else {
+        WriteDecision::Write
+    }
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// The small object: the manifest's fast-moving parts.
+fn ais_object(manifest: &serde_json::Value) -> serde_json::Value {
+    let mut out = serde_json::json!({
+        "version": manifest["version"],
+        "_readme": "Your AIs (names, personas, settings), their pictures, the \
+                    knowledge you gave them and your document library's cards, \
+                    as stored on this device - the parts of the manifest that \
+                    change most, so they travel on their own.",
+        "license": manifest["license"],
+        "app": manifest["app"],
+        "exported_at_iso": manifest["exported_at_iso"],
+        "network_generation": manifest["network_generation"],
+    });
+    for k in ["ai_configs", "thumbnails", "ai_knowledge", "corpus"] {
+        if let Some(v) = manifest.get(k) {
+            out[k] = v.clone();
+        }
+    }
+    out
+}
+
+async fn post_backup_json(port: u16, label: &str, data: &serde_json::Value) -> Result<(), String> {
+    let resp = http()
+        .post(format!("http://127.0.0.1:{}/backup", port))
+        .header("Origin", VAULT_ORIGIN)
+        .json(&serde_json::json!({
+            "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
+            "app_name": "Your Own AI",
+            "label": label,
+            "data": data,
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("vault unreachable: {}", e))?;
+    if !resp.status().is_success() {
+        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+        return Err(body["error"].as_str().unwrap_or("backup_failed").to_string());
+    }
+    Ok(())
 }
 
 /// Union by hash, newest deletion first, capped.
@@ -2234,27 +2379,42 @@ async fn write_incremental_backup(
     // Deletions ride the manifest so a restore on ANOTHER device leaves them
     // deleted too: this device's ledger merged with what the Vault's
     // manifest already carries (the other device's), newest kept.
+    let held = own_backup_labels(port).await;
+    let vault_manifest = if held.contains(MANIFEST_LABEL) { fetch_vault_label(port, MANIFEST_LABEL).await } else { None };
     manifest["deleted"] = serde_json::Value::Array(merge_tombstones(
         crate::conversation_cache::deleted_ledger(app),
-        fetch_manifest_tombstones(port).await,
+        tombstones_of(vault_manifest.as_ref()),
     ));
 
-    let resp = http()
-        .post(format!("http://127.0.0.1:{}/backup", port))
-        .header("Origin", VAULT_ORIGIN)
-        .json(&serde_json::json!({
-            "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
-            "app_name": "Your Own AI",
-            "label": MANIFEST_LABEL,
-            "data": manifest,
-        }))
-        .send()
-        .await
-        .map_err(|e| format!("vault unreachable: {}", e))?;
-    if !resp.status().is_success() {
-        let body: serde_json::Value = resp.json().await.unwrap_or_default();
-        return Err(body["error"].as_str().unwrap_or("backup_failed").to_string());
-    }
+    // The small object whenever it changed; the manifest when it changed
+    // and its last write is ten minutes behind (a held write is caught up
+    // on its own). Neither is rewritten unchanged.
+    let now = now_secs();
+    let mut prints = load_fingerprints(app);
+    let ais = ais_object(&manifest);
+    let ais_print = fingerprint_of(&ais);
+    let ais_state = match write_decision(prints.get(AIS_LABEL).map(|p| p.hash != ais_print).unwrap_or(true), held.contains(AIS_LABEL), prints.get(AIS_LABEL), now, 0) {
+        WriteDecision::Unchanged => "unchanged",
+        _ => {
+            post_backup_json(port, AIS_LABEL, &ais).await?;
+            prints.insert(AIS_LABEL.to_string(), Fingerprint { hash: ais_print, written_at: now });
+            "written"
+        }
+    };
+    let manifest_print = fingerprint_of(&manifest);
+    let manifest_state = match write_decision(prints.get(MANIFEST_LABEL).map(|p| p.hash != manifest_print).unwrap_or(true), held.contains(MANIFEST_LABEL), prints.get(MANIFEST_LABEL), now, MANIFEST_MIN_GAP_SECS) {
+        WriteDecision::Unchanged => "unchanged".to_string(),
+        WriteDecision::Later(secs) => {
+            schedule_backup_after(app, secs + 5);
+            format!("held, again in {} s", secs)
+        }
+        WriteDecision::Write => {
+            post_backup_json(port, MANIFEST_LABEL, &manifest).await?;
+            prints.insert(MANIFEST_LABEL.to_string(), Fingerprint { hash: manifest_print, written_at: now });
+            "written".to_string()
+        }
+    };
+    save_fingerprints(app, &prints);
 
     // The manifest is now the authoritative snapshot - retire the legacy
     // monolith so a stale copy can't shadow it (restore prefers the
@@ -2267,11 +2427,13 @@ async fn write_incremental_backup(
     }
 
     log::info!(
-        "[escrow] incremental backup: {} conversations ({} records), {} object(s) uploaded, {} unchanged",
+        "[escrow] incremental backup: {} conversations ({} records), {} object(s) uploaded, {} unchanged; manifest {}, ais {}",
         index.len(),
         total_records,
         uploaded_objects,
         unchanged,
+        manifest_state,
+        ais_state,
     );
     Ok(serde_json::json!({
         "mode": "incremental",
@@ -2280,6 +2442,8 @@ async fn write_incremental_backup(
         "truncated_conversations": 0,
         "uploaded_objects": uploaded_objects,
         "unchanged_conversations": unchanged,
+        "manifest": manifest_state,
+        "ais": ais_state,
     }))
 }
 
@@ -2616,6 +2780,27 @@ pub fn schedule_full_backup(app: &tauri::AppHandle) {
     });
 }
 
+/// A manifest write held back (its last write was under ten minutes ago)
+/// runs when the gap has passed - one timer at a time; a backup that runs
+/// sooner for another reason writes it then.
+pub fn schedule_backup_after(app: &tauri::AppHandle, secs: u64) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static ARMED: AtomicBool = AtomicBool::new(false);
+    if ARMED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+        ARMED.store(false, Ordering::SeqCst);
+        match write_full_backup(&app).await {
+            Ok(_) => {}
+            Err(e) if e == "vault_locked" => backup_when_vault_unlocks(&app),
+            Err(e) => log::debug!("[escrow] held manifest write: {}", e),
+        }
+    });
+}
+
 /// A backup that found the Vault locked runs the moment it unlocks: poll
 /// the Vault every two minutes for up to a day, single-flight. Before this
 /// a write with the Vault locked was simply dropped, and a person who
@@ -2740,6 +2925,45 @@ mod tombstone_tests {
 
 #[cfg(test)]
 mod tests {
+    use super::{ais_object, fingerprint_of, write_decision, Fingerprint, WriteDecision};
+
+    #[test]
+    fn the_fingerprint_ignores_when_the_object_was_written() {
+        let a = serde_json::json!({ "exported_at_iso": "2026-10-19T01:00:00Z", "ai_configs": { "data": [1] } });
+        let b = serde_json::json!({ "exported_at_iso": "2026-10-19T02:00:00Z", "ai_configs": { "data": [1] } });
+        let c = serde_json::json!({ "exported_at_iso": "2026-10-19T02:00:00Z", "ai_configs": { "data": [2] } });
+        assert_eq!(fingerprint_of(&a), fingerprint_of(&b));
+        assert_ne!(fingerprint_of(&a), fingerprint_of(&c));
+    }
+
+    #[test]
+    fn an_object_is_written_when_missing_or_changed_and_the_manifest_waits_out_its_gap() {
+        let last = Fingerprint { hash: "x".into(), written_at: 1_000 };
+        assert_eq!(write_decision(false, false, Some(&last), 1_100, 600), WriteDecision::Write, "the Vault lacks it");
+        assert_eq!(write_decision(true, true, None, 1_100, 600), WriteDecision::Write, "never written");
+        assert_eq!(write_decision(false, true, Some(&last), 1_100, 600), WriteDecision::Unchanged);
+        assert_eq!(write_decision(true, true, Some(&last), 1_100, 600), WriteDecision::Later(500));
+        assert_eq!(write_decision(true, true, Some(&last), 1_700, 600), WriteDecision::Write);
+        assert_eq!(write_decision(true, true, Some(&last), 1_001, 0), WriteDecision::Write, "the small object has no gap");
+    }
+
+    #[test]
+    fn the_small_object_carries_the_fast_parts_and_none_of_the_conversations() {
+        let m = serde_json::json!({
+            "version": 2, "license": "CAL", "app": { "name": "Your Own AI" }, "exported_at_iso": "t",
+            "network_generation": "holochain-0.6",
+            "conversations": [1, 2, 3], "memory_rows": { "scopes": {} }, "app_keys": { "k": 1 },
+            "ai_configs": { "data": { "custom-ais": [] } }, "thumbnails": { "data": {} }, "ai_knowledge": { "data": {} }, "corpus": { "data": {} },
+        });
+        let a = ais_object(&m);
+        for k in ["ai_configs", "thumbnails", "ai_knowledge", "corpus", "network_generation", "exported_at_iso"] {
+            assert!(a.get(k).is_some(), "{k}");
+        }
+        for k in ["conversations", "memory_rows", "app_keys"] {
+            assert!(a.get(k).is_none(), "{k}");
+        }
+    }
+
     use super::*;
 
     fn bundle_with(n_records: usize, pad: usize) -> ConvBundle {

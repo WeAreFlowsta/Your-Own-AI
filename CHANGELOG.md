@@ -56,6 +56,13 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   not yet talked to stayed on one device.
 - Changes from your other devices show here within a minute or two, not
   five: each minute the app checks what moved and reads only that.
+- Your AIs, their pictures, their knowledge and your document cards now
+  travel to your other devices as a small object of their own, written
+  when they change. The full backup record (every conversation's index,
+  your memory) is rewritten at most every ten minutes, and nothing is
+  rewritten unchanged. Before, a new AI rode a 2 MB record that changed
+  with every conversation, and each rewrite made the other device start
+  its copy again.
 - Documents an AI was given on another of your devices are listed on
   this one too, marked with the device they are on. Add the same file
   here and it links itself; until then the document's words stay there.

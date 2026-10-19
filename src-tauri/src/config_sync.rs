@@ -188,15 +188,15 @@ pub(crate) fn missing_pictures(
         .collect()
 }
 
-/// One sibling's manifest copy (Vault 1.6.1 reads the named device's; a
-/// 1.6.0 Vault answers with the newest copy across devices instead).
-async fn sibling_manifest(port: u16, device: &str) -> Result<Option<serde_json::Value>, String> {
+/// One sibling's copy of a named object (Vault 1.6.1 reads the named
+/// device's; a 1.6.0 Vault answers with the newest copy across devices).
+async fn sibling_label(port: u16, device: &str, label: &str) -> Result<Option<serde_json::Value>, String> {
     let resp = http()
         .post(format!("http://127.0.0.1:{}/backup/retrieve", port))
         .header("Origin", VAULT_ORIGIN)
         .json(&serde_json::json!({
             "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
-            "label": crate::vault_escrow::MANIFEST_LABEL,
+            "label": label,
             "across": "devices",
             "device": device,
         }))
@@ -362,10 +362,17 @@ fn sibling_needs_update(manifest: Option<&serde_json::Value>, device: &crate::va
 /// sibling's manifest is the cost of a round; the stamps are free (they ride
 /// the backup list), so a round that would read the same manifests again is
 /// skipped - which is what lets the rounds run every minute.
-static LAST_STAMPS: std::sync::Mutex<Option<Vec<(String, Option<String>)>>> = std::sync::Mutex::new(None);
+static LAST_STAMPS: std::sync::Mutex<Option<Vec<(String, Option<String>, Option<String>)>>> = std::sync::Mutex::new(None);
 
-fn stamps_of(devices: &[crate::vault_escrow::SiblingDevice]) -> Vec<(String, Option<String>)> {
-    devices.iter().map(|d| (d.id.clone(), d.manifest_at.clone())).collect()
+fn stamps_of(devices: &[crate::vault_escrow::SiblingDevice]) -> Vec<(String, Option<String>, Option<String>)> {
+    devices.iter().map(|d| (d.id.clone(), d.manifest_at.clone(), d.ais_at.clone())).collect()
+}
+
+/// Did this sibling's manifest move since the last round? (Unknown = yes.)
+fn manifest_moved(last: Option<&Vec<(String, Option<String>, Option<String>)>>, device: &crate::vault_escrow::SiblingDevice) -> bool {
+    last.and_then(|l| l.iter().find(|(id, _, _)| *id == device.id))
+        .map(|(_, m, _)| *m != device.manifest_at)
+        .unwrap_or(true)
 }
 
 /// `force`: read every manifest even when no sibling's has moved (Settings'
@@ -380,11 +387,17 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle, force: bool) -> R
         return Ok((0, 0));
     }
     let stamps = stamps_of(&devices);
-    if !force && LAST_STAMPS.lock().unwrap().as_ref() == Some(&stamps) {
+    let last_stamps = LAST_STAMPS.lock().unwrap().clone();
+    if !force && last_stamps.as_ref() == Some(&stamps) {
         return Ok((0, 0));
     }
     let mut synced: Vec<SyncedDevice> = Vec::new();
-    let mut sibling_index: Vec<SiblingConversation> = Vec::new();
+    // The siblings' conversation lists: kept from the last round for every
+    // device whose manifest is not read this time.
+    let mut sibling_index: Vec<SiblingConversation> = sibling_conversations_path(app)
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
     let store = app
         .store(crate::profile::store_path(app, "ai-data.json"))
         .map_err(|e| e.to_string())?;
@@ -398,29 +411,47 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle, force: bool) -> R
     // Every sibling AI's picture by founding key, first device first.
     let mut sibling_pictures: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for device in &devices {
-        let manifest = match sibling_manifest(port, &device.id).await {
-            Ok(m) => m,
+        let short = &device.id[..device.id.len().min(8)];
+        // The small object carries the AIs, pictures, knowledge and cards
+        // (~400 KB, written when they change); the manifest (~2 MB) is read
+        // only when it moved, or when the sibling writes no small object yet.
+        let fast = match sibling_label(port, &device.id, crate::vault_escrow::AIS_LABEL).await {
+            Ok(v) => v,
             Err(e) => {
-                log::warn!("[config-sync] manifest from {}: {}", &device.id[..device.id.len().min(8)], e);
+                log::warn!("[config-sync] ais from {}: {}", short, e);
                 None
             }
+        };
+        let manifest = if force || fast.is_none() || manifest_moved(last_stamps.as_ref(), device) {
+            match sibling_label(port, &device.id, crate::vault_escrow::MANIFEST_LABEL).await {
+                Ok(m) => m,
+                Err(e) => {
+                    log::warn!("[config-sync] manifest from {}: {}", short, e);
+                    None
+                }
+            }
+        } else {
+            None
         };
         synced.push(SyncedDevice {
             id: device.id.clone(),
             name: device.name.clone(),
-            needs_update: sibling_needs_update(manifest.as_ref(), device),
+            needs_update: sibling_needs_update(fast.as_ref().or(manifest.as_ref()), device),
         });
-        let Some(manifest) = manifest else { continue };
-        sibling_index.extend(index_of(&manifest, device));
-        // The sibling's memory while it is off: its facts and its rows.
-        if let Some(hc) = app.try_state::<std::sync::Arc<crate::commands_holochain::HolochainState>>() {
-            if let Ok(key) = hc.get().and_then(|m| m.data_key()) {
-                let (f, r) = crate::memory_rows::fold_sibling_person_memory(app, &key, &manifest);
-                if f + r > 0 {
-                    log::info!("[config-sync] memory from {}: {} fact(s), {} row(s) folded in", device.name.as_deref().unwrap_or("another device"), f, r);
+        if let Some(manifest) = &manifest {
+            sibling_index.retain(|c| c.device != device.id);
+            sibling_index.extend(index_of(manifest, device));
+            // The sibling's memory while it is off: its facts and its rows.
+            if let Some(hc) = app.try_state::<std::sync::Arc<crate::commands_holochain::HolochainState>>() {
+                if let Ok(key) = hc.get().and_then(|m| m.data_key()) {
+                    let (f, r) = crate::memory_rows::fold_sibling_person_memory(app, &key, manifest);
+                    if f + r > 0 {
+                        log::info!("[config-sync] memory from {}: {} fact(s), {} row(s) folded in", device.name.as_deref().unwrap_or("another device"), f, r);
+                    }
                 }
             }
         }
+        let Some(manifest) = fast.or(manifest) else { continue };
         let sibling = ai_list(&manifest);
         if sibling.is_empty() {
             continue;

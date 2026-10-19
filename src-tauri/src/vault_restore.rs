@@ -421,6 +421,19 @@ async fn fetch_data_backup(port: u16) -> Result<serde_json::Value, String> {
     match retrieve_label(port, vault_escrow::MANIFEST_LABEL).await {
         Ok(v) => {
             let mut manifest = v["data"].clone();
+            // The AIs, pictures, knowledge and cards travel in their own
+            // object too, written as they change while the manifest waits
+            // its ten minutes: when that one is newer, it has the last word.
+            if let Ok(a) = retrieve_label(port, vault_escrow::AIS_LABEL).await {
+                let newer = a["data"]["exported_at_iso"].as_str() >= manifest["exported_at_iso"].as_str();
+                if newer {
+                    for k in ["ai_configs", "thumbnails", "ai_knowledge", "corpus"] {
+                        if let Some(part) = a["data"].get(k) {
+                            manifest[k] = part.clone();
+                        }
+                    }
+                }
+            }
             let index = manifest["conversations"]
                 .as_array()
                 .cloned()
