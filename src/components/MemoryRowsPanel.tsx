@@ -6,7 +6,7 @@
  * (MEMORY_REDESIGN.md §9).
  */
 import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
-import { LuPencil, LuTrash2 } from "@qwikest/icons/lucide";
+import { LuPencil, LuTrash2, LuChevronDown, LuChevronRight } from "@qwikest/icons/lucide";
 import {
   listMemoryRows,
   listMemoryRowsCached,
@@ -49,6 +49,12 @@ export default component$<Props>((props) => {
   const dreams = useSignal<MemoryRevision[]>([]);
   const revisions = useSignal<MemoryRevision[]>([]);
   const dreamsOpen = useSignal(false);
+  // What each session left behind (one `episode` row per session, raw, in
+  // the digest's own words - MEMORY_REDESIGN.md §5.5): shown so the person
+  // sees what the next session will carry and can drop any of it.
+  const episodes = useSignal<MemoryRow[]>([]);
+  const sessionsOpen = useSignal(false);
+  const openEpisode = useSignal<string | null>(null);
   const editingId = useSignal<string | null>(null);
   const editValue = useSignal("");
   const scope = useSignal("");
@@ -59,7 +65,9 @@ export default component$<Props>((props) => {
       rows.value = (await listMemoryRowsCached(scope.value)).filter(isLayer1);
     } catch { /* older backend */ }
     try {
-      rows.value = (await listMemoryRows(scope.value, props.agentKey)).filter(isLayer1);
+      const all = await listMemoryRows(scope.value, props.agentKey);
+      rows.value = all.filter(isLayer1);
+      episodes.value = all.filter((r) => r.kind === "episode" && !r.deleted).sort((a, b) => b.as_of - a.as_of);
     } catch (e) {
       console.warn("[MemoryRows] rows did not answer (cached shown):", e);
     }
@@ -200,6 +208,57 @@ export default component$<Props>((props) => {
           <p class="mt-2 text-[11px] text-[var(--text-muted)]">
             Kept in your own records, so they follow you to your other devices. Every AI is reminded of them when it answers.
           </p>
+        </div>
+      )}
+      {episodes.value.length > 0 && (
+        <div class="mb-5 p-4 rounded-xl bg-[var(--bg-main)] border border-[var(--border-subtle)]" data-testid="memory-sessions">
+          <button
+            type="button"
+            class="flex items-center gap-1.5 text-xs font-semibold text-[var(--text-muted)] uppercase tracking-wide bg-transparent border-none cursor-pointer p-0"
+            onClick$={() => (sessionsOpen.value = !sessionsOpen.value)}
+            data-testid="memory-sessions-toggle"
+          >
+            {sessionsOpen.value ? <LuChevronDown class="w-3.5 h-3.5" /> : <LuChevronRight class="w-3.5 h-3.5" />}
+            Sessions ({episodes.value.length})
+          </button>
+          {sessionsOpen.value && (
+            <div class="mt-2 flex flex-col gap-1.5">
+              {episodes.value.map((r) => {
+                const firstLine = r.text.split("\n").find((l) => l.trim()) ?? "";
+                const open = openEpisode.value === r.id;
+                return (
+                  <div key={r.id} class="group flex items-start gap-2" data-testid="memory-episode">
+                    <button
+                      type="button"
+                      class="min-w-0 flex-1 text-left bg-transparent border-none cursor-pointer p-0"
+                      onClick$={() => (openEpisode.value = open ? null : r.id)}
+                    >
+                      <span class="text-[11px] text-[var(--text-muted)] mr-2">{new Date(r.as_of).toLocaleDateString(undefined, { day: "numeric", month: "short" })}</span>
+                      <span class={`text-sm text-[var(--text-primary)] ${open ? "whitespace-pre-wrap" : ""}`}>
+                        {open ? r.text : firstLine.length > 140 ? firstLine.slice(0, 140) + "…" : firstLine}
+                      </span>
+                    </button>
+                    {!props.readOnly && (
+                      <button
+                        type="button"
+                        class="p-1 rounded text-[var(--text-muted)] hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="Forget this session"
+                        onClick$={async () => {
+                          await saveMemoryRow(deletion(r), props.agentKey);
+                          await load$();
+                        }}
+                      >
+                        <LuTrash2 class="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+              <p class="mt-1 text-[11px] text-[var(--text-muted)]">
+                What each session left behind, in its own words. The next session starts from these; dreaming folds them into the notes above over time.
+              </p>
+            </div>
+          )}
         </div>
       )}
     </>

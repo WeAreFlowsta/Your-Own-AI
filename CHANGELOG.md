@@ -61,6 +61,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   here and it links itself; until then the document's words stay there.
 
 ### Memory
+- Project memory lists its sessions: what each one left behind, in its
+  own words, with a date. Open one to read it; forget one and the next
+  session starts without it.
 - A correction replaces the note it corrects, whatever kind the AI
   filed each one under. Before, a "make build" saved as a fact left the
   earlier "make all" command standing beside it.
