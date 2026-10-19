@@ -122,6 +122,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   it has no tools - one line above the input says so, with the way up:
   a bigger model on this computer, or your plan's online models. One
   door for this, in place of the pop-up and the line in the working rail.
+  The line comes as soon as a second step fails, while the turn is still
+  running; "Let this AI use online models" stops the turn and asks the
+  same question again on the online models.
 - Replies and agent turns keep running when you leave the chat; coming
   back opens the running reply at once and lands on your question.
 - The activity tray lists replies you are not looking at, never repeats

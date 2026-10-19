@@ -2058,6 +2058,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
               ].filter(Boolean).join("\n").slice(0, 500)
             : errorOf(update);
         const finished = status === "completed" || status === "failed";
+        if (status === "failed") queueMicrotask(midTurnStruggle);
         uiLog(`[rail] ${kind} ${human.name ?? update.name ?? "?"} ${status ?? "-"} ${toolCallId}${taskId ? ` task ${taskId}` : ""}${helperOf ? ` in helper ${helperOf}` : ""}`);
         if (!status || status === "in_progress" || status === "pending") {
           state.liveStatus = `${human.label}..`;
@@ -2598,6 +2599,67 @@ export function useAgentSession(props: UseAgentSessionProps) {
       }, 0);
     };
 
+    /** The way up, on the line above the composer (one door, Eric 10-19):
+     *  which model on this computer does better (when the AI is pinned to
+     *  a weaker one), and the plan's online models when the account has
+     *  them. Said at the turn's end, or as soon as a second step fails. */
+    const offerWayUp = (pending: { turnId: string; model: string; pinned: boolean; entitled: boolean }) => {
+      const { turnId: offerTurn, model, pinned, entitled } = pending;
+      const pretty = (f: string) => f.replace(/\.gguf$/i, "").replace(/-Q\d[^-]*$/i, "");
+      const online = entitled
+        ? " Your plan's online models do them in one go."
+        : " Online models do them in one go. They are an optional paid service, and everything offline stays free.";
+      const say = (bigger?: string) => {
+        const lead = state.smallCoderText
+          ? state.smallCoderText.replace(/\s*A larger model.*$/s, "")
+          : "This model didn't manage the project's tools.";
+        const text = bigger
+          ? `${lead} ${pretty(bigger)} on this computer does better at project work.${online}`
+          : `${lead} Project work goes better on a bigger model.${online}`;
+        props.chatState.messages = props.chatState.messages.map((x) => (x.id === offerTurn ? { ...x, projectOffer: { text, bigger, plan: entitled } } : x));
+      };
+      if (pinned) {
+        invokeTauri("agent_best_local")
+          .then((best) => say(typeof best === "string" && best && best.toLowerCase() !== model.toLowerCase() ? best : undefined))
+          .catch(() => say(undefined));
+      } else {
+        say(undefined);
+      }
+    };
+
+    /** A second real red step while the turn still runs: say it now, not
+     *  at the end (10-19: a 4B model failed twice by its second minute and
+     *  then wrote one file for five more; the line came only after Stop).
+     *  Red is a command that printed nothing, a refused tool, a timeout -
+     *  never our own faults. Once per session. */
+    const midTurnStruggle = () => {
+      if (state.struggleShown || state.mode !== "project") return;
+      const id = turnId.value;
+      const m = id ? props.chatState.messages.find((x) => x.id === id) : undefined;
+      if (!m) return;
+      const ourFault = (e: string | undefined) =>
+        !!e && /was not executed|did not answer|stopped answering|didn't start|not connected/i.test(e);
+      const red = (m.agentLog ?? []).filter((i) => i.type === "action" && i.action.status === "failed" && !ourFault(i.action.error)).length;
+      if (red < 2) return;
+      const aiModel = props.selectedAi.value.aiConfig?.model || "";
+      const offline = aiModel === "auto:offline" || aiModel === "auto:my-hardware" || aiModel.toLowerCase().endsWith(".gguf");
+      if (!offline) return;
+      try {
+        if (localStorage.getItem(`project-offer-off:${props.selectedAi.value.id}`) === "1") return;
+      } catch {
+        /* preference only */
+      }
+      state.struggleShown = true;
+      let entitled = false;
+      try {
+        entitled = lastKnownEntitled() === "yes";
+      } catch {
+        /* unknown = no plan */
+      }
+      uiLog(`[rail] struggle mid-turn: ${red} red step(s), ai ${aiModel}, entitled ${entitled}`);
+      offerWayUp({ turnId: m.id, model: aiModel, pinned: aiModel.toLowerCase().endsWith(".gguf"), entitled });
+    };
+
     const finishTurn = (errorText?: string, outcome: "done" | "stopped" | "error" = errorText ? "error" : "done") => {
       // Once per turn: turn_completed (with the informative error) and the
       // RPC response (with a generic "Internal error") both land here.
@@ -2737,28 +2799,9 @@ export function useAgentSession(props: UseAgentSessionProps) {
       // better (when the AI is pinned to a weaker one), and the plan's
       // online models when the account has them.
       if (strugglePending.value) {
-        const { turnId: offerTurn, model, pinned, entitled } = strugglePending.value;
+        const pending = strugglePending.value;
         strugglePending.value = null;
-        const pretty = (f: string) => f.replace(/\.gguf$/i, "").replace(/-Q\d[^-]*$/i, "");
-        const online = entitled
-          ? " Your plan's online models do them in one go."
-          : " Online models do them in one go. They are an optional paid service, and everything offline stays free.";
-        const say = (bigger?: string) => {
-          const lead = state.smallCoderText
-            ? state.smallCoderText.replace(/\s*A larger model.*$/s, "")
-            : "This model didn't manage the project's tools.";
-          const text = bigger
-            ? `${lead} ${pretty(bigger)} on this computer does better at project work.${online}`
-            : `${lead} Project work goes better on a bigger model.${online}`;
-          props.chatState.messages = props.chatState.messages.map((x) => (x.id === offerTurn ? { ...x, projectOffer: { text, bigger, plan: entitled } } : x));
-        };
-        if (pinned) {
-          invokeTauri("agent_best_local")
-            .then((best) => say(typeof best === "string" && best && best.toLowerCase() !== model.toLowerCase() ? best : undefined))
-            .catch(() => say(undefined));
-        } else {
-          say(undefined);
-        }
+        offerWayUp(pending);
       }
       state.liveStatus = "";
       state.retryStatus = "";

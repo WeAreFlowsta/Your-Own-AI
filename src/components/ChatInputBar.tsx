@@ -198,7 +198,7 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
             <div class="flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="project-offer" data-plan={offer.plan ? 'yes' : 'no'}>
               <span>{offer.text}</span>
               {offer.plan ? (
-                <button type="button" class={offerLink} title="Sets this AI to Auto - Online and Offline and asks again" onClick$={() => offerGo(offer.messageId, 'project-online')}>Let this AI use online models</button>
+                <button type="button" class={offerLink} title="Sets this AI to Auto - Online and Offline and asks the same question again (a running turn is stopped first)" onClick$={() => offerGo(offer.messageId, 'project-online')}>Let this AI use online models</button>
               ) : (
                 <a href="/online-models" class={offerLink}>See online models</a>
               )}

@@ -1727,7 +1727,16 @@ export default component$(() => {
       }
       selectedAi.value = { ...ai, aiConfig: { ...ai.aiConfig, model } };
       chatState.messages = chatState.messages.map((m) => (m.id === id ? { ...m, projectOffer: undefined } : m));
-      uiLog(`[project] ${ai.label} now on ${model}; asking again`);
+      // Mid-turn: the small model is still at it - stop it, wait for the
+      // turn to close, then the same question on the new model.
+      if (chatState.isLoading) {
+        uiLog(`[project] ${ai.label} now on ${model}; stopping the turn to ask again`);
+        await cancelTurn$();
+        for (let i = 0; i < 60 && chatState.isLoading; i++) await new Promise((r) => setTimeout(r, 250));
+        if (chatState.isLoading) return;
+      } else {
+        uiLog(`[project] ${ai.label} now on ${model}; asking again`);
+      }
       await resendAgentLast$();
       return;
     }

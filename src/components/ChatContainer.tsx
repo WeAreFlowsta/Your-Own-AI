@@ -161,8 +161,12 @@ export default component$<ChatContainerProps>((props) => {
   // information the AI could not look up comes next (Offline Only, or no
   // plan: the answer may be out of date).
   const lastReply = messages[messages.length - 1];
+  // The project-model offer can arrive while the turn still runs (a second
+  // failed step): it shows at once, and its online button stops the turn.
   const replyOffer: ReplyOffer | null =
-    !props.isLoading && lastReply?.role === 'assistant' && !lastReply.isLoading && !!lastReply.content
+    lastReply?.role === 'assistant' && lastReply.projectOffer
+      ? { messageId: lastReply.id, kind: 'project-model', ...lastReply.projectOffer }
+    : !props.isLoading && lastReply?.role === 'assistant' && !lastReply.isLoading && !!lastReply.content
       ? lastReply.needsWeb
         ? { messageId: lastReply.id, kind: 'web-off', needsWeb: lastReply.needsWeb }
         : lastReply.projectOffer
