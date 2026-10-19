@@ -86,6 +86,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   re-indexed once, with progress shown on its card.
 
 ### Working in the background
+- A program that asks the AI at `:11435` to call one named tool (the
+  OpenAI `tool_choice` object) now gets the tool call from a model on
+  this computer; the engine understood only auto / required / none and
+  was dropping the request.
 - When a model this computer runs gives up on project work - steps fail,
   or it answers a question about the folder without reading it and says
   it has no tools - one line above the input says so, with the way up:

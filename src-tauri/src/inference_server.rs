@@ -1428,6 +1428,9 @@ async fn chat_completions(
     // Offline: llama-server keys off the loaded model. Online: the proxy needs
     // the bare provider id (no "online:" prefix).
     body["model"] = json!(online_id.clone().or_else(|| external_id.clone()).unwrap_or_else(|| ai.model.clone()));
+    if online_id.is_none() {
+        normalize_tool_choice(&mut body);
+    }
 
     // Recording context: the exchange is recorded to the signed transcript once
     // we have the assistant's reply (grouped by an optional caller-supplied
@@ -1888,6 +1891,47 @@ fn strip_image_parts(messages: &mut [Value]) -> usize {
 /// A model filename as the rail says it: no extension.
 fn pretty_model_name(model: &str) -> String {
     model.trim_end_matches(".gguf").to_string()
+}
+
+/// llama-server takes `tool_choice` as one of "auto" | "required" | "none"; the
+/// OpenAI object form that names a function (`{"type":"function","function":
+/// {"name":..}}`) makes it warn and drop the field, so a caller that forced a
+/// tool (the Build agent's structured output does) got a free-text answer and
+/// no tool call. Naming a function means a tool call is required: say so.
+fn normalize_tool_choice(body: &mut Value) {
+    let Some(choice) = body.get("tool_choice") else { return };
+    if choice.is_object() {
+        let name = choice
+            .get("function")
+            .and_then(|f| f.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        body["tool_choice"] = json!("required");
+        if !name.is_empty() {
+            log::debug!("[inference] tool_choice named {name}; sent to the engine as required");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tool_choice_tests {
+    use super::normalize_tool_choice;
+    use serde_json::json;
+    #[test]
+    fn a_named_function_becomes_required_and_the_strings_stand() {
+        let mut b = json!({ "tool_choice": { "type": "function", "function": { "name": "emit" } } });
+        normalize_tool_choice(&mut b);
+        assert_eq!(b["tool_choice"], json!("required"));
+        for s in ["auto", "required", "none"] {
+            let mut b = json!({ "tool_choice": s });
+            normalize_tool_choice(&mut b);
+            assert_eq!(b["tool_choice"], json!(s));
+        }
+        let mut b = json!({ "messages": [] });
+        normalize_tool_choice(&mut b);
+        assert!(b.get("tool_choice").is_none());
+    }
 }
 
 fn coalesce_system(messages: Vec<Value>) -> Vec<Value> {
