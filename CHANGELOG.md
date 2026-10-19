@@ -58,6 +58,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   five: each minute the app checks what moved and reads only that.
 
 ### Memory
+- A correction replaces the note it corrects, whatever kind the AI
+  filed each one under. Before, a "make build" saved as a fact left the
+  earlier "make all" command standing beside it.
 - Rules, facts, decisions and session notes are separate, dated entries
   in your own network, sealed to you, and they reach your other devices,
   even from a device that is switched off (through its backup copy).

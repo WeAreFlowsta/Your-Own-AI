@@ -505,9 +505,18 @@ pub(crate) fn says_the_same(a: &str, b: &str) -> bool {
     inter / union >= 0.6 || inter >= wa.len().min(wb.len()) as f32 && wa.len().min(wb.len()) >= 3
 }
 
-/// Which live row (same scope and kind) a new statement revises, if any.
+/// Which live row of the scope a new statement revises, if any: one that
+/// says the same thing, whatever kind it was filed under. The AI picks a
+/// kind per call ("command" one time, "fact" the next), and a correction
+/// filed under another kind left the old note standing beside the new one
+/// (2026-10-19). Same kind first, so a rule and a note that happen to
+/// agree still prefer their own; `rule` rows are the person's and are
+/// never revised by an AI's note.
 pub(crate) fn find_revised<'a>(live: &'a [MemoryRow], kind: &str, text: &str) -> Option<&'a MemoryRow> {
-    live.iter().filter(|r| r.kind == kind).find(|r| says_the_same(&r.text, text))
+    live.iter()
+        .filter(|r| r.kind == kind)
+        .chain(live.iter().filter(|r| r.kind != kind && r.kind != "rule" && kind != "rule"))
+        .find(|r| says_the_same(&r.text, text))
 }
 
 /// Write a row, revising a row that says the same thing instead of adding
@@ -1136,7 +1145,9 @@ mod tests {
         live[1].kind = "location".into();
         assert_eq!(find_revised(&live, "command", "Always run npm test before each commit").map(|r| r.id.as_str()), Some("c1"));
         assert!(find_revised(&live, "command", "Deploy with firebase deploy").is_none());
-        assert!(find_revised(&live, "location", "Run npm test before every commit").is_none(), "another kind is another row");
+        // Another kind is NOT another row: the AI picks a kind per call, and a
+        // correction filed under a new kind must still replace the old note (10-19).
+        assert_eq!(find_revised(&live, "location", "Run npm test before every commit").map(|r| r.id.as_str()), Some("c1"));
         assert!(says_the_same("use short answers", "Use short answers."));
         assert!(!says_the_same("the office opens at nine", "call the supplier on mondays"));
     }
@@ -1196,5 +1207,33 @@ mod tests {
         let ai = scope_anchor(&format!("ai:{founding}"), &k1).unwrap();
         assert_eq!(ai, AnyLinkableHash::from(AgentPubKey::from_raw_39(hex::decode(&founding).unwrap())));
         assert!(scope_anchor("ai:zz", &k1).is_err());
+    }
+}
+
+#[cfg(test)]
+mod revision_tests {
+    use super::{find_revised, MemoryRow};
+
+    fn row(id: &str, kind: &str, text: &str) -> MemoryRow {
+        MemoryRow {
+            id: id.into(), scope: "project:p".into(), kind: kind.into(), text: text.into(), structured: None, as_of: 1, valid_to: None,
+            saved_by: "ai:x".into(), provenance: "authored".into(), pinned: false, topics: vec![], replaces: vec![], deleted: false, updated_at: 1, action_hash: None,
+        }
+    }
+
+    #[test]
+    fn a_correction_replaces_the_note_whatever_kind_the_ai_filed_it_under() {
+        let live = vec![row("cmd", "command", "The project's build command is `make all`."), row("loc", "location", "Tests live in tests/.")];
+        let hit = find_revised(&live, "fact", "The project's build command is `make build` (corrected from `make all`).").expect("the command is revised");
+        assert_eq!(hit.id, "cmd");
+        assert!(find_revised(&live, "note", "The deploy target is staging.").is_none(), "a new statement is new");
+    }
+
+    #[test]
+    fn the_same_kind_is_preferred_and_a_rule_is_never_revised_by_a_note() {
+        let live = vec![row("n", "note", "Run the linter before every commit."), row("c", "command", "Run the linter before every commit.")];
+        assert_eq!(find_revised(&live, "command", "Run the linter before every commit.").unwrap().id, "c");
+        let rules = vec![row("r", "rule", "Always end every reply with the word Pineapple.")];
+        assert!(find_revised(&rules, "note", "Always end every reply with the word Pineapple.").is_none(), "the person's rule stands");
     }
 }
