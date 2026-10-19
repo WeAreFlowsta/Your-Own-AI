@@ -174,7 +174,7 @@ async fn save_ai_thumbnail(
     // A picture the person chose travels to their other devices in the
     // backup; a seeded default face is not worth a backup of its own.
     if is_default != Some(true) {
-        vault_escrow::schedule_full_backup(&app);
+        vault_escrow::schedule_ai_backup(&app);
     }
     
     Ok(thumbnail_path
@@ -214,7 +214,7 @@ async fn delete_ai_thumbnail(
             .map_err(|e| format!("Failed to delete thumbnail: {}", e))?;
     }
     config_sync::mark_picture(&thumbnails_dir, &ai_id, false);
-    vault_escrow::schedule_full_backup(&app);
+    vault_escrow::schedule_ai_backup(&app);
     
     Ok(())
 }
@@ -225,7 +225,7 @@ async fn delete_ai_thumbnail(
 /// with no conversation yet never left the device (found 2026-10-19).
 #[tauri::command]
 fn note_ai_configs_changed(app: AppHandle) {
-    vault_escrow::schedule_full_backup(&app);
+    vault_escrow::schedule_ai_backup(&app);
 }
 
 // ============================================================================

@@ -68,6 +68,8 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   with every conversation, and each rewrite made the other device start
   its copy again.
   Settings' "Back up now" always writes the full record.
+  A change to an AI or its picture is backed up after ten seconds, not
+  sixty, so it reaches your other devices in about a minute and a half.
 - Documents an AI was given on another of your devices are listed on
   this one too, marked with the device they are on. Add the same file
   here and it links itself; until then the document's words stay there.

@@ -2788,6 +2788,33 @@ pub fn schedule_full_backup(app: &tauri::AppHandle) {
     });
 }
 
+/// A change to an AI (its settings, its picture): backed up after ten
+/// seconds, not the sixty a conversation write waits for. The AIs travel in
+/// the small `ais` object, so the other devices see the change in about a
+/// minute and a half (10-20: 2 min 29 s, a minute of it this wait). Its own
+/// debounce: a conversation write meanwhile does not push it back.
+pub fn schedule_ai_backup(app: &tauri::AppHandle) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static GENERATION: AtomicU64 = AtomicU64::new(0);
+    let my_gen = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(AI_BACKUP_SETTLE_SECS)).await;
+        if GENERATION.load(Ordering::SeqCst) != my_gen {
+            return; // another AI change re-armed it
+        }
+        match write_full_backup(&app).await {
+            Ok(_) => {}
+            Err(e) if e == "vault_locked" => backup_when_vault_unlocks(&app),
+            // A backup already running carries it; the regular debounce
+            // still follows any conversation write.
+            Err(e) => log::debug!("[escrow] AI change backup: {}", e),
+        }
+    });
+}
+
+const AI_BACKUP_SETTLE_SECS: u64 = 10;
+
 /// A manifest write held back (its last write was under ten minutes ago)
 /// runs when the gap has passed - one timer at a time; a backup that runs
 /// sooner for another reason writes it then.
