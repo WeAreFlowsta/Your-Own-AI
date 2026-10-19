@@ -24,6 +24,7 @@ mod lair;
 mod mlx_artifacts;      // MLX model artifacts (safetensors dirs) download/status
 mod mlx_engine;         // Apple Silicon MLX engine (preview) - SwiftLM                 // Holochain lair keystore management
 mod conductor;            // Holochain conductor lifecycle
+mod rendezvous_keeper;    // keeps this device listed on the rendezvous when the conductor's registration stalls
 pub mod dna;              // DNA installation per AI personality (pub for bin/census)
 pub mod flowsta;          // Sign in with Flowsta via Vault + online-model proxy
 mod holochain;            // Multi-agent manager
@@ -1066,9 +1067,11 @@ pub fn run() {
                             log::warn!("Failed to reconnect existing agents: {}", e);
                         }
 
+                        let admin_port = manager.handle.admin_port;
                         // Fill the OnceCell
                         let _ = hc_state.manager.set(manager);
                         log::info!("Holochain conductor ready");
+                        rendezvous_keeper::start(admin_port);
                         if identity_watch::RELAUNCHED_INTO_IDENTITY.load(std::sync::atomic::Ordering::Relaxed) {
                             identity_watch::bring_to_front(&hc_app_handle);
                         }

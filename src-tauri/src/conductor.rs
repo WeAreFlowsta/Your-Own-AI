@@ -161,6 +161,20 @@ impl Rendezvous {
     }
 }
 
+/// Every rendezvous this build knows, for the registration keeper
+/// (`rendezvous_keeper`): Flowsta's with this app's auth material first,
+/// then the open community nodes. `(bootstrap url, base64 auth material)`.
+pub(crate) fn rendezvous_servers() -> Vec<(String, Option<String>)> {
+    let mut servers = Vec::new();
+    if let Some(p) = Rendezvous::primary() {
+        servers.push((p.bootstrap_url, p.auth_material));
+    }
+    for f in Rendezvous::fallbacks() {
+        servers.push((f.bootstrap_url, None));
+    }
+    servers
+}
+
 impl Clone for Rendezvous {
     fn clone(&self) -> Self {
         Self { bootstrap_url: self.bootstrap_url.clone(), signal_url: self.signal_url.clone(), auth_material: self.auth_material.clone() }
@@ -238,8 +252,12 @@ fn generate_conductor_config(
         Some(r) => log::info!("[conductor] rendezvous {} (the person's own devices can meet)", r.bootstrap_url),
         None => log::info!("[conductor] no rendezvous - this conductor stays alone"),
     }
+    // Errors only, plus the bootstrap client's warnings: a refused
+    // registration ("Bootstrap PUT returned HTTP error") is the one line
+    // that tells a stranded device from a quiet one (2026-10-19).
     let config = format!(
-        r#"data_root_path: '{data_root}'
+        r#"tracing_override: 'error,kitsune2_bootstrap_client=warn'
+data_root_path: '{data_root}'
 keystore:
   type: lair_server
   connection_url: '{lair_url}'
@@ -274,6 +292,10 @@ fn start_conductor_process(
 
     let stdout_path = conductor_dir.join("holochain-stdout.log");
     let stderr_path = conductor_dir.join("holochain-stderr.log");
+    // Keep the previous run's logs: a restart is the usual cure for a
+    // network problem, and it used to erase the only evidence.
+    let _ = std::fs::rename(&stdout_path, conductor_dir.join("holochain-stdout.previous.log"));
+    let _ = std::fs::rename(&stderr_path, conductor_dir.join("holochain-stderr.previous.log"));
 
     let stdout_file = std::fs::File::create(&stdout_path)
         .map_err(|e| format!("Failed to create conductor stdout log: {}", e))?;

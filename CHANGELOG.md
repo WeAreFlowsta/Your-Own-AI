@@ -47,6 +47,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   (Restart now or Later).
 - When Flowsta's meeting point is down, devices still find each other
   through an open community node.
+- A device that drops off the meeting point, for example after a spell
+  with no connection, puts itself back within a minute and tells its
+  conductor about devices it had not heard of. No restart needed. The
+  conductor's logs from the previous run are kept.
 
 ### Memory
 - Rules, facts, decisions and session notes are separate, dated entries
