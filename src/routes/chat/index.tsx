@@ -47,7 +47,6 @@ import { useVisionDownload } from "../../contexts/VisionDownloadContext";
 
 import ChatContainer from "../../components/ChatContainer";
 import CodePanel from "../../components/CodePanel";
-import StruggleModal, { type StruggleAction } from "../../components/StruggleModal";
 import AppHeader from "../../components/AppHeader";
 import {
   firstModelInFlight,
@@ -225,7 +224,6 @@ export default component$(() => {
     prepareTurn$: prepareAgentTurn$,
     discardPreparedTurn$: discardPreparedAgentTurn$,
     resendLast$: resendAgentLast$,
-    dismissStruggle$,
     cancelTurn$,
     respondPermission$,
     answerPermissionByReply$,
@@ -1678,7 +1676,7 @@ export default component$(() => {
   // Retry, redo on the other side, or - for an AI that carries tools -
   // "Answer again with tools": the direct reply and its question leave the
   // list (as any retry does) and the same question goes through a session.
-  const retryOrTools$ = $(async (id: string, target?: "online" | "device" | "alt" | "tools" | "web-once" | "web-on" | "web-never" | "live-online" | "live-use-online" | "live-never" | "build-install" | "build-dismiss" | "build-never" | "dig-deeper") => {
+  const retryOrTools$ = $(async (id: string, target?: "online" | "device" | "alt" | "tools" | "web-once" | "web-on" | "web-never" | "live-online" | "live-use-online" | "live-never" | "project-online" | "project-local" | "project-never" | "build-install" | "build-dismiss" | "build-never" | "dig-deeper") => {
     if (target === "build-install" || target === "build-dismiss" || target === "build-never") {
       // The offer line under a thin-page reply: the existing install flow
       // (consent given by the press; the header shows progress), or quiet.
@@ -1705,6 +1703,32 @@ export default component$(() => {
     if (target === "live-never") {
       try { localStorage.setItem(`live-offer-off:${selectedAi.value.id}`, "1"); } catch { /* preference */ }
       chatState.messages = chatState.messages.map((m) => (m.id === id ? { ...m, liveOffer: false } : m));
+      return;
+    }
+    // The project-model offer (a model this computer runs gave up on
+    // project work). Don't ask again: no more for this AI. Online: the
+    // setting the person would make in Edit, then the same prompt again.
+    // A bigger local model: the same, with that model.
+    if (target === "project-never") {
+      try { localStorage.setItem(`project-offer-off:${selectedAi.value.id}`, "1"); } catch { /* preference */ }
+      chatState.messages = chatState.messages.map((m) => (m.id === id ? { ...m, projectOffer: undefined } : m));
+      return;
+    }
+    if (target === "project-online" || target === "project-local") {
+      const ai = selectedAi.value;
+      const offer = chatState.messages.find((m) => m.id === id)?.projectOffer;
+      const model = target === "project-online" ? "auto:online-offline" : offer?.bigger;
+      if (!ai.aiConfig?.id || !model) return;
+      try {
+        await updateCustomAi(ai.aiConfig.id, { model });
+      } catch (e) {
+        console.warn("[Project] could not change the AI's model:", e);
+        return;
+      }
+      selectedAi.value = { ...ai, aiConfig: { ...ai.aiConfig, model } };
+      chatState.messages = chatState.messages.map((m) => (m.id === id ? { ...m, projectOffer: undefined } : m));
+      uiLog(`[project] ${ai.label} now on ${model}; asking again`);
+      await resendAgentLast$();
       return;
     }
     if (target === "live-online") {
@@ -2873,33 +2897,6 @@ export default component$(() => {
         }}
       />
 
-      {/* A small model struggled: the way up, where it cannot be missed. */}
-      <StruggleModal
-        struggle={agentState.struggle}
-        onAction$={$(async (action: StruggleAction) => {
-          const s = agentState.struggle;
-          await dismissStruggle$();
-          if (!s) return;
-          const id = selectedAi.value.aiConfig?.id;
-          if (action === "see-online") {
-            await nav("/online-models");
-          } else if (action === "go-online" && id) {
-            try {
-              await updateCustomAi(id, { model: "auto:online-offline" });
-            } catch {
-              return;
-            }
-            await resendAgentLast$();
-          } else if (action === "switch-local" && id && s.bigger) {
-            try {
-              await updateCustomAi(id, { model: s.bigger });
-            } catch {
-              return;
-            }
-            await resendAgentLast$();
-          }
-        })}
-      />
 
       {/* Closing the folder mid-task is the one destructive gesture here -
           confirm it. Idle closes never see this. */}

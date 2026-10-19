@@ -86,6 +86,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   re-indexed once, with progress shown on its card.
 
 ### Working in the background
+- When a model this computer runs gives up on project work - steps fail,
+  or it answers a question about the folder without reading it and says
+  it has no tools - one line above the input says so, with the way up:
+  a bigger model on this computer, or your plan's online models. One
+  door for this, in place of the pop-up and the line in the working rail.
 - Replies and agent turns keep running when you leave the chat; coming
   back opens the running reply at once and lands on your question.
 - The activity tray lists replies you are not looking at, never repeats

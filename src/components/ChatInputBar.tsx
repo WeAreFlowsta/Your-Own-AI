@@ -16,8 +16,9 @@ export type ReplyOffer =
   | { messageId: string; kind: 'web-off'; needsWeb: 'page' | 'live' }
   | { messageId: string; kind: 'live-info'; plan: boolean }
   | { messageId: string; kind: 'dig-deeper'; pages: number }
-  | { messageId: string; kind: 'build' };
-export type ReplyOfferTarget = 'web-once' | 'web-on' | 'web-never' | 'live-online' | 'live-use-online' | 'live-never' | 'build-install' | 'build-dismiss' | 'build-never' | 'dig-deeper';
+  | { messageId: string; kind: 'build' }
+  | { messageId: string; kind: 'project-model'; text: string; bigger?: string; plan: boolean };
+export type ReplyOfferTarget = 'web-once' | 'web-on' | 'web-never' | 'live-online' | 'live-use-online' | 'live-never' | 'project-online' | 'project-local' | 'project-never' | 'build-install' | 'build-dismiss' | 'build-never' | 'dig-deeper';
 
 interface ChatInputBarProps {
   /** See ReplyOffer: at most one, for the last reply, gone on the next message. */
@@ -191,6 +192,20 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
                 </>
               )}
               <button type="button" class={offerQuiet} onClick$={() => offerGo(offer.messageId, 'live-never')}>Don't ask again for this AI</button>
+            </div>
+          )}
+          {offer.kind === 'project-model' && (
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="project-offer" data-plan={offer.plan ? 'yes' : 'no'}>
+              <span>{offer.text}</span>
+              {offer.plan ? (
+                <button type="button" class={offerLink} title="Sets this AI to Auto - Online and Offline and asks again" onClick$={() => offerGo(offer.messageId, 'project-online')}>Let this AI use online models</button>
+              ) : (
+                <a href="/online-models" class={offerLink}>See online models</a>
+              )}
+              {offer.bigger && (
+                <button type="button" class={offerLink} onClick$={() => offerGo(offer.messageId, 'project-local')}>Use {offer.bigger.replace(/\.gguf$/i, '').split('-').slice(0, 2).join('-')} here</button>
+              )}
+              <button type="button" class={offerQuiet} onClick$={() => offerGo(offer.messageId, 'project-never')}>Don't ask again for this AI</button>
             </div>
           )}
           {offer.kind === 'dig-deeper' && (

@@ -14,7 +14,7 @@ type SidePanelContent = { messageId: string; codeString: string; language: strin
 interface ChatContainerProps {
   messages: Message[];
   messagesEndRef: Signal<HTMLDivElement | undefined>;
-  retry$: QRL<(id: string, target?: 'online' | 'device' | 'alt' | 'tools' | 'web-once' | 'web-on' | 'web-never' | 'live-online' | 'live-use-online' | 'live-never' | 'build-install' | 'build-dismiss' | 'build-never' | 'dig-deeper') => void>;
+  retry$: QRL<(id: string, target?: 'online' | 'device' | 'alt' | 'tools' | 'web-once' | 'web-on' | 'web-never' | 'live-online' | 'live-use-online' | 'live-never' | 'project-online' | 'project-local' | 'project-never' | 'build-install' | 'build-dismiss' | 'build-never' | 'dig-deeper') => void>;
   canRouteOnline: boolean;
   canUseTools?: boolean;
   onGround$?: QRL<(id: string) => void>;
@@ -165,6 +165,8 @@ export default component$<ChatContainerProps>((props) => {
     !props.isLoading && lastReply?.role === 'assistant' && !lastReply.isLoading && !!lastReply.content
       ? lastReply.needsWeb
         ? { messageId: lastReply.id, kind: 'web-off', needsWeb: lastReply.needsWeb }
+        : lastReply.projectOffer
+          ? { messageId: lastReply.id, kind: 'project-model', ...lastReply.projectOffer }
         : lastReply.liveOffer
           ? { messageId: lastReply.id, kind: 'live-info', plan: (() => { try { return lastKnownEntitled() === 'yes'; } catch { return false; } })() }
           : lastReply.digDeeper

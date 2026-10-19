@@ -126,10 +126,10 @@ export interface AgentSessionState {
   waitingOn: string;
   /** The last route event said the person's own server serves this turn. */
   lastRouteServer: boolean;
-  /** The struggle notice has been shown this session (once is enough). */
+  /** The project-model offer has been made this session (once is enough). */
   struggleShown: boolean;
-  /** The struggle the person is being told about right now (a modal). */
-  struggle: { text: string; bigger?: string; entitled: boolean } | null;
+  /** The small-coder notice's words, kept for the first turn's offer line. */
+  smallCoderText: string;
   /** Why routing picked the serving model (from the agent-route event). */
   routeReason: string;
   /** Helpers this turn spawned, by where their model calls ran (agent-route events with a role). */
@@ -372,7 +372,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     waitingOn: "",
     lastRouteServer: false,
     struggleShown: false,
-    struggle: null,
+    smallCoderText: "",
     routeReason: "",
     helpers: { device: 0, online: 0 },
     rulesFile: null,
@@ -929,10 +929,6 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.overloadOffer = null;
   });
 
-  /** The struggle modal was answered or waved away. */
-  const dismissStruggle$ = $(() => {
-    state.struggle = null;
-  });
 
   /** Send the last prompt again (after a setting changed what serves it). */
   const resendLast$ = $(async () => {
@@ -1219,6 +1215,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.sessionAiId = null;
     state.lastFinishedAt = null;
     state.smallCoder = false;
+    state.smallCoderText = "";
     state.struggleShown = false;
     state.sessionTools = "";
     state.sessionToolsSig = "";
@@ -2209,7 +2206,13 @@ export function useAgentSession(props: UseAgentSessionProps) {
       const text = typeof e.payload?.text === "string" ? e.payload.text : "";
       if (!text) return;
       const kind = String(e.payload?.kind ?? "");
-      if (kind === "small-coder") state.smallCoder = true;
+      // The small-coder notice goes on the offer line above the composer at
+      // the first turn's end (one door for the way up), not into the rail.
+      if (kind === "small-coder") {
+        state.smallCoder = true;
+        state.smallCoderText = text;
+        return;
+      }
       // Before any turn exists (a session-start notice): keep it for the
       // first turn's bubble instead of dropping it on the floor.
       if (!turnId.value) {
@@ -2636,13 +2639,15 @@ export function useAgentSession(props: UseAgentSessionProps) {
         // one tool call to work. Said once per session, in plain words,
         // with the way up (field, 2026-09-24). The pinned-smaller case is filled
         // in below, once the best local model is known.
-        if (!state.struggleShown && !state.smallCoder) {
+        if (!state.struggleShown) {
           const ourFault = (e: string | undefined) =>
             !!e && /was not executed|did not answer|stopped answering|didn't start|not connected/i.test(e);
           let red = 0;
           let toolOk = false;
+          let acted = false;
           for (const i of log) {
             if (i.type !== "action") continue;
+            acted = true;
             if (i.action.status === "failed" && !ourFault(i.action.error)) red++;
             if (i.action.icon === "mcp" && i.action.status === "completed") toolOk = true;
           }
@@ -2651,10 +2656,22 @@ export function useAgentSession(props: UseAgentSessionProps) {
           // struggle; one that answered from what it already had (the
           // documents, the conversation) and never went red is not (09-25:
           // a clean summary from the library copies raised the dialog).
-          const struggled = red >= 2 || (toolsTurn && !toolOk && red >= 1);
+          // A turn that used no tool at all and SAID it had none, or could
+          // not see the files, gave up without trying (10-19: a 4B model
+          // answered "what files are in this folder" from its document
+          // library and claimed it had no tools; four were up).
+          const spoken = [m.content, ...log.map((i) => ("text" in i ? i.text : ""))].join(" ");
+          const gaveUp = !acted && /\b(don'?t|do not|cannot|can'?t|unable to) (have )?(access to|use|see|list|read|run) (the |your |any |my )?(tools?|files?|folders?|director(y|ies)|workspace|file system)|\bno (access to|way to) (the |any )?(tools?|files?|folder)/i.test(spoken);
+          const struggled = red >= 2 || (toolsTurn && !toolOk && red >= 1) || gaveUp || state.smallCoder;
           const aiModel = props.selectedAi.value.aiConfig?.model || "";
           const offline = aiModel === "auto:offline" || aiModel === "auto:my-hardware" || aiModel.toLowerCase().endsWith(".gguf");
-          if (struggled && offline) {
+          let offerOff = false;
+          try {
+            offerOff = localStorage.getItem(`project-offer-off:${props.selectedAi.value.id}`) === "1";
+          } catch {
+            /* preference only */
+          }
+          if (struggled && offline && !offerOff) {
             state.struggleShown = true;
             let entitled = false;
             try {
@@ -2666,7 +2683,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
             // rail went unseen, 09-25). The pinned-smaller case waits for the
             // better model's name below; the rest is said now.
             strugglePending.value = { turnId: m.id, model: aiModel, pinned: aiModel.toLowerCase().endsWith(".gguf"), entitled };
-            uiLog(`[rail] struggle: ${red} red step(s), tools turn ${toolsTurn} ok ${toolOk}, ai ${aiModel}, entitled ${entitled}`);
+            uiLog(`[rail] struggle: ${red} red step(s), tools turn ${toolsTurn} ok ${toolOk}, gave up ${gaveUp}, small coder ${state.smallCoder}, ai ${aiModel}, entitled ${entitled}`);
           }
         }
         // The turn's last words ARE the answer: promote the last spoken
@@ -2704,21 +2721,25 @@ export function useAgentSession(props: UseAgentSessionProps) {
         if (empty) dropTurn(id);
         else endTurn(id, outcome);
       }
-      // The struggle, said once the turn is over: which model on this
-      // computer does better (when the AI is pinned to a weaker one), and
-      // the plan's online models when the account has them.
+      // The way up, said once the turn is over on the line above the
+      // composer (one door, Eric 10-19): which model on this computer does
+      // better (when the AI is pinned to a weaker one), and the plan's
+      // online models when the account has them.
       if (strugglePending.value) {
-        const { model, pinned, entitled } = strugglePending.value;
+        const { turnId: offerTurn, model, pinned, entitled } = strugglePending.value;
         strugglePending.value = null;
         const pretty = (f: string) => f.replace(/\.gguf$/i, "").replace(/-Q\d[^-]*$/i, "");
         const online = entitled
           ? " Your plan's online models do them in one go."
           : " Online models do them in one go. They are an optional paid service, and everything offline stays free.";
         const say = (bigger?: string) => {
+          const lead = state.smallCoderText
+            ? state.smallCoderText.replace(/\s*A larger model.*$/s, "")
+            : "This model didn't manage the project's tools.";
           const text = bigger
-            ? `Tasks like this are hard for ${pretty(model)}, the model this AI is set to. ${pretty(bigger)} on this computer does better at them.${online}`
-            : `Tasks like this need more than the models this computer can run.${online}`;
-          state.struggle = { text, bigger, entitled };
+            ? `${lead} ${pretty(bigger)} on this computer does better at project work.${online}`
+            : `${lead} Project work goes better on a bigger model.${online}`;
+          props.chatState.messages = props.chatState.messages.map((x) => (x.id === offerTurn ? { ...x, projectOffer: { text, bigger, plan: entitled } } : x));
         };
         if (pinned) {
           invokeTauri("agent_best_local")
@@ -2989,7 +3010,6 @@ export function useAgentSession(props: UseAgentSessionProps) {
     prepareTurn$,
     discardPreparedTurn$,
     resendLast$,
-    dismissStruggle$,
     cancelTurn$,
     respondPermission$,
     answerPermissionByReply$,

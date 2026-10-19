@@ -169,6 +169,9 @@ export interface Message {
   /** The question needed live information and this AI could not look it up (Offline Only,
    *  or no plan): true = the offer above the composer; false = offered once, then dismissed. */
   liveOffer?: boolean;
+  /** Project work on a model this computer runs gave up (steps went red, or it answered a question
+   *  about the folder without reading it): the one line above the composer with the way up. */
+  projectOffer?: { text: string; bigger?: string; plan: boolean };
   /** An AI pinned to an online model that failed before its first word: the
    *  error line offers this model, from another provider, one tap away. */
   altModel?: { model: string; name: string };
