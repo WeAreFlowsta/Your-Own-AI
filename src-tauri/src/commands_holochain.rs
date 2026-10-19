@@ -1057,17 +1057,60 @@ pub async fn project_memory_append_note(
     }
     let current = project_memory_read(app, folder).await?;
     let row = format!("- [saved by {}] {}", saved_by, capped);
-    let mut lines: Vec<String> = current
+    let lines: Vec<String> = current
         .lines()
         .filter(|l| !l.trim().is_empty())
         .map(str::to_string)
         .collect();
-    lines.push(row);
+    let mut lines = with_note(lines, row, capped);
     if lines.len() > WORKSPACE_MEMORY_MAX_LINES {
         let cut = lines.len() - WORKSPACE_MEMORY_MAX_LINES;
         lines.drain(0..cut);
     }
     project_memory_write(app, writer_key, writer_label, folder, &lines.join("\n")).await
+}
+
+/// The note goes in; a line it revises (the same thing said again, or
+/// corrected - "the build command is `make build` (corrected from `make
+/// all`)") goes out, so the memory never holds both. 10-19: a correction
+/// stood beside the note it corrected and the agent read both.
+fn with_note(mut lines: Vec<String>, row: String, note: &str) -> Vec<String> {
+    let body = |l: &str| -> String {
+        let l = l.trim_start_matches(['-', ' ']);
+        match l.strip_prefix("[saved by ").and_then(|r| r.split_once("] ")) {
+            Some((_, rest)) => rest.to_string(),
+            None => l.to_string(),
+        }
+    };
+    if let Some(i) = lines.iter().position(|l| crate::memory_rows::says_the_same(&body(l), note)) {
+        lines.remove(i);
+    }
+    lines.push(row);
+    lines
+}
+
+#[cfg(test)]
+mod note_tests {
+    use super::with_note;
+    #[test]
+    fn a_correction_takes_the_place_of_the_note_it_corrects() {
+        let lines = vec![
+            "- [saved by Teresa] To list every file, run `find . -type f`.".to_string(),
+            "- [saved by Teresa] The project's build command is `make all`.".to_string(),
+        ];
+        let note = "The project's build command is `make build` (corrected from `make all`).";
+        let out = with_note(lines, format!("- [saved by Teresa] {note}"), note);
+        assert_eq!(out.len(), 2);
+        assert!(out[0].contains("find ."));
+        assert!(out[1].contains("make build"));
+        assert!(!out.iter().any(|l| l.ends_with("`make all`.")));
+    }
+    #[test]
+    fn an_unrelated_note_is_added_beside_the_others() {
+        let lines = vec!["- [saved by Teresa] The project's build command is `make build`.".to_string()];
+        let note = "Tests live in the tests folder and run with `make test`.";
+        assert_eq!(with_note(lines, format!("- [saved by Rook] {note}"), note).len(), 2);
+    }
 }
 
 /// One project-memory write at a time: two writers reading the same last

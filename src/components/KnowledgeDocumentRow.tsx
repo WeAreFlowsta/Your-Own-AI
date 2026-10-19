@@ -1,5 +1,5 @@
 import { component$, useSignal, $, type QRL } from '@builder.io/qwik';
-import { LuFileText, LuTrash2, LuLink, LuRefreshCw, LuCloud, LuFileQuestion, LuLoader2 } from '@qwikest/icons/lucide';
+import { LuFileText, LuTrash2, LuLink, LuRefreshCw, LuCloud, LuFileQuestion, LuLoader2, LuLaptop } from '@qwikest/icons/lucide';
 import type { KnowledgeDocument } from '../utils/transcriptMemory';
 
 function formatSize(bytes: number): string {
@@ -14,9 +14,13 @@ function day(secs: number): string {
 
 /** What the document's link to its file needs the person to know - or null
  *  when it is simply linked. One place, so both lists say the same thing. */
-export function linkState(doc: KnowledgeDocument): { kind: 'waiting' | 'offline' | 'online'; text: string } | null {
+export function linkState(doc: KnowledgeDocument): { kind: 'elsewhere' | 'waiting' | 'offline' | 'online'; text: string } | null {
+  // Not a problem to fix: the document lives on another of the person's
+  // devices. Said plainly, with the one thing they can do here (10-19: it
+  // read as an error - amber, "Check again", and a Remove that the next
+  // sync round undid).
   if (doc.chunkCount === 0 && doc.heldOn) {
-    return { kind: 'waiting', text: `On ${doc.heldOn} - it was added there, not on this computer. Add the same file here and it links itself; its words stay on that device until then.` };
+    return { kind: 'elsewhere', text: `On ${doc.heldOn}. Add the same file here to use it on this computer too.` };
   }
   if (doc.chunkCount === 0) {
     return { kind: 'waiting', text: 'Needs its file - it came back from a backup without its text, so there is nothing to quote yet.' };
@@ -125,6 +129,8 @@ export const KnowledgeDocumentRow = component$<{
         )}
         {state?.kind === 'online' ? (
           <LuCloud class="w-4 h-4 text-[var(--text-muted)] shrink-0" />
+        ) : state?.kind === 'elsewhere' ? (
+          <LuLaptop class="w-4 h-4 text-[var(--text-muted)] shrink-0" />
         ) : state ? (
           <LuFileQuestion class="w-4 h-4 text-amber-500 shrink-0" />
         ) : (
@@ -163,19 +169,27 @@ export const KnowledgeDocumentRow = component$<{
             {busy.value ? <LuLoader2 class="w-3.5 h-3.5 animate-spin" /> : <LuRefreshCw class="w-3.5 h-3.5" />}
           </button>
         )}
-        <button
-          type="button"
-          onClick$={() => props.onRemove$(doc.docId)}
-          title="Take this document away from this AI"
-          class="text-[var(--text-muted)] hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 shrink-0"
-        >
-          <LuTrash2 class="w-3.5 h-3.5" />
-        </button>
+        {state?.kind !== 'elsewhere' && (
+          <button
+            type="button"
+            onClick$={() => props.onRemove$(doc.docId)}
+            title="Take this document away from this AI"
+            class="text-[var(--text-muted)] hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100 shrink-0"
+          >
+            <LuTrash2 class="w-3.5 h-3.5" />
+          </button>
+        )}
       </div>
       {state && (
         <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-          <span class={state.kind === 'online' ? 'text-[var(--text-muted)]' : 'text-amber-600 dark:text-amber-400'}>{state.text}</span>
-          {state.kind !== 'online' && (
+          <span class={state.kind === 'online' || state.kind === 'elsewhere' ? 'text-[var(--text-muted)]' : 'text-amber-600 dark:text-amber-400'}>{state.text}</span>
+          {state.kind === 'elsewhere' && (
+            <button type="button" onClick$={relink} disabled={busy.value} class={action}>
+              {busy.value ? <LuLoader2 class="w-3.5 h-3.5 animate-spin" /> : <LuLink class="w-3.5 h-3.5" />}
+              {busy.value ? 'Reading...' : 'Add the file here'}
+            </button>
+          )}
+          {state.kind !== 'online' && state.kind !== 'elsewhere' && (
             <>
               <button type="button" onClick$={checkAgain} disabled={busy.value} class={action} title="Look for the file where it was">
                 {busy.value ? <LuLoader2 class="w-3.5 h-3.5 animate-spin" /> : <LuRefreshCw class="w-3.5 h-3.5" />}

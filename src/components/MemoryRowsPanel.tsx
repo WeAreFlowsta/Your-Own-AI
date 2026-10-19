@@ -62,7 +62,12 @@ export default component$<Props>((props) => {
   const load$ = $(async () => {
     if (!scope.value) return;
     try {
-      rows.value = (await listMemoryRowsCached(scope.value)).filter(isLayer1);
+      // The saved copy answers at once; the live read below can take a
+      // while when the records are busy, and until it did, a project's
+      // Sessions did not show at all (10-19).
+      const cached = await listMemoryRowsCached(scope.value);
+      rows.value = cached.filter(isLayer1);
+      episodes.value = cached.filter((r) => r.kind === "episode" && !r.deleted).sort((a, b) => b.as_of - a.as_of);
     } catch { /* older backend */ }
     try {
       const all = await listMemoryRows(scope.value, props.agentKey);

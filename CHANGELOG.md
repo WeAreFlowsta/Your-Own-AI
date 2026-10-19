@@ -66,11 +66,16 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - Documents an AI was given on another of your devices are listed on
   this one too, marked with the device they are on. Add the same file
   here and it links itself; until then the document's words stay there.
+  Shown as a plain note, not a warning: "On <device>", with "Add the
+  file here".
 - An AI arriving from another device shows its own picture at once; until
   this device had set the AI up (up to a minute), its card showed the
   character's stock face.
 
 ### Memory
+- A note an AI saves for a project that corrects an earlier one (the
+  build command changed, say) takes the old note's place; before, both
+  stood and the next session read both.
 - Project memory lists its sessions: what each one left behind, in its
   own words, with a date. Open one to read it; forget one and the next
   session starts without it.
