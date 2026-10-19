@@ -484,14 +484,25 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle, force: bool) -> R
         let mut filled = 0;
         for (local_id, b64) in &missing {
             if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
-                if std::fs::write(thumb_dir.join(format!("{}.jpg", local_id)), bytes).is_ok() {
+                let path = thumb_dir.join(format!("{}.jpg", local_id));
+                // A starter wearing its character's face is marked a stand-in
+                // on every start, and the other device's copy is the same
+                // face: nothing to fill (three writes and a refresh of every
+                // card each start, 10-19). It stays a stand-in, so a picture
+                // the person chooses on another device still replaces it.
+                if std::fs::read(&path).map(|have| have == bytes).unwrap_or(false) {
+                    continue;
+                }
+                if std::fs::write(&path, bytes).is_ok() {
                     mark_picture(&thumb_dir, local_id, false);
                     filled += 1;
                 }
             }
         }
-        log::info!("[config-sync] {} picture(s) filled in from the other devices", filled);
-        let _ = app.emit("ai-configs-changed", serde_json::json!({ "updated": 0, "added": 0, "pictures": filled }));
+        if filled > 0 {
+            log::info!("[config-sync] {} picture(s) filled in from the other devices", filled);
+            let _ = app.emit("ai-configs-changed", serde_json::json!({ "updated": 0, "added": 0, "pictures": filled }));
+        }
     }
     if let Some(p) = sibling_conversations_path(app) {
         if let Ok(json) = serde_json::to_vec(&sibling_index) {

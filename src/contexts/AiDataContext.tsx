@@ -651,9 +651,28 @@ export function useAiDataActions() {
   useVisibleTask$(async ({ cleanup }) => {
     const { listen } = await import("@tauri-apps/api/event");
     const un = await listen<{ updated: number; added: number }>("ai-configs-changed", async (e) => {
+      // Every card's picture from disk, under the ids the AIs have now.
+      const loadPictures = async () => {
+        const urls: Record<string, string> = {};
+        for (const ai of state.userDefinedAis) {
+          try {
+            const data = await readAiThumbnail(ai);
+            urls[ai.id] = URL.createObjectURL(new Blob([new Uint8Array(data)], { type: "image/jpeg" }));
+          } catch { /* the archetype default */ }
+        }
+        for (const old of Object.values(state.thumbnailObjectUrls)) {
+          if (old.startsWith("blob:")) URL.revokeObjectURL(old);
+        }
+        state.thumbnailObjectUrls = urls;
+      };
       try {
         const localAis = await getLocalCustomAis();
         state.userDefinedAis = localAis;
+        // An AI from another device arrives with its picture under a
+        // stand-in id: show it now. Giving the AI its own agent below can
+        // take a minute, and until then the card showed the character's
+        // stock face (every AI that came across, 10-19).
+        await loadPictures();
         const { provisionAgent } = await import("../utils/holochainTranscripts");
         for (const ai of state.userDefinedAis) {
           if (ai.agentPubKey) continue;
@@ -676,18 +695,8 @@ export function useAiDataActions() {
           }
         }
         state.userDefinedAis = [...state.userDefinedAis];
-        // Pictures may have changed for AIs that were already here too.
-        const urls: Record<string, string> = {};
-        for (const ai of state.userDefinedAis) {
-          try {
-            const data = await readAiThumbnail(ai);
-            urls[ai.id] = URL.createObjectURL(new Blob([new Uint8Array(data)], { type: "image/jpeg" }));
-          } catch { /* the archetype default */ }
-        }
-        for (const old of Object.values(state.thumbnailObjectUrls)) {
-          if (old.startsWith("blob:")) URL.revokeObjectURL(old);
-        }
-        state.thumbnailObjectUrls = urls;
+        // Again under the AIs' own ids, now the pictures have followed them.
+        await loadPictures();
         const { announceActivity } = await import("../utils/activity");
         const n = (e.payload?.updated ?? 0) + (e.payload?.added ?? 0);
         // Pictures filled in alone: they show; no notice for that.
