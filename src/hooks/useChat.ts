@@ -630,7 +630,11 @@ export function useChat(props: UseChatProps) {
             let searched = false;
             try {
               const { lastKnownEntitled } = await import("../utils/entitlement");
-              if (lastKnownEntitled() === "yes") {
+              // A search is answered by an online model: only an AI whose
+              // setting answers online may run one (Offline Only never does).
+              const setting = selectedAi.aiConfig?.model ?? "";
+              const maySearch = setting.startsWith("online:") || setting === "auto:online-offline";
+              if (lastKnownEntitled() === "yes" && maySearch) {
                 state.messages = state.messages.map((m) => (m.id === assistantId ? { ...m, statusText: "Searching the web.." } : m));
                 const s = await invoke<{ answer: string; sources: { title: string; url: string }[] }>("web_search_once_cmd", { query: userInput });
                 if (s.answer.trim()) {

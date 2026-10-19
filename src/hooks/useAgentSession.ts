@@ -2275,6 +2275,18 @@ export function useAgentSession(props: UseAgentSessionProps) {
         state.smallCoderText = text;
         return;
       }
+      // A search this Offline Only AI could not run: the "live information"
+      // line above the composer when the turn ends, with the online door.
+      if (kind === "search-offline") {
+        let off = false;
+        try {
+          off = localStorage.getItem(`live-offer-off:${props.selectedAi.value.id}`) === "1";
+        } catch {
+          /* preference only */
+        }
+        if (!off) mutateTurn((m) => ({ ...m, liveOffer: true }));
+        return;
+      }
       // Before any turn exists (a session-start notice): keep it for the
       // first turn's bubble instead of dropping it on the floor.
       if (!turnId.value) {

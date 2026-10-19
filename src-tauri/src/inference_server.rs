@@ -2481,6 +2481,21 @@ async fn responses_web_search(
     // on unless turned off). "Offline only" is about which MODELS answer;
     // the web is this switch. Search runs through the Flowsta proxy on the
     // person's plan, so a plan without online models is refused there.
+    if !crate::router::model_may_search(&ai.model) {
+        log::info!("[inference] web search refused for {} - set to Offline Only, and a search is answered by an online model", ai.name);
+        use tauri::Emitter as _;
+        // Not a rail line: the turn gets the "live information" offer above
+        // the composer, with the online door.
+        let _ = app.emit("agent-hint", json!({ "kind": "search-offline", "ai": ai.name, "text": "search needs online models" }));
+        return err(
+            StatusCode::FORBIDDEN,
+            &format!(
+                "Web search is not available for '{}': this AI is set to Offline Only, and a search is answered by an online model. Answer from what you know and say plainly that you could not search the web.",
+                ai.name
+            ),
+            "web_search_offline_only",
+        );
+    }
     if !ai.web_access {
         log::info!("[inference] web search refused for {} - web access is off for this AI", ai.name);
         // Tell the rail, so the person sees WHY and how to turn it on -

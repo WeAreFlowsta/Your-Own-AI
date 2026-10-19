@@ -735,10 +735,17 @@ pub async fn start_build_agent(
         }
     );
 
+    // An Offline Only AI gets no search tool at all: a search is answered
+    // by an online model (router::model_may_search). Page reading stays.
+    let disallowed = if crate::router::model_may_search(ai_model.as_deref().unwrap_or("")) {
+        DROPPED_TOOLS.to_string()
+    } else {
+        format!("{DROPPED_TOOLS},web_search")
+    };
     let mut command = app_handle
         .shell()
         .command(&binary)
-        .args(["--disallowed-tools", DROPPED_TOOLS, "agent", "stdio"])
+        .args(["--disallowed-tools", &disallowed, "agent", "stdio"])
         .current_dir(std::path::PathBuf::from(&cwd));
     if let Some(cap) = tool_result_cap {
         // The harness's env tier for its MCP inline cap (above the user

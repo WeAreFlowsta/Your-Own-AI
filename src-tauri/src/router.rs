@@ -1516,6 +1516,30 @@ pub async fn agent_serving_window(
 /// minutes of critical-path crawl, worse than the cheap online driver it
 /// replaces. Free and private when it engages; the leader stays in charge.
 /// Documented in the routing explainer.
+/// May a search run for an AI on this model setting? A web search is
+/// answered by an online search model through the proxy, so it follows the
+/// MODEL setting, not the web switch: "Offline Only" (and a pinned local
+/// file) never searches; reading a page the AI is pointed at is local and
+/// stays with the switch. (Eric 10-19: an Offline Only AI's search query
+/// went to an online model because the switch was on.)
+pub(crate) fn model_may_search(model: &str) -> bool {
+    model.starts_with("online:") || model == "auto:online-offline"
+}
+
+#[cfg(test)]
+mod search_rule_tests {
+    use super::model_may_search;
+    #[test]
+    fn only_a_setting_that_answers_online_may_search() {
+        assert!(model_may_search("auto:online-offline"));
+        assert!(model_may_search("online:gpt-6-astra"));
+        assert!(!model_may_search("auto:offline"));
+        assert!(!model_may_search("auto:my-hardware"));
+        assert!(!model_may_search("Qwen3.5-4B-Opus-Distilled-Q4_K_M.gguf"));
+        assert!(!model_may_search(""));
+    }
+}
+
 pub async fn device_subagents_enabled(app: &AppHandle) -> bool {
     if store_pref(app, "routingProjectDeviceSubagents").as_deref() == Some("0") {
         return false;

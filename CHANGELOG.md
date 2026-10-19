@@ -138,6 +138,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   second one.
 
 ### Web
+- An AI set to Offline Only no longer searches the web: a search is
+  answered by an online model, so it follows the model setting, not the
+  Web access switch. Reading a page you point the AI at is done on this
+  computer and stays with the switch. When a question needed a search,
+  the line above the input offers the online models.
 - A switch per AI for reading web pages; when it is off, a reply that
   needs the web says so in one line above the message box, with "Just
   this once".
