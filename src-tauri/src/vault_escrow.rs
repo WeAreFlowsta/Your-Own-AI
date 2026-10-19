@@ -2259,6 +2259,7 @@ async fn write_incremental_backup(
     ai_configs: Option<serde_json::Value>,
     convs: Vec<ConvBundle>,
     carried: Vec<serde_json::Value>,
+    now_asked: bool,
 ) -> Result<serde_json::Value, String> {
     let mut sync = load_sync_state(app);
     let mut counts: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
@@ -2402,7 +2403,7 @@ async fn write_incremental_backup(
         }
     };
     let manifest_print = fingerprint_of(&manifest);
-    let manifest_state = match write_decision(prints.get(MANIFEST_LABEL).map(|p| p.hash != manifest_print).unwrap_or(true), held.contains(MANIFEST_LABEL), prints.get(MANIFEST_LABEL), now, MANIFEST_MIN_GAP_SECS) {
+    let manifest_state = match write_decision(prints.get(MANIFEST_LABEL).map(|p| p.hash != manifest_print).unwrap_or(true), held.contains(MANIFEST_LABEL), prints.get(MANIFEST_LABEL), now, if now_asked { 0 } else { MANIFEST_MIN_GAP_SECS }) {
         WriteDecision::Unchanged => "unchanged".to_string(),
         WriteDecision::Later(secs) => {
             schedule_backup_after(app, secs + 5);
@@ -2587,6 +2588,13 @@ pub fn last_backup_outcome() -> Option<serde_json::Value> {
 }
 
 pub async fn write_full_backup(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
+    write_full_backup_with(app, false).await
+}
+
+/// `now`: the person asked for it (Settings' "Back up now") - the full
+/// record is written whatever its ten-minute hold says; unchanged objects
+/// are still not rewritten. (10-20: the button was held like the timer.)
+pub async fn write_full_backup_with(app: &tauri::AppHandle, now: bool) -> Result<serde_json::Value, String> {
     // One backup at a time: the debounce, the launch pass, the daily check
     // and the button can all fire within a minute of launch, and two
     // passes reading a thousand-conversation cell at once doubled the
@@ -2606,7 +2614,7 @@ pub async fn write_full_backup(app: &tauri::AppHandle) -> Result<serde_json::Val
         }
     }
     let _done = Done;
-    let result = write_full_backup_inner(app).await;
+    let result = write_full_backup_inner(app, now).await;
     match &result {
         Ok(v) => {
             if let Some(reason) = v.get("skipped").and_then(|r| r.as_str()) {
@@ -2639,7 +2647,7 @@ pub async fn write_full_backup(app: &tauri::AppHandle) -> Result<serde_json::Val
     result
 }
 
-async fn write_full_backup_inner(app: &tauri::AppHandle) -> Result<serde_json::Value, String> {
+async fn write_full_backup_inner(app: &tauri::AppHandle, now: bool) -> Result<serde_json::Value, String> {
     let port = match escrow_port(app, true).await {
         Ok(p) => p,
         Err(s) => return Err(s.error.unwrap_or(s.state)),
@@ -2715,7 +2723,7 @@ async fn write_full_backup_inner(app: &tauri::AppHandle) -> Result<serde_json::V
     // EVERYTHING is backed up - no budget, nothing left out; only changed
     // conversations re-upload. Older Vaults get the legacy single snapshot.
     if let Some(limits) = fetch_backup_limits(port).await {
-        return write_incremental_backup(app, port, &limits, &recovery, ai_configs, convs, carried).await;
+        return write_incremental_backup(app, port, &limits, &recovery, ai_configs, convs, carried, now).await;
     }
 
     let conversations = convs.len();
@@ -2898,7 +2906,7 @@ fn unix_now_secs() -> u64 {
 /// Manual full backup for the UI ("Back up now") and for testing.
 #[tauri::command]
 pub async fn vault_backup_now(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    write_full_backup(&app).await
+    write_full_backup_with(&app, true).await
 }
 
 #[cfg(test)]
