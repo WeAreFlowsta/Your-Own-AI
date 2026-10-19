@@ -30,6 +30,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   answers came from. (Online models)
 
 ### Devices
+- The check that keeps this device listed for your other devices no
+  longer warns about the open fallback servers: the conductor registers
+  only with the server it started on, so being listed on a fallback is
+  extra reach, said once, not a stalled registration.
 - Signing in on another device shows what is syncing in the activity
   tray: your AIs, their pictures and your memory arrive at once, then one
   Restart brings in their conversations.

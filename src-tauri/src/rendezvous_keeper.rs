@@ -243,6 +243,19 @@ pub(crate) struct Round {
     pub reached: usize,
     /// Our fresh notes the server already had: the conductor is doing its job.
     pub conductor_registered: usize,
+    /// Our notes we registered on a rendezvous the conductor was not
+    /// configured with (an open fallback): extra reach, never a stall.
+    pub put_elsewhere: usize,
+}
+
+/// Is this the rendezvous the conductor itself registers with? The one it
+/// was configured with at launch; unknown (an older start path) = the first
+/// in the list, as before.
+pub(crate) fn is_conductors(url: &str, index: usize, conductor: Option<&str>) -> bool {
+    match conductor {
+        Some(c) => url.trim_end_matches('/') == c.trim_end_matches('/'),
+        None => index == 0,
+    }
 }
 
 pub(crate) struct Keeper {
@@ -253,6 +266,8 @@ pub(crate) struct Keeper {
     /// When we first had to register for the conductor, until it registers again.
     stalled_since: Option<std::time::Instant>,
     every_server_dark: bool,
+    /// Fallback servers we have said we register on, said once each.
+    told_elsewhere: HashSet<String>,
 }
 
 impl Keeper {
@@ -261,7 +276,7 @@ impl Keeper {
             .timeout(std::time::Duration::from_secs(15))
             .build()
             .unwrap_or_default();
-        Self { servers, client, registered: HashSet::new(), stalled_since: None, every_server_dark: false }
+        Self { servers, client, registered: HashSet::new(), stalled_since: None, every_server_dark: false, told_elsewhere: HashSet::new() }
     }
 
     /// Read the conductor's own notes and peers, compare with every server,
@@ -310,9 +325,12 @@ impl Keeper {
         let mut listings: Vec<Note> = Vec::new();
         let mut reached: HashSet<String> = HashSet::new();
         let mut put_on: Vec<String> = Vec::new();
+        let mut put_elsewhere_on: Vec<String> = Vec::new();
+        let conductor = crate::conductor::conductor_rendezvous();
         for space in &spaces {
             let own_here: Vec<Note> = own.iter().filter(|n| n.space == *space).cloned().collect();
-            for server in self.servers.iter_mut() {
+            for (index, server) in self.servers.iter_mut().enumerate() {
+                let conductors = is_conductors(&server.url, index, conductor.as_deref());
                 let listed = match server.list(&self.client, space).await {
                     Ok(l) => l,
                     Err(e) => {
@@ -321,17 +339,21 @@ impl Keeper {
                     }
                 };
                 reached.insert(server.url.clone());
-                round.conductor_registered += own_here
+                round.conductor_registered += if !conductors { 0 } else { own_here
                     .iter()
                     .filter(|n| now_us - n.created_at <= PUT_MAX_AGE_US)
                     .filter(|n| listed.iter().any(|l| l.agent == n.agent && l.created_at >= n.created_at))
-                    .count();
+                    .count() };
                 let full = listing_full(listed.len());
                 for note in notes_to_put(&own_here, &listed, now_us) {
                     if !first_time(&mut self.registered, note) {
                         continue;
                     }
                     match server.put(&self.client, note).await {
+                        Ok(()) if !conductors => {
+                            round.put_elsewhere += 1;
+                            put_elsewhere_on.push(server.url.clone());
+                        }
                         Ok(()) if full => round.registered_blind += 1,
                         Ok(()) => {
                             round.put += 1;
@@ -352,6 +374,15 @@ impl Keeper {
         }
 
         self.report(&round, &put_on);
+        for url in put_elsewhere_on {
+            if self.told_elsewhere.insert(url.clone()) {
+                log::info!(
+                    "[rendezvous] this device is listed on {} too, so other devices find it if {} goes dark (the conductor registers only there)",
+                    url,
+                    conductor.as_deref().unwrap_or("the main rendezvous")
+                );
+            }
+        }
         Ok(round)
     }
 
@@ -444,6 +475,19 @@ pub fn start(admin_port: u16) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_the_rendezvous_the_conductor_was_given_counts_for_a_stall() {
+        use super::is_conductors;
+        let main = Some("https://bootstrap.flowsta.com");
+        assert!(is_conductors("https://bootstrap.flowsta.com/", 0, main));
+        assert!(!is_conductors("https://node1.flowsta.com", 1, main), "a fallback the conductor never registers with");
+        let fell_back = Some("https://node1.flowsta.com/");
+        assert!(is_conductors("https://node1.flowsta.com", 1, fell_back), "the conductor started on the fallback");
+        assert!(!is_conductors("https://bootstrap.flowsta.com", 0, fell_back));
+        assert!(is_conductors("https://bootstrap.flowsta.com", 0, None), "unknown: the first, as before");
+        assert!(!is_conductors("https://node1.flowsta.com", 1, None));
+    }
+
     use super::*;
 
     fn note(space: &str, agent: &str, created_at: i64, tombstone: bool) -> Note {
