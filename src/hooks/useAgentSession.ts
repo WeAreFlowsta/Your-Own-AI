@@ -153,6 +153,9 @@ export interface AgentSessionState {
 
 /** Upstream-refusal signatures worth an offer: provider overload / rate
  *  limits, surfaced through the proxy as 429s. */
+/** Four minutes with nothing from a local model: the turn is stopped. */
+const STEP_CEILING_MS = 4 * 60_000;
+
 const OVERLOAD_RE = /overload|429|too many requests|rate.?limit/i;
 
 /** A resumed conversation restores the transcript for the USER's eyes, but
@@ -718,6 +721,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       ],
     };
     props.chatState.messages = [...props.chatState.messages, userMsg, assistantMsg];
+    lastRailEventAt.value = Date.now();
     state.toolStartFailures = [];
     state.startNotices = [];
     props.chatState.isLoading = true;
@@ -758,6 +762,12 @@ export function useAgentSession(props: UseAgentSessionProps) {
   const prepared = useSignal(false);
   /** A turn that struggled, to be told once the turn is over. */
   const strugglePending = useSignal<{ turnId: string; model: string; pinned: boolean; entitled: boolean } | null>(null);
+  /** When the agent last sent anything for the running turn (a step, a
+   *  chunk of text or thought): the ceiling below measures silence from
+   *  here. */
+  const lastRailEventAt = useSignal(0);
+  /** The turn the ceiling already stopped, so it stops it once. */
+  const ceilingTurn = useSignal<string | null>(null);
   /** Skill name (lower case) -> glyph name, from the installed skills. */
   const skillGlyphs = useSignal<Record<string, string>>({});
   const prepareTurn$ = $(async (text: string, files?: string[], surface?: "project" | "tools", status?: string) => {
@@ -955,6 +965,45 @@ export function useAgentSession(props: UseAgentSessionProps) {
     const seen = new Map<string, number>();
     let idleTicks = 0;
     const timer = setInterval(async () => {
+      // A model this computer runs that has sent nothing for four minutes
+      // - no step, no text, no thought, and no command of its own still
+      // running - is usually going in circles (10-19: a 4B model wrote one
+      // file's contents for six minutes at 13 tokens a second). Stop the
+      // turn once, say so on it, and offer the way up. Online models and
+      // a running command (a background task, a helper) are left alone.
+      if (working && state.mode === "project" && lastRailEventAt.value > 0) {
+        const id = turnId.value;
+        const m = id ? props.chatState.messages.find((x) => x.id === id) : undefined;
+        const aiModel = props.selectedAi.value.aiConfig?.model || "";
+        const offline = aiModel === "auto:offline" || aiModel === "auto:my-hardware" || aiModel.toLowerCase().endsWith(".gguf");
+        const openStep = (m?.agentLog ?? []).some((i) => i.type === "action" && (i.action.status === "in_progress" || i.action.status === "pending"));
+        const quiet = Date.now() - lastRailEventAt.value;
+        if (id && m && offline && !openStep && quiet > STEP_CEILING_MS && ceilingTurn.value !== id) {
+          ceilingTurn.value = id;
+          const mins = Math.round(quiet / 60_000);
+          uiLog(`[rail] ceiling: nothing from ${aiModel} for ${mins} min - stopping the turn`);
+          props.chatState.messages = props.chatState.messages.map((x) =>
+            x.id === id
+              ? { ...x, agentLog: [...(x.agentLog ?? []), { id: `ceiling-${id}`, type: "notice" as const, text: `Stopped: nothing came from the model for ${mins} minutes. A model this computer runs that goes quiet this long is usually going in circles.` }] }
+              : x,
+          );
+          if (!state.struggleShown) {
+            state.struggleShown = true;
+            let entitled = false;
+            try {
+              entitled = lastKnownEntitled() === "yes";
+            } catch {
+              /* unknown = no plan */
+            }
+            strugglePending.value = { turnId: id, model: aiModel, pinned: aiModel.toLowerCase().endsWith(".gguf"), entitled };
+          }
+          try {
+            await invokeTauri("cancel_agent_turn");
+          } catch {
+            /* the turn is ending anyway */
+          }
+        }
+      }
       // Recent bubbles' execute steps (last 3 agent turns): the previous
       // turn's background task is exactly the one still running.
       const bubbles = props.chatState.messages
@@ -1657,6 +1706,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       const update = e.payload?.params?.update;
       if (!update) return;
       const kind = update.sessionUpdate;
+      lastRailEventAt.value = Date.now();
       const fromSession = typeof e.payload?.params?.sessionId === "string" ? e.payload.params.sessionId : undefined;
       const helperOf = fromSession ? helperSessions.get(fromSession) : undefined;
       if (helperOf && kind !== "tool_call" && kind !== "tool_call_update") return;

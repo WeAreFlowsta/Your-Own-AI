@@ -125,6 +125,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   The line comes as soon as a second step fails, while the turn is still
   running; "Let this AI use online models" stops the turn and asks the
   same question again on the online models.
+- A model this computer runs that sends nothing for four minutes in a
+  project (no step, no text, no command of its own running) is stopped,
+  with a note on the turn and the same line above the input. Before, a
+  small model could write one file for ten minutes with nothing to say
+  whether to wait.
 - Replies and agent turns keep running when you leave the chat; coming
   back opens the running reply at once and lands on your question.
 - The activity tray lists replies you are not looking at, never repeats
