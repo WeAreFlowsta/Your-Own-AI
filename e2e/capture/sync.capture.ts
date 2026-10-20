@@ -36,32 +36,42 @@ describe("capture", () => {
     if (await gotIt.isExisting()) { await gotIt.click(); await browser.pause(500); }
 
     const take = await Take.start("sync-a");
-    await take.hold(1200);
-    await take.still("01-your-ais");
-    await take.hover("[data-shoot-card]", 900);
-    await take.click('[data-shoot="edit"]');
-    await browser.waitUntil(async () => tag("button", "Appearance", "appearance"), { timeout: 15_000, timeoutMsg: "the edit dialog never opened" });
-    await take.hold(700);
-    await take.click('[data-shoot="appearance"]');
-    await browser.waitUntil(async () => tag("button", "Choose from Gallery", "gallery"), { timeout: 15_000, timeoutMsg: "no Choose from Gallery on Appearance" });
-    await take.hold(800);
-    await take.scrollTo('[data-shoot="gallery"]');
-    await take.hold(500);
-    await take.click('[data-shoot="gallery"]');
-    await (await $(`button[title="${picture}"]`)).waitForDisplayed({ timeout: 10_000 });
-    await take.hold(800);
-    await take.still("02-gallery");
-    await take.hover(`button[title="${picture}"]`, 500);
-    await take.click(`button[title="${picture}"]`);
-    await browser.waitUntil(async () => tag("button", "Save Changes", "save"), { timeout: 15_000 });
-    await take.hold(900);
-    await take.scrollTo('[data-shoot="save"]');
-    await take.click('[data-shoot="save"]');
-    console.log(`sync: SAVED at ${new Date().toISOString()}`);
-    await (await $('[data-shoot="save"]')).waitForExist({ reverse: true, timeout: 30_000 });
-    await take.hold(1500);
-    await take.still("03-saved");
-    await take.hover("[data-shoot-card]", 2500);
-    await take.stop();
+    try {
+      await take.hold(1200);
+      await take.still("01-your-ais");
+      await take.hover("[data-shoot-card]", 900);
+      await take.click('[data-shoot="edit"]');
+      await browser.waitUntil(async () => tag("button", "Appearance", "appearance"), { timeout: 15_000, timeoutMsg: "the edit dialog never opened" });
+      await take.hold(700);
+      await take.click('[data-shoot="appearance"]');
+      await browser.waitUntil(async () => tag("button", "Choose from Gallery", "gallery"), { timeout: 15_000, timeoutMsg: "no Choose from Gallery on Appearance" });
+      await take.hold(800);
+      await take.scrollTo('[data-shoot="gallery"]');
+      await take.hold(500);
+      await take.click('[data-shoot="gallery"]');
+      await (await $(`button[title="${picture}"]`)).waitForDisplayed({ timeout: 10_000 });
+      await take.hold(800);
+      await take.still("02-gallery");
+      await take.hover(`button[title="${picture}"]`, 500);
+      await take.click(`button[title="${picture}"]`);
+      await browser.waitUntil(async () => tag("button", "Save Changes", "save"), { timeout: 15_000 });
+      await take.hold(900);
+      await take.scrollTo('[data-shoot="save"]');
+      await take.click('[data-shoot="save"]');
+      console.log(`sync: SAVED at ${new Date().toISOString()}`);
+      await (await $('[data-shoot="save"]')).waitForExist({ reverse: true, timeout: 30_000 });
+      await take.hold(1500);
+      await take.still("03-saved");
+      // The save redraws the cards: find Nova again for the closing look.
+      await browser.execute((n: string) => {
+        const label = [...document.querySelectorAll("[title]")].find((e) => e.getAttribute("title") === n);
+        let card: Element | null = label ?? null;
+        while (card && !card.querySelector('button[title^="Edit AI"]')) card = card.parentElement;
+        card?.setAttribute("data-shoot-card", "1");
+      }, name);
+      await take.hover("[data-shoot-card]", 2500);
+    } finally {
+      await take.stop();
+    }
   });
 });

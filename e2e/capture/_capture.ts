@@ -163,7 +163,9 @@ export class Take {
       throw new Error(`capture: the ${W}x${H} client area at ${area.x},${area.y} runs off the ${screen.w}x${screen.h} screen; see e2e/CAPTURE.md`);
     }
     const out = resolve(dir, `${flow}.mp4`);
-    const rec = spawn("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", ...ffmpegInput(area, true), ...encoderArgs(), out], { stdio: ["pipe", "inherit", "inherit"] });
+    const rec = spawn("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", ...ffmpegInput(area, true), ...encoderArgs(),
+      // fragmented: a take cut short (a failed step, a killed run) still plays up to its last second
+      "-movflags", "+frag_keyframe+empty_moov+default_base_moof", out], { stdio: ["pipe", "inherit", "inherit"] });
     const t0 = Date.now();
     await new Promise((r) => setTimeout(r, 1000)); // first frames before the first move
     console.log(`capture: recording ${W}x${H} at ${area.x},${area.y} -> ${out}`);
