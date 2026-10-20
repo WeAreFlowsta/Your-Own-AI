@@ -275,8 +275,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   waits until the matrix finishes. The Devices section says which identity
   it describes and numbers your other devices; the report names no device
   or identity, so it stays safe to share.
-  The tool-call check loads each model graded for agent work itself, and
-  the computer is kept awake while the matrix runs (macOS and Linux).
+  The helper check uses the routing classifier's real instruction and
+  fails when it reads a message as the wrong kind of task. The tool-call
+  check loads each model graded for agent work itself, and the computer
+  is kept awake while the matrix runs (macOS and Linux).
 - The truth matrix has a Devices section: the Vault, when this device
   last backed up its AIs and everything else, how old this Vault's copies
   of your other devices are, the last check for their changes, and where

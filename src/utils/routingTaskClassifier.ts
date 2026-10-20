@@ -44,25 +44,9 @@ function looksRoutable(message: string): boolean {
   );
 }
 
-const BASE = `Classify the user's message for model routing. Output exactly TWO words: the TASK then the DIFFICULTY.
-TASK = CODE | MATH | REASONING | GENERAL.
-  CODE = programming — writing, debugging, explaining, reviewing, or refactoring code; algorithms; APIs; shell/config.
-  MATH = mathematics — calculations, equations, proofs, numeric/quantitative problems.
-  REASONING = hard multi-step logic, planning, deep analysis, system design, puzzles.
-  GENERAL = everything else — casual chat, facts, writing, advice, simple questions.
-DIFFICULTY = HARD if it needs a powerful model (complex, multi-step, deep, expert-level); EASY otherwise (simple, short, routine, factual).
-
-Examples:
-write a python function to parse a csv => CODE EASY
-implement a lock-free concurrent hashmap in rust => CODE HARD
-why is my code throwing a null pointer exception => CODE EASY
-what is the integral of x squared => MATH EASY
-prove there are infinitely many primes => MATH HARD
-plan a detailed multi-step migration strategy => REASONING HARD
-design a fault-tolerant distributed system => REASONING HARD
-what's the capital of France => GENERAL EASY
-write me a short poem about the sea => GENERAL EASY
-how's your day going => GENERAL EASY`;
+// One instruction for the app and the truth matrix: the matrix tested a
+// short copy of it and read a misjudgement the app never makes (10-20).
+import BASE from "./routingClassifierPrompt.txt?raw";
 
 /** Classify task + difficulty, or null (keyword-gated / unparseable). Never throws. */
 export async function classifyRoutingSignals(

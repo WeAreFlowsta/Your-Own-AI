@@ -1540,27 +1540,41 @@ pub async fn leg_components(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<
         sink("embedding model: not installed (memory recall, freshness and the semantic health check are off; Online-first stays on the device by design)".into());
     }
     if dir.join(HELPER_FILE).exists() {
-        const BASE: &str = "Classify the user's message for model routing. Output exactly TWO words: the TASK then the DIFFICULTY.\nTASK = CODE | MATH | REASONING | GENERAL.\nDIFFICULTY = HARD if it needs a powerful model (complex, multi-step, deep, expert-level); EASY otherwise.";
+        // The app's own instruction, word for word (routingTaskClassifier.ts reads the same file).
+        const BASE: &str = include_str!("../../src/utils/routingClassifierPrompt.txt");
         const GRAMMAR: &str = "root ::= (\"CODE\" | \"MATH\" | \"REASONING\" | \"GENERAL\") \" \" (\"EASY\" | \"HARD\")";
+        // Messages the classifier really sees: the free keyword gate passes
+        // only code/math/reasoning-looking ones (a plain "capital of France"
+        // never reaches the model), so the GENERAL probe is a keyword false
+        // alarm the classifier must correct. TASK must be right; a different
+        // DIFFICULTY is noted, not failed (it is a judgment call).
         let probes = [
-            ("prove that there are infinitely many primes", "HARD"),
-            ("what is the capital of France", "EASY"),
-            ("write a python function that parses a csv file", "CODE"),
+            ("write a python function that parses a csv file", "CODE", "EASY"),
+            ("prove that there are infinitely many primes", "MATH", "HARD"),
+            ("how do I debug my sourdough starter, it isn't rising", "GENERAL", "EASY"),
         ];
         let mut lines = Vec::new();
-        for (q, want) in probes {
+        for (q, want_task, want_diff) in probes {
             if cancelled() {
                 break;
             }
             match crate::llm::utility_chat(app.clone(), st.clone(), HELPER_FILE.to_string(), BASE.to_string(), q.to_string(), Some(GRAMMAR.to_string()), 12).await {
                 Ok(out) => {
                     let verdict = out.trim().to_uppercase();
-                    let parsed = verdict.split_whitespace().count() == 2;
-                    let hit = verdict.contains(want);
-                    lines.push(format!("{q:?} -> {verdict}{}", if hit { "" } else { " (expected it to say " } .to_string() + if hit { "" } else { want } + if hit { "" } else { ")" }));
-                    if !parsed {
+                    let mut words = verdict.split_whitespace();
+                    let (task, diff) = (words.next().unwrap_or(""), words.next().unwrap_or(""));
+                    let note = if task != want_task {
+                        failures.push(format!("components: helper read {q:?} as {task} (it is {want_task}) - routing would send it the wrong way"));
+                        format!(" - WRONG, it is {want_task}")
+                    } else if diff != want_diff {
+                        format!(" (expected {want_diff})")
+                    } else {
+                        String::new()
+                    };
+                    if task.is_empty() || diff.is_empty() {
                         failures.push(format!("components: helper verdict unparseable: {verdict:?}"));
                     }
+                    lines.push(format!("{q:?} -> {verdict}{note}"));
                 }
                 Err(e) => {
                     sink(format!("helper model: FAIL - {e}"));

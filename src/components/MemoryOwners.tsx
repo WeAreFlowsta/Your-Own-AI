@@ -47,7 +47,7 @@ export default component$<Props>((props) => {
     on ? "ring-2 ring-[var(--bg-button-primary)]" : "ring-1 ring-[var(--border-subtle)] opacity-70 group-hover:opacity-100";
 
   return (
-    <div class="flex items-start gap-4 overflow-x-auto pb-2 mb-6" data-testid="memory-owners">
+    <div class="flex items-start gap-4 overflow-x-auto px-1 pt-1 pb-2 mb-6" data-testid="memory-owners">
       <button
         type="button"
         class="group flex flex-col items-center gap-1 shrink-0 bg-transparent border-none cursor-pointer p-0"
