@@ -30,6 +30,8 @@ const windowsAppEnv: Record<string, string> = WIN
       USERPROFILE: PROFILE,
       APPDATA: resolve(PROFILE, "AppData", "Roaming"),
       LOCALAPPDATA: resolve(PROFILE, "AppData", "Local"),
+      // a test launch never downloads a model (launch-app.sh sets the same)
+      YOAI_BLOCK_MODEL_DOWNLOADS: "1",
       ...(process.env.YOAI_E2E_CPU_ONLY ? { FLOWSTA_CPU_ONLY: "1" } : {}),
       // YOAI_E2E_ONLINE: the staging proxy and an unanswered Vault port (see launch-app.sh)
       ...(process.env.YOAI_E2E_ONLINE
