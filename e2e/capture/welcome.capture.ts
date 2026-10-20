@@ -28,7 +28,9 @@ describe("capture", () => {
       timeout: 60_000,
       timeoutMsg: "step 2 never showed the three AIs",
     });
-    await take.hold(1400);
+    // Off the card that now sits under the pointer (its "Change picture" tip), toward the choice.
+    await take.moveTo('[data-testid="welcome-preset-option"]:nth-of-type(2)');
+    await take.hold(900);
     await take.still("02-step2-personal");
 
     // The Work set.
