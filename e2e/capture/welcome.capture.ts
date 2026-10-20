@@ -44,6 +44,7 @@ describe("capture", () => {
     await take.click(`${card} button[title="Change picture"]`);
     await (await $(gallery)).waitForDisplayed({ timeout: 10_000 });
     await take.hold(900);
+    await take.still("03b-gallery");
     const pic = process.env.YOAI_CAPTURE_AI_PICTURE;
     const choice = pic ? `${gallery} > button[title="${pic}"]` : `${gallery} > button:nth-child(3)`;
     await take.hover(choice, 500);
