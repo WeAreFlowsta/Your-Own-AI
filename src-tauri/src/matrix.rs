@@ -1729,9 +1729,9 @@ fn ago(secs_then: u64, now: u64) -> String {
 /// What counts as broken in the Devices section: only what is plainly
 /// wrong on THIS machine. Another device being asleep or off is a fact,
 /// not a failure.
-pub(crate) fn devices_failures(vault_reachable: bool, unlocked: bool, ai_count: usize, holds_ais: bool, holds_manifest: bool) -> Vec<String> {
+pub(crate) fn devices_failures(labels_read: bool, unlocked: bool, ai_count: usize, holds_ais: bool, holds_manifest: bool) -> Vec<String> {
     let mut f = Vec::new();
-    if vault_reachable && unlocked && ai_count > 0 && !holds_ais && !holds_manifest {
+    if labels_read && unlocked && ai_count > 0 && !holds_ais && !holds_manifest {
         f.push(format!("devices: the Vault holds no backup of your {ai_count} AI(s) - they cannot reach your other devices"));
     }
     f
@@ -1766,15 +1766,26 @@ pub async fn leg_devices(app: &AppHandle, sink: Sink<'_>) -> Vec<String> {
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
         .and_then(|v| v["custom-ais"].as_array().map(|a| a.len()))
         .unwrap_or(0);
-    let labels = if vault.unlocked { crate::vault_escrow::own_backup_labels(port).await } else { Default::default() };
-    let (holds_ais, holds_manifest) = (labels.contains(crate::vault_escrow::AIS_LABEL), labels.contains(crate::vault_escrow::MANIFEST_LABEL));
+    // None: the Vault's list did not answer (locked or busy at that moment)
+    // - not read, which is not the same as missing (10-20: a Windows run
+    // failed "holds no backup" while the list simply did not answer).
+    let labels = if vault.unlocked { crate::vault_escrow::own_backup_labels_read(port).await } else { None };
+    let held = |label: &str| match &labels {
+        Some(l) if l.contains(label) => "held",
+        Some(_) => "missing",
+        None => "not read",
+    };
     let written = crate::vault_escrow::backup_write_times(app);
-    let when = |label: &str| written.iter().find(|(l, _)| l == label).map(|(_, t)| ago(*t, now)).unwrap_or_else(|| "not yet".into());
+    let when = |label: &str| written.iter().find(|(l, _)| l == label).map(|(_, t)| format!("written {}", ago(*t, now))).unwrap_or_else(|| "not written by this version yet".into());
     sink(format!(
         "this device: {ai_count} AI(s) | small AI backup {} ({}) | full backup {} ({})",
-        if holds_ais { "held" } else { "missing" }, when(crate::vault_escrow::AIS_LABEL),
-        if holds_manifest { "held" } else { "missing" }, when(crate::vault_escrow::MANIFEST_LABEL),
+        held(crate::vault_escrow::AIS_LABEL), when(crate::vault_escrow::AIS_LABEL),
+        held(crate::vault_escrow::MANIFEST_LABEL), when(crate::vault_escrow::MANIFEST_LABEL),
     ));
+    let (holds_ais, holds_manifest, labels_read) = match &labels {
+        Some(l) => (l.contains(crate::vault_escrow::AIS_LABEL), l.contains(crate::vault_escrow::MANIFEST_LABEL), true),
+        None => (false, false, false),
+    };
     if vault.unlocked {
         match crate::vault_escrow::sibling_devices(port).await {
             Ok(devs) if devs.is_empty() => sink("other devices: none on this identity".into()),
@@ -1800,18 +1811,17 @@ pub async fn leg_devices(app: &AppHandle, sink: Sink<'_>) -> Vec<String> {
     }
     match crate::rendezvous_keeper::last_status() {
         Some(k) => sink(format!(
-            "rendezvous: conductor started on {} | last round {} - {}/{} server(s) answered, conductor registered {} note(s){}{}",
+            "rendezvous: conductor started on {} | last round {} - {}/{} server(s) answered | {}{}",
             k.conductor.as_deref().map(public_server_name).unwrap_or_else(|| "(unknown)".into()),
             ago(k.at_secs, now),
             k.reached,
             k.servers,
-            k.conductor_registered,
-            if k.put_elsewhere > 0 { format!(", listed on fallbacks too ({})", k.put_elsewhere) } else { String::new() },
-            match k.stalled_min { Some(m) => format!(" | COVERING for a stalled registration ({m} min)"), None => String::new() },
+            match k.stalled_min { Some(m) => format!("COVERING for a stalled registration ({m} min)"), None => "registering on its own".into() },
+            if k.put_elsewhere > 0 { " | listed on a fallback too" } else { "" },
         )),
         None => sink("rendezvous: the keeper has not run yet (it starts about a minute after the conductor)".into()),
     }
-    let failures = devices_failures(true, vault.unlocked, ai_count, holds_ais, holds_manifest);
+    let failures = devices_failures(labels_read, vault.unlocked, ai_count, holds_ais, holds_manifest);
     for f in &failures {
         sink(format!("FAIL: {f}"));
     }
@@ -2574,6 +2584,7 @@ mod devices_leg_tests {
         assert!(devices_failures(true, true, 3, false, true).is_empty(), "an older app's full backup alone too");
         assert!(devices_failures(true, false, 3, false, false).is_empty(), "locked: backups wait, not broken");
         assert!(devices_failures(false, false, 3, false, false).is_empty(), "no Vault: this device keeps to itself");
+        assert!(devices_failures(false, true, 7, false, false).is_empty(), "the list did not answer: not read, not missing (10-20 Windows)");
         assert!(devices_failures(true, true, 0, false, false).is_empty(), "no AIs, nothing to hold");
     }
     #[test]

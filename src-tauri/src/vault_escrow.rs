@@ -956,13 +956,23 @@ async fn fetch_vault_label(port: u16, label: &str) -> Option<serde_json::Value> 
 /// The labels this device's app backup holds in the Vault (the list is one
 /// cheap call; it says whether an object we may skip rewriting is there).
 pub(crate) async fn own_backup_labels(port: u16) -> std::collections::HashSet<String> {
-    let Ok(resp) = http()
+    own_backup_labels_read(port).await.unwrap_or_default()
+}
+
+/// The labels, or None when the list could not be read (locked, busy).
+pub(crate) async fn own_backup_labels_read(port: u16) -> Option<std::collections::HashSet<String>> {
+    let resp = http()
         .get(format!("http://127.0.0.1:{}/backup/list", port))
         .header("Origin", VAULT_ORIGIN)
         .send()
         .await
-    else { return Default::default() };
-    let Ok(v) = resp.json::<serde_json::Value>().await else { return Default::default() };
+        .ok()
+        .filter(|r| r.status().is_success())?;
+    let v = resp.json::<serde_json::Value>().await.ok()?;
+    Some(own_labels_in(&v))
+}
+
+fn own_labels_in(v: &serde_json::Value) -> std::collections::HashSet<String> {
     v["apps"]
         .as_array()
         .into_iter()

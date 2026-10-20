@@ -1296,7 +1296,10 @@ const HELPER_RAM_MARGIN_GB: f64 = 1.0;
 fn helper_has_ram_room(app: &AppHandle, file: &str, ctx: u64, what: &'static str, said: &std::sync::atomic::AtomicBool) -> bool {
     use std::sync::atomic::Ordering::SeqCst;
     let Some(need) = helper_ram_need_gb(app, file, ctx) else { return true };
-    let free = available_memory_bytes() as f64 / 1024f64.powi(3);
+    // The figure the grader and the loader use: on macOS "available" leaves
+    // out what the system frees on demand, and the helper was refused on a
+    // 16 GB Mac with 6 GB really free (10-20).
+    let free = grading_memory_bytes() as f64 / 1024f64.powi(3);
     if free - need >= HELPER_RAM_MARGIN_GB {
         said.store(false, SeqCst);
         return true;
@@ -4387,7 +4390,13 @@ pub async fn utility_chat(
     max_tokens: u32,
 ) -> Result<String, String> {
     let _ = state;
-    memory_complete(&app_handle, &model, &system, &user, grammar.as_deref(), max_tokens, 0.7).await
+    // A grammar means a fixed-form answer - the routing classifier's two
+    // words, memory extraction's lines: greedy, so the same message gets the
+    // same verdict on every run and every machine (10-20: at 0.7 the Windows
+    // matrix read "debug my sourdough starter" as CODE, Linux as GENERAL).
+    // Free prose (summaries, portraits) keeps its warmth.
+    let temperature = if grammar.is_some() { 0.0 } else { 0.7 };
+    memory_complete(&app_handle, &model, &system, &user, grammar.as_deref(), max_tokens, temperature).await
 }
 
 /// One memory-work completion through the memory slot (MEMORY_REDESIGN.md

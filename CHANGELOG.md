@@ -286,6 +286,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   fails when it reads a message as the wrong kind of task. The tool-call
   check loads each model graded for agent work itself, and the computer
   is kept awake while the matrix runs (macOS and Linux).
+- The routing classifier and memory extraction answer the same way every
+  time: their fixed-form answers are no longer sampled at random, so a
+  message is not routed one way on one run and another way on the next.
+- On a Mac, the helper model starts when there is room by the same memory
+  figure the model loader uses; it was refused with plenty free.
 - The truth matrix has a Devices section: the Vault, when this device
   last backed up its AIs and everything else, how old this Vault's copies
   of your other devices are, the last check for their changes, and where
