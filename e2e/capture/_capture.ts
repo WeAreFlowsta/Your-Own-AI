@@ -252,6 +252,24 @@ export class Take {
     this.log("type", sel);
   }
 
+  /** Types into a contenteditable composer at a typing pace (its input handler reads the text; driver key events
+   *  do not reach it). */
+  async typeEditable(sel: string, text: string, msPerChar = 45) {
+    await this.click(sel);
+    for (let i = 1; i <= text.length; i++) {
+      await browser.execute((s: string, t: string, ch: string) => {
+        const el = document.querySelector(s) as HTMLElement;
+        el.focus();
+        el.textContent = t;
+        const r = document.createRange(); r.selectNodeContents(el); r.collapse(false);
+        const sel = window.getSelection(); sel?.removeAllRanges(); sel?.addRange(r);
+        el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: ch }));
+      }, sel, text.slice(0, i), text[i - 1]);
+      await this.hold(msPerChar + Math.round(Math.random() * 30));
+    }
+    this.log("type", sel);
+  }
+
   /** Drags a range input's thumb to a step, with the real button held. */
   async dragRange(sel: string, to: number, ms = 1200) {
     const r = await browser.execute((s: string) => {
