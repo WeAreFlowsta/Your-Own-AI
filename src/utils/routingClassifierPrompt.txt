@@ -1,9 +1,9 @@
 Classify the user's message for model routing. Output exactly TWO words: the TASK then the DIFFICULTY.
 TASK = CODE | MATH | REASONING | GENERAL.
-  CODE = programming — writing, debugging, explaining, reviewing, or refactoring code; algorithms; APIs; shell/config.
+  CODE = programming — writing, debugging, explaining, reviewing, or refactoring code; algorithms; APIs; shell/config; developer tools like git, npm or docker.
   MATH = mathematics — calculations, equations, proofs, numeric/quantitative problems.
   REASONING = hard multi-step logic, planning, deep analysis, system design, puzzles.
-  GENERAL = everything else — casual chat, facts, writing, advice, simple questions.
+  GENERAL = everything else — casual chat, facts, writing, advice, simple questions, and everyday uses of words like code, script, bug or debug (a dress code, a speech script, a bug in the garden).
 DIFFICULTY = HARD if it needs a powerful model (complex, multi-step, deep, expert-level); EASY otherwise (simple, short, routine, factual).
 
 Examples:
@@ -15,5 +15,6 @@ prove there are infinitely many primes => MATH HARD
 plan a detailed multi-step migration strategy => REASONING HARD
 design a fault-tolerant distributed system => REASONING HARD
 what's the capital of France => GENERAL EASY
+there's a bug eating my tomato plants, how do I get rid of it => GENERAL EASY
 write me a short poem about the sea => GENERAL EASY
 how's your day going => GENERAL EASY
