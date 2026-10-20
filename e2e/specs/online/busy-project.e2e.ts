@@ -12,7 +12,7 @@
 import { homedir } from "node:os";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { SHOTS } from "../../wdio.conf";
+import { SHOTS, appUrl } from "../../wdio.conf";
 import { shot, invoke, waitForChat, ask, lastReply, resetAiModels, seedConversations } from "../models/_helpers";
 import { APP_LOG as LOG, IDENTITY, ONLINE_MODEL as MODEL, PROFILE, haveIdentity, setAiModel, signInAsTestIdentity } from "./_online";
 
@@ -109,7 +109,7 @@ describe(`online: a busy ${MODEL} agent in a project on an AI with ${BIG} conver
     // The AI works on the online model.
     await browser.execute((p: string) => localStorage.setItem("build-binary-path", p), HELPER);
     await setAiModel(w.key, `online:${MODEL}`);
-    await browser.url("tauri://localhost/chat/");
+    await browser.url(appUrl("/chat/"));
     await (await $('[data-testid="chat-input"]')).waitForDisplayed({ timeout: 60_000 });
     ready = true;
   });
@@ -205,7 +205,7 @@ describe(`online: a busy ${MODEL} agent in a project on an AI with ${BIG} conver
     });
     await shot("online-drawer");
     await browser.keys("Escape");
-    await browser.url("tauri://localhost/memory/");
+    await browser.url(appUrl("/memory/"));
     const tab = await $('[data-testid="memory-tab-projects"]');
     await tab.waitForDisplayed({ timeout: 60_000 });
     await timed("Projects tab: this project listed", 10_000, async () => {

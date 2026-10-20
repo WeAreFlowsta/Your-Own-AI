@@ -1,6 +1,7 @@
 // Web access per AI (NEXT.md: fetch for everyone, local, free; the switch is
 // ON by default; the offer line when it is off). Needs the network for
 // example.com; the page is read on this computer.
+import { appUrl } from "../../wdio.conf";
 import { shot, waitForChat, invoke, ask, waitForReplyDone, lastReply, resetAiModels } from "./_helpers";
 
 const PAGE_QUESTION = "Read https://example.com/ and tell me in one sentence what that page says.";
@@ -18,7 +19,7 @@ const setWebAccess = async (on: boolean) => {
     return ais.map((a) => `${a.name}=${a.webAccess}`);
   }, on);
   console.log(`e2e: web access ${JSON.stringify(names)}`);
-  await browser.url("tauri://localhost/chat/");
+  await browser.url(appUrl("/chat/"));
   await waitForChat();
 };
 
@@ -147,7 +148,7 @@ describe("web access per AI", () => {
     console.log(`e2e: tray Open on Settings: ${rowOpened}`);
     if (!rowOpened) {
       // The resend already ended and its row is gone: the drawer opens it instead.
-      await browser.url("tauri://localhost/chat/");
+      await browser.url(appUrl("/chat/"));
       await waitForChat();
     }
     await browser.waitUntil(async () => (await browser.execute(() => location.pathname)) === "/chat/", { timeout: 30_000, timeoutMsg: "the chat never reopened" });

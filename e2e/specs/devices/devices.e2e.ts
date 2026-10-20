@@ -7,6 +7,7 @@
 // ARRIVES in B's own records and the composer opens. Three launches, one
 // phase each (DEVICES_PHASE), each against its own TEST Vault
 // (YOAI_VAULT_PORT) - never the installed one. Run: e2e/devices-live.sh
+import { appUrl } from "../../wdio.conf";
 import { shot, waitForChat, invoke, ask, waitForReplyDone } from "../models/_helpers";
 
 const MESSAGE = "Devices test: name one colour and nothing else.";
@@ -32,7 +33,7 @@ const escrow = () => invoke<{ state: string }>("vault_escrow_sync");
 const bodyText = () => browser.execute(() => document.body.innerText);
 
 async function yourAis() {
-  await browser.url("tauri://localhost/your-ais/");
+  await browser.url(appUrl("/your-ais/"));
   await browser.waitUntil(async () => (await $$('button[title^="Edit AI"]')).length > 0, { timeout: 60_000, timeoutMsg: "the Your AIs page never listed an AI" });
 }
 
@@ -134,7 +135,7 @@ describe(`devices, phase ${PHASE}`, () => {
       const aiCached = await invoke<{ kind: string; text: string }[]>("list_memory_rows_cached", { scope: `ai:${renamedB!.founding}` });
       console.log(`e2e: B's cached AI notes ${JSON.stringify(aiCached.map((r) => r.text))}`);
       expect(aiCached.some((r) => r.text === AI_NOTE)).toBe(true);
-      await browser.url("tauri://localhost/your-memory/");
+      await browser.url(appUrl("/your-memory/"));
       const ruleEl = await $(`[data-testid="memory-rule"]*=${RULE.slice(0, 30)}`);
       await ruleEl.waitForDisplayed({ timeout: 60_000 });
       await shot("devices-b-rule-from-a");
@@ -173,7 +174,7 @@ describe(`devices, phase ${PHASE}`, () => {
       // sign-in (only the Vault link is real here), so the panel renders
       // signed out on this harness; the line is checked when it can be.
       const sess = await invoke<{ signed_in: boolean }>("flowsta_session");
-      await browser.url("tauri://localhost/settings/");
+      await browser.url(appUrl("/settings/"));
       if (sess.signed_in) {
         const line = await $('[data-testid="flowsta-devices-line"]');
         await line.waitForDisplayed({ timeout: 60_000 });

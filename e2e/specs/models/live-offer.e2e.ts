@@ -5,6 +5,7 @@
 // again for this AI". Web access off changes nothing here: turning the web
 // on would not fetch live information without online models, so the live
 // line takes the place of the web-off line.
+import { appUrl } from "../../wdio.conf";
 import { shot, waitForChat, ask, waitForReplyDone, resetAiModels } from "./_helpers";
 
 const offer = () =>
@@ -28,7 +29,7 @@ async function firstAi(patch: Record<string, unknown>) {
 }
 
 async function newChat() {
-  await browser.url("tauri://localhost/chat/");
+  await browser.url(appUrl("/chat/"));
   await waitForChat();
 }
 

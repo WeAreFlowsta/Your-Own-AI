@@ -6,6 +6,7 @@
 // Before 2026-10-17 a busy provider showed `Error: {"message":"Upstream
 // provider error (429)"}` in the bubble, and a provider that failed after
 // the reply had started left a cut-off reply that looked finished.
+import { appUrl } from "../../wdio.conf";
 import { invoke, waitForChat, ask, lastReply, shot, resetAiModels } from "../models/_helpers";
 import { haveIdentity, setAiModel, signInAsTestIdentity, ONLINE_MODEL } from "./_online";
 
@@ -45,7 +46,7 @@ describe("online errors, said plainly", () => {
     // run's 8 GB cap stopped a run with them loaded).
     await invoke("stop_llama_server").catch(() => {});
     await invoke("stop_utility_server").catch(() => {});
-    await browser.url("tauri://localhost/chat/");
+    await browser.url(appUrl("/chat/"));
     await (await $('[data-testid="chat-input"]')).waitForDisplayed({ timeout: 60_000 });
     ready = true;
   });

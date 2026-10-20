@@ -2,6 +2,7 @@
 // the composer says the answer may be out of date and offers "Look it up
 // online" - the same question again on the live-web model, this once, with
 // the AI still Offline Only afterwards.
+import { appUrl } from "../../wdio.conf";
 import { waitForChat, ask, lastReply, shot, resetAiModels } from "../models/_helpers";
 import { cheapPicks, haveIdentity, setAiModel, setRoutingPrefs, signInAsTestIdentity } from "./_online";
 
@@ -44,7 +45,7 @@ describe("the live line for a plan holder", () => {
   it("looks it up online once, and leaves the AI Offline Only", async function () {
     this.timeout(900_000);
     if (!haveIdentity()) this.skip();
-    await browser.url("tauri://localhost/chat/");
+    await browser.url(appUrl("/chat/"));
     await waitForChat();
     await ask("What's the weather today in Chicago?");
     await browser.waitUntil(async () => (await lastReply())?.state === "done", { timeout: 300_000, timeoutMsg: "the device reply never finished" });

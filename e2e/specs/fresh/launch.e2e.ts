@@ -3,7 +3,7 @@
 // that the window, the webview, the front end and the Rust side all came
 // up - the test every release must pass first.
 import { resolve } from "node:path";
-import { SHOTS } from "../../wdio.conf";
+import { SHOTS, appUrl } from "../../wdio.conf";
 
 const shot = (name: string) => browser.saveScreenshot(resolve(SHOTS, `${name}.png`));
 
@@ -42,7 +42,7 @@ describe("a download in flight on the wizard", () => {
     await browser.execute(() => {
       localStorage.setItem("firstModelDownloading", JSON.stringify({ filename: "e2e-fake-model.gguf", label: "Test model" }));
     });
-    await browser.url("tauri://localhost/welcome/");
+    await browser.url(appUrl("/welcome/"));
     const title = await $('[data-testid="welcome-title"]');
     await title.waitForDisplayed({ timeout: 60_000 });
     await browser.execute(async () => {
@@ -84,7 +84,7 @@ describe("a download in flight on the wizard", () => {
     await (await $("button=Back")).click();
     await browser.waitUntil(async () => (await $('[data-testid="welcome-download"]').getText()).includes("Continue"), { timeout: 10_000, timeoutMsg: "Back did not return to a step 1 that knows about the download" });
     await browser.execute(() => localStorage.removeItem("firstModelDownloading"));
-    await browser.url("tauri://localhost/welcome/");
+    await browser.url(appUrl("/welcome/"));
     await (await $('[data-testid="welcome-title"]')).waitForDisplayed({ timeout: 60_000 });
   });
 });

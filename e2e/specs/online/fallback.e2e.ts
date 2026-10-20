@@ -5,6 +5,7 @@
 // the models the person allows (the catalog's default leaves some
 // providers off); a model the person picks by name is used either way.
 // The staging proxy fails one model on purpose (x-yoai-test-fail busy@id).
+import { appUrl } from "../../wdio.conf";
 import { invoke, waitForChat, ask, lastReply, shot, resetAiModels } from "../models/_helpers";
 import { cheapPicks, haveIdentity, setAiModel, setRoutingPrefs, signInAsTestIdentity, ONLINE_MODEL } from "./_online";
 
@@ -41,7 +42,7 @@ async function setAutoAllow(v: { providers?: Record<string, boolean>; models?: R
 }
 
 async function newChat() {
-  await browser.url("tauri://localhost/chat/");
+  await browser.url(appUrl("/chat/"));
   await waitForChat();
 }
 
@@ -64,7 +65,7 @@ describe("fallback to another provider, and the models automatic routing may use
     })) as string;
     // The app records the plan when a page reads the session (the router
     // keeps everything on the device until it has): the Online Models page.
-    await browser.url("tauri://localhost/online-models/");
+    await browser.url(appUrl("/online-models/"));
     await browser.waitUntil(async () => browser.execute(async () => {
       const store = await (window as any).__TAURI__.store.load("settings.json");
       return (await store.get("onlineEntitled")) === "yes";
@@ -120,7 +121,7 @@ describe("fallback to another provider, and the models automatic routing may use
     if (!haveIdentity()) this.skip();
     this.timeout(180_000);
     await setAutoAllow(null);
-    await browser.url("tauri://localhost/settings/");
+    await browser.url(appUrl("/settings/"));
     await (await $('[data-testid="auto-routing-models"]')).waitForDisplayed({ timeout: 60_000 });
     const rows = (await browser.execute(() =>
       [...document.querySelectorAll('[data-testid="auto-routing-models"] [data-provider]')].map((r) => ({
@@ -146,7 +147,7 @@ describe("fallback to another provider, and the models automatic routing may use
     console.log(`e2e: breakdown ${JSON.stringify(breakdown)}`);
     await browser.pause(400);
     await shot("routing-breakdown");
-    await browser.url("tauri://localhost/online-models/");
+    await browser.url(appUrl("/online-models/"));
     await browser.waitUntil(async () => browser.execute(() => document.querySelectorAll('[data-testid="model-auto-switch"]').length > 0), { timeout: 60_000, timeoutMsg: "no Auto switch on the cards" });
     await browser.pause(1_000);
     const badges = (await browser.execute(() => [...document.querySelectorAll('[data-testid="model-use-badge"]')].map((b) => b.textContent))) as string[];

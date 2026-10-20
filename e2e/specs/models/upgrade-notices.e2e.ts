@@ -4,6 +4,7 @@
 // information and web access is off, and the card for an online model while
 // signed out. Pictures only (e2e/shots/notice-*.png) - the review of the
 // notices reads them; nothing here passes or fails on copy.
+import { appUrl } from "../../wdio.conf";
 import { shot, invoke, waitForChat, ask, waitForReplyDone, resetAiModels } from "./_helpers";
 
 async function firstAi(patch: Record<string, unknown>) {
@@ -58,20 +59,20 @@ describe("online-model offers, as someone without a plan sees them", () => {
     await browser.keys("Escape");
 
     // Settings: the routing section's no-plan text.
-    await browser.url("tauri://localhost/settings/");
+    await browser.url(appUrl("/settings/"));
     await browser.pause(2_500);
     console.log(`e2e: settings routing text found: ${await scrollToText("Plans are an optional paid")}`);
     await browser.pause(300);
     await shot("notice-03-settings-routing");
 
     // The Online Models page, signed out.
-    await browser.url("tauri://localhost/online-models/");
+    await browser.url(appUrl("/online-models/"));
     await browser.pause(3_000);
     await shot("notice-04-online-models-page");
 
     // A live-information question with web access off: the offer above the composer.
     await firstAi({ webAccess: false });
-    await browser.url("tauri://localhost/chat/");
+    await browser.url(appUrl("/chat/"));
     await waitForChat();
     await ask("what's the weather today in Chicago");
     await waitForReplyDone(240_000);
@@ -80,7 +81,7 @@ describe("online-model offers, as someone without a plan sees them", () => {
 
     // An online model while signed out: the card under the conversation.
     await firstAi({ webAccess: null, model: "online:gpt-6-luna" });
-    await browser.url("tauri://localhost/chat/");
+    await browser.url(appUrl("/chat/"));
     await (await $('[data-testid="chat-input"]')).waitForDisplayed({ timeout: 60_000 });
     await (await $('[data-testid="new-chat"]')).click().catch(() => {});
     await ask("hello");

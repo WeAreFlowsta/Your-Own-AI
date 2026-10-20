@@ -9,6 +9,7 @@
 // Two checks, no model reply needed: the harness config the app writes when
 // a project opens, and the router's pick for an agent call and a plan call
 // with a different model chosen for each.
+import { appUrl } from "../../wdio.conf";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
@@ -56,7 +57,7 @@ describe("project helpers run on the right model", () => {
     mkdirSync(FOLDER, { recursive: true });
     writeFileSync(resolve(FOLDER, "README.md"), "# Helpers test\n");
     await browser.execute((p: string) => localStorage.setItem("build-binary-path", p), HELPER);
-    await browser.url("tauri://localhost/chat/");
+    await browser.url(appUrl("/chat/"));
     await (await $('[data-testid="chat-input"]')).waitForDisplayed({ timeout: 60_000 });
     ready = true;
   });

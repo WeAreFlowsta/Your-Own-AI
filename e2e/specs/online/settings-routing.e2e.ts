@@ -2,6 +2,7 @@
 // the offline part first (for everyone), the online part second, how
 // routing decides last. Pictures (e2e/shots/routing-*.png) plus the order
 // of the section's headings, which must hold in both states.
+import { appUrl } from "../../wdio.conf";
 import { shot, waitForChat } from "../models/_helpers";
 import { haveIdentity, signInAsTestIdentity } from "./_online";
 
@@ -19,7 +20,7 @@ async function scrollToHeading(text: string) {
 }
 
 async function openRouting() {
-  await browser.url("tauri://localhost/settings/");
+  await browser.url(appUrl("/settings/"));
   await (await $("#settings-routing")).waitForExist({ timeout: 60_000 });
   await browser.pause(2_000);
 }
@@ -51,7 +52,7 @@ describe("Settings > Routing, offline part first, online part second", () => {
     const session = await signInAsTestIdentity();
     expect(session.tier).toBe("pro");
     // The page reads the plan when it loads.
-    await browser.url("tauri://localhost/online-models/");
+    await browser.url(appUrl("/online-models/"));
     await browser.pause(3_000);
     await openRouting();
     await browser.waitUntil(async () => (await headings()).includes("How much goes online"), { timeout: 60_000, timeoutMsg: "the online settings never showed" });

@@ -5,6 +5,7 @@
 // Meanwhile the activity tray shows both turns, the drawer marks Reeves's
 // conversation live, and when Reeves finishes Teresa's turn runs. "Open" on the
 // finished row brings Reeves's conversation back.
+import { appUrl } from "../../wdio.conf";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { shot, waitForChat, invoke, ask, resetAiModels } from "./_helpers";
@@ -47,7 +48,7 @@ describe("two AIs on one engine", () => {
       return ais.map((a) => `${a.name}=${a.model}`);
     }, loaded, SECOND_MODEL);
     console.log(`e2e: AIs pinned ${JSON.stringify(pinned)}`);
-    await browser.url("tauri://localhost/chat/");
+    await browser.url(appUrl("/chat/"));
     await waitForChat();
     await selectAi("Reeves");
 

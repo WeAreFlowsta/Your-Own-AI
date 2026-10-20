@@ -16,7 +16,7 @@
 // Timings go to e2e/shots/routing-conversation.json.
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { SHOTS } from "../../wdio.conf";
+import { SHOTS, appUrl } from "../../wdio.conf";
 import { shot, invoke, waitForChat, ask, lastReply, resetAiModels } from "../models/_helpers";
 import { cheapPicks, decisions, haveIdentity, logBetween, onlineRequests, setAiModel, setRoutingPrefs, signInAsTestIdentity } from "./_online";
 
@@ -40,7 +40,7 @@ async function newChat() {
 async function converse(label: string, key: string, mode: "auto:offline" | "auto:online-offline", share: string, turns: Turn[]) {
   await setAiModel(key, mode);
   await setRoutingPrefs({ routingOnlineShare: share });
-  await browser.url("tauri://localhost/chat/");
+  await browser.url(appUrl("/chat/"));
   await (await $('[data-testid="chat-input"]')).waitForDisplayed({ timeout: 60_000 });
   await newChat();
   const rows: Row[] = [];

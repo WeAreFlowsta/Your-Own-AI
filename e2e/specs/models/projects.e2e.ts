@@ -12,7 +12,7 @@
 import { homedir } from "node:os";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { SHOTS } from "../../wdio.conf";
+import { SHOTS, appUrl } from "../../wdio.conf";
 import { shot, invoke, waitForChat, ask, lastReply, resetAiModels, seedConversations } from "./_helpers";
 
 const RUN = Date.now().toString(36);
@@ -157,7 +157,7 @@ describe("projects: the agent in a project", () => {
       await store.set("custom-ais", ais);
       await store.save();
     }, loaded);
-    await browser.url("tauri://localhost/chat/");
+    await browser.url(appUrl("/chat/"));
     await waitForChat();
   });
 

@@ -3,6 +3,7 @@
 // the agent, the person opens Settings while it works, comes back - the turn is
 // still on screen or finished, the page has taken it over, and it is in the
 // records. Needs the Build helper installed on this machine (skipped otherwise).
+import { appUrl } from "../../wdio.conf";
 import { homedir } from "node:os";
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
@@ -50,7 +51,7 @@ describe("an agent turn keeps going when you leave the chat", () => {
       return ais.map((a) => `${a.name}=${a.model}`);
     }, loaded);
     console.log(`e2e: AIs pinned ${JSON.stringify(pinned)}`);
-    await browser.url("tauri://localhost/chat/");
+    await browser.url(appUrl("/chat/"));
     await waitForChat();
     const folder = resolve(import.meta.dirname ?? ".", "../../profile/project-scratch");
     mkdirSync(folder, { recursive: true });
@@ -223,7 +224,7 @@ describe("an agent turn keeps going when you leave the chat", () => {
     });
     if (!canRead) { console.log("e2e: no network - skipping"); this.skip(); }
     await browser.execute((p: string) => localStorage.setItem("build-binary-path", p), HELPER);
-    await browser.url("tauri://localhost/chat/");
+    await browser.url(appUrl("/chat/"));
     await waitForChat();
     // Every routing decision of the session, leader and helpers alike: the
     // app emits one agent-route event per model call with a role and, for
@@ -293,7 +294,7 @@ describe("an agent turn keeps going when you leave the chat", () => {
     });
     if (!canRead) { console.log("e2e: no network - skipping"); this.skip(); }
     await browser.execute((p: string) => localStorage.setItem("build-binary-path", p), HELPER);
-    await browser.url("tauri://localhost/chat/");
+    await browser.url(appUrl("/chat/"));
     await waitForChat();
     // The person names ONE address. A second page the model finds on its own
     // (an encyclopedia article, say) is outside the session's allow-set: the
