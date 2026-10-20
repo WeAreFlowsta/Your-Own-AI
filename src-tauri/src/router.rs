@@ -99,6 +99,10 @@ const EMBED_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(60
 /// leg reports it per 100 decisions).
 pub(crate) static EMBED_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// Embedding pauses (a failure or a slow answer: keywords only for a
+/// minute) counted since the last reset - the matrix's routing leg.
+pub(crate) static EMBED_PAUSES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 async fn embed_guarded(app: &AppHandle, texts: Vec<String>) -> Result<Vec<Vec<f32>>, String> {
     let t0 = std::time::Instant::now();
     let r = embed_guarded_inner(app, texts).await;
@@ -142,6 +146,7 @@ async fn embed_guarded_inner(app: &AppHandle, texts: Vec<String>) -> Result<Vec<
     };
     if let Err(e) = &result {
         log::warn!("[router] embedding unavailable: {e} - keyword gates only for the next minute");
+        EMBED_PAUSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if let Ok(mut g) = EMBED_BROKEN_UNTIL.lock() {
             *g = Some(std::time::Instant::now() + EMBED_RETRY_AFTER);
         }

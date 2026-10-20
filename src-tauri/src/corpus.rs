@@ -49,6 +49,17 @@ pub const DOC_EXTENSIONS: &[&str] = &[
 const RECALL_THRESHOLD: f32 = 0.25;
 /// Embedding batch size (the embed server takes a batch per request).
 const EMBED_BATCH: usize = 24;
+/// A whole-library re-index sends this many passages per request: one per
+/// lane of the embedding server, so a question waits one round at most.
+const REEMBED_BATCH: usize = 4;
+
+/// A whole-library re-index is running (the truth matrix says so instead of
+/// failing the checks it starves).
+pub(crate) static REEMBED_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn reembed_running() -> bool {
+    REEMBED_RUNNING.load(std::sync::atomic::Ordering::SeqCst)
+}
 /// The memory component (mirrors EMBEDDING_MODEL in src/data/recommended-models.ts).
 pub use crate::embedding_model::FILE as EMBEDDING_MODEL_FILE;
 
@@ -574,7 +585,21 @@ pub async fn corpus_reembed_all(
     };
     let total = rows.len();
     let mut done = 0usize;
-    for batch in rows.chunks(EMBED_BATCH) {
+    REEMBED_RUNNING.store(true, std::sync::atomic::Ordering::SeqCst);
+    struct Running;
+    impl Drop for Running {
+        fn drop(&mut self) {
+            REEMBED_RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    let _running = Running;
+    // One passage per lane of the embedding server and a breath between:
+    // a question's embedding then waits one short round, not a 24-passage
+    // batch (10-20: on a processor-run embedder a re-index of 6,397
+    // passages held every routing question past its 15 s limit, and the
+    // router fell back to keywords for the whole run).
+    for batch in rows.chunks(REEMBED_BATCH) {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let texts: Vec<String> = batch.iter().map(|(_, _, t)| format!("{}{}", crate::embedding_model::DOC_PREFIX, t)).collect();
         let vecs = crate::llm::embed_texts(app.clone(), llm_state.clone(), texts, EMBEDDING_MODEL_FILE.to_string()).await?;
         let conn = open(&app)?;

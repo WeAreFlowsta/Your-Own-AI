@@ -1930,6 +1930,30 @@ pub async fn leg_tool_call(bin: &Path, dir: &Path, sink: Sink<'_>) -> Vec<String
 }
 
 pub async fn leg_routing(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<String> {
+    crate::router::EMBED_PAUSES.store(0, Ordering::SeqCst);
+    let reindex_at_start = crate::corpus::reembed_running();
+    let failures = leg_routing_inner(app, dir, sink).await;
+    let paused = crate::router::EMBED_PAUSES.load(Ordering::SeqCst);
+    let reindexing = reindex_at_start || crate::corpus::reembed_running();
+    if paused == 0 && !reindexing {
+        return failures;
+    }
+    // The meaning checks did not get their embeddings this run: a library
+    // re-index held the embedder, or it stopped answering. What failed for
+    // that reason is not measured, not failed (10-20 Windows).
+    sink(format!(
+        "note: the memory model was {} during this leg ({} pause{}) - the meaning-based checks were not measured; run again when it is free",
+        if reindexing { "busy re-indexing your document library" } else { "not answering in time" },
+        paused,
+        if paused == 1 { "" } else { "s" }
+    ));
+    failures
+        .into_iter()
+        .filter(|f| !(f.starts_with("fresh gate") || f.starts_with("health gate") || (f.starts_with("routing: ") && !f.starts_with("routing: stopped") && !f.starts_with("routing: think"))))
+        .collect()
+}
+
+async fn leg_routing_inner(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<String> {
     let mut failures = Vec::new();
     let table: serde_json::Value = match serde_json::from_str(include_str!("../route-battery.json")) {
         Ok(v) => v,

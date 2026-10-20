@@ -289,6 +289,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - The routing classifier and memory extraction answer the same way every
   time: their fixed-form answers are no longer sampled at random, so a
   message is not routed one way on one run and another way on the next.
+- Re-indexing your document library (after the memory model changes) no
+  longer holds up questions: it sends four passages at a time, so a
+  question's own lookup waits a moment, not half a minute.
 - On a Mac, the helper model starts when there is room by the same memory
   figure the model loader uses; it was refused with plenty free.
 - The truth matrix has a Devices section: the Vault, when this device
