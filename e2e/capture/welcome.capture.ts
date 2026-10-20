@@ -3,7 +3,7 @@
 // follows from then on. Stops on step 2: it never reaches step 3 (Connect with Flowsta), so a retake leaves nothing
 // behind in any identity.
 //   YOAI_CAPTURE_AI_NAME     the AI's new name (default Nova)
-//   YOAI_CAPTURE_AI_PICTURE  the picture's name in the gallery (its title); default: the third on the Colors tab
+//   YOAI_CAPTURE_AI_PICTURE  the picture's name in the gallery (its title); default Lagoon (the teal gradient)
 import { Take } from "./_capture";
 
 const card = '[data-testid="welcome-ai-card"]:first-of-type';
@@ -45,8 +45,8 @@ describe("capture", () => {
     await (await $(gallery)).waitForDisplayed({ timeout: 10_000 });
     await take.hold(900);
     await take.still("03b-gallery");
-    const pic = process.env.YOAI_CAPTURE_AI_PICTURE;
-    const choice = pic ? `${gallery} > button[title="${pic}"]` : `${gallery} > button:nth-child(3)`;
+    const pic = process.env.YOAI_CAPTURE_AI_PICTURE ?? "Lagoon";
+    const choice = `${gallery} > button[title="${pic}"]`;
     await take.hover(choice, 500);
     await take.click(choice);
     await (await $(gallery)).waitForExist({ reverse: true, timeout: 10_000 });
