@@ -237,6 +237,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   and retry with a smaller one when it does not fit.
 - Model downloads use about 30% less processor per megabyte.
 - Each model's reasoning setting follows its own template.
+- Project work is no longer given to Qwen 3.8 Distilled 2B, which
+  answers in words where a tool call is needed; the 4B and 9B still take
+  it.
 
 ### Fixed
 - AI pictures from another device now show on this one.

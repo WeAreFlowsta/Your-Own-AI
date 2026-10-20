@@ -201,9 +201,17 @@ pub fn agent_caps(model_name: &str) -> u8 {
     if n.contains("coder") || n.contains("-code") || n.contains("codestral") || n.contains("devstral") {
         return 8;
     }
-    // The 2B/4B/9B distills are Qwen3.5-ARCH (its chat template, not the
+    // The 2B distill writes prose instead of a call even when one tool is
+    // required, thinking on or off (truth matrix 10-20, Linux; the 4B
+    // called it), and called a tool in 1 of 8 project tasks where
+    // Qwen3.5-2B called one in all 8: below the agent floor, so project
+    // work never lands on it.
+    if n.contains("qwen3.8-2b") {
+        return 5;
+    }
+    // The 4B/9B distills are Qwen3.5-ARCH (its chat template, not the
     // flagship's Developer-role format) - the generic qwen3 tier fits them.
-    if n.contains("qwen3.8-9b") || n.contains("qwen3.8-4b") || n.contains("qwen3.8-2b") {
+    if n.contains("qwen3.8-9b") || n.contains("qwen3.8-4b") {
         return 7;
     }
     // Qwen 3.8 shipped a dedicated tool-call format ("Developer role") and
@@ -483,6 +491,12 @@ mod specialist_tests {
         assert!(d9.overall < flagship.overall, "9B distill must rank below the 27B");
         assert!(d2.overall < d9.overall, "2B must rank below 9B");
         assert_eq!(d9.vision, 0, "distills are text-only");
+    }
+
+    #[test]
+    fn the_qwen38_2b_distill_is_not_given_project_work() {
+        assert!(super::agent_caps("Qwen3.8-2B-Q4_K_M.gguf") < 6, "it does not call a required tool");
+        assert!(super::agent_caps("Qwen3.8-4B-Q4_K_M.gguf") >= 6, "the 4B calls it");
     }
 
     #[test]
