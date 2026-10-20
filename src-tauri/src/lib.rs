@@ -879,6 +879,25 @@ pub fn run() {
             flowsta::share_submit,
         ])
         .setup(|app| {
+            // The system asking the app to quit (a logout, a session manager,
+            // a closed terminal): say so in the log and quit the clean way, so
+            // the model servers and helpers stop with it. Before 10-20 such an
+            // exit left no line and orphaned its children. A hard kill still
+            // leaves no trace - nothing can catch it.
+            #[cfg(unix)]
+            {
+                let quit_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    use tokio::signal::unix::{signal, SignalKind};
+                    let (Ok(mut term), Ok(mut hup)) = (signal(SignalKind::terminate()), signal(SignalKind::hangup())) else { return };
+                    let which = tokio::select! {
+                        _ = term.recv() => "SIGTERM",
+                        _ = hup.recv() => "SIGHUP",
+                    };
+                    log::warn!("[exit] the system asked Your Own AI to quit ({which}) - shutting down cleanly");
+                    quit_handle.exit(0);
+                });
+            }
             // UI test harness only: the driven window must be in front and
             // focused, or the compositor withholds frame callbacks and the
             // webview stops painting (no requestAnimationFrame, no

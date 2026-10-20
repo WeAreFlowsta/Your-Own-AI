@@ -543,37 +543,31 @@ pub async fn kill_port_8080() -> Result<String, String> {
     {
         use std::process::Command;
         
-        // Try lsof first
+        // Only the process LISTENING on the port, and never this app: a plain
+        // `lsof -ti :port` (or `fuser -k`) also matches every process holding
+        // a connection to it - this app included, which keeps connections
+        // to its own model server open (found 10-20 while chasing a silent
+        // exit; the sweep would kill the app outright).
         let lsof_result = Command::new("lsof")
-            .args(&["-ti", &format!(":{}", chat_port())])
+            .args(&["-ti", &format!("TCP:{}", chat_port()), "-sTCP:LISTEN"])
             .output();
-        
+        let me = std::process::id().to_string();
+        let mut killed: Vec<String> = Vec::new();
         if let Ok(output) = lsof_result {
-            if !output.stdout.is_empty() {
-                let pid = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                
-                // Kill the process
-                let kill_result = Command::new("kill")
-                    .args(&["-9", &pid])
-                    .output();
-                
-                if kill_result.is_ok() {
-                    return Ok(format!("Killed process {} on port 8080", pid));
+            for pid in String::from_utf8_lossy(&output.stdout).split_whitespace() {
+                if pid == me {
+                    continue;
+                }
+                if Command::new("kill").args(&["-9", pid]).status().map(|s| s.success()).unwrap_or(false) {
+                    killed.push(pid.to_string());
                 }
             }
         }
-        
-        // If lsof failed, try fuser as alternative
-        let fuser_result = Command::new("fuser")
-            .args(&["-k", "-9", &format!("{}/tcp", chat_port())])
-            .output();
-        
-        if fuser_result.is_ok() {
-            return Ok("Killed process on port 8080 using fuser".to_string());
+        if killed.is_empty() {
+            Ok(format!("No server found listening on port {}", chat_port()))
+        } else {
+            Ok(format!("Killed the server listening on port {} (pid {})", chat_port(), killed.join(", ")))
         }
-        
-        // If both failed, port might be free already
-        Ok("No process found on port 8080 (or unable to detect)".to_string())
     }
     
     #[cfg(not(target_os = "linux"))]

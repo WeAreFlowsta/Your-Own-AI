@@ -791,6 +791,10 @@ pub(crate) fn score_quality(case: &QualityCase, answer: &str) -> (u8, Vec<String
 /// table's `overall` beside the measured points so the two can be compared
 /// on every machine - the table's size tiers are to be set from these
 /// numbers, never by hand (NEXT.md §A0, Eric 2026-10-12).
+/// Time one model gets in the answer-quality leg before it is called too
+/// slow for this machine (not a failure).
+const QUALITY_MODEL_BUDGET: std::time::Duration = std::time::Duration::from_secs(180);
+
 pub async fn leg_quality(bin: &Path, dir: &Path, loaded: Option<&str>, sink: Sink<'_>) -> Vec<String> {
     use std::time::Duration;
     let mut failures = Vec::new();
@@ -853,7 +857,16 @@ pub async fn leg_quality(bin: &Path, dir: &Path, loaded: Option<&str>, sink: Sin
         let mut gen_tokens = 0u64;
         let mut gen_ms = 0u128;
         let mut broke = false;
+        let mut answered = 0usize;
+        let mut too_slow = false;
         for (i, case) in QUALITY_GOLD.iter().enumerate() {
+            // A model that thinks at length on a small card took 8 minutes for
+            // ten questions with nothing on the screen (10-20, Linux): a time
+            // limit per model, and a line when a question runs long.
+            if started.elapsed() > QUALITY_MODEL_BUDGET {
+                too_slow = true;
+                break;
+            }
             let body = serde_json::json!({
                 "model": model,
                 "messages": [
@@ -882,6 +895,10 @@ pub async fn leg_quality(bin: &Path, dir: &Path, loaded: Option<&str>, sink: Sin
                 }
             };
             gen_ms += t0.elapsed().as_millis();
+            answered += 1;
+            if t0.elapsed() > std::time::Duration::from_secs(30) {
+                sink(format!("  ... {model}: question {} of {} took {} s", i + 1, QUALITY_GOLD.len(), t0.elapsed().as_secs()));
+            }
             gen_tokens += v["usage"]["completion_tokens"].as_u64().unwrap_or(0);
             let content_empty = v["choices"][0]["message"]["content"].as_str().map(|c| c.trim().is_empty()).unwrap_or(true);
             let cut_off = v["choices"][0]["finish_reason"].as_str() == Some("length");
@@ -897,6 +914,18 @@ pub async fn leg_quality(bin: &Path, dir: &Path, loaded: Option<&str>, sink: Sin
             }
         }
         if broke {
+            continue;
+        }
+        if too_slow {
+            // Not a failure: what this machine can do with this model, said.
+            sink(format!(
+                "quality: {model}: too slow to finish here - {answered} of {} answered in {} s ({points} points so far); not graded",
+                QUALITY_GOLD.len(),
+                started.elapsed().as_secs()
+            ));
+            for n in &notes {
+                sink(n.clone());
+            }
             continue;
         }
         let registry = crate::model_caps::caps_for(&model).overall;
@@ -2244,8 +2273,11 @@ impl KeepAwake {
                 .spawn()
                 .ok()
         } else if cfg!(target_os = "linux") {
+            // `tail --pid` ends when the app does, however the app ends (10-20:
+            // the app died mid-run and a `sleep infinity` inhibitor outlived it,
+            // keeping the computer awake).
             std::process::Command::new("systemd-inhibit")
-                .args(["--what=idle:sleep", "--who=Your Own AI", "--why=Running the truth matrix", "--mode=block", "sleep", "infinity"])
+                .args(["--what=idle:sleep", "--who=Your Own AI", "--why=Running the truth matrix", "--mode=block", "tail", &format!("--pid={}", std::process::id()), "-f", "/dev/null"])
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn()

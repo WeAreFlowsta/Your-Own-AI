@@ -289,6 +289,14 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - The routing classifier and memory extraction answer the same way every
   time: their fixed-form answers are no longer sampled at random, so a
   message is not routed one way on one run and another way on the next.
+- The truth matrix gives each model three minutes in the answer-quality
+  step (a slower one is reported as too slow here, not failed) and shows
+  a line when a question runs long; the keep-awake helper ends with the
+  app however the app ends.
+- When the system asks Your Own AI to quit (a logout, a closed terminal),
+  it says so in its log and shuts down cleanly, stopping its model
+  servers. Freeing the chat model's port only ever stops the server
+  listening there, never the app itself.
 - Re-indexing your document library (after the memory model changes) no
   longer holds up questions: it sends four passages at a time, so a
   question's own lookup waits a moment, not half a minute.
