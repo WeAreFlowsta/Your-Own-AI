@@ -15,6 +15,9 @@ export const appUrl = (path: string) => (WIN ? "http://tauri.localhost" : "tauri
 // YOAI_E2E_HOME moves it (launch-app.sh reads the same variable): on Windows
 // WebView2 and the keystore fail in a profile path near 260 characters.
 const PROFILE = resolve(process.env.YOAI_E2E_HOME || resolve(here, "profile"));
+// YOAI_E2E_KEEP=1: the profile is kept between runs (a video shoot's AIs, conversations and memory); without it
+// every run starts empty. Point YOAI_E2E_HOME at the shoot's own folder when keeping.
+const KEEP = !!process.env.YOAI_E2E_KEEP;
 /**
  * Linux and macOS start the app through launch-app.sh. Windows starts the
  * binary itself: Node will not spawn a .cmd without a shell (EINVAL), so
@@ -183,11 +186,16 @@ function seedWindowsProfile() {
     if (!models) {
       try { models = JSON.parse(readFileSync(resolve(realData, "settings.json"), "utf8")).modelsDir ?? ""; } catch { /* no settings */ }
     }
-    writeFileSync(resolve(testData, "settings.json"), JSON.stringify({ modelsDir: models || resolve(realData, "models") }));
+    // A kept profile (YOAI_E2E_KEEP) keeps its own settings: only the models folder is set in them.
+    const file = resolve(testData, "settings.json");
+    let settings: Record<string, unknown> = {};
+    if (KEEP) try { settings = JSON.parse(readFileSync(file, "utf8")); } catch { /* none yet */ }
+    writeFileSync(file, JSON.stringify({ ...settings, modelsDir: models || resolve(realData, "models") }));
   }
   if (process.env.YOAI_E2E_WITH_CUDA) {
     const engines = process.env.YOAI_E2E_ENGINES_DIR ?? resolve(realData, "engines");
-    if (existsSync(engines)) symlinkSync(engines, resolve(testData, "engines"), "junction");
+    if (existsSync(resolve(testData, "engines"))) { /* a kept profile is already linked */ }
+    else if (existsSync(engines)) symlinkSync(engines, resolve(testData, "engines"), "junction");
     else console.warn(`e2e: no engines folder at ${engines} - the bundled engine runs (install CUDA in the app first)`);
   }
 }
@@ -239,7 +247,7 @@ export const config: WebdriverIO.Config = {
     if (screenLocked()) throw new SevereServiceError("e2e: the screen is locked - the app gets no frames while it is. Unlock it and run again.");
     holdIdleLock();
     reapSidecars();
-    rmSync(PROFILE, { recursive: true, force: true });
+    if (!KEEP) rmSync(PROFILE, { recursive: true, force: true });
     rmSync(SHOTS, { recursive: true, force: true });
     mkdirSync(SHOTS, { recursive: true });
     seedWindowsProfile();
