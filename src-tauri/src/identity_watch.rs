@@ -212,9 +212,17 @@ pub fn restart_after_identity_switch(app: tauri::AppHandle) -> Result<(), String
             log::warn!("[identity] relaunch marker not written: {}", e);
         }
     }
+    // `request_restart`, not `restart`: this command is synchronous, so it
+    // runs on the main thread, where `restart()` skips the exit events and
+    // relaunches at once. The single-instance lock is released only on the
+    // exit event, so the new process found it still held, handed over to
+    // this one and quit, and this one then exited: the app closed and never
+    // came back (Linux, 10-20). The async restarts (reset, transcript swap)
+    // run off the main thread and already go through the exit events.
     #[cfg(not(debug_assertions))]
     {
-        app.restart()
+        app.request_restart();
+        Ok(())
     }
     // Dev: the webview comes from the dev server, which a programmatic
     // restart does not survive (same split as reset.rs).

@@ -85,6 +85,8 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - An AI arriving from another device shows its own picture at once; until
   this device had set the AI up (up to a minute), its card showed the
   character's stock face.
+- When you switch identity in your Vault, Your Own AI restarts into that
+  identity and opens again. It closed and did not reopen.
 
 ### Memory
 - Your Memory and each AI's memory page open with a row of faces: You
