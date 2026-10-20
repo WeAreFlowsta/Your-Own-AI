@@ -1804,66 +1804,105 @@ pub async fn leg_devices(app: &AppHandle, sink: Sink<'_>) -> Vec<String> {
     failures
 }
 
-/// The loaded chat model, asked for ONE named tool the way a program asks
-/// (the OpenAI object form, normalized as :11435 does), answers with that
-/// tool call. A failure on a model graded for agent work is a failure; on a
-/// smaller one it is noted.
-pub async fn leg_tool_call(app: &AppHandle, sink: Sink<'_>) -> Vec<String> {
-    let loaded = app.state::<crate::llm::LLMState>().current_model.lock().await.clone();
-    let Some(model) = loaded else {
-        sink("no chat model loaded - skipped (load one and run again)".into());
-        return Vec::new();
-    };
-    let mut body = serde_json::json!({
-        "model": model,
-        "messages": [{"role": "user", "content": "Record that the build passed."}],
-        "tools": [{"type": "function", "function": {
-            "name": "emit",
-            "description": "Record a status line.",
-            "parameters": {"type": "object", "properties": {"status": {"type": "string"}}, "required": ["status"]}
-        }}],
-        "tool_choice": {"type": "function", "function": {"name": "emit"}},
-        "max_tokens": 1024,
-        "stream": false,
-    });
-    crate::inference_server::normalize_tool_choice(&mut body);
-    let started = std::time::Instant::now();
-    let reply = crate::llm::local_http()
-        .post(format!("http://127.0.0.1:{}/v1/chat/completions", crate::llm::chat_port()))
-        .json(&body)
-        .timeout(std::time::Duration::from_secs(180))
-        .send()
-        .await;
-    let called = match reply {
-        Ok(r) => match r.json::<serde_json::Value>().await {
-            Ok(v) => v["choices"][0]["message"]["tool_calls"][0]["function"]["name"].as_str().map(str::to_string),
+/// Every model here graded for agent work, asked for ONE named tool the way
+/// a program asks (the OpenAI object form, normalized as :11435 does),
+/// answers with that tool call. Each runs on its own test server, as the
+/// other legs do: the matrix unloads the app's model when it starts, so
+/// "the loaded model" is never there (10-20, the first run skipped).
+pub async fn leg_tool_call(bin: &Path, dir: &Path, sink: Sink<'_>) -> Vec<String> {
+    let mut failures = Vec::new();
+    let mut tried = 0;
+    for name in gguf_files(dir) {
+        if cancelled() {
+            sink("cancelled".into());
+            break;
+        }
+        let path = dir.join(&name);
+        let Ok(meta) = crate::gguf::read_meta(&path) else { continue };
+        if meta.is_embedding() {
+            continue;
+        }
+        let grade = crate::model_caps::agent_caps(&name);
+        if grade < 6 {
+            continue;
+        }
+        tried += 1;
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let free_now = crate::llm::grading_memory_bytes();
+        if free_now > 0 && free_now < load_room_needed(size, false) {
+            sink(format!("{name}: not tried - {:.1} GB of memory free", free_now as f64 / 1024f64.powi(3)));
+            continue;
+        }
+        let free = free_vram_gb(bin);
+        let ctx = 8192;
+        let mut args: Vec<String> = vec![
+            "--port".into(), bench_port().to_string(),
+            "--host".into(), "127.0.0.1".into(),
+            "--no-webui".into(), "--reasoning".into(), "off".into(),
+            "--ctx-size".into(), ctx.to_string(),
+            "--fit".into(), "off".into(),
+            "--model".into(), name.clone(),
+        ];
+        if let Some(n) = moe_decision(&meta, size, ctx, free).filter(|n| *n > 0) {
+            args.push("--n-cpu-moe".into());
+            args.push(n.to_string());
+        }
+        if meta.surfaces_special_tokens() {
+            args.push("--special".into());
+        }
+        let _guard = match spawn_bench_server(bin, dir, args).await {
+            Ok(g) => g,
             Err(e) => {
-                sink(format!("{model}: FAIL - reply unreadable: {e}"));
-                return vec![format!("tool call: {model} reply unreadable")];
+                sink(format!("{name}: FAIL - did not load: {e}"));
+                failures.push(format!("tool call: {name} did not load"));
+                continue;
             }
-        },
-        Err(e) => {
-            sink(format!("{model}: FAIL - no answer: {e}"));
-            return vec![format!("tool call: {model} did not answer")];
-        }
-    };
-    let grade = crate::model_caps::agent_caps(&model);
-    match called.as_deref() {
-        Some("emit") => {
-            sink(format!("{model}: ok - called emit ({} ms)", started.elapsed().as_millis()));
-            Vec::new()
-        }
-        other => {
-            let what = other.map(|n| format!("called {n}")).unwrap_or_else(|| "answered in words".into());
-            if grade >= 6 {
-                sink(format!("{model}: FAIL - asked for emit, {what}"));
-                vec![format!("tool call: {model} {what} when asked for one named tool")]
-            } else {
-                sink(format!("{model}: {what} (grade {grade}: not an agent model - noted, not a failure)"));
-                Vec::new()
+        };
+        let mut body = serde_json::json!({
+            "model": name,
+            "messages": [{"role": "user", "content": "Record that the build passed."}],
+            "tools": [{"type": "function", "function": {
+                "name": "emit",
+                "description": "Record a status line.",
+                "parameters": {"type": "object", "properties": {"status": {"type": "string"}}, "required": ["status"]}
+            }}],
+            "tool_choice": {"type": "function", "function": {"name": "emit"}},
+            "max_tokens": 1024,
+            "stream": false,
+        });
+        crate::inference_server::normalize_tool_choice(&mut body);
+        let started = std::time::Instant::now();
+        let called = match crate::llm::local_http()
+            .post(format!("http://127.0.0.1:{}/v1/chat/completions", bench_port()))
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(180))
+            .send()
+            .await
+        {
+            Ok(r) => r
+                .json::<serde_json::Value>()
+                .await
+                .ok()
+                .and_then(|v| v["choices"][0]["message"]["tool_calls"][0]["function"]["name"].as_str().map(str::to_string)),
+            Err(e) => {
+                sink(format!("{name}: FAIL - no answer: {e}"));
+                failures.push(format!("tool call: {name} did not answer"));
+                continue;
+            }
+        };
+        match called.as_deref() {
+            Some("emit") => sink(format!("{name}: ok - called emit ({} ms)", started.elapsed().as_millis())),
+            other => {
+                let what = other.map(|n| format!("called {n}")).unwrap_or_else(|| "answered in words".into());
+                sink(format!("{name}: FAIL - asked for emit, {what}"));
+                failures.push(format!("tool call: {name} {what} when asked for one named tool"));
             }
         }
     }
+    if tried == 0 {
+        sink("no model here is graded for agent work - nothing to ask".into());
+    }
+    failures
 }
 
 pub async fn leg_routing(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<String> {
@@ -2141,6 +2180,47 @@ pub async fn matrix_cancel() -> Result<(), String> {
 /// Run the whole matrix and write one report file; returns its path. The
 /// chat model is unloaded first (same maintenance stop the engine switch
 /// uses); progress streams as `matrix-progress` events, one line each.
+/// Holds the computer awake (not the screen) while it lives: `caffeinate`
+/// on macOS, `systemd-inhibit` on Linux, both built in. Windows: not yet
+/// (a system call this build adds later). Best effort - a missing tool
+/// leaves the person's own sleep settings in charge.
+struct KeepAwake(Option<std::process::Child>);
+
+impl KeepAwake {
+    fn start() -> Self {
+        let child = if cfg!(target_os = "macos") {
+            std::process::Command::new("caffeinate")
+                .args(["-i", "-w", &std::process::id().to_string()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .ok()
+        } else if cfg!(target_os = "linux") {
+            std::process::Command::new("systemd-inhibit")
+                .args(["--what=idle:sleep", "--who=Your Own AI", "--why=Running the truth matrix", "--mode=block", "sleep", "infinity"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .ok()
+        } else {
+            None
+        };
+        if child.is_some() {
+            log::info!("[matrix] keeping the computer awake while the matrix runs");
+        }
+        KeepAwake(child)
+    }
+}
+
+impl Drop for KeepAwake {
+    fn drop(&mut self) {
+        if let Some(mut c) = self.0.take() {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn matrix_run(
     app: AppHandle,
@@ -2161,6 +2241,9 @@ pub async fn matrix_run(
         }
     }
     let _running = Running;
+    // A long run must not depend on the person's sleep settings (10-20: the
+    // Mac went to sleep mid-run and the matrix sat there).
+    let _awake = KeepAwake::start();
     MATRIX_CANCEL.store(false, Ordering::SeqCst);
     crate::tuning::tune_cancel_flag_set(false);
 
@@ -2292,7 +2375,7 @@ pub async fn matrix_run(
 
     if !cancelled() && want("toolcall") {
         sink("== Tool call (one named tool, asked the way a program asks) ==".into());
-        failures.extend(leg_tool_call(&app, sink).await);
+        failures.extend(leg_tool_call(&bin, &dir, sink).await);
         sink(String::new());
     }
 
