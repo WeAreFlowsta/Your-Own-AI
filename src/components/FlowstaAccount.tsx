@@ -671,12 +671,14 @@ export default component$<FlowstaAccountProps>((props) => {
             )}
 
           {devicesLine(configSync.value) && (
-            <p
-              class={`text-xs ${devicesLine(configSync.value)!.warn ? "text-amber-300" : "text-[var(--text-muted)]"}`}
+            <button
+              type="button"
+              class={`block text-left text-xs bg-transparent border-none p-0 cursor-pointer hover:underline ${devicesLine(configSync.value)!.warn ? "text-amber-300" : "text-[var(--text-muted)]"}`}
               data-testid="flowsta-devices-line"
+              onClick$={() => document.getElementById("settings-devices")?.scrollIntoView({ behavior: "smooth" })}
             >
               {devicesLine(configSync.value)!.text}
-            </p>
+            </button>
           )}
 
           {escrow.value?.state === "identity_mismatch" && (

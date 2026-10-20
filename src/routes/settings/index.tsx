@@ -17,6 +17,7 @@ import packageJson from "../../../package.json";
 import { ThemeContext } from "../layout";
 import { LiquidMetalBorder } from "../../components/LiquidMetalBorder";
 import FlowstaAccount from "../../components/FlowstaAccount";
+import DevicesSettings from "../../components/DevicesSettings";
 import ComponentsSettings from "../../components/ComponentsSettings";
 import EnginesSettings from "../../components/EnginesSettings";
 import ExternalAccess from "../../components/ExternalAccess";
@@ -146,6 +147,7 @@ const OnlineModelPicker = component$<{
 const SECTIONS = [
   { id: "settings-account", label: "Flowsta Identity" },
   { id: "settings-backups", label: "Backups & recovery" },
+  { id: "settings-devices", label: "Devices" },
   { id: "settings-behavior", label: "AI behavior" },
   { id: "settings-memory", label: "Memory" },
   { id: "settings-routing", label: "Routing" },
@@ -935,6 +937,9 @@ export default component$(() => {
               <div id="settings-backups" class="scroll-mt-4">
                 <FlowstaAccount section="backups" />
               </div>
+
+              {/* Devices - who this identity's computers are, who is there now. */}
+              <DevicesSettings />
 
               {/* AI behavior */}
               <section

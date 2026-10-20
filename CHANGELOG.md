@@ -30,6 +30,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   answers came from. (Online models)
 
 ### Devices
+- Settings has a Devices section: this computer and your others, a dot
+  for each that is reachable right now (green: its Vault unlocked; grey:
+  locked, asleep or off), when its last change arrived, and what travels
+  between them. A lock on this computer when its own Vault is locked. On
+  the first computer it says how to add another.
 - The check that keeps this device listed for your other devices no
   longer warns about the open fallback servers: the conductor registers
   only with the server it started on, so being listed on a fallback is

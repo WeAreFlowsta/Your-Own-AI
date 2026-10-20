@@ -638,6 +638,7 @@ pub fn run() {
             flowsta::vault_sign_document,
             vault_escrow::vault_escrow_sync,
             config_sync::config_sync_status,
+            config_sync::devices_view,
             config_sync::config_sync_now,
             commands_holochain::get_copy_transcript,
             memory_rows::save_memory_row,

@@ -343,6 +343,110 @@ pub fn config_sync_status(app: tauri::AppHandle) -> Option<ConfigSyncState> {
     serde_json::from_slice(&std::fs::read(p).ok()?).ok()
 }
 
+/// One of the identity's devices, for Settings > Devices.
+#[derive(Serialize, Clone, Debug)]
+pub struct DeviceView {
+    pub id: String,
+    pub name: Option<String>,
+    pub platform: Option<String>,
+    pub this_device: bool,
+    /// Its Vault was heard from in the last few minutes: unlocked and
+    /// reachable. None when the Vault cannot say (an older Vault).
+    pub here: Option<bool>,
+    /// Seconds since this Vault last copied a change from it.
+    pub last_change_secs_ago: Option<u64>,
+    pub needs_update: bool,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct DevicesView {
+    /// "none" (no Vault found), "locked", "unlocked".
+    pub vault: String,
+    pub devices: Vec<DeviceView>,
+}
+
+/// A device heard within this many announcement periods is "here".
+pub(crate) fn is_here(heard_secs_ago: Option<u64>, announce_every_secs: u64) -> bool {
+    heard_secs_ago.map(|s| s <= announce_every_secs * 2 + 60).unwrap_or(false)
+}
+
+/// The identity's devices as Settings shows them: the Vault's list (who is
+/// there right now), when this device last took a change from each, and
+/// which needs the update. Read-only, a second or so.
+#[tauri::command]
+pub async fn devices_view(app: tauri::AppHandle) -> DevicesView {
+    let vault = flowsta::find_vault().await;
+    let Some(port) = vault.port else {
+        return DevicesView { vault: "none".into(), devices: Vec::new() };
+    };
+    if !vault.unlocked {
+        return DevicesView { vault: "locked".into(), devices: Vec::new() };
+    }
+    let now = now_ms() / 1000;
+    let listed: Option<serde_json::Value> = match http()
+        .get(format!("http://127.0.0.1:{}/devices", port))
+        .header("Origin", VAULT_ORIGIN)
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => r.json().await.ok(),
+        _ => None,
+    };
+    let siblings = crate::vault_escrow::sibling_devices(port).await.unwrap_or_default();
+    let status = config_sync_status(app.clone());
+    let stale = |id: &str| status.as_ref().map(|s| s.devices.iter().any(|d| d.id == id && d.needs_update)).unwrap_or(false);
+    let last_change = |id: &str| -> Option<u64> {
+        let d = siblings.iter().find(|d| d.id == id)?;
+        [d.ais_at.as_deref(), d.manifest_at.as_deref()]
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.trim_matches('"').parse::<u64>().ok())
+            .max()
+            .map(|t| now.saturating_sub(t))
+    };
+    let devices = match listed {
+        Some(v) => {
+            let every = v["announce_every_secs"].as_u64().unwrap_or(120);
+            v["devices"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|d| {
+                    let id = d["device"].as_str()?.to_string();
+                    let this_device = d["this_device"].as_bool().unwrap_or(false);
+                    let heard = d["heard_at"].as_u64().map(|t| now.saturating_sub(t));
+                    Some(DeviceView {
+                        name: d["name"].as_str().map(str::to_string),
+                        platform: d["platform"].as_str().map(str::to_string),
+                        here: if this_device { Some(true) } else { Some(is_here(heard, every)) },
+                        last_change_secs_ago: if this_device { None } else { last_change(&id) },
+                        needs_update: !this_device && stale(&id),
+                        this_device,
+                        id,
+                    })
+                })
+                .collect()
+        }
+        // An older Vault without the list: the devices this one holds copies
+        // of, with no word on who is there now.
+        None => {
+            let mut out = vec![DeviceView { id: "this".into(), name: None, platform: None, this_device: true, here: Some(true), last_change_secs_ago: None, needs_update: false }];
+            out.extend(siblings.iter().map(|d| DeviceView {
+                id: d.id.clone(),
+                name: d.name.clone(),
+                platform: d.platform.clone(),
+                this_device: false,
+                here: None,
+                last_change_secs_ago: last_change(&d.id),
+                needs_update: stale(&d.id),
+            }));
+            out
+        }
+    };
+    DevicesView { vault: "unlocked".into(), devices }
+}
+
 fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
@@ -589,6 +693,15 @@ pub fn start_config_sync_rounds(app: &tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_device_heard_in_the_last_two_announcements_is_here() {
+        use super::is_here;
+        assert!(is_here(Some(30), 120));
+        assert!(is_here(Some(290), 120), "two periods and a minute of slack");
+        assert!(!is_here(Some(301), 120), "missed two announcements: locked, asleep or off");
+        assert!(!is_here(None, 120), "never heard this session");
+    }
+
     use super::{has_own_picture, mark_picture, merge_sibling_configs, missing_pictures, sibling_needs_update};
     use crate::vault_escrow::SiblingDevice;
 
