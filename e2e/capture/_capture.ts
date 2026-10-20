@@ -226,6 +226,30 @@ export class Take {
     await this.hold(250);
   }
 
+  /** Replaces a text field's value the way a person does: click in, select it all, type at a typing pace,
+   *  then Tab away, which commits it (the welcome names save on change). */
+  async type(sel: string, text: string, msPerChar = 85) {
+    await this.click(sel);
+    // Select what is there (the selection shows, as a person's would), then type over it. The characters are set
+    // through the field's own value setter with the events typing fires: WebDriver key input lands after the old
+    // text in WebView2, whatever the selection.
+    await browser.execute((s: string) => (document.querySelector(s) as HTMLInputElement).select(), sel);
+    await this.hold(450);
+    const put = (s: string, v: string, done: boolean) => {
+      const el = document.querySelector(s) as HTMLInputElement;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, v);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      if (done) el.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    for (let i = 1; i <= text.length; i++) {
+      await browser.execute(put, sel, text.slice(0, i), false);
+      await this.hold(msPerChar + Math.round(Math.random() * 40));
+    }
+    await this.hold(300);
+    await browser.execute(put, sel, text, true);
+    this.log("type", sel);
+  }
+
   /** Drags a range input's thumb to a step, with the real button held. */
   async dragRange(sel: string, to: number, ms = 1200) {
     const r = await browser.execute((s: string) => {
