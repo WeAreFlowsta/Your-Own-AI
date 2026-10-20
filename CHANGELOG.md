@@ -35,6 +35,8 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   locked, asleep or off), when its last change arrived, and what travels
   between them. A lock on this computer when its own Vault is locked. On
   the first computer it says how to add another.
+  Just after a start or an unlock it says it is catching up with your
+  other devices instead.
 - The check that keeps this device listed for your other devices no
   longer warns about the open fallback servers: the conductor registers
   only with the server it started on, so being listed on a fallback is

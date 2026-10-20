@@ -6,7 +6,7 @@
  * device: how to add another.
  */
 import { component$, useSignal, useVisibleTask$ } from "@builder.io/qwik";
-import { LuLaptop, LuLock, LuPlus, LuBot, LuImage, LuBrain, LuFileText, LuMessageSquare } from "@qwikest/icons/lucide";
+import { LuLaptop, LuLock, LuPlus, LuBot, LuImage, LuBrain, LuFileText, LuMessageSquare, LuLoader2 } from "@qwikest/icons/lucide";
 
 interface DeviceView {
   id: string;
@@ -21,6 +21,7 @@ interface DeviceView {
 interface DevicesView {
   vault: "none" | "locked" | "unlocked";
   devices: DeviceView[];
+  catching_up?: boolean;
 }
 
 function ago(secs: number): string {
@@ -103,8 +104,17 @@ export default component$(() => {
           );
         })}
 
+        {/* Just started or unlocked: the Vault is still reading who your
+            devices are - not "this is your only one" (10-20). */}
+        {v && !locked && v.catching_up && (
+          <div class="flex items-center gap-3" data-testid="device-catching-up">
+            <LuLoader2 class="w-5 h-5 text-[var(--text-muted)] animate-spin shrink-0" />
+            <span class="text-sm text-[var(--text-secondary)]">Catching up with your other devices...</span>
+          </div>
+        )}
+
         {/* Only this computer so far: the one sentence, where it belongs. */}
-        {v && !locked && others.length === 0 && (
+        {v && !locked && !v.catching_up && others.length === 0 && (
           <div class="flex items-center gap-3" data-testid="device-add-hint">
             <span class="w-5 h-5 rounded border border-dashed border-[var(--border-subtle)] flex items-center justify-center shrink-0">
               <LuPlus class="w-3 h-3 text-[var(--text-muted)]" />

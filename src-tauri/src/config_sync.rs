@@ -363,6 +363,16 @@ pub struct DevicesView {
     /// "none" (no Vault found), "locked", "unlocked".
     pub vault: String,
     pub devices: Vec<DeviceView>,
+    /// The Vault is still reading the identity's devices (just started or
+    /// unlocked): a short list is not the whole picture yet.
+    pub catching_up: bool,
+}
+
+/// Catching up, not alone: the Vault says so, or it lists only this device
+/// while this app already knows of others (copies from them, or an earlier
+/// sync round named them) - an older Vault does not say (10-20).
+pub(crate) fn catching_up(vault_says: Option<bool>, others_listed: usize, others_known_here: usize) -> bool {
+    vault_says.unwrap_or(false) || (others_listed == 0 && others_known_here > 0)
 }
 
 /// A device heard within this many announcement periods is "here".
@@ -377,10 +387,10 @@ pub(crate) fn is_here(heard_secs_ago: Option<u64>, announce_every_secs: u64) -> 
 pub async fn devices_view(app: tauri::AppHandle) -> DevicesView {
     let vault = flowsta::find_vault().await;
     let Some(port) = vault.port else {
-        return DevicesView { vault: "none".into(), devices: Vec::new() };
+        return DevicesView { vault: "none".into(), devices: Vec::new(), catching_up: false };
     };
     if !vault.unlocked {
-        return DevicesView { vault: "locked".into(), devices: Vec::new() };
+        return DevicesView { vault: "locked".into(), devices: Vec::new(), catching_up: false };
     }
     let now = now_ms() / 1000;
     let listed: Option<serde_json::Value> = match http()
@@ -404,6 +414,7 @@ pub async fn devices_view(app: tauri::AppHandle) -> DevicesView {
             .max()
             .map(|t| now.saturating_sub(t))
     };
+    let vault_says = listed.as_ref().and_then(|v| v["catching_up"].as_bool());
     let devices = match listed {
         Some(v) => {
             let every = v["announce_every_secs"].as_u64().unwrap_or(120);
@@ -444,7 +455,9 @@ pub async fn devices_view(app: tauri::AppHandle) -> DevicesView {
             out
         }
     };
-    DevicesView { vault: "unlocked".into(), devices }
+    let others_listed = devices.iter().filter(|d| !d.this_device).count();
+    let others_known_here = siblings.len().max(status.as_ref().map(|s| s.devices.len()).unwrap_or(0));
+    DevicesView { vault: "unlocked".into(), catching_up: catching_up(vault_says, others_listed, others_known_here), devices }
 }
 
 fn now_ms() -> u64 {
@@ -693,6 +706,15 @@ pub fn start_config_sync_rounds(app: &tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_empty_list_is_catching_up_when_others_are_known_here() {
+        use super::catching_up;
+        assert!(catching_up(Some(true), 2, 2), "the Vault says so");
+        assert!(catching_up(None, 0, 2), "an older Vault lists only this device, copies from two others here");
+        assert!(!catching_up(None, 0, 0), "nothing known of any other: the first device");
+        assert!(!catching_up(Some(false), 2, 2));
+    }
+
     #[test]
     fn a_device_heard_in_the_last_two_announcements_is_here() {
         use super::is_here;
