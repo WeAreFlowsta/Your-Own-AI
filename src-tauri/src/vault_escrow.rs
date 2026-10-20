@@ -127,10 +127,10 @@ async fn fetch_escrow(port: u16) -> Result<Option<RecoveryMaterial>, String> {
     let resp = http()
         .post(format!("http://127.0.0.1:{}/backup/retrieve", port))
         .header("Origin", VAULT_ORIGIN)
-        .json(&serde_json::json!({
+        .json(&crate::flowsta::with_identity(serde_json::json!({
             "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
             "label": ESCROW_LABEL,
-        }))
+        })))
         .send()
         .await
         .map_err(|e| format!("vault unreachable: {}", e))?;
@@ -161,11 +161,11 @@ async fn fetch_escrow_across(port: u16) -> Result<Option<(RecoveryMaterial, Opti
     let resp = http()
         .post(format!("http://127.0.0.1:{}/backup/retrieve", port))
         .header("Origin", VAULT_ORIGIN)
-        .json(&serde_json::json!({
+        .json(&crate::flowsta::with_identity(serde_json::json!({
             "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
             "label": ESCROW_LABEL,
             "across": "devices",
-        }))
+        })))
         .send()
         .await
         .map_err(|e| format!("vault unreachable: {}", e))?;
@@ -191,7 +191,7 @@ async fn fetch_app_secret(port: u16, label: &str) -> Result<Option<[u8; 32]>, St
     let resp = http()
         .post(format!("http://127.0.0.1:{}/app-secret", port))
         .header("Origin", VAULT_ORIGIN)
-        .json(&serde_json::json!({ "label": label }))
+        .json(&crate::flowsta::with_identity(serde_json::json!({ "label": label })))
         .send()
         .await
         .map_err(|e| format!("vault unreachable: {}", e))?;
@@ -232,7 +232,7 @@ pub(crate) struct SiblingDevice {
 
 pub(crate) async fn sibling_devices(port: u16) -> Result<Vec<SiblingDevice>, String> {
     let resp = http()
-        .get(format!("http://127.0.0.1:{}/backup/list", port))
+        .get(crate::flowsta::identity_query(format!("http://127.0.0.1:{}/backup/list", port)))
         .header("Origin", VAULT_ORIGIN)
         .send()
         .await
@@ -274,12 +274,12 @@ async fn retrieve_from_device(port: u16, label: &str, device: &str) -> Result<Op
     let resp = http()
         .post(format!("http://127.0.0.1:{}/backup/retrieve", port))
         .header("Origin", VAULT_ORIGIN)
-        .json(&serde_json::json!({
+        .json(&crate::flowsta::with_identity(serde_json::json!({
             "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
             "label": label,
             "across": "devices",
             "device": device,
-        }))
+        })))
         .send()
         .await
         .map_err(|e| format!("vault unreachable: {}", e))?;
@@ -429,12 +429,12 @@ async fn write_escrow(port: u16, recovery: &RecoveryMaterial) -> Result<(), Stri
     let resp = http()
         .post(format!("http://127.0.0.1:{}/backup", port))
         .header("Origin", VAULT_ORIGIN)
-        .json(&serde_json::json!({
+        .json(&crate::flowsta::with_identity(serde_json::json!({
             "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
             "app_name": "Your Own AI",
             "label": ESCROW_LABEL,
             "data": escrow_payload(recovery),
-        }))
+        })))
         .send()
         .await
         .map_err(|e| format!("vault unreachable: {}", e))?;
@@ -944,7 +944,7 @@ async fn fetch_vault_label(port: u16, label: &str) -> Option<serde_json::Value> 
     let resp = http()
         .post(format!("http://127.0.0.1:{}/backup/retrieve", port))
         .header("Origin", VAULT_ORIGIN)
-        .json(&serde_json::json!({ "client_id": YOAI_HOLOCHAIN_CLIENT_ID, "label": label }))
+        .json(&crate::flowsta::with_identity(serde_json::json!({ "client_id": YOAI_HOLOCHAIN_CLIENT_ID, "label": label })))
         .send()
         .await
         .ok()
@@ -962,7 +962,7 @@ pub(crate) async fn own_backup_labels(port: u16) -> std::collections::HashSet<St
 /// The labels, or None when the list could not be read (locked, busy).
 pub(crate) async fn own_backup_labels_read(port: u16) -> Option<std::collections::HashSet<String>> {
     let resp = http()
-        .get(format!("http://127.0.0.1:{}/backup/list", port))
+        .get(crate::flowsta::identity_query(format!("http://127.0.0.1:{}/backup/list", port)))
         .header("Origin", VAULT_ORIGIN)
         .send()
         .await
@@ -1079,12 +1079,12 @@ async fn post_backup_json(port: u16, label: &str, data: &serde_json::Value) -> R
     let resp = http()
         .post(format!("http://127.0.0.1:{}/backup", port))
         .header("Origin", VAULT_ORIGIN)
-        .json(&serde_json::json!({
+        .json(&crate::flowsta::with_identity(serde_json::json!({
             "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
             "app_name": "Your Own AI",
             "label": label,
             "data": data,
-        }))
+        })))
         .send()
         .await
         .map_err(|e| format!("vault unreachable: {}", e))?;
@@ -1122,7 +1122,7 @@ pub(crate) fn merge_tombstones(
 /// list cannot be read).
 async fn vault_object_count(port: u16) -> Option<usize> {
     let resp = http()
-        .get(format!("http://127.0.0.1:{}/backup/list", port))
+        .get(crate::flowsta::identity_query(format!("http://127.0.0.1:{}/backup/list", port)))
         .header("Origin", VAULT_ORIGIN)
         .send()
         .await
@@ -1145,7 +1145,7 @@ async fn vault_has_object(port: u16, label: &str) -> Option<bool> {
     let resp = http()
         .post(format!("http://127.0.0.1:{}/backup/retrieve", port))
         .header("Origin", VAULT_ORIGIN)
-        .json(&serde_json::json!({ "client_id": YOAI_HOLOCHAIN_CLIENT_ID, "label": label }))
+        .json(&crate::flowsta::with_identity(serde_json::json!({ "client_id": YOAI_HOLOCHAIN_CLIENT_ID, "label": label })))
         .send()
         .await
         .ok()?;
@@ -1214,7 +1214,7 @@ async fn reconcile_sync_state(app: &tauri::AppHandle, port: u16) {
 
 async fn fetch_backup_limits(port: u16) -> Option<BackupLimits> {
     let resp = http()
-        .get(format!("http://127.0.0.1:{}/backup/limits", port))
+        .get(crate::flowsta::identity_query(format!("http://127.0.0.1:{}/backup/limits", port)))
         .header("Origin", VAULT_ORIGIN)
         .send()
         .await
@@ -1364,13 +1364,13 @@ async fn post_backup_object(port: u16, label: &str, bytes: &[u8]) -> Result<(), 
     let resp = http()
         .post(format!("http://127.0.0.1:{}/backup", port))
         .header("Origin", VAULT_ORIGIN)
-        .json(&serde_json::json!({
+        .json(&crate::flowsta::with_identity(serde_json::json!({
             "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
             "app_name": "Your Own AI",
             "label": label,
             "data_base64": base64::engine::general_purpose::STANDARD.encode(bytes),
             "content_type": "application/json+gzip",
-        }))
+        })))
         .send()
         .await
         .map_err(|e| format!("vault unreachable: {}", e))?;
@@ -1389,10 +1389,10 @@ async fn delete_backup_label(port: u16, label: &str) {
     let _ = http()
         .post(format!("http://127.0.0.1:{}/backup/delete", port))
         .header("Origin", VAULT_ORIGIN)
-        .json(&serde_json::json!({
+        .json(&crate::flowsta::with_identity(serde_json::json!({
             "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
             "label": label,
-        }))
+        })))
         .send()
         .await;
 }
@@ -2028,10 +2028,10 @@ async fn fetch_existing_data_records(port: u16) -> Result<Option<u64>, String> {
         let resp = http()
             .post(format!("http://127.0.0.1:{}/backup/retrieve", port))
             .header("Origin", VAULT_ORIGIN)
-            .json(&serde_json::json!({
+            .json(&crate::flowsta::with_identity(serde_json::json!({
                 "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
                 "label": label,
-            }))
+            })))
             .send()
             .await
             .map_err(|e| format!("vault unreachable: {}", e))?;
@@ -2754,12 +2754,12 @@ async fn write_full_backup_inner(app: &tauri::AppHandle, now: bool) -> Result<se
     let resp = http()
         .post(format!("http://127.0.0.1:{}/backup", port))
         .header("Origin", VAULT_ORIGIN)
-        .json(&serde_json::json!({
+        .json(&crate::flowsta::with_identity(serde_json::json!({
             "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
             "app_name": "Your Own AI",
             "label": DATA_LABEL,
             "data": payload,
-        }))
+        })))
         .send()
         .await
         .map_err(|e| format!("vault unreachable: {}", e))?;

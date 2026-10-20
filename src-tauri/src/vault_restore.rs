@@ -372,7 +372,7 @@ pub(crate) async fn retrieve_label_across(port: u16, label: &str, device: Option
     let resp = http()
         .post(format!("http://127.0.0.1:{}/backup/retrieve", port))
         .header("Origin", VAULT_ORIGIN)
-        .json(&body)
+        .json(&crate::flowsta::with_identity(body))
         .send()
         .await
         .map_err(|e| format!("vault unreachable: {}", e))?;

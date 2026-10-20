@@ -1835,7 +1835,11 @@ pub async fn leg_devices(app: &AppHandle, sink: Sink<'_>) -> Vec<String> {
         }
     }
     match crate::config_sync::config_sync_status(app.clone()) {
-        Some(st) => sink(format!("last check for other devices' changes: {} ({} updated, {} added)", ago(st.checked_at / 1000, now), st.updated, st.added)),
+        Some(st) if crate::config_sync::checked_this_run() => sink(format!("last check for other devices' changes: {} ({} updated, {} added)", ago(st.checked_at / 1000, now), st.updated, st.added)),
+        Some(st) => sink(format!(
+            "last check for other devices' changes: none yet since the app started (the first comes about a minute after it opens; the previous run's was {})",
+            ago(st.checked_at / 1000, now)
+        )),
         None => sink("last check for other devices' changes: none yet on this profile".into()),
     }
     match crate::rendezvous_keeper::last_status() {

@@ -194,12 +194,12 @@ async fn sibling_label(port: u16, device: &str, label: &str) -> Result<Option<se
     let resp = http()
         .post(format!("http://127.0.0.1:{}/backup/retrieve", port))
         .header("Origin", VAULT_ORIGIN)
-        .json(&serde_json::json!({
+        .json(&crate::flowsta::with_identity(serde_json::json!({
             "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
             "label": label,
             "across": "devices",
             "device": device,
-        }))
+        })))
         .send()
         .await
         .map_err(|e| format!("vault unreachable: {}", e))?;
@@ -319,7 +319,19 @@ fn state_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     crate::profile::root(app).ok().map(|r| r.join(STATE_FILE))
 }
 
+/// A round has saved its state in this run of the app. The state file
+/// outlives the process, so without this a report read right after a start
+/// showed the previous run's time as the last check (beta.15 matrices,
+/// 10-20: "3 h ago" on all three machines, a minute after the update).
+static CHECKED_THIS_RUN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Has a round checked the other devices since this run started?
+pub fn checked_this_run() -> bool {
+    CHECKED_THIS_RUN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn save_state(app: &tauri::AppHandle, state: &ConfigSyncState) {
+    CHECKED_THIS_RUN.store(true, std::sync::atomic::Ordering::Relaxed);
     let mut state = state.clone();
     if let Some(prev) = config_sync_status(app.clone()) {
         state.total_updated = prev.total_updated + state.updated;
@@ -394,7 +406,7 @@ pub async fn devices_view(app: tauri::AppHandle) -> DevicesView {
     }
     let now = now_ms() / 1000;
     let listed: Option<serde_json::Value> = match http()
-        .get(format!("http://127.0.0.1:{}/devices", port))
+        .get(crate::flowsta::identity_query(format!("http://127.0.0.1:{}/devices", port)))
         .header("Origin", VAULT_ORIGIN)
         .send()
         .await
@@ -697,7 +709,7 @@ pub fn start_config_sync_rounds(app: &tauri::AppHandle) {
             match sync_from_siblings(&app, force).await {
                 Ok((0, 0)) => {}
                 Ok((u, a)) => log::info!("[config-sync] round: {} updated, {} added", u, a),
-                Err(e) if e == "unlinked" || e == "vault_unavailable" || e == "vault_locked" || e == "identity_switched" => {}
+                Err(e) if e == "unlinked" || e == "vault_unavailable" || e == "vault_locked" || e == "identity_switched" || e == "identity_mismatch" => {}
                 Err(e) => log::warn!("[config-sync] round failed: {}", e),
             }
         }

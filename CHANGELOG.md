@@ -87,6 +87,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   character's stock face.
 - When you switch identity in your Vault, Your Own AI restarts into that
   identity and opens again. It closed and did not reopen.
+- Every request Your Own AI makes to your Vault names the identity it
+  belongs to, so a Vault switched to another identity refuses the request
+  instead of answering as that identity, even in the seconds before the
+  app notices the switch.
 
 ### Memory
 - Your Memory and each AI's memory page open with a row of faces: You
@@ -298,6 +302,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   script or bug (a sourdough starter, a bike chain) from programming, so
   those questions are no longer sent to a coding model; questions about
   developer tools like git count as code.
+- The truth matrix's Devices section says when the app has not yet checked
+  your other devices since it started, instead of showing the time from
+  before the restart.
 - The truth matrix gives each model three minutes in the answer-quality
   step (a slower one is reported as too slow here, not failed) and shows
   a line when a question runs long; the keep-awake helper ends with the

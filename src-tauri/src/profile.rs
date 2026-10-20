@@ -66,6 +66,23 @@ pub const PROFILE_DIRS: &[&str] = &["thumbnails", "imports", "tool-sessions", "c
 
 static ROOT: OnceLock<PathBuf> = OnceLock::new();
 
+/// The identity this process's profile belongs to, for `expected_identity`
+/// on every Vault request (`flowsta::with_identity`): set when the profile
+/// opens and whenever `bind` records an identity. None before any identity
+/// has been adopted; the requests then name none, as before.
+static EXPECTED_IDENTITY: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// The identity this profile's Vault requests act as (see EXPECTED_IDENTITY).
+pub fn expected_identity() -> Option<String> {
+    EXPECTED_IDENTITY.lock().ok().and_then(|g| g.clone())
+}
+
+fn set_expected_identity(key: &str) {
+    if let Ok(mut g) = EXPECTED_IDENTITY.lock() {
+        *g = Some(key.to_string());
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct ProfileInfo {
     /// Flowsta agent key this profile belongs to; None until the first sign-in.
@@ -400,6 +417,13 @@ pub fn select_profile_root(device_root: &Path, live_identity: Option<&str>) -> P
 pub fn init(device_root: &Path, live_identity: Option<&str>) -> PathBuf {
     let root = select_profile_root(device_root, live_identity);
     let _ = ROOT.set(root.clone());
+    if root.parent() == Some(&profiles_dir(device_root)) {
+        if let Some(folder) = root.file_name().map(|f| f.to_string_lossy().to_string()) {
+            if let Some(key) = Profiles::load(device_root).profiles.get(&folder).and_then(|p| p.identity.clone()) {
+                set_expected_identity(&key);
+            }
+        }
+    }
     root
 }
 
@@ -435,6 +459,7 @@ pub fn bind(app: &tauri::AppHandle, agent_pub_key: &str) {
         log::warn!("[profile] not rebinding this profile after an identity switch");
         return;
     }
+    set_expected_identity(agent_pub_key);
     let (Ok(device), Ok(current)) = (device_root(app), root(app)) else { return };
     if current.parent() != Some(&profiles_dir(&device)) { return; } // legacy root: nothing to record
     let Some(folder) = current.file_name().map(|f| f.to_string_lossy().to_string()) else { return };

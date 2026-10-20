@@ -193,6 +193,64 @@ pub struct FlowstaSession {
 /// One shared client so repeated Vault/proxy calls reuse connections
 /// instead of opening (and leaking into TIME_WAIT) a fresh socket each
 /// time — the churn that helped wedge Vault's IPC accept loop.
+/// A Vault request body that names this profile's identity
+/// (`expected_identity`): a Vault holding another identity refuses with 409
+/// `identity_mismatch` instead of acting as it - closing the moment between
+/// the identity check and the request (the website had no check at all,
+/// 10-20). No identity yet (a first link): the body is unchanged.
+pub(crate) fn with_identity(body: serde_json::Value) -> serde_json::Value {
+    add_identity(body, crate::profile::expected_identity())
+}
+
+fn add_identity(mut body: serde_json::Value, key: Option<String>) -> serde_json::Value {
+    if let (Some(key), Some(obj)) = (key, body.as_object_mut()) {
+        obj.entry("expected_identity").or_insert(serde_json::Value::String(key));
+    }
+    body
+}
+
+/// A Vault GET URL that names this profile's identity (GETs carry it in the
+/// query string).
+pub(crate) fn identity_query(url: String) -> String {
+    query_with_identity(url, crate::profile::expected_identity())
+}
+
+fn query_with_identity(url: String, key: Option<String>) -> String {
+    match key {
+        Some(key) => {
+            let enc = percent_encoding::utf8_percent_encode(&key, percent_encoding::NON_ALPHANUMERIC);
+            format!("{url}{}expected_identity={enc}", if url.contains('?') { '&' } else { '?' })
+        }
+        None => url,
+    }
+}
+
+#[cfg(test)]
+mod identity_naming_tests {
+    use super::{add_identity, query_with_identity};
+    const KEY: &str = "uhCAk75qJ5oobyfm3Lh-akZIQSe2zpSTtG1Pcxs23qTFoQwY_GDWY";
+
+    #[test]
+    fn a_body_names_the_identity_only_when_the_profile_has_one() {
+        let b = add_identity(serde_json::json!({ "label": "ais" }), Some(KEY.into()));
+        assert_eq!(b["expected_identity"], KEY);
+        assert_eq!(b["label"], "ais");
+        let none = add_identity(serde_json::json!({ "label": "ais" }), None);
+        assert!(none.get("expected_identity").is_none(), "a first link names none");
+        let kept = add_identity(serde_json::json!({ "expected_identity": "other" }), Some(KEY.into()));
+        assert_eq!(kept["expected_identity"], "other", "a body that names one keeps it");
+    }
+
+    #[test]
+    fn a_get_names_the_identity_in_its_query() {
+        let u = query_with_identity("http://127.0.0.1:27777/backup/list".into(), Some(KEY.into()));
+        assert_eq!(u, format!("http://127.0.0.1:27777/backup/list?expected_identity={}", KEY.replace('-', "%2D").replace('_', "%5F")));
+        let q = query_with_identity("http://127.0.0.1:27777/link-status?client_id=x".into(), Some(KEY.into()));
+        assert!(q.starts_with("http://127.0.0.1:27777/link-status?client_id=x&expected_identity=uhCAk"));
+        assert_eq!(query_with_identity("http://127.0.0.1:27777/devices".into(), None), "http://127.0.0.1:27777/devices");
+    }
+}
+
 pub(crate) fn http() -> reqwest::Client {
     use std::sync::OnceLock;
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -525,11 +583,11 @@ async fn ensure_linked(
         .post(format!("http://127.0.0.1:{}/link-identity", port))
         .header("Origin", VAULT_ORIGIN)
         .timeout(std::time::Duration::from_secs(75))
-        .json(&serde_json::json!({
+        .json(&crate::flowsta::with_identity(serde_json::json!({
             "app_name": "Your Own AI",
             "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
             "app_agent_pub_key": link_key,
-        }))
+        })))
         .send()
         .await
         .map_err(|e| format!("vault unreachable: {}", e))?
@@ -628,16 +686,28 @@ pub async fn flowsta_sign_in(app: tauri::AppHandle) -> Result<FlowstaSession, St
         // A locked Vault holds the request ~55 s for the unlock, then runs
         // its 60 s dialog - budget past both.
         .timeout(std::time::Duration::from_secs(125))
-        .json(&serde_json::json!({
+        .json(&crate::flowsta::with_identity(serde_json::json!({
             "app_name": "Your Own AI",
             "challenge": challenge,
             "reason": "Sign in to use online models",
             "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
             "app_agent_pub_key": stored_link_key(&app),
-        }))
+        })))
         .send()
         .await
         .map_err(|_| "vault_interrupted".to_string())?;
+    // The Vault holds another identity than this profile's (the request
+    // named it): the same as a switch the watch has seen - offer the
+    // restart, never sign the other identity into this folder.
+    if auth_resp.status() == reqwest::StatusCode::CONFLICT {
+        let body: serde_json::Value = auth_resp.json().await.unwrap_or_default();
+        if body["error"].as_str() == Some("identity_mismatch") {
+            use tauri::Emitter as _;
+            let _ = app.emit("vault-identity-switched", serde_json::json!({}));
+            return Err("identity_switched".into());
+        }
+        return Err(body["error"].as_str().unwrap_or("vault_denied").to_string());
+    }
     if auth_resp.status() == reqwest::StatusCode::FORBIDDEN {
         // vault_locked / user_denied
         let body: serde_json::Value = auth_resp.json().await.unwrap_or_default();
@@ -927,14 +997,14 @@ async fn handoff_url(app: &tauri::AppHandle) -> Result<String, String> {
         .post(format!("http://127.0.0.1:{port}/authenticate"))
         .header("Origin", VAULT_ORIGIN)
         .timeout(std::time::Duration::from_secs(125))
-        .json(&serde_json::json!({
+        .json(&crate::flowsta::with_identity(serde_json::json!({
             "app_name": "Your Own AI",
             "challenge": challenge_b64,
             "reason": "Open yourownai.net signed in",
             "client_id": YOAI_WEB_CLIENT_ID,
             "scopes": ["openid", "display_name", "username", "profile_picture"],
             "app_agent_pub_key": stored_link_key(app),
-        }))
+        })))
         .send()
         .await
         .map_err(|_| "vault_interrupted".to_string())?;
@@ -1502,7 +1572,7 @@ async fn vault_link_active(
     app_agent_pub_key: &str,
 ) -> Option<bool> {
     let resp = client
-        .get(format!("http://127.0.0.1:{}/link-status", port))
+        .get(crate::flowsta::identity_query(format!("http://127.0.0.1:{}/link-status", port)))
         .header("Origin", VAULT_ORIGIN)
         .query(&[("app_agent_pub_key", app_agent_pub_key)])
         .timeout(std::time::Duration::from_secs(4))
@@ -1696,11 +1766,11 @@ pub async fn vault_sign(
         .post(format!("http://127.0.0.1:{}/sign", port))
         .header("Origin", VAULT_ORIGIN)
         .timeout(std::time::Duration::from_secs(75)) // per-action dialog waits 60 s
-        .json(&serde_json::json!({
+        .json(&crate::flowsta::with_identity(serde_json::json!({
             "type": "bytes",
             "bytes": bytes_b64,
             "reason": reason,
-        }))
+        })))
         .send()
         .await
         .map_err(|_| "vault_interrupted".to_string())?;
@@ -1849,7 +1919,7 @@ pub async fn vault_sign_document(
         let resp = client
             .post(format!("http://127.0.0.1:{}/sign-document", port))
             .header("Origin", VAULT_ORIGIN)
-            .json(&serde_json::json!({
+            .json(&crate::flowsta::with_identity(serde_json::json!({
                 "file_hash": file_hash_hex,
                 "label": label,
                 "comment": comment,
@@ -1859,7 +1929,7 @@ pub async fn vault_sign_document(
                 "ai_generation": "assisted",
                 "commit": true,
                 "job": true,
-            }))
+            })))
             .send()
             .await
             .map_err(|_| "vault_interrupted".to_string())?;
