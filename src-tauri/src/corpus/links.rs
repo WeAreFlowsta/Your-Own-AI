@@ -232,17 +232,17 @@ mod tests {
 
     #[test]
     fn an_anchor_names_the_nearest_known_folder_and_resolves_on_another_machine() {
-        let here = [("home", PathBuf::from("/home/eric")), ("documents", PathBuf::from("/home/eric/Documents"))];
-        let a = anchor_among(Path::new("/home/eric/Documents/Research/paper.pdf"), &here).unwrap();
+        let here = [("home", PathBuf::from("/home/alex")), ("documents", PathBuf::from("/home/alex/Documents"))];
+        let a = anchor_among(Path::new("/home/alex/Documents/Research/paper.pdf"), &here).unwrap();
         assert_eq!(a, Anchor { base: "documents".into(), rel: "Research/paper.pdf".into() });
-        assert_eq!(anchor_among(Path::new("/home/eric/notes.md"), &here).unwrap().base, "home");
+        assert_eq!(anchor_among(Path::new("/home/alex/notes.md"), &here).unwrap().base, "home");
         assert_eq!(anchor_among(Path::new("/mnt/usb/paper.pdf"), &here), None);
 
-        let there = [("documents", PathBuf::from("/Users/eric/OneDrive/Documents"))];
-        assert_eq!(resolve_among(&a, &there).unwrap(), PathBuf::from("/Users/eric/OneDrive/Documents/Research/paper.pdf"));
+        let there = [("documents", PathBuf::from("/Users/alex/OneDrive/Documents"))];
+        assert_eq!(resolve_among(&a, &there).unwrap(), PathBuf::from("/Users/alex/OneDrive/Documents/Research/paper.pdf"));
         assert_eq!(resolve_among(&Anchor { base: "videos".into(), rel: "x".into() }, &there), None);
         // A relative path never climbs out of its folder.
         let sneaky = Anchor { base: "documents".into(), rel: "../../etc/passwd".into() };
-        assert_eq!(resolve_among(&sneaky, &there).unwrap(), PathBuf::from("/Users/eric/OneDrive/Documents/etc/passwd"));
+        assert_eq!(resolve_among(&sneaky, &there).unwrap(), PathBuf::from("/Users/alex/OneDrive/Documents/etc/passwd"));
     }
 }

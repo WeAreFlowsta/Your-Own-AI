@@ -1,4 +1,4 @@
-//! The exfiltration gate for an agent's page reads (decided with Eric
+//! The exfiltration gate for an agent's page reads (decided
 //! 2026-10-15). An agent - or a page it read that carries instructions -
 //! can compose an address of its own with the person's text in it; fetched
 //! silently, the data leaves the machine in the address itself. So a read

@@ -1,5 +1,5 @@
 //! The one activity-tray notice that tells the person what syncing with
-//! their other devices is doing (Eric 2026-10-16: "tell them what is
+//! their other devices is doing (2026-10-16: "tell them what is
 //! syncing, then it changes to the restart notice"). One event,
 //! `device-sync`, with a stage; the front end keeps it as ONE tray row that
 //! changes in place:
@@ -7,8 +7,8 @@
 //!   syncing   right after sign-in: the AIs, their pictures and the memory
 //!             arrive from the Vault's copies (no restart)
 //!   restart   they are here; the conversations need one restart (this
-//!             device is on a network of its own - build-docs
-//!             MULTI_DEVICE.md §5.1), with a Restart button
+//!             device is on a network of its own - the design
+//!             notes §5.1), with a Restart button
 //!   bringing  after the restart: the conversations arrive in the background
 //!   done      in sync
 //!
@@ -17,7 +17,7 @@
 
 use tauri::Emitter;
 
-/// The other devices' names, joined for a title ("WhitedoveDM and MacBook").
+/// The other devices' names, joined for a title ("Desktop and MacBook").
 pub(crate) async fn sibling_names(port: u16) -> Option<String> {
     let devices = crate::vault_escrow::sibling_devices(port).await.ok()?;
     if devices.is_empty() {

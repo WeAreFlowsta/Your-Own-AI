@@ -228,7 +228,7 @@ fn query_with_identity(url: String, key: Option<String>) -> String {
 #[cfg(test)]
 mod identity_naming_tests {
     use super::{add_identity, query_with_identity};
-    const KEY: &str = "uhCAk75qJ5oobyfm3Lh-akZIQSe2zpSTtG1Pcxs23qTFoQwY_GDWY";
+    const KEY: &str = "uhCAkTestIdentityKeyForTheNamingTestsOnly000000000000";
 
     #[test]
     fn a_body_names_the_identity_only_when_the_profile_has_one() {
@@ -481,8 +481,8 @@ mod vault_owner_tests {
 
     #[test]
     fn tasklist_user_is_the_seventh_column() {
-        let mine = "\"Flowsta Vault.exe\",\"4120\",\"Console\",\"1\",\"120,332 K\",\"Running\",\"DESKTOP-1\\eric\",\"0:00:05\",\"Flowsta Vault\"\r\n";
-        assert_eq!(tasklist_user(mine).as_deref(), Some("DESKTOP-1\\eric"));
+        let mine = "\"Flowsta Vault.exe\",\"4120\",\"Console\",\"1\",\"120,332 K\",\"Running\",\"DESKTOP-1\\alex\",\"0:00:05\",\"Flowsta Vault\"\r\n";
+        assert_eq!(tasklist_user(mine).as_deref(), Some("DESKTOP-1\\alex"));
         let other = "\"Flowsta Vault.exe\",\"5000\",\"Console\",\"2\",\"98,000 K\",\"Unknown\",\"N/A\",\"0:00:00\",\"N/A\"\r\n";
         assert_eq!(tasklist_user(other).as_deref(), Some("N/A"));
         assert_eq!(tasklist_user("INFO: No tasks are running."), None);
@@ -942,7 +942,7 @@ pub async fn flowsta_link_url(app: tauri::AppHandle) -> Result<String, String> {
     Ok(format!("{}?link={}", account_url(), key))
 }
 
-/// The desktop-to-web hand-off (build-docs VAULT_CONNECTION_UX.md §4): the
+/// The desktop-to-web hand-off (the design notes §4): the
 /// dashboard opens SIGNED IN as the identity this app already holds, with
 /// the device linked by its claims - the browser never has to find the
 /// Vault, no second dialog, no code, no "link this device". The API's own
@@ -1583,7 +1583,7 @@ async fn vault_link_active(
     Some(v["linked"].as_bool().unwrap_or(false))
 }
 
-/// The stored identity follows the Vault's answer (build-docs NEXT.md field
+/// The stored identity follows the Vault's answer (the design notes field
 /// finding 2026-10-06: a connection revoked on another device left Settings
 /// showing the old name). When the Vault in front of us holds OUR identity
 /// and says this app's link is gone, the session is cleared - the same keys

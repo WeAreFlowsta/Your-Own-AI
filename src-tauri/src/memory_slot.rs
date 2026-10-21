@@ -1,4 +1,4 @@
-//! The memory slot in the router (build-docs MEMORY_REDESIGN.md §7): which
+//! The memory slot in the router (the design notes §7): which
 //! LOCAL model does the memory work. Two task kinds - `memory-precision`
 //! (fact extraction, note typing, the remember-this verdict) and
 //! `memory-prose` (portrait, consolidation, distillation). The pick: a
@@ -128,7 +128,7 @@ pub fn helper_needed(grades: &HashMap<String, MemoryGrade>, installed: &[String]
     !installed.iter().any(|m| grade_for(grades, m, "memory-precision") >= FLOOR)
 }
 
-/// The helper offer's gate (MEMORY_REDESIGN.md §7 / NEXT.md 10-08: the
+/// The helper offer's gate (the memory design §7 / the plan 10-08: the
 /// helper is a floor, offered only when the installed models grade below
 /// it - and only ever as an offer).
 #[tauri::command]

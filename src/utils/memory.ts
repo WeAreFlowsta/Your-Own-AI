@@ -16,7 +16,7 @@ import {
 import { recallPerAi } from "./transcriptMemory";
 import { listMemoryRows, listMemoryRowsCached, personScope, aiScope, type MemoryRow } from "./memoryRows";
 
-/** Layer 1 of memory (MEMORY_REDESIGN.md §4): the person's rules, commands
+/** Layer 1 of memory (the memory design §4): the person's rules, commands
  *  and locations for the scopes in play - the person's words verbatim,
  *  first, re-stated on every turn, never summarised. Read from the local
  *  per-scope cache (instant); the cache is refreshed in the background so
@@ -49,7 +49,7 @@ export function memoryLine(): string | null {
   return parts.length ? `Memory: ${parts.join(", ")}` : null;
 }
 
-/** The cue rule (MEMORY_REDESIGN.md §5.2, until the decision model ships):
+/** The cue rule (the memory design §5.2, until the decision model ships):
  *  does a message read as a standing instruction about how to work? High
  *  precision on purpose - a wrong offer under a message is noise. Short,
  *  not a question, and carries an explicit standing marker. */
@@ -64,7 +64,7 @@ export function looksLikeInstruction(text: string): boolean {
   );
 }
 
-/** Rule offers from extraction (MEMORY_REDESIGN.md §5.6): a preference the
+/** Rule offers from extraction (the memory design §5.6): a preference the
  *  extractor finds in a message is saved as a fact as before AND offered as
  *  a rule under that message - never saved as a rule silently. Keyed by the
  *  message's text; the chat bubble asks when it renders or when the offer
@@ -692,7 +692,7 @@ export function removePendingTurn(id: string): void {
  *  match` log line (bge's bar was 0.66 on a 0.62-0.75 band). */
 export const RECALL_BEST_AT_LEAST = 0.30;
 /** A question that names a web page has its material in the page: the AI's
- *  documents join only on a strong match (Eric 10-14: "analyse flowsta.com"
+ *  documents join only on a strong match (10-14: "analyse flowsta.com"
  *  pulled in diffusion-model papers at 0.34 and the reply was spent on them). */
 export const RECALL_BEST_FOR_PAGE_QUESTION = 0.50;
 /** How far below the best match a passage may score and still be given. */

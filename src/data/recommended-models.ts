@@ -230,7 +230,7 @@ export interface CapabilityModel {
  * (tools, health, freshness). Defined here - NOT in `modelFamilies` - so it
  * downloads via Settings -> Components and the welcome flow, never the chat
  * picker. EmbeddingGemma-300M (2026-10-12, replacing bge-small-en-v1.5):
- * chosen by the embedding-model matrix (build-docs guides/tools/embed-matrix.mjs,
+ * chosen by the embedding-model matrix (the embed-matrix tool,
  * archive/embed-matrix-2026-10-12): tools gate 1 wrong of 84 held-out messages
  * (bge 9); health and rule gates in six languages from English examples;
  * document recall 12/12 in English, Spanish and German (bge 12 / 8 / 4).

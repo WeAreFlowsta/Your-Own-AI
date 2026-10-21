@@ -1,5 +1,5 @@
-// Answer quality on this machine's models through the truth matrix (NEXT.md
-// §A0, Eric 2026-10-12): eight plain questions with a deterministic rubric,
+// Answer quality on this machine's models through the truth matrix (the plan
+// §A0): eight plain questions with a deterministic rubric,
 // graded per model, the registry's family score printed beside each measured
 // grade. Slow (a load per model, eight answers each): a long timeout.
 import { invoke, waitForChat } from "./_helpers";

@@ -1,4 +1,4 @@
-//! AI configs across the person's devices (build-docs MULTI_DEVICE.md §3.4,
+//! AI configs across the person's devices (the design notes §3.4,
 //! phase 4): each device's `manifest` backup already carries its
 //! `ai-data.json`; the Vault copies every sibling's manifest here (1.6.0+).
 //! A round reads each copy and merges the AIs by FOUNDING KEY - the newest
@@ -259,7 +259,7 @@ const SIBLING_CONVERSATIONS_FILE: &str = "sibling-conversations.json";
 
 /// One conversation another device backed up, as its manifest lists it -
 /// enough to show it in the drawer before its records arrive here and to
-/// fetch the copy for a read-only view (build-docs MULTI_DEVICE.md §3.3).
+/// fetch the copy for a read-only view (the design notes §3.3).
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub(crate) struct SiblingConversation {
     pub device: String,

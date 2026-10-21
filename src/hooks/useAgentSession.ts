@@ -428,7 +428,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         /* safety copy only */
       }
     };
-    // Raw capture first (MEMORY_REDESIGN.md §5.5): one episode row per
+    // Raw capture first (the memory design §5.5): one episode row per
     // session in the project's scope - what happened, in the digest's own
     // words, never rewritten here (dreaming consolidates later).
     if (projectId.value) {
@@ -1641,7 +1641,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         // The first prompt always carries at least the tool hint; the
         // memory content joins it when the chain read lands in time.
         memoryPending.value = true;
-        // The project's AGENTS.md (MEMORY_REDESIGN.md §8, decision 5): the
+        // The project's AGENTS.md (the memory design §8, decision 5): the
         // person-written rules layer, read by default at every session start,
         // nearest file wins (the project root here), capped so it stays a
         // rules file and not a manual.
@@ -1649,7 +1649,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         state.rulesFile = null;
         projectRules.value = "";
         // The project's own memory rows (rules, commands, locations) by its
-        // id - the same project on every machine (MEMORY_REDESIGN.md §13.1).
+        // id - the same project on every machine (the memory design §13.1).
         projectId.value = "";
         invoke<string>("project_identity_for", { folder })
           .then(async (pid) => {
@@ -2383,7 +2383,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
           ],
         };
       });
-      // A `remember` ask says what it would replace (MEMORY_REDESIGN.md
+      // A `remember` ask says what it would replace (the memory design
       // §5.3): the self-edit is found at execution, so the card asks the
       // cache first and adds the line while the person is still reading.
       const toolName: string = typeof tc.rawInput?.tool_name === "string" ? tc.rawInput.tool_name : (tc.title ?? "");
@@ -2665,7 +2665,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
       }, 0);
     };
 
-    /** The way up, on the line above the composer (one door, Eric 10-19):
+    /** The way up, on the line above the composer (one door):
      *  which model on this computer does better (when the AI is pinned to
      *  a weaker one), and the plan's online models when the account has
      *  them. Said at the turn's end, or as soon as a second step fails. */
@@ -2861,7 +2861,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         else endTurn(id, outcome);
       }
       // The way up, said once the turn is over on the line above the
-      // composer (one door, Eric 10-19): which model on this computer does
+      // composer (one door): which model on this computer does
       // better (when the AI is pinned to a weaker one), and the plan's
       // online models when the account has them.
       if (strugglePending.value) {

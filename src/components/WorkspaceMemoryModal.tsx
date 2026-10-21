@@ -33,7 +33,7 @@ export const WorkspaceMemoryModal = component$<{
   const dirty = useSignal(false);
   const saving = useSignal(false);
   const slowLoad = useSignal(false);
-  // The project's own rules ("How to work here", MEMORY_REDESIGN.md §8): rows
+  // The project's own rules ("How to work here", the memory design §8): rows
   // by the project's identity - the same on every machine.
   const projectId = useSignal("");
   const agentsMdResult = useSignal("");

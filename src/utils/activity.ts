@@ -30,7 +30,7 @@ export interface ActivityNote {
 }
 
 /** The page where a download's own progress shows: the tray hides the row
- *  there (Eric 2026-10-13: "they already know, they are on it"). */
+ *  there (2026-10-13: "they already know, they are on it"). */
 export function homeForFile(filename: string): string {
   const f = filename.toLowerCase();
   if (f.startsWith("llama-server-")) return "/settings";

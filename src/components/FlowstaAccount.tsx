@@ -733,7 +733,7 @@ export default component$<FlowstaAccountProps>((props) => {
             second, competing "restore from Vault" narrative.) */}
         {/* No join card: joining the identity's network is part of signing
             in - the activity tray says what syncs and offers the one restart
-            the conversations need (device_sync.rs, Eric 2026-10-16). */}
+            the conversations need (device_sync.rs). */}
         {signedIn() && escrow.value?.state === "island_deferred" && (
           <p class="mt-3 text-xs text-[var(--text-muted)]" data-testid="island-later">
             Your other devices join at the next launch.

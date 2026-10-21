@@ -253,10 +253,10 @@ mod disk_path_tests {
                 s.to_string()
             }
         };
-        assert_eq!(strip("\\\\?\\C:\\Users\\eric\\models"), "C:\\Users\\eric\\models");
+        assert_eq!(strip("\\\\?\\C:\\Users\\alex\\models"), "C:\\Users\\alex\\models");
         assert_eq!(strip("\\\\?\\UNC\\nas\\share\\models"), "\\\\nas\\share\\models");
         assert_eq!(strip("/home/solar/models"), "/home/solar/models");
-        assert!("c:\\users\\eric\\models".starts_with("c:\\"));
+        assert!("c:\\users\\alex\\models".starts_with("c:\\"));
     }
 }
 
@@ -4393,7 +4393,7 @@ pub async fn utility_chat(
     memory_complete(&app_handle, &model, &system, &user, grammar.as_deref(), max_tokens, temperature).await
 }
 
-/// One memory-work completion through the memory slot (MEMORY_REDESIGN.md
+/// One memory-work completion through the memory slot (the memory design
 /// §7): the warm chat model when it grades high enough, else the helper
 /// (`fallback_model`, started if needed). Never a load, never online. The
 /// helper command above and dreaming's model-assisted steps both use it.
@@ -7308,7 +7308,7 @@ Active Connections\r\n\
 
 #[cfg(test)]
 mod live_download_cpu {
-    //! MEASURE the download loop's CPU cost before changing it (NEXT.md: "downloads
+    //! MEASURE the download loop's CPU cost before changing it (the plan: "downloads
     //! take a full core" - the Holochain team's 0.8.0 report). Streams one real
     //! file two ways and reports this process's CPU seconds per wall second:
     //! (a) the shipped shape - a blocking write_all per network chunk plus a

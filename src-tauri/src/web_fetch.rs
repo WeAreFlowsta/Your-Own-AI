@@ -1,4 +1,4 @@
-//! Reading a web page for an AI, on this computer (NEXT.md "Web access per
+//! Reading a web page for an AI, on this computer (the plan "Web access per
 //! AI - fetch for everyone, local, free").
 //!
 //! The page is downloaded here - nothing goes through Flowsta, no plan or

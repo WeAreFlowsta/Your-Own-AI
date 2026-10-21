@@ -917,7 +917,7 @@ async fn handle_agent_message(
             // Reading a public web page through the app's own reader is a read
             // as well: the address rules refuse anything local, the rail shows
             // "Read example.com", and a card for every page would make the
-            // reader useless. (Open question in NEXT.md: an address the person
+            // reader useless. (Open question in the plan: an address the person
             // did not give could carry data out - gate those later.)
             let read_only_own_tool = tool_name == "project-memory__read_project_memory"
                 || tool_name == "project-memory__read_memory"

@@ -315,7 +315,7 @@ async fn sibling_materials(port: u16) -> Vec<(RecoveryMaterial, bool)> {
 }
 
 /// What this device does about the transcript network, given the other
-/// devices' material (build-docs MULTI_DEVICE.md §5.1).
+/// devices' material (the design notes §5.1).
 #[derive(Debug, PartialEq)]
 pub(crate) enum NetworkDecision {
     /// No other device disagrees, or the others join this one.
@@ -372,7 +372,7 @@ fn preserve_replaced(app: &tauri::AppHandle, old: &RecoveryMaterial) -> Result<(
 
 /// Before the first conductor start on a profile with no material of its
 /// own: the identity's material, so a second device joins the person's
-/// network instead of founding one (build-docs MULTI_DEVICE.md §3.1). In
+/// network instead of founding one (the design notes §3.1). In
 /// order, so a secret never changes once an identity has one: this
 /// device's `recovery` slot, any other device's copy, two app secrets the
 /// Vault derives (1.6.1+; also escrowed so an older Vault elsewhere finds
@@ -1448,7 +1448,7 @@ fn facts_file_rekeyed(dir: &std::path::Path, old_key: &[u8; 32], new_key: &[u8; 
 
 /// This device used Your Own AI before it was signed in and the identity
 /// already has a network elsewhere: fold this device's conversations into
-/// it (build-docs MULTI_DEVICE.md §5.1). Export first - the same shape the
+/// it (the design notes §5.1). Export first - the same shape the
 /// restore reads, every record carried as plaintext so it is re-encrypted
 /// under the identity's key - verify the count, then swap the material and
 /// relaunch; the pending marker makes the next start replay the export.
@@ -2161,7 +2161,7 @@ fn attach_extras(
         }
         // The person's memory rows for this device (its person-scope cache,
         // sealed under the data key): another device reads them from the
-        // copy while this one is off (MEMORY_REDESIGN.md §10).
+        // copy while this one is off (the memory design §10).
         {
             use base64::Engine;
             // Every scope this device knows: the person's, and each AI's by

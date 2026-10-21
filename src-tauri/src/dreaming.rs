@@ -1,4 +1,4 @@
-//! Dreaming (build-docs MEMORY_REDESIGN.md §6): consolidation of the
+//! Dreaming (the design notes §6): consolidation of the
 //! person's memory rows when the app is idle - local, deterministic here
 //! (the model-assisted parts, relative dates and splitting double
 //! statements, join with the memory slot). Merge rows that say the same
@@ -30,7 +30,7 @@ fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
-/// On battery, not plugged in: a dream waits (MEMORY_REDESIGN.md §6 - never
+/// On battery, not plugged in: a dream waits (the memory design §6 - never
 /// on battery saver). Best effort per platform; unknown = plugged in.
 pub fn on_battery() -> bool {
     #[cfg(target_os = "linux")]

@@ -1,4 +1,4 @@
-// Web access per AI (NEXT.md: fetch for everyone, local, free; the switch is
+// Web access per AI (the plan: fetch for everyone, local, free; the switch is
 // ON by default; the offer line when it is off). Needs the network for
 // example.com; the page is read on this computer.
 import { shot, waitForChat, invoke, ask, waitForReplyDone, lastReply, resetAiModels } from "./_helpers";
@@ -24,7 +24,7 @@ const setWebAccess = async (on: boolean) => {
 
 const offerShown = () => browser.execute(() => !!document.querySelector('[data-testid="web-offer"]'));
 // What the web step found lives in the last reply's Sources panel (no
-// sentences in the action bar - Eric 10-14): open it, read the note.
+// sentences in the action bar): open it, read the note.
 const noteFromSources = async () => {
   await browser.execute(() => {
     const m = [...document.querySelectorAll('[data-testid="chat-message"][data-role="assistant"]')].pop();
@@ -128,7 +128,7 @@ describe("web access per AI", () => {
     // root (the bubble itself can come and go between two slow polls).
     await browser.waitUntil(async () => ((await browser.execute(() => (window as any).__yoaiTurns?.() ?? [])) as { id: string }[]).some((t) => !before.includes(t.id)), { timeout: 120_000, timeoutMsg: "the question was not asked again" });
     const turnOf = async () => ((await browser.execute(() => (window as any).__yoaiTurns?.() ?? [])) as { id: string; state: string }[]).find((t) => !before.includes(t.id));
-    // The loop Eric does by hand (10-14): leave the chat while the resend runs,
+    // The loop a person does by hand (10-14): leave the chat while the resend runs,
     // come back through the tray - the page shows ONE question and ONE reply
     // (the live one), never the replaced web-off answer above it.
     await (await $('button[title^="Menu"]')).click();
@@ -169,7 +169,7 @@ describe("web access per AI", () => {
     const again = await waitForReplyDone(60_000);
     console.log(`e2e: reply once (turn ${resent?.state}) ${JSON.stringify(again.text.slice(0, 200))}`);
     if (again.text.includes("empty reply twice") || again.text.includes("lost on the way") || resent?.state === "error") {
-      // Known on this box (NEXT.md §A): one invoke of the resend reaches the backend twice and the
+      // Known on this box (the plan §A): one invoke of the resend reaches the backend twice and the
       // first stream's events never arrive. Guarded in the app; the cause is still open.
       console.log("e2e: KNOWN FLAKE - the resend's stream was lost after a duplicate invoke; skipping this leg");
       this.skip();

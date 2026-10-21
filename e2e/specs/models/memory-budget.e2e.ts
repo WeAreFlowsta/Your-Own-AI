@@ -1,4 +1,4 @@
-// Phase 6 gate (build-docs MEMORY_REDESIGN.md §13.6): the layer-2 budget
+// Phase 6 gate (the design notes §13.6): the layer-2 budget
 // holds live. 510 episodes in a throwaway project scope, one dream: at
 // most 500 stay live, the oldest ten go to history (valid_to, never
 // deleted), and a second dream changes nothing. Slow (510 writes): a long

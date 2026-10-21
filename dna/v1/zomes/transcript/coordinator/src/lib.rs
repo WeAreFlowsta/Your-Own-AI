@@ -81,8 +81,8 @@ pub struct DeleteAtInput {
     pub anchor: Option<AgentPubKey>,
 }
 
-/// The tag that marks a link at a scope anchor as a MEMORY ROW (build-docs
-/// MEMORY_REDESIGN.md §11, v1): the same sealed entry type and the same
+/// The tag that marks a link at a scope anchor as a MEMORY ROW (the design
+/// notes §11, v1): the same sealed entry type and the same
 /// link type as a conversation, told apart by the tag, so no integrity
 /// change is needed. Conversation readers skip these; the memory reader
 /// takes only these. Hashes and ids in tags, never text.

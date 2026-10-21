@@ -3,7 +3,7 @@
  * decisions - the person's own words, re-stated every turn) and what
  * dreaming changed there, with Undo. One component for every scope: the
  * person's on Your Memory, an AI's on its Memory page section
- * (MEMORY_REDESIGN.md §9).
+ * (the memory design §9).
  */
 import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
 import { LuPencil, LuTrash2, LuChevronDown, LuChevronRight } from "@qwikest/icons/lucide";
@@ -50,7 +50,7 @@ export default component$<Props>((props) => {
   const revisions = useSignal<MemoryRevision[]>([]);
   const dreamsOpen = useSignal(false);
   // What each session left behind (one `episode` row per session, raw, in
-  // the digest's own words - MEMORY_REDESIGN.md §5.5): shown so the person
+  // the digest's own words - the memory design §5.5): shown so the person
   // sees what the next session will carry and can drop any of it.
   const episodes = useSignal<MemoryRow[]>([]);
   const sessionsOpen = useSignal(false);

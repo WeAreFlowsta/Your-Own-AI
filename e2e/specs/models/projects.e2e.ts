@@ -1,5 +1,5 @@
 // Projects and project memory: how long things take and what the person
-// sees (Eric 10-17: "the best experience possible for devs using yoai").
+// sees (10-17: "the best experience possible for devs using yoai").
 // The 10-16 evening session is the reason: a project note took five minutes
 // to save and the memory seven to read back, because every save and read
 // walked every AI's whole conversation list, and a slow read started a

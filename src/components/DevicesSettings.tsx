@@ -1,7 +1,7 @@
 /**
  * Settings > Devices: the computers this identity uses Your Own AI on, which
  * are reachable right now, and what travels between them. Taught with dots
- * and icons, not paragraphs (Eric 10-20: "it's not obvious that you need
+ * and icons, not paragraphs (10-20: "it's not obvious that you need
  * both Vaults unlocked"). One sentence appears only while this is the only
  * device: how to add another.
  */

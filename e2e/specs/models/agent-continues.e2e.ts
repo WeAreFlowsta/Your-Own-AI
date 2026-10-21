@@ -1,5 +1,5 @@
-// An agent (project) turn keeps going when you leave the chat (build-docs
-// ALWAYS_ON_AND_THREADS.md, step 1b): a project is opened, a question is sent to
+// An agent (project) turn keeps going when you leave the chat (the design
+// notes, step 1b): a project is opened, a question is sent to
 // the agent, the person opens Settings while it works, comes back - the turn is
 // still on screen or finished, the page has taken it over, and it is in the
 // records. Needs the Build helper installed on this machine (skipped otherwise).
@@ -277,7 +277,7 @@ describe("an agent turn keeps going when you leave the chat", () => {
     } else {
       // The mechanism is proven (a tools session for a page question, the reader
       // offered); whether the model picks the reader is model quality - the test
-      // box's small model reaches for web search (NEXT.md "Tools need an agentic model").
+      // box's small model reaches for web search (the plan "Tools need an agentic model").
       console.log("e2e: the model did not call the page reader - content check skipped (model quality)");
     }
     await browser.execute(async () => { await (window as any).__yoaiCloseFolder?.(); });

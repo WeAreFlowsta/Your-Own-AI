@@ -559,7 +559,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
           </div>
         )}
 
-        {/* No sentences in the action bar (Eric 10-14): what the web step did
+        {/* No sentences in the action bar: what the web step did
             lives in Sources; the one offer for the last reply lives above the
             composer (ChatInputBar). */}
 
@@ -966,7 +966,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
 });
 
 const ChatMessage = component$<ChatMessageProps>((props) => {
-  /** Capture at the moment of saying (MEMORY_REDESIGN.md §5): under the
+  /** Capture at the moment of saying (the memory design §5): under the
    *  person's own message, one line - "Keep this as a rule?" when it reads
    *  as a standing instruction, else a quiet Remember that saves a note.
    *  '' | 'saving' | 'saved-rule' | 'saved-note' | 'dismissed' | 'error' */
@@ -1032,7 +1032,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
   // This reply streamed (or is streaming) in this view - the only case the
   // scroll reservation below is for. A reopened conversation's last reply
   // never did: reserving for it made the open's jump-to-the-end land on
-  // an empty viewport with the tail of the action bar (Eric 10-14).
+  // an empty viewport with the tail of the action bar.
   const everLoading = useSignal(false);
   const isGenerationPhase = useSignal(false);
   const thinkingBoxVisible = useSignal(false);

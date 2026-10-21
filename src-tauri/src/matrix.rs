@@ -91,7 +91,7 @@ impl Drop for KillOnDrop {
     }
 }
 
-// ───────────── the memory slot's measured leg (MEMORY_REDESIGN.md §7) ─────────────
+// ───────────── the memory slot's measured leg (the memory design §7) ─────────────
 
 /// A message a person might send, and the facts the extractor must find
 /// (predicate + a phrase the value must contain) - or nothing at all.
@@ -790,7 +790,7 @@ pub(crate) fn score_quality(case: &QualityCase, answer: &str) -> (u8, Vec<String
 /// capability table (`model_caps`) scores by family name; the line shows the
 /// table's `overall` beside the measured points so the two can be compared
 /// on every machine - the table's size tiers are to be set from these
-/// numbers, never by hand (NEXT.md §A0, Eric 2026-10-12).
+/// numbers, never by hand (the plan §A0).
 /// Time one model gets in the answer-quality leg before it is called too
 /// slow for this machine (not a failure).
 const QUALITY_MODEL_BUDGET: std::time::Duration = std::time::Duration::from_secs(180);
@@ -2015,7 +2015,7 @@ async fn leg_routing_inner(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<S
     ));
     // The semantic gates on their own, before the routing verdicts: how the
     // freshness and health gates did on the battery's labeled buckets with
-    // THIS machine's memory component (Eric 2026-10-12: "the web/recent and
+    // THIS machine's memory component (2026-10-12: "the web/recent and
     // the report classifier in the matrix"). Follow-ups and long turns are
     // not single messages and sit out; the health bucket is the medical
     // gate's yes and the freshness gate's no, the fresh buckets the reverse.

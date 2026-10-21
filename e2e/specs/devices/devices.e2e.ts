@@ -1,4 +1,4 @@
-// One identity on two devices, live (build-docs MULTI_DEVICE.md §5.4):
+// One identity on two devices, live (the design notes §5.4):
 // device A renames an AI and backs up; its Vault copies the manifest to
 // the identity's second Vault; device B signs in fresh there and shows the
 // renamed AI with its own agent. Phase c: BOTH devices online at once (A
@@ -63,7 +63,7 @@ describe(`devices, phase ${PHASE}`, () => {
       await shot("devices-a-renamed");
       // A standing rule, kept here: a person-scope memory row. The live read
       // puts it in this device's rows cache, which rides the manifest, so the
-      // other device has it while this one is off (MEMORY_REDESIGN.md §10).
+      // other device has it while this one is off (the memory design §10).
       await invoke("save_memory_row", { agentKey: null, row: {
         id: `devices-${Date.now().toString(36)}`, scope: "person", kind: "rule", text: RULE, structured: null,
         as_of: Date.now(), valid_to: null, saved_by: "person", provenance: "authored", pinned: true, topics: [], replaces: [], deleted: false, updated_at: Date.now(),

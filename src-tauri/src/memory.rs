@@ -114,7 +114,7 @@ pub fn get_memory_facts(
 /// reconciliation; this overwrites the blob with the supplied set. The
 /// file is this device's cache: what changed is mirrored into the
 /// person's memory rows in their network, so it reaches their other
-/// devices (MEMORY_REDESIGN.md §12).
+/// devices (the memory design §12).
 #[tauri::command]
 pub fn save_memory_facts(
     app: tauri::AppHandle,

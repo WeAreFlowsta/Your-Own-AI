@@ -1,4 +1,4 @@
-// The island merge, live (build-docs MULTI_DEVICE.md §5.1): a device that
+// The island merge, live (the design notes §5.1): a device that
 // used Your Own AI before it was signed in joins the identity's network.
 // Three launches, one phase each (ISLAND_PHASE), against a TEST Vault on
 // a pinned port (YOAI_VAULT_PORT) - never the installed one:

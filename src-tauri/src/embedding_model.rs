@@ -3,7 +3,7 @@
 //! src/data/recommended-models.ts - change both together.
 //!
 //! EmbeddingGemma-300M (2026-10-12, replacing bge-small-en-v1.5): chosen by
-//! the embedding-model matrix (build-docs guides/tools/embed-matrix.mjs,
+//! the embedding-model matrix (the embed-matrix tool,
 //! results archive/embed-matrix-2026-10-12) - the tools gate 1 wrong of 84
 //! held-out messages (bge 9), health and rule gates in six languages from
 //! English examples (AUC 0.99 / 0.98; bge 0.76 / 0.69), document recall

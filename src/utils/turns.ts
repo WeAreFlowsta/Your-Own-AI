@@ -1,5 +1,5 @@
 /**
- * Live turns at the app root (build-docs ALWAYS_ON_AND_THREADS.md, step 1).
+ * Live turns at the app root (the design notes, step 1).
  *
  * A reply used to live in the chat PAGE: leave the page and the streaming
  * text had no home; come back and the page rebuilt itself from the records,

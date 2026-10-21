@@ -1663,7 +1663,7 @@ fn sort_entries(entries: &mut [TranscriptEntryInfo]) {
 
 /// A conversation another device backed up, read from the Vault's copy of
 /// that device's object, for a read-only view until its records arrive
-/// here (build-docs MULTI_DEVICE.md §3.3). `device` is the authoring
+/// here (the design notes §3.3). `device` is the authoring
 /// device's id, as the drawer item's `copy:<device>` source carries it.
 #[tauri::command]
 pub async fn get_copy_transcript(
