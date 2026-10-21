@@ -248,6 +248,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   it.
 
 ### Fixed
+- Going back to the chat page right after watching a reply finish, then
+  pressing New, could bring that conversation back with its question
+  doubled: the page reopened a reply it should only reopen when it
+  finished while you were away, and a read of its records that landed
+  after New still wrote the page. Neither happens now.
 - A reply you left with New in its first second came back onto the new
   page when it finished, and the activity tray did not list it. The reply
   now stays where it started; the tray says "answered" with Open, and the

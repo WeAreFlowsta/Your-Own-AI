@@ -637,6 +637,10 @@ export default component$(() => {
         return; // superseded by a newer click
       }
       const { messages, nextSequence, folderPath } = loaded;
+      if (resumeGeneration.value !== gen) {
+        uiLog(`resume ${who}: superseded before writing the page, after ${Date.now() - t0} ms`);
+        return;
+      }
       uiLog(
         `resume ${who}: ${messages.length} messages in ${Date.now() - t0} ms${messages.length === 0 ? " - banner shown, chat left empty" : ""}`,
         messages.length === 0 ? "warn" : "info",
@@ -741,7 +745,10 @@ export default component$(() => {
     const asked = takePendingOpen();
     const t = asked?.conversationHash
       ? asked
-      : turns.find((x) => x.aiId === aiId && x.conversationHash && (isLive(x) || (x.endedAt ?? 0) > Date.now() - 60_000));
+      // A reply still running, or one that finished while the person was
+      // away (never one they watched finish and then left: that is New, and
+      // coming back to the page must not reopen it - 10-22).
+      : turns.find((x) => x.aiId === aiId && x.conversationHash && (isLive(x) || (!x.seen && (x.endedAt ?? 0) > Date.now() - 60_000)));
     void import("../../utils/uiLog").then(({ uiLog }) => uiLog(`[turns] chat mounted for ${aiId.slice(0, 12)}: ${turns.length} turn(s) at the root${t ? `, opening ${t.conversationHash!.slice(0, 12)}` : ""}`));
     if (!t) return;
     resumeConversation({ hash: t.conversationHash!, agentKey: t.agentKey, aiId: t.aiId, title: t.question });
@@ -1858,6 +1865,11 @@ export default component$(() => {
 
   const handleNewQuestion = $(() => {
     queuedMessage.value = null; // it belonged to the conversation being left
+    // An open still reading its records (a slow read can take seconds) must
+    // not finish onto the new page: New outranks it (10-22: a page that
+    // mounted twice started two reads; the second landed after New and put
+    // the conversation just left back on screen, its question doubled).
+    resumeGeneration.value++;
     resetChat();
     input.value = "";
     selectedAction.value = null;
