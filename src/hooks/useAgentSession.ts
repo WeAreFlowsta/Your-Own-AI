@@ -722,10 +722,12 @@ export function useAgentSession(props: UseAgentSessionProps) {
       ],
     };
     props.chatState.messages = [...props.chatState.messages, userMsg, assistantMsg];
+    uiLog("[send] agent bubble: messages placed");
     lastRailEventAt.value = Date.now();
     state.toolStartFailures = [];
     state.startNotices = [];
     props.chatState.isLoading = true;
+    uiLog("[send] agent bubble: loading set");
     // The turn lives at the app root from here (ALWAYS_ON_AND_THREADS.md step
     // 1b): leave the page and it keeps going; come back and the page attaches.
     // Stop on the turn cancels over ACP, the same as the page's Stop.
@@ -733,7 +735,14 @@ export function useAgentSession(props: UseAgentSessionProps) {
     controller.signal.addEventListener("abort", () => {
       invokeTauri("cancel_agent_turn").catch(() => {});
     });
-    claimAgentSession(ownerId.value);
+    try {
+      claimAgentSession(ownerId.value);
+    } catch (e) {
+      uiLog(`[send] agent bubble: claim failed: ${String(e).slice(0, 160)}`, "error");
+      throw e;
+    }
+    uiLog("[send] agent bubble: session claimed, registering the turn");
+    try {
     beginTurn(
       {
         id,
@@ -754,6 +763,11 @@ export function useAgentSession(props: UseAgentSessionProps) {
     );
     // Fire-and-forget - chat always works even if the conductor is down.
     recordUserTurn(userText).catch(() => {});
+    } catch (e) {
+      uiLog(`[send] agent bubble: registering failed: ${String(e).slice(0, 160)}`, "error");
+      throw e;
+    }
+    uiLog("[send] agent bubble: turn registered");
   });
 
   /** The turn's bubble goes up the moment the person sends, before the
