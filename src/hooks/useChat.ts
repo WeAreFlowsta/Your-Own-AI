@@ -692,6 +692,12 @@ export function useChat(props: UseChatProps) {
       }
       state.isLoading = true;
       uiLog("[send] chat path: bubbles up");
+      // The page this turn was sent from. New (resetChat) starts a new page
+      // key; a turn whose page has moved on by the time it would claim the
+      // page stays detached - it finishes and records at the root, and the
+      // new page is never told its conversation (10-21: a reply left with
+      // New during its first second came back onto the new page).
+      const pageKey = state.cacheKey;
       state.error = null;
 
       // Embed this turn's text ONCE, immediately - the router's semantic
@@ -1427,7 +1433,7 @@ export function useChat(props: UseChatProps) {
         abortControllerRef.value.abort();
       }
       const controller = new AbortController();
-      abortControllerRef.value = noSerialize(controller);
+      if (state.cacheKey === pageKey) abortControllerRef.value = noSerialize(controller);
       // This turn's own conversation and place in it. New lets go of a reply
       // in flight (resetChat): the reply goes on recording where it started -
       // it used to read the PAGE's conversation when it finished, recording
@@ -1436,7 +1442,7 @@ export function useChat(props: UseChatProps) {
       // it still belongs to this turn.
       let turnConv: string | null = state.conversationHash;
       let turnSeq = state.messageSequence;
-      const pageOwns = () => abortControllerRef.value === controller;
+      const pageOwns = () => abortControllerRef.value === controller && state.cacheKey === pageKey;
       const takeSeq = (): number => {
         const n = turnSeq++;
         if (pageOwns()) state.messageSequence = turnSeq;

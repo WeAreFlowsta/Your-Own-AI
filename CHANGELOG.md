@@ -248,6 +248,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   it.
 
 ### Fixed
+- A reply you left with New in its first second came back onto the new
+  page when it finished, and the activity tray did not list it. The reply
+  now stays where it started; the tray says "answered" with Open, and the
+  reply keeps its Model, Tokens and Sources when you open it.
 - A question in a project or a tools session stopped at "working" with
   nothing sent and nothing to stop it. The turn's bubble went up and then
   the page failed on its next line, before the question reached the
