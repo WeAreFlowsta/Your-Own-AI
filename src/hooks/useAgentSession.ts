@@ -723,10 +723,11 @@ export function useAgentSession(props: UseAgentSessionProps) {
     };
     props.chatState.messages = [...props.chatState.messages, userMsg, assistantMsg];
     uiLog("[send] agent bubble: messages placed");
-    lastRailEventAt.value = Date.now();
-    state.toolStartFailures = [];
-    state.startNotices = [];
-    props.chatState.isLoading = true;
+    try { lastRailEventAt.value = Date.now(); } catch (e) { uiLog(`[send] agent bubble: rail stamp failed: ${String(e).slice(0, 160)}`, "error"); throw e; }
+    uiLog("[send] agent bubble: rail stamped");
+    try { state.toolStartFailures = []; state.startNotices = []; } catch (e) { uiLog(`[send] agent bubble: notices reset failed: ${String(e).slice(0, 160)}`, "error"); throw e; }
+    uiLog("[send] agent bubble: notices reset");
+    try { props.chatState.isLoading = true; } catch (e) { uiLog(`[send] agent bubble: loading flag failed: ${String(e).slice(0, 160)}`, "error"); throw e; }
     uiLog("[send] agent bubble: loading set");
     // The turn lives at the app root from here (ALWAYS_ON_AND_THREADS.md step
     // 1b): leave the page and it keeps going; come back and the page attaches.

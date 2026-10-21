@@ -316,6 +316,13 @@ export default component$(() => {
   // can: console.warn + the last 20 in localStorage("uiStalls").
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(({ cleanup }) => {
+    // Page errors reach the app log, so a question that stops with no
+    // message on screen can be read in support ("[page] ...").
+    const onPageError = (ev: ErrorEvent) => { void import("../utils/uiLog").then(({ uiLog }) => uiLog(`[page] error: ${String(ev.message).slice(0, 200)} at ${ev.filename?.split("/").pop() ?? "?"}:${ev.lineno}`, "error")); };
+    const onPageRejection = (ev: PromiseRejectionEvent) => { const r = ev.reason; const text = r instanceof Error ? `${r.message} ${(r.stack ?? "").split("\n").slice(1, 3).join(" | ")}` : String(r); void import("../utils/uiLog").then(({ uiLog }) => uiLog(`[page] unhandled: ${text.slice(0, 300)}`, "error")); };
+    window.addEventListener("error", onPageError);
+    window.addEventListener("unhandledrejection", onPageRejection);
+    cleanup(() => { window.removeEventListener("error", onPageError); window.removeEventListener("unhandledrejection", onPageRejection); });
     let last = performance.now();
     let raf = 0;
     const tick = () => {
