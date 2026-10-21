@@ -238,7 +238,7 @@ pub fn restart_after_identity_switch(app: tauri::AppHandle) -> Result<(), String
 mod tests {
     use super::*;
 
-    const A: &str = "uhCAk75qJ5oobyfm3Lh-akZIQSe2zpSTtG1Pcxs23qTFoQwY_GDWY";
+    const A: &str = "uhCAkTestIdentityKeyForTheNamingTestsOnly000000000000";
     const B: &str = "uhCAk0O4EJ97RZ7eX2wf9x08PWjNj3Avt2K1SdU8tgPzWoQBwWk0s";
 
     #[test]

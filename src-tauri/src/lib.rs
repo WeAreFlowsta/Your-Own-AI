@@ -3,10 +3,10 @@
 
 mod config_sync;          // AI configs across the person's devices (sibling manifests)
 mod device_sync;          // the tray notice for what syncs with the other devices
-mod memory_rows;          // typed, dated, sealed memory rows at scope anchors (MEMORY_REDESIGN)
+mod memory_rows;          // typed, dated, sealed memory rows at scope anchors (the memory design)
 mod project_identity;     // a folder's project id: git root commit / id file / path hash
-mod dreaming;             // memory consolidation when idle (MEMORY_REDESIGN §6)
-mod memory_slot;          // which local model does the memory work (MEMORY_REDESIGN §7)
+mod dreaming;             // memory consolidation when idle (the memory design §6)
+mod memory_slot;          // which local model does the memory work (the memory design §7)
 mod conversation_cache;   // last-known-good conversation lists (encrypted)
 mod ports;                 // every fixed local port, shifted together by YOAI_PORT_OFFSET
 mod embedding_model;       // THE embedding model: file, prefixes, pooling, index marker
@@ -1248,7 +1248,7 @@ pub(crate) fn resolve_resource_dir(
 }
 
 #[cfg(test)]
-mod multi_device_live; // two real conductors, one seed (build-docs MULTI_DEVICE.md §9)
+mod multi_device_live; // two real conductors, one seed (the design notes §9)
 
 #[cfg(test)]
 mod attachment_extractor_smoke {

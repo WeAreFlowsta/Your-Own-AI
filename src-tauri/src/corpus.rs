@@ -2192,12 +2192,12 @@ mod tests {
         let meta = DocMeta { filename: "tides.txt".into(), path: Some(dir.join("tides.txt").to_string_lossy().into()), content_id: Some(shared_cid), ..Default::default() };
         let here = insert_document(&mut b, &key, &meta, size, &pa, &fake_embed(&pa), "lin-1").unwrap();
 
-        assert_eq!(fold_sibling_records_into(&mut b, &key, &mac, "Erics-MacBook-Air").unwrap(), 1, "one new card; the shared file only gains a grant; no AI here, no card");
-        assert_eq!(fold_sibling_records_into(&mut b, &key, &mac, "Erics-MacBook-Air").unwrap(), 0, "folding again lists nothing new");
+        assert_eq!(fold_sibling_records_into(&mut b, &key, &mac, "Alexs-MacBook-Air").unwrap(), 1, "one new card; the shared file only gains a grant; no AI here, no card");
+        assert_eq!(fold_sibling_records_into(&mut b, &key, &mac, "Alexs-MacBook-Air").unwrap(), 0, "folding again lists nothing new");
         let all = read_records(&b, &key, None).unwrap();
         let listed = all.iter().find(|d| d.doc_id == "mac-doc-1").expect("the Mac's card is here");
         assert_eq!(listed.chunk_count, 0);
-        assert_eq!(listed.link.held_on.as_deref(), Some("Erics-MacBook-Air"));
+        assert_eq!(listed.link.held_on.as_deref(), Some("Alexs-MacBook-Air"));
         assert_eq!(listed.ai_ids, vec!["lin-1".to_string()]);
         let ours = all.iter().find(|d| d.doc_id == here.doc_id).unwrap();
         assert!(ours.link.held_on.is_none(), "a document read here is ours");

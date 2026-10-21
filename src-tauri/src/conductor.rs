@@ -66,8 +66,8 @@ pub struct StartupResult {
     pub lair_client: LairClient,
 }
 
-/// Where this conductor meets the person's OTHER devices (build-docs
-/// MULTI_DEVICE.md). The network is private by construction - the seed is
+/// Where this conductor meets the person's OTHER devices (the design
+/// notes). The network is private by construction - the seed is
 /// per identity (or per install) and every record is ciphertext under the
 /// person's data key before it reaches the DNA - so a reachable peer is
 /// only ever one of the person's own devices, and the rendezvous learns

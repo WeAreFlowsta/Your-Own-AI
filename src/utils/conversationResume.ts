@@ -29,7 +29,7 @@ export interface ConversationListItem {
  *  (conversations not continued since last-activity tracking began). */
 /** The device id a `copy:<device>` source names: the conversation is held
  *  here only as the Vault's copy of that device's backup, read-only until
- *  its records arrive (build-docs MULTI_DEVICE.md §3.3). */
+ *  its records arrive (the design notes §3.3). */
 export function copiedFromDevice(c: Pick<HolochainConversation, "source">): string | null {
   return c.source?.startsWith("copy:") ? c.source.slice("copy:".length) : null;
 }

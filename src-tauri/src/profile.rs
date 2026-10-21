@@ -494,7 +494,7 @@ pub fn profile_store_path(app: tauri::AppHandle, name: String) -> Result<String,
 mod tests {
     use super::*;
 
-    const KEY_A: &str = "uhCAk75qJ5oobyfm3Lh-akZIQSe2zpSTtG1Pcxs23qTFoQwY_GDWY";
+    const KEY_A: &str = "uhCAkTestIdentityKeyForTheNamingTestsOnly000000000000";
     const KEY_B: &str = "uhCAk0O4EJ97RZ7eX2wf9x08PWjNj3Avt2K1SdU8tgPzWoQBwWk0s";
 
     fn legacy_install(root: &Path, owner: Option<&str>) {

@@ -1,4 +1,4 @@
-//! A project's identity (build-docs MEMORY_REDESIGN.md §13.1, decided
+//! A project's identity (the design notes §13.1, decided
 //! 2026-10-11): what makes "the same folder on two machines" one project,
 //! so its memory rows meet. A git repo is its ROOT COMMIT hash - the same
 //! on every clone, unmoved by renames, moves, remote changes or branches
@@ -121,7 +121,7 @@ mod tests {
     }
 }
 
-/// "Save as AGENTS.md" (MEMORY_REDESIGN.md §8): the project's pinned rules
+/// "Save as AGENTS.md" (the memory design §8): the project's pinned rules
 /// appended to `<folder>/AGENTS.md` under "How to work here"; lines the file
 /// already has are skipped, nothing is removed. Your Own AI never writes
 /// this file unasked - this command IS the person's ask.

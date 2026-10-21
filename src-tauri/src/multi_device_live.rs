@@ -1,5 +1,5 @@
 //! Two conductors, one person's network - the behaviours the multi-device
-//! plan cannot prove by reading (build-docs `MULTI_DEVICE.md` §9): a
+//! plan cannot prove by reading (the design notes §9): a
 //! conversation started by one device's agent is listed by the other at the
 //! first agent's key (the founding key as an address), a message appended
 //! from the second device lands under a conversation the first authored,

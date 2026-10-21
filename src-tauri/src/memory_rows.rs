@@ -1,4 +1,4 @@
-//! Memory rows (build-docs apps/your-own-ai/planning/MEMORY_REDESIGN.md §3,
+//! Memory rows (the design notes §3,
 //! §11): one typed, dated, sealed record for everything an AI or the person
 //! remembers - a rule, a command, a location, a decision, a fact, an
 //! episode, a note - in a scope (the person, one AI, a project, a
@@ -1170,7 +1170,7 @@ mod tests {
 
     #[test]
     fn the_row_is_group_ready_the_only_per_person_field_is_saved_by() {
-        // MEMORY_REDESIGN.md §3 / §13.6: a group cell adds membership and an
+        // the memory design §3 / §13.6: a group cell adds membership and an
         // agreement; nothing in the row changes. Guard the shape: no owner,
         // user, identity or device field may creep in beside `saved_by`.
         let r = row("x", "hello", 1);

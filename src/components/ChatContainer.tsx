@@ -156,7 +156,7 @@ export default component$<ChatContainerProps>((props) => {
   const setIsSidePanelVisible$ = $((v: boolean) => { props.isSidePanelVisible.value = v; });
 
   // The one offer for the last reply, shown above the composer - never
-  // under the reply, never two at once (Eric 10-14). Web off outranks the
+  // under the reply, never two at once. Web off outranks the
   // rest: the person asked for a page and got an answer without it. Live
   // information the AI could not look up comes next (Offline Only, or no
   // plan: the answer may be out of date).

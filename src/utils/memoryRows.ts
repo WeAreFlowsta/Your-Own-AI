@@ -1,4 +1,4 @@
-// Memory rows (build-docs apps/your-own-ai/planning/MEMORY_REDESIGN.md §3):
+// Memory rows (the design notes §3):
 // typed, dated, sealed records in the person's own network, in a scope -
 // the person, one AI (by founding key), a project (by folder identity), a
 // conversation. A correction or a deletion is a new revision with the same

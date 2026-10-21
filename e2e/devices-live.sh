@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One identity on two devices, live (see specs/devices/devices.e2e.ts).
 # Needs: the Vault's debug TEST binary (flowsta-vault/scripts/build-test-binary.sh),
-# the e2e build of this app, the machine's models, Eric's installed Vault
+# the e2e build of this app, the machine's models, the installed Vault
 # CLOSED (a test instance exits at once otherwise), and no app instance up.
 # Starts two FRESH test Vaults (md-e, md-f), creates an identity on the
 # first, adds the second with the recovery phrase, then runs phase a on the

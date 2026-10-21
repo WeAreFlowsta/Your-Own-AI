@@ -2604,7 +2604,7 @@ export function useChat(props: UseChatProps) {
 
   const resetChat = $(() => {
     // Leaving a conversation is a plain chat's session boundary
-    // (MEMORY_REDESIGN.md §5.5): one episode row in the AI's own memory,
+    // (the memory design §5.5): one episode row in the AI's own memory,
     // raw and deterministic - the question that opened it and the latest
     // answer - revised in place when the conversation is left again with
     // more said, never rewritten here (dreaming consolidates later).

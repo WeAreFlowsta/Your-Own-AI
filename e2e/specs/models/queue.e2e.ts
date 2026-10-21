@@ -1,4 +1,4 @@
-// Two AIs at once on one engine (build-docs ALWAYS_ON_AND_THREADS.md, step 2):
+// Two AIs at once on one engine (the design notes, step 2):
 // Reeves answers a long question on one model; a new chat with Teresa, pinned to
 // another model, asks and WAITS visibly for the engine ("Waiting for the engine ·
 // Reeves is answering first") instead of restarting the server under Reeves.

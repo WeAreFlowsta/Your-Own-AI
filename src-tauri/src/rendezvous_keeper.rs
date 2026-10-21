@@ -2,8 +2,8 @@
 //! the rendezvous and feeds the listing back in, whenever the conductor's
 //! own registration has stalled.
 //!
-//! Why this exists (measured 2026-10-19, build-docs
-//! `apps/your-own-ai/planning/NEXT.md`): the conductor's networking
+//! Why this exists (measured 2026-10-19, the design
+//! notes): the conductor's networking
 //! (kitsune2 0.4.1) re-signs each agent's note every 15 min and sends it to
 //! the bootstrap server. A refused send goes back on the queue unchanged and
 //! is retried on a backoff that reaches 5 min; the server refuses notes older

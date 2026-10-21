@@ -1,6 +1,6 @@
 // The activity tray lists replies that finished while the person was
-// elsewhere - never one they watched finish. Eric, 10-17: after New, the
-// tray showed "Emrys answered" twice, for replies he had just watched end.
+// elsewhere - never one they watched finish. 10-17: after New, the
+// tray showed "Emrys answered" twice, for replies the person had just watched end.
 // A reply left mid-way (New while it streams) is news when it ends.
 import { ask, invoke, lastReply, shot, waitForChat, waitForReplyDone } from "./_helpers";
 

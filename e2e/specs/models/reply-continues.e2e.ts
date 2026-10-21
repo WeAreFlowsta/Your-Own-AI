@@ -1,4 +1,4 @@
-// Replies keep going when you leave the chat (build-docs ALWAYS_ON_AND_THREADS.md,
+// Replies keep going when you leave the chat (the design notes,
 // step 1; the Holochain team's 0.8.0 report): a long reply is started, the
 // person opens Settings while it streams, comes back - the reply is still
 // streaming or finished, and it is in the records.

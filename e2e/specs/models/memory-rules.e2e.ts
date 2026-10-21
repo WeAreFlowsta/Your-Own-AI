@@ -1,4 +1,4 @@
-// Memory rules (build-docs MEMORY_REDESIGN.md §3, phase 1): a rule added on
+// Memory rules (the design notes §3, phase 1): a rule added on
 // the Your Memory page is a pinned person-scope row in the person's own
 // records - it is listed first, survives a reload (read back from the
 // network), and a removal is a record that hides it.

@@ -180,7 +180,7 @@ pub(crate) fn normalize_share(s: &str) -> &'static str {
 /// position, on EmbeddingGemma's scale (2026-10-17; the old bars were
 /// bge-small's and caught 4 in 10 live questions). The contrast margin
 /// does most of the separating; the bar keeps faint matches home. Measured
-/// with build-docs fresh-bench.mjs - held-out set B: frontier and balanced
+/// with the fresh-bench tool - held-out set B: frontier and balanced
 /// 55/60 live caught, 3/60 ordinary sent online; local-first 50/60, 3/60.
 fn threshold_for(share: &str) -> f32 {
     match share {
@@ -1525,7 +1525,7 @@ pub async fn agent_serving_window(
 /// answered by an online search model through the proxy, so it follows the
 /// MODEL setting, not the web switch: "Offline Only" (and a pinned local
 /// file) never searches; reading a page the AI is pointed at is local and
-/// stays with the switch. (Eric 10-19: an Offline Only AI's search query
+/// stays with the switch. (10-19: an Offline Only AI's search query
 /// went to an online model because the switch was on.)
 pub(crate) fn model_may_search(model: &str) -> bool {
     model.starts_with("online:") || model == "auto:online-offline"

@@ -1,4 +1,4 @@
-// The memory slot's measured leg (build-docs MEMORY_REDESIGN.md §7): every
+// The memory slot's measured leg (the design notes §7): every
 // runnable installed model is graded on the app's own extraction prompt
 // and grammar (precision/recall on a fixed set) and on a consolidation
 // rubric; the grades land in the slot's store and decide which local model

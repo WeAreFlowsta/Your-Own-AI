@@ -1,5 +1,5 @@
 // The report/code mode classifier and the semantic gates, measured on this
-// machine through the truth matrix (NEXT.md §A0, Eric 2026-10-12): the matrix
+// machine through the truth matrix (the plan §A0): the matrix
 // runs the app's own prompt, grammar and pre-gate against a held-out set on
 // the installed models, and the routing leg's gate lines score the freshness
 // and health gates against the battery's labeled buckets. Slow (a load per
