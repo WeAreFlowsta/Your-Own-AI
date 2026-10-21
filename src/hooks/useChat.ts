@@ -1760,6 +1760,7 @@ export function useChat(props: UseChatProps) {
                 return null;
               }
               turnConv = hash;
+              uiLog(`[turns] conversation ${hash.slice(0, 12)} started for ${assistantId.slice(0, 8)}; page owns the turn: ${pageOwns()}`);
               if (pageOwns()) state.conversationHash = hash;
               updateTurn(assistantId, { conversationHash: hash });
             }
@@ -2611,6 +2612,7 @@ export function useChat(props: UseChatProps) {
     // raw and deterministic - the question that opened it and the latest
     // answer - revised in place when the conversation is left again with
     // more said, never rewritten here (dreaming consolidates later).
+    uiLog(`[turns] New: leaving ${state.conversationHash?.slice(0, 12) ?? "no conversation"}, ${state.messages.length} message(s), loading ${state.isLoading}`);
     void leaveEpisode(state.conversationHash, state.messages, props.selectedAi.value);
     // A reply in flight stays at the app root (utils/turns.ts): the page
     // lets go of it - it finishes and records on its own, Stop reaches it
