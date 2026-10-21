@@ -74,4 +74,24 @@ describe("the tray and replies the person saw", () => {
     const still = await invoke<{ role: string }[]>("get_conversation_transcript", { agentKey: left!.agentKey, conversationHash: left!.conversationHash });
     expect(still.length).toBe(2);
   });
+
+  it("does not reopen a reply the person watched finish when they come back to the page and press New", async function () {
+    this.timeout(400_000);
+    await waitForChat();
+    await ask("Reply with the single word: hello");
+    await waitForReplyDone(300_000);
+    // The front page redirects to the chat page: a fresh mount of the page
+    // while the finished reply is still at the root (10-22: it was reopened
+    // and a records read that landed after New put it back, question doubled).
+    await browser.url("tauri://localhost/");
+    await waitForChat();
+    await newChat();
+    await browser.pause(10_000); // a slow records read lands here if it is going to
+    const shown = await browser.execute(() => ({
+      bubbles: document.querySelectorAll('[data-testid="chat-message"]').length,
+      users: [...document.querySelectorAll('[data-testid="chat-message"][data-role="user"]')].length,
+    }));
+    console.log(`e2e: after front page + New: ${JSON.stringify(shown)}`);
+    expect(shown.bubbles).toBe(0);
+  });
 });
