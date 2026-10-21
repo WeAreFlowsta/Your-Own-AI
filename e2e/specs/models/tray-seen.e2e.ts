@@ -39,7 +39,14 @@ describe("the tray and replies the person saw", () => {
     // Leave as soon as the reply has started.
     await browser.waitUntil(async () => (await lastReply())?.state === "streaming" || (await lastReply())?.state === "thinking", { timeout: 180_000, interval: 200, timeoutMsg: "the reply never started" });
     await newChat();
-    await browser.waitUntil(async () => (await turnRows()).some((r) => r.state === "done"), { timeout: 300_000, interval: 1_000, timeoutMsg: "the reply that finished elsewhere was never listed" });
+    try {
+      await browser.waitUntil(async () => (await turnRows()).some((r) => r.state === "done"), { timeout: 300_000, interval: 1_000, timeoutMsg: "the reply that finished elsewhere was never listed" });
+    } catch (e) {
+      // Say what the root held and what the tray showed, so a miss can be read.
+      console.log(`e2e: root turns at the miss: ${JSON.stringify(await browser.execute(() => (window as any).__yoaiTurns?.() ?? []))}`);
+      console.log(`e2e: tray rows at the miss: ${JSON.stringify(await turnRows())} path=${await browser.execute(() => location.pathname)} bubbles=${await browser.execute(() => document.querySelectorAll('[data-testid="chat-message"]').length)}`);
+      throw e;
+    }
     const rows = await turnRows();
     console.log(`e2e: after New mid-reply: ${JSON.stringify(rows)}`);
     await shot("tray-news-after-leaving");
