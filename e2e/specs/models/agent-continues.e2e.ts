@@ -67,7 +67,14 @@ describe("an agent turn keeps going when you leave the chat", () => {
 
     await ask(QUESTION);
     // The turn is registered at the root as an agent turn.
-    await browser.waitUntil(async () => (await turns()).some((t) => t.kind !== "chat"), { timeout: 60_000, interval: 500, timeoutMsg: "no agent turn was registered at the root" });
+    try {
+      await browser.waitUntil(async () => (await turns()).some((t) => t.kind !== "chat"), { timeout: 60_000, interval: 500, timeoutMsg: "no agent turn was registered at the root" });
+    } catch (e) {
+      // Say what the root held and what the page shows, so a miss can be read.
+      console.log(`e2e: root turns at the miss: ${JSON.stringify(await turns())}`);
+      console.log(`e2e: page at the miss: ${JSON.stringify(await browser.execute(() => ({ bubbles: document.querySelectorAll('[data-testid="chat-message"]').length, stalls: localStorage.getItem("uiStalls") })))}`);
+      throw e;
+    }
     // Some work has arrived (narration on the rail or text).
     await browser.waitUntil(async () => (await turns()).some((t) => t.kind !== "chat" && t.chars > 0) || (await browser.execute(() => {
       const m = [...document.querySelectorAll('[data-testid="chat-message"][data-role="assistant"]')].pop() as HTMLElement | undefined;

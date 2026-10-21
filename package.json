@@ -19,7 +19,8 @@
     "e2e": "node e2e/run.mjs fresh",
     "e2e:models": "node e2e/run.mjs models",
     "e2e:online": "node e2e/run.mjs online",
-    "capture": "node e2e/run.mjs capture"
+    "capture": "node e2e/run.mjs capture",
+    "walkthrough": "bash e2e/walkthrough.sh"
   },
   "dependencies": {
     "@builder.io/qwik": "^1.19.2",
