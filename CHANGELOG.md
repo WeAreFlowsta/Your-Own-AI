@@ -248,6 +248,13 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   it.
 
 ### Fixed
+- A question could sit at "working" with nothing to stop it: before a
+  prompt is sent, the question is embedded to find the AI's documents,
+  and when the embedding model stopped answering (a chat model had just
+  filled the graphics card and the helpers were being moved) that wait
+  had no end. The wait is now 15 seconds at most; past it the question
+  goes without document passages, and the embedding server's own checks
+  and requests time out instead of hanging.
 - AI pictures from another device now show on this one.
 - An AI that has no picture on this device takes the one your other
   devices have, and a built-in face never covers an AI's own picture: its
