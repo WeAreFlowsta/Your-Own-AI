@@ -2110,6 +2110,9 @@ export function useChat(props: UseChatProps) {
             ? { ...m, servedBy: modelName, routingReason: routedReason, routingTask: routedTask, skills: skillsUsed, memoryLine: memoryLine() ?? undefined }
             : m,
         );
+        // The root's copy too: a page that folds this reply in later (it
+        // finished while the person was elsewhere) shows its Model details.
+        updateTurn(assistantId, { assistant: { servedBy: modelName, routingReason: routedReason, routingTask: routedTask, skills: skillsUsed, memoryLine: memoryLine() ?? undefined } });
 
         if (!holochainId) {
           console.warn("[Holochain] No agent pub key, skipping transcript");

@@ -189,6 +189,7 @@ export default component$(() => {
     const t = track(() => attached.value);
     if (!t || isLive(t)) return;
     if (!turnShown(t, chatState.messages)) {
+      uiLog(`[turns] folding ended turn ${t.id.slice(0, 8)} into the page (conversation ${t.conversationHash?.slice(0, 12)})`);
       const base = withoutUnansweredPlaceholder(chatState.messages);
       // A bubble that never got anything (cancelled before output) is noise.
       const empty = t.assistant.content === "" && !(t.assistant.agentLog ?? []).length && !t.assistant.error;
@@ -763,6 +764,7 @@ export default component$(() => {
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(({ track, cleanup }) => {
     const hash = track(() => chatState.conversationHash);
+    uiLog(`[turns] page conversation -> ${hash?.slice(0, 12) ?? "none"}`);
     noteOpenConversation(hash);
     cleanup(() => noteOpenConversation(null));
   });
