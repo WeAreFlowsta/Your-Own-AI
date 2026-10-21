@@ -1769,6 +1769,63 @@ pub(crate) fn devices_failures(labels_read: bool, unlocked: bool, ai_count: usiz
 /// The multi-device picture on this machine, read only: the Vault, what
 /// this device has backed up and when, each other device's copies, the
 /// last check for their changes, and the rendezvous keeper.
+/// The page's own errors from the current app log (`[page] ...` lines the
+/// window's error and unhandled-rejection reporters write): the last ten,
+/// as time, message and code location. Never a failure: the section is for
+/// reading, not grading. Anything that looks like a path or an address in
+/// a message is blanked, so the report stays safe to share.
+pub fn leg_page_errors(app: &AppHandle) -> Vec<String> {
+    let Ok(dir) = app.path().app_log_dir() else { return vec!["log folder not found".into()] };
+    let name = format!("{}.log", app.package_info().name);
+    let Ok(text) = std::fs::read_to_string(dir.join(&name)) else { return vec!["no app log yet".into()] };
+    let lines: Vec<String> = text.lines().filter_map(page_error_line).collect();
+    if lines.is_empty() {
+        return vec!["none in this log".into()];
+    }
+    let skip = lines.len().saturating_sub(10);
+    let mut out: Vec<String> = lines.into_iter().skip(skip).collect();
+    if skip > 0 {
+        out.insert(0, format!("({skip} earlier not shown)"));
+    }
+    out
+}
+
+/// One log line -> "date time  message" when it is a page error, else None.
+/// Paths and addresses inside the message are replaced by `<path>`.
+fn page_error_line(line: &str) -> Option<String> {
+    let at = line.find("[page] ")?;
+    let msg = &line[at + "[page] ".len()..];
+    // "[2026-10-21][10:33:34][...]" -> "2026-10-21 10:33:34"
+    let mut parts = line.splitn(3, ']');
+    let date = parts.next()?.trim_start_matches('[');
+    let time = parts.next()?.trim_start_matches('[');
+    // Our own code locations stay (they name a chunk of the app, not the
+    // person); anything else with a path or an address is blanked.
+    let safe: String = msg
+        .split_whitespace()
+        .map(|w| w.replace("tauri://localhost/build/", ""))
+        .map(|w| if w.contains('/') || w.contains('\\') || w.contains("://") { "<path>".to_string() } else { w })
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(format!("{date} {time}  {}", safe.chars().take(220).collect::<String>()))
+}
+
+#[cfg(test)]
+mod page_error_tests {
+    use super::page_error_line;
+    #[test]
+    fn a_page_error_keeps_time_message_and_location_and_blanks_paths() {
+        let l = "[2026-10-21][10:33:34][app_lib::commands_holochain][ERROR] [ui] [page] unhandled: Can't find variable: lastRailEventAt @tauri://localhost/build/q-BC92XIMX.js:2:28375 | Do@tauri://localhost/build/q-BC92XIMX.js:2:1240";
+        let out = page_error_line(l).unwrap();
+        assert!(out.starts_with("2026-10-21 10:33:34  unhandled: Can't find variable: lastRailEventAt"), "{out}");
+        assert!(out.contains("q-BC92XIMX.js:2:28375") && !out.contains("tauri://"), "the code location stays, the address goes: {out}");
+        let l2 = "[2026-10-21][10:40:00][app_lib::commands_holochain][ERROR] [ui] [page] error: could not read /home/someone/Documents/tax.pdf at q-abc.js:1:2";
+        let out2 = page_error_line(l2).unwrap();
+        assert!(!out2.contains("someone") && out2.contains("<path>"), "a path in a message never reaches the report: {out2}");
+        assert!(page_error_line("[2026-10-21][10:33:34][app_lib::llm][INFO] [embed] 1 text(s)").is_none());
+    }
+}
+
 pub async fn leg_devices(app: &AppHandle, sink: Sink<'_>) -> Vec<String> {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let vault = crate::flowsta::find_vault().await;
@@ -2454,6 +2511,14 @@ pub async fn matrix_run(
     if !cancelled() && want("devices") {
         sink("== Devices (this machine and your others) ==".into());
         failures.extend(leg_devices(&app, sink).await);
+        sink(String::new());
+    }
+
+    if !cancelled() && want("page-errors") {
+        sink("== Page errors (what the app's own screen code threw; never your words) ==".into());
+        for line in leg_page_errors(&app) {
+            sink(line);
+        }
         sink(String::new());
     }
 

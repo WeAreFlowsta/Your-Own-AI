@@ -298,6 +298,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   button says.
 
 ### Diagnostics
+- The truth matrix report has a Page errors section: the last ten errors
+  the app's own screen code threw, each as time, message and code
+  location. Never your words: anything that looks like a path or an
+  address in a message is blanked.
 - Running the truth matrix can no longer run the computer out of memory:
   each test load starts only with room for it (a model graded too big is
   not loaded to confirm it when memory is short), and the app's own model
