@@ -311,9 +311,11 @@ pub fn model_need_scaled(meta: &GgufMeta, size_bytes: u64, ctx: u64, kv_scale: f
         / GIB
         * kv_scale;
     let overhead_gb = 0.8;
-    // The token-embedding table stays in system memory even under full
-    // offload - the card never pays for it (fit-truth 09-01: gemma E2B
-    // served from 1.94 GB while its file is 2.89 GB).
+    // The embedding tables stay in system memory even under full offload -
+    // the card never pays for them (fit-truth 09-01: gemma E2B served from
+    // 1.94 GB while its file is 2.89 GB; 10-22: its 1.6 GB per-layer table
+    // counted on the card graded it "runs slower" on a 4 GB card it fills
+    // to 1.7 GB - gguf::is_embedding_table).
     let on_card_weights_gb = (size_bytes.saturating_sub(meta.embd_bytes)) as f64 / GIB;
     (weights_gb, kv_gb, on_card_weights_gb + kv_gb + overhead_gb)
 }
@@ -1296,8 +1298,11 @@ mod tests {
             let meta = crate::gguf::read_meta(&p).unwrap();
             let size = std::fs::metadata(&p).unwrap().len();
             let (w, kv, need) = model_need(&meta, size, 8192);
-            eprintln!("{name}: weights={w:.2}GB kv@8k={kv:.2}GB need={need:.2}GB");
-            assert!(w > 0.1 && need > w);
+            let on_card_w = (size.saturating_sub(meta.embd_bytes)) as f64 / GIB;
+            eprintln!("{name}: weights={w:.2}GB on card={on_card_w:.2}GB kv@8k={kv:.2}GB need={need:.2}GB");
+            // The need is the ON-CARD weights plus cache and overhead; the
+            // embedding tables (1.8 GB of Gemma E2B) never ride the card.
+            assert!(w > 0.1 && need > on_card_w);
         }
     }
 }

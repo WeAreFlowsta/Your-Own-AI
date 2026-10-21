@@ -926,11 +926,12 @@ async fn pick_offline_detail(app: &AppHandle, task: &str, lean: &str, agent_only
     // Learned family shifts (bounded, this machine's verdicts) ride the task
     // score; the health task never learns.
     let adj = if task == "medical" { Adjustments::default() } else { learned_adjustments(app) };
-    let cap = |name: &str| {
+    let cap = |f: &crate::fit::ModelFit| {
+        let task_cap = size_capped(crate::model_caps::caps_for(&f.name).by_task(task), f.params_b);
         if agent_only {
-            agent_rank_cap(crate::model_caps::agent_caps(name), crate::model_caps::caps_for(name).by_task(task))
+            agent_rank_cap(crate::model_caps::agent_caps(&f.name), task_cap)
         } else {
-            shifted(crate::model_caps::caps_for(name).by_task(task), adj.family(name))
+            shifted(task_cap, adj.family(&f.name))
         }
     };
     // Agent work ranks QUALITY first among the models that run here
@@ -1011,7 +1012,7 @@ async fn pick_offline_detail(app: &AppHandle, task: &str, lean: &str, agent_only
                     });
                 if !faster_specialist {
                     log::info!("[router] medical turn -> user's preferred model {}", chosen.name);
-                    return Ok(OfflinePick { name: chosen.name.clone(), fast: chosen.fit.is_fast(), cap: cap(&chosen.name) });
+                    return Ok(OfflinePick { name: chosen.name.clone(), fast: chosen.fit.is_fast(), cap: cap(chosen) });
                 }
                 log::info!(
                     "[router] medical pick {} would run slowly here - a health specialist that fits fully answers instead",
@@ -1021,7 +1022,7 @@ async fn pick_offline_detail(app: &AppHandle, task: &str, lean: &str, agent_only
         }
     }
 
-    let rank = |f: &crate::fit::ModelFit| OfflineRank { cap: cap(&f.name), tier: tier(f), params_b: f.params_b,
+    let rank = |f: &crate::fit::ModelFit| OfflineRank { cap: cap(f), tier: tier(f), params_b: f.params_b,
         tps: f.measured_tps,
     };
     let best = *pool
@@ -1053,14 +1054,54 @@ async fn pick_offline_detail(app: &AppHandle, task: &str, lean: &str, agent_only
             let keep = if agent_only {
                 offline_ordering("quality", rank(cf), rank(best)) != std::cmp::Ordering::Less
             } else {
-                keep_loaded(cap(&cf.name), cap(&best.name), tier(cf), tier(best), folder_open, best.load_secs)
+                keep_loaded(cap(cf), cap(best), tier(cf), tier(best), folder_open, best.load_secs)
             };
             if keep {
-                return Ok(OfflinePick { name: cur.clone(), fast: cf.fit.is_fast(), cap: cap(&cf.name) });
+                if !agent_only {
+                    log::info!(
+                        "[router] offline pick ({task}, {lean}): keeping the loaded {} (cap {}, fit {}) - best would be {} (cap {}, fit {})",
+                        cf.name, cap(cf), tier(cf), best.name, cap(best), tier(best)
+                    );
+                }
+                return Ok(OfflinePick { name: cur.clone(), fast: cf.fit.is_fast(), cap: cap(cf) });
             }
+            if !agent_only {
+                log::info!(
+                    "[router] offline pick ({task}, {lean}): {} (cap {}, fit {}) over the loaded {} (cap {}, fit {})",
+                    best.name, cap(best), tier(best), cf.name, cap(cf), tier(cf)
+                );
+            }
+            return Ok(OfflinePick { name: best.name.clone(), fast: best.fit.is_fast(), cap: cap(best) });
         }
     }
-    Ok(OfflinePick { name: best.name.clone(), fast: best.fit.is_fast(), cap: cap(&best.name) })
+    if !agent_only {
+        log::info!("[router] offline pick ({task}, {lean}): {} (cap {}, fit {})", best.name, cap(best), tier(best));
+    }
+    Ok(OfflinePick { name: best.name.clone(), fast: best.fit.is_fast(), cap: cap(best) })
+}
+
+/// A capability score is a FAMILY reading (model_caps matches names); a
+/// small member of a strong family inherits its flagship's score and tops
+/// Auto on every machine that fits it (10-22, Linux 4 GB card: a 4B
+/// community distill read 8 of 10 - the flagship's figure - and won every
+/// general turn over a Gemma 4 E2B that answered better and faster). The
+/// parameter count bounds what a model of that size can be, whatever its
+/// family: under 3B at most 6, under 6B at most 7, under 12B at most 8.
+/// A size the header cannot tell (0) is left alone. A rule of size, never
+/// of names.
+pub(crate) fn size_capped(cap: u8, params_b: f64) -> u8 {
+    let ceiling = if params_b <= 0.0 {
+        10
+    } else if params_b < 3.0 {
+        6
+    } else if params_b < 6.0 {
+        7
+    } else if params_b < 12.0 {
+        8
+    } else {
+        10
+    };
+    cap.min(ceiling)
 }
 
 /// Should the loaded model stay loaded instead of switching to the
@@ -3347,6 +3388,23 @@ mod tests {
         // A code turn keeps its task's chooser.
         let c = orphaned_followup_model(&models, Some("online:gone"), "code", &picks).unwrap();
         assert!(!c.contains("search") && c != "online:gpt-6-luna", "{c}");
+    }
+
+    #[test]
+    fn size_bounds_a_small_model_s_family_score() {
+        // A 4B distill of a family that scores 8: at most 7.
+        assert_eq!(size_capped(8, 4.5), 7);
+        // A 2B of the same family: at most 6.
+        assert_eq!(size_capped(8, 2.3), 6);
+        // A 9B keeps the family's 8; a 27B keeps a 9.
+        assert_eq!(size_capped(8, 9.6), 8);
+        assert_eq!(size_capped(9, 27.0), 9);
+        // A modest score is never raised, and an unknown size changes nothing.
+        assert_eq!(size_capped(6, 2.0), 6);
+        assert_eq!(size_capped(8, 0.0), 8);
+        // The sized 3.8 distills already sit at their ceilings.
+        assert_eq!(size_capped(crate::model_caps::caps_for("Qwen3.8-4B-Q4_K_M.gguf").overall, 4.4), 7);
+        assert_eq!(size_capped(crate::model_caps::caps_for("Qwen3.8-2B-Q4_K_M.gguf").overall, 2.3), 6);
     }
 
     #[test]

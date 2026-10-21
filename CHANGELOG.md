@@ -248,6 +248,22 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   it.
 
 ### Fixed
+- A model whose template always starts a reply by thinking, with no way to
+  turn that off, could spend the whole reply thinking and end there; the
+  page then said the response was all internal reasoning. The app asked it
+  not to think, but that request never reached such a model. A chat turn
+  on one now hands it an empty, already closed thought, so the reply
+  starts with the answer. Reports still think.
+- Auto could rank a small model by its family's flagship score and pick
+  it over a better, faster one on the same computer. A model's size now
+  bounds its score: under 3B at most 6 of 10, under 6B at most 7, under
+  12B at most 8.
+- Gemma 4 E2B graded "runs slower" on a 4 GB card it fills to 1.7 GB: its
+  per-layer embedding table, kept in system memory by the engine, was
+  counted on the card. It now grades, and ranks, as the model that runs
+  fully on the card that it is.
+- The app log now records each offline model pick for a chat turn, with
+  the score and fit that decided it, and whether the loaded model was kept.
 - Going back to the chat page right after watching a reply finish, then
   pressing New, could bring that conversation back with its question
   doubled: the page reopened a reply it should only reopen when it

@@ -73,6 +73,12 @@ pub struct GgufMeta {
     /// The template has a thinking switch (`enable_thinking`): the app can
     /// turn reasoning on or off per request.
     pub template_enable_thinking: bool,
+    /// The template opens a thinking block in its generation prompt and
+    /// has no switch to close it: the model thinks on every turn whatever
+    /// the request says, and the engine's reasoning budget never activates
+    /// (it learns the tags from the switch). A chat turn on such a model
+    /// prefills an empty thought instead - see llm::prefilled_thought.
+    pub template_forced_thought: bool,
     /// The tool-call channel opener this model's own chat template uses
     /// (None = the template declares no such channel). Read from the
     /// template, never from the model's name.
@@ -561,6 +567,7 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
         value_length_swa: 0,
         template_reasoning_strength: false,
         template_enable_thinking: false,
+        template_forced_thought: false,
         tool_call_marker: None,
         turn_end_marker: None,
         embd_bytes: 0,
@@ -619,6 +626,7 @@ fn read_meta_uncached(path: &std::path::Path, file_len: u64) -> Result<GgufMeta,
             m.turn_end_marker = TURN_CLOSERS.iter().copied().find(|c| tpl.contains(c));
             m.template_reasoning_strength = tpl.contains("reasoning_strength");
             m.template_enable_thinking = tpl.contains("enable_thinking");
+            m.template_forced_thought = template_forces_thought(&tpl);
         } else if key == "general.architecture" && vtype == 8 {
             m.architecture = r.read_gstr().map_err(io)?;
         } else if key == "general.size_label" && vtype == 8 {
@@ -961,7 +969,7 @@ fn read_tensor_table<R: Read + Seek>(
         }
         let _ty = r.read_u32()?;
         let offset = r.read_u64()?;
-        tensors.push((offset, expert_block_of(&name), attn_block_of(&name), name == "token_embd.weight"));
+        tensors.push((offset, expert_block_of(&name), attn_block_of(&name), is_embedding_table(&name)));
     }
     // Data section starts at the header end rounded up to the alignment.
     let data_start = r.pos.div_ceil(alignment) * alignment;
@@ -1022,8 +1030,57 @@ fn file_type_bpw(ft: u32) -> f64 {
     }
 }
 
+/// Embedding tables the engine keeps in system memory even under full
+/// offload: the token table, and the per-layer token table of the Gemma
+/// 3n/4 "E" models (1.6 GB of a 3.1 GB E2B file - graded on the card, the
+/// model read "runs slower" while it ran fully on the card at 1.7 GB).
+/// Tensor names per the GGUF naming scheme, never a model name.
+pub fn is_embedding_table(name: &str) -> bool {
+    name == "token_embd.weight" || name == "per_layer_token_embd.weight"
+}
+
+/// Does this template open a thinking block in its generation prompt
+/// without a switch to close it? Read from the `add_generation_prompt`
+/// branch: a template WITH `enable_thinking` also writes `<think>` there
+/// (the closed form when thinking is off) - that one is switchable, not
+/// forced.
+pub fn template_forces_thought(tpl: &str) -> bool {
+    if tpl.contains("enable_thinking") {
+        return false;
+    }
+    let Some(i) = tpl.rfind("add_generation_prompt") else { return false };
+    let tail = &tpl[i..];
+    let end = tail.find("endif").unwrap_or(tail.len());
+    tail[..end].contains("<think>")
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn embedding_tables_stay_off_the_card() {
+        assert!(super::is_embedding_table("token_embd.weight"));
+        assert!(super::is_embedding_table("per_layer_token_embd.weight"));
+        assert!(!super::is_embedding_table("per_layer_model_proj.weight"));
+        assert!(!super::is_embedding_table("blk.0.attn_q.weight"));
+        assert!(!super::is_embedding_table("output.weight"));
+    }
+
+    #[test]
+    fn forced_thought_is_read_from_the_generation_prompt() {
+        // A distill whose template always opens a thought (no switch).
+        let forced = "{%- for m in messages %}{{ m.content }}{%- endfor %}\n{%- if add_generation_prompt %}\n    {{- '<|im_start|>assistant\n<think>\n' }}\n{%- endif %}";
+        assert!(super::template_forces_thought(forced));
+        // Qwen3's own template: `<think>` in the branch too, but behind the switch.
+        let switched = "{%- if add_generation_prompt %}{{- '<|im_start|>assistant\n' }}{%- if enable_thinking is defined and enable_thinking is false %}{{- '<think>\n\n</think>\n\n' }}{%- endif %}{%- endif %}";
+        assert!(!super::template_forces_thought(switched));
+        // A plain template: no thought anywhere.
+        let plain = "{%- if add_generation_prompt %}{{- '<start_of_turn>model\n' }}{%- endif %}";
+        assert!(!super::template_forces_thought(plain));
+        // `<think>` only in the history branch (rendering past turns) is not a forced opener.
+        let history = "{%- for m in messages %}{%- if m.reasoning_content %}<think>{{ m.reasoning_content }}</think>{%- endif %}{%- endfor %}{%- if add_generation_prompt %}{{- '<|im_start|>assistant\n' }}{%- endif %}";
+        assert!(!super::template_forces_thought(history));
+    }
+
     use super::*;
 
     /// Reads a real on-disk model if present (skips otherwise) and sanity-checks

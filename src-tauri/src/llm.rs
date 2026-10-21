@@ -854,6 +854,30 @@ pub(crate) fn model_thinks_on_request(model_name: &str) -> bool {
     .unwrap_or(false)
 }
 
+/// Does this model's template open a thinking block on every turn with no
+/// switch to close it (gguf::template_forces_thought)? `--reasoning off`
+/// does not reach such a template and the engine's reasoning budget never
+/// activates on it (10-22, Linux: budget 0 sent, 723 reasoning chars
+/// back; a plain question spent its whole reply thinking and ended inside
+/// the block - the page showed "all internal reasoning"). A chat turn on
+/// such a model prefills an empty thought instead: the template renders
+/// a trailing assistant message with its thinking closed
+/// (`<think>\n\n</think>\n\n`), and the model answers directly (measured:
+/// 8 tokens, 0 reasoning, where the same question thought for 400+).
+pub(crate) fn model_forces_thought(model_name: &str) -> bool {
+    (|| {
+        let dir = CURRENT_MODELS_DIR.lock().ok()?.clone()?;
+        let m = crate::gguf::read_meta(&dir.join(model_name)).ok()?;
+        Some(m.template_forced_thought)
+    })()
+    .unwrap_or(false)
+}
+
+/// The assistant prefill that closes a forced thought: one space, which the
+/// template wraps as an empty thinking block followed by the reply's first
+/// character. The stream drops the leading whitespace it produces.
+pub(crate) const EMPTY_THOUGHT_PREFILL: &str = " ";
+
 /// The engine's `--reasoning` flag for a model, from its own template:
 /// `off` for a model whose template declares a thinking switch (the app
 /// turns thinking on per request, report mode), `auto` for one that does
@@ -6160,6 +6184,17 @@ pub async fn stream_chat_completion(
             }
         }
     };
+    // A template that always opens a thought and has no switch: prefill an
+    // empty one for chat turns, so the reply starts with words (see
+    // model_forces_thought). Report turns leave the thought open.
+    let prefilled_thought = online_model.is_none()
+        && external_model.is_none()
+        && !should_think
+        && model_forces_thought(&model_name);
+    if prefilled_thought {
+        all_messages.push(serde_json::json!({ "role": "assistant", "content": EMPTY_THOUGHT_PREFILL }));
+        log::info!("[LLM] empty thought prefilled for '{}' - its template opens a thinking block with no switch", model_name);
+    }
     let mut body = serde_json::json!({
         "model": model_name,
         "messages": all_messages,
@@ -6420,6 +6455,9 @@ pub async fn stream_chat_completion(
     let mut prompt_tps: Option<f64> = None;
     let mut sources: Vec<SourceItem> = Vec::new();
     let mut in_reasoning = false;
+    // The empty-thought prefill puts a space before the reply's first
+    // character; drop leading whitespace until the first word arrives.
+    let mut trim_lead = prefilled_thought;
     // One definition of "tokens per second" for every engine: completion
     // tokens over the span from the first streamed bytes to the last.
     // llama-server's `predicted_per_second` is that same span; SwiftLM's is
@@ -6642,6 +6680,15 @@ pub async fn stream_chat_completion(
 
                             // Extract regular content
                             if let Some(content) = parsed["choices"][0]["delta"]["content"].as_str() {
+                                let content: &str = if trim_lead {
+                                    let t = content.trim_start();
+                                    if !t.is_empty() {
+                                        trim_lead = false;
+                                    }
+                                    t
+                                } else {
+                                    content
+                                };
                                 // Close thinking tag when transitioning from reasoning to content
                                 if in_reasoning {
                                     in_reasoning = false;
