@@ -679,6 +679,11 @@ export function useAgentSession(props: UseAgentSessionProps) {
     }
   });
 
+  /** When the agent last sent anything for the running turn (a step, a
+   *  chunk of text or thought): the ceiling below measures silence from
+   *  here. */
+  const lastRailEventAt = useSignal(0);
+
   /** The turn's single reply bubble, pushed at Enter. Mounting it anchors
    *  the question to the top and shows the avatar + action bar instantly. */
   const startTurnBubble = $((userText: string, attachedFiles?: string[], library?: LibraryDocGiven[], surface?: "project" | "tools") => {
@@ -778,10 +783,6 @@ export function useAgentSession(props: UseAgentSessionProps) {
   const prepared = useSignal(false);
   /** A turn that struggled, to be told once the turn is over. */
   const strugglePending = useSignal<{ turnId: string; model: string; pinned: boolean; entitled: boolean } | null>(null);
-  /** When the agent last sent anything for the running turn (a step, a
-   *  chunk of text or thought): the ceiling below measures silence from
-   *  here. */
-  const lastRailEventAt = useSignal(0);
   /** The turn the ceiling already stopped, so it stops it once. */
   const ceilingTurn = useSignal<string | null>(null);
   /** Skill name (lower case) -> glyph name, from the installed skills. */

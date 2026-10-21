@@ -248,6 +248,12 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   it.
 
 ### Fixed
+- A question in a project or a tools session stopped at "working" with
+  nothing sent and nothing to stop it. The turn's bubble went up and then
+  the page failed on its next line, before the question reached the
+  agent, so no ceiling and no Stop applied. The page's own errors now
+  reach the app log as well, so a stop with nothing on screen leaves a
+  line that can be read.
 - A question could sit at "working" with nothing to stop it: before a
   prompt is sent, the question is embedded to find the AI's documents,
   and when the embedding model stopped answering (a chat model had just
