@@ -302,6 +302,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   button says.
 
 ### Diagnostics
+- The build's closure-order check also fails on a closure that reads a
+  signal, store or computed value declared below it, the fault behind
+  the stopped project questions.
 - The truth matrix report has a Page errors section: the last ten errors
   the app's own screen code threw, each as time, message and code
   location. Never your words: anything that looks like a path or an
