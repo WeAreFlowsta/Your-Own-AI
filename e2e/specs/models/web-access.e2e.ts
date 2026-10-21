@@ -247,15 +247,18 @@ describe("web access per AI", () => {
     await shot("web-access-once-reopened");
   });
 
+  // A page question, not a live one: since searching follows the model setting,
+  // a question about now on an Offline Only AI gets the live-information line,
+  // and the web offer with its "Don't ask again" belongs to page reading.
   it("stops offering for this AI on request", async function () {
     this.timeout(600_000);
     await setWebAccess(false);
-    await ask(LIVE_QUESTION);
+    await ask(PAGE_QUESTION);
     await waitForReplyDone(300_000);
-    await browser.waitUntil(offerShown, { timeout: 10_000, timeoutMsg: "the offer line did not show for a live question" });
+    await browser.waitUntil(offerShown, { timeout: 10_000, timeoutMsg: "the offer line did not show for a page question" });
     expect(await clickOffer("Don't ask again for this AI")).toBe(true);
     await browser.waitUntil(async () => !(await offerShown()), { timeout: 10_000, timeoutMsg: "the offer line stayed" });
-    await ask(LIVE_QUESTION);
+    await ask(PAGE_QUESTION);
     await waitForReplyDone(300_000);
     expect(await offerShown()).toBe(false);
     await shot("web-access-never");
