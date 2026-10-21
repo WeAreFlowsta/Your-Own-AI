@@ -4043,7 +4043,17 @@ pub async fn embed_texts(
             }
             Ok(out)
         }
-        Err(EmbedError::Other(e)) => Err(e),
+        Err(EmbedError::Other(e)) => {
+            // A request that timed out means the server took it and never
+            // answered (seen with the helpers being moved while a chat model
+            // filled the card): stop it, so the next request starts a fresh
+            // one instead of queueing behind a server that has stopped.
+            if e.contains("timed out") || e.contains("timeout") {
+                log::warn!("[embed] {e} - stopping the embedding server; the next request restarts it");
+                stop_embedding_server_inner(&state).await;
+            }
+            Err(e)
+        }
     }
 }
 
