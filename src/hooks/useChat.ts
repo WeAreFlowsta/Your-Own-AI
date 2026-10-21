@@ -2004,31 +2004,30 @@ export function useChat(props: UseChatProps) {
               ? ""
               : "(The model returned an empty reply twice - it may not sit well with this AI's setup. Try asking again, or pick a different model for this AI.)");
 
-        updateTurn(assistantId, { assistant: { content: displayContent, thinking: finalThinking || undefined, isLoading: false, statusText: undefined } });
-        state.messages = state.messages.map((m) =>
-          m.id === assistantId
-            ? {
-                ...m,
-                content: displayContent,
-                thinking: finalThinking || undefined,
-                isLoading: false,
-                tokens: tokenUsage
-                  ? {
-                      prompt_tokens: tokenUsage.prompt_tokens,
-                      completion_tokens: tokenUsage.completion_tokens,
-                      total_tokens: tokenUsage.total_tokens,
-                      tokens_per_second: tokensPerSecond,
-                      prompt_per_second: tokenUsage.prompt_per_second
-                        ? Math.round(tokenUsage.prompt_per_second)
-                        : undefined,
-                      engine: tokenUsage.engine ?? undefined,
-                    }
-                  : undefined,
-                sources: sources || undefined,
-                library: libraryGiven.length ? libraryGiven : undefined,
-              }
-            : m
-        );
+        // The same figures on the page's copy and the root's: a page that
+        // folds this reply in later shows Tokens, Sources and Model alike.
+        const tokenFigures = tokenUsage
+          ? {
+              prompt_tokens: tokenUsage.prompt_tokens,
+              completion_tokens: tokenUsage.completion_tokens,
+              total_tokens: tokenUsage.total_tokens,
+              tokens_per_second: tokensPerSecond,
+              prompt_per_second: tokenUsage.prompt_per_second
+                ? Math.round(tokenUsage.prompt_per_second)
+                : undefined,
+              engine: tokenUsage.engine ?? undefined,
+            }
+          : undefined;
+        const finished = {
+          content: displayContent,
+          thinking: finalThinking || undefined,
+          isLoading: false,
+          tokens: tokenFigures,
+          sources: sources || undefined,
+          library: libraryGiven.length ? libraryGiven : undefined,
+        };
+        updateTurn(assistantId, { assistant: { ...finished, statusText: undefined } });
+        state.messages = state.messages.map((m) => (m.id === assistantId ? { ...m, ...finished } : m));
 
         // Memory: learn durable user facts from this turn. Fire this BEFORE and
         // INDEPENDENTLY of the Holochain transcript write below - memory must
@@ -2734,6 +2733,7 @@ export function useChat(props: UseChatProps) {
       state.messages = state.messages.map((m) =>
         m.id === messageId ? { ...m, groundingNote: text, groundingPending: false } : m,
       );
+      updateTurn(messageId, { assistant: { groundingNote: text, groundingPending: false } });
     };
     const current = props.currentModel.value;
     const model =
