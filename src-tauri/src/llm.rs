@@ -3796,7 +3796,11 @@ async fn ensure_embedding_server(
     }
     // Serialize startup: overlapping embed calls (e.g. recall + indexing) must
     // not both try to start the server - that's what collided on the port.
+    let t_lock = std::time::Instant::now();
     let _startup = state.embed_startup.lock().await;
+    if t_lock.elapsed().as_secs() >= 2 {
+        log::info!("[embed] waited {} ms for another start to finish", t_lock.elapsed().as_millis());
+    }
 
     {
         let running = *state.embed_running.lock().await;
@@ -3810,12 +3814,14 @@ async fn ensure_embedding_server(
             // still warming up, WAIT for it rather than restarting - a restart
             // races the old process for the port. Only fall through to a real
             // restart if it never becomes ready (genuinely stuck).
+            let t_ready = std::time::Instant::now();
             for _ in 0..60 {
                 if embed_server_ready().await {
                     return Ok(());
                 }
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             }
+            log::warn!("[embed] server running but not answering /health after {} ms - restarting it", t_ready.elapsed().as_millis());
         }
     }
 
@@ -3986,7 +3992,16 @@ pub async fn embed_texts(
     if texts.is_empty() {
         return Ok(vec![]);
     }
-    ensure_embedding_server(&app_handle, &state, &model).await?;
+    // Timed, so a prompt that waits on its recall can be read in the log.
+    let t0 = std::time::Instant::now();
+    log::info!("[embed] {} text(s) for '{}'", texts.len(), model);
+    if let Err(e) = ensure_embedding_server(&app_handle, &state, &model).await {
+        log::warn!("[embed] server not available after {} ms: {e}", t0.elapsed().as_millis());
+        return Err(e);
+    }
+    if t0.elapsed().as_secs() >= 2 {
+        log::info!("[embed] server ready after {} ms", t0.elapsed().as_millis());
+    }
 
     // The embedding model runs with a 512-token context and llama-server
     // rejects the WHOLE request when one input is longer ("input (1756

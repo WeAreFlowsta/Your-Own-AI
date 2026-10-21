@@ -1457,9 +1457,13 @@ export default component$(() => {
         // A session's own prompt and tool definitions are large: a modest,
         // fixed share of the window, not everything that would fit. A
         // question that names a page takes documents only on a strong match.
+        const t0 = Date.now();
+        uiLog("[recall] embedding the question for the session's documents");
+        const qv = await embedQuery(question);
+        uiLog(`[recall] question embedded in ${Date.now() - t0} ms`);
         const recalled = await loadDocumentContextUsed(
           selectedAi.value.id,
-          await embedQuery(question),
+          qv,
           2000,
           6,
           followUp ? await embedQuery(followUp) : null,
@@ -1475,7 +1479,7 @@ export default component$(() => {
           remembered +=
             "\n\n(The passages above are copies from the AI's document library, given for context. They are not files in this session's folder. To read, search or change the notes themselves, use the tool that holds them.)";
         }
-      } catch { /* the memory component may not be on this computer */ }
+      } catch (e) { uiLog(`[recall] no documents for this prompt: ${String(e).slice(0, 120)}`); }
       return { context: [attached, remembered].filter(Boolean).join("\n\n") || undefined, library, docsGiven: !!remembered };
     };
 
