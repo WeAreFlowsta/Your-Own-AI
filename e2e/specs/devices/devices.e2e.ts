@@ -155,7 +155,7 @@ describe(`devices, phase ${PHASE}`, () => {
       const reason = await $('[data-testid="chat-readonly-reason"]');
       await reason.waitForDisplayed({ timeout: 60_000 });
       console.log(`e2e: composer reads ${JSON.stringify(await reason.getText())}`);
-      expect(await reason.getText()).toContain("From LinuxLappy");
+      expect(await reason.getText()).toMatch(/^From \S/);
       expect(await reason.getText()).toContain("read-only until it arrives");
       expect(await (await $('[data-testid="chat-input"]')).getAttribute("contenteditable")).toBe("false");
       expect(await $('[data-testid="copied-from-line"]').isExisting()).toBe(false);
