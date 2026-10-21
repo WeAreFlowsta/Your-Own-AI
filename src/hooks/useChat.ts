@@ -691,6 +691,7 @@ export function useChat(props: UseChatProps) {
         }
       }
       state.isLoading = true;
+      uiLog("[send] chat path: bubbles up");
       state.error = null;
 
       // Embed this turn's text ONCE, immediately - the router's semantic

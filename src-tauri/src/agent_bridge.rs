@@ -1182,6 +1182,7 @@ pub async fn send_agent_prompt(
         .await
         .clone()
         .ok_or("agent session is not ready")?;
+        log::info!("[agent] prompt: {} chars for session {}", text.chars().count(), session_id);
     {
         // Addresses in the person's words may be read without asking (web_gate).
         let found = crate::web_gate::addresses_in_text(&text);

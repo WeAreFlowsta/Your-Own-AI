@@ -685,6 +685,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     const id = uuidv4();
     turnId.value = id;
     const kind: "project" | "tools" = surface ?? (state.mode === "tools" ? "tools" : "project");
+    uiLog(`[send] agent bubble ${id.slice(0, 8)} (${kind})`);
     const userMsg: Message = {
       id: uuidv4(),
       role: "user",
@@ -810,6 +811,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
     state.lastRouteServer = false;
     state.helpers = { device: 0, online: 0 };
     state.liveStatus = "Thinking..";
+    uiLog("[send] agent: preparing the wire");
     props.chatState.isLoading = true;
     // First prompt after a resume: the restored-context digest rides ahead
     // of the question ON THE WIRE only - the bubble and the transcript keep
@@ -851,7 +853,9 @@ export function useAgentSession(props: UseAgentSessionProps) {
       } catch { /* no guidance this session */ }
     }
     try {
+      uiLog(`[send] agent: send_agent_prompt (${wire.length} chars)`);
       await invokeTauri("send_agent_prompt", { text: wire });
+      uiLog("[send] agent: the prompt is with the program");
     } catch (err) {
       state.status = "ready";
       props.chatState.isLoading = false;

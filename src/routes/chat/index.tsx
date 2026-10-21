@@ -1484,6 +1484,7 @@ export default component$(() => {
     };
 
     if (!input.value.trim()) return;
+    uiLog(`[send] submit: ${input.value.trim().length} chars, folder ${agentState.folderPath ? "open" : "none"}, mode ${agentState.mode}, agent ${agentState.status}`);
 
     // Typing while a permission card waits IS the answer: decline with
     // instructions - the reply shows in place and goes to the agent next.
@@ -1616,7 +1617,9 @@ export default component$(() => {
       // the user's bubble on this path).
       dropReplacedTurn();
       const files = attachedFiles.value.map((f) => f.filename);
+      uiLog("[send] project path: raising the bubble");
       await prepareAgentTurn$(finalInput, files);
+      uiLog("[send] project path: bubble up, reading the session's documents");
       // The field is the person's again the moment the turn is on screen -
       // not after the documents search that rides with the prompt (the
       // prompt sat in the field for a second or two, field, 2026-09-24).
@@ -1625,6 +1628,7 @@ export default component$(() => {
       attachedImages.value = [];
       attachedFiles.value = [];
       const given = await sessionContext(fileContext, finalInput);
+      uiLog("[send] project path: documents read, sending");
       sendAgentPrompt$(finalInput, { context: given.context, library: given.library, files, docsGiven: given.docsGiven });
       return;
     }
