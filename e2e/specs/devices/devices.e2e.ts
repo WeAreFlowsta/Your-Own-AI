@@ -92,8 +92,9 @@ describe(`devices, phase ${PHASE}`, () => {
       console.log(`e2e: backup ${JSON.stringify(backup).slice(0, 300)}`);
       // "Back up now" is the forced path: it writes the full record even
       // inside the manifest's ten-minute hold, and says so.
-      expect(backup.status).toBe("ok");
-      expect(backup.records).toBeDefined();
+      expect(backup.manifest).toBe("written");
+      expect(["written", "unchanged"]).toContain(backup.ais);
+      expect(Number(backup.records)).toBeGreaterThan(0);
       // Every request the app makes to its Vault names the identity it
       // expects; the Vault refuses a request for another identity with 409
       // before doing anything. Checked on the test Vault directly, with a
