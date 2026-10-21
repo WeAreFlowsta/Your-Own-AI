@@ -68,6 +68,36 @@ describe("web access per AI", () => {
     }
   });
 
+  it("refuses a web search for an Offline Only AI, before any network", async function () {
+    this.timeout(400_000);
+    await waitForChat();
+    // Searching follows the MODEL setting, not the Web access switch: an
+    // Offline Only AI never searches, whatever its switch says.
+    const name = await browser.execute(async () => {
+      const t = (window as any).__TAURI__;
+      const path = await t.core.invoke("profile_store_path", { name: "ai-data.json" });
+      const store = await t.store.load(path);
+      const ais = ((await store.get("custom-ais")) || []) as { name: string; model?: string; webAccess?: boolean }[];
+      if (!ais.length) return null;
+      ais[0].model = "auto:offline";
+      ais[0].webAccess = true;
+      await store.set("custom-ais", ais);
+      await store.save();
+      return ais[0].name;
+    });
+    expect(name).toBeTruthy();
+    const r = await fetch("http://127.0.0.1:11435/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: name, input: LIVE_QUESTION }),
+    });
+    const body = (await r.json()) as { error?: { type?: string; message?: string } };
+    console.log(`e2e: /v1/responses for an Offline Only AI -> ${r.status} ${JSON.stringify(body).slice(0, 160)}`);
+    expect(r.status).toBe(403);
+    expect(body.error?.type).toBe("web_search_offline_only");
+    expect(body.error?.message).toContain("Offline Only");
+  });
+
   it("reads a page the person points at, with no prompt (default on)", async function () {
     this.timeout(600_000);
     await waitForChat();

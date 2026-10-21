@@ -90,6 +90,25 @@ describe(`devices, phase ${PHASE}`, () => {
       // device's Vault now.
       const backup = await invoke<Record<string, unknown>>("vault_backup_now");
       console.log(`e2e: backup ${JSON.stringify(backup).slice(0, 300)}`);
+      // "Back up now" is the forced path: it writes the full record even
+      // inside the manifest's ten-minute hold, and says so.
+      expect(backup.status).toBe("ok");
+      expect(backup.records).toBeDefined();
+      // Every request the app makes to its Vault names the identity it
+      // expects; the Vault refuses a request for another identity with 409
+      // before doing anything. Checked on the test Vault directly, with a
+      // real-shaped key that is not this identity's.
+      const port = process.env.YOAI_VAULT_PORT;
+      if (port) {
+        const other = "uhCAkQ3K9mYt2PwzLx8vRb1Hq5nJc7dFe0aUoSgWiTyBpNrVmZkEf";
+        const r = await fetch(`http://127.0.0.1:${port}/status?expected_identity=${other}`);
+        const body = (await r.json()) as { error?: string };
+        console.log(`e2e: /status for another identity -> ${r.status} ${JSON.stringify(body).slice(0, 120)}`);
+        expect(r.status).toBe(409);
+        expect(body.error).toBe("identity_mismatch");
+        const ok = await fetch(`http://127.0.0.1:${port}/status`);
+        expect(ok.status).toBe(200);
+      }
     } else if (PHASE === "b") {
       await waitForChat();
       const st = await escrow();
