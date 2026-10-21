@@ -62,6 +62,7 @@ describe("a download in flight on the wizard", () => {
       const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
       return { onTop: !!hit && b.contains(hit), hit: hit ? (hit as HTMLElement).tagName + "." + (hit as HTMLElement).className.toString().slice(0, 40) : null };
     });
+    console.log(`e2e: under the Download button's centre: ${JSON.stringify(covered)}`);
     expect(covered.onTop).toBe(true);
   });
 
