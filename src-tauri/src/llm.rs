@@ -3755,8 +3755,15 @@ pub(crate) fn netstat_listening_pids(text: &str, port: &str) -> Vec<String> {
 
 async fn embed_server_ready() -> bool {
     let client = local_http();
+    // Bounded: a server that accepted the connection but never answers must
+    // read as not ready, not hold every prompt that waits on its recall.
     matches!(
-        client.get(format!("http://localhost:{}/health", embed_port())).bearer_auth(local_api_key()).send().await,
+        client
+            .get(format!("http://localhost:{}/health", embed_port()))
+            .bearer_auth(local_api_key())
+            .timeout(std::time::Duration::from_secs(3))
+            .send()
+            .await,
         Ok(r) if r.status().is_success()
     )
 }
@@ -4052,9 +4059,13 @@ enum EmbedError {
 async fn embed_request(model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbedError> {
     let _busy = Inflight::new(&EMBED_INFLIGHT);
     let client = local_http();
+    // Bounded: an embedding that never comes back is an error the caller
+    // handles (a prompt goes without recall), never a wait with no end. A
+    // batch of passages on the processor can take seconds; a minute is room.
     let resp = client
         .post(format!("http://localhost:{}/v1/embeddings", embed_port())).bearer_auth(local_api_key())
         .json(&serde_json::json!({ "model": model, "input": texts }))
+        .timeout(std::time::Duration::from_secs(60))
         .send()
         .await
         .map_err(|e| EmbedError::Other(format!("Embedding request failed: {}", e)))?;

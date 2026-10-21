@@ -700,7 +700,7 @@ export function useChat(props: UseChatProps) {
       const queryVecPromise: Promise<number[] | null> = import(
         "../utils/embeddings"
       )
-        .then(({ embedQuery }) => embedQuery(userInput))
+        .then(({ embedQueryBounded }) => embedQueryBounded(userInput))
         .catch(() => null);
 
       // Memory retrieval is independent of routing - start it NOW so its
@@ -1686,7 +1686,7 @@ export function useChat(props: UseChatProps) {
           const before = [...state.messages].reverse().find((m) => m.role === "user" && m.content !== userInput)?.content;
           const followUp = followUpQuery(before, userInput);
           const followUpVec = followUp
-            ? await import("../utils/embeddings").then(({ embedQuery }) => embedQuery(followUp)).catch(() => null)
+            ? await import("../utils/embeddings").then(({ embedQueryBounded }) => embedQueryBounded(followUp)).catch(() => null)
             : null;
           const recalled = await loadDocumentContextUsed(
             selectedAi.id, qvec, room, 8, followUpVec,

@@ -1448,7 +1448,7 @@ export default component$(() => {
       let remembered = "";
       let library: LibraryDocGiven[] = [];
       try {
-        const { embedQuery } = await import("../../utils/embeddings");
+        const { embedQueryBounded } = await import("../../utils/embeddings");
         const { loadDocumentContextUsed, followUpQuery, RECALL_BEST_FOR_PAGE_QUESTION } = await import("../../utils/memory");
         const { findWebAddresses } = await import("../../utils/webAddresses");
         // A follow-up is also searched together with the question before it.
@@ -1459,14 +1459,14 @@ export default component$(() => {
         // question that names a page takes documents only on a strong match.
         const t0 = Date.now();
         uiLog("[recall] embedding the question for the session's documents");
-        const qv = await embedQuery(question);
+        const qv = await embedQueryBounded(question);
         uiLog(`[recall] question embedded in ${Date.now() - t0} ms`);
         const recalled = await loadDocumentContextUsed(
           selectedAi.value.id,
           qv,
           2000,
           6,
-          followUp ? await embedQuery(followUp) : null,
+          followUp ? await embedQueryBounded(followUp) : null,
           findWebAddresses(question).length > 0 ? RECALL_BEST_FOR_PAGE_QUESTION : undefined,
         );
         remembered = recalled.text;

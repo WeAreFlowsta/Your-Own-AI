@@ -34,6 +34,29 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
 }
 
 /** Embed stored documents (notes, transcript turns, tool descriptions) for the index. */
+/** How long a prompt waits on its question's embedding before going without
+ *  document recall. The embedding server can stop answering when a chat
+ *  model has just filled the card and the helpers are being moved; a prompt
+ *  must never wait on that with nothing on screen. */
+export const EMBED_QUERY_BUDGET_MS = 15_000;
+
+/** embedQuery, bounded: null when the embedding does not come back in time,
+ *  so the caller sends without document passages instead of waiting. */
+export async function embedQueryBounded(query: string, budgetMs = EMBED_QUERY_BUDGET_MS): Promise<number[] | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), budgetMs); });
+  try {
+    const vec = await Promise.race([embedQuery(query), late]);
+    if (vec === null) {
+      const { uiLog } = await import("./uiLog");
+      uiLog(`[recall] the embedding did not answer within ${Math.round(budgetMs / 1000)} s - sending without document passages`, "warn");
+    }
+    return vec;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function embedDocuments(texts: string[]): Promise<number[][]> {
   return embedTexts(texts.map((t) => `${EMBEDDING_PREFIXES.doc}${t}`));
 }
