@@ -3,7 +3,7 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
-## [0.9.0] - 2026-10-15
+## [0.9.0] - 2026-10-22
 
 ### Highlights
 - **Your AIs on every computer you own.** Sign in with the same Flowsta
