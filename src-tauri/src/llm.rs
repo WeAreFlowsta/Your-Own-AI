@@ -867,10 +867,40 @@ pub(crate) fn model_thinks_on_request(model_name: &str) -> bool {
 pub(crate) fn model_forces_thought(model_name: &str) -> bool {
     (|| {
         let dir = CURRENT_MODELS_DIR.lock().ok()?.clone()?;
-        let m = crate::gguf::read_meta(&dir.join(model_name)).ok()?;
-        Some(m.template_forced_thought)
+        Some(template_forces_thought_in(&dir, model_name))
     })()
     .unwrap_or(false)
+}
+
+/// The same reading for a model in a given directory (the truth matrix
+/// runs its own bench server from the directory it is handed).
+pub(crate) fn template_forces_thought_in(dir: &std::path::Path, model_name: &str) -> bool {
+    crate::gguf::read_meta(&dir.join(model_name)).map(|m| m.template_forced_thought).unwrap_or(false)
+}
+
+/// Everything a chat turn does to be answered without thinking, applied to
+/// a request body whose `messages` are built: the engine's budget / effort
+/// (chat_turn_reasoning_controls) and, for a template that forces a
+/// thought, the empty-thought prefill. One shape for the app's chat turn
+/// and the truth matrix's chat legs, so the matrix asks the way the app
+/// asks (10-22: the matrix kept reporting "thought first despite the
+/// no-thinking ask" for a model the app had already fixed). Returns
+/// whether a thought was prefilled.
+pub(crate) fn apply_no_think(body: &mut serde_json::Value, dir: &std::path::Path, model: &str) -> bool {
+    let (budget, effort) = chat_turn_reasoning_controls(model);
+    if let Some(b) = budget {
+        body["reasoning_budget_tokens"] = serde_json::json!(b);
+    }
+    if let Some(e) = effort {
+        body["reasoning_effort"] = serde_json::json!(e);
+    }
+    let forced = template_forces_thought_in(dir, model);
+    if forced {
+        if let Some(arr) = body["messages"].as_array_mut() {
+            arr.push(serde_json::json!({ "role": "assistant", "content": EMPTY_THOUGHT_PREFILL }));
+        }
+    }
+    forced
 }
 
 /// The assistant prefill that closes a forced thought: one space, which the

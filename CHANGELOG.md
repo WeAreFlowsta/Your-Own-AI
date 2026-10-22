@@ -323,6 +323,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   button says.
 
 ### Diagnostics
+- The truth matrix's chat, answer-quality, think-switch and sampling legs
+  now ask a model exactly the way a chat turn in the app asks it, with the
+  same no-thinking shape, so a model the app answers with is not reported
+  as thinking first or running out of room.
 - The build's closure-order check also fails on a closure that reads a
   signal, store or computed value declared below it, the fault behind
   the stopped project questions.

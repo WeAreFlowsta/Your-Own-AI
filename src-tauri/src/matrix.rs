@@ -405,6 +405,9 @@ async fn ask_scenarios(
     model: &str,
     scenarios: &[(&str, &str)],
     tool_marker: Option<&'static str>,
+    // The directory the model file sits in (its template decides the
+    // no-thinking shape); None for an MLX model, which has no GGUF header.
+    dir: Option<&Path>,
 ) -> String {
     use std::time::Duration;
     let client = crate::llm::local_http();
@@ -429,12 +432,21 @@ async fn ask_scenarios(
             "stop": crate::llm::chat_stop_strings_with(model, tool_marker),
         });
         crate::llm::apply_sampling(&mut body, None, false);
-        let (budget, effort) = crate::llm::chat_turn_reasoning_controls(model);
-        if let Some(b) = budget {
-            body["reasoning_budget_tokens"] = serde_json::json!(b);
-        }
-        if let Some(e) = effort {
-            body["reasoning_effort"] = serde_json::json!(e);
+        // The app's no-thinking shape (budget / effort, and the empty-thought
+        // prefill for a template that forces a thought).
+        match dir {
+            Some(d) => {
+                crate::llm::apply_no_think(&mut body, d, model);
+            }
+            None => {
+                let (budget, effort) = crate::llm::chat_turn_reasoning_controls(model);
+                if let Some(b) = budget {
+                    body["reasoning_budget_tokens"] = serde_json::json!(b);
+                }
+                if let Some(e) = effort {
+                    body["reasoning_effort"] = serde_json::json!(e);
+                }
+            }
         }
         let v: serde_json::Value = match client
             .post(format!("http://127.0.0.1:{}/v1/chat/completions", bench_port()))
@@ -558,15 +570,15 @@ pub async fn bench_chat_format(
         Err(e) => return format!("FAIL load: {e}"),
     };
     let marker = meta.as_ref().and_then(|m| m.tool_call_marker);
-    let mut verdict = ask_scenarios(model, scenarios, marker).await;
+    let mut verdict = ask_scenarios(model, scenarios, marker, Some(dir)).await;
     // The think switch (routing's P2 output) is honored: on a template with
     // a switch, thinking on must produce reasoning and thinking off must
     // not. Same server, two short asks.
     if let Some(m) = meta.as_ref().filter(|m| m.template_enable_thinking || m.template_reasoning_strength) {
         if !verdict.starts_with("FAIL") {
             let strength = m.template_reasoning_strength;
-            let on = ask_think(model, true, strength, marker).await;
-            let off = ask_think(model, false, strength, marker).await;
+            let on = ask_think(model, true, strength, marker, dir).await;
+            let off = ask_think(model, false, strength, marker, dir).await;
             verdict.push_str(&match (on, off) {
                 (Ok((on_r, _)), Ok((off_r, off_v))) if on_r > 0 && off_r == 0 && off_v > 0 => {
                     format!(" | think switch ok (on {on_r} chars, off 0)")
@@ -586,7 +598,7 @@ pub async fn bench_chat_format(
 
 /// One ask with thinking on (enable_thinking / reasoning_strength high) or
 /// off (the app's chat-turn controls). Returns (reasoning chars, visible chars).
-async fn ask_think(model: &str, on: bool, strength: bool, marker: Option<&'static str>) -> Result<(usize, usize), String> {
+async fn ask_think(model: &str, on: bool, strength: bool, marker: Option<&'static str>, dir: &Path) -> Result<(usize, usize), String> {
     use std::time::Duration;
     let client = crate::llm::local_http();
     let mut body = serde_json::json!({
@@ -610,13 +622,7 @@ async fn ask_think(model: &str, on: bool, strength: bool, marker: Option<&'stati
         }
         body["chat_template_kwargs"] = serde_json::Value::Object(kw);
     } else {
-        let (budget, effort) = crate::llm::chat_turn_reasoning_controls(model);
-        if let Some(b) = budget {
-            body["reasoning_budget_tokens"] = serde_json::json!(b);
-        }
-        if let Some(e) = effort {
-            body["reasoning_effort"] = serde_json::json!(e);
-        }
+        crate::llm::apply_no_think(&mut body, dir, model);
     }
     let v: serde_json::Value = client
         .post(format!("http://127.0.0.1:{}/v1/chat/completions", bench_port()))
@@ -867,7 +873,7 @@ pub async fn leg_quality(bin: &Path, dir: &Path, loaded: Option<&str>, sink: Sin
                 too_slow = true;
                 break;
             }
-            let body = serde_json::json!({
+            let mut body = serde_json::json!({
                 "model": model,
                 "messages": [
                     {"role": "system", "content": format!("You are a helpful, plain-spoken assistant. Answer the question directly.{}", case.system_extra.unwrap_or(""))},
@@ -880,6 +886,9 @@ pub async fn leg_quality(bin: &Path, dir: &Path, loaded: Option<&str>, sink: Sin
                 "max_tokens": 1500, "temperature": 0.0, "stream": false, "cache_prompt": true,
                 "stop": crate::llm::chat_stop_strings(&model),
             });
+            // Asked the way the app's chat turn asks: no thinking (budget /
+            // effort, and the empty-thought prefill for a forced template).
+            crate::llm::apply_no_think(&mut body, dir, &model);
             let t0 = std::time::Instant::now();
             let v: Result<serde_json::Value, String> = async {
                 client.post(format!("http://127.0.0.1:{}/v1/chat/completions", bench_port())).json(&body).timeout(Duration::from_secs(300)).send().await
@@ -1358,6 +1367,7 @@ pub async fn leg_sampling(bin: &Path, dir: &Path, model: &str, sink: Sink<'_>) -
     let ask = |sampling: Option<crate::llm::SamplingParams>, seed: Option<u64>| {
         let client = client.clone();
         let model = model.to_string();
+        let dir = dir.to_path_buf();
         async move {
             let mut body = serde_json::json!({
                 "model": model,
@@ -1371,13 +1381,7 @@ pub async fn leg_sampling(bin: &Path, dir: &Path, model: &str, sink: Sink<'_>) -
                 // in the reply (4060 Ti, 09-13) - the knob was fine.
                 "cache_prompt": false,
             });
-            let (budget, effort) = crate::llm::chat_turn_reasoning_controls(&model);
-            if let Some(b) = budget {
-                body["reasoning_budget_tokens"] = serde_json::json!(b);
-            }
-            if let Some(e) = effort {
-                body["reasoning_effort"] = serde_json::json!(e);
-            }
+            crate::llm::apply_no_think(&mut body, &dir, &model);
             crate::llm::apply_sampling(&mut body, sampling.as_ref(), false);
             if let Some(sd) = seed {
                 body["seed"] = serde_json::json!(sd);
@@ -1516,7 +1520,7 @@ pub async fn leg_mlx(app: &AppHandle, bin_dir_hint: &Path, sink: Sink<'_>) -> Ve
         ];
         let verdict = match spawn_bench_server(&bin, bin_dir_hint, args).await {
             Ok(guard) => {
-                let v = ask_scenarios(&name, &CHAT_SCENARIOS, None).await;
+                let v = ask_scenarios(&name, &CHAT_SCENARIOS, None, None).await;
                 drop(guard);
                 v
             }
