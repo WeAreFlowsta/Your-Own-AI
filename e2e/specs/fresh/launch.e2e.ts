@@ -52,6 +52,15 @@ describe("a download in flight on the wizard", () => {
     const pill = await $('[data-testid="welcome-progress"]');
     await pill.waitForDisplayed({ timeout: 10_000 });
     await browser.waitUntil(async () => (await pill.getText()).includes("42%"), { timeout: 10_000, timeoutMsg: "the wizard pill never showed the progress" });
+    // The app's own startup loader ("Setting up AI agents...") can sit over
+    // the wizard for ~10 s after this reload: the three AIs the earlier
+    // tests created have no agent keys yet, and the loading gate holds
+    // until they do (10-21, 10-22: the check below hit that overlay twice).
+    // It clears on its own; wait for it, then look at what covers the button.
+    await browser.waitUntil(async () => !(await $("#app-loading").isDisplayed()), {
+      timeout: 120_000,
+      timeoutMsg: "the startup loader never cleared off the wizard",
+    });
     await shot("03-wizard-download-in-flight");
     // The activity tray must not be on this page at all.
     expect(await $('[data-testid="activity-tray"]').isExisting()).toBe(false);
