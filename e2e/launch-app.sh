@@ -58,4 +58,16 @@ if [ -n "${YOAI_E2E_WITH_RENDEZVOUS:-}" ]; then
   fi
 fi
 if [ "${XDG_SESSION_TYPE:-}" = "wayland" ] && [ -z "${YOAI_E2E_NATIVE_WAYLAND:-}" ]; then export GDK_BACKEND=x11; fi
-exec "$HERE/../src-tauri/target/debug/app" "$@"
+# One instance per spec. The app hands a second launch off to a running
+# instance (single-instance), so a previous spec's app that is still
+# shutting down would answer this spec's driver with its own stale state
+# (10-22: three specs in a row saw "no model loaded" after a spec that ran
+# a matrix leg - its instance outlived the session end). Wait for any e2e
+# instance of THIS binary to go; after 20 s, end it by pid. Only the e2e
+# build's own path is matched, never an installed app.
+BIN="$HERE/../src-tauri/target/debug/app"
+BIN_REAL="$(readlink -f "$BIN")"
+leftover() { for pid in $(pgrep -x app); do [ "$(readlink -f "/proc/$pid/exe" 2>/dev/null)" = "$BIN_REAL" ] && echo "$pid"; done; }
+for _ in $(seq 1 40); do [ -z "$(leftover)" ] && break; sleep 0.5; done
+for pid in $(leftover); do echo "e2e: ending leftover app instance $pid" >&2; kill -9 "$pid" 2>/dev/null || true; done
+exec "$BIN" "$@"
