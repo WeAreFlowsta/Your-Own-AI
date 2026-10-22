@@ -68,6 +68,11 @@ if [ "${XDG_SESSION_TYPE:-}" = "wayland" ] && [ -z "${YOAI_E2E_NATIVE_WAYLAND:-}
 BIN="$HERE/../src-tauri/target/debug/app"
 BIN_REAL="$(readlink -f "$BIN")"
 leftover() { for pid in $(pgrep -x app); do [ "$(readlink -f "/proc/$pid/exe" 2>/dev/null)" = "$BIN_REAL" ] && echo "$pid"; done; }
-for _ in $(seq 1 40); do [ -z "$(leftover)" ] && break; sleep 0.5; done
-for pid in $(leftover); do echo "e2e: ending leftover app instance $pid" >&2; kill -9 "$pid" 2>/dev/null || true; done
+# The two-device harness (devices-live.sh phase c) runs a second instance
+# on shifted ports beside an unattended first one on purpose: the guard
+# stands down for an offset launch, or it would end device A.
+if [ -z "${YOAI_PORT_OFFSET:-}" ]; then
+  for _ in $(seq 1 40); do [ -z "$(leftover)" ] && break; sleep 0.5; done
+  for pid in $(leftover); do echo "e2e: ending leftover app instance $pid" >&2; kill -9 "$pid" 2>/dev/null || true; done
+fi
 exec "$BIN" "$@"

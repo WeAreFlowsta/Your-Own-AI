@@ -92,6 +92,9 @@ trap 'killA; killtests; sleep 2; killtests' EXIT
 for _ in $(seq 1 60); do curl -s -m 2 http://127.0.0.1:11435/health | grep -q '"ok"' && break; sleep 2; done
 curl -s -m 2 http://127.0.0.1:11435/health | grep -q '"ok"' || { echo "device A never came up for phase c"; exit 1; }
 echo "== device A is up (pid $A_PID); driving B"
-YOAI_E2E_HOME="$B" YOAI_VAULT_PORT="$P2" YOAI_PORT_OFFSET=100 YOAI_E2E_WITH_RENDEZVOUS=1 DEVICES_PHASE=c node e2e/run.mjs models --spec e2e/specs/devices/devices.e2e.ts
+# Phase c waits up to six minutes for A's record to reach B through the
+# rendezvous (10-22: it arrived at 5 min and the five-minute harness limit
+# had already fired) - the long limit applies.
+YOAI_E2E_LONG=1 YOAI_E2E_HOME="$B" YOAI_VAULT_PORT="$P2" YOAI_PORT_OFFSET=100 YOAI_E2E_WITH_RENDEZVOUS=1 DEVICES_PHASE=c node e2e/run.mjs models --spec e2e/specs/devices/devices.e2e.ts
 killA
 echo "== all three phases passed; profiles kept at $ROOT"
