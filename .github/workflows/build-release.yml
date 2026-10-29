@@ -200,6 +200,12 @@ jobs:
           HC_RELEASE: holochain-0.6.1
         run: |
           mkdir -p src-tauri/binaries
+          pinned() { awk -v k="$1" '$1 !~ /^#/ && $2 == k { print $1 }' .github/holochain-sidecars.sha256; }
+          sha() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
+          check() { # file, release/asset
+            w=$(pinned "$2"); g=$(sha "$1")
+            [ -n "$w" ] && [ "$g" = "$w" ] || { echo "$2: SHA-256 $g does not match the pinned ${w:-(none)}"; exit 1; }
+          }
           BASE="https://github.com/holochain/holochain/releases/download/${HC_RELEASE}"
           T="${{ matrix.target }}"
           EXT=""
@@ -208,8 +214,8 @@ jobs:
             DEST="src-tauri/binaries/yourowai-${BIN}-${T}${EXT}"
             curl -fsSL --retry 5 --retry-delay 20 --retry-all-errors "${BASE}/${BIN}-${T}${EXT}" -o "$DEST"
             chmod +x "$DEST"
-            test "$(wc -c < "$DEST")" -gt 1000000 || { echo "${BIN} download too small"; exit 1; }
-            echo "yourowai-${BIN}-${T}${EXT} (${HC_RELEASE})"
+            check "$DEST" "${HC_RELEASE}/${BIN}-${T}${EXT}"
+            echo "yourowai-${BIN}-${T}${EXT} (${HC_RELEASE}, checksum verified)"
           done
 
       # pdfium renders scanned-PDF pages for OCR. tauri.conf bundles

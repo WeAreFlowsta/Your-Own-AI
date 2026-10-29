@@ -1,0 +1,25 @@
+# SHA-256 of the Holochain release binaries this build downloads
+# (https://github.com/holochain/holochain/releases), as GitHub reports each
+# asset's digest. The build stops when a download does not match: a
+# replaced or tampered release asset never reaches an installer.
+# Format: <sha256>  <release tag>/<asset name>
+cfff436e181b7afb1e86cd12bb5a337954493328229c79c1dc9db5a1519c7851  holochain-0.6.1/holochain-aarch64-apple-darwin
+263be8307257a08c46a1b7d547c26cd213a7ab986602498c15eccb2618107246  holochain-0.6.1/holochain-aarch64-unknown-linux-gnu
+12e6424578899d5fa8847b0e4be709848370277587b552e7520eebfb03f9b7d8  holochain-0.6.1/holochain-x86_64-apple-darwin
+8bf0355d5ff203a91d981c210676300ac12e3aa2669a0f002e6e6ae3747fe747  holochain-0.6.1/holochain-x86_64-pc-windows-msvc.exe
+423f1111773c83c4c4f07e0bb338289d9bf0c5fa53dd31414b05b0dc8119ada7  holochain-0.6.1/holochain-x86_64-unknown-linux-gnu
+c3312988eb14fcb0ee0d6cba01e8a41601f48c7a69e03135cbd737d0d9ad774d  holochain-0.6.1/lair-keystore-aarch64-apple-darwin
+014e8cf91ff60dcf15c835104a69c46ee8387a83662ba1083156e88c4c2877de  holochain-0.6.1/lair-keystore-aarch64-unknown-linux-gnu
+5ec0c1a70b96ccc625efcee3e23f9d054cadccee379101e179eebb225d7b19d7  holochain-0.6.1/lair-keystore-x86_64-apple-darwin
+2bbb29415da515a3732cb8d3c51fcf933eb2c44605de2036b8671821b5a414a0  holochain-0.6.1/lair-keystore-x86_64-pc-windows-msvc.exe
+4d13042d70803d9556bad5f2bfcd01e7daf33ee51ced16cd8d2377a321cceed0  holochain-0.6.1/lair-keystore-x86_64-unknown-linux-gnu
+5a2a4b1db5e2aa2cfa6b2b480c12633de92a20850852a2c58a97721a19771ad6  holochain-0.7.1/holochain-aarch64-apple-darwin
+dcf9ad7f90ae32b2a3dab6b6bae560760403c5bba94d7c02da608930c42cb2fa  holochain-0.7.1/holochain-aarch64-unknown-linux-gnu
+9fcbcb770ef7d60bd6c6a8ca94a4a715ffd24d8b4daf43fb1b76a162b0493a40  holochain-0.7.1/holochain-x86_64-apple-darwin
+59261119a3ad3e51cd33d996be3110d39a5c4d1cc7c34c173a28efec137bb5b1  holochain-0.7.1/holochain-x86_64-pc-windows-msvc.exe
+0c14700874349c8417c4bfebfe845e7ab036757442e4388e50dd622bb3c89974  holochain-0.7.1/holochain-x86_64-unknown-linux-gnu
+1e074d8587b8bc2125d9a379a443c27363b8e60955cad5faa8638d653dd19289  holochain-0.7.1/lair-keystore-aarch64-apple-darwin
+69a96c3b06eec29a288f04ecf0210bb281697423a3ee10bc393ceea0d712c823  holochain-0.7.1/lair-keystore-aarch64-unknown-linux-gnu
+34a40c1b4324801db1c028dafaf82ea3276c808971c6ad1830fcf445e6f35419  holochain-0.7.1/lair-keystore-x86_64-apple-darwin
+16750b08e5ddd50a04f493142bc85b33cc6bfaf0ef7c7fe9cb215129787a923f  holochain-0.7.1/lair-keystore-x86_64-pc-windows-msvc.exe
+87c7a02556d47d950f0d4284bfdb4e37737b0bc98afe038955817793606d669a  holochain-0.7.1/lair-keystore-x86_64-unknown-linux-gnu
