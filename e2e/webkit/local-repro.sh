@@ -9,6 +9,8 @@
 # offload variables instead makes WebKit abort at startup ("Could not
 # create GBM EGL display") - not a real configuration. Lock the Vault first
 # so the scratch app starts on a local profile. Delete the scratch home after.
+# GDB=1 runs it under gdb and prints the crashing stack and the library
+# load addresses when it stops.
 set -euo pipefail
 APP=/usr/bin/app
 pgrep -x app >/dev/null && { echo "Your Own AI is already running - close it first"; exit 1; }
@@ -17,4 +19,9 @@ mkdir -p "$SCRATCH"
 export HOME="$SCRATCH" XDG_CONFIG_HOME="$SCRATCH/.config" XDG_DATA_HOME="$SCRATCH/.local/share" XDG_CACHE_HOME="$SCRATCH/.cache"
 echo "session: ${XDG_SESSION_TYPE:-?}  display GPU: $(prime-select query 2>/dev/null || echo ?)  WebKitGTK $(dpkg-query -W -f='${Version}' libwebkit2gtk-4.1-0)"
 echo "scratch home: $SCRATCH"
+if [ "${GDB:-}" = 1 ]; then
+  exec gdb -q -batch -iex 'set debuginfod enabled off' -ex 'set pagination off' \
+    -ex 'handle SIGPIPE SIGUSR1 SIGUSR2 SIG34 SIG35 nostop noprint pass' \
+    -ex run -ex 'bt 60' -ex 'info sharedlibrary' --args "$APP"
+fi
 exec "$APP"
