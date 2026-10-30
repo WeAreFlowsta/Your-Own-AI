@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Launch checks against the system WebKitGTK: the installed Your Own AI
 # package and WebKitGTK's own MiniBrowser, under X11 (Xvfb) and Wayland
-# (headless Weston). Each case runs for CHECK_SECONDS (default 60) with a
-# fresh profile and its own session bus. Crashes are caught by
-# systemd-coredump; backtraces.sh reads them afterwards.
+# (headless Weston). Each case runs for CHECK_SECONDS (default 90) with a
+# fresh profile and its own session bus; the offline case runs in a
+# network namespace with loopback only. A fresh profile joins only its own
+# private network (a random network seed per profile). Crashes are caught
+# by systemd-coredump; backtraces.sh reads them afterwards.
 #
 # Prints a results table (also to the GitHub step summary when there is
 # one) and writes logs and X11 screenshots to the output folder. Exits 1
@@ -13,7 +15,7 @@
 set -u
 OUT="${1:?usage: check.sh <output dir>}"; mkdir -p "$OUT"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SECS="${CHECK_SECONDS:-60}"
+SECS="${CHECK_SECONDS:-90}"
 # The program the desktop entry launches (the package also puts its
 # sidecars in /usr/bin).
 DESKTOP="$(dpkg -L your-own-ai 2>/dev/null | grep -m1 '\.desktop$')"
@@ -45,13 +47,17 @@ done
 echo "X11: Xvfb :99 ($(grep -m1 'OpenGL renderer' "$OUT/glxinfo.txt" | cut -d: -f2- | xargs))"
 echo "Wayland: ${WAYLAND:+headless Weston, $WAYLAND renderer}${WAYLAND:-not available}"
 
+# No network but loopback, for the offline case.
+sudo ip netns add check-offline && sudo ip netns exec check-offline ip link set lo up
+
 # --- one case -----------------------------------------------------------------
 ROWS=()
 CRASHED=0
-run_case() { # name display(x11|wayland) app|minibrowser [url] [VAR=value ...]
+run_case() { # name display(x11|wayland) app|app-offline|minibrowser [url] [VAR=value ...]
   local name=$1 disp=$2 kind=$3; shift 3
-  local cmd=("$APP")
+  local cmd=("$APP") prefix=()
   if [ "$kind" = minibrowser ]; then cmd=("$MB" "$1"); shift; fi
+  [ "$kind" = app-offline ] && prefix=(sudo ip netns exec check-offline sudo -u "$(id -un)" --)
   if [ "$disp" = wayland ] && [ -z "$WAYLAND" ]; then
     ROWS+=("| $name | $disp | - | skipped: no Wayland compositor | |"); return
   fi
@@ -62,9 +68,9 @@ run_case() { # name display(x11|wayland) app|minibrowser [url] [VAR=value ...]
   (
     cd "$home" || exit 1
     ulimit -c unlimited
-    exec setsid dbus-run-session -- env "${denv[@]}" "$@" \
+    exec setsid "${prefix[@]}" dbus-run-session -- env "${denv[@]}" "$@" \
       HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" \
-      XDG_CACHE_HOME="$home/.cache" "${cmd[@]}"
+      XDG_CACHE_HOME="$home/.cache" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" "${cmd[@]}"
   ) >"$OUT/$name.log" 2>&1 &
   local pid=$! t=0 result="running after ${SECS}s" windows="-"
   while [ "$t" -lt "$SECS" ]; do
@@ -73,7 +79,7 @@ run_case() { # name display(x11|wayland) app|minibrowser [url] [VAR=value ...]
       windows=$(DISPLAY=:99 xdotool search --onlyvisible --name '.+' getwindowname %@ 2>/dev/null | paste -sd '/' -)
       windows="${windows:-none}"
     fi
-    if [ "$disp" = x11 ] && { [ "$t" -eq 10 ] || [ "$t" -eq 30 ] || [ "$t" -eq $((SECS - 5)) ]; }; then
+    if [ "$disp" = x11 ] && { [ "$t" -eq 10 ] || [ "$t" -eq 30 ] || [ "$t" -eq 60 ] || [ "$t" -eq $((SECS - 5)) ]; }; then
       import -display :99 -window root "$OUT/$name-${t}s.png" 2>/dev/null || true
     fi
     if ! kill -0 "$pid" 2>/dev/null; then
@@ -100,6 +106,7 @@ run_case() { # name display(x11|wayland) app|minibrowser [url] [VAR=value ...]
 run_case app-x11            x11     app
 run_case app-x11-scale2     x11     app GDK_SCALE=2
 run_case app-wayland        wayland app
+run_case app-x11-offline    x11     app-offline
 run_case minibrowser-blank-x11      x11     minibrowser about:blank
 run_case minibrowser-vt-x11         x11     minibrowser "$PAGE"
 run_case minibrowser-novt-x11       x11     minibrowser "$PAGE?vt=0"
