@@ -1,0 +1,71 @@
+name: WebKitGTK launch check
+
+# Launches the released Linux package, and WebKitGTK's own MiniBrowser on
+# a view-transition test page, against the newest system WebKitGTK of a
+# fresh Ubuntu, under X11 and Wayland. Reports whether anything crashed,
+# with a symbolized backtrace for every crash (e2e/webkit/).
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Release tag whose Linux .deb to launch
+        default: v0.9.0
+  push:
+    branches: [ci/webkit-check]
+    paths:
+      - ".github/workflows/webkit-check.yml"
+      - "e2e/webkit/**"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      RELEASE: ${{ inputs.release || 'v0.9.0' }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the release, the system WebKitGTK and the tools
+        run: |
+          gh release download "$RELEASE" --repo "$GITHUB_REPOSITORY" --pattern '*-Linux.deb' --dir "$RUNNER_TEMP/release"
+          sudo apt-get update -q
+          sudo apt-get install -y -q "$RUNNER_TEMP"/release/*.deb \
+            xvfb weston imagemagick gdb elfutils jq mesa-utils dbus systemd-coredump
+          sudo sysctl -q -p /usr/lib/sysctl.d/50-coredump.conf
+
+      # A test run is not a person: its throwaway profiles stay off the
+      # public peer networks.
+      - name: Keep test profiles off the peer networks
+        run: echo "0.0.0.0 bootstrap.flowsta.com node1.flowsta.com bootstrap-staging.flowsta.com" | sudo tee -a /etc/hosts
+
+      - name: What this runner has
+        run: |
+          lsb_release -ds
+          uname -r
+          dpkg-query -W -f='${Package} ${Version}\n' libwebkit2gtk-4.1-0 libjavascriptcoregtk-4.1-0 libgl1-mesa-dri weston your-own-ai 2>/dev/null || true
+          cat /proc/sys/kernel/core_pattern
+
+      - name: Launch checks
+        run: e2e/webkit/check.sh "$RUNNER_TEMP/out"
+
+      - name: Backtraces
+        if: always()
+        run: e2e/webkit/backtraces.sh "$RUNNER_TEMP/out"
+
+      - name: Keep the logs, screenshots and backtraces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webkit-check-${{ matrix.os }}
+          path: ${{ runner.temp }}/out
+          retention-days: 14

@@ -1,0 +1,30 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>View transition check</title>
+<!--
+  Changes the page every 400 ms, the first time right after load (the
+  way the app's start page navigates at once). With view transitions
+  (the default) each change runs inside document.startViewTransition;
+  with ?vt=0 the same changes run without one, as the control.
+-->
+<style>
+  body { font: 32px sans-serif; margin: 40px; background: #fff; color: #111; }
+  #box { width: 300px; height: 200px; background: steelblue; view-transition-name: box; }
+  .moved #box { margin-left: 400px; background: tomato; }
+</style>
+<p id="status">starting</p>
+<div id="box"></div>
+<script>
+  const wanted = !location.search.includes("vt=0");
+  const supported = typeof document.startViewTransition === "function";
+  let changes = 0;
+  const change = () => { document.body.classList.toggle("moved"); changes++; };
+  const tick = () => {
+    if (wanted && supported) document.startViewTransition(change); else change();
+    document.getElementById("status").textContent =
+      `view transitions ${supported ? "supported" : "not supported"}, ` +
+      `${wanted && supported ? "used" : "not used"}: ${changes} changes`;
+  };
+  tick();
+  setInterval(tick, 400);
+</script>
