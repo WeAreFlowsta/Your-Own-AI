@@ -14,7 +14,10 @@ set -u
 OUT="${1:?usage: check.sh <output dir>}"; mkdir -p "$OUT"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SECS="${CHECK_SECONDS:-60}"
-APP="$(dpkg -L your-own-ai 2>/dev/null | grep -m1 '^/usr/bin/')"
+# The program the desktop entry launches (the package also puts its
+# sidecars in /usr/bin).
+DESKTOP="$(dpkg -L your-own-ai 2>/dev/null | grep -m1 '\.desktop$')"
+APP="$(command -v "$(sed -n 's/^Exec=\([^ ]*\).*/\1/p' "$DESKTOP" 2>/dev/null | head -1)")"
 MB="$(ls /usr/lib/*/webkit2gtk-4.1/MiniBrowser 2>/dev/null | head -1)"
 PAGE="file://$HERE/view-transition.html"
 [ -n "$APP" ] || { echo "the your-own-ai package is not installed"; exit 2; }
@@ -50,7 +53,7 @@ run_case() { # name display(x11|wayland) app|minibrowser [url] [VAR=value ...]
   local cmd=("$APP")
   if [ "$kind" = minibrowser ]; then cmd=("$MB" "$1"); shift; fi
   if [ "$disp" = wayland ] && [ -z "$WAYLAND" ]; then
-    ROWS+=("| $name | $disp | skipped: no Wayland compositor | |"); return
+    ROWS+=("| $name | $disp | - | skipped: no Wayland compositor | |"); return
   fi
   local denv=(-u WAYLAND_DISPLAY DISPLAY=:99 GDK_BACKEND=x11)
   [ "$disp" = wayland ] && denv=(-u DISPLAY WAYLAND_DISPLAY=wl-check GDK_BACKEND=wayland)
@@ -63,9 +66,13 @@ run_case() { # name display(x11|wayland) app|minibrowser [url] [VAR=value ...]
       HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" \
       XDG_CACHE_HOME="$home/.cache" "${cmd[@]}"
   ) >"$OUT/$name.log" 2>&1 &
-  local pid=$! t=0 result="running after ${SECS}s"
+  local pid=$! t=0 result="running after ${SECS}s" windows="-"
   while [ "$t" -lt "$SECS" ]; do
     sleep 1; t=$((t + 1))
+    if [ "$disp" = x11 ] && [ "$t" -eq 15 ]; then
+      windows=$(DISPLAY=:99 xdotool search --onlyvisible --name '.+' getwindowname %@ 2>/dev/null | paste -sd '/' -)
+      windows="${windows:-none}"
+    fi
     if [ "$disp" = x11 ] && { [ "$t" -eq 10 ] || [ "$t" -eq 30 ] || [ "$t" -eq $((SECS - 5)) ]; }; then
       import -display :99 -window root "$OUT/$name-${t}s.png" 2>/dev/null || true
     fi
@@ -85,8 +92,8 @@ run_case() { # name display(x11|wayland) app|minibrowser [url] [VAR=value ...]
   for f in "$home"/.local/share/*/logs/*.log; do
     [ -f "$f" ] && cp "$f" "$OUT/$name-app-$(basename "$f" | tr ' ' '_')"
   done
-  ROWS+=("| $name | $disp | $result | ${crashes:-none} |")
-  echo "$name: $result; crashes: ${crashes:-none}"
+  ROWS+=("| $name | $disp | $windows | $result | ${crashes:-none} |")
+  echo "$name: $result; windows at 15s: $windows; crashes: ${crashes:-none}"
 }
 
 # --- the cases ----------------------------------------------------------------
@@ -106,8 +113,10 @@ run_case minibrowser-novt-wayland   wayland minibrowser "$PAGE?vt=0"
   echo
   echo "WebKitGTK $(dpkg-query -W -f='${Version}' libwebkit2gtk-4.1-0 2>/dev/null), $(dpkg-query -W -f='your-own-ai ${Version}' your-own-ai 2>/dev/null), ${SECS}s per case"
   echo
-  echo "| Case | Display | Result | Crashes |"
-  echo "|---|---|---|---|"
+  echo "Program: $APP"
+  echo
+  echo "| Case | Display | Windows at 15s (X11) | Result | Crashes |"
+  echo "|---|---|---|---|---|"
   printf '%s\n' "${ROWS[@]}"
 } | tee "$OUT/summary.md" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
 cat "$OUT/summary.md"

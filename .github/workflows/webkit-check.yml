@@ -40,7 +40,7 @@ jobs:
           gh release download "$RELEASE" --repo "$GITHUB_REPOSITORY" --pattern '*-Linux.deb' --dir "$RUNNER_TEMP/release"
           sudo apt-get update -q
           sudo apt-get install -y -q "$RUNNER_TEMP"/release/*.deb \
-            xvfb weston imagemagick gdb elfutils jq mesa-utils dbus systemd-coredump
+            xvfb weston xdotool imagemagick gdb elfutils jq mesa-utils dbus systemd-coredump
           sudo sysctl -q -p /usr/lib/sysctl.d/50-coredump.conf
 
       # A test run is not a person: its throwaway profiles stay off the
