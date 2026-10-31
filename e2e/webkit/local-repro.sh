@@ -3,11 +3,10 @@
 # home, so the welcome flow shows and the person's own profile, models and
 # identity are not touched. Downloads are real and land in the scratch home.
 #   e2e/webkit/local-repro.sh
-# It runs on whatever GPU drives the display. To test an NVIDIA laptop the
-# way a desktop NVIDIA machine runs, switch the display to NVIDIA
-# (`sudo prime-select nvidia`, reboot); forcing NVIDIA's EGL with the PRIME
-# offload variables instead makes WebKit abort at startup ("Could not
-# create GBM EGL display") - not a real configuration. Lock the Vault first
+# It runs on whatever GPU drives the display. NVIDIA=1 puts WebKit on the
+# NVIDIA card with NVIDIA's EGL (as on a desktop NVIDIA machine) with no
+# reboot: the render device and the EGL vendor must match, or WebKit aborts
+# at startup ("Could not create GBM EGL display"). Lock the Vault first
 # so the scratch app starts on a local profile. Delete the scratch home after.
 # GDB=1 runs it under gdb and prints the crashing stack and the library
 # load addresses when it stops.
@@ -17,7 +16,14 @@ pgrep -x app >/dev/null && { echo "Your Own AI is already running - close it fir
 SCRATCH="${REPRO_HOME:-/home/$(id -un)/yoai-webkit-repro}"
 mkdir -p "$SCRATCH"
 export HOME="$SCRATCH" XDG_CONFIG_HOME="$SCRATCH/.config" XDG_DATA_HOME="$SCRATCH/.local/share" XDG_CACHE_HOME="$SCRATCH/.cache"
-echo "session: ${XDG_SESSION_TYPE:-?}  display GPU: $(prime-select query 2>/dev/null || echo ?)  WebKitGTK $(dpkg-query -W -f='${Version}' libwebkit2gtk-4.1-0)"
+echo "session: ${XDG_SESSION_TYPE:-?}  display GPU mode: $(prime-select query 2>/dev/null || echo ?)  WebKitGTK $(dpkg-query -W -f='${Version}' libwebkit2gtk-4.1-0)"
+if [ "${NVIDIA:-}" = 1 ]; then
+  export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
+  for d in /sys/class/drm/renderD*; do
+    [ "$(basename "$(readlink -f "$d/device/driver")")" = nvidia ] && export WEBKIT_WEB_RENDER_DEVICE_FILE="/dev/dri/$(basename "$d")"
+  done
+  echo "WebKit on NVIDIA: ${WEBKIT_WEB_RENDER_DEVICE_FILE:-no NVIDIA render node found}"
+fi
 echo "scratch home: $SCRATCH"
 if [ "${GDB:-}" = 1 ]; then
   exec gdb -q -batch -iex 'set debuginfod enabled off' -ex 'set pagination off' \
