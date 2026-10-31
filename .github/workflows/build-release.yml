@@ -319,6 +319,9 @@ jobs:
           $zip = Join-Path $env:RUNNER_TEMP "CodeSignTool.zip"
           $dest = Join-Path $env:RUNNER_TEMP "CodeSignTool"
           Invoke-WebRequest -Uri $url -OutFile $zip
+          # The tool is handed the eSigner secrets: only the pinned zip runs.
+          $got = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne "f14b1e1ef14bfa1fd00279c363aab0debbf5dcfba0e4bcdce5d22bb771de0e3a") { throw "CodeSignTool v1.3.2: SHA-256 $got does not match the pinned f14b1e1ef14bfa1fd00279c363aab0debbf5dcfba0e4bcdce5d22bb771de0e3a" }
           Expand-Archive -Path $zip -DestinationPath $dest -Force
           "CODE_SIGN_TOOL_DIR=$dest" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
