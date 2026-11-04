@@ -147,9 +147,14 @@ describe("your own server with an access key", () => {
   it("keeps the key across a reload, and the window never receives it", async () => {
     seen.length = 0;
     await openEngines();
+    // The section reads its saved server when it scrolls INTO VIEW (a Qwik
+    // visible task): until then it shows the empty connect form. Scroll to
+    // the section first, then wait for the saved server to replace the form.
+    const card = await $('[data-testid="own-server-url"], [data-testid="own-server-status"]');
+    await card.waitForExist({ timeout: 60_000 });
+    await card.scrollIntoView();
     const status = await $('[data-testid="own-server-status"]');
-    await status.waitForExist({ timeout: 60_000 });
-    await status.scrollIntoView();
+    await status.waitForExist({ timeout: 30_000 });
     await browser.waitUntil(async () => (await status.getAttribute("data-healthy")) === "1", { timeout: 30_000, timeoutMsg: "the server did not answer after the reload" });
     expect(await status.getText()).toContain("access key saved");
     expect(seen.some((r) => r.path === "/v1/models" && r.bearer === KEY)).toBe(true);
