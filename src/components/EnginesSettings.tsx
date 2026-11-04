@@ -576,7 +576,7 @@ export default component$(() => {
             </p>
             {external.value?.url ? (
               <div class="mt-2">
-                <p class="text-[11px] flex items-center gap-1.5">
+                <p class="text-[11px] flex items-center gap-1.5" data-testid="own-server-status" data-healthy={external.value.healthy ? "1" : "0"}>
                   <span
                     class={`inline-block w-2 h-2 rounded-full ${
                       external.value.healthy ? "bg-green-500" : "bg-red-500"
@@ -607,6 +607,7 @@ export default component$(() => {
                   <input
                     type="text"
                     placeholder="http://192.168.1.20:8000"
+                    data-testid="own-server-url"
                     value={externalUrl.value}
                     disabled={externalBusy.value}
                     onInput$={(_, el) => (externalUrl.value = el.value)}
@@ -614,6 +615,7 @@ export default component$(() => {
                   />
                   <LiquidMetalButton
                     onClick$={connectExternal}
+                    testId="own-server-connect"
                     class="px-3 py-1.5 text-xs whitespace-nowrap"
                   >
                     {externalBusy.value ? "Checking…" : "Connect"}
@@ -624,6 +626,7 @@ export default component$(() => {
                   autocomplete="off"
                   placeholder="Access key (only if the server asks for one)"
                   aria-label="Access key"
+                  data-testid="own-server-key"
                   value={externalKey.value}
                   disabled={externalBusy.value}
                   onInput$={(_, el) => (externalKey.value = el.value)}
@@ -636,7 +639,7 @@ export default component$(() => {
               </div>
             )}
             {externalError.value && (
-              <p class="text-xs text-red-400 mt-1">{externalError.value}</p>
+              <p class="text-xs text-red-400 mt-1" data-testid="own-server-error">{externalError.value}</p>
             )}
           </div>
           {external.value?.url && (
@@ -644,6 +647,7 @@ export default component$(() => {
               <LiquidMetalButton
                 variant="danger"
                 onClick$={disconnectExternal}
+                testId="own-server-disconnect"
                 class="flex items-center gap-1.5 px-3 py-1.5 text-xs"
               >
                 <LuTrash2 class="w-3.5 h-3.5" /> Disconnect

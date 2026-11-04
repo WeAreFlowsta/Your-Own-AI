@@ -6044,8 +6044,9 @@ pub async fn stream_chat_completion(
     crate::dreaming::note_activity();
     // Online models ("online:<id>") route to the YOAI proxy with the
     // Flowsta (Vault-grant) token; external models ("external:<id>") post to
-    // the user's own connected OpenAI-compatible server (no auth, their
-    // hardware); everything else is local llama.cpp.
+    // the user's own connected OpenAI-compatible server (their hardware,
+    // with its access key when one is saved); everything else is local
+    // llama.cpp.
     let online_model: Option<String> = model
         .as_deref()
         .filter(|m| m.starts_with("online:"))

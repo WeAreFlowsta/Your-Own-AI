@@ -415,9 +415,10 @@ pub async fn remove_cuda_engine(
 // ── External engine (connect-mode) ─────────────────────────────────────
 // The user can point YOAI at any OpenAI-compatible server they run
 // themselves (a llama.cpp on another box, a vLLM box, a Mac cluster).
-// Chat requests for `external:<id>` models post straight to it - no auth,
-// no billing, the user's own hardware. The URL is user-chosen by design;
-// chat content goes wherever they point it.
+// Chat requests for `external:<id>` models post straight to it - no
+// billing, the user's own hardware, and the server's access key when it
+// asks for one. The URL is user-chosen by design; chat content goes
+// wherever they point it.
 
 const EXTERNAL_ENGINE_FILE: &str = "external-engine.json";
 
