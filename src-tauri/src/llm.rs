@@ -6409,8 +6409,8 @@ pub async fn stream_chat_completion(
     } else if external_model.is_some() {
         let base = crate::engine::external_engine_url(&app)
             .ok_or("external_engine_not_configured")?;
-        client
-            .post(format!("{}/v1/chat/completions", base))
+        let key = crate::engine::external_engine_key(&app);
+        crate::engine::with_external_key(client.post(format!("{}/v1/chat/completions", base)), key.as_deref())
             .header("Content-Type", "application/json")
             .json(&request_body)
             .send()
