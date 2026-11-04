@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       - name: HEAD-check every catalog download URL
         id: sweep
         run: node scripts/check-catalog-urls.mjs 2>&1 | tee sweep.txt
@@ -47,6 +47,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       - name: Every routing job has one enabled model; the app's floors exist
         run: node scripts/check-online-catalog.mjs
