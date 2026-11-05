@@ -1493,7 +1493,11 @@ async fn chat_completions(
             );
         };
         log::info!("[inference] {} served by your server for {}{}", body["model"], ai.name, if agent_mode { " (project work)" } else { "" });
-        client.post(format!("{base}/v1/chat/completions")).json(&body).send().await
+        let key = crate::engine::external_engine_key(&app);
+        crate::engine::with_external_key(client.post(format!("{base}/v1/chat/completions")), key.as_deref())
+            .json(&body)
+            .send()
+            .await
     } else {
         // One request at a time on the chat server: an agent's parallel
         // calls used to overflow the shared window together.

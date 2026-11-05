@@ -27,6 +27,8 @@ interface ExternalEngineInfo {
   tps: number | null;
   ctx?: number | null;
   error: string | null;
+  /** An access key is saved for this server (the key itself stays in the backend). */
+  has_key?: boolean;
 }
 
 interface EngineStatus {
@@ -223,6 +225,7 @@ export default component$(() => {
   // External engine (connect-mode): the user's own OpenAI-compatible server.
   const external = useSignal<ExternalEngineInfo | null>(null);
   const externalUrl = useSignal("");
+  const externalKey = useSignal("");
   const externalBusy = useSignal(false);
   const externalError = useSignal("");
 
@@ -245,8 +248,10 @@ export default component$(() => {
     try {
       external.value = await invoke<ExternalEngineInfo>("set_external_engine", {
         url: externalUrl.value,
+        key: externalKey.value.trim() || null,
       });
       externalUrl.value = "";
+      externalKey.value = "";
     } catch (e) {
       externalError.value = e instanceof Error ? e.message : String(e);
     } finally {
@@ -259,7 +264,7 @@ export default component$(() => {
     try {
       await invoke("remove_external_engine");
       external.value = {
-        url: null, healthy: false, models: [], models_info: [], tps: null, error: null,
+        url: null, healthy: false, models: [], models_info: [], tps: null, error: null, has_key: false,
       };
     } catch (e) {
       externalError.value = e instanceof Error ? e.message : String(e);
@@ -571,7 +576,7 @@ export default component$(() => {
             </p>
             {external.value?.url ? (
               <div class="mt-2">
-                <p class="text-[11px] flex items-center gap-1.5">
+                <p class="text-[11px] flex items-center gap-1.5" data-testid="own-server-status" data-healthy={external.value.healthy ? "1" : "0"}>
                   <span
                     class={`inline-block w-2 h-2 rounded-full ${
                       external.value.healthy ? "bg-green-500" : "bg-red-500"
@@ -586,7 +591,7 @@ export default component$(() => {
                           external.value.tps ? ` · ~${Math.round(external.value.tps)} tok/s measured` : ""
                         }${
                           external.value.ctx ? ` · ${Math.round(external.value.ctx / 1024)}k window` : ""
-                        }`
+                        }${external.value.has_key ? " · access key saved" : ""}`
                       : `- unreachable${external.value.error ? ` (${external.value.error})` : ""}`}
                   </span>
                 </p>
@@ -597,25 +602,44 @@ export default component$(() => {
                 </p>
               </div>
             ) : (
-              <div class="mt-2 flex gap-2">
+              <div class="mt-2">
+                <div class="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="http://192.168.1.20:8000"
+                    data-testid="own-server-url"
+                    value={externalUrl.value}
+                    disabled={externalBusy.value}
+                    onInput$={(_, el) => (externalUrl.value = el.value)}
+                    class="flex-1 min-w-0 rounded-full bg-[var(--bg-input)] px-4 py-1.5 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] border border-[var(--border-subtle)] focus:outline-none"
+                  />
+                  <LiquidMetalButton
+                    onClick$={connectExternal}
+                    testId="own-server-connect"
+                    class="px-3 py-1.5 text-xs whitespace-nowrap"
+                  >
+                    {externalBusy.value ? "Checking…" : "Connect"}
+                  </LiquidMetalButton>
+                </div>
                 <input
-                  type="text"
-                  placeholder="http://192.168.1.20:8000"
-                  value={externalUrl.value}
+                  type="password"
+                  autocomplete="off"
+                  placeholder="Access key (only if the server asks for one)"
+                  aria-label="Access key"
+                  data-testid="own-server-key"
+                  value={externalKey.value}
                   disabled={externalBusy.value}
-                  onInput$={(_, el) => (externalUrl.value = el.value)}
-                  class="flex-1 min-w-0 rounded-full bg-[var(--bg-input)] px-4 py-1.5 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] border border-[var(--border-subtle)] focus:outline-none"
+                  onInput$={(_, el) => (externalKey.value = el.value)}
+                  class="mt-2 w-full rounded-full bg-[var(--bg-input)] px-4 py-1.5 text-sm text-[var(--text-primary)] placeholder-[var(--text-muted)] border border-[var(--border-subtle)] focus:outline-none"
                 />
-                <LiquidMetalButton
-                  onClick$={connectExternal}
-                  class="px-3 py-1.5 text-xs whitespace-nowrap"
-                >
-                  {externalBusy.value ? "Checking…" : "Connect"}
-                </LiquidMetalButton>
+                <p class="mt-1 text-[11px] text-[var(--text-muted)]">
+                  Another Your Own AI with External access on shows its key under Settings › External access.
+                  llama.cpp and vLLM ask for one when started with --api-key.
+                </p>
               </div>
             )}
             {externalError.value && (
-              <p class="text-xs text-red-400 mt-1">{externalError.value}</p>
+              <p class="text-xs text-red-400 mt-1" data-testid="own-server-error">{externalError.value}</p>
             )}
           </div>
           {external.value?.url && (
@@ -623,6 +647,7 @@ export default component$(() => {
               <LiquidMetalButton
                 variant="danger"
                 onClick$={disconnectExternal}
+                testId="own-server-disconnect"
                 class="flex items-center gap-1.5 px-3 py-1.5 text-xs"
               >
                 <LuTrash2 class="w-3.5 h-3.5" /> Disconnect

@@ -415,9 +415,10 @@ pub async fn remove_cuda_engine(
 // ── External engine (connect-mode) ─────────────────────────────────────
 // The user can point YOAI at any OpenAI-compatible server they run
 // themselves (a llama.cpp on another box, a vLLM box, a Mac cluster).
-// Chat requests for `external:<id>` models post straight to it - no auth,
-// no billing, the user's own hardware. The URL is user-chosen by design;
-// chat content goes wherever they point it.
+// Chat requests for `external:<id>` models post straight to it - no
+// billing, the user's own hardware, and the server's access key when it
+// asks for one. The URL is user-chosen by design; chat content goes
+// wherever they point it.
 
 const EXTERNAL_ENGINE_FILE: &str = "external-engine.json";
 
@@ -447,16 +448,50 @@ pub fn external_engine_url(app: &AppHandle) -> Option<String> {
         .map(String::from)
 }
 
+/// The access key the person's own server asks for, if they gave one. A
+/// server that wants a key (another Your Own AI with External access on,
+/// llama.cpp or vLLM started with `--api-key`) refuses a request without
+/// it. Stored beside the url, the same way this app keeps its own
+/// External access key; never logged, never returned to the window.
+pub fn external_engine_key(app: &AppHandle) -> Option<String> {
+    let raw = std::fs::read_to_string(external_engine_path(app)?).ok()?;
+    key_from(&serde_json::from_str::<serde_json::Value>(&raw).ok()?)
+}
+
+fn key_from(v: &serde_json::Value) -> Option<String> {
+    v["key"].as_str().map(str::trim).filter(|k| !k.is_empty()).map(String::from)
+}
+
+/// Present the key, when there is one, as every OpenAI-compatible server
+/// expects it: `Authorization: Bearer <key>`.
+pub fn with_external_key(rb: reqwest::RequestBuilder, key: Option<&str>) -> reqwest::RequestBuilder {
+    match key {
+        Some(k) => rb.bearer_auth(k),
+        None => rb,
+    }
+}
+
+/// What a refused probe means to the person: a server that wants a key
+/// they did not give, or one that did not accept the key they gave.
+fn refused_message(status: reqwest::StatusCode, key: Option<&str>) -> String {
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+        if key.is_some() {
+            return "the server did not accept the access key".to_string();
+        }
+        return "the server asks for an access key".to_string();
+    }
+    format!("HTTP {}", status)
+}
+
 /// Probe an OpenAI-compatible server: GET /v1/models, return its model ids.
-async fn probe_external(base: &str) -> Result<Vec<String>, String> {
-    let resp = reqwest::Client::new()
-        .get(format!("{}/v1/models", base))
+async fn probe_external(base: &str, key: Option<&str>) -> Result<Vec<String>, String> {
+    let resp = with_external_key(reqwest::Client::new().get(format!("{}/v1/models", base)), key)
         .timeout(std::time::Duration::from_secs(5))
         .send()
         .await
         .map_err(|e| format!("unreachable: {}", e))?;
     if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
+        return Err(refused_message(resp.status(), key));
     }
     let v: serde_json::Value = resp
         .json()
@@ -497,10 +532,9 @@ fn scan_models(ids: &[String]) -> Vec<ExternalModelInfo> {
 /// responses carry exact `timings`; otherwise wall-clock over the usage
 /// counts. `None` when the server can't generate (still connectable - the
 /// speed just stays unknown).
-async fn bench_external(base: &str, model_id: &str) -> Option<f64> {
+async fn bench_external(base: &str, model_id: &str, key: Option<&str>) -> Option<f64> {
     let started = std::time::Instant::now();
-    let resp = reqwest::Client::new()
-        .post(format!("{}/v1/chat/completions", base))
+    let resp = with_external_key(reqwest::Client::new().post(format!("{}/v1/chat/completions", base)), key)
         .timeout(std::time::Duration::from_secs(60))
         .json(&serde_json::json!({
             "model": model_id,
@@ -536,6 +570,10 @@ pub struct ExternalEngineInfo {
     /// Measured generation speed from the connect-time bench, if any.
     pub tps: Option<f64>,
     pub error: Option<String>,
+    /// Whether an access key is saved for this server. The key itself never
+    /// goes to the window.
+    #[serde(default)]
+    pub has_key: bool,
 }
 
 /// Connect an external engine: probe it, run the one-shot capability scan
@@ -543,24 +581,29 @@ pub struct ExternalEngineInfo {
 /// and only save on success. The bench runs ONCE here, not on every status
 /// read - its result is cached in the config file.
 #[tauri::command]
-pub async fn set_external_engine(app: AppHandle, url: String) -> Result<ExternalEngineInfo, String> {
+pub async fn set_external_engine(
+    app: AppHandle,
+    url: String,
+    key: Option<String>,
+) -> Result<ExternalEngineInfo, String> {
     let base = normalize_base_url(&url);
     if !base.starts_with("http://") && !base.starts_with("https://") {
         return Err("URL must start with http:// or https://".into());
     }
-    let models = probe_external(&base).await?;
+    let key = key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
+    let models = probe_external(&base, key.as_deref()).await?;
     let tps = match models.first() {
-        Some(first) => bench_external(&base, first).await,
+        Some(first) => bench_external(&base, first, key.as_deref()).await,
         None => None,
     };
-    let ctx = probe_external_ctx(&base).await;
+    let ctx = probe_external_ctx(&base, key.as_deref()).await;
     let path = external_engine_path(&app).ok_or("no app data dir")?;
     // Models are cached alongside the url so ROUTING can consider the
     // server without a network probe per request; the status read
     // refreshes this cache whenever the server answers.
     std::fs::write(
         &path,
-        serde_json::json!({ "url": base, "tps": tps, "models": models, "ctx": ctx }).to_string(),
+        serde_json::json!({ "url": base, "key": key, "tps": tps, "models": models, "ctx": ctx }).to_string(),
     )
     .map_err(|e| format!("could not save: {}", e))?;
     log::info!(
@@ -571,14 +614,14 @@ pub async fn set_external_engine(app: AppHandle, url: String) -> Result<External
         ctx.map(|c| format!(", {}k window", c / 1024)).unwrap_or_default()
     );
     let models_info = scan_models(&models);
-    Ok(ExternalEngineInfo { url: Some(base), healthy: true, ctx, models, models_info, tps, error: None })
+    let has_key = key.is_some();
+    Ok(ExternalEngineInfo { url: Some(base), healthy: true, ctx, models, models_info, tps, error: None, has_key })
 }
 
 /// The server's context window per slot, from llama.cpp's `/props`
 /// (`default_generation_settings.n_ctx`). Other engines say nothing.
-async fn probe_external_ctx(base: &str) -> Option<u64> {
-    let resp = reqwest::Client::new()
-        .get(format!("{}/props", base))
+async fn probe_external_ctx(base: &str, key: Option<&str>) -> Option<u64> {
+    let resp = with_external_key(reqwest::Client::new().get(format!("{}/props", base)), key)
         .timeout(std::time::Duration::from_secs(5))
         .send()
         .await
@@ -609,25 +652,28 @@ fn stored_external_tps(app: &AppHandle) -> Option<f64> {
 pub async fn external_engine_info(app: AppHandle) -> ExternalEngineInfo {
     let Some(url) = external_engine_url(&app) else {
         return ExternalEngineInfo {
-            url: None, healthy: false, ctx: None, models: vec![], models_info: vec![], tps: None, error: None,
+            url: None, healthy: false, ctx: None, models: vec![], models_info: vec![], tps: None, error: None, has_key: false,
         };
     };
+    let key = external_engine_key(&app);
+    let has_key = key.is_some();
     let tps = stored_external_tps(&app);
-    match probe_external(&url).await {
+    match probe_external(&url, key.as_deref()).await {
         Ok(models) => {
-            let ctx = probe_external_ctx(&url).await.or_else(|| external_ctx_cached(&app));
-            // Keep the routing cache current with what the server reports.
+            let ctx = probe_external_ctx(&url, key.as_deref()).await.or_else(|| external_ctx_cached(&app));
+            // Keep the routing cache current with what the server reports;
+            // the saved key stays with it.
             if let Some(p) = external_engine_path(&app) {
                 let _ = std::fs::write(
                     &p,
-                    serde_json::json!({ "url": &url, "tps": tps, "models": &models, "ctx": ctx }).to_string(),
+                    serde_json::json!({ "url": &url, "key": &key, "tps": tps, "models": &models, "ctx": ctx }).to_string(),
                 );
             }
             let models_info = scan_models(&models);
-            ExternalEngineInfo { url: Some(url), healthy: true, ctx, models, models_info, tps, error: None }
+            ExternalEngineInfo { url: Some(url), healthy: true, ctx, models, models_info, tps, error: None, has_key }
         }
         Err(e) => ExternalEngineInfo {
-            url: Some(url), healthy: false, ctx: external_ctx_cached(&app), models: vec![], models_info: vec![], tps, error: Some(e),
+            url: Some(url), healthy: false, ctx: external_ctx_cached(&app), models: vec![], models_info: vec![], tps, error: Some(e), has_key,
         },
     }
 }
@@ -663,8 +709,8 @@ pub async fn external_reachable(app: &AppHandle) -> bool {
     if external_recently_failed() {
         return false;
     }
-    reqwest::Client::new()
-        .get(format!("{}/v1/models", url))
+    let key = external_engine_key(app);
+    with_external_key(reqwest::Client::new().get(format!("{}/v1/models", url)), key.as_deref())
         .timeout(std::time::Duration::from_secs(2))
         .send()
         .await
@@ -695,6 +741,33 @@ pub fn remove_external_engine(app: AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_saved_key_is_read_trimmed_and_an_empty_one_is_none() {
+        use serde_json::json;
+        assert_eq!(super::key_from(&json!({ "url": "http://h", "key": " yoai-abc " })).as_deref(), Some("yoai-abc"));
+        assert_eq!(super::key_from(&json!({ "url": "http://h", "key": "" })), None);
+        assert_eq!(super::key_from(&json!({ "url": "http://h", "key": null })), None);
+        // A config saved before keys existed has no key field.
+        assert_eq!(super::key_from(&json!({ "url": "http://h" })), None);
+    }
+
+    #[test]
+    fn the_key_goes_as_a_bearer_header_and_no_key_sends_none() {
+        let c = reqwest::Client::new();
+        let with = super::with_external_key(c.get("http://h/v1/models"), Some("yoai-abc")).build().unwrap();
+        assert_eq!(with.headers().get(reqwest::header::AUTHORIZATION).unwrap(), "Bearer yoai-abc");
+        let without = super::with_external_key(c.get("http://h/v1/models"), None).build().unwrap();
+        assert!(without.headers().get(reqwest::header::AUTHORIZATION).is_none());
+    }
+
+    #[test]
+    fn a_refusal_says_whether_a_key_is_missing_or_wrong() {
+        let s = reqwest::StatusCode::UNAUTHORIZED;
+        assert_eq!(super::refused_message(s, None), "the server asks for an access key");
+        assert_eq!(super::refused_message(s, Some("k")), "the server did not accept the access key");
+        assert_eq!(super::refused_message(reqwest::StatusCode::NOT_FOUND, None), "HTTP 404 Not Found");
+    }
+
     #[test]
     fn every_pinned_cuda_zip_has_a_size() {
         for (triple, _) in super::CUDA_ZIP_SHA256 {
