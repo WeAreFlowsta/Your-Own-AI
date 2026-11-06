@@ -1,0 +1,45 @@
+name: DNA tests
+
+# The transcript DNA's tests: its zomes' unit tests, then the sweettests on a
+# real Holochain conductor against the committed bundle (built once by
+# dna/v2/build.sh and committed: a rebuild is a new DNA hash, so CI never
+# rebuilds it), with a stranger's coordinator (tests/hostile) beside it.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dna/**"
+      - ".github/workflows/dna-tests.yml"
+  pull_request:
+    paths:
+      - "dna/**"
+      - ".github/workflows/dna-tests.yml"
+
+jobs:
+  transcript-v2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            dna/v2 -> target
+            dna/v2/tests -> target
+            dna/v2/tests/hostile -> target
+
+      - name: Zome unit tests
+        working-directory: dna/v2
+        run: cargo test
+
+      - name: Build the stranger's coordinator
+        working-directory: dna/v2/tests/hostile
+        env:
+          RUSTFLAGS: '--cfg getrandom_backend="custom"'
+        run: cargo build --release --target wasm32-unknown-unknown
+
+      - name: Sweettests
+        working-directory: dna/v2/tests
+        run: cargo test -- --test-threads=1

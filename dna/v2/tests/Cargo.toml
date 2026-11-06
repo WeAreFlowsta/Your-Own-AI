@@ -1,0 +1,24 @@
+[package]
+name = "transcript-v2-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Sweettests for the Your Own AI transcript DNA v2 on a real Holochain 0.7.1 conductor"
+
+# Its own workspace on purpose: the DNA workspace one level up builds for
+# wasm32 and must never pull the conductor crate in.
+[workspace]
+
+[dependencies]
+transcript_integrity_v2 = { path = "../zomes/transcript/integrity" }
+transcript_coordinator_v2 = { path = "../zomes/transcript/coordinator" }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+holochain = { version = "=0.7.1", features = ["test_utils"] }
+holo_hash = { version = "0.7.1", features = ["encoding"] }
+holochain_serialized_bytes = "0.0.57"
+tokio = { version = "1", features = ["full"] }
+
+[profile.dev]
+debug = 0
