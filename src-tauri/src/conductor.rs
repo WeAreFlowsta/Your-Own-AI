@@ -517,13 +517,14 @@ impl LineHooks for YoaiLines {
     }
 }
 
-/// Every transcript app on the running 0.6 line, disabled ones included:
-/// (app id, agent key 39 bytes).
+/// Every enabled transcript app on the running 0.6 line: (app id, agent key
+/// 39 bytes). A disabled one was tidied because it holds no records; it gets
+/// its v2 app at the first 0.7 start after it is enabled again.
 async fn transcript_apps_06() -> Result<Vec<(String, Vec<u8>)>, String> {
     let port = admin_port().ok_or("the 0.6 line is not running")?;
     let admin = AdminClient::connect(Line::V06, port, &origin()).await.map_err(|e| format!("0.6 admin: {e}"))?;
     let apps = admin.list_apps().await.map_err(|e| format!("0.6 list_apps: {e}"))?;
-    Ok(apps.into_iter().filter(|a| a.app_id.starts_with(crate::dna::APP_ID_PREFIX)).map(|a| (a.app_id, a.agent_key)).collect())
+    Ok(apps.into_iter().filter(|a| a.enabled && a.app_id.starts_with(crate::dna::APP_ID_PREFIX)).map(|a| (a.app_id, a.agent_key)).collect())
 }
 
 /// Start the open profile's lines; returns once the 0.6 line is up and its
@@ -537,6 +538,13 @@ pub async fn start_holochain(app: tauri::AppHandle, data_dir: PathBuf, line_07: 
         Err(e) if e == NOT_WANTED => Err("the app is closing".into()),
         other => other,
     }
+}
+
+/// The lines of a profile in a test, without a window to narrate to.
+#[cfg(test)]
+pub(crate) async fn start_for_test(data_dir: PathBuf, line_07: Option<Line07>) -> Result<u64, String> {
+    let secondary = line_07.is_some().then_some(Line::V07);
+    supervisor().start_lines(Line::V06, secondary, Arc::new(YoaiLines { app: None, data_dir, line_07 })).await
 }
 
 #[cfg(test)]
