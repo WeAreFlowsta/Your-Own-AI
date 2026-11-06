@@ -441,6 +441,8 @@ pub async fn start_conversation(
     crate::vault_escrow::schedule_full_backup(&app);
     let raw = hash.get_raw_39();
     let hex_hash = hex::encode(raw);
+    // The 0.7 line too, under the same id.
+    crate::hc07::also_start_conversation(&agent_key, &founding, key, hex_hash.clone(), plain.clone());
     // Write-through: the new conversation is visible in cached lists
     // immediately, even if full reads are struggling on a loaded box.
     crate::conversation_cache::append_to_cache(
@@ -635,6 +637,10 @@ pub async fn record_transcript_entry(
 
     let hash: ActionHash = ExternIO::decode(&result)
         .map_err(|e| format!("Failed to decode entry hash: {}", e))?;
+    // The 0.7 line too, under the same ids.
+    if let Ok(value) = serde_json::to_value(&plain) {
+        crate::hc07::also_record_message(&agent_key, key, conversation_hash.clone(), hex::encode(hash.get_raw_39()), value);
+    }
 
     if let (Some(folder), Some(text)) = (memory_folder.as_deref(), memory_content.as_deref()) {
         project_memory_cache_set(&app, folder, Some(text)).await;
@@ -703,6 +709,10 @@ pub async fn record_grounding_annotation(
 
     let hash: ActionHash = ExternIO::decode(&result)
         .map_err(|e| format!("Failed to decode entry hash: {}", e))?;
+    // The 0.7 line too, under the same ids.
+    if let Ok(value) = serde_json::to_value(&plain) {
+        crate::hc07::also_record_message(&agent_key, key, conversation_hash.clone(), hex::encode(hash.get_raw_39()), value);
+    }
 
     crate::vault_escrow::schedule_full_backup(&app);
     Ok(hex::encode(hash.get_raw_39()))
@@ -1654,6 +1664,10 @@ pub async fn delete_conversation(
     crate::conversation_cache::record_deleted(&app, &agent_key, &conversation_hash);
     crate::conversation_cache::remove_from_cache(&app, &agent_key, &conversation_hash);
     crate::transcript_search::forget_conversation(&app, &conversation_hash);
+    // The 0.7 line too: this device's parts removed, the tombstone written.
+    if let Ok(key) = manager.data_key() {
+        crate::hc07::also_delete_conversation(&agent_key, &founding, key, conversation_hash.clone());
+    }
     // The chain changed shape - refresh the escrow backup like other writes.
     crate::vault_escrow::schedule_full_backup(&app);
     Ok(deleted)

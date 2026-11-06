@@ -147,9 +147,10 @@ pub async fn save_memory_row(
     let plain = serde_json::to_vec(&sealed).map_err(|e| e.to_string())?;
     let (nonce, cipher) = crate::transcript_crypto::encrypt(&key, &plain)?;
     let anchor = scope_anchor(&row.scope, &key)?;
-    let payload = ExternIO::encode(SaveInput { cipher, nonce: nonce.to_vec(), anchor }).map_err(|e| e.to_string())?;
+    let payload = ExternIO::encode(SaveInput { cipher: cipher.clone(), nonce: nonce.to_vec(), anchor: anchor.clone() }).map_err(|e| e.to_string())?;
     let out = manager.call_zome(&agent_key, "transcript", "save_memory_row", payload).await?;
     let hash: ActionHash = ExternIO::decode(&out).map_err(|e| e.to_string())?;
+    crate::hc07::also_save_memory_row(&agent_key, cipher, nonce.to_vec(), anchor);
     Ok(hex::encode(hash.get_raw_39()))
 }
 
@@ -422,8 +423,10 @@ async fn write_row(manager: &crate::holochain::HolochainManager, agent: &str, ro
     let plain = serde_json::to_vec(&sealed).map_err(|e| e.to_string())?;
     let (nonce, cipher) = crate::transcript_crypto::encrypt(&key, &plain)?;
     let anchor = scope_anchor(&row.scope, &key)?;
-    let payload = ExternIO::encode(SaveInput { cipher, nonce: nonce.to_vec(), anchor }).map_err(|e| e.to_string())?;
-    manager.call_zome(agent, "transcript", "save_memory_row", payload).await.map(|_| ())
+    let payload = ExternIO::encode(SaveInput { cipher: cipher.clone(), nonce: nonce.to_vec(), anchor: anchor.clone() }).map_err(|e| e.to_string())?;
+    manager.call_zome(agent, "transcript", "save_memory_row", payload).await?;
+    crate::hc07::also_save_memory_row(agent, cipher, nonce.to_vec(), anchor);
+    Ok(())
 }
 
 /// `YYYY-MM-DD` (UTC) for a ms epoch; empty for a time before 1970.
@@ -538,9 +541,10 @@ pub(crate) async fn upsert_row(app: &tauri::AppHandle, manager: &crate::holochai
     let plain = serde_json::to_vec(&sealed).map_err(|e| e.to_string())?;
     let (nonce, cipher) = crate::transcript_crypto::encrypt(&key, &plain)?;
     let anchor = scope_anchor(&row.scope, &key)?;
-    let payload = ExternIO::encode(SaveInput { cipher, nonce: nonce.to_vec(), anchor }).map_err(|e| e.to_string())?;
+    let payload = ExternIO::encode(SaveInput { cipher: cipher.clone(), nonce: nonce.to_vec(), anchor: anchor.clone() }).map_err(|e| e.to_string())?;
     let out = manager.call_zome(agent, "transcript", "save_memory_row", payload).await?;
     let hash: ActionHash = ExternIO::decode(&out).map_err(|e| e.to_string())?;
+    crate::hc07::also_save_memory_row(agent, cipher, nonce.to_vec(), anchor);
     // The cache sees the change at once.
     let mut after: Vec<MemoryRow> = live.into_iter().filter(|r| r.id != row.id).collect();
     row.action_hash = Some(hex::encode(hash.get_raw_39()));

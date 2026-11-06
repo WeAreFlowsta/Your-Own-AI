@@ -81,11 +81,14 @@ pub struct Cells07 {
     /// The 0.7 ports the connections were made on: a new start (new ports,
     /// a new origin) drops them.
     ports: Mutex<Option<(u16, u16)>>,
+    /// One write at a time per chain: two writes racing on one chain lose
+    /// one to "source chain head has moved".
+    chain_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }
 
 impl Default for Cells07 {
     fn default() -> Self {
-        Self { clients: Mutex::new(HashMap::new()), ports: Mutex::new(None) }
+        Self { clients: Mutex::new(HashMap::new()), ports: Mutex::new(None), chain_locks: Mutex::new(HashMap::new()) }
     }
 }
 
@@ -133,6 +136,21 @@ impl Cells07 {
         let client = Arc::new(client);
         self.clients.lock().await.insert(agent_hex.to_string(), client.clone());
         Ok(client)
+    }
+
+    /// A write on `agent`'s v2 chain: one at a time per chain, tried again
+    /// when another write moved the chain's head under it.
+    pub async fn write<I: Serialize, O: DeserializeOwned>(&self, agent_hex: &str, fn_name: &str, input: &I) -> Result<O, String> {
+        let lock = self.chain_locks.lock().await.entry(agent_hex.to_string()).or_default().clone();
+        let _one = lock.lock().await;
+        let mut tries = 0;
+        loop {
+            tries += 1;
+            match self.call(agent_hex, fn_name, input).await {
+                Err(e) if tries < 3 && e.contains("head has moved") => tokio::time::sleep(std::time::Duration::from_millis(300)).await,
+                other => return other,
+            }
+        }
     }
 
     /// Call `fn_name` on `agent`'s v2 cell.
@@ -318,6 +336,85 @@ impl Cells07 {
         let raw: Vec<Record07> = self.call(agent_hex, "get_memory_rows", &MemoryRows { anchor }).await?;
         raw.iter().map(view).collect()
     }
+}
+
+// ── Writes to both lines ────────────────────────────────────────────────
+//
+// While the 0.6 line is in use, every record is written there first (its v1
+// hash is its id), then here with that id. A write here runs in the
+// background, so nothing the person does waits on the 0.7 line, and one
+// that fails is carried by the move's next pass: the record is on 0.6.
+
+fn agent(hex_key: &str) -> Option<AgentPubKey> {
+    hex::decode(hex_key).ok().filter(|b| b.len() == 39).map(AgentPubKey::from_raw_39)
+}
+
+fn sealed(data_key: &[u8; 32], plain: &serde_json::Value) -> Option<(Vec<u8>, Vec<u8>)> {
+    let bytes = serde_json::to_vec(plain).ok()?;
+    let (nonce, cipher) = crate::transcript_crypto::encrypt(data_key, &bytes).ok()?;
+    Some((cipher, nonce.to_vec()))
+}
+
+fn in_background(what: &'static str, agent_hex: String, job: impl std::future::Future<Output = Result<(), String>> + Send + 'static) {
+    if crate::conductor::ports(Line::V07).is_none() {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = job.await {
+            log::info!("[0.7] {what} for {}.. not written yet ({e}); the move's next pass carries it", &agent_hex[..8.min(agent_hex.len())]);
+        }
+    });
+}
+
+/// A conversation just written to the 0.6 line as `id`, written here too.
+pub fn also_start_conversation(agent_hex: &str, founding_hex: &str, data_key: [u8; 32], id: String, plain: serde_json::Value) {
+    let (agent_hex, founding_hex) = (agent_hex.to_string(), founding_hex.to_string());
+    in_background("a conversation", agent_hex.clone(), async move {
+        let anchor = agent(&founding_hex).ok_or("bad founding key")?;
+        let (cipher, nonce) = sealed(&data_key, &crate::transcript_ids::conversation_plaintext_v2(plain, &id)).ok_or("not sealed")?;
+        let conversation_anchor = ExternalHash::from_raw_32(crate::transcript_ids::conversation_anchor(&data_key, &id).to_vec());
+        let _: holochain_types::prelude::ActionHash = app_cells().write(&agent_hex, "start_conversation", &StartConversation { cipher, nonce, anchor, conversation_anchor }).await?;
+        Ok(())
+    });
+}
+
+/// A message or annotation just written to the 0.6 line as `id`, written
+/// here too.
+pub fn also_record_message(agent_hex: &str, data_key: [u8; 32], conversation_id: String, id: String, plain: serde_json::Value) {
+    let agent_hex = agent_hex.to_string();
+    in_background("a message", agent_hex.clone(), async move {
+        let (cipher, nonce) = sealed(&data_key, &crate::transcript_ids::message_plaintext_v2(plain, &id, &conversation_id)).ok_or("not sealed")?;
+        let input = RecordMessage {
+            conversation_anchor: ExternalHash::from_raw_32(crate::transcript_ids::conversation_anchor(&data_key, &conversation_id).to_vec()),
+            message_key: crate::transcript_ids::message_key(&data_key, &id).to_vec(),
+            cipher,
+            nonce,
+        };
+        let _: holochain_types::prelude::ActionHash = app_cells().write(&agent_hex, "record_message", &input).await?;
+        Ok(())
+    });
+}
+
+/// A conversation just deleted on the 0.6 line, deleted here too: this
+/// device's parts removed and the tombstone written.
+pub fn also_delete_conversation(agent_hex: &str, founding_hex: &str, data_key: [u8; 32], conversation_id: String) {
+    let (agent_hex, founding_hex) = (agent_hex.to_string(), founding_hex.to_string());
+    in_background("a deletion", agent_hex.clone(), async move {
+        let anchor = agent(&founding_hex).ok_or("bad founding key")?;
+        let conversation_anchor = ExternalHash::from_raw_32(crate::transcript_ids::conversation_anchor(&data_key, &conversation_id).to_vec());
+        let _: u32 = app_cells().write(&agent_hex, "delete_conversation", &DeleteConversation { anchor, conversation_anchor }).await?;
+        Ok(())
+    });
+}
+
+/// A memory row just saved on the 0.6 line, saved here too: the same sealed
+/// bytes (a row's plaintext carries its own id).
+pub fn also_save_memory_row(agent_hex: &str, cipher: Vec<u8>, nonce: Vec<u8>, anchor: AnyLinkableHash) {
+    let agent_hex = agent_hex.to_string();
+    in_background("a memory row", agent_hex.clone(), async move {
+        let _: holochain_types::prelude::ActionHash = app_cells().write(&agent_hex, "save_memory_row", &SaveMemoryRow { cipher, nonce, anchor }).await?;
+        Ok(())
+    });
 }
 
 /// The resource directory holds the bundle this build ships.
