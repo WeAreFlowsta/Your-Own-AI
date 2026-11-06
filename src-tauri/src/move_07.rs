@@ -43,7 +43,10 @@ const READ_TIMEOUT: Duration = Duration::from_secs(180);
 pub struct Move {
     pub hc: Arc<HolochainState>,
     pub data_key: [u8; 32],
-    pub cells: Cells07,
+    /// The app's own connections to its v2 cells: the move's writes and the
+    /// app's take turns on each chain (two writers on one chain lose one to
+    /// "source chain head has moved").
+    pub cells: &'static Cells07,
     /// An AI cell's founding key (from `ai-data.json`), where every device
     /// lists its conversations; the cell's own key when it has none.
     pub founding: Box<dyn Fn(&str) -> String + Send + Sync>,
@@ -58,7 +61,7 @@ impl Move {
         Move {
             hc: app.state::<Arc<HolochainState>>().inner().clone(),
             data_key,
-            cells: Cells07::default(),
+            cells: crate::hc07::app_cells(),
             founding: Box::new(move |agent| crate::commands_holochain::founding_key_for(&a, agent)),
             deleted: Box::new(move || crate::conversation_cache::deleted_ledger(&b).into_iter().map(|d| d.hash).collect()),
         }
@@ -243,7 +246,7 @@ impl VersionedKind<Move> for Conversations {
             anchor: Move::agent_key(&mv.founding(&unit.id))?,
             conversation_anchor: ExternalHash::from_raw_32(conversation_anchor(&mv.data_key, &body.id).to_vec()),
         };
-        let hash: ActionHash = mv.cells.call(&unit.id, "start_conversation", &input).await?;
+        let hash: ActionHash = mv.cells.write(&unit.id, "start_conversation", &input).await?;
         Ok(hash.get_raw_39().to_vec())
     }
 }
@@ -314,7 +317,7 @@ impl VersionedKind<Move> for Messages {
             cipher,
             nonce,
         };
-        let hash: ActionHash = mv.cells.call(&unit.id, "record_message", &input).await?;
+        let hash: ActionHash = mv.cells.write(&unit.id, "record_message", &input).await?;
         Ok(hash.get_raw_39().to_vec())
     }
 }
@@ -421,7 +424,7 @@ impl VersionedKind<Move> for MemoryRows {
         // A row's plaintext already carries its id: the sealed bytes go
         // across as they are.
         let input = crate::hc07::SaveMemoryRow { cipher: b.cipher, nonce: b.nonce, anchor: holochain_types::prelude::AnyLinkableHash::from_raw_39(b.anchor) };
-        let hash: ActionHash = mv.cells.call(&unit.id, "save_memory_row", &input).await?;
+        let hash: ActionHash = mv.cells.write(&unit.id, "save_memory_row", &input).await?;
         Ok(hash.get_raw_39().to_vec())
     }
 }
@@ -478,7 +481,7 @@ impl flowsta_hc_lines::pass::CarriedRecords<Move> for Tombstones {
                 let anchor = conversation_anchor(&mv.data_key, &id);
                 if !have.contains(&anchor) {
                     let input = crate::hc07::DeleteConversation { anchor: Move::agent_key(&founding)?, conversation_anchor: ExternalHash::from_raw_32(anchor.to_vec()) };
-                    let _: u32 = mv.cells.call(agent, "delete_conversation", &input).await?;
+                    let _: u32 = mv.cells.write(agent, "delete_conversation", &input).await?;
                     report.add("written", 1);
                 }
                 report.carried += 1;
@@ -530,8 +533,7 @@ fn describe(out: &flowsta_hc_lines::pass::PassOutcome) -> String {
 
 /// The move's passes, once the 0.7 line has joined: the first as soon as
 /// the app's 0.6 agents are connected, then every [`PASS_EVERY`] while both
-/// lines run. One runner for the process; the move's connections are kept
-/// across passes and made again when the 0.7 line restarts.
+/// lines run. One runner for the process.
 pub fn run_passes(app: tauri::AppHandle, data_dir: std::path::PathBuf) {
     static RUNNER: std::sync::OnceLock<PassRunner<Move>> = std::sync::OnceLock::new();
     static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -559,17 +561,13 @@ pub fn run_passes(app: tauri::AppHandle, data_dir: std::path::PathBuf) {
                 return;
             }
         };
-        let mut mv: Option<(Option<(u16, u16)>, Arc<Move>)> = None;
+        // The connections follow a 0.7 restart by themselves (`Cells07`).
+        let m = Arc::new(Move::for_app(&app, data_key));
         loop {
-            let ports = crate::conductor::ports(Line::V07);
-            if ports.is_none() || crate::conductor::ports(Line::V06).is_none() {
+            if crate::conductor::ports(Line::V07).is_none() || crate::conductor::ports(Line::V06).is_none() {
                 break;
             }
-            if mv.as_ref().map(|(p, _)| *p != ports).unwrap_or(true) {
-                mv = Some((ports, Arc::new(Move::for_app(&app, data_key))));
-            }
-            let (_, m) = mv.as_ref().expect("set above");
-            let out = runner.run(m, &data_dir, "the 0.7 line is up").await;
+            let out = runner.run(&m, &data_dir, "the 0.7 line is up").await;
             log::info!("[0.7] pass: {}", describe(&out));
             tokio::time::sleep(PASS_EVERY).await;
         }
@@ -672,7 +670,7 @@ mod tests {
         manager.reconnect_existing_agents().await.expect("the AI reconnects");
         let hc = Arc::new(HolochainState::new());
         let _ = hc.manager.set(manager);
-        let mv = Arc::new(Move { hc, data_key, cells: Cells07::default(), founding: Box::new(|a| a.to_string()), deleted: Box::new(HashSet::new) });
+        let mv = Arc::new(Move { hc, data_key, cells: crate::hc07::app_cells(), founding: Box::new(|a| a.to_string()), deleted: Box::new(HashSet::new) });
 
         let first = runner().run(&mv, &profile, "live").await;
         assert_eq!(first.error, None, "{first:?}");

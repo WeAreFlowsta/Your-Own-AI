@@ -120,7 +120,29 @@ impl Cells07 {
             .find(|a| a.app_id.starts_with(APP_ID_PREFIX) && a.agent_key == agent)
             .ok_or_else(|| format!("no 0.7 transcript app for {agent_hex}"))?;
         let cell = admin.app_cell(&app.app_id, ROLE).await.map_err(|e| format!("0.7 cell of {}: {e}", app.app_id))?;
-        let grant = admin.authorize_signing(&cell).await.map_err(|e| format!("0.7 grant for {}: {e}", app.app_id))?;
+        // Enabled is not ready: right after a start (or the install restart)
+        // a cell is listed before it runs. Wait for it, turning a disabled
+        // one back on, for up to about a minute.
+        let mut tries = 0;
+        let grant = loop {
+            tries += 1;
+            match admin.authorize_signing(&cell).await {
+                Ok(g) => break g,
+                Err(e) if e.kind == flowsta_hc_lines::ZomeErrorKind::CellNotRunning && tries < 20 => {
+                    if tries == 1 {
+                        log::info!("[0.7] {} is not running yet; waiting for it", app.app_id);
+                    }
+                    if !app.enabled {
+                        let _ = admin.enable(&app.app_id).await;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                }
+                Err(e) => return Err(format!("0.7 grant for {}: {e}", app.app_id)),
+            }
+        };
+        if tries > 1 {
+            log::info!("[0.7] {} answered after {} tries", app.app_id, tries);
+        }
         let (_, app_port) = crate::conductor::ports(Line::V07).ok_or("the 0.7 line is not running")?;
         let client = admin
             .connect_app(AppConnect {
