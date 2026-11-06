@@ -585,6 +585,106 @@ pub fn get_my_entries_page(input: MyEntriesPageInput) -> ExternResult<MyEntriesP
     Ok(MyEntriesPage { items, next_seq, total })
 }
 
+/// The conversations tombstoned under `anchor` (an AI's founding key) by any
+/// of the person's devices, from links alone.
+#[hdk_extern]
+pub fn get_tombstones(anchor: AgentPubKey) -> ExternResult<Vec<ActionHash>> {
+    let mut out: Vec<ActionHash> = get_links(LinkQuery::try_new(anchor, LinkTypes::AllConversations)?, GetStrategy::default())?
+        .into_iter()
+        .filter(is_tombstone)
+        .filter_map(|l| ActionHash::try_from(l.target).ok())
+        .collect();
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MyMemoryRowsPageInput {
+    /// Only rows after this chain sequence number. None = from the first.
+    pub after_seq: Option<u32>,
+    pub limit: u32,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MyMemoryRow {
+    pub record: Record,
+    /// The scope anchor the row is listed under.
+    pub anchor: AnyLinkableHash,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MyMemoryRowsPage {
+    pub items: Vec<MyMemoryRow>,
+    /// Pass back as `after_seq` for the next page. None = no more.
+    pub next_seq: Option<u32>,
+    /// Rows on this chain, all pages.
+    pub total: u32,
+}
+
+/// Every memory row this agent wrote, with the scope anchor it is listed
+/// under, read from its own chain a page at a time: whatever the scope, so
+/// a row in the scope of a project no longer known is found too. One chain
+/// scan without entries finds the row creates and their `mem` links; the
+/// records come in tight sequence ranges.
+#[hdk_extern]
+pub fn get_my_memory_rows_page(input: MyMemoryRowsPageInput) -> ExternResult<MyMemoryRowsPage> {
+    let list_lt = ScopedLinkType::try_from(LinkTypes::AllConversations)?;
+    let actions = query(ChainQueryFilter::new().include_entries(false))?;
+    let mut seq_of: HashMap<ActionHash, u32> = HashMap::new();
+    let mut anchor_of: HashMap<ActionHash, AnyLinkableHash> = HashMap::new();
+    let mut deleted: HashSet<ActionHash> = HashSet::new();
+    for r in actions.iter() {
+        match r.action() {
+            Action::Create(c) => {
+                seq_of.insert(r.action_address().clone(), c.action_seq);
+            }
+            Action::CreateLink(l) if l.zome_index == list_lt.zome_index && l.link_type == list_lt.zome_type && l.tag.as_ref() == MEMORY_TAG => {
+                if let Ok(target) = ActionHash::try_from(l.target_address.clone()) {
+                    anchor_of.insert(target, l.base_address.clone());
+                }
+            }
+            Action::Delete(d) => {
+                deleted.insert(d.deletes_address.clone());
+            }
+            _ => {}
+        }
+    }
+    drop(actions);
+    let mut wanted: Vec<(u32, ActionHash, AnyLinkableHash)> = anchor_of
+        .into_iter()
+        .filter(|(row, _)| !deleted.contains(row))
+        .filter_map(|(row, anchor)| seq_of.get(&row).map(|&s| (s, row, anchor)))
+        .collect();
+    wanted.sort_by_key(|w| w.0);
+    let total = wanted.len() as u32;
+    if let Some(after) = input.after_seq {
+        wanted.retain(|w| w.0 > after);
+    }
+    let limit = input.limit.max(1) as usize;
+    let more = wanted.len() > limit;
+    wanted.truncate(limit);
+    let next_seq = if more { wanted.last().map(|w| w.0) } else { None };
+    let mut seqs: Vec<u32> = wanted.iter().map(|w| w.0).collect();
+    let by_hash: HashMap<ActionHash, AnyLinkableHash> = wanted.into_iter().map(|w| (w.1, w.2)).collect();
+    let mut items = Vec::with_capacity(by_hash.len());
+    for (from, to) in seq_ranges(&mut seqs, RANGE_GAP) {
+        let records = query(
+            ChainQueryFilter::new()
+                .sequence_range(ChainQueryFilterRange::ActionSeqRange(from, to))
+                .action_type(ActionType::Create)
+                .include_entries(true),
+        )?;
+        for r in records {
+            if let Some(anchor) = by_hash.get(r.action_address()) {
+                items.push(MyMemoryRow { anchor: anchor.clone(), record: r });
+            }
+        }
+    }
+    items.sort_by_key(|i| i.record.action().action_seq());
+    Ok(MyMemoryRowsPage { items, next_seq, total })
+}
+
 /// Get a single conversation record.
 #[hdk_extern]
 pub fn get_conversation(action_hash: ActionHash) -> ExternResult<Option<Record>> {

@@ -13,7 +13,11 @@
 //!   without decrypting anything. Each kind names its records by the keyed
 //!   hash of their id on both lines.
 //! - **Deleted conversations are not carried,** nor their messages: those in
-//!   the deleted ledger, and those tombstoned on the 0.7 line.
+//!   the deleted ledger and those tombstoned on either line. Every 0.6
+//!   tombstone, from any device, is carried to the 0.7 line on every pass,
+//!   so a deletion made on a device still on 0.9.0 reaches the moved copy.
+//! - **Memory rows** carry every revision (the history view shows them all),
+//!   listed from the agent's own chain whatever their scope.
 
 use crate::commands_holochain::HolochainState;
 use crate::hc07::{Cells07, RecordMessage, StartConversation};
@@ -74,10 +78,26 @@ impl Move {
         (self.founding)(agent)
     }
 
-    /// Conversation ids not to carry: the deleted ledger's, and those whose
-    /// anchor is tombstoned on the 0.7 line.
+    /// A v1 call on `agent`'s cell.
+    async fn call_06<I: Serialize + std::fmt::Debug, O: serde::de::DeserializeOwned + std::fmt::Debug>(&self, agent: &str, fn_name: &str, input: I) -> Result<O, HookError> {
+        use holochain_types::prelude::ExternIO;
+        let manager = self.hc.get()?;
+        let out = manager.call_zome_with_timeout(agent, "transcript", fn_name, ExternIO::encode(input)?, READ_TIMEOUT).await?;
+        Ok(ExternIO::decode(&out)?)
+    }
+
+    /// The conversations tombstoned on the 0.6 line under the AI's founding
+    /// key (by any device), as ids.
+    async fn tombstones_06(&self, agent: &str) -> Result<HashSet<String>, HookError> {
+        let hashes: Vec<ActionHash> = self.call_06(agent, "get_tombstones", Self::agent_key(&self.founding(agent))?).await?;
+        Ok(hashes.iter().map(|h| id_of_v1(h.get_raw_39())).collect())
+    }
+
+    /// Conversation ids not to carry: the deleted ledger's and those
+    /// tombstoned on the 0.6 line; and anchors tombstoned on the 0.7 line.
     async fn gone(&self, agent: &str) -> Result<(HashSet<String>, HashSet<[u8; 32]>), HookError> {
-        let ids = (self.deleted)();
+        let mut ids = (self.deleted)();
+        ids.extend(self.tombstones_06(agent).await?);
         let keys: crate::hc07::ConversationKeys = self.cells.call(agent, "get_conversation_keys", &Self::agent_key(&self.founding(agent))?).await?;
         let anchors = keys.tombstoned.iter().filter_map(|a| anchor_core(a)).collect();
         Ok((ids, anchors))
@@ -299,13 +319,183 @@ impl VersionedKind<Move> for Messages {
     }
 }
 
-/// The profile's pass runner: conversations, then messages.
+// ── Memory rows ─────────────────────────────────────────────────────────
+
+pub struct MemoryRows;
+
+#[derive(Serialize, Deserialize)]
+struct RowBody {
+    cipher: Vec<u8>,
+    nonce: Vec<u8>,
+    anchor: Vec<u8>,
+}
+
+#[derive(Serialize, Debug)]
+struct MyRowsPageInput {
+    after_seq: Option<u32>,
+    limit: u32,
+}
+
+#[derive(Deserialize, Debug)]
+struct MyRow {
+    record: holochain_types::prelude::Record,
+    anchor: holochain_types::prelude::AnyLinkableHash,
+}
+
+#[derive(Deserialize, Debug)]
+struct MyRowsPage {
+    items: Vec<MyRow>,
+    next_seq: Option<u32>,
+}
+
+/// A revision's name on both lines: its row's id and when it was written
+/// (each revision is its own record; the reader reduces them by id).
+fn revision_id(row: &crate::memory_rows::MemoryRow) -> String {
+    format!("{}@{}", row.id, row.updated_at)
+}
+
+fn row_of(key: &[u8; 32], cipher: &[u8], nonce: &[u8]) -> Option<crate::memory_rows::MemoryRow> {
+    let plain = crate::transcript_crypto::decrypt(key, nonce, cipher).ok()?;
+    serde_json::from_slice(&plain).ok()
+}
+
+#[async_trait::async_trait]
+impl VersionedKind<Move> for MemoryRows {
+    fn name(&self) -> &'static str {
+        "memory rows"
+    }
+
+    async fn versions(&self, cx: &PassCx<'_, Move>, line: Line, unit: &CopyUnit) -> Result<Vec<Version>, HookError> {
+        let mv = cx.app.as_ref();
+        let agent = unit.id.as_str();
+        let rows = mine_06(mv, agent).await?;
+        match line {
+            Line::V06 => Ok(rows
+                .into_iter()
+                .filter_map(|(r, anchor)| {
+                    let (cipher, nonce) = sealed(&r)?;
+                    let row = row_of(&mv.data_key, &cipher, &nonce)?;
+                    let body = RowBody { cipher, nonce, anchor: anchor.get_raw_39().to_vec() };
+                    Some(Version {
+                        logical_id: revision_id(&row),
+                        version_time: 0,
+                        created_at: r.action().timestamp().as_micros().max(0) as u64,
+                        deleted: false,
+                        action_hash: r.action_address().get_raw_39().to_vec(),
+                        body: rmp_serde::to_vec_named(&body).ok()?,
+                    })
+                })
+                .collect()),
+            Line::V07 => {
+                // v2 lists rows by scope anchor: the anchors this agent's
+                // rows are under on v1.
+                let author = hex::decode(agent)?;
+                let anchors: HashSet<Vec<u8>> = rows.iter().map(|(_, a)| a.get_raw_39().to_vec()).collect();
+                let mut out = Vec::new();
+                for anchor in anchors {
+                    let views = mv.cells.memory_rows(agent, holochain_types::prelude::AnyLinkableHash::from_raw_39(anchor)).await?;
+                    for view in views.into_iter().filter(|v| v.author == author) {
+                        let Ok(ee) = view.entry_as::<crate::commands_holochain::EncryptedEntryRaw>() else { continue };
+                        let Some(row) = row_of(&mv.data_key, &ee.cipher, &ee.nonce) else { continue };
+                        out.push(Version {
+                            logical_id: revision_id(&row),
+                            version_time: 0,
+                            created_at: view.timestamp_us.max(0) as u64,
+                            deleted: false,
+                            action_hash: view.action_hash.clone(),
+                            body: Vec::new(),
+                        });
+                    }
+                }
+                Ok(out)
+            }
+        }
+    }
+
+    async fn write(&self, cx: &PassCx<'_, Move>, line: Line, unit: &CopyUnit, v: &Version, _supersedes: Option<&[u8]>) -> Result<Vec<u8>, HookError> {
+        if line != Line::V07 {
+            return Err("memory rows are carried to the 0.7 line only".into());
+        }
+        let mv = cx.app.as_ref();
+        let b: RowBody = rmp_serde::from_slice(&v.body)?;
+        // A row's plaintext already carries its id: the sealed bytes go
+        // across as they are.
+        let input = crate::hc07::SaveMemoryRow { cipher: b.cipher, nonce: b.nonce, anchor: holochain_types::prelude::AnyLinkableHash::from_raw_39(b.anchor) };
+        let hash: ActionHash = mv.cells.call(&unit.id, "save_memory_row", &input).await?;
+        Ok(hash.get_raw_39().to_vec())
+    }
+}
+
+/// Every memory row `agent` wrote on the 0.6 line, with its scope anchor.
+async fn mine_06(mv: &Move, agent: &str) -> Result<Vec<(holochain_types::prelude::Record, holochain_types::prelude::AnyLinkableHash)>, HookError> {
+    let mut out = Vec::new();
+    let mut after_seq = None;
+    loop {
+        let page: MyRowsPage = mv.call_06(agent, "get_my_memory_rows_page", MyRowsPageInput { after_seq, limit: 500 }).await?;
+        out.extend(page.items.into_iter().map(|i| (i.record, i.anchor)));
+        match page.next_seq {
+            Some(s) => after_seq = Some(s),
+            None => return Ok(out),
+        }
+    }
+}
+
+// ── Tombstones ──────────────────────────────────────────────────────────
+
+/// Every conversation tombstoned on the 0.6 line, or in the deleted ledger,
+/// is tombstoned on the 0.7 line too. On every pass: a device still on
+/// 0.9.0 deletes on 0.6 only.
+pub struct Tombstones;
+
+#[async_trait::async_trait]
+impl flowsta_hc_lines::pass::CarriedRecords<Move> for Tombstones {
+    fn name(&self) -> &'static str {
+        "tombstones"
+    }
+
+    fn blocks_flip(&self) -> bool {
+        true
+    }
+
+    async fn carry(&self, cx: &PassCx<'_, Move>, report: &mut flowsta_hc_lines::pass::CarryReport) -> Result<flowsta_hc_lines::pass::Carried, HookError> {
+        let mv = cx.app.as_ref();
+        let units = Cells.units(cx).await?;
+        let mut any = false;
+        let mut done_founding = HashSet::new();
+        for unit in units {
+            let agent = unit.id.as_str();
+            let founding = mv.founding(agent);
+            if !done_founding.insert(founding.clone()) {
+                continue;
+            }
+            let mut ids = mv.tombstones_06(agent).await?;
+            ids.extend((mv.deleted)());
+            let keys: crate::hc07::ConversationKeys = mv.cells.call(agent, "get_conversation_keys", &Move::agent_key(&founding)?).await?;
+            let have: HashSet<[u8; 32]> = keys.tombstoned.iter().filter_map(|a| anchor_core(a)).collect();
+            for id in ids {
+                any = true;
+                report.total += 1;
+                let anchor = conversation_anchor(&mv.data_key, &id);
+                if !have.contains(&anchor) {
+                    let input = crate::hc07::DeleteConversation { anchor: Move::agent_key(&founding)?, conversation_anchor: ExternalHash::from_raw_32(anchor.to_vec()) };
+                    let _: u32 = mv.cells.call(agent, "delete_conversation", &input).await?;
+                    report.add("written", 1);
+                }
+                report.carried += 1;
+            }
+        }
+        Ok(if any { flowsta_hc_lines::pass::Carried::Ran } else { flowsta_hc_lines::pass::Carried::Nothing })
+    }
+}
+
+/// The profile's pass runner: conversations, messages, memory rows, then
+/// the tombstones.
 pub fn runner() -> PassRunner<Move> {
     PassRunner::new(
         MARKER,
         Arc::new(Cells),
-        vec![OwnKind::Versioned(Arc::new(Conversations)), OwnKind::Versioned(Arc::new(Messages))],
-        Vec::new(),
+        vec![OwnKind::Versioned(Arc::new(Conversations)), OwnKind::Versioned(Arc::new(Messages)), OwnKind::Versioned(Arc::new(MemoryRows))],
+        vec![Arc::new(Tombstones)],
         Arc::new(NoFlipHook),
     )
 }
@@ -354,6 +544,31 @@ mod tests {
             let (n, c) = seal(serde_json::json!({"role": "user", "content": text, "sequence": i, "timestamp": i}));
             manager.call_zome(&agent, "transcript", "record_message", ExternIO::encode(RecordV1 { conversation_hash: conversation.clone(), cipher: c, nonce: n.to_vec() }).unwrap()).await.unwrap();
         }
+        // A second conversation, deleted on 0.6: not carried, its tombstone is.
+        let (n, c) = seal(serde_json::json!({"title": "Gone", "started_at": 2, "ai_personality_id": agent}));
+        let out = manager.call_zome(&agent, "transcript", "start_conversation", ExternIO::encode(StartV1 { cipher: c, nonce: n.to_vec(), anchor: None }).unwrap()).await.unwrap();
+        let gone: ActionHash = ExternIO::decode(&out).unwrap();
+        let (n, c) = seal(serde_json::json!({"role": "user", "content": "forget this", "sequence": 0, "timestamp": 5}));
+        manager.call_zome(&agent, "transcript", "record_message", ExternIO::encode(RecordV1 { conversation_hash: gone.clone(), cipher: c, nonce: n.to_vec() }).unwrap()).await.unwrap();
+        #[derive(Serialize, Debug)]
+        struct DeleteV1 {
+            conversation_hash: ActionHash,
+            anchor: Option<AgentPubKey>,
+        }
+        manager.call_zome(&agent, "transcript", "delete_conversation_at", ExternIO::encode(DeleteV1 { conversation_hash: gone.clone(), anchor: Some(Move::agent_key(&agent).unwrap()) }).unwrap()).await.unwrap();
+        // Two revisions of one memory row in the person's scope.
+        #[derive(Serialize, Debug)]
+        struct SaveRowV1 {
+            cipher: Vec<u8>,
+            nonce: Vec<u8>,
+            anchor: holochain_types::prelude::AnyLinkableHash,
+        }
+        let scope_anchor = crate::memory_rows::scope_anchor("person", &data_key).unwrap();
+        for (updated_at, text) in [(10, "likes tea"), (20, "likes green tea")] {
+            let row = serde_json::json!({"id": "r1", "scope": "person", "kind": "fact", "text": text, "as_of": updated_at, "saved_by": "person", "provenance": "test", "updated_at": updated_at});
+            let (n, c) = seal(row);
+            manager.call_zome(&agent, "transcript", "save_memory_row", ExternIO::encode(SaveRowV1 { cipher: c, nonce: n.to_vec(), anchor: scope_anchor.clone() }).unwrap()).await.unwrap();
+        }
         drop(manager);
         supervisor().stop();
 
@@ -372,14 +587,18 @@ mod tests {
 
         let first = runner().run(&mv, &profile, "live").await;
         assert_eq!(first.error, None, "{first:?}");
-        assert_eq!(first.kind("conversations").map(|k| (k.total, k.written)), Some((1, 1)));
-        assert_eq!(first.kind("messages").map(|k| (k.total, k.written)), Some((2, 2)));
+        assert_eq!(first.kind("conversations").map(|k| (k.total, k.written)), Some((1, 1)), "the deleted one is not carried");
+        assert_eq!(first.kind("messages").map(|k| (k.total, k.written)), Some((2, 2)), "nor its message");
+        assert_eq!(first.kind("memory rows").map(|k| (k.total, k.written)), Some((2, 2)), "both revisions");
+        assert_eq!(first.kind("tombstones").map(|k| (k.total, k.written)), Some((1, 1)), "the deletion reaches 0.7");
         assert!(first.flipped, "the marker flips once every kind is complete");
 
         let second = runner().run(&mv, &profile, "live again").await;
         assert_eq!(second.error, None, "{second:?}");
         assert_eq!(second.kind("conversations").map(|k| (k.present, k.written)), Some((1, 0)), "skipped by key");
         assert_eq!(second.kind("messages").map(|k| (k.present, k.written)), Some((2, 0)));
+        assert_eq!(second.kind("memory rows").map(|k| (k.present, k.written)), Some((2, 0)));
+        assert_eq!(second.kind("tombstones").map(|k| k.details.clone()), Some(Vec::new()), "no tombstone written twice");
 
         let conversation_id = id_of_v1(conversation.get_raw_39());
         let entries = mv
