@@ -363,10 +363,11 @@ fn read_conductor_logs(conductor_dir: &Path) -> String {
     let stdout = std::fs::read_to_string(&stdout_path).unwrap_or_default();
 
     let output = if !stderr.is_empty() { stderr } else { stdout };
-    if output.len() > 500 {
-        format!("{}...", &output[..500])
-    } else {
-        output
+    // 500 characters, cut on a character boundary: a byte cut inside a
+    // multibyte character panics.
+    match output.char_indices().nth(500) {
+        Some((cut, _)) => format!("{}...", &output[..cut]),
+        None => output,
     }
 }
 

@@ -1081,11 +1081,6 @@ pub fn run() {
                     Ok(startup) => {
                         let manager = HolochainManager::new(startup, resource_dir, recovery);
 
-                        // Phase A fresh start: remove pre-versioning apps.
-                        if let Err(e) = dna::cleanup_legacy_apps(manager.handle.admin_port).await {
-                            log::warn!("Legacy app cleanup failed: {}", e);
-                        }
-
                         // Hot-swap coordinator zomes to this build's version
                         // (no-op once applied; new externs reach existing
                         // cells without touching the DNA hash).
