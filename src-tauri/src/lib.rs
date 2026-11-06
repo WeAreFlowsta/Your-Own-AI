@@ -737,7 +737,6 @@ pub fn run() {
             llm::stop_embedding_server,
             llm::utility_chat,
             llm::stop_utility_server,
-            llm::kill_port_8080,
             agent_bridge::start_build_agent,
             agent_bridge::send_agent_prompt,
             agent_bridge::cancel_agent_turn,

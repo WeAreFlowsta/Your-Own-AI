@@ -533,46 +533,135 @@ pub async fn is_llama_server_ready() -> Result<bool, String> {
     }
 }
 
-/**
- * Force kill any process on port 8080
- * Useful for recovering from zombie processes after crashes/reboots
- */
-#[tauri::command]
-pub async fn kill_port_8080() -> Result<String, String> {
-    #[cfg(target_os = "linux")]
-    {
-        use std::process::Command;
-        
-        // Only the process LISTENING on the port, and never this app: a plain
-        // `lsof -ti :port` (or `fuser -k`) also matches every process holding
-        // a connection to it - this app included, which keeps connections
-        // to its own model server open (found 10-20 while chasing a silent
-        // exit; the sweep would kill the app outright).
-        let lsof_result = Command::new("lsof")
-            .args(&["-ti", &format!("TCP:{}", chat_port()), "-sTCP:LISTEN"])
-            .output();
-        let me = std::process::id().to_string();
-        let mut killed: Vec<String> = Vec::new();
-        if let Ok(output) = lsof_result {
-            for pid in String::from_utf8_lossy(&output.stdout).split_whitespace() {
-                if pid == me {
-                    continue;
-                }
-                if Command::new("kill").args(&["-9", pid]).status().map(|s| s.success()).unwrap_or(false) {
-                    killed.push(pid.to_string());
-                }
-            }
+/// The names the engine servers run under: the bundled and the CUDA
+/// llama-server, and SwiftLM (the Mac MLX preview). Lower-case, no `.exe`.
+const ENGINE_NAMES: &[&str] = &["llama-server", "swiftlm"];
+
+/// Whether a process is one of this app's engine servers on `port`: an
+/// engine by name, started with `--port <port>`, and either a child of this
+/// app or one of our own engine binaries by exact path (release builds). A
+/// person's own server on the same port is neither and is never touched.
+fn is_our_engine_on(name_stem: &str, cmd: &[String], port: u16, is_child: bool, is_our_binary: bool) -> bool {
+    ENGINE_NAMES.contains(&name_stem) && serves_port(cmd, port) && (is_child || is_our_binary)
+}
+
+fn serves_port(cmd: &[String], port: u16) -> bool {
+    let p = port.to_string();
+    cmd.windows(2).any(|w| w[0] == "--port" && w[1] == p)
+        || cmd.iter().any(|a| a.strip_prefix("--port=") == Some(p.as_str()))
+}
+
+/// Our own engine binaries by exact path: the bundled llama-server, the
+/// downloaded CUDA build and SwiftLM.
+fn our_engine_binaries(app: &AppHandle) -> Vec<std::path::PathBuf> {
+    let mut bins = vec![crate::resolve_sidecar_bin("llama-server")];
+    bins.extend(crate::engine::cuda_engine_binary(app));
+    bins.extend(crate::mlx_engine::swiftlm_binary(app));
+    bins.into_iter().filter(|p| p.is_absolute()).collect()
+}
+
+/// End this app's own engine servers on `port` (`is_our_engine_on`).
+fn end_our_engines_on(app: &AppHandle, port: u16) -> u32 {
+    use sysinfo::{ProcessRefreshKind, RefreshKind, System, UpdateKind};
+    let sys = System::new_with_specifics(RefreshKind::nothing().with_processes(
+        ProcessRefreshKind::nothing().with_exe(UpdateKind::Always).with_cmd(UpdateKind::Always),
+    ));
+    let me = sysinfo::Pid::from_u32(std::process::id());
+    let ours = if cfg!(debug_assertions) { Vec::new() } else { our_engine_binaries(app) };
+    let mut ended = 0;
+    for (pid, p) in sys.processes() {
+        if *pid == me {
+            continue;
         }
-        if killed.is_empty() {
-            Ok(format!("No server found listening on port {}", chat_port()))
-        } else {
-            Ok(format!("Killed the server listening on port {} (pid {})", chat_port(), killed.join(", ")))
+        let name = p.name().to_string_lossy().to_lowercase();
+        let stem = name.strip_suffix(".exe").unwrap_or(&name).to_string();
+        let cmd: Vec<String> = p.cmd().iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        let is_child = p.parent() == Some(me);
+        let is_our_binary = p.exe().map(|x| ours.iter().any(|o| o.as_path() == x)).unwrap_or(false);
+        if is_our_engine_on(&stem, &cmd, port, is_child, is_our_binary) && p.kill() {
+            log::info!("[engine] ended our own {} on port {} (pid {})", stem, port, pid);
+            ended += 1;
         }
     }
-    
-    #[cfg(not(target_os = "linux"))]
+    ended
+}
+
+/// The pids LISTENING on a local port (never the client end of a
+/// connection: the app keeps connections to its own servers open).
+fn listening_pids(port: u16) -> Vec<String> {
+    #[cfg(unix)]
     {
-        Ok("Port killing not implemented for this OS".to_string())
+        std::process::Command::new("lsof")
+            .args(["-nP", "-t", &format!("-iTCP:{}", port), "-sTCP:LISTEN"])
+            .output()
+            .map(|out| String::from_utf8_lossy(&out.stdout).split_whitespace().map(str::to_string).collect())
+            .unwrap_or_default()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // A GUI process: netstat gets a console window of its own unless told otherwise.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        std::process::Command::new("netstat")
+            .args(["-ano"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map(|out| netstat_listening_pids(&String::from_utf8_lossy(&out.stdout), &port.to_string()))
+            .unwrap_or_default()
+    }
+}
+
+/// What holds `port`, for the log: the listener's name and pid when this
+/// user may see it (another user's process, a root-owned container, is not
+/// listed).
+fn port_holder(port: u16) -> Option<String> {
+    let me = std::process::id().to_string();
+    let pid = listening_pids(port).into_iter().find(|p| *p != me)?;
+    let sys = sysinfo::System::new_with_specifics(
+        sysinfo::RefreshKind::nothing().with_processes(sysinfo::ProcessRefreshKind::nothing()),
+    );
+    let name = pid
+        .parse::<u32>()
+        .ok()
+        .and_then(|n| sys.process(sysinfo::Pid::from_u32(n)))
+        .map(|p| p.name().to_string_lossy().into_owned());
+    Some(match name {
+        Some(n) => format!("{} (pid {})", n, pid),
+        None => format!("pid {}", pid),
+    })
+}
+
+/// Make `engine`'s port usable before its server starts, without touching
+/// any other program. Free: kept. Held by one of our own engine servers (a
+/// leftover from this session or, in a release build, an earlier one): that
+/// server is ended and the port reused. Held by anything else (a person's
+/// own web server, a Caddy in Docker): left alone, and the server moves to
+/// a free port for the rest of the session. Every caller asks `ports` each
+/// time, so they follow.
+pub(crate) async fn claim_engine_port(app: &AppHandle, engine: crate::ports::Engine) -> u16 {
+    let port = crate::ports::engine(engine);
+    if crate::ports::bindable(port) {
+        return port;
+    }
+    if end_our_engines_on(app, port) > 0 {
+        for _ in 0..20 {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            if crate::ports::bindable(port) {
+                return port;
+            }
+        }
+    }
+    let holder = port_holder(port).unwrap_or_else(|| "another program".to_string());
+    match crate::ports::free_port() {
+        Some(free) => {
+            crate::ports::move_engine(engine, free);
+            log::warn!("[engine] port {} is held by {}: the {:?} server uses port {} this session", port, holder, engine, free);
+            free
+        }
+        None => {
+            log::warn!("[engine] port {} is held by {} and the OS offered no free port", port, holder);
+            port
+        }
     }
 }
 
@@ -2918,26 +3007,6 @@ pub async fn start_llama_server(
         return Ok(());
     }
     
-    // Check if already running externally (could be zombie process)
-    if is_llama_server_running().await? {
-        println!("[LLM] Port 8080 is in use - attempting to kill zombie process");
-        // Try to kill any zombie process on port 8080
-        let kill_result = kill_port_8080().await;
-        println!("[LLM] Kill attempt result: {:?}", kill_result);
-        
-        // Wait a moment for port to be freed
-        tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-        
-        // Check again after kill attempt
-        if is_llama_server_running().await? {
-            println!("[LLM] Port 8080 still in use after kill attempt - assuming it's our server");
-            *is_running = true;
-            return Ok(());
-        } else {
-            println!("[LLM] Port 8080 is now free, proceeding to start server");
-        }
-    }
-    
     // No model, no server. A model-less llama-server (b10355: "router mode")
     // happily accepts requests and 400s every one of them - the bare-server
     // class of bug. The only caller that passed None was the old eager start
@@ -2945,6 +3014,12 @@ pub async fn start_llama_server(
     if model_filename.is_none() {
         return Err("No model specified - the server starts with a model load".to_string());
     }
+
+    // The port first. Whatever else holds it is never ended and never taken
+    // for our engine (both happened: a person's own server on 8080 was
+    // killed, and a root-owned Caddy that could not be killed was sent
+    // every prompt); the engine moves to a free port instead.
+    claim_engine_port(&app_handle, crate::ports::Engine::Chat).await;
 
     let models_dir = get_models_dir(&app_handle)?;
 
@@ -3729,63 +3804,6 @@ struct EmbeddingDatum {
     index: usize,
 }
 
-/// Best-effort: kill whatever process holds `port`. Used to clear an embedding
-/// server orphaned by a dev hot-reload (cargo hard-kills the app, skipping the
-/// clean-exit handler, so the old server keeps holding 8091 and the new one
-/// can't bind it).
-/// Kill whatever is LISTENING on a local port - an orphaned helper server
-/// from an earlier run - so ours can bind it. Only listeners, and never
-/// this process: the app keeps keep-alive client connections to its own
-/// servers, and a "every pid on this port" sweep (`lsof -ti :port`, a
-/// netstat line grep) lists the client end too. On 2026-09-24 the memory
-/// model moved from the processor to the card on an 8 GB Mac two seconds
-/// after the app had used it, the sweep returned the app's own pid, and
-/// the app killed itself - no crash report, three orphaned children.
-fn free_port(port: &str) {
-    let me = std::process::id().to_string();
-    #[cfg(unix)]
-    {
-        use std::process::Command;
-        // -sTCP:LISTEN keeps the client end of our own connections out.
-        if let Ok(out) = Command::new("lsof")
-            .args(["-nP", "-t", &format!("-iTCP:{}", port), "-sTCP:LISTEN"])
-            .output()
-        {
-            for pid in String::from_utf8_lossy(&out.stdout).split_whitespace() {
-                if pid == me {
-                    continue;
-                }
-                let _ = Command::new("kill").args(["-9", pid]).output();
-            }
-        }
-    }
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        use std::process::Command;
-        // The app is a GUI process: netstat and taskkill each get a console
-        // window of their own unless told otherwise, and every model load
-        // flashed them across the screen.
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        if let Ok(out) = Command::new("netstat")
-            .args(["-ano"])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-        {
-            let s = String::from_utf8_lossy(&out.stdout);
-            for pid in netstat_listening_pids(&s, port) {
-                if pid == me {
-                    continue;
-                }
-                let _ = Command::new("taskkill")
-                    .args(["/F", "/PID", &pid])
-                    .creation_flags(CREATE_NO_WINDOW)
-                    .output();
-            }
-        }
-    }
-}
-
 /// The pids LISTENING on `port` in `netstat -ano` output: the local
 /// address must end in `:port` and the state must be LISTENING. A line
 /// whose FOREIGN address is the port is one of our own client
@@ -3886,12 +3904,11 @@ async fn ensure_embedding_server(
         }
     }
 
-    // Real (re)start: stop our tracked process, then FORCE-free the port in
-    // case an embed server was orphaned (a dev hot-reload kills the app without
-    // running the clean-exit handler, leaving the old one holding the port).
-    // Then wait for the port to actually release before rebinding.
+    // Real (re)start: stop our tracked process, then claim the port: our own
+    // leftover there is ended, anything else is left alone and the server
+    // moves to a free port. Then wait for the port to actually release.
     stop_embedding_server_inner(state).await;
-    free_port(&embed_port());
+    claim_engine_port(app_handle, crate::ports::Engine::Embed).await;
     for _ in 0..20 {
         if tokio::net::TcpStream::connect(format!("127.0.0.1:{}", embed_port()))
             .await
@@ -4236,7 +4253,7 @@ async fn ensure_utility_server(
     }
 
     stop_utility_server_inner(state).await;
-    free_port(&util_port());
+    claim_engine_port(app_handle, crate::ports::Engine::Util).await;
     for _ in 0..20 {
         if tokio::net::TcpStream::connect(format!("127.0.0.1:{}", util_port()))
             .await
@@ -5771,19 +5788,20 @@ async fn load_model_inner(
     helpers_off_card(&state).await;
     stop_llama_server(state.clone()).await.ok();
 
-    // Wait for port 8080 to be fully released
+    // Wait for the chat port to be released
     for attempt in 1..=10 {
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         match is_llama_server_running().await {
             Ok(false) => {
-                println!("[LLM] Port 8080 freed after {}ms", attempt * 500);
+                println!("[LLM] Port {} freed after {}ms", chat_port(), attempt * 500);
                 break;
             }
             _ => {
                 if attempt == 10 {
-                    // Force kill anything on port 8080
-                    println!("[LLM] Port 8080 still in use after 5s, force killing");
-                    kill_port_8080().await.ok();
+                    // Our stopped engine has not exited: end it. Anything else
+                    // on the port is left alone (the start moves to a free port).
+                    println!("[LLM] Port {} still in use after 5s, ending our own engine there", chat_port());
+                    end_our_engines_on(&app_handle, crate::ports::chat());
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                 }
             }
@@ -7250,15 +7268,33 @@ pub(crate) static LIVE_MATRIX_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new
 mod stop_chain_tests {
     use super::*;
 
-    /// Live (headless matrix): the helper-port sweep ends the LISTENER and
-    /// never the process connected to it. 0.8.0-beta.2 killed itself on an
-    /// 8 GB Mac: the sweep listed every pid on the port, the app's own
-    /// keep-alive connection included, and SIGKILLed them all. If this
-    /// sweep ever names the test process again, the run dies here.
+    /// Which processes count as our own engine on a port: an engine by
+    /// name, started with `--port <port>`, and our child or our own binary.
+    /// Everything else on the port is left alone (a person's own server on
+    /// 8080 was killed by the old start, and a Caddy it could not kill got
+    /// every prompt).
+    #[test]
+    fn only_our_own_engine_on_the_port_counts_as_ours() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let chat = args(&["-m", "model.gguf", "--host", "127.0.0.1", "--port", "8080"]);
+        assert!(is_our_engine_on("llama-server", &chat, 8080, true, false), "this app's chat engine");
+        assert!(is_our_engine_on("llama-server", &chat, 8080, false, true), "our binary from an earlier session");
+        assert!(!is_our_engine_on("llama-server", &chat, 8080, false, false), "a person's own llama-server");
+        assert!(!is_our_engine_on("llama-server", &args(&["--port", "8091"]), 8080, true, true), "our embedding server is not the chat engine");
+        assert!(!is_our_engine_on("caddy", &chat, 8080, true, true), "not an engine");
+        assert!(!is_our_engine_on("python3", &chat, 8080, true, false), "not an engine, even as our child");
+        assert!(is_our_engine_on("swiftlm", &args(&["--port=8080"]), 8080, true, false), "the MLX engine, --port=");
+        assert!(!is_our_engine_on("llama-server", &args(&["--port", "18080"]), 8080, true, true), "a port that only ends the same way");
+    }
+
+    /// Live (headless matrix): a listener that is not ours is named and
+    /// never ended, and the app's own client connection to the port is not
+    /// taken for a holder (0.8.0-beta.2 killed itself on an 8 GB Mac when a
+    /// sweep listed every pid on the port).
     #[test]
     #[ignore]
     #[cfg(unix)]
-    fn live_matrix_port_sweep_spares_the_client() {
+    fn live_matrix_a_foreign_listener_is_named_and_left_running() {
         let port = 18199u16;
         let script = format!(
             "import socket,time\ns=socket.socket()\ns.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)\ns.bind(('127.0.0.1',{port}))\ns.listen(4)\nc,_=s.accept()\ntime.sleep(60)"
@@ -7274,19 +7310,15 @@ mod stop_chain_tests {
         }
         let _client = client.expect("connected to the listener");
         std::thread::sleep(std::time::Duration::from_millis(300));
-        free_port(&port.to_string());
-        let mut ended = false;
-        for _ in 0..50 {
-            if listener.try_wait().expect("listener state").is_some() {
-                ended = true;
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-        if !ended {
-            let _ = listener.kill();
-        }
-        assert!(ended, "the process listening on the port should have been ended");
+        let pids = listening_pids(port);
+        assert!(pids.contains(&listener.id().to_string()), "the listener is named: {:?}", pids);
+        assert!(!pids.contains(&std::process::id().to_string()), "our client end is not a holder: {:?}", pids);
+        assert!(port_holder(port).is_some_and(|h| h.contains("python")), "the log names the program");
+        assert!(!crate::ports::bindable(port));
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let still_running = listener.try_wait().expect("listener state").is_none();
+        let _ = listener.kill();
+        assert!(still_running, "a listener that is not ours is never ended");
     }
 
     /// The port sweep must name the LISTENER only: the app's own client
