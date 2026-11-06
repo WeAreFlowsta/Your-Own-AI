@@ -297,25 +297,20 @@ impl HolochainManager {
             Err(e) => {
                 let err_str = format!("{}", e);
                 if err_str.contains("UNIQUE constraint") {
-                    // Seed already exists from a previous session — look it up
+                    // Seed already exists from a previous session: look it up
+                    // by its tag. Never list the store's entries: the key
+                    // store's connection carries at most 8 KiB per message,
+                    // so listing a large store aborts the connection.
                     log::info!("Lair seed already exists for AI: {}, reusing", ai_id);
-                    let entries = self
+                    match self
                         .lair_client
-                        .list_entries()
+                        .get_entry(tag.clone())
                         .await
-                        .map_err(|e| format!("Failed to list lair entries: {}", e))?;
-
-                    entries
-                        .into_iter()
-                        .find_map(|entry| {
-                            if let lair_keystore_api::prelude::LairEntryInfo::Seed { tag: t, seed_info, .. } = entry {
-                                if *t == *tag {
-                                    return Some(seed_info);
-                                }
-                            }
-                            None
-                        })
-                        .ok_or_else(|| format!("Seed exists but not found in lair entries for AI: {}", ai_id))?
+                        .map_err(|e| format!("Failed to read the lair seed for AI {}: {}", ai_id, e))?
+                    {
+                        lair_keystore_api::prelude::LairEntryInfo::Seed { seed_info, .. } => seed_info,
+                        _ => return Err(format!("The lair entry for AI {} is not a seed", ai_id)),
+                    }
                 } else {
                     return Err(format!("Failed to create lair seed for AI {}: {}", ai_id, e));
                 }

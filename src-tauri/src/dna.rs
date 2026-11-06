@@ -258,44 +258,6 @@ pub async fn update_coordinators_sweep(
     Ok(updated)
 }
 
-/// One-time fresh start (Phase A): uninstall pre-versioning transcript
-/// apps ("transcript_<x>" without the "_v1_" tag). These are dev-era
-/// installs — the plaintext DNA and the orphan generations from the
-/// re-keying bug (holochain-integration.md Issue 9). Deliberate data
-/// reset agreed pre-launch; the only content ever recorded was a
-/// single April test conversation.
-pub async fn cleanup_legacy_apps(admin_port: u16) -> Result<u32, String> {
-    let admin_ws = AdminWebsocket::connect(
-        format!("localhost:{}", admin_port),
-        Some("your-own-ai".to_string()),
-    )
-    .await
-    .map_err(|e| format!("Failed to connect to admin WebSocket: {}", e))?;
-
-    let apps = admin_ws
-        .list_apps(None)
-        .await
-        .map_err(|e| format!("Failed to list apps: {}", e))?;
-
-    let mut removed = 0;
-    for app in &apps {
-        let id = &app.installed_app_id;
-        if id.starts_with("transcript_") && !id.starts_with(APP_ID_PREFIX) {
-            match admin_ws.uninstall_app(id.clone(), false).await {
-                Ok(_) => {
-                    log::info!("Removed legacy transcript app: {}", id);
-                    removed += 1;
-                }
-                Err(e) => log::warn!("Failed to remove legacy app {}: {}", id, e),
-            }
-        }
-    }
-    if removed > 0 {
-        log::info!("Legacy cleanup removed {} pre-v1 transcript apps", removed);
-    }
-    Ok(removed)
-}
-
 /// Set up an authenticated AppWebsocket for a specific installed app.
 pub async fn connect_app_websocket(
     admin_port: u16,
