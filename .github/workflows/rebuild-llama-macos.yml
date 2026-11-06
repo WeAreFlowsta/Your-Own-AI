@@ -25,6 +25,12 @@ on:
         default: 'both'
         type: choice
         options: [both, x64, arm64]
+      upload:
+        description: 'Replace the release assets (no = build and check only)'
+        required: true
+        default: 'yes'
+        type: choice
+        options: ['yes', 'no']
 
 permissions:
   contents: write
@@ -32,7 +38,7 @@ permissions:
 jobs:
   build-macos-arm64:
     if: ${{ github.event.inputs.targets == 'both' || github.event.inputs.targets == 'arm64' }}
-    runs-on: macos-14
+    runs-on: macos-15  # macos-14 was retired 2026-11-02 (the 11.0 target and the vtool check keep the floor)
     steps:
       - name: Checkout llama.cpp
         uses: actions/checkout@v4
@@ -70,6 +76,7 @@ jobs:
           strip build/bin/llama-server
 
       - name: Replace the release asset
+        if: ${{ github.event.inputs.upload != 'no' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -135,6 +142,7 @@ jobs:
           strip build/bin/llama-server
 
       - name: Replace the release asset
+        if: ${{ github.event.inputs.upload != 'no' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
