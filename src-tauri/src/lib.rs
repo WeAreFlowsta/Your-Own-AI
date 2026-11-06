@@ -1073,9 +1073,11 @@ pub fn run() {
                     }
                 };
 
-                // The 0.7 line starts beside it once the move begins (C2); until then
-                // only the 0.6 line runs.
-                match conductor::start_holochain(hc_app_handle.clone(), data_dir.clone(), None).await {
+                // The 0.7 line starts beside the 0.6 one for the move, from a
+                // freshly prepared key store (the move's design:
+                // TRANSCRIPT_MOVE.md); its passes run once it joins.
+                let line_07 = move_07::line_07_for_start(&data_dir, &recovery, &resource_dir).await;
+                match conductor::start_holochain(hc_app_handle.clone(), data_dir.clone(), line_07).await {
                     Ok(_session) => {
                         let manager = HolochainManager::new(resource_dir, recovery);
 

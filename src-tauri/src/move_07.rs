@@ -488,6 +488,95 @@ impl flowsta_hc_lines::pass::CarriedRecords<Move> for Tombstones {
     }
 }
 
+/// What a start's 0.7 line needs, when the profile is to run it: a profile
+/// with a 0.6 key store (a new install's first start makes it, and moves
+/// from the next). None when it does not, or when the 0.7 key store could
+/// not be prepared: the app then runs on 0.6 alone this session, and the
+/// move waits.
+pub async fn line_07_for_start(data_dir: &std::path::Path, recovery: &crate::transcript_crypto::RecoveryMaterial, resource_dir: &std::path::Path) -> Option<crate::conductor::Line07> {
+    let (lair_06, _) = crate::conductor::line_dirs(data_dir, Line::V06);
+    if !flowsta_hc_lines::keystore::config_path(&lair_06).exists() {
+        log::info!("[0.7] no 0.6 key store yet: the move begins at the next start");
+        return None;
+    }
+    let data_key = match recovery.data_key() {
+        Ok(k) => k,
+        Err(e) => {
+            log::warn!("[0.7] not started: {e}");
+            return None;
+        }
+    };
+    match crate::conductor::prepare_store_07(data_dir, &data_key).await {
+        Ok(passphrase) => Some(crate::conductor::Line07 { passphrase, network_seed: recovery.network_seed.clone(), resource_dir: resource_dir.to_path_buf() }),
+        Err(e) => {
+            log::warn!("[0.7] not started this session: {e}");
+            None
+        }
+    }
+}
+
+/// How often passes run while both lines do: what a device still on 0.9.0
+/// writes to the 0.6 line (its deletions) reaches the 0.7 line within this.
+const PASS_EVERY: Duration = Duration::from_secs(15 * 60);
+
+/// One line per pass for the log.
+fn describe(out: &flowsta_hc_lines::pass::PassOutcome) -> String {
+    if let Some(why) = &out.skipped {
+        return format!("skipped: {why}");
+    }
+    let kinds: Vec<String> = out.kinds.iter().map(|k| format!("{} {}/{} (+{}){}", k.name, k.present + k.written, k.total, k.written, if k.complete { "" } else { " incomplete" })).collect();
+    format!("{}{}{} in {} ms", kinds.join(", "), if out.flipped { "; flipped" } else { "" }, out.error.as_ref().map(|e| format!("; {e}")).unwrap_or_default(), out.took_ms)
+}
+
+/// The move's passes, once the 0.7 line has joined: the first as soon as
+/// the app's 0.6 agents are connected, then every [`PASS_EVERY`] while both
+/// lines run. One runner for the process; the move's connections are kept
+/// across passes and made again when the 0.7 line restarts.
+pub fn run_passes(app: tauri::AppHandle, data_dir: std::path::PathBuf) {
+    static RUNNER: std::sync::OnceLock<PassRunner<Move>> = std::sync::OnceLock::new();
+    static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if RUNNING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        let runner = RUNNER.get_or_init(runner);
+        let hc = app.state::<Arc<HolochainState>>().inner().clone();
+        let mut waited = Duration::ZERO;
+        while hc.get().is_err() {
+            if waited > Duration::from_secs(600) {
+                log::warn!("[0.7] the app's 0.6 agents never connected: no pass this session");
+                RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+                return;
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            waited += Duration::from_secs(2);
+        }
+        let data_key = match hc.get().and_then(|m| m.data_key()) {
+            Ok(k) => k,
+            Err(e) => {
+                log::warn!("[0.7] no pass: {e}");
+                RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+                return;
+            }
+        };
+        let mut mv: Option<(Option<(u16, u16)>, Arc<Move>)> = None;
+        loop {
+            let ports = crate::conductor::ports(Line::V07);
+            if ports.is_none() || crate::conductor::ports(Line::V06).is_none() {
+                break;
+            }
+            if mv.as_ref().map(|(p, _)| *p != ports).unwrap_or(true) {
+                mv = Some((ports, Arc::new(Move::for_app(&app, data_key))));
+            }
+            let (_, m) = mv.as_ref().expect("set above");
+            let out = runner.run(m, &data_dir, "the 0.7 line is up").await;
+            log::info!("[0.7] pass: {}", describe(&out));
+            tokio::time::sleep(PASS_EVERY).await;
+        }
+        RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+    });
+}
+
 /// The profile's pass runner: conversations, messages, memory rows, then
 /// the tombstones.
 pub fn runner() -> PassRunner<Move> {

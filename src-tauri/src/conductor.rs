@@ -523,6 +523,11 @@ impl LineHooks for YoaiLines {
     async fn joined(&self, line: Line, role: Role, _session: u64, admin_port: u16, app_port: u16) {
         self.emit(role, ConductorStatus::Ready { admin_port, app_port });
         log::info!("[{line}] Holochain conductor ready (admin: {}, app: {})", admin_port, app_port);
+        if line == Line::V07 {
+            if let Some(app) = &self.app {
+                crate::move_07::run_passes(app.clone(), self.data_dir.clone());
+            }
+        }
     }
 
     async fn secondary_failed(&self, line: Line, error: &str) {
