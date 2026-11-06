@@ -1,0 +1,17 @@
+[package]
+name = "transcript_hostile_test"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Test only: a coordinator a stranger could run against the transcript integrity zome (same DNA hash, same network). Never bundled."
+
+# Its own workspace: built only for the sweettests, never part of the DNA.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+hdk = "=0.7.1"
+serde = "1.0"
+transcript_integrity_v2 = { path = "../../zomes/transcript/integrity" }

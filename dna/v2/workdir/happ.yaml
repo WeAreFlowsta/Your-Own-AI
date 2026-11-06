@@ -1,0 +1,12 @@
+---
+manifest_version: "0"
+name: yourown_ai_transcript_v2_happ
+description: "Your Own AI transcript DNA v2 - Holochain 0.7 line; records carry ids, links carry their keyed ids"
+roles:
+  - name: transcript
+    provisioning:
+      strategy: create
+      deferred: false
+    dna:
+      path: yourown_ai_transcript_v2.dna
+      clone_limit: 0

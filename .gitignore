@@ -29,6 +29,8 @@ src-tauri/bin/llama-server-*
 
 # DNA build artifacts
 dna/*/target
+dna/*/tests/target
+dna/*/tests/hostile/target
 
 # Local dev environment overrides (not for the public repo)
 dev-env.sh

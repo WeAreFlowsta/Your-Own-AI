@@ -1,0 +1,13 @@
+[package]
+name = "transcript_coordinator_v2"
+version = "0.2.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+name = "transcript_coordinator"
+
+[dependencies]
+hdk = { workspace = true }
+serde = { workspace = true }
+transcript_integrity_v2 = { path = "../integrity" }
