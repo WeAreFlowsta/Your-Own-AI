@@ -63,7 +63,7 @@ jobs:
           retention-days: 7
 
   build-macos-arm64:
-    runs-on: macos-14  # M1/M2/M3 runner
+    runs-on: macos-15  # Apple silicon; macos-14 was retired 2026-11-02 (the 11.0 target and the vtool check keep the floor)
     steps:
       - name: Checkout llama.cpp
         uses: actions/checkout@v4
