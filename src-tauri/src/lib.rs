@@ -28,6 +28,7 @@ pub mod dna;              // DNA installation per AI personality (pub for bin/ce
 pub mod flowsta;          // Sign in with Flowsta via Vault + online-model proxy
 mod holochain;            // Multi-agent manager
 mod transcript_crypto;    // User data key + per-user seed (Phase A privacy)
+mod transcript_ids;       // record ids, and the 0.7 line's anchors and keys derived from them
 mod commands_holochain;   // Tauri commands for transcript operations
 mod memory;               // Phase A persistent memory (encrypted profile facts)
 mod transcript_pages;     // Conversation records read a page at a time
