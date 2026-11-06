@@ -132,18 +132,30 @@ pub(crate) fn passphrase_07(data_key: &[u8; 32], salt: &[u8; 32]) -> String {
     hex::encode(blake3::derive_key("Your Own AI 2026-11 lair 0.7 key store passphrase", &material))
 }
 
-/// Make the 0.7 key store ready to start, and return its passphrase: a copy
-/// of the 0.6 store (the same keys, so every AI keeps its id), with its
-/// salt, rewrapped from the 0.6 passphrase to the derived one. Each step is
-/// skipped once done, so a start that was stopped part way is finished by
-/// the next. Neither line may be running: the copy reads a quiet 0.6 store,
-/// and the rewrap writes a store no lair has open.
+/// Make the 0.7 key store ready to start, and return its passphrase.
+///
+/// While the 0.6 line is in use, the 0.7 store is a fresh copy of the 0.6
+/// one at every start: the same keys, so every AI keeps its id, including
+/// an AI made since the last start (its key is made in the 0.6 store, and
+/// cannot be exported). The copy is built beside the store, given the
+/// store's salt (so the passphrase stays the same), rewrapped from the 0.6
+/// passphrase to the derived one, and swapped in; a start stopped part way
+/// finds one whole store, and an interrupted swap is put back. Neither
+/// line may be running: the copy reads a quiet 0.6 store, and the rewrap
+/// writes a store no lair has open.
 pub(crate) async fn prepare_store_07(data_dir: &Path, data_key: &[u8; 32]) -> Result<String, String> {
     let (lair_06, _) = line_dirs(data_dir, Line::V06);
     let (lair_07, _) = line_dirs(data_dir, Line::V07);
-    if !flowsta_hc_lines::keystore::config_path(&lair_07).exists() {
-        let copied = flowsta_hc_lines::keystore::copy_store(&lair_06, &lair_07, &socket_plan()).map_err(|e| format!("copy the key store for 0.7: {e}"))?;
-        log::info!("[0.7] key store copied from the 0.6 one ({} bytes)", copied.bytes);
+    let next = data_dir.join("lair-07.next");
+    let prev = data_dir.join("lair-07.prev");
+    if !lair_07.exists() && prev.exists() {
+        std::fs::rename(&prev, &lair_07).map_err(|e| format!("put back the 0.7 key store: {e}"))?;
+        log::warn!("[0.7] a key store swap was stopped part way: the previous store is back");
+    }
+    for leftover in [&next, &prev] {
+        if leftover.exists() {
+            std::fs::remove_dir_all(leftover).map_err(|e| format!("clear {leftover:?}: {e}"))?;
+        }
     }
     let salt_path = lair_07.join(SALT_FILE_07);
     let salt: [u8; 32] = match std::fs::read_to_string(&salt_path) {
@@ -151,17 +163,22 @@ pub(crate) async fn prepare_store_07(data_dir: &Path, data_key: &[u8; 32]) -> Re
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             let mut salt = [0u8; 32];
             rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut salt);
-            flowsta_hc_lines::files::write_atomic_private(&salt_path, hex::encode(salt).as_bytes()).map_err(|e| format!("write the 0.7 key store's salt: {e}"))?;
             salt
         }
         Err(e) => return Err(format!("read the 0.7 key store's salt: {e}")),
     };
     let passphrase = passphrase_07(data_key, &salt);
-    match flowsta_hc_lines::keystore::rekey_store(&lair_07, Line::V07, PASSPHRASE_06, &passphrase).await {
-        Ok(flowsta_hc_lines::keystore::Rekeyed::Rewrapped) => log::info!("[0.7] key store rewrapped under this install's passphrase"),
-        Ok(_) => {}
-        Err(e) => return Err(format!("the 0.7 key store does not open: {e}")),
+    let copied = flowsta_hc_lines::keystore::copy_store(&lair_06, &next, &socket_plan()).map_err(|e| format!("copy the key store for 0.7: {e}"))?;
+    flowsta_hc_lines::files::write_atomic_private(&next.join(SALT_FILE_07), hex::encode(salt).as_bytes()).map_err(|e| format!("write the 0.7 key store's salt: {e}"))?;
+    flowsta_hc_lines::keystore::rekey_store(&next, Line::V07, PASSPHRASE_06, &passphrase).await.map_err(|e| format!("rewrap the 0.7 key store: {e}"))?;
+    if lair_07.exists() {
+        std::fs::rename(&lair_07, &prev).map_err(|e| format!("set the previous 0.7 key store aside: {e}"))?;
     }
+    std::fs::rename(&next, &lair_07).map_err(|e| format!("put the 0.7 key store in place: {e}"))?;
+    if prev.exists() {
+        let _ = std::fs::remove_dir_all(&prev);
+    }
+    log::info!("[0.7] key store refreshed from the 0.6 one ({} bytes) under this install's passphrase", copied.bytes);
     Ok(passphrase)
 }
 
@@ -619,8 +636,9 @@ mod line_07_tests {
 
     /// The real sidecars: a 0.6 store holding an AI's random seed, prepared
     /// for 0.7 (copied, salted, rewrapped), starts the 0.7 line under the
-    /// derived passphrase with the same key under the same tag; a second
-    /// preparation changes nothing; the 0.6 store still opens as before.
+    /// derived passphrase with the same key under the same tag; an AI made
+    /// on 0.6 afterwards is in the next copy, under the same passphrase; the
+    /// 0.6 store still opens as before.
     /// Run with the app closed: `cargo test --lib -- --ignored live_07`
     #[tokio::test(flavor = "multi_thread")]
     #[ignore]
@@ -637,8 +655,19 @@ mod line_07_tests {
         p06.stop();
 
         let passphrase = prepare_store_07(&profile, &data_key).await.expect("prepared");
-        assert_eq!(passphrase, prepare_store_07(&profile, &data_key).await.expect("prepared again"), "a second preparation changes nothing");
         assert!(line_dirs(&profile, Line::V07).0.join(SALT_FILE_07).is_file());
+
+        // An AI made on 0.6 after the first copy is in the next one, under
+        // the same passphrase.
+        let later = "ai-made-later".to_string();
+        let mut p06 = start_one(Line::V06, &profile, PASSPHRASE_06, &alone(), &origin, &[KeySource::NewSeed { tag: later.clone() }], |_| {}).await.expect("0.6 starts again");
+        let later_key = p06.agents[0];
+        p06.stop();
+        assert_eq!(passphrase, prepare_store_07(&profile, &data_key).await.expect("refreshed"), "the salt is kept, so the passphrase too");
+        assert!(!profile.join("lair-07.next").exists() && !profile.join("lair-07.prev").exists(), "no leftovers");
+        let mut p07 = start_one(Line::V07, &profile, &passphrase, &alone(), &origin, &[KeySource::Existing { tag: later }], |_| {}).await.expect("0.7 has the later AI");
+        assert_eq!(p07.agents[0], later_key);
+        p07.stop();
 
         let mut p07 = start_one(Line::V07, &profile, &passphrase, &alone(), &origin, &[KeySource::Existing { tag: tag.clone() }], |_| {}).await.expect("0.7 starts under the derived passphrase");
         assert_eq!(p07.agents[0], key, "the AI's key on 0.7 is its key on 0.6");
