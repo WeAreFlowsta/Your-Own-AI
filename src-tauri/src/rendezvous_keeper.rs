@@ -302,7 +302,7 @@ impl Keeper {
     /// Read the conductor's own notes and peers, compare with every server,
     /// register and feed in what is missing.
     pub(crate) async fn run_once(&mut self, admin_port: u16) -> Result<Round, String> {
-        let admin = holochain_client::AdminWebsocket::connect(format!("localhost:{}", admin_port), Some("your-own-ai".to_string()))
+        let admin = holochain_client::AdminWebsocket::connect(format!("localhost:{}", admin_port), Some(crate::conductor::origin()))
             .await
             .map_err(|e| format!("admin: {e}"))?;
         let apps = admin
@@ -483,7 +483,7 @@ const WOKE_AFTER: std::time::Duration = std::time::Duration::from_secs(150);
 /// Once a minute while the app is open, starting a little after the
 /// conductor's first registration has had its chance. Nothing to do when
 /// this build has no rendezvous (one device, the localhost black hole).
-pub fn start(admin_port: u16) {
+pub fn start() {
     let servers = servers();
     if servers.is_empty() {
         log::info!("[rendezvous] no rendezvous configured - nothing to keep");
@@ -503,6 +503,8 @@ pub fn start(admin_port: u16) {
                 }
             }
             last_tick = now;
+            // Asked each round: a new start brings a new port and origin.
+            let Some(admin_port) = crate::conductor::admin_port() else { continue };
             if let Err(e) = keeper.run_once(admin_port).await {
                 log::debug!("[rendezvous] round skipped: {}", e);
             }

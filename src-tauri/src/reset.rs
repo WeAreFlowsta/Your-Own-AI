@@ -10,8 +10,7 @@
 //! account is independent of the local Holochain identity, so it stays connected
 //! across the reset (the Vault link auto-reconciles on the next launch).
 
-use std::sync::Arc;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 /// Full factory reset: remove all AIs, conversations, and learned memory, then
 /// restart. The frontend clears its own localStorage and confirms with the user
@@ -23,22 +22,11 @@ pub async fn reset_to_defaults(app: AppHandle) -> Result<(), String> {
     let data_dir = crate::profile::root(&app)?;
     let device_dir = crate::profile::device_root(&app)?;
 
-    // Stop the conductor + lair so their database files aren't held open when we
-    // delete them. We only have the PIDs (the Child handles are shared, not
-    // mutable), so signal by PID — matching the app's exit handler.
-    if let Some(hc) = app.try_state::<Arc<crate::commands_holochain::HolochainState>>() {
-        if let Some(manager) = hc.manager.get() {
-            for pid in [
-                manager.handle.conductor_child.id(),
-                manager.handle.lair_child.id(),
-            ] {
-                crate::process_ext::stop_pid(pid);
-            }
-            log::info!("[reset] signalled conductor + lair to stop");
-        }
-    }
-    // Give the OS a moment to reap the processes and release their file handles.
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    // Stop the conductor + lair so their database files aren't held open
+    // when we delete them: a start under way ends first, then the conductor
+    // stops, then the key store.
+    crate::conductor::stop_for_good_async().await;
+    log::info!("[reset] conductor + lair stopped");
 
     // Wipe local AIs, transcripts, memory, thumbnails, and UI sentinels.
     for dir in ["conductor", "lair", "thumbnails"] {

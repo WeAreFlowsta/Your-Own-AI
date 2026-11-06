@@ -84,7 +84,7 @@ pub async fn install_transcript_app(
 
     let admin_ws = AdminWebsocket::connect(
         format!("localhost:{}", admin_port),
-        Some("your-own-ai".to_string()),
+        Some(crate::conductor::origin()),
     )
     .await
     .map_err(|e| format!("Failed to connect to admin WebSocket: {}", e))?;
@@ -234,7 +234,7 @@ pub async fn update_coordinators_sweep(
 
     let admin_ws = AdminWebsocket::connect(
         format!("localhost:{}", admin_port),
-        Some("your-own-ai".to_string()),
+        Some(crate::conductor::origin()),
     )
     .await
     .map_err(|e| format!("Failed to connect to admin WebSocket: {}", e))?;
@@ -264,9 +264,20 @@ pub async fn connect_app_websocket(
     app_port: u16,
     app_id: &str,
 ) -> Result<holochain_client::AppWebsocket, String> {
+    connect_app_websocket_as(admin_port, app_port, app_id, &crate::conductor::origin()).await
+}
+
+/// [`connect_app_websocket`] presenting `origin`: for a tool in another
+/// process, which reads the origin from the conductor's config.
+pub async fn connect_app_websocket_as(
+    admin_port: u16,
+    app_port: u16,
+    app_id: &str,
+    origin: &str,
+) -> Result<holochain_client::AppWebsocket, String> {
     let admin_ws = AdminWebsocket::connect(
         format!("localhost:{}", admin_port),
-        Some("your-own-ai".to_string()),
+        Some(origin.to_string()),
     )
     .await
     .map_err(|e| format!("Failed to connect to admin WebSocket: {}", e))?;
@@ -366,7 +377,7 @@ pub async fn connect_app_websocket(
         std::sync::Arc::new(ws_config),
         token.token,
         signer_arc,
-        Some("your-own-ai".to_string()),
+        Some(origin.to_string()),
     )
     .await
     .map_err(|e| format!("Failed to connect app WebSocket: {}", e))?;

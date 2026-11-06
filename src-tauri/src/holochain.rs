@@ -4,12 +4,10 @@
 //! and source chain. This module manages the lifecycle of multiple agents
 //! within a single conductor instance.
 
-use crate::conductor::{ConductorHandle, StartupResult};
 use crate::transcript_crypto::RecoveryMaterial;
 use crate::dna;
 use holochain_client::AppWebsocket;
 use holochain_types::prelude::AgentPubKey;
-use lair_keystore_api::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -79,8 +77,6 @@ mod census_tests {
 }
 
 pub struct HolochainManager {
-    pub lair_client: LairClient,
-    pub handle: ConductorHandle,
     pub resource_dir: PathBuf,
     /// Map from agent pub key hex to its Holochain agent.
     pub agents: Mutex<HashMap<String, AiAgent>>,
@@ -107,11 +103,9 @@ pub struct HolochainManager {
 }
 
 impl HolochainManager {
-    /// Create a new manager from a startup result.
-    pub fn new(startup: StartupResult, resource_dir: PathBuf, recovery: RecoveryMaterial) -> Self {
+    /// A manager for the conductor that has just started.
+    pub fn new(resource_dir: PathBuf, recovery: RecoveryMaterial) -> Self {
         Self {
-            lair_client: startup.lair_client,
-            handle: startup.handle,
             resource_dir,
             agents: Mutex::new(HashMap::new()),
             lineage_index: Mutex::new(HashMap::new()),
@@ -119,6 +113,17 @@ impl HolochainManager {
             chain_locks: Mutex::new(HashMap::new()),
             recovery,
         }
+    }
+
+    /// The conductor's admin port (0 when it does not run: a connection
+    /// then fails at once).
+    pub fn admin_port(&self) -> u16 {
+        crate::conductor::admin_port().unwrap_or(0)
+    }
+
+    /// The conductor's app interface port (0 when it does not run).
+    pub fn app_port(&self) -> u16 {
+        crate::conductor::app_port().unwrap_or(0)
     }
 
     /// The user's transcript data key (Phase A encryption).
@@ -205,8 +210,8 @@ impl HolochainManager {
         // ask the conductor itself.
         {
             let admin_ws = holochain_client::AdminWebsocket::connect(
-                format!("localhost:{}", self.handle.admin_port),
-                Some("your-own-ai".to_string()),
+                format!("localhost:{}", self.admin_port()),
+                Some(crate::conductor::origin()),
             )
             .await
             .map_err(|e| format!("Failed to connect to admin WebSocket: {}", e))?;
@@ -253,8 +258,8 @@ impl HolochainManager {
                     key_hex
                 );
                 let app_client = dna::connect_app_websocket(
-                    self.handle.admin_port,
-                    self.handle.app_port,
+                    self.admin_port(),
+                    self.app_port(),
                     &app.installed_app_id,
                 )
                 .await
@@ -283,53 +288,25 @@ impl HolochainManager {
 
         log::info!("Provisioning Holochain agent for AI: {}", ai_id);
 
-        // 1. Get or create a lair seed for this AI personality.
-        let tag: Arc<str> = format!("ai-{}", ai_id).into();
-        let seed_info = match self
-            .lair_client
-            .new_seed(tag.clone(), None, false)
+        // 1. This AI's key: a random seed made in the key store under its
+        // tag, or the one already there from a previous session (looked up
+        // by its tag, never by listing the store's entries: the key store's
+        // connection carries at most 8 KiB per message, so listing a large
+        // store aborts the connection).
+        let key = crate::conductor::supervisor()
+            .add_agent(
+                flowsta_hc_lines::Line::V06,
+                crate::conductor::PASSPHRASE_06,
+                &flowsta_hc_lines::supervisor::KeySource::NewSeed { tag: format!("ai-{}", ai_id) },
+            )
             .await
-        {
-            Ok(info) => {
-                log::info!("Created new lair seed for AI: {}", ai_id);
-                info
-            }
-            Err(e) => {
-                let err_str = format!("{}", e);
-                if err_str.contains("UNIQUE constraint") {
-                    // Seed already exists from a previous session: look it up
-                    // by its tag. Never list the store's entries: the key
-                    // store's connection carries at most 8 KiB per message,
-                    // so listing a large store aborts the connection.
-                    log::info!("Lair seed already exists for AI: {}, reusing", ai_id);
-                    match self
-                        .lair_client
-                        .get_entry(tag.clone())
-                        .await
-                        .map_err(|e| format!("Failed to read the lair seed for AI {}: {}", ai_id, e))?
-                    {
-                        lair_keystore_api::prelude::LairEntryInfo::Seed { seed_info, .. } => seed_info,
-                        _ => return Err(format!("The lair entry for AI {} is not a seed", ai_id)),
-                    }
-                } else {
-                    return Err(format!("Failed to create lair seed for AI {}: {}", ai_id, e));
-                }
-            }
-        };
-
-        let agent_pub_key = holochain_types::prelude::AgentPubKey::from_raw_32(
-            seed_info.ed25519_pub_key.0.to_vec(),
-        );
-
-        log::info!(
-            "Generated agent key for AI {}: {}",
-            ai_id,
-            hex::encode(&*seed_info.ed25519_pub_key.0)
-        );
+            .map_err(|e| format!("Failed to create the key for AI {}: {}", ai_id, e))?;
+        let agent_pub_key = holochain_types::prelude::AgentPubKey::from_raw_32(key.to_vec());
+        log::info!("Agent key for AI {}: {}", ai_id, hex::encode(key));
 
         // 2. Install the transcript hApp with this agent key.
         let app_id = dna::install_transcript_app(
-            self.handle.admin_port,
+            self.admin_port(),
             &self.resource_dir,
             agent_pub_key.clone(),
             ai_id,
@@ -339,8 +316,8 @@ impl HolochainManager {
 
         // 3. Connect an AppWebsocket.
         let app_client = dna::connect_app_websocket(
-            self.handle.admin_port,
-            self.handle.app_port,
+            self.admin_port(),
+            self.app_port(),
             &app_id,
         )
         .await?;
@@ -378,8 +355,8 @@ impl HolochainManager {
         live: &[(String, String)],
     ) -> Result<serde_json::Value, String> {
         let admin_ws = holochain_client::AdminWebsocket::connect(
-            format!("localhost:{}", self.handle.admin_port),
-            Some("your-own-ai".to_string()),
+            format!("localhost:{}", self.admin_port()),
+            Some(crate::conductor::origin()),
         )
         .await
         .map_err(|e| format!("Failed to connect to admin WebSocket: {}", e))?;
@@ -431,8 +408,8 @@ impl HolochainManager {
                 false
             } else {
                 match dna::connect_app_websocket(
-                    self.handle.admin_port,
-                    self.handle.app_port,
+                    self.admin_port(),
+                    self.app_port(),
                     &app.installed_app_id,
                 )
                 .await
@@ -630,8 +607,8 @@ impl HolochainManager {
             })
             .unwrap_or_default();
         let admin_ws = holochain_client::AdminWebsocket::connect(
-            format!("localhost:{}", self.handle.admin_port),
-            Some("your-own-ai".to_string()),
+            format!("localhost:{}", self.admin_port()),
+            Some(crate::conductor::origin()),
         )
         .await
         .map_err(|e| format!("Failed to connect to admin WebSocket: {}", e))?;
@@ -677,8 +654,8 @@ impl HolochainManager {
     /// forgets the agent in-memory. Returns the number of hApps removed.
     pub async fn purge_agent(&self, ai_id: &str) -> Result<u32, String> {
         let admin_ws = holochain_client::AdminWebsocket::connect(
-            format!("localhost:{}", self.handle.admin_port),
-            Some("your-own-ai".to_string()),
+            format!("localhost:{}", self.admin_port()),
+            Some(crate::conductor::origin()),
         )
         .await
         .map_err(|e| format!("Failed to connect to admin WebSocket: {}", e))?;
@@ -861,8 +838,8 @@ impl HolochainManager {
     /// installed in a previous session.
     pub async fn reconnect_existing_agents(&self) -> Result<(), String> {
         let admin_ws = holochain_client::AdminWebsocket::connect(
-            format!("localhost:{}", self.handle.admin_port),
-            Some("your-own-ai".to_string()),
+            format!("localhost:{}", self.admin_port()),
+            Some(crate::conductor::origin()),
         )
         .await
         .map_err(|e| format!("Failed to connect to admin WebSocket: {}", e))?;
@@ -902,8 +879,8 @@ impl HolochainManager {
 
                 // Connect AppWebsocket.
                 match dna::connect_app_websocket(
-                    self.handle.admin_port,
-                    self.handle.app_port,
+                    self.admin_port(),
+                    self.app_port(),
                     &app.installed_app_id,
                 )
                 .await
@@ -946,8 +923,8 @@ impl HolochainManager {
             );
             for app_id in failed {
                 match dna::connect_app_websocket(
-                    self.handle.admin_port,
-                    self.handle.app_port,
+                    self.admin_port(),
+                    self.app_port(),
                     &app_id.0,
                 )
                 .await

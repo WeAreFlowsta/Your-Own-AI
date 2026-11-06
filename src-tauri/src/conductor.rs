@@ -1,18 +1,27 @@
-//! Holochain conductor lifecycle management for Your Own AI.
+//! The open profile's Holochain key store and conductor, run through
+//! flowsta-hc-lines. The library starts them (the key store made on the
+//! first run, a free admin port, a config only this OS account can read,
+//! the conductor, its admin interface), holds them for the session and
+//! stops them: the conductor first, asked and given a grace, then the key
+//! store.
 //!
-//! Starts lair-keystore and holochain as child processes, waits for readiness.
-//! Adapted from ProofPoll's conductor.rs — simplified for local-only use
-//! (no DHT networking, no migration clients).
+//! Every interface accepts one origin, made fresh for each start and kept by
+//! the supervisor ([`origin`]). Every connection the app makes presents it;
+//! a web page always presents its own address, and another account on the
+//! device cannot read the config, so nothing else can open these interfaces.
+//!
+//! Agents are made while the app runs, one per AI generation
+//! (`HolochainManager::provision_agent`), in the line's own key store.
 
-use crate::lair;
-use crate::process_ext::{SidecarChild, SidecarCommand};
-use lair_keystore_api::prelude::LairClient;
-use std::path::{Path, PathBuf};
+use flowsta_hc_lines::conductor::NetworkTuning;
+use flowsta_hc_lines::keystore::SocketPlan;
+use flowsta_hc_lines::rendezvous::{answers, Rendezvous, PROBE_TIMEOUT};
+use flowsta_hc_lines::supervisor::{self, LineHooks, LineProcess, LineStart, Role, Setup, StartStep, Supervisor, Timeouts, NOT_WANTED};
+use flowsta_hc_lines::{AdminClient, Line};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock};
 use tauri::Emitter;
-
-/// Admin WebSocket port for the local Holochain conductor.
-/// Different from Flowsta Vault (4455) and ProofPoll (4466).
-pub fn admin_ws_port() -> u16 { crate::ports::admin_ws() }
 
 /// The Holochain network generation this build's conductor speaks - the
 /// Vault's vocabulary (`devices.rs` NETWORK_GENERATION), so a sibling on
@@ -20,31 +29,89 @@ pub fn admin_ws_port() -> u16 { crate::ports::admin_ws() }
 /// sync with <device>". Bump with the Holochain upgrade (0.7.x).
 pub const NETWORK_GENERATION: &str = "holochain-0.6";
 
-/// Handle to a running conductor + lair-keystore pair.
-pub struct ConductorHandle {
-    pub lair_child: SidecarChild,
-    pub conductor_child: SidecarChild,
-    pub admin_port: u16,
-    pub app_port: u16,
+/// The passphrase of the 0.6 line's key store and conductor databases.
+/// Kept as it has always been until the 0.6 line retires, so nothing that
+/// exists is rewritten.
+pub(crate) const PASSPHRASE_06: &str = "your-own-ai-local";
+
+static SUPERVISOR: LazyLock<Arc<Supervisor>> = LazyLock::new(|| Arc::new(Supervisor::new("yoai")));
+
+/// The open profile's lines.
+pub fn supervisor() -> &'static Arc<Supervisor> {
+    &SUPERVISOR
 }
 
-impl ConductorHandle {
-    pub fn shutdown(mut self) {
-        log::info!("Shutting down conductor...");
-        if let Err(e) = self.conductor_child.kill() {
-            log::warn!("Failed to kill conductor process: {}", e);
-        }
-        let _ = self.conductor_child.wait();
+/// The origin every connection to this start's conductor presents.
+pub fn origin() -> String {
+    supervisor().origin()
+}
 
-        log::info!("Shutting down lair-keystore...");
-        if let Err(e) = self.lair_child.kill() {
-            log::warn!("Failed to kill lair-keystore process: {}", e);
-        }
-        let _ = self.lair_child.wait();
+/// The 0.6 conductor's admin port, while it runs.
+pub fn admin_port() -> Option<u16> {
+    supervisor().ports(Line::V06).map(|(admin, _)| admin)
+}
 
-        log::info!("Conductor and lair-keystore stopped");
+/// The 0.6 conductor's app interface port, while it runs.
+pub fn app_port() -> Option<u16> {
+    supervisor().ports(Line::V06).map(|(_, app)| app)
+}
+
+/// Where a key store's socket goes when its own folder's path is over the
+/// Unix-socket limit: the folder and naming the app has always used, so an
+/// existing key store keeps its socket.
+pub fn socket_plan() -> SocketPlan {
+    SocketPlan::new("fv", "lair")
+}
+
+/// The 0.6 conductor's admin port candidates, the first free one used.
+fn admin_ports() -> [u16; 3] {
+    let base = crate::ports::admin_ws();
+    [base, base + 1, base + 2]
+}
+
+/// The 0.6 conductor's settings, as the app has always run it: SQLite synced
+/// in full on every write, errors logged plus the bootstrap client's
+/// warnings (a refused registration, "Bootstrap PUT returned HTTP error", is
+/// the one line that tells a stranded device from a quiet one).
+fn tuning() -> NetworkTuning {
+    let mut t = NetworkTuning::for_line(Line::V06);
+    t.db_sync_strategy = Some("Resilient".into());
+    t.rust_log = Some("error,kitsune2_bootstrap_client=warn".into());
+    t
+}
+
+// ── Closing ─────────────────────────────────────────────────────────────
+
+static CLOSING: AtomicBool = AtomicBool::new(false);
+
+/// The app is quitting, resetting or swapping its material: no start that
+/// is under way goes on (each ends at its next step), and none begins.
+pub fn begin_closing() {
+    CLOSING.store(true, Ordering::SeqCst);
+}
+
+fn closing() -> bool {
+    CLOSING.load(Ordering::SeqCst)
+}
+
+/// Stop the lines for good: no start goes on, a start under way is waited
+/// for (up to 30 s), then every line stops, the conductor first. Blocking.
+pub fn stop_for_good() {
+    begin_closing();
+    if !supervisor().wait_for_starts(std::time::Duration::from_secs(30)) {
+        log::warn!("[conductor] a start was still under way after 30 s - stopping anyway");
+    }
+    if supervisor().stop() {
+        log::info!("[conductor] the key store and conductor are stopped");
     }
 }
+
+/// [`stop_for_good`] from async code.
+pub async fn stop_for_good_async() {
+    let _ = tokio::task::spawn_blocking(stop_for_good).await;
+}
+
+// ── Status for the window ───────────────────────────────────────────────
 
 /// Conductor status reported to the frontend.
 #[derive(Clone, serde::Serialize)]
@@ -60,142 +127,55 @@ pub enum ConductorStatus {
     Error { message: String },
 }
 
-/// Result of the startup sequence.
-pub struct StartupResult {
-    pub handle: ConductorHandle,
-    pub lair_client: LairClient,
-}
-
-/// Where this conductor meets the person's OTHER devices (the design
-/// notes). The network is private by construction - the seed is
-/// per identity (or per install) and every record is ciphertext under the
-/// person's data key before it reaches the DNA - so a reachable peer is
-/// only ever one of the person's own devices, and the rendezvous learns
-/// agent keys, a space hash and an address, never content or an identity.
-///
-/// Bootstrap + signal URL and the per-app auth material are baked at build
-/// time (`FLOWSTA_BOOTSTRAP_URL`, `FLOWSTA_SIGNAL_URL`, `FLOWSTA_AUTH_MATERIAL`
-/// - the Vault's names) or set at run time for a dev box. Without auth
-/// material the conductor keeps the localhost black hole it always had:
-/// one device, no peers, nothing to reach - the bootstrap refuses
-/// unauthenticated clients anyway.
-struct Rendezvous {
-    bootstrap_url: String,
-    signal_url: String,
-    auth_material: Option<String>,
-}
-
-impl Rendezvous {
-    fn env(k: &str) -> Option<String> {
-        std::env::var(k).ok().filter(|v| !v.is_empty())
-    }
-
-    /// Flowsta's own rendezvous, usable only with this app's auth material.
-    fn primary() -> Option<Self> {
-        let auth_material = Self::env("FLOWSTA_AUTH_MATERIAL")
-            .or_else(|| option_env!("FLOWSTA_AUTH_MATERIAL").filter(|m| !m.is_empty()).map(String::from))?;
-        let bootstrap_url = Self::env("FLOWSTA_BOOTSTRAP_URL")
-            .or_else(|| option_env!("FLOWSTA_BOOTSTRAP_URL").map(String::from))
-            .unwrap_or_else(|| "https://bootstrap.flowsta.com".to_string());
-        let signal_url = Self::env("FLOWSTA_SIGNAL_URL")
-            .or_else(|| option_env!("FLOWSTA_SIGNAL_URL").map(String::from))
-            .unwrap_or_else(|| bootstrap_url.replacen("https://", "wss://", 1));
-        Some(Self { bootstrap_url, signal_url, auth_material: Some(auth_material) })
-    }
-
-    /// Open rendezvous for when Flowsta's is dark (community nodes): a
-    /// comma-separated list, https only (the conductor refuses a plaintext
-    /// relay), no auth material by design - the Vault's rule.
-    fn fallbacks() -> Vec<Self> {
-        let list = Self::env("FLOWSTA_BOOTSTRAP_FALLBACKS")
-            .or_else(|| option_env!("FLOWSTA_BOOTSTRAP_FALLBACKS").map(String::from))
-            .unwrap_or_default();
-        parse_fallbacks(&list)
-    }
-
-    /// The rendezvous for this conductor session: the primary when it
-    /// answers (or when there is nothing else to try); else the first live
-    /// fallback; with everything dark, the primary anyway - the conductor
-    /// works alone and reconnects when anything returns. `None` = no
-    /// material and no fallbacks: the localhost black hole, one device.
-    async fn resolve() -> Option<Self> {
-        let primary = Self::primary();
-        let fallbacks = Self::fallbacks();
-        if fallbacks.is_empty() {
-            return primary;
-        }
-        if let Some(p) = &primary {
-            if bootstrap_alive(&p.bootstrap_url).await {
-                return primary;
-            }
-            log::warn!("[conductor] rendezvous {} unreachable - trying {} fallback(s)", p.bootstrap_url, fallbacks.len());
-        }
-        for f in &fallbacks {
-            if bootstrap_alive(&f.bootstrap_url).await {
-                log::info!("[conductor] using open rendezvous {}", f.bootstrap_url);
-                return Some(f.clone());
-            }
-        }
-        log::warn!("[conductor] every rendezvous is dark - starting alone, reconnecting when one returns");
-        primary.or_else(|| fallbacks.into_iter().next())
-    }
-
-    /// The `network:` block. The relay URL is the bootstrap host with a
-    /// trailing dot (an absolute DNS name, the form the relay wants).
-    fn network_block(this: Option<&Self>) -> String {
-        match this {
-            Some(r) => {
-                let auth = match &r.auth_material {
-                    Some(m) => format!("  base64_auth_material_bootstrap: \"{m}\"\n  base64_auth_material_relay: \"{m}\"\n"),
-                    None => String::new(),
-                };
-                format!(
-                    "network:\n  bootstrap_url: {b}\n  signal_url: {s}\n  relay_url: {r}\n{auth}",
-                    b = r.bootstrap_url,
-                    s = r.signal_url,
-                    r = relay_url_for(&r.bootstrap_url),
-                )
-            }
-            None => "network:\n  bootstrap_url: https://localhost/\n  signal_url: wss://localhost/\n  relay_url: https://localhost/\n".to_string(),
-        }
+fn step_message(step: StartStep) -> &'static str {
+    match step {
+        StartStep::KeyStore => "Starting lair-keystore...",
+        StartStep::Connect => "Connecting to lair-keystore...",
+        StartStep::Agents => "Reading the key store...",
+        StartStep::Conductor => "Starting Holochain conductor...",
+        StartStep::WaitAdmin => "Waiting for conductor...",
+        _ => "Starting...",
     }
 }
 
-/// Every rendezvous this build knows, for the registration keeper
-/// (`rendezvous_keeper`): Flowsta's with this app's auth material first,
-/// then the open community nodes. `(bootstrap url, base64 auth material)`.
-/// The rendezvous the running conductor was configured with at launch (the
-/// main one, or the first fallback that answered when it was dark). The
-/// registration keeper calls a stall only against this one: the conductor
-/// never registers anywhere else, so a missing note on a fallback is not a
-/// stall (10-19: "did not reach node1.flowsta.com" every few minutes).
-static CONDUCTOR_RENDEZVOUS: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+// ── The rendezvous ──────────────────────────────────────────────────────
+//
+// Where this conductor meets the person's OTHER devices. The network is
+// private by construction - the seed is per identity (or per install) and
+// every record is ciphertext under the person's data key before it reaches
+// the DNA - so a reachable peer is only ever one of the person's own
+// devices, and the rendezvous learns agent keys, a space hash and an
+// address, never content or an identity.
+//
+// Bootstrap + signal URL and the per-app auth material are baked at build
+// time (`FLOWSTA_BOOTSTRAP_URL`, `FLOWSTA_SIGNAL_URL`, `FLOWSTA_AUTH_MATERIAL`
+// - the Vault's names) or set at run time for a dev box. Without auth
+// material the conductor keeps the localhost black hole it always had: one
+// device, no peers, nothing to reach - the bootstrap refuses unauthenticated
+// clients anyway.
 
-pub(crate) fn conductor_rendezvous() -> Option<String> {
-    CONDUCTOR_RENDEZVOUS.lock().ok().and_then(|g| g.clone())
+fn env(k: &str) -> Option<String> {
+    std::env::var(k).ok().filter(|v| !v.is_empty())
 }
 
-fn remember_conductor_rendezvous(url: &str) {
-    if let Ok(mut g) = CONDUCTOR_RENDEZVOUS.lock() {
-        *g = Some(url.trim_end_matches('/').to_string());
-    }
+/// Flowsta's own rendezvous, usable only with this app's auth material.
+fn primary() -> Option<Rendezvous> {
+    let auth_material = env("FLOWSTA_AUTH_MATERIAL").or_else(|| option_env!("FLOWSTA_AUTH_MATERIAL").filter(|m| !m.is_empty()).map(String::from))?;
+    let bootstrap_url = env("FLOWSTA_BOOTSTRAP_URL")
+        .or_else(|| option_env!("FLOWSTA_BOOTSTRAP_URL").map(String::from))
+        .unwrap_or_else(|| "https://bootstrap.flowsta.com".to_string());
+    let signal_url = env("FLOWSTA_SIGNAL_URL")
+        .or_else(|| option_env!("FLOWSTA_SIGNAL_URL").map(String::from))
+        .unwrap_or_else(|| bootstrap_url.replacen("https://", "wss://", 1));
+    Some(Rendezvous { bootstrap_url, signal_url: Some(signal_url), auth_material: Some(auth_material) })
 }
 
-pub(crate) fn rendezvous_servers() -> Vec<(String, Option<String>)> {
-    let mut servers = Vec::new();
-    if let Some(p) = Rendezvous::primary() {
-        servers.push((p.bootstrap_url, p.auth_material));
-    }
-    for f in Rendezvous::fallbacks() {
-        servers.push((f.bootstrap_url, None));
-    }
-    servers
-}
-
-impl Clone for Rendezvous {
-    fn clone(&self) -> Self {
-        Self { bootstrap_url: self.bootstrap_url.clone(), signal_url: self.signal_url.clone(), auth_material: self.auth_material.clone() }
-    }
+/// Open rendezvous for when Flowsta's is dark (community nodes): a
+/// comma-separated list, https only (the conductor refuses a plaintext
+/// relay), no auth material by design - the Vault's rule.
+fn fallbacks() -> Vec<Rendezvous> {
+    let list = env("FLOWSTA_BOOTSTRAP_FALLBACKS").or_else(|| option_env!("FLOWSTA_BOOTSTRAP_FALLBACKS").map(String::from)).unwrap_or_default();
+    parse_fallbacks(&list)
 }
 
 fn parse_fallbacks(list: &str) -> Vec<Rendezvous> {
@@ -212,378 +192,177 @@ fn parse_fallbacks(list: &str) -> Vec<Rendezvous> {
         .map(|u| {
             let bootstrap_url = u.trim_end_matches('/').to_string();
             let host = bootstrap_url.trim_start_matches("https://").to_string();
-            Rendezvous { bootstrap_url, signal_url: format!("wss://{}", host), auth_material: None }
+            Rendezvous { bootstrap_url, signal_url: Some(format!("wss://{}", host)), auth_material: None }
         })
         .collect()
 }
 
-/// Is a bootstrap server answering? kitsune2-bootstrap-srv serves
-/// GET /health (200, no auth); community nodes run the same binary.
-async fn bootstrap_alive(url: &str) -> bool {
-    let health = format!("{}/health", url.trim_end_matches('/'));
-    let Ok(client) = reqwest::Client::builder().timeout(std::time::Duration::from_millis(2500)).build() else {
-        return false;
-    };
-    matches!(client.get(&health).send().await, Ok(r) if r.status().is_success())
+/// No rendezvous at all: a localhost black hole, one device.
+fn alone() -> Rendezvous {
+    Rendezvous { bootstrap_url: "https://localhost/".into(), signal_url: Some("wss://localhost/".into()), auth_material: None }
 }
 
-/// `https://host[:port]/...` → `https://host.[:port]/` (the Vault's rule).
-fn relay_url_for(bootstrap_url: &str) -> String {
-    let trimmed = bootstrap_url.trim_end_matches('/');
-    let Some((scheme, rest)) = trimmed.split_once("://") else {
-        return format!("{}./", trimmed.trim_end_matches('.'));
-    };
-    let (host, port) = match rest.rsplit_once(':') {
-        Some((h, p)) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => (h, Some(p)),
-        _ => (rest, None),
-    };
-    let host = host.trim_end_matches('.');
-    match port {
-        Some(p) => format!("{}://{}.:{}/", scheme, host, p),
-        None => format!("{}://{}./", scheme, host),
+/// The rendezvous for this conductor session: the primary when it answers
+/// (or when there is nothing else to try); else the first live fallback;
+/// with everything dark, the primary anyway - the conductor works alone and
+/// reconnects when anything returns. None: no material and no fallbacks.
+async fn resolve() -> Option<Rendezvous> {
+    let primary = primary();
+    let fallbacks = fallbacks();
+    if fallbacks.is_empty() {
+        return primary;
     }
-}
-
-fn generate_conductor_config(
-    conductor_dir: &Path,
-    lair_connection_url: &str,
-    admin_port: u16,
-    rendezvous: Option<&Rendezvous>,
-) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(conductor_dir)
-        .map_err(|e| format!("Failed to create conductor directory: {}", e))?;
-
-    // Path values use SINGLE-quoted YAML strings — double-quoted YAML
-    // interprets backslash escapes (e.g. "C:\Users\..." reads "\U" as a
-    // Unicode escape and fails on the first non-hex character). Single
-    // quotes pass backslashes through verbatim; the only escape needed
-    // is doubling embedded single quotes. (Same fix as ProofPoll/Vault —
-    // this bit ProofPoll's first Windows install in beta11.)
-    let data_root = conductor_dir.display().to_string().replace('\'', "''");
-    let lair_url = lair_connection_url.replace('\'', "''");
-
-    // relay_url is new in Holochain 0.6.1 (Iroh transport); localhost
-    // black-hole like bootstrap/signal — connection failures are
-    // tolerated, gossip simply never happens.
-    match rendezvous {
-        Some(r) => log::info!("[conductor] rendezvous {} (the person's own devices can meet)", r.bootstrap_url),
-        None => log::info!("[conductor] no rendezvous - this conductor stays alone"),
-    }
-    // Errors only, plus the bootstrap client's warnings: a refused
-    // registration ("Bootstrap PUT returned HTTP error") is the one line
-    // that tells a stranded device from a quiet one (2026-10-19).
-    let config = format!(
-        r#"tracing_override: 'error,kitsune2_bootstrap_client=warn'
-data_root_path: '{data_root}'
-keystore:
-  type: lair_server
-  connection_url: '{lair_url}'
-admin_interfaces:
-- driver:
-    type: websocket
-    port: {admin_port}
-    allowed_origins: '*'
-{network}db_sync_strategy: Resilient
-"#,
-        data_root = data_root,
-        admin_port = admin_port,
-        lair_url = lair_url,
-        network = Rendezvous::network_block(rendezvous),
-    );
-
-    let config_path = conductor_dir.join("conductor-config.yaml");
-    std::fs::write(&config_path, &config)
-        .map_err(|e| format!("Failed to write conductor config: {}", e))?;
-
-    log::info!("Conductor config written to {:?}", config_path);
-    Ok(config_path)
-}
-
-/// Start the holochain conductor process.
-fn start_conductor_process(
-    config_path: &Path,
-    conductor_dir: &Path,
-    passphrase: &str,
-) -> Result<SidecarChild, String> {
-    log::info!("Starting holochain conductor...");
-
-    let stdout_path = conductor_dir.join("holochain-stdout.log");
-    let stderr_path = conductor_dir.join("holochain-stderr.log");
-    // Keep the previous run's logs: a restart is the usual cure for a
-    // network problem, and it used to erase the only evidence.
-    let _ = std::fs::rename(&stdout_path, conductor_dir.join("holochain-stdout.previous.log"));
-    let _ = std::fs::rename(&stderr_path, conductor_dir.join("holochain-stderr.previous.log"));
-
-    let stdout_file = std::fs::File::create(&stdout_path)
-        .map_err(|e| format!("Failed to create conductor stdout log: {}", e))?;
-    let stderr_file = std::fs::File::create(&stderr_path)
-        .map_err(|e| format!("Failed to create conductor stderr log: {}", e))?;
-
-    let holochain_bin = crate::resolve_sidecar_bin("yourowai-holochain");
-    log::info!("Using holochain binary: {:?}", holochain_bin);
-
-    let mut child = SidecarCommand::new(&holochain_bin)
-        .arg("-c")
-        .arg(config_path)
-        .arg("--piped")
-        .stdout(stdout_file)
-        .stderr(stderr_file)
-        .spawn()
-        .map_err(|e| format!("Failed to spawn holochain conductor: {}", e))?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write;
-        stdin
-            .write_all(format!("{}\n", passphrase).as_bytes())
-            .map_err(|e| format!("Failed to write passphrase to conductor: {}", e))?;
-    }
-
-    log::info!("Holochain conductor started (pid {})", child.id());
-
-    // Brief check for immediate failure.
-    std::thread::sleep(std::time::Duration::from_millis(500));
-    match child.try_wait() {
-        Ok(Some(status)) => {
-            let output = read_conductor_logs(conductor_dir);
-            Err(format!(
-                "Holochain conductor exited immediately (status {}): {}",
-                status, output.trim()
-            ))
+    if let Some(p) = &primary {
+        if answers(&p.bootstrap_url, PROBE_TIMEOUT).await {
+            return primary;
         }
-        Ok(None) => Ok(child),
-        Err(e) => Err(format!("Failed to check conductor process status: {}", e)),
+        log::warn!("[conductor] rendezvous {} unreachable - trying {} fallback(s)", p.bootstrap_url, fallbacks.len());
     }
-}
-
-fn read_conductor_logs(conductor_dir: &Path) -> String {
-    let stderr_path = conductor_dir.join("holochain-stderr.log");
-    let stdout_path = conductor_dir.join("holochain-stdout.log");
-
-    let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
-    let stdout = std::fs::read_to_string(&stdout_path).unwrap_or_default();
-
-    let output = if !stderr.is_empty() { stderr } else { stdout };
-    // 500 characters, cut on a character boundary: a byte cut inside a
-    // multibyte character panics.
-    match output.char_indices().nth(500) {
-        Some((cut, _)) => format!("{}...", &output[..cut]),
-        None => output,
-    }
-}
-
-/// Wait for the conductor admin WebSocket to be ready.
-async fn wait_for_admin_ws(
-    port: u16,
-    timeout_secs: u64,
-    conductor_child: &mut SidecarChild,
-    conductor_dir: &Path,
-) -> Result<(), String> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-    let mut attempt = 0;
-
-    while std::time::Instant::now() < deadline {
-        attempt += 1;
-
-        match conductor_child.try_wait() {
-            Ok(Some(status)) => {
-                let output = read_conductor_logs(conductor_dir);
-                return Err(format!(
-                    "Conductor exited during startup (status {}): {}",
-                    status,
-                    output.trim()
-                ));
-            }
-            Ok(None) => {}
-            Err(e) => return Err(format!("Failed to check conductor process: {}", e)),
-        }
-
-        match tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port)).await {
-            Ok(_) => {
-                log::info!(
-                    "Conductor admin WS ready on port {} (attempt {})",
-                    port,
-                    attempt
-                );
-                return Ok(());
-            }
-            Err(_) => {
-                if attempt <= 3 {
-                    log::info!("Waiting for conductor admin WS (attempt {})...", attempt);
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            }
+    for f in &fallbacks {
+        if answers(&f.bootstrap_url, PROBE_TIMEOUT).await {
+            log::info!("[conductor] using open rendezvous {}", f.bootstrap_url);
+            return Some(f.clone());
         }
     }
-
-    let output = read_conductor_logs(conductor_dir);
-    if !output.trim().is_empty() {
-        Err(format!(
-            "Conductor not ready after {}s. Logs: {}",
-            timeout_secs, output.trim()
-        ))
-    } else {
-        Err(format!(
-            "Conductor admin WS not ready after {}s on port {}",
-            timeout_secs, port
-        ))
-    }
+    log::warn!("[conductor] every rendezvous is dark - starting alone, reconnecting when one returns");
+    primary.or_else(|| fallbacks.into_iter().next())
 }
 
-/// Full startup sequence: lair → conductor → wait for ready.
-///
-/// Does NOT install DNAs or set up app interfaces — that's handled
-/// by the multi-agent manager (holochain.rs) which provisions agents lazily.
-pub async fn start_holochain(
-    app_handle: tauri::AppHandle,
+/// The rendezvous the running conductor was configured with at its start
+/// (the main one, or the first fallback that answered when it was dark).
+/// The registration keeper calls a stall only against this one: the
+/// conductor never registers anywhere else, so a missing note on a fallback
+/// is not a stall (10-19: "did not reach node1.flowsta.com" every few
+/// minutes).
+pub(crate) fn conductor_rendezvous() -> Option<String> {
+    supervisor().rendezvous(Line::V06)
+}
+
+/// Every rendezvous this build knows, for the registration keeper
+/// (`rendezvous_keeper`): Flowsta's with this app's auth material first,
+/// then the open community nodes. `(bootstrap url, base64 auth material)`.
+pub(crate) fn rendezvous_servers() -> Vec<(String, Option<String>)> {
+    let mut servers = Vec::new();
+    if let Some(p) = primary() {
+        servers.push((p.bootstrap_url, p.auth_material));
+    }
+    for f in fallbacks() {
+        servers.push((f.bootstrap_url, None));
+    }
+    servers
+}
+
+/// Whether this session's conductor started with no rendezvous answering,
+/// and so without its auth. Holochain 0.6.1 authenticates with the relay as
+/// it starts, and a conductor that cannot (no network) refuses to start at
+/// all ("Authenticate Failed", exit 101). Started without the auth it runs,
+/// and everything on this device works; the next start uses the auth again.
+static STARTED_OFFLINE: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn started_offline() -> bool {
+    STARTED_OFFLINE.load(Ordering::SeqCst)
+}
+
+// ── The start ───────────────────────────────────────────────────────────
+
+/// What the app's lines need from the app (flowsta-hc-lines `LineHooks`):
+/// the profile's folders and the window to narrate the start to.
+struct YoaiLines {
+    app: tauri::AppHandle,
+    /// The open profile's root.
     data_dir: PathBuf,
-    passphrase: String,
-) -> Result<StartupResult, String> {
-    let _ = app_handle.emit(
-        "conductor-status",
-        ConductorStatus::Starting {
-            message: "Starting lair-keystore...".into(),
-        },
-    );
+}
 
-    // 1. Start lair-keystore.
-    let lair_dir = data_dir.join("lair");
-    let (mut lair_child, connection_url) = lair::start_lair_process(&lair_dir, &passphrase)?;
-
-    macro_rules! fail_with_lair_cleanup {
-        ($err:expr) => {{
-            let _ = lair_child.kill();
-            let _ = lair_child.wait();
-            return Err($err);
-        }};
+impl YoaiLines {
+    fn emit(&self, status: ConductorStatus) {
+        let _ = self.app.emit("conductor-status", status);
     }
 
-    // 2. Wait for lair socket.
-    if let Err(e) = lair::wait_for_lair_socket(&connection_url, 15).await {
-        fail_with_lair_cleanup!(e);
+    fn say(&self, message: &str) {
+        self.emit(ConductorStatus::Starting { message: message.into() });
     }
+}
 
-    // 3. Connect to lair. Timeout is load-bearing: this connect has hung
-    // indefinitely in the field (lair up, socket present, no answer) - the
-    // UI then spins forever with nothing in the log between "socket ready"
-    // and "config written". Bound it and say so, loudly.
-    let _ = app_handle.emit(
-        "conductor-status",
-        ConductorStatus::Starting {
-            message: "Connecting to lair-keystore...".into(),
-        },
-    );
-    // Log the pipe address only - the URL's query string carries the
-    // connection token, and users share these logs with support.
-    log::info!(
-        "Connecting to lair-keystore at {}",
-        connection_url.split('?').next().unwrap_or("<unparseable>")
-    );
-    let lair_client = match tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        lair::connect_to_lair(&connection_url, &passphrase),
-    )
-    .await
-    {
-        Ok(Ok(c)) => c,
-        Ok(Err(e)) => {
-            log::error!("Lair connect failed: {}", e);
-            fail_with_lair_cleanup!(e);
+#[async_trait::async_trait]
+impl LineHooks for YoaiLines {
+    async fn start(&self, line: Line, _role: Role) -> Result<LineProcess, String> {
+        if line != Line::V06 {
+            return Err(format!("this build runs no {line} line"));
         }
-        Err(_) => {
-            log::error!(
-                "Lair connect timed out after 30s (server running, socket present, no response)"
-            );
-            fail_with_lair_cleanup!(
-                "Timed out connecting to the key store after 30 seconds. Please send us your log file - it now shows exactly where startup stopped.".to_string()
-            );
-        }
-    };
-    log::info!("Connected to lair-keystore");
-
-    // 4. Generate conductor config.
-    let _ = app_handle.emit(
-        "conductor-status",
-        ConductorStatus::Starting {
-            message: "Starting Holochain conductor...".into(),
-        },
-    );
-    let conductor_dir = data_dir.join("conductor");
-    let rendezvous = Rendezvous::resolve().await;
-    if let Some(r) = &rendezvous {
-        remember_conductor_rendezvous(&r.bootstrap_url);
-    }
-    let config_path = match generate_conductor_config(&conductor_dir, &connection_url, admin_ws_port(), rendezvous.as_ref()) {
-        Ok(p) => p,
-        Err(e) => fail_with_lair_cleanup!(e),
-    };
-
-    // 5. Start conductor process.
-    let mut conductor_child = match start_conductor_process(&config_path, &conductor_dir, &passphrase) {
-        Ok(c) => c,
-        Err(e) => fail_with_lair_cleanup!(e),
-    };
-
-    // 6. Wait for admin WebSocket.
-    let _ = app_handle.emit(
-        "conductor-status",
-        ConductorStatus::Starting {
-            message: "Waiting for conductor...".into(),
-        },
-    );
-    if let Err(e) = wait_for_admin_ws(admin_ws_port(), 30, &mut conductor_child, &conductor_dir).await {
-        let _ = conductor_child.kill();
-        let _ = conductor_child.wait();
-        fail_with_lair_cleanup!(e);
-    }
-
-    // 7. Attach app interface (port 0 = auto-assign).
-    let _ = app_handle.emit(
-        "conductor-status",
-        ConductorStatus::Starting {
-            message: "Setting up app interface...".into(),
-        },
-    );
-    let admin_ws = holochain_client::AdminWebsocket::connect(
-        format!("localhost:{}", admin_ws_port()),
-        Some("your-own-ai".to_string()),
-    )
-    .await
-    .map_err(|e| {
-        let _ = conductor_child.kill();
-        let _ = conductor_child.wait();
-        format!("Failed to connect to admin WebSocket: {}", e)
-    })?;
-
-    let app_port = admin_ws
-        .attach_app_interface(0, None, holochain_client::AllowedOrigins::Any, None)
+        let entry = match resolve().await {
+            Some(r) => {
+                let start = r.for_start(PROBE_TIMEOUT).await;
+                if start.without_auth {
+                    log::warn!("[conductor] no rendezvous answers ({}): starting without its auth, offline - the next start uses it", start.rendezvous.bootstrap_url);
+                }
+                STARTED_OFFLINE.store(start.without_auth, Ordering::SeqCst);
+                log::info!("[conductor] rendezvous {} (the person's own devices can meet)", start.rendezvous.bootstrap_url);
+                supervisor().set_rendezvous(line, Some(&start.rendezvous.bootstrap_url));
+                start.rendezvous
+            }
+            None => {
+                log::info!("[conductor] no rendezvous - this conductor stays alone");
+                supervisor().set_rendezvous(line, None);
+                alone()
+            }
+        };
+        let origin = supervisor().fresh_origin();
+        let lair_bin = crate::resolve_sidecar_bin("yourowai-lair-keystore");
+        let conductor_bin = crate::resolve_sidecar_bin("yourowai-holochain");
+        log::info!("[conductor] key store {:?}, conductor {:?}", lair_bin, conductor_bin);
+        let (lair_dir, conductor_dir) = (self.data_dir.join("lair"), self.data_dir.join("conductor"));
+        supervisor::start_line(
+            &LineStart {
+                line,
+                lair_bin: &lair_bin,
+                conductor_bin: &conductor_bin,
+                lair_dir: &lair_dir,
+                conductor_dir: &conductor_dir,
+                passphrase: PASSPHRASE_06,
+                sockets: &socket_plan(),
+                admin_ports: &admin_ports(),
+                origin: &origin,
+                rendezvous: &entry,
+                tuning: &tuning(),
+                agents: &[],
+                timeouts: Timeouts::default(),
+            },
+            |step| self.say(step_message(step)),
+        )
         .await
-        .map_err(|e| format!("Failed to attach app interface: {}", e))?;
+        .map_err(|e| e.to_string())
+    }
 
-    log::info!("App interface attached on port {}", app_port);
+    /// The app interface, accepting only this start's origin. The
+    /// coordinator sweep and the agents follow once the line has joined.
+    async fn setup(&self, line: Line, _role: Role, process: &mut LineProcess) -> Result<Setup, String> {
+        self.say("Setting up app interface...");
+        let origin = supervisor().origin();
+        let admin = AdminClient::connect(line, process.admin_port, &origin).await.map_err(|e| format!("Failed to connect to admin WebSocket: {e}"))?;
+        let app_port = admin.attach_app_interface(&origin).await.map_err(|e| format!("Failed to attach app interface: {e}"))?;
+        log::info!("App interface attached on port {}", app_port);
+        Ok(app_port.into())
+    }
 
-    // 8. Emit ready status.
-    let _ = app_handle.emit(
-        "conductor-status",
-        ConductorStatus::Ready {
-            admin_port: admin_ws_port(),
-            app_port,
-        },
-    );
-    log::info!(
-        "Holochain conductor ready (admin: {}, app: {})",
-        admin_ws_port(),
-        app_port
-    );
+    async fn joined(&self, _line: Line, _role: Role, _session: u64, admin_port: u16, app_port: u16) {
+        self.emit(ConductorStatus::Ready { admin_port, app_port });
+        log::info!("Holochain conductor ready (admin: {}, app: {})", admin_port, app_port);
+    }
 
-    Ok(StartupResult {
-        handle: ConductorHandle {
-            lair_child,
-            conductor_child,
-            admin_port: admin_ws_port(),
-            app_port,
-        },
-        lair_client,
-    })
+    fn wanted(&self) -> bool {
+        !closing()
+    }
+}
+
+/// Start the open profile's key store and conductor; returns once they are
+/// up and the app interface is attached. The start gets one retry after a
+/// failure (2 s later, so ports and processes are released).
+pub async fn start_holochain(app: tauri::AppHandle, data_dir: PathBuf) -> Result<u64, String> {
+    let hooks = Arc::new(YoaiLines { app, data_dir });
+    match supervisor().start_lines(Line::V06, None, hooks).await {
+        Err(e) if e == NOT_WANTED => Err("the app is closing".into()),
+        other => other,
+    }
 }
 
 #[cfg(test)]
@@ -593,17 +372,36 @@ mod rendezvous_tests {
         let f = super::parse_fallbacks(" https://node1.example.com/, http://plain.example.com, https://node2.example.com:8443 ,");
         assert_eq!(f.len(), 2, "the plaintext one is dropped");
         assert_eq!(f[0].bootstrap_url, "https://node1.example.com");
-        assert_eq!(f[0].signal_url, "wss://node1.example.com");
+        assert_eq!(f[0].signal_url(), "wss://node1.example.com");
         assert!(f[0].auth_material.is_none(), "fallbacks are open by design");
         assert_eq!(f[1].bootstrap_url, "https://node2.example.com:8443");
-        assert_eq!(super::relay_url_for(&f[1].bootstrap_url), "https://node2.example.com.:8443/");
+        assert_eq!(f[1].relay_url(), "https://node2.example.com.:8443/");
         assert!(super::parse_fallbacks("").is_empty());
     }
 
     #[test]
-    fn relay_url_is_the_bootstrap_host_as_an_absolute_name() {
-        assert_eq!(super::relay_url_for("https://bootstrap.flowsta.com"), "https://bootstrap.flowsta.com./");
-        assert_eq!(super::relay_url_for("https://bootstrap-staging.flowsta.com/"), "https://bootstrap-staging.flowsta.com./");
-        assert_eq!(super::relay_url_for("http://localhost:8787"), "http://localhost.:8787/");
+    fn the_config_keeps_the_settings_the_app_has_always_run_with() {
+        use flowsta_hc_lines::conductor::{config_yaml, ConfigInput};
+        let r = super::alone();
+        let c = config_yaml(&ConfigInput {
+            line: flowsta_hc_lines::Line::V06,
+            conductor_dir: std::path::Path::new("/p/conductor"),
+            lair_url: "unix:///p/lair/socket?k=K",
+            admin_port: 4477,
+            origin: "yoai-00",
+            rendezvous: &r,
+            tuning: &super::tuning(),
+        });
+        assert!(c.contains("allowed_origins: 'yoai-00'"), "the admin interface accepts only this start's origin");
+        assert!(c.contains("db_sync_strategy: Resilient"));
+        assert!(c.contains("bootstrap_url: https://localhost/") && !c.contains("base64_auth_material"), "no material: the black hole, alone");
+        assert_eq!(super::tuning().rust_log.as_deref(), Some("error,kitsune2_bootstrap_client=warn"));
+    }
+
+    #[test]
+    fn admin_ports_start_at_the_usual_one() {
+        let p = super::admin_ports();
+        assert_eq!(p[0], crate::ports::admin_ws());
+        assert_eq!(p, [p[0], p[0] + 1, p[0] + 2]);
     }
 }

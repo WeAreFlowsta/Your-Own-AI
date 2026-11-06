@@ -54,10 +54,13 @@ tauri-plugin-window-state = "2.4.1"
 tauri-plugin-log = "2"
 log = "0.4"
 
-# Holochain (conductor + lair keystore management)
-# Pinned to the Holochain 0.6.1-compatible set proven in ProofPoll:
-# 0.6.1 pins lair_keystore_api to exactly 0.6.3, and holochain_client
-# 0.8.1 / holochain_types 0.6.1 move in lockstep with the conductor.
+# Holochain: the key store and conductor run through flowsta-hc-lines,
+# which starts, supervises and stops each Holochain line. The client crates
+# are pinned to the versions the library pins for the 0.6 line (0.6.1 pins
+# lair_keystore_api to exactly 0.6.3; holochain_client 0.8.1 and
+# holochain_types 0.6.1 move in lockstep with the conductor).
+flowsta-hc-lines = { git = "https://github.com/WeAreFlowsta/flowsta-hc-lines", rev = "f3b96f148d6cb30faaa55b4a4c801b7658606cf9" }
+async-trait = "0.1"
 lair_keystore_api = "=0.6.3"
 holochain_client = { version = "=0.8.1", default-features = false }
 holochain_types = "=0.6.1"
@@ -105,24 +108,6 @@ opt-level = 3
 [profile.dev.package.ocrs]
 opt-level = 3
 
-# Linux: prctl(PR_SET_PDEATHSIG) so lair/conductor die with the app (process_ext.rs).
 [dev-dependencies]
 tempfile = "3"
 
-[target.'cfg(target_os = "linux")'.dependencies]
-libc = "0.2"
-
-# Windows: hide spawned lair/holochain/llama-server console windows post-spawn
-# (EnumWindows + ShowWindow) and tie them to a kill-on-close Job Object so they
-# die with the app instead of orphaning and holding the lair pipe / ports.
-# See process_ext.rs (ported from Flowsta Vault).
-[target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = [
-    "Win32_Foundation",
-    "Win32_UI_WindowsAndMessaging",
-    "Win32_System_Diagnostics_ToolHelp",
-    "Win32_System_JobObjects",
-    "Win32_Security",
-    "Win32_System_Threading",
-    "Win32_System_Pipes",
-] }

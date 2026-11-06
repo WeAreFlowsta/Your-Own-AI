@@ -20,10 +20,9 @@ mod tuning;               // per-model fine-tune overrides (FINE_TUNE_PANEL laye
 mod matrix;               // in-app truth matrix (Help & diagnostics, every build)
 mod engine;               // optional inference engines (pinned tag; CUDA backend later)
 mod ocr;                  // OCR for scanned PDFs (pdfium render + ocrs)
-mod lair;
 mod mlx_artifacts;      // MLX model artifacts (safetensors dirs) download/status
-mod mlx_engine;         // Apple Silicon MLX engine (preview) - SwiftLM                 // Holochain lair keystore management
-mod conductor;            // Holochain conductor lifecycle
+mod mlx_engine;         // Apple Silicon MLX engine (preview) - SwiftLM
+mod conductor;            // the Holochain key store + conductor, through flowsta-hc-lines
 mod rendezvous_keeper;    // keeps this device listed on the rendezvous when the conductor's registration stalls
 pub mod dna;              // DNA installation per AI personality (pub for bin/census)
 pub mod flowsta;          // Sign in with Flowsta via Vault + online-model proxy
@@ -51,7 +50,7 @@ mod reset;                 // factory reset (wipe local AIs/transcripts/memory, 
 mod vault_escrow;          // transcript-key escrow in the user's Flowsta Vault
 mod vault_restore;         // replay conversations from the Vault backup onto this device
 mod model_caps;            // capability registry (benchmark-informed scores)
-mod process_ext;           // Windows: hide sidecar consoles + kill-on-close job; Linux: PDEATHSIG
+mod process_ext;           // sidecar spawn and stop (flowsta-hc-lines): hidden consoles, tied to the app
 mod instance_guard;        // single-instance port lock + orphan-process sweep
 mod clipboard;
 mod skills;               // Add-ons > Skills: SKILL.md folders the AIs read
@@ -975,6 +974,8 @@ pub fn run() {
             // and orphaned sidecars (stale conductor/lair/llama-server from
             // a crashed run) so they can't poison this one.
             let inference_listener = instance_guard::acquire_or_exit(app.handle());
+            // Windows: a console window titled with one of these is hidden.
+            process_ext::register_title_markers(&["yourowai-holochain", "yourowai-lair-keystore", "llama-server"]);
 
             // Prime the CUDA compute-capability read (subprocess; done off
             // the startup path so no spawn decision ever waits on it).
@@ -1053,7 +1054,6 @@ pub fn run() {
 
             tauri::async_runtime::spawn(async move {
                 log::info!("Starting Holochain conductor...");
-                let passphrase = "your-own-ai-local";
 
                 // Phase A: user data key + per-user network seed,
                 // generated on first launch (standalone — no account).
@@ -1070,21 +1070,15 @@ pub fn run() {
                     }
                 };
 
-                match conductor::start_holochain(
-                    hc_app_handle.clone(),
-                    data_dir.clone(),
-                    passphrase.to_string(),
-                )
-                .await
-                {
-                    Ok(startup) => {
-                        let manager = HolochainManager::new(startup, resource_dir, recovery);
+                match conductor::start_holochain(hc_app_handle.clone(), data_dir.clone()).await {
+                    Ok(_session) => {
+                        let manager = HolochainManager::new(resource_dir, recovery);
 
                         // Hot-swap coordinator zomes to this build's version
                         // (no-op once applied; new externs reach existing
                         // cells without touching the DNA hash).
                         if let Err(e) = dna::update_coordinators_sweep(
-                            manager.handle.admin_port,
+                            manager.admin_port(),
                             &manager.resource_dir,
                             &data_dir,
                         )
@@ -1098,11 +1092,10 @@ pub fn run() {
                             log::warn!("Failed to reconnect existing agents: {}", e);
                         }
 
-                        let admin_port = manager.handle.admin_port;
                         // Fill the OnceCell
                         let _ = hc_state.manager.set(manager);
                         log::info!("Holochain conductor ready");
-                        rendezvous_keeper::start(admin_port);
+                        rendezvous_keeper::start();
                         if identity_watch::RELAUNCHED_INTO_IDENTITY.load(std::sync::atomic::Ordering::Relaxed) {
                             identity_watch::bring_to_front(&hc_app_handle);
                         }
@@ -1175,16 +1168,11 @@ pub fn run() {
                     println!("[Exit] utility server stopped");
                 }
 
-                // Stop Holochain conductor + lair by killing processes via PID
+                // Stop the conductor, then the key store: each is asked and
+                // given its grace, a start under way ends first.
                 println!("[Exit] Stopping Holochain conductor...");
-                let hc_state = app_handle.state::<Arc<commands_holochain::HolochainState>>();
-                if let Some(manager) = hc_state.manager.get() {
-                    let conductor_pid = manager.handle.conductor_child.id();
-                    let lair_pid = manager.handle.lair_child.id();
-                    process_ext::stop_pid(conductor_pid);
-                    process_ext::stop_pid(lair_pid);
-                    println!("[Exit] Holochain stopped (pids: {}, {})", conductor_pid, lair_pid);
-                }
+                conductor::stop_for_good();
+                println!("[Exit] Holochain stopped");
             }
         });
 }
