@@ -1,11 +1,12 @@
 //! Transcript census — ground-truth audit of every transcript app.
 //!
-//! Connects to the running YOAI conductor (admin port 4477), iterates
-//! EVERY installed `transcript_*` app (no lineage logic), and lists each
-//! conversation with its message count. Run while `npm run tauri dev`
-//! is up:
+//! Connects to the running YOAI conductor, iterates EVERY installed
+//! `transcript_*` app (no lineage logic), and lists each conversation with
+//! its message count. The conductor accepts only the origin its start made,
+//! written with its admin port in the open profile's conductor config, which
+//! only this OS account can read. Run while the app is up:
 //!
-//!     cargo run --bin census
+//!     cargo run --bin census -- <profile>/conductor/conductor-config.yaml
 //!
 //! Read-only: only zome reads (`get_all_conversations`,
 //! `get_conversation_entries`) are issued.
@@ -13,26 +14,39 @@
 use holochain_client::AdminWebsocket;
 use holochain_types::prelude::ExternIO;
 
-const ADMIN_PORT: u16 = 4477;
+/// The admin port and origin a conductor config names.
+fn port_and_origin(config: &str) -> Option<(u16, String)> {
+    let value = |key: &str| {
+        config.lines().find_map(|l| l.trim().strip_prefix(key).map(|v| v.trim().trim_matches('\'').to_string()))
+    };
+    Some((value("port:")?.parse().ok()?, value("allowed_origins:")?))
+}
 
 #[tokio::main]
 async fn main() {
-    let admin_ws = match AdminWebsocket::connect(
-        format!("localhost:{}", ADMIN_PORT),
-        Some("your-own-ai".to_string()),
-    )
-    .await
-    {
+    let Some(path) = std::env::args().nth(1) else {
+        eprintln!("usage: census <profile>/conductor/conductor-config.yaml");
+        std::process::exit(2);
+    };
+    let config = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        eprintln!("Cannot read {path}: {e}");
+        std::process::exit(1);
+    });
+    let Some((admin_port, origin)) = port_and_origin(&config) else {
+        eprintln!("{path} names no admin port and origin");
+        std::process::exit(1);
+    };
+    let admin_ws = match AdminWebsocket::connect(format!("localhost:{}", admin_port), Some(origin.clone())).await {
         Ok(ws) => ws,
         Err(e) => {
-            eprintln!("Cannot connect to admin port {ADMIN_PORT} — is the app running? ({e})");
+            eprintln!("Cannot connect to admin port {admin_port} - is the app running? ({e})");
             std::process::exit(1);
         }
     };
 
     let apps = admin_ws.list_apps(None).await.expect("list_apps failed");
     let app_port = admin_ws
-        .attach_app_interface(0, None, holochain_client::AllowedOrigins::Any, None)
+        .attach_app_interface(0, None, holochain_client::AllowedOrigins::Origins([origin.clone()].into_iter().collect()), None)
         .await
         .expect("attach_app_interface failed");
 
@@ -49,7 +63,7 @@ async fn main() {
     let mut total_msgs = 0usize;
 
     for app_id in &transcript_apps {
-        let app_ws = match app_lib::dna::connect_app_websocket(ADMIN_PORT, app_port, app_id).await {
+        let app_ws = match app_lib::dna::connect_app_websocket_as(admin_port, app_port, app_id, &origin).await {
             Ok(ws) => ws,
             Err(e) => {
                 println!("{app_id}\n  [unreachable: {e}]\n");

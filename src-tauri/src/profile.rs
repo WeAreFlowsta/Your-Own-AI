@@ -228,7 +228,7 @@ pub fn short_socket_path(root: &Path) -> PathBuf {
 }
 
 /// Whether a key store under `root` can be started at all: its default
-/// socket fits, or the short runtime socket does (`lair::ensure_socket_fits`
+/// socket fits, or the short runtime socket does (the key store's start
 /// moves it there at start). Windows named pipes always fit.
 pub fn lair_socket_path_fits(root: &Path) -> bool {
     #[cfg(windows)]
@@ -264,7 +264,7 @@ fn profile_entries(root: &Path) -> Vec<PathBuf> {
 /// address is a percent-encoded URL, so this goes through the URL-aware
 /// repoint, never a plain text replace.
 fn rewrite_lair_paths(new_lair_dir: &Path, _old_lair_dir: &Path) -> Result<(), String> {
-    crate::lair::repoint_config(new_lair_dir).map(|_| ())
+    flowsta_hc_lines::keystore::repoint_config(new_lair_dir, &crate::conductor::socket_plan()).map(|_| ()).map_err(|e| e.to_string())
 }
 
 /// Move the legacy root layout into `profiles/<folder>/`, all-or-nothing.

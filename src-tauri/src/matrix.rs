@@ -1912,7 +1912,7 @@ pub async fn leg_devices(app: &AppHandle, sink: Sink<'_>) -> Vec<String> {
             k.servers,
             match k.stalled_min { Some(m) => format!("COVERING for a stalled registration ({m} min)"), None => "registering on its own".into() },
             if k.put_elsewhere > 0 { " | listed on a fallback too" } else { "" },
-        )),
+        ) + if crate::conductor::started_offline() { " | started offline, without the rendezvous auth (the next start uses it)" } else { "" }),
         None => sink("rendezvous: the keeper has not run yet (it starts about a minute after the conductor)".into()),
     }
     let failures = devices_failures(labels_read, vault.unlocked, ai_count, holds_ais, holds_manifest);

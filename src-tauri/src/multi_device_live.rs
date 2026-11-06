@@ -135,7 +135,7 @@ mod tests {
             .attach_app_interface(0, None, holochain_client::AllowedOrigins::Any, None)
             .await
             .expect("app interface");
-        let app = crate::dna::connect_app_websocket(admin_port, app_port, &app_id)
+        let app = crate::dna::connect_app_websocket_as(admin_port, app_port, &app_id, "your-own-ai")
             .await
             .expect("app connection");
         println!("  {} up: agent {} admin {} app {}", name, agent, admin_port, app_port);

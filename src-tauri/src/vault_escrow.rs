@@ -599,18 +599,10 @@ pub(crate) async fn swap_material_and_restart(
     data_dir: &std::path::Path,
     new_material: &RecoveryMaterial,
 ) -> Result<(), String> {
-    if let Some(hc) = app.try_state::<Arc<HolochainState>>() {
-        if let Some(manager) = hc.manager.get() {
-            for pid in [
-                manager.handle.conductor_child.id(),
-                manager.handle.lair_child.id(),
-            ] {
-                crate::process_ext::stop_pid(pid);
-            }
-            log::info!("[escrow] signalled conductor + lair to stop for the material swap");
-        }
-    }
-    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    // A start under way ends first, then the conductor stops, then the
+    // key store.
+    crate::conductor::stop_for_good_async().await;
+    log::info!("[escrow] conductor + lair stopped for the material swap");
 
     for dir in ["conductor", "lair"] {
         let p = data_dir.join(dir);
