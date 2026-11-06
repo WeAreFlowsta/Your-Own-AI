@@ -18,16 +18,24 @@ use flowsta_hc_lines::keystore::SocketPlan;
 use flowsta_hc_lines::rendezvous::{answers, Rendezvous, PROBE_TIMEOUT};
 use flowsta_hc_lines::supervisor::{self, LineHooks, LineProcess, LineStart, Role, Setup, StartStep, Supervisor, Timeouts, NOT_WANTED};
 use flowsta_hc_lines::{AdminClient, Line};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
 use tauri::Emitter;
 
-/// The Holochain network generation this build's conductor speaks - the
+/// The Holochain network generation this build's records are on - the
 /// Vault's vocabulary (`devices.rs` NETWORK_GENERATION), so a sibling on
 /// another generation reads the same way everywhere: "Needs the update to
-/// sync with <device>". Bump with the Holochain upgrade (0.7.x).
+/// sync with <device>". It follows the records when they move to 0.7.
 pub const NETWORK_GENERATION: &str = "holochain-0.6";
+
+/// Each line's network generation, in the same vocabulary.
+pub fn network_generation(line: Line) -> &'static str {
+    match line {
+        Line::V06 => "holochain-0.6",
+        Line::V07 => "holochain-0.7",
+    }
+}
 
 /// The passphrase of the 0.6 line's key store and conductor databases.
 /// Kept as it has always been until the 0.6 line retires, so nothing that
@@ -63,21 +71,93 @@ pub fn socket_plan() -> SocketPlan {
     SocketPlan::new("fv", "lair")
 }
 
-/// The 0.6 conductor's admin port candidates, the first free one used.
-fn admin_ports() -> [u16; 3] {
-    let base = crate::ports::admin_ws();
+/// A line's admin port candidates, the first free one used: 4477-4479 for
+/// 0.6, 4480-4482 for 0.7 (both shifted by the port offset).
+fn admin_ports(line: Line) -> [u16; 3] {
+    let base = crate::ports::admin_ws() + if line == Line::V07 { 3 } else { 0 };
     [base, base + 1, base + 2]
 }
 
-/// The 0.6 conductor's settings, as the app has always run it: SQLite synced
-/// in full on every write, errors logged plus the bootstrap client's
+/// A line's conductor settings. SQLite synced in full on every write
+/// (0.6 `Resilient`, 0.7 `Full`), errors logged plus the bootstrap client's
 /// warnings (a refused registration, "Bootstrap PUT returned HTTP error", is
-/// the one line that tells a stranded device from a quiet one).
-fn tuning() -> NetworkTuning {
-    let mut t = NetworkTuning::for_line(Line::V06);
-    t.db_sync_strategy = Some("Resilient".into());
+/// the one line that tells a stranded device from a quiet one); on 0.7 the
+/// library's gossip cap.
+fn tuning(line: Line) -> NetworkTuning {
+    let mut t = NetworkTuning::for_line(line);
+    match line {
+        Line::V06 => t.db_sync_strategy = Some("Resilient".into()),
+        Line::V07 => t.db_sync_level = Some("Full".into()),
+    }
     t.rust_log = Some("error,kitsune2_bootstrap_client=warn".into());
     t
+}
+
+/// A line's key store and conductor folders in the profile.
+pub fn line_dirs(data_dir: &Path, line: Line) -> (PathBuf, PathBuf) {
+    match line {
+        Line::V06 => (data_dir.join("lair"), data_dir.join("conductor")),
+        Line::V07 => (data_dir.join("lair-07"), data_dir.join("conductor-07")),
+    }
+}
+
+/// A line's sidecars: its key store, then its conductor.
+fn sidecars(line: Line) -> (&'static str, &'static str) {
+    match line {
+        Line::V06 => ("yourowai-lair-keystore", "yourowai-holochain"),
+        Line::V07 => ("yourowai-lair-keystore-07", "yourowai-holochain-07"),
+    }
+}
+
+// ── The 0.7 key store's passphrase ──────────────────────────────────────
+
+/// The file in the 0.7 key store's folder holding its passphrase salt: 32
+/// random bytes, hex, made once for this install.
+const SALT_FILE_07: &str = "passphrase-salt";
+
+/// The 0.7 key store's passphrase: derived from the person's data key and
+/// this install's salt, never stored. The data key is already the one
+/// secret that must be kept (and the Vault backup carries it), so the
+/// passphrase adds no way to lose data and no key material for a backup to
+/// carry; the salt makes it this install's own.
+pub(crate) fn passphrase_07(data_key: &[u8; 32], salt: &[u8; 32]) -> String {
+    let mut material = [0u8; 64];
+    material[..32].copy_from_slice(data_key);
+    material[32..].copy_from_slice(salt);
+    hex::encode(blake3::derive_key("Your Own AI 2026-11 lair 0.7 key store passphrase", &material))
+}
+
+/// Make the 0.7 key store ready to start, and return its passphrase: a copy
+/// of the 0.6 store (the same keys, so every AI keeps its id), with its
+/// salt, rewrapped from the 0.6 passphrase to the derived one. Each step is
+/// skipped once done, so a start that was stopped part way is finished by
+/// the next. Neither line may be running: the copy reads a quiet 0.6 store,
+/// and the rewrap writes a store no lair has open.
+pub(crate) async fn prepare_store_07(data_dir: &Path, data_key: &[u8; 32]) -> Result<String, String> {
+    let (lair_06, _) = line_dirs(data_dir, Line::V06);
+    let (lair_07, _) = line_dirs(data_dir, Line::V07);
+    if !flowsta_hc_lines::keystore::config_path(&lair_07).exists() {
+        let copied = flowsta_hc_lines::keystore::copy_store(&lair_06, &lair_07, &socket_plan()).map_err(|e| format!("copy the key store for 0.7: {e}"))?;
+        log::info!("[0.7] key store copied from the 0.6 one ({} bytes)", copied.bytes);
+    }
+    let salt_path = lair_07.join(SALT_FILE_07);
+    let salt: [u8; 32] = match std::fs::read_to_string(&salt_path) {
+        Ok(text) => hex::decode(text.trim()).ok().and_then(|b| b.try_into().ok()).ok_or("the 0.7 key store's salt is malformed")?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let mut salt = [0u8; 32];
+            rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut salt);
+            flowsta_hc_lines::files::write_atomic_private(&salt_path, hex::encode(salt).as_bytes()).map_err(|e| format!("write the 0.7 key store's salt: {e}"))?;
+            salt
+        }
+        Err(e) => return Err(format!("read the 0.7 key store's salt: {e}")),
+    };
+    let passphrase = passphrase_07(data_key, &salt);
+    match flowsta_hc_lines::keystore::rekey_store(&lair_07, Line::V07, PASSPHRASE_06, &passphrase).await {
+        Ok(flowsta_hc_lines::keystore::Rekeyed::Rewrapped) => log::info!("[0.7] key store rewrapped under this install's passphrase"),
+        Ok(_) => {}
+        Err(e) => return Err(format!("the 0.7 key store does not open: {e}")),
+    }
+    Ok(passphrase)
 }
 
 // ── Closing ─────────────────────────────────────────────────────────────
@@ -197,6 +277,22 @@ fn parse_fallbacks(list: &str) -> Vec<Rendezvous> {
         .collect()
 }
 
+/// The 0.7 line's rendezvous: its own bootstrap host beside the 0.6 one (a
+/// 0.7.1 conductor speaks to a kitsune2 0.5 bootstrap), with the same auth
+/// material. The open fallbacks serve the 0.6 line only.
+fn primary_07() -> Option<Rendezvous> {
+    let auth_material = env("FLOWSTA_AUTH_MATERIAL").or_else(|| option_env!("FLOWSTA_AUTH_MATERIAL").filter(|m| !m.is_empty()).map(String::from))?;
+    let bootstrap_url = env("FLOWSTA_BOOTSTRAP_URL_07")
+        .or_else(|| option_env!("FLOWSTA_BOOTSTRAP_URL_07").map(String::from))
+        .unwrap_or_else(|| "https://bootstrap-7.flowsta.com".to_string());
+    Some(Rendezvous { bootstrap_url, signal_url: None, auth_material: Some(auth_material) })
+}
+
+/// The 0.7 line's rendezvous for the registration keeper.
+pub(crate) fn rendezvous_servers_07() -> Vec<(String, Option<String>)> {
+    primary_07().map(|p| vec![(p.bootstrap_url, p.auth_material)]).unwrap_or_default()
+}
+
 /// No rendezvous at all: a localhost black hole, one device.
 fn alone() -> Rendezvous {
     Rendezvous { bootstrap_url: "https://localhost/".into(), signal_url: Some("wss://localhost/".into()), auth_material: None }
@@ -265,88 +361,129 @@ pub(crate) fn started_offline() -> bool {
 
 // ── The start ───────────────────────────────────────────────────────────
 
+/// Start one line's key store and conductor with the app's settings.
+async fn start_one(
+    line: Line,
+    data_dir: &Path,
+    passphrase: &str,
+    rendezvous: &Rendezvous,
+    origin: &str,
+    agents: &[flowsta_hc_lines::supervisor::KeySource],
+    on_step: impl FnMut(StartStep) + Send,
+) -> Result<LineProcess, String> {
+    let (lair_name, conductor_name) = sidecars(line);
+    let (lair_bin, conductor_bin) = (crate::resolve_sidecar_bin(lair_name), crate::resolve_sidecar_bin(conductor_name));
+    log::info!("[{line}] key store {:?}, conductor {:?}", lair_bin, conductor_bin);
+    let (lair_dir, conductor_dir) = line_dirs(data_dir, line);
+    supervisor::start_line(
+        &LineStart {
+            line,
+            lair_bin: &lair_bin,
+            conductor_bin: &conductor_bin,
+            lair_dir: &lair_dir,
+            conductor_dir: &conductor_dir,
+            passphrase,
+            sockets: &socket_plan(),
+            admin_ports: &admin_ports(line),
+            origin,
+            rendezvous,
+            tuning: &tuning(line),
+            agents,
+            timeouts: Timeouts::default(),
+        },
+        on_step,
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// A line's rendezvous as this start uses it: without its auth while it
+/// does not answer, the black hole when there is none.
+async fn entry_for(line: Line, role: Role) -> Rendezvous {
+    let found = match line {
+        Line::V06 => resolve().await,
+        Line::V07 => primary_07(),
+    };
+    match found {
+        Some(r) => {
+            let start = r.for_start(PROBE_TIMEOUT).await;
+            if start.without_auth {
+                log::warn!("[{line}] no rendezvous answers ({}): starting without its auth, offline - the next start uses it", start.rendezvous.bootstrap_url);
+            }
+            if role == Role::Primary {
+                STARTED_OFFLINE.store(start.without_auth, Ordering::SeqCst);
+            }
+            log::info!("[{line}] rendezvous {} (the person's own devices can meet)", start.rendezvous.bootstrap_url);
+            supervisor().set_rendezvous(line, Some(&start.rendezvous.bootstrap_url));
+            start.rendezvous
+        }
+        None => {
+            log::info!("[{line}] no rendezvous - this conductor stays alone");
+            supervisor().set_rendezvous(line, None);
+            alone()
+        }
+    }
+}
+
 /// What the app's lines need from the app (flowsta-hc-lines `LineHooks`):
-/// the profile's folders and the window to narrate the start to.
+/// the profile's folders, the 0.7 line's passphrase, and the window to
+/// narrate the primary's start to.
 struct YoaiLines {
-    app: tauri::AppHandle,
+    app: Option<tauri::AppHandle>,
     /// The open profile's root.
     data_dir: PathBuf,
+    /// The 0.7 key store's passphrase ([`prepare_store_07`]); None when this
+    /// start runs no 0.7 line.
+    passphrase_07: Option<String>,
 }
 
 impl YoaiLines {
-    fn emit(&self, status: ConductorStatus) {
-        let _ = self.app.emit("conductor-status", status);
+    fn emit(&self, role: Role, status: ConductorStatus) {
+        if role == Role::Primary {
+            if let Some(app) = &self.app {
+                let _ = app.emit("conductor-status", status);
+            }
+        }
     }
 
-    fn say(&self, message: &str) {
-        self.emit(ConductorStatus::Starting { message: message.into() });
+    fn say(&self, role: Role, message: &str) {
+        self.emit(role, ConductorStatus::Starting { message: message.into() });
     }
 }
 
 #[async_trait::async_trait]
 impl LineHooks for YoaiLines {
-    async fn start(&self, line: Line, _role: Role) -> Result<LineProcess, String> {
-        if line != Line::V06 {
-            return Err(format!("this build runs no {line} line"));
-        }
-        let entry = match resolve().await {
-            Some(r) => {
-                let start = r.for_start(PROBE_TIMEOUT).await;
-                if start.without_auth {
-                    log::warn!("[conductor] no rendezvous answers ({}): starting without its auth, offline - the next start uses it", start.rendezvous.bootstrap_url);
-                }
-                STARTED_OFFLINE.store(start.without_auth, Ordering::SeqCst);
-                log::info!("[conductor] rendezvous {} (the person's own devices can meet)", start.rendezvous.bootstrap_url);
-                supervisor().set_rendezvous(line, Some(&start.rendezvous.bootstrap_url));
-                start.rendezvous
-            }
-            None => {
-                log::info!("[conductor] no rendezvous - this conductor stays alone");
-                supervisor().set_rendezvous(line, None);
-                alone()
-            }
+    async fn start(&self, line: Line, role: Role) -> Result<LineProcess, String> {
+        let passphrase = match line {
+            Line::V06 => PASSPHRASE_06,
+            Line::V07 => self.passphrase_07.as_deref().ok_or("the 0.7 key store is not prepared")?,
         };
-        let origin = supervisor().fresh_origin();
-        let lair_bin = crate::resolve_sidecar_bin("yourowai-lair-keystore");
-        let conductor_bin = crate::resolve_sidecar_bin("yourowai-holochain");
-        log::info!("[conductor] key store {:?}, conductor {:?}", lair_bin, conductor_bin);
-        let (lair_dir, conductor_dir) = (self.data_dir.join("lair"), self.data_dir.join("conductor"));
-        supervisor::start_line(
-            &LineStart {
-                line,
-                lair_bin: &lair_bin,
-                conductor_bin: &conductor_bin,
-                lair_dir: &lair_dir,
-                conductor_dir: &conductor_dir,
-                passphrase: PASSPHRASE_06,
-                sockets: &socket_plan(),
-                admin_ports: &admin_ports(),
-                origin: &origin,
-                rendezvous: &entry,
-                tuning: &tuning(),
-                agents: &[],
-                timeouts: Timeouts::default(),
-            },
-            |step| self.say(step_message(step)),
-        )
-        .await
-        .map_err(|e| e.to_string())
+        let entry = entry_for(line, role).await;
+        // One origin per app start, shared by both lines: the primary makes
+        // it, a line attached beside it keeps the one in force (a fresh one
+        // would leave the running line refusing every connection).
+        let origin = if role == Role::Primary || supervisor().origin().is_empty() { supervisor().fresh_origin() } else { supervisor().origin() };
+        start_one(line, &self.data_dir, passphrase, &entry, &origin, &[], |step| self.say(role, step_message(step))).await
     }
 
     /// The app interface, accepting only this start's origin. The
     /// coordinator sweep and the agents follow once the line has joined.
-    async fn setup(&self, line: Line, _role: Role, process: &mut LineProcess) -> Result<Setup, String> {
-        self.say("Setting up app interface...");
+    async fn setup(&self, line: Line, role: Role, process: &mut LineProcess) -> Result<Setup, String> {
+        self.say(role, "Setting up app interface...");
         let origin = supervisor().origin();
         let admin = AdminClient::connect(line, process.admin_port, &origin).await.map_err(|e| format!("Failed to connect to admin WebSocket: {e}"))?;
         let app_port = admin.attach_app_interface(&origin).await.map_err(|e| format!("Failed to attach app interface: {e}"))?;
-        log::info!("App interface attached on port {}", app_port);
+        log::info!("[{line}] app interface attached on port {}", app_port);
         Ok(app_port.into())
     }
 
-    async fn joined(&self, _line: Line, _role: Role, _session: u64, admin_port: u16, app_port: u16) {
-        self.emit(ConductorStatus::Ready { admin_port, app_port });
-        log::info!("Holochain conductor ready (admin: {}, app: {})", admin_port, app_port);
+    async fn joined(&self, line: Line, role: Role, _session: u64, admin_port: u16, app_port: u16) {
+        self.emit(role, ConductorStatus::Ready { admin_port, app_port });
+        log::info!("[{line}] Holochain conductor ready (admin: {}, app: {})", admin_port, app_port);
+    }
+
+    async fn secondary_failed(&self, line: Line, error: &str) {
+        log::warn!("[{line}] did not start ({error}); the app goes on with its other line");
     }
 
     fn wanted(&self) -> bool {
@@ -354,12 +491,15 @@ impl LineHooks for YoaiLines {
     }
 }
 
-/// Start the open profile's key store and conductor; returns once they are
-/// up and the app interface is attached. The start gets one retry after a
-/// failure (2 s later, so ports and processes are released).
-pub async fn start_holochain(app: tauri::AppHandle, data_dir: PathBuf) -> Result<u64, String> {
-    let hooks = Arc::new(YoaiLines { app, data_dir });
-    match supervisor().start_lines(Line::V06, None, hooks).await {
+/// Start the open profile's lines; returns once the 0.6 line is up and its
+/// app interface is attached. With the 0.7 key store's passphrase
+/// ([`prepare_store_07`]), the 0.7 line follows beside it from a task. The
+/// primary gets one retry after a failure (2 s later, so ports and
+/// processes are released).
+pub async fn start_holochain(app: tauri::AppHandle, data_dir: PathBuf, passphrase_07: Option<String>) -> Result<u64, String> {
+    let secondary = passphrase_07.is_some().then_some(Line::V07);
+    let hooks = Arc::new(YoaiLines { app: Some(app), data_dir, passphrase_07 });
+    match supervisor().start_lines(Line::V06, secondary, hooks).await {
         Err(e) if e == NOT_WANTED => Err("the app is closing".into()),
         other => other,
     }
@@ -390,18 +530,82 @@ mod rendezvous_tests {
             admin_port: 4477,
             origin: "yoai-00",
             rendezvous: &r,
-            tuning: &super::tuning(),
+            tuning: &super::tuning(flowsta_hc_lines::Line::V06),
         });
         assert!(c.contains("allowed_origins: 'yoai-00'"), "the admin interface accepts only this start's origin");
         assert!(c.contains("db_sync_strategy: Resilient"));
         assert!(c.contains("bootstrap_url: https://localhost/") && !c.contains("base64_auth_material"), "no material: the black hole, alone");
-        assert_eq!(super::tuning().rust_log.as_deref(), Some("error,kitsune2_bootstrap_client=warn"));
+        assert_eq!(super::tuning(flowsta_hc_lines::Line::V06).rust_log.as_deref(), Some("error,kitsune2_bootstrap_client=warn"));
     }
 
     #[test]
-    fn admin_ports_start_at_the_usual_one() {
-        let p = super::admin_ports();
-        assert_eq!(p[0], crate::ports::admin_ws());
-        assert_eq!(p, [p[0], p[0] + 1, p[0] + 2]);
+    fn admin_ports_start_at_the_usual_one_and_the_lines_never_share() {
+        use flowsta_hc_lines::Line;
+        let (p06, p07) = (super::admin_ports(Line::V06), super::admin_ports(Line::V07));
+        assert_eq!(p06[0], crate::ports::admin_ws());
+        assert_eq!(p06, [p06[0], p06[0] + 1, p06[0] + 2]);
+        assert_eq!(p07, [p06[0] + 3, p06[0] + 4, p06[0] + 5]);
+    }
+}
+
+#[cfg(test)]
+mod line_07_tests {
+    use super::*;
+
+    #[test]
+    fn the_07_passphrase_is_the_data_keys_and_this_installs() {
+        let (key, salt) = ([7u8; 32], [9u8; 32]);
+        let p = passphrase_07(&key, &salt);
+        assert_eq!(p.len(), 64, "32 bytes, hex");
+        assert_eq!(p, passphrase_07(&key, &salt), "derived the same at every start");
+        assert_ne!(p, passphrase_07(&key, &[8u8; 32]), "another install's salt, another passphrase");
+        assert_ne!(p, passphrase_07(&[6u8; 32], &salt), "another data key, another passphrase");
+        assert_ne!(p, PASSPHRASE_06);
+    }
+
+    #[test]
+    fn each_line_has_its_own_folders_sidecars_and_settings() {
+        let root = Path::new("/p");
+        assert_eq!(line_dirs(root, Line::V06), (root.join("lair"), root.join("conductor")));
+        assert_eq!(line_dirs(root, Line::V07), (root.join("lair-07"), root.join("conductor-07")));
+        assert_eq!(sidecars(Line::V07), ("yourowai-lair-keystore-07", "yourowai-holochain-07"));
+        let t = tuning(Line::V07);
+        assert_eq!(t.db_sync_level.as_deref(), Some("Full"));
+        assert!(t.gossip_max_op_bytes.is_some(), "the gossip cap on every 0.7 conductor");
+        assert_eq!(network_generation(Line::V07), "holochain-0.7");
+    }
+
+    /// The real sidecars: a 0.6 store holding an AI's random seed, prepared
+    /// for 0.7 (copied, salted, rewrapped), starts the 0.7 line under the
+    /// derived passphrase with the same key under the same tag; a second
+    /// preparation changes nothing; the 0.6 store still opens as before.
+    /// Run with the app closed: `cargo test --lib -- --ignored live_07`
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn live_07_the_prepared_store_keeps_every_ai_key() {
+        use flowsta_hc_lines::supervisor::KeySource;
+        let tmp = tempfile::tempdir().unwrap();
+        let profile = tmp.path().join("profile");
+        let origin = supervisor().origin_or_fresh();
+        let tag = "ai-local-1794004195703-x".to_string();
+        let data_key = [3u8; 32];
+
+        let mut p06 = start_one(Line::V06, &profile, PASSPHRASE_06, &alone(), &origin, &[KeySource::NewSeed { tag: tag.clone() }], |_| {}).await.expect("0.6 starts");
+        let key = p06.agents[0];
+        p06.stop();
+
+        let passphrase = prepare_store_07(&profile, &data_key).await.expect("prepared");
+        assert_eq!(passphrase, prepare_store_07(&profile, &data_key).await.expect("prepared again"), "a second preparation changes nothing");
+        assert!(line_dirs(&profile, Line::V07).0.join(SALT_FILE_07).is_file());
+
+        let mut p07 = start_one(Line::V07, &profile, &passphrase, &alone(), &origin, &[KeySource::Existing { tag: tag.clone() }], |_| {}).await.expect("0.7 starts under the derived passphrase");
+        assert_eq!(p07.agents[0], key, "the AI's key on 0.7 is its key on 0.6");
+        let config = std::fs::read_to_string(line_dirs(&profile, Line::V07).1.join("conductor-config.yaml")).unwrap();
+        assert!(config.contains("maxGossipOpBytes") && config.contains("db_sync_level: Full"));
+        p07.stop();
+
+        let mut again = start_one(Line::V06, &profile, PASSPHRASE_06, &alone(), &origin, &[KeySource::Existing { tag }], |_| {}).await.expect("0.6 still opens");
+        assert_eq!(again.agents[0], key);
+        again.stop();
     }
 }

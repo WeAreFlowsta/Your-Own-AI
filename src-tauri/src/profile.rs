@@ -62,7 +62,7 @@ pub const PROFILE_FILES: &[&str] = &[
 pub const PROFILE_PREFIXES: &[&str] = &["transcript-recovery.", "transcript-emb-", "conv-list-", "project-memory-"];
 /// Directories that belong to a profile. `lair` last: its config rewrite
 /// happens after every rename succeeded.
-pub const PROFILE_DIRS: &[&str] = &["thumbnails", "imports", "tool-sessions", "conductor", "lair"];
+pub const PROFILE_DIRS: &[&str] = &["thumbnails", "imports", "tool-sessions", "conductor", "lair", "conductor-07", "lair-07"];
 
 static ROOT: OnceLock<PathBuf> = OnceLock::new();
 

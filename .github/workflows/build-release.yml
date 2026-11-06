@@ -191,13 +191,12 @@ jobs:
           echo "${BINARY} (${SIZE} bytes)"
 
       # Official Holochain release binaries, downloaded at build time - the
-      # same pattern as Flowsta Vault (nothing compiled from source). The
-      # binaries get a yourowai- prefix so the installers never collide with
-      # other Holochain apps' bundled conductors.
-      - name: Download Holochain binaries (official release)
+      # same pattern as Flowsta Vault (nothing compiled from source): each
+      # line's conductor and key store (0.6.1, and 0.7.1 with a -07 suffix).
+      # The binaries get a yourowai- prefix so the installers never collide
+      # with other Holochain apps' bundled conductors.
+      - name: Download Holochain binaries (official releases)
         shell: bash
-        env:
-          HC_RELEASE: holochain-0.6.1
         run: |
           mkdir -p src-tauri/binaries
           pinned() { awk -v k="$1" '$1 !~ /^#/ && $2 == k { print $1 }' .github/holochain-sidecars.sha256; }
@@ -206,16 +205,19 @@ jobs:
             w=$(pinned "$2"); g=$(sha "$1")
             [ -n "$w" ] && [ "$g" = "$w" ] || { echo "$2: SHA-256 $g does not match the pinned ${w:-(none)}"; exit 1; }
           }
-          BASE="https://github.com/holochain/holochain/releases/download/${HC_RELEASE}"
           T="${{ matrix.target }}"
           EXT=""
           if [ "$T" = "x86_64-pc-windows-msvc" ]; then EXT=".exe"; fi
-          for BIN in holochain lair-keystore; do
-            DEST="src-tauri/binaries/yourowai-${BIN}-${T}${EXT}"
-            curl -fsSL --retry 5 --retry-delay 20 --retry-all-errors "${BASE}/${BIN}-${T}${EXT}" -o "$DEST"
-            chmod +x "$DEST"
-            check "$DEST" "${HC_RELEASE}/${BIN}-${T}${EXT}"
-            echo "yourowai-${BIN}-${T}${EXT} (${HC_RELEASE}, checksum verified)"
+          for LINE in "holochain-0.6.1:" "holochain-0.7.1:-07"; do
+            HC_RELEASE="${LINE%%:*}"; SUFFIX="${LINE#*:}"
+            BASE="https://github.com/holochain/holochain/releases/download/${HC_RELEASE}"
+            for BIN in holochain lair-keystore; do
+              DEST="src-tauri/binaries/yourowai-${BIN}${SUFFIX}-${T}${EXT}"
+              curl -fsSL --retry 5 --retry-delay 20 --retry-all-errors "${BASE}/${BIN}-${T}${EXT}" -o "$DEST"
+              chmod +x "$DEST"
+              check "$DEST" "${HC_RELEASE}/${BIN}-${T}${EXT}"
+              echo "yourowai-${BIN}${SUFFIX}-${T}${EXT} (${HC_RELEASE}, checksum verified)"
+            done
           done
 
       # pdfium renders scanned-PDF pages for OCR. tauri.conf bundles

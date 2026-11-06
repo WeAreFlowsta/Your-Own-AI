@@ -29,7 +29,7 @@ pub async fn reset_to_defaults(app: AppHandle) -> Result<(), String> {
     log::info!("[reset] conductor + lair stopped");
 
     // Wipe local AIs, transcripts, memory, thumbnails, and UI sentinels.
-    for dir in ["conductor", "lair", "thumbnails"] {
+    for dir in ["conductor", "lair", "conductor-07", "lair-07", "thumbnails"] {
         let p = data_dir.join(dir);
         if p.exists() {
             if let Err(e) = std::fs::remove_dir_all(&p) {
