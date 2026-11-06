@@ -1475,6 +1475,40 @@ pub async fn get_conversations(
         }
     }
 
+    // The AI's conversations on the 0.7 line, by id: a moved copy is the v1
+    // conversation it was carried from (its id is that hash), so only what
+    // exists on 0.7 alone is added. The 0.7 line hides its tombstoned ones.
+    if crate::conductor::ports(flowsta_hc_lines::Line::V07).is_some() {
+        let founding_hex = founding_key_for(&app, &agent_key);
+        if let Some(founding_key) = hex::decode(&founding_hex).ok().filter(|b| b.len() == 39).map(holochain_types::prelude::AgentPubKey::from_raw_39) {
+            match crate::hc07::app_cells().conversations_all(&reader, &founding_key).await {
+                Ok(items) => {
+                    for (view, _anchor) in items {
+                        let Ok(ee) = view.entry_as::<EncryptedEntryRaw>() else { continue };
+                        let Ok(plain_bytes) = crate::transcript_crypto::decrypt(&data_key, &ee.nonce, &ee.cipher) else { continue };
+                        let Ok(conv) = serde_json::from_slice::<serde_json::Value>(&plain_bytes) else { continue };
+                        let Some(id) = conv["id"].as_str().map(String::from) else { continue };
+                        if !seen_hashes.insert(id.clone()) {
+                            continue;
+                        }
+                        conversations.push(ConversationInfo {
+                            hash: id,
+                            ai_personality_id: conv["ai_personality_id"].as_str().unwrap_or("").to_string(),
+                            ai_personality_name: conv["ai_personality_name"].as_str().unwrap_or("").to_string(),
+                            model_used: conv["model_used"].as_str().unwrap_or("").to_string(),
+                            started_at: conv["started_at"].as_i64().unwrap_or(0),
+                            last_active_at: None,
+                            title: conv["title"].as_str().map(|s| s.to_string()),
+                            source: conv["source"].as_str().map(|s| s.to_string()),
+                            agent_key: reader.clone(),
+                        });
+                    }
+                }
+                Err(e) => log::info!("[records] conversations of {}..: the 0.7 line did not answer ({e}); listing the 0.6 line alone", &agent_key[..8.min(agent_key.len())]),
+            }
+        }
+    }
+
     // Last activity lives only in the local cache (the records entry knows
     // when a conversation started, not when it was last continued) - carry
     // it over so a live refresh never resets the order.
@@ -1719,75 +1753,89 @@ pub async fn get_conversation_transcript(
         return Ok(vec![]);
     }
 
-    let raw_bytes = hex::decode(&conversation_hash)
-        .map_err(|e| format!("Invalid conversation hash hex: {}", e))?;
-    let conv_hash = ActionHash::from_raw_39(raw_bytes);
-
     let manager = hc_state.get()?;
-    let read = crate::transcript_pages::all_entries(
-        &manager,
-        &agent_key,
-        conv_hash,
-        std::time::Duration::from_secs(60),
-    )
-    .await
-    .map_err(|e| {
-        log::warn!("[records] transcript {who}: read failed after {} ms: {e}", t0.elapsed().as_millis());
-        e
-    })?;
-    if !read.complete {
-        // A conversation opened with its tail missing would read as whole.
-        let why = read.stopped_by.unwrap_or_else(|| "unknown".to_string());
-        log::warn!(
-            "[records] transcript {who}: stopped after {} of {} messages in {} ms: {why}",
-            read.records.len(),
-            read.total,
-            t0.elapsed().as_millis()
-        );
-        return Err(why);
-    }
-    let records = read.records;
-
-    let data_key = hc_state.get()?.data_key()?;
-    let mut entries = Vec::new();
+    let data_key = manager.data_key()?;
+    // Every entry of the conversation, from each line it is on, by id: a
+    // record's id is its v1 hash, so the 0.7 copy of a v1 message is the
+    // same entry, and only what exists on 0.7 alone is added from there.
+    let mut sealed_entries: Vec<(String, EncryptedEntryRaw)> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut skipped = 0usize;
+    // A fresh id (not a v1 hash) has nothing on the 0.6 line.
+    if conversation_hash.len() == 78 {
+        let raw_bytes = hex::decode(&conversation_hash).map_err(|e| format!("Invalid conversation hash hex: {}", e))?;
+        let conv_hash = ActionHash::from_raw_39(raw_bytes);
+        let read = crate::transcript_pages::all_entries(&manager, &agent_key, conv_hash, std::time::Duration::from_secs(60)).await.map_err(|e| {
+            log::warn!("[records] transcript {who}: read failed after {} ms: {e}", t0.elapsed().as_millis());
+            e
+        })?;
+        if !read.complete {
+            // A conversation opened with its tail missing would read as whole.
+            let why = read.stopped_by.unwrap_or_else(|| "unknown".to_string());
+            log::warn!("[records] transcript {who}: stopped after {} of {} messages in {} ms: {why}", read.records.len(), read.total, t0.elapsed().as_millis());
+            return Err(why);
+        }
+        for record in read.records.iter() {
+            let Some(app_bytes) = record.entry().as_option().and_then(|e| e.as_app_entry()) else { continue };
+            let Ok(ee) = rmp_serde::from_slice::<EncryptedEntryRaw>(app_bytes.as_ref().bytes()) else { skipped += 1; continue };
+            let id = crate::transcript_ids::id_of_v1(record.action_address().get_raw_39());
+            seen.insert(id.clone());
+            sealed_entries.push((id, ee));
+        }
+    }
+    if crate::conductor::ports(flowsta_hc_lines::Line::V07).is_some() {
+        let anchor = holochain_types::prelude::ExternalHash::from_raw_32(crate::transcript_ids::conversation_anchor(&data_key, &conversation_hash).to_vec());
+        match crate::hc07::app_cells().entries_all(&agent_key, &anchor).await {
+            Ok(items) => {
+                for (view, _key) in items {
+                    let Ok(ee) = view.entry_as::<EncryptedEntryRaw>() else { skipped += 1; continue };
+                    let id = crate::transcript_crypto::decrypt(&data_key, &ee.nonce, &ee.cipher)
+                        .ok()
+                        .and_then(|p| serde_json::from_slice::<serde_json::Value>(&p).ok())
+                        .and_then(|v| v["id"].as_str().map(String::from))
+                        .unwrap_or_else(|| hex::encode(&view.action_hash));
+                    if seen.insert(id.clone()) {
+                        sealed_entries.push((id, ee));
+                    }
+                }
+            }
+            Err(e) => log::info!("[records] transcript {who}: the 0.7 line did not answer ({e}); reading the 0.6 line alone"),
+        }
+    }
+
+    let mut entries = Vec::new();
     // Grounding annotations recorded after their message (on-demand "Verify
     // sources"), merged into the target message below. Records arrive
     // timestamp-sorted, so applying in order leaves the latest annotation.
     let mut annotations: Vec<(String, Option<Vec<GroundedSource>>)> = Vec::new();
-    for record in records.iter() {
-        if let Some(entry) = record.entry().as_option() {
-            if let Some(app_bytes) = entry.as_app_entry() {
-                let Ok(ee) = rmp_serde::from_slice::<EncryptedEntryRaw>(app_bytes.as_ref().bytes()) else { skipped += 1; continue };
-                let Ok(plain_bytes) = crate::transcript_crypto::decrypt(&data_key, &ee.nonce, &ee.cipher) else {
-                    log::warn!("Failed to decrypt a transcript entry (wrong key?)");
-                    skipped += 1;
-                    continue;
-                };
-                // A grounding annotation (not a message) carries the marker.
-                if let Ok(ann) = serde_json::from_slice::<GroundingAnnotationPlain>(&plain_bytes) {
-                    if ann.annotation == "grounding" {
-                        annotations.push((ann.target_hash, ann.grounded));
-                        continue;
-                    }
-                }
-                let e = match serde_json::from_slice::<MessagePlain>(&plain_bytes) {
-                    Ok(e) => e,
-                    Err(err) => {
-                        // NEVER drop entries silently - a parse failure here
-                        // reads as "the answer vanished" in the app.
-                        log::warn!(
-                            "Transcript entry failed to parse (dropped): {} - first 120 bytes: {}",
-                            err,
-                            String::from_utf8_lossy(&plain_bytes[..plain_bytes.len().min(120)])
-                        );
-                        skipped += 1;
-                        continue;
-                    }
-                };
-                entries.push(entry_info(hex::encode(record.action_address().get_raw_39()), e));
+    for (id, ee) in sealed_entries.iter() {
+        let Ok(plain_bytes) = crate::transcript_crypto::decrypt(&data_key, &ee.nonce, &ee.cipher) else {
+            log::warn!("Failed to decrypt a transcript entry (wrong key?)");
+            skipped += 1;
+            continue;
+        };
+        // A grounding annotation (not a message) carries the marker.
+        if let Ok(ann) = serde_json::from_slice::<GroundingAnnotationPlain>(&plain_bytes) {
+            if ann.annotation == "grounding" {
+                annotations.push((ann.target_hash, ann.grounded));
+                continue;
             }
         }
+        let e = match serde_json::from_slice::<MessagePlain>(&plain_bytes) {
+            Ok(e) => e,
+            Err(err) => {
+                // NEVER drop entries silently - a parse failure here
+                // reads as "the answer vanished" in the app.
+                log::warn!(
+                    "Transcript entry failed to parse (dropped): {} - first 120 bytes: {}",
+                    err,
+                    String::from_utf8_lossy(&plain_bytes[..plain_bytes.len().min(120)])
+                );
+                skipped += 1;
+                continue;
+            }
+        };
+        entries.push(entry_info(id.clone(), e));
     }
 
     // Fold grounding annotations into the messages they target (latest wins).
@@ -1805,9 +1853,9 @@ pub async fn get_conversation_transcript(
 
     let ms = t0.elapsed().as_millis();
     if entries.is_empty() {
-        log::warn!("[records] transcript {who}: {} records, {skipped} skipped, 0 entries in {ms} ms - empty answer", records.len());
+        log::warn!("[records] transcript {who}: {} records, {skipped} skipped, 0 entries in {ms} ms - empty answer", sealed_entries.len());
     } else {
-        log::info!("[records] transcript {who}: {} entries from {} records ({skipped} skipped) in {ms} ms", entries.len(), records.len());
+        log::info!("[records] transcript {who}: {} entries from {} records ({skipped} skipped) in {ms} ms", entries.len(), sealed_entries.len());
     }
     Ok(entries)
 }

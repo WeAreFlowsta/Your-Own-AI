@@ -78,17 +78,34 @@ pub async fn ensure_apps_on(admin: &AdminClient, resource_dir: &Path, network_se
 /// `Cells07`.
 pub struct Cells07 {
     clients: Mutex<HashMap<String, Arc<AppClient>>>,
+    /// The 0.7 ports the connections were made on: a new start (new ports,
+    /// a new origin) drops them.
+    ports: Mutex<Option<(u16, u16)>>,
 }
 
 impl Default for Cells07 {
     fn default() -> Self {
-        Self { clients: Mutex::new(HashMap::new()) }
+        Self { clients: Mutex::new(HashMap::new()), ports: Mutex::new(None) }
     }
+}
+
+/// The app's own connections to its v2 cells (the move keeps its own).
+pub fn app_cells() -> &'static Cells07 {
+    static CELLS: std::sync::OnceLock<Cells07> = std::sync::OnceLock::new();
+    CELLS.get_or_init(Cells07::default)
 }
 
 impl Cells07 {
     /// The connection to `agent`'s v2 cell.
     pub async fn client(&self, agent_hex: &str) -> Result<Arc<AppClient>, String> {
+        let now = crate::conductor::ports(Line::V07);
+        {
+            let mut ports = self.ports.lock().await;
+            if *ports != now {
+                self.clients.lock().await.clear();
+                *ports = now;
+            }
+        }
         if let Some(c) = self.clients.lock().await.get(agent_hex) {
             return Ok(c.clone());
         }
@@ -267,6 +284,34 @@ impl Cells07 {
         let raw: MyEntriesPageRaw = self.call(agent_hex, "get_my_entries_page", input).await?;
         let items = raw.items.iter().map(|i| Ok((view(&i.record)?, i.conversation_anchor.clone(), i.key.clone()))).collect::<Result<_, String>>()?;
         Ok(MyEntries { items, next_seq: raw.next_seq, total: raw.total })
+    }
+
+    /// Every conversation listed under `founding`, with its anchor.
+    pub async fn conversations_all(&self, agent_hex: &str, founding: &AgentPubKey) -> Result<Vec<(RecordView, Vec<u8>)>, String> {
+        let mut out = Vec::new();
+        let mut before = None;
+        loop {
+            let page = self.conversations_page(agent_hex, &ConversationsPage { anchor: founding.clone(), before, limit: 100 }).await?;
+            out.extend(page.items);
+            match page.next {
+                Some(n) => before = Some(n),
+                None => return Ok(out),
+            }
+        }
+    }
+
+    /// Every entry under a conversation's anchor, oldest first, with its key.
+    pub async fn entries_all(&self, agent_hex: &str, conversation_anchor: &ExternalHash) -> Result<Vec<(RecordView, Vec<u8>)>, String> {
+        let mut out = Vec::new();
+        let mut after = None;
+        loop {
+            let page = self.entries_page(agent_hex, &EntriesPage { conversation_anchor: conversation_anchor.clone(), after, limit: 500 }).await?;
+            out.extend(page.items);
+            match page.next {
+                Some(n) => after = Some(n),
+                None => return Ok(out),
+            }
+        }
     }
 
     pub async fn memory_rows(&self, agent_hex: &str, anchor: AnyLinkableHash) -> Result<Vec<RecordView>, String> {
