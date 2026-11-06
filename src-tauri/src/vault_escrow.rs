@@ -604,7 +604,9 @@ pub(crate) async fn swap_material_and_restart(
     crate::conductor::stop_for_good_async().await;
     log::info!("[escrow] conductor + lair stopped for the material swap");
 
-    for dir in ["conductor", "lair"] {
+    // Both lines: the 0.7 key store's passphrase follows the data key that
+    // is about to be replaced.
+    for dir in ["conductor", "lair", "conductor-07", "lair-07"] {
         let p = data_dir.join(dir);
         let mut last_err = String::new();
         let mut removed = false;

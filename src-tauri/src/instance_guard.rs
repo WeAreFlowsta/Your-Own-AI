@@ -99,7 +99,7 @@ fn other_instance_is_healthy() -> bool {
 /// without extension. Deliberately a NAME list and not "anything in the exe
 /// dir": on a Linux .deb the exe dir is /usr/bin, and a directory-only match
 /// there would kill unrelated system processes.
-const SIDECAR_NAMES: &[&str] = &["llama-server", "yourowai-holochain", "yourowai-lair-keystore"];
+const SIDECAR_NAMES: &[&str] = &["llama-server", "yourowai-holochain", "yourowai-lair-keystore", "yourowai-holochain-07", "yourowai-lair-keystore-07"];
 
 /// Kill leftover processes from a dead session. Only runs once the caller
 /// holds (or is taking) the instance lock, which is what makes every match

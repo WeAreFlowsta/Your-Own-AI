@@ -2,7 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
   Applied by the Tauri bundler to the app AND every sidecar it signs
-  (llama-server, yourowai-holochain, yourowai-lair-keystore).
+  (llama-server, yourowai-holochain, yourowai-lair-keystore, and the 0.7
+  line's yourowai-holochain-07 and yourowai-lair-keystore-07).
 
   The Holochain conductor JIT-compiles zome WebAssembly (wasmer) the
   first time it installs a hApp. The hardened runtime that notarization

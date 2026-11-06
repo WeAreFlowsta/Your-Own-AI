@@ -1,76 +1,54 @@
 #!/bin/bash
+# The Holochain sidecars for a dev build on this machine: each line's
+# conductor and key store from the official Holochain releases, the same
+# files the release build downloads (.github/workflows/build-release.yml),
+# each checked against .github/holochain-sidecars.sha256.
+#
+#   ./download-holochain-binaries.sh            this machine's target
+#   ./download-holochain-binaries.sh <triple>   another target
+#
+# 0.6.1 lands as yourowai-<bin>-<triple>, 0.7.1 as yourowai-<bin>-07-<triple>
+# (about 180 MB for the four files).
 
-# Download holochain + lair-keystore binaries for bundling with the app
-# These are compiled by our GitHub Actions workflow (build-holochain-binaries.yml)
+set -euo pipefail
+cd "$(dirname "$0")"
 
-set -e
+T="${1:-}"
+if [ -z "$T" ]; then
+  case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64) T=x86_64-unknown-linux-gnu ;;
+    Linux-aarch64) T=aarch64-unknown-linux-gnu ;;
+    Darwin-arm64) T=aarch64-apple-darwin ;;
+    Darwin-x86_64) T=x86_64-apple-darwin ;;
+    MINGW*|MSYS*|CYGWIN*) T=x86_64-pc-windows-msvc ;;
+    *) echo "Unknown machine $(uname -s)-$(uname -m): pass a target triple"; exit 1 ;;
+  esac
+fi
+EXT=""
+if [ "$T" = "x86_64-pc-windows-msvc" ]; then EXT=".exe"; fi
 
 BINDIR="src-tauri/binaries"
 mkdir -p "$BINDIR"
+pinned() { awk -v k="$1" '$1 !~ /^#/ && $2 == k { print $1 }' .github/holochain-sidecars.sha256; }
+sha() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
 
-echo "📥 Downloading Holochain binaries..."
-echo ""
-
-# Get latest release from OUR repository
-REPO="WeAreFlowsta/Your-Own-AI"
-
-# Check for GitHub token (needed for private repos)
-AUTH_HEADER=""
-if [ -n "$GITHUB_TOKEN" ]; then
-  echo "🔑 Using GITHUB_TOKEN for authentication"
-  AUTH_HEADER="Authorization: token $GITHUB_TOKEN"
-fi
-
-# Auto-detect latest holochain release
-echo "🔍 Finding latest Holochain release..."
-RELEASE_TAG=$(curl -s ${AUTH_HEADER:+-H "$AUTH_HEADER"} "https://api.github.com/repos/${REPO}/releases" | grep '"tag_name"' | grep 'holochain-' | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
-
-if [ -z "$RELEASE_TAG" ]; then
-  echo "❌ Error: Could not find Holochain release"
-  echo "💡 For private repos, set GITHUB_TOKEN environment variable:"
-  echo "   export GITHUB_TOKEN=your_github_token"
-  echo "   ./download-holochain-binaries.sh"
-  echo ""
-  echo "💡 Or run the build-holochain-binaries workflow first in GitHub Actions"
-  exit 1
-fi
-
-BASE_URL="https://github.com/${REPO}/releases/download/${RELEASE_TAG}"
-
-echo "📦 Using release: ${RELEASE_TAG}"
-echo ""
-
-# Linux (x86_64)
-echo "⬇️  Downloading Linux binaries..."
-curl -L ${AUTH_HEADER:+-H "$AUTH_HEADER"} "${BASE_URL}/holochain-x86_64-unknown-linux-gnu" -o "${BINDIR}/yourowai-holochain-x86_64-unknown-linux-gnu"
-curl -L ${AUTH_HEADER:+-H "$AUTH_HEADER"} "${BASE_URL}/lair-keystore-x86_64-unknown-linux-gnu" -o "${BINDIR}/yourowai-lair-keystore-x86_64-unknown-linux-gnu"
-chmod +x "${BINDIR}/yourowai-holochain-x86_64-unknown-linux-gnu" "${BINDIR}/yourowai-lair-keystore-x86_64-unknown-linux-gnu"
-echo "✅ Linux binaries ready"
-
-# macOS (Apple Silicon - ARM64)
-echo "⬇️  Downloading macOS ARM64 binaries..."
-curl -L ${AUTH_HEADER:+-H "$AUTH_HEADER"} "${BASE_URL}/holochain-aarch64-apple-darwin" -o "${BINDIR}/yourowai-holochain-aarch64-apple-darwin"
-curl -L ${AUTH_HEADER:+-H "$AUTH_HEADER"} "${BASE_URL}/lair-keystore-aarch64-apple-darwin" -o "${BINDIR}/yourowai-lair-keystore-aarch64-apple-darwin"
-chmod +x "${BINDIR}/yourowai-holochain-aarch64-apple-darwin" "${BINDIR}/yourowai-lair-keystore-aarch64-apple-darwin"
-echo "✅ macOS ARM64 binaries ready"
-
-# macOS (Intel - x86_64)
-echo "⬇️  Downloading macOS Intel binaries..."
-curl -L ${AUTH_HEADER:+-H "$AUTH_HEADER"} "${BASE_URL}/holochain-x86_64-apple-darwin" -o "${BINDIR}/yourowai-holochain-x86_64-apple-darwin"
-curl -L ${AUTH_HEADER:+-H "$AUTH_HEADER"} "${BASE_URL}/lair-keystore-x86_64-apple-darwin" -o "${BINDIR}/yourowai-lair-keystore-x86_64-apple-darwin"
-chmod +x "${BINDIR}/yourowai-holochain-x86_64-apple-darwin" "${BINDIR}/yourowai-lair-keystore-x86_64-apple-darwin"
-echo "✅ macOS Intel binaries ready"
-
-# Windows (x86_64)
-echo "⬇️  Downloading Windows binaries..."
-curl -L ${AUTH_HEADER:+-H "$AUTH_HEADER"} "${BASE_URL}/holochain-x86_64-pc-windows-msvc.exe" -o "${BINDIR}/yourowai-holochain-x86_64-pc-windows-msvc.exe"
-curl -L ${AUTH_HEADER:+-H "$AUTH_HEADER"} "${BASE_URL}/lair-keystore-x86_64-pc-windows-msvc.exe" -o "${BINDIR}/yourowai-lair-keystore-x86_64-pc-windows-msvc.exe"
-echo "✅ Windows binaries ready"
-
-echo ""
-echo "✅ All Holochain binaries downloaded!"
-echo ""
-echo "📊 Binary sizes:"
-ls -lh "${BINDIR}"/holochain-* "${BINDIR}"/lair-keystore-*
-echo ""
-echo "🎯 Binaries ready for bundling with Tauri app"
+for LINE in "holochain-0.6.1:" "holochain-0.7.1:-07"; do
+  HC_RELEASE="${LINE%%:*}"; SUFFIX="${LINE#*:}"
+  BASE="https://github.com/holochain/holochain/releases/download/${HC_RELEASE}"
+  for BIN in holochain lair-keystore; do
+    ASSET="${BIN}-${T}${EXT}"
+    DEST="${BINDIR}/yourowai-${BIN}${SUFFIX}-${T}${EXT}"
+    want=$(pinned "${HC_RELEASE}/${ASSET}")
+    if [ -z "$want" ]; then echo "${HC_RELEASE}/${ASSET}: no pinned checksum"; exit 1; fi
+    if [ -f "$DEST" ] && [ "$(sha "$DEST")" = "$want" ]; then
+      echo "$DEST: already here"
+      continue
+    fi
+    curl -fsSL --retry 5 --retry-delay 20 --retry-all-errors "${BASE}/${ASSET}" -o "$DEST.part"
+    got=$(sha "$DEST.part")
+    if [ "$got" != "$want" ]; then rm -f "$DEST.part"; echo "${HC_RELEASE}/${ASSET}: SHA-256 $got does not match the pinned $want"; exit 1; fi
+    mv "$DEST.part" "$DEST"
+    chmod +x "$DEST"
+    echo "$DEST (${HC_RELEASE}, checksum verified)"
+  done
+done

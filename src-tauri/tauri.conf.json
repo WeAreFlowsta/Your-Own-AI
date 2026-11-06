@@ -111,7 +111,9 @@
     "externalBin": [
       "bin/llama-server",
       "binaries/yourowai-holochain",
-      "binaries/yourowai-lair-keystore"
+      "binaries/yourowai-lair-keystore",
+      "binaries/yourowai-holochain-07",
+      "binaries/yourowai-lair-keystore-07"
     ],
     "resources": [
       "resources/*.happ",

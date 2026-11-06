@@ -975,7 +975,7 @@ pub fn run() {
             // a crashed run) so they can't poison this one.
             let inference_listener = instance_guard::acquire_or_exit(app.handle());
             // Windows: a console window titled with one of these is hidden.
-            process_ext::register_title_markers(&["yourowai-holochain", "yourowai-lair-keystore", "llama-server"]);
+            process_ext::register_title_markers(&["yourowai-holochain", "yourowai-lair-keystore", "llama-server"]); // a title containing one: the -07 sidecars too
 
             // Prime the CUDA compute-capability read (subprocess; done off
             // the startup path so no spawn decision ever waits on it).
@@ -1070,7 +1070,9 @@ pub fn run() {
                     }
                 };
 
-                match conductor::start_holochain(hc_app_handle.clone(), data_dir.clone()).await {
+                // The 0.7 line starts beside it once the move begins (C2); until then
+                // only the 0.6 line runs.
+                match conductor::start_holochain(hc_app_handle.clone(), data_dir.clone(), None).await {
                     Ok(_session) => {
                         let manager = HolochainManager::new(resource_dir, recovery);
 
