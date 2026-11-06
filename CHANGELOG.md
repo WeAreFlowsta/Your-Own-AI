@@ -3,6 +3,16 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
+## [Unreleased]
+
+### Fixed
+- **Your Own AI no longer stops other programs that use its ports.** When
+  another program already listens on port 8080 (or 8091 or 8092), the AI
+  engine starts on a free port instead. Before, Your Own AI stopped that
+  program to take the port, or, when it could not, sent every message to it
+  and answered with empty replies. Only Your Own AI's own engine is ever
+  restarted.
+
 ## [0.9.0] - 2026-10-22
 
 ### Highlights
