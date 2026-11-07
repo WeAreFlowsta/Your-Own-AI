@@ -37,7 +37,11 @@ import {
   withoutUnansweredPlaceholder,
 } from "../../utils/conversationResume";
 import { emptyMayBeWarmup, noteRecordsSeen, WARMUP_POLL_MS } from "../../utils/recordsWarmup";
-import { waitForHolochainReady } from "../../utils/holochainTranscripts";
+import { getConversations, waitForHolochainReady } from "../../utils/holochainTranscripts";
+
+/** How often a copy on screen (an item in the open drawer, or the
+ *  conversation open read-only) asks whether its records have arrived. */
+const COPY_RECHECK_MS = 20_000;
 import ConfirmModal from "../../components/ConfirmModal";
 import { drainPendingExtractions, prewarmExtractionModel } from "../../utils/memoryExtraction";
 import GpuSafeModeNotice from "../../components/GpuSafeModeNotice";
@@ -829,6 +833,66 @@ export default component$(() => {
       conversationsLoading.value = false;
       conversationsWarming.value = false;
     }
+  });
+
+  // A copy says "read-only until it arrives", so it must change when it
+  // does. The drawer reads its list once when it opens; while it stays open
+  // and lists another device's copy, read again every COPY_RECHECK_MS and
+  // the item becomes this device's own the moment its records are here.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track, cleanup }) => {
+    const open = track(() => conversationsOpen.value);
+    const hasCopy = track(() => conversationItems.value.some((i) => i.conversation.source?.startsWith("copy:")));
+    if (!open || !hasCopy) return;
+    let busy = false;
+    const timer = setInterval(async () => {
+      if (busy || !conversationsOpen.value) return;
+      busy = true;
+      try {
+        const items = await listAllConversations(dynamicModelOptions.value);
+        if (items.length === 0 || !conversationsOpen.value) return;
+        // The same per-AI merge as the open: an AI whose read failed keeps its rows.
+        const liveAis = new Set(items.map((i) => i.aiId));
+        const kept = conversationItems.value.filter((i) => !liveAis.has(i.aiId));
+        const merged = [...items, ...kept];
+        merged.sort((a, b) => lastActiveAt(b.conversation) - lastActiveAt(a.conversation));
+        conversationItems.value = merged;
+      } finally {
+        busy = false;
+      }
+    }, COPY_RECHECK_MS);
+    cleanup(() => clearInterval(timer));
+  });
+
+  // The same for a copy that is OPEN read-only: once this device's own
+  // records hold it (an own conversation whose hash the copy's label
+  // starts), open that one - the person can type again, no reopen needed.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track, cleanup }) => {
+    const from = track(() => copiedFrom.value);
+    const hash = track(() => chatState.conversationHash);
+    if (!from || !hash || !hash.startsWith("conv-")) return;
+    const prefix = hash.slice("conv-".length);
+    let busy = false;
+    const timer = setInterval(async () => {
+      // The drawer refreshes itself while open; switching under it would close it.
+      if (busy || !copiedFrom.value || chatState.conversationHash !== hash || conversationsOpen.value) return;
+      const ai = selectedAi.value;
+      const agentKey = ai.aiConfig?.agentPubKey;
+      if (!agentKey) return;
+      busy = true;
+      try {
+        const list = await getConversations(agentKey, undefined, "copy arrival");
+        const own = list.find((c) => !c.source?.startsWith("copy:") && c.hash.startsWith(prefix));
+        if (own && copiedFrom.value && chatState.conversationHash === hash && !conversationsOpen.value) {
+          uiLog(`copy ${hash.slice(0, 16)}..: its records arrived as ${own.hash.slice(0, 12)}.. - opening them`);
+          await resumeConversation({ hash: own.hash, agentKey: own.agent_key, aiId: ai.id, title: own.title ?? undefined, source: own.source });
+        }
+      } finally {
+        busy = false;
+      }
+    }, COPY_RECHECK_MS);
+    cleanup(() => clearInterval(timer));
   });
 
   // Last-conversation pointer: written whenever a chat-path conversation
