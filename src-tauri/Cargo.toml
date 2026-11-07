@@ -59,7 +59,7 @@ log = "0.4"
 # are pinned to the versions the library pins for the 0.6 line (0.6.1 pins
 # lair_keystore_api to exactly 0.6.3; holochain_client 0.8.1 and
 # holochain_types 0.6.1 move in lockstep with the conductor).
-flowsta-hc-lines = { git = "https://github.com/WeAreFlowsta/flowsta-hc-lines", rev = "f086ce00e6f49b48bc3147d5e2c0d0d5770983af" }
+flowsta-hc-lines = { git = "https://github.com/WeAreFlowsta/flowsta-hc-lines", rev = "b8b1559a6b5cae2cea2ff61f69f458942a0428f5" }
 async-trait = "0.1"
 lair_keystore_api = "=0.6.3"
 holochain_client = { version = "=0.8.1", default-features = false }
