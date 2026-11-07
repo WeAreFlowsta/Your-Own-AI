@@ -2046,6 +2046,8 @@ pub async fn import_archive_adopt(
             .await?;
         }
         written += 1;
+        // Written to the 0.6 line only: the move's next pass copies it.
+        crate::hc07::note_missed(&ai_id);
 
         let pct = (((idx + 1) * 100) / total.max(1)) as u32;
         if pct != last_pct {

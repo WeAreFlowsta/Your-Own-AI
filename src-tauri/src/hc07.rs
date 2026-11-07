@@ -33,6 +33,12 @@ async fn admin() -> Result<AdminClient, String> {
     AdminClient::connect(Line::V07, port, &crate::conductor::origin()).await.map_err(|e| format!("0.7 admin: {e}"))
 }
 
+/// The agents (keys, hex) with an enabled v2 transcript app.
+pub async fn agents_with_apps() -> Result<std::collections::HashSet<String>, String> {
+    let apps = admin().await?.list_apps().await.map_err(|e| format!("0.7 list_apps: {e}"))?;
+    Ok(apps.into_iter().filter(|a| a.enabled && a.app_id.starts_with(APP_ID_PREFIX)).map(|a| hex::encode(a.agent_key)).collect())
+}
+
 /// Make sure each v1 transcript app has its v2 app: an app that exists is
 /// adopted (enabled if it is not), never reinstalled, since a second install
 /// under a key that has a 0.7 chain forks it. `v1_apps` is (app id, agent

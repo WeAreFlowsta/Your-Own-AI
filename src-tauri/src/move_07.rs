@@ -129,9 +129,12 @@ impl PassApp for Move {
 pub struct Cells;
 
 impl Cells {
+    /// This device's AI cells that have their v2 app (one made this session
+    /// gets it at the next start, and is copied then).
     async fn all(mv: &Move) -> Result<Vec<CopyUnit>, HookError> {
         let manager = mv.hc.get()?;
-        let mut ids: Vec<String> = manager.agents.lock().await.keys().cloned().collect();
+        let on_07 = crate::hc07::agents_with_apps().await?;
+        let mut ids: Vec<String> = manager.agents.lock().await.keys().filter(|k| on_07.contains(*k)).cloned().collect();
         ids.sort();
         Ok(ids.into_iter().map(|id| CopyUnit { id }).collect())
     }
