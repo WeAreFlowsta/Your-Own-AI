@@ -1022,8 +1022,9 @@ async fn restore_backup(
             records_restored += n;
         }
         // Replayed outside the write-through path: the next list read for
-        // this AI must be live.
+        // this AI must be live, and the move's next pass copies it.
         crate::conversation_cache::mark_stale(&app, agent_key);
+        crate::hc07::note_missed(agent_key);
     }
 
     // 5. Cells with no matching AI - e.g. an AI deleted while its

@@ -627,6 +627,7 @@ impl HolochainManager {
                 Err(e) => errors.push(format!("{app_id}: {e:?}")),
             }
         }
+        crate::hc07::disable_for(&planned).await;
         log::info!(
             "[cells] tidy v2: {} of {} verified-empty cells disabled, {} errors",
             disabled,
@@ -680,8 +681,12 @@ impl HolochainManager {
         }
 
         // Drop any in-memory agents whose app was removed.
-        let mut agents = self.agents.lock().await;
-        agents.retain(|_, a| !a.installed_app_id.ends_with(ai_id));
+        {
+            let mut agents = self.agents.lock().await;
+            agents.retain(|_, a| !a.installed_app_id.ends_with(ai_id));
+        }
+        // Its copies on the 0.7 line go too.
+        crate::hc07::purge(ai_id).await;
 
         Ok(removed)
     }
@@ -836,6 +841,13 @@ impl HolochainManager {
     ///
     /// Called after conductor restart to reconnect to apps that were
     /// installed in a previous session.
+    /// After the lines restarted (new ports, a new origin): every agent's
+    /// connection is made again.
+    pub async fn reconnect_after_restart(&self) -> Result<(), String> {
+        self.agents.lock().await.clear();
+        self.reconnect_existing_agents().await
+    }
+
     pub async fn reconnect_existing_agents(&self) -> Result<(), String> {
         let admin_ws = holochain_client::AdminWebsocket::connect(
             format!("localhost:{}", self.admin_port()),

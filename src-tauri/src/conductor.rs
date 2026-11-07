@@ -44,6 +44,14 @@ pub(crate) const PASSPHRASE_06: &str = "your-own-ai-local";
 
 static SUPERVISOR: LazyLock<Arc<Supervisor>> = LazyLock::new(|| Arc::new(Supervisor::new("yoai")));
 
+/// The open profile's root, once its lines have been asked to start.
+static PROFILE_ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// The open profile's root (None before the start).
+pub fn profile_root() -> Option<&'static Path> {
+    PROFILE_ROOT.get().map(|p| p.as_path())
+}
+
 /// The open profile's lines.
 pub fn supervisor() -> &'static Arc<Supervisor> {
     &SUPERVISOR
@@ -62,6 +70,11 @@ pub fn admin_port() -> Option<u16> {
 /// The 0.6 conductor's app interface port, while it runs.
 pub fn app_port() -> Option<u16> {
     supervisor().ports(Line::V06).map(|(_, app)| app)
+}
+
+/// A line's admin and app ports, while it runs.
+pub fn ports(line: Line) -> Option<(u16, u16)> {
+    supervisor().ports(line)
 }
 
 /// Where a key store's socket goes when its own folder's path is over the
@@ -127,18 +140,47 @@ pub(crate) fn passphrase_07(data_key: &[u8; 32], salt: &[u8; 32]) -> String {
     hex::encode(blake3::derive_key("Your Own AI 2026-11 lair 0.7 key store passphrase", &material))
 }
 
-/// Make the 0.7 key store ready to start, and return its passphrase: a copy
-/// of the 0.6 store (the same keys, so every AI keeps its id), with its
-/// salt, rewrapped from the 0.6 passphrase to the derived one. Each step is
-/// skipped once done, so a start that was stopped part way is finished by
-/// the next. Neither line may be running: the copy reads a quiet 0.6 store,
-/// and the rewrap writes a store no lair has open.
+/// The 0.7 key store's passphrase as it stands (its salt is in it), for a
+/// start beside a running 0.6 line, when the store cannot be copied again.
+pub(crate) fn passphrase_of_store_07(data_dir: &Path, data_key: &[u8; 32]) -> Result<String, String> {
+    let (lair_07, _) = line_dirs(data_dir, Line::V07);
+    let text = std::fs::read_to_string(lair_07.join(SALT_FILE_07)).map_err(|e| format!("read the 0.7 key store's salt: {e}"))?;
+    let salt: [u8; 32] = hex::decode(text.trim()).ok().and_then(|b| b.try_into().ok()).ok_or("the 0.7 key store's salt is malformed")?;
+    Ok(passphrase_07(data_key, &salt))
+}
+
+/// Start the 0.7 line again beside the running session (its conductor
+/// died, or it was stopped for its memory).
+pub fn attach_07(app: tauri::AppHandle, data_dir: PathBuf, line_07: Line07) -> Result<(), String> {
+    let session = supervisor().session().ok_or("no session runs")?;
+    supervisor().attach_line(session, Line::V07, Arc::new(YoaiLines { app: Some(app), data_dir, line_07: Some(line_07) }));
+    Ok(())
+}
+
+/// Make the 0.7 key store ready to start, and return its passphrase.
+///
+/// While the 0.6 line is in use, the 0.7 store is a fresh copy of the 0.6
+/// one at every start: the same keys, so every AI keeps its id, including
+/// an AI made since the last start (its key is made in the 0.6 store, and
+/// cannot be exported). The copy is built beside the store, given the
+/// store's salt (so the passphrase stays the same), rewrapped from the 0.6
+/// passphrase to the derived one, and swapped in; a start stopped part way
+/// finds one whole store, and an interrupted swap is put back. Neither
+/// line may be running: the copy reads a quiet 0.6 store, and the rewrap
+/// writes a store no lair has open.
 pub(crate) async fn prepare_store_07(data_dir: &Path, data_key: &[u8; 32]) -> Result<String, String> {
     let (lair_06, _) = line_dirs(data_dir, Line::V06);
     let (lair_07, _) = line_dirs(data_dir, Line::V07);
-    if !flowsta_hc_lines::keystore::config_path(&lair_07).exists() {
-        let copied = flowsta_hc_lines::keystore::copy_store(&lair_06, &lair_07, &socket_plan()).map_err(|e| format!("copy the key store for 0.7: {e}"))?;
-        log::info!("[0.7] key store copied from the 0.6 one ({} bytes)", copied.bytes);
+    let next = data_dir.join("lair-07.next");
+    let prev = data_dir.join("lair-07.prev");
+    if !lair_07.exists() && prev.exists() {
+        std::fs::rename(&prev, &lair_07).map_err(|e| format!("put back the 0.7 key store: {e}"))?;
+        log::warn!("[0.7] a key store swap was stopped part way: the previous store is back");
+    }
+    for leftover in [&next, &prev] {
+        if leftover.exists() {
+            std::fs::remove_dir_all(leftover).map_err(|e| format!("clear {leftover:?}: {e}"))?;
+        }
     }
     let salt_path = lair_07.join(SALT_FILE_07);
     let salt: [u8; 32] = match std::fs::read_to_string(&salt_path) {
@@ -146,17 +188,22 @@ pub(crate) async fn prepare_store_07(data_dir: &Path, data_key: &[u8; 32]) -> Re
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             let mut salt = [0u8; 32];
             rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut salt);
-            flowsta_hc_lines::files::write_atomic_private(&salt_path, hex::encode(salt).as_bytes()).map_err(|e| format!("write the 0.7 key store's salt: {e}"))?;
             salt
         }
         Err(e) => return Err(format!("read the 0.7 key store's salt: {e}")),
     };
     let passphrase = passphrase_07(data_key, &salt);
-    match flowsta_hc_lines::keystore::rekey_store(&lair_07, Line::V07, PASSPHRASE_06, &passphrase).await {
-        Ok(flowsta_hc_lines::keystore::Rekeyed::Rewrapped) => log::info!("[0.7] key store rewrapped under this install's passphrase"),
-        Ok(_) => {}
-        Err(e) => return Err(format!("the 0.7 key store does not open: {e}")),
+    let copied = flowsta_hc_lines::keystore::copy_store(&lair_06, &next, &socket_plan()).map_err(|e| format!("copy the key store for 0.7: {e}"))?;
+    flowsta_hc_lines::files::write_atomic_private(&next.join(SALT_FILE_07), hex::encode(salt).as_bytes()).map_err(|e| format!("write the 0.7 key store's salt: {e}"))?;
+    flowsta_hc_lines::keystore::rekey_store(&next, Line::V07, PASSPHRASE_06, &passphrase).await.map_err(|e| format!("rewrap the 0.7 key store: {e}"))?;
+    if lair_07.exists() {
+        std::fs::rename(&lair_07, &prev).map_err(|e| format!("set the previous 0.7 key store aside: {e}"))?;
     }
+    std::fs::rename(&next, &lair_07).map_err(|e| format!("put the 0.7 key store in place: {e}"))?;
+    if prev.exists() {
+        let _ = std::fs::remove_dir_all(&prev);
+    }
+    log::info!("[0.7] key store refreshed from the 0.6 one ({} bytes) under this install's passphrase", copied.bytes);
     Ok(passphrase)
 }
 
@@ -172,6 +219,11 @@ pub fn begin_closing() {
 
 fn closing() -> bool {
     CLOSING.load(Ordering::SeqCst)
+}
+
+/// Whether the app is quitting, resetting or swapping its material.
+pub fn is_closing() -> bool {
+    closing()
 }
 
 /// Stop the lines for good: no start goes on, a start under way is waited
@@ -359,6 +411,14 @@ pub(crate) fn started_offline() -> bool {
     STARTED_OFFLINE.load(Ordering::SeqCst)
 }
 
+/// Whether the 0.6 line's rendezvous (the one with auth material) answers.
+pub(crate) async fn rendezvous_answers() -> bool {
+    match primary() {
+        Some(p) => answers(&p.bootstrap_url, PROBE_TIMEOUT).await,
+        None => false,
+    }
+}
+
 // ── The start ───────────────────────────────────────────────────────────
 
 /// Start one line's key store and conductor with the app's settings.
@@ -432,9 +492,18 @@ struct YoaiLines {
     app: Option<tauri::AppHandle>,
     /// The open profile's root.
     data_dir: PathBuf,
-    /// The 0.7 key store's passphrase ([`prepare_store_07`]); None when this
-    /// start runs no 0.7 line.
-    passphrase_07: Option<String>,
+    /// What the 0.7 line needs; None when this start runs no 0.7 line.
+    line_07: Option<Line07>,
+}
+
+/// What a start's 0.7 line needs.
+pub struct Line07 {
+    /// The key store's passphrase ([`prepare_store_07`]).
+    pub passphrase: String,
+    /// The person's network seed, which every transcript cell joins.
+    pub network_seed: String,
+    /// Where the bundled v2 hApp is.
+    pub resource_dir: PathBuf,
 }
 
 impl YoaiLines {
@@ -456,7 +525,7 @@ impl LineHooks for YoaiLines {
     async fn start(&self, line: Line, role: Role) -> Result<LineProcess, String> {
         let passphrase = match line {
             Line::V06 => PASSPHRASE_06,
-            Line::V07 => self.passphrase_07.as_deref().ok_or("the 0.7 key store is not prepared")?,
+            Line::V07 => self.line_07.as_ref().map(|l| l.passphrase.as_str()).ok_or("the 0.7 key store is not prepared")?,
         };
         let entry = entry_for(line, role).await;
         // One origin per app start, shared by both lines: the primary makes
@@ -466,20 +535,38 @@ impl LineHooks for YoaiLines {
         start_one(line, &self.data_dir, passphrase, &entry, &origin, &[], |step| self.say(role, step_message(step))).await
     }
 
-    /// The app interface, accepting only this start's origin. The
-    /// coordinator sweep and the agents follow once the line has joined.
+    /// The app interface, accepting only this start's origin. On 0.6 the
+    /// coordinator sweep and the agents follow once the line has joined. On
+    /// 0.7, every AI cell on the running 0.6 line gets its v2 app (adopted
+    /// when it exists, never reinstalled), and a start that installed any
+    /// restarts the line once to give back the memory the installs kept.
     async fn setup(&self, line: Line, role: Role, process: &mut LineProcess) -> Result<Setup, String> {
         self.say(role, "Setting up app interface...");
         let origin = supervisor().origin();
         let admin = AdminClient::connect(line, process.admin_port, &origin).await.map_err(|e| format!("Failed to connect to admin WebSocket: {e}"))?;
         let app_port = admin.attach_app_interface(&origin).await.map_err(|e| format!("Failed to attach app interface: {e}"))?;
         log::info!("[{line}] app interface attached on port {}", app_port);
+        if line == Line::V07 {
+            let l07 = self.line_07.as_ref().ok_or("the 0.7 line has no settings")?;
+            crate::hc07::purge_noted_on(&admin, &self.data_dir).await;
+            let v1_apps = transcript_apps_06().await?;
+            let installed = crate::hc07::ensure_apps_on(&admin, &l07.resource_dir, &l07.network_seed, &v1_apps).await?;
+            if installed > 0 {
+                log::info!("[0.7] {installed} transcript app(s) installed: the line restarts once to give back the memory the installs kept");
+                return Ok(Setup { app_port, restart: true });
+            }
+        }
         Ok(app_port.into())
     }
 
     async fn joined(&self, line: Line, role: Role, _session: u64, admin_port: u16, app_port: u16) {
         self.emit(role, ConductorStatus::Ready { admin_port, app_port });
         log::info!("[{line}] Holochain conductor ready (admin: {}, app: {})", admin_port, app_port);
+        if line == Line::V07 {
+            if let Some(app) = &self.app {
+                crate::move_07::run_passes(app.clone(), self.data_dir.clone());
+            }
+        }
     }
 
     async fn secondary_failed(&self, line: Line, error: &str) {
@@ -491,18 +578,35 @@ impl LineHooks for YoaiLines {
     }
 }
 
+/// Every enabled transcript app on the running 0.6 line: (app id, agent key
+/// 39 bytes). A disabled one was tidied because it holds no records; it gets
+/// its v2 app at the first 0.7 start after it is enabled again.
+async fn transcript_apps_06() -> Result<Vec<(String, Vec<u8>)>, String> {
+    let port = admin_port().ok_or("the 0.6 line is not running")?;
+    let admin = AdminClient::connect(Line::V06, port, &origin()).await.map_err(|e| format!("0.6 admin: {e}"))?;
+    let apps = admin.list_apps().await.map_err(|e| format!("0.6 list_apps: {e}"))?;
+    Ok(apps.into_iter().filter(|a| a.enabled && a.app_id.starts_with(crate::dna::APP_ID_PREFIX)).map(|a| (a.app_id, a.agent_key)).collect())
+}
+
 /// Start the open profile's lines; returns once the 0.6 line is up and its
-/// app interface is attached. With the 0.7 key store's passphrase
-/// ([`prepare_store_07`]), the 0.7 line follows beside it from a task. The
-/// primary gets one retry after a failure (2 s later, so ports and
-/// processes are released).
-pub async fn start_holochain(app: tauri::AppHandle, data_dir: PathBuf, passphrase_07: Option<String>) -> Result<u64, String> {
-    let secondary = passphrase_07.is_some().then_some(Line::V07);
-    let hooks = Arc::new(YoaiLines { app: Some(app), data_dir, passphrase_07 });
+/// app interface is attached. With [`Line07`], the 0.7 line follows beside
+/// it from a task. The primary gets one retry after a failure (2 s later,
+/// so ports and processes are released).
+pub async fn start_holochain(app: tauri::AppHandle, data_dir: PathBuf, line_07: Option<Line07>) -> Result<u64, String> {
+    let _ = PROFILE_ROOT.set(data_dir.clone());
+    let secondary = line_07.is_some().then_some(Line::V07);
+    let hooks = Arc::new(YoaiLines { app: Some(app), data_dir, line_07 });
     match supervisor().start_lines(Line::V06, secondary, hooks).await {
         Err(e) if e == NOT_WANTED => Err("the app is closing".into()),
         other => other,
     }
+}
+
+/// The lines of a profile in a test, without a window to narrate to.
+#[cfg(test)]
+pub(crate) async fn start_for_test(data_dir: PathBuf, line_07: Option<Line07>) -> Result<u64, String> {
+    let secondary = line_07.is_some().then_some(Line::V07);
+    supervisor().start_lines(Line::V06, secondary, Arc::new(YoaiLines { app: None, data_dir, line_07 })).await
 }
 
 #[cfg(test)]
@@ -577,8 +681,9 @@ mod line_07_tests {
 
     /// The real sidecars: a 0.6 store holding an AI's random seed, prepared
     /// for 0.7 (copied, salted, rewrapped), starts the 0.7 line under the
-    /// derived passphrase with the same key under the same tag; a second
-    /// preparation changes nothing; the 0.6 store still opens as before.
+    /// derived passphrase with the same key under the same tag; an AI made
+    /// on 0.6 afterwards is in the next copy, under the same passphrase; the
+    /// 0.6 store still opens as before.
     /// Run with the app closed: `cargo test --lib -- --ignored live_07`
     #[tokio::test(flavor = "multi_thread")]
     #[ignore]
@@ -595,8 +700,19 @@ mod line_07_tests {
         p06.stop();
 
         let passphrase = prepare_store_07(&profile, &data_key).await.expect("prepared");
-        assert_eq!(passphrase, prepare_store_07(&profile, &data_key).await.expect("prepared again"), "a second preparation changes nothing");
         assert!(line_dirs(&profile, Line::V07).0.join(SALT_FILE_07).is_file());
+
+        // An AI made on 0.6 after the first copy is in the next one, under
+        // the same passphrase.
+        let later = "ai-made-later".to_string();
+        let mut p06 = start_one(Line::V06, &profile, PASSPHRASE_06, &alone(), &origin, &[KeySource::NewSeed { tag: later.clone() }], |_| {}).await.expect("0.6 starts again");
+        let later_key = p06.agents[0];
+        p06.stop();
+        assert_eq!(passphrase, prepare_store_07(&profile, &data_key).await.expect("refreshed"), "the salt is kept, so the passphrase too");
+        assert!(!profile.join("lair-07.next").exists() && !profile.join("lair-07.prev").exists(), "no leftovers");
+        let mut p07 = start_one(Line::V07, &profile, &passphrase, &alone(), &origin, &[KeySource::Existing { tag: later }], |_| {}).await.expect("0.7 has the later AI");
+        assert_eq!(p07.agents[0], later_key);
+        p07.stop();
 
         let mut p07 = start_one(Line::V07, &profile, &passphrase, &alone(), &origin, &[KeySource::Existing { tag: tag.clone() }], |_| {}).await.expect("0.7 starts under the derived passphrase");
         assert_eq!(p07.agents[0], key, "the AI's key on 0.7 is its key on 0.6");
@@ -607,5 +723,65 @@ mod line_07_tests {
         let mut again = start_one(Line::V06, &profile, PASSPHRASE_06, &alone(), &origin, &[KeySource::Existing { tag }], |_| {}).await.expect("0.6 still opens");
         assert_eq!(again.agents[0], key);
         again.stop();
+    }
+
+    /// The real sidecars through the supervisor, as the app runs them: an
+    /// AI's cell on 0.6; then both lines, the 0.7 setup installing the AI's
+    /// v2 app (with its one restart); then a conversation and a message
+    /// written to v2 and read back by anchor and key.
+    /// Run with the app closed: `cargo test --lib -- --ignored live_07`
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn live_07_the_setup_installs_each_ais_v2_app_and_it_takes_records() {
+        use crate::hc07::{Cells07, ConversationsPage, EntriesPage, RecordMessage, StartConversation};
+        use flowsta_hc_lines::supervisor::KeySource;
+        use holochain_types::prelude::{ActionHash, AgentPubKey, ExternalHash};
+        let tmp = tempfile::tempdir().unwrap();
+        let profile = tmp.path().join("profile");
+        let resource_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
+        let (data_key, seed) = ([4u8; 32], format!("live-07-{}", std::process::id()));
+
+        let only_06 = Arc::new(YoaiLines { app: None, data_dir: profile.clone(), line_07: None });
+        supervisor().start_lines(Line::V06, None, only_06).await.expect("0.6 starts");
+        let key = supervisor().add_agent(Line::V06, PASSPHRASE_06, &KeySource::NewSeed { tag: "ai-live".into() }).await.unwrap();
+        let agent = AgentPubKey::from_raw_32(key.to_vec());
+        crate::dna::install_transcript_app(admin_port().unwrap(), &resource_dir, agent.clone(), "live", &seed).await.expect("v1 app");
+        supervisor().stop();
+
+        let passphrase = prepare_store_07(&profile, &data_key).await.expect("prepared");
+        let both = Arc::new(YoaiLines { app: None, data_dir: profile.clone(), line_07: Some(Line07 { passphrase, network_seed: seed, resource_dir }) });
+        supervisor().start_lines(Line::V06, Some(Line::V07), both).await.expect("0.6 starts again");
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(240);
+        while !supervisor().has(Line::V07) {
+            assert!(std::time::Instant::now() < until, "the 0.7 line did not join");
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+
+        let cells = Cells07::default();
+        let agent_hex = hex::encode(agent.get_raw_39());
+        let conversation = ExternalHash::from_raw_32(crate::transcript_ids::conversation_anchor(&data_key, "c-1").to_vec());
+        let (cipher, nonce) = (vec![7u8; 40], vec![1u8; 24]);
+        let _: ActionHash = cells
+            .call(&agent_hex, "start_conversation", &StartConversation { cipher: cipher.clone(), nonce: nonce.clone(), anchor: agent.clone(), conversation_anchor: conversation.clone() })
+            .await
+            .expect("a conversation on v2");
+        let mkey = crate::transcript_ids::message_key(&data_key, "m-1").to_vec();
+        let _: ActionHash = cells
+            .call(&agent_hex, "record_message", &RecordMessage { conversation_anchor: conversation.clone(), message_key: mkey.clone(), cipher: vec![8u8; 40], nonce: nonce.clone() })
+            .await
+            .expect("a message on v2");
+
+        let page = cells.conversations_page(&agent_hex, &ConversationsPage { anchor: agent.clone(), before: None, limit: 10 }).await.expect("listed");
+        assert_eq!(page.items.len(), 1, "one conversation under the founding key");
+        assert_eq!(page.items[0].0.author, agent.get_raw_39().to_vec());
+        let entries = cells.entries_page(&agent_hex, &EntriesPage { conversation_anchor: conversation, after: None, limit: 10 }).await.expect("entries");
+        assert_eq!(entries.items.len(), 1, "one message under the conversation's anchor");
+        assert_eq!(entries.items[0].1, mkey, "listed with its key");
+
+        // A purge reaches the 0.7 line: the AI's v2 app is uninstalled.
+        crate::hc07::purge("live").await;
+        let admin = AdminClient::connect(Line::V07, ports(Line::V07).unwrap().0, &origin()).await.unwrap();
+        assert!(!admin.list_apps().await.unwrap().iter().any(|a| a.app_id == "transcript_v2_live"), "purged on 0.7 too");
+        supervisor().stop();
     }
 }
