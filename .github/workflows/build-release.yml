@@ -379,6 +379,20 @@ jobs:
           releaseId: ${{ needs.create-release.outputs.release_id }}
           args: --target ${{ matrix.target }}${{ steps.tauri_args.outputs.extra }}
 
+      # The Linux app links nothing of the system's OpenSSL: Fedora 45 ships
+      # OpenSSL 4, and 0.9.0, which needed libssl.so.3, did not start there
+      # (2026-11-07). OpenSSL is built in (openssl-src); this keeps it so.
+      - name: No system OpenSSL in the Linux app
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          BIN="src-tauri/target/${{ matrix.target }}/release/app"
+          if readelf -d "$BIN" | grep -E 'NEEDED.*lib(ssl|crypto)\.so'; then
+            echo "$BIN needs the system's OpenSSL: it would not start on a system without that version"
+            exit 1
+          fi
+          echo "$BIN needs no system OpenSSL"
+
       - name: Dump Windows signing transcript on failure
         if: failure() && runner.os == 'Windows'
         shell: pwsh

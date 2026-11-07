@@ -10,8 +10,6 @@ on:
         description: "Release tag (e.g. v0.9.0)"
         required: true
         default: "v0.9.0"
-  push:
-    branches: [linux-smoke]
 
 jobs:
   fedora:
