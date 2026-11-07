@@ -183,8 +183,11 @@ jobs:
           # gh release download can exit 0 with no file when the pattern
           # doesn't match - that would silently ship an installer with no
           # inference engine. Smallest real binary is ~11 MB.
-          DEST="src-tauri/bin/${BINARY}"
-          test -f "$DEST" || { echo "${BINARY} did not download"; exit 1; }
+          test -f "src-tauri/bin/${BINARY}" || { echo "${BINARY} did not download"; exit 1; }
+          # Bundled under the app's own prefix: a Linux package never
+          # claims /usr/bin/llama-server (distributions' llama.cpp has one).
+          DEST="src-tauri/bin/yourowai-${BINARY}"
+          mv "src-tauri/bin/${BINARY}" "$DEST"
           SIZE=$(wc -c < "$DEST")
           test "$SIZE" -gt 5000000 || { echo "${BINARY} too small (${SIZE} bytes)"; exit 1; }
           chmod +x "$DEST" 2>/dev/null || true

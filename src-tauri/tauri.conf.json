@@ -110,7 +110,7 @@
     "license": "AGPL-3.0-or-later",
     "category": "Productivity",
     "externalBin": [
-      "bin/llama-server",
+      "bin/yourowai-llama-server",
       "binaries/yourowai-holochain",
       "binaries/yourowai-lair-keystore",
       "binaries/yourowai-holochain-07",

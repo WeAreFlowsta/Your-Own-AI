@@ -2299,12 +2299,12 @@ fn engine_binary(app: &AppHandle) -> Result<(PathBuf, &'static str), String> {
         };
         let bin = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("bin")
-            .join(format!("llama-server-{triple}"));
+            .join(format!("{}-{triple}", crate::llm::BUNDLED_ENGINE));
         if bin.exists() {
             return Ok((bin, "bundled"));
         }
     }
-    let bin = crate::resolve_sidecar_bin("llama-server");
+    let bin = crate::resolve_sidecar_bin(crate::llm::BUNDLED_ENGINE);
     if bin.is_absolute() && bin.exists() {
         Ok((bin, "bundled"))
     } else {

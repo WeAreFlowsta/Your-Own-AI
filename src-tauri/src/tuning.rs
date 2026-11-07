@@ -738,7 +738,7 @@ pub async fn tune_run(
     let total_ram_gb = sys.total_memory() as f64 / (1024.0 * 1024.0 * 1024.0);
     let bin = match crate::engine::active_backend(&app) {
         crate::engine::Backend::Cuda => crate::engine::cuda_engine_binary(&app).ok_or("CUDA engine binary missing")?,
-        crate::engine::Backend::Bundled => crate::resolve_sidecar_bin("llama-server"),
+        crate::engine::Backend::Bundled => crate::resolve_sidecar_bin(crate::llm::BUNDLED_ENGINE),
     };
     if !bin.is_file() {
         return Err(format!("engine binary missing at {}", bin.display()));
@@ -870,7 +870,7 @@ mod tests {
         let triple = if cfg!(target_os = "windows") { "x86_64-pc-windows-msvc.exe" }
             else if cfg!(target_os = "macos") { if cfg!(target_arch = "aarch64") { "aarch64-apple-darwin" } else { "x86_64-apple-darwin" } }
             else { "x86_64-unknown-linux-gnu" };
-        let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bin").join(format!("llama-server-{triple}"));
+        let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bin").join(format!("{}-{triple}", crate::llm::BUNDLED_ENGINE));
         assert!(bin.exists(), "shipped engine binary missing at {}", bin.display());
         let meta = crate::gguf::read_meta(&path).expect("model header reads");
         let size = std::fs::metadata(&path).unwrap().len();
@@ -970,7 +970,7 @@ mod tests {
         let triple = if cfg!(target_os = "windows") { "x86_64-pc-windows-msvc.exe" }
             else if cfg!(target_os = "macos") { if cfg!(target_arch = "aarch64") { "aarch64-apple-darwin" } else { "x86_64-apple-darwin" } }
             else { "x86_64-unknown-linux-gnu" };
-        let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bin").join(format!("llama-server-{triple}"));
+        let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bin").join(format!("{}-{triple}", crate::llm::BUNDLED_ENGINE));
         assert!(bin.exists());
         let only: Vec<String> = std::env::var("YOAI_FIT_TRUTH_MODELS").ok()
             .map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
@@ -1004,7 +1004,7 @@ mod tests {
         let triple = if cfg!(target_os = "windows") { "x86_64-pc-windows-msvc.exe" }
             else if cfg!(target_os = "macos") { if cfg!(target_arch = "aarch64") { "aarch64-apple-darwin" } else { "x86_64-apple-darwin" } }
             else { "x86_64-unknown-linux-gnu" };
-        let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bin").join(format!("llama-server-{triple}"));
+        let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bin").join(format!("{}-{triple}", crate::llm::BUNDLED_ENGINE));
         assert!(bin.exists());
         let sink = |l: String| eprintln!("[chat-format] {l}");
         let failures = crate::matrix::leg_chat_format(&bin, &dir, &sink).await;
@@ -1031,7 +1031,7 @@ mod tests {
         let triple = if cfg!(target_os = "windows") { "x86_64-pc-windows-msvc.exe" }
             else if cfg!(target_os = "macos") { if cfg!(target_arch = "aarch64") { "aarch64-apple-darwin" } else { "x86_64-apple-darwin" } }
             else { "x86_64-unknown-linux-gnu" };
-        let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bin").join(format!("llama-server-{triple}"));
+        let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bin").join(format!("{}-{triple}", crate::llm::BUNDLED_ENGINE));
         assert!(bin.exists());
         let sink = |l: String| eprintln!("[matrix] sampling {l}");
         crate::matrix::leg_sampling(&bin, &dir, &model, &sink)

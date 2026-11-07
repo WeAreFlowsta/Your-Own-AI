@@ -47,31 +47,31 @@ echo ""
 
 # Linux (x86_64)
 echo "⬇️  Downloading Linux binary..."
-curl -L ${AUTH_HEADER:+-H "$AUTH_HEADER"} "${BASE_URL}/llama-server-x86_64-unknown-linux-gnu" -o "${BINDIR}/llama-server-x86_64-unknown-linux-gnu"
-chmod +x "${BINDIR}/llama-server-x86_64-unknown-linux-gnu"
+curl -L ${AUTH_HEADER:+-H "$AUTH_HEADER"} "${BASE_URL}/llama-server-x86_64-unknown-linux-gnu" -o "${BINDIR}/yourowai-llama-server-x86_64-unknown-linux-gnu"
+chmod +x "${BINDIR}/yourowai-llama-server-x86_64-unknown-linux-gnu"
 echo "✅ Linux binary ready"
 
 # macOS (Apple Silicon - ARM64)
 echo "⬇️  Downloading macOS ARM64 binary..."
-curl -L ${AUTH_HEADER:+-H "$AUTH_HEADER"} "${BASE_URL}/llama-server-aarch64-apple-darwin" -o "${BINDIR}/llama-server-aarch64-apple-darwin"
-chmod +x "${BINDIR}/llama-server-aarch64-apple-darwin"
+curl -L ${AUTH_HEADER:+-H "$AUTH_HEADER"} "${BASE_URL}/llama-server-aarch64-apple-darwin" -o "${BINDIR}/yourowai-llama-server-aarch64-apple-darwin"
+chmod +x "${BINDIR}/yourowai-llama-server-aarch64-apple-darwin"
 echo "✅ macOS ARM64 binary ready"
 
 # macOS (Intel - x86_64)
 echo "⬇️  Downloading macOS Intel binary..."
-curl -L ${AUTH_HEADER:+-H "$AUTH_HEADER"} "${BASE_URL}/llama-server-x86_64-apple-darwin" -o "${BINDIR}/llama-server-x86_64-apple-darwin"
-chmod +x "${BINDIR}/llama-server-x86_64-apple-darwin"
+curl -L ${AUTH_HEADER:+-H "$AUTH_HEADER"} "${BASE_URL}/llama-server-x86_64-apple-darwin" -o "${BINDIR}/yourowai-llama-server-x86_64-apple-darwin"
+chmod +x "${BINDIR}/yourowai-llama-server-x86_64-apple-darwin"
 echo "✅ macOS Intel binary ready"
 
 # Windows (x86_64)
 echo "⬇️  Downloading Windows binary..."
-curl -L ${AUTH_HEADER:+-H "$AUTH_HEADER"} "${BASE_URL}/llama-server-x86_64-pc-windows-msvc.exe" -o "${BINDIR}/llama-server-x86_64-pc-windows-msvc.exe"
+curl -L ${AUTH_HEADER:+-H "$AUTH_HEADER"} "${BASE_URL}/llama-server-x86_64-pc-windows-msvc.exe" -o "${BINDIR}/yourowai-llama-server-x86_64-pc-windows-msvc.exe"
 echo "✅ Windows binary ready"
 
 echo ""
 echo "✅ All binaries downloaded!"
 echo ""
 echo "📊 Binary sizes:"
-ls -lh "${BINDIR}"/llama-server-*
+ls -lh "${BINDIR}"/yourowai-llama-server-*
 echo ""
 echo "🎯 Binaries ready for bundling with Tauri app"

@@ -533,16 +533,23 @@ pub async fn is_llama_server_ready() -> Result<bool, String> {
     }
 }
 
-/// The names the engine servers run under: the bundled and the CUDA
-/// llama-server, and SwiftLM (the Mac MLX preview). Lower-case, no `.exe`.
-const ENGINE_NAMES: &[&str] = &["llama-server", "swiftlm"];
+/// The bundled engine's file name (tauri.conf.json externalBin): llama.cpp's
+/// llama-server under the app's own prefix, so a Linux package never claims
+/// `/usr/bin/llama-server`, which distributions' llama.cpp packages install
+/// (0.9.0 and earlier: `llama-server`).
+pub(crate) const BUNDLED_ENGINE: &str = "yourowai-llama-server";
+
+/// The names the engine servers run under: the bundled engine, the
+/// downloaded CUDA llama-server, and SwiftLM (the Mac MLX preview).
+/// Lower-case, no `.exe`.
+const ENGINE_NAMES: &[&str] = &[BUNDLED_ENGINE, "llama-server", "swiftlm"];
 
 /// Whether a process is one of this app's engine servers on `port`: an
 /// engine by name, started with `--port <port>`, and either a child of this
 /// app or one of our own engine binaries by exact path (release builds). A
 /// person's own server on the same port is neither and is never touched.
 fn is_our_engine_on(name_stem: &str, cmd: &[String], port: u16, is_child: bool, is_our_binary: bool) -> bool {
-    ENGINE_NAMES.contains(&name_stem) && serves_port(cmd, port) && (is_child || is_our_binary)
+    ENGINE_NAMES.iter().any(|n| crate::instance_guard::process_name_is(n, name_stem)) && serves_port(cmd, port) && (is_child || is_our_binary)
 }
 
 fn serves_port(cmd: &[String], port: u16) -> bool {
@@ -554,7 +561,7 @@ fn serves_port(cmd: &[String], port: u16) -> bool {
 /// Our own engine binaries by exact path: the bundled llama-server, the
 /// downloaded CUDA build and SwiftLM.
 fn our_engine_binaries(app: &AppHandle) -> Vec<std::path::PathBuf> {
-    let mut bins = vec![crate::resolve_sidecar_bin("llama-server")];
+    let mut bins = vec![crate::resolve_sidecar_bin(BUNDLED_ENGINE)];
     bins.extend(crate::engine::cuda_engine_binary(app));
     bins.extend(crate::mlx_engine::swiftlm_binary(app));
     bins.into_iter().filter(|p| p.is_absolute()).collect()
@@ -573,17 +580,22 @@ fn end_our_engines_on(app: &AppHandle, port: u16) -> u32 {
         if *pid == me {
             continue;
         }
-        let name = p.name().to_string_lossy().to_lowercase();
-        let stem = name.strip_suffix(".exe").unwrap_or(&name).to_string();
-        let cmd: Vec<String> = p.cmd().iter().map(|a| a.to_string_lossy().into_owned()).collect();
-        let is_child = p.parent() == Some(me);
-        let is_our_binary = p.exe().map(|x| ours.iter().any(|o| o.as_path() == x)).unwrap_or(false);
-        if is_our_engine_on(&stem, &cmd, port, is_child, is_our_binary) && p.kill() {
-            log::info!("[engine] ended our own {} on port {} (pid {})", stem, port, pid);
+        if is_our_engine_process(p, me, &ours, port) && p.kill() {
+            log::info!("[engine] ended our own {} on port {} (pid {})", p.name().to_string_lossy(), port, pid);
             ended += 1;
         }
     }
     ended
+}
+
+/// `is_our_engine_on` for a process as `sysinfo` reads it (`me`: this app).
+fn is_our_engine_process(p: &sysinfo::Process, me: sysinfo::Pid, ours: &[std::path::PathBuf], port: u16) -> bool {
+    let name = p.name().to_string_lossy().to_lowercase();
+    let stem = name.strip_suffix(".exe").unwrap_or(&name).to_string();
+    let cmd: Vec<String> = p.cmd().iter().map(|a| a.to_string_lossy().into_owned()).collect();
+    let is_child = p.parent() == Some(me);
+    let is_our_binary = p.exe().map(|x| ours.iter().any(|o| o.as_path() == x)).unwrap_or(false);
+    is_our_engine_on(&stem, &cmd, port, is_child, is_our_binary)
 }
 
 /// The pids LISTENING on a local port (never the client end of a
@@ -717,14 +729,14 @@ fn chat_server_command(
 fn bundled_llama_command(
     app_handle: &AppHandle,
 ) -> Result<tauri_plugin_shell::process::Command, String> {
-    let bin = crate::resolve_sidecar_bin("llama-server");
+    let bin = crate::resolve_sidecar_bin(BUNDLED_ENGINE);
     // In production the resolver returns the exe-relative path when it
     // exists and a bare name otherwise; a bare name means the file beside
     // the app is gone - say where it should have been.
     if !cfg!(debug_assertions) && !bin.is_absolute() {
         let expected = std::env::current_exe()
             .ok()
-            .and_then(|e| e.parent().map(|d| d.join(if cfg!(windows) { "llama-server.exe" } else { "llama-server" })))
+            .and_then(|e| e.parent().map(|d| d.join(format!("{BUNDLED_ENGINE}{}", std::env::consts::EXE_SUFFIX))))
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "beside the app executable".to_string());
         let msg = format!(
@@ -7285,6 +7297,37 @@ mod stop_chain_tests {
         assert!(!is_our_engine_on("python3", &chat, 8080, true, false), "not an engine, even as our child");
         assert!(is_our_engine_on("swiftlm", &args(&["--port=8080"]), 8080, true, false), "the MLX engine, --port=");
         assert!(!is_our_engine_on("llama-server", &args(&["--port", "18080"]), 8080, true, true), "a port that only ends the same way");
+        assert!(is_our_engine_on(BUNDLED_ENGINE, &chat, 8080, true, false), "the bundled engine by its own name");
+        assert!(is_our_engine_on("yourowai-llama-", &chat, 8080, false, true) == cfg!(target_os = "linux"), "Linux names a process by its first 15 characters");
+    }
+
+    /// The bundled engine as Linux names a running process (its file
+    /// name's first 15 characters, `yourowai-llama-`), our child on the
+    /// port: ours, read the way the start reads it.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn our_engine_is_found_by_its_linux_short_name() {
+        use std::os::unix::fs::PermissionsExt;
+        use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System, UpdateKind};
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join(BUNDLED_ENGINE);
+        std::fs::write(&bin, "#!/bin/sh\nsleep 30\n").unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // A file just written can be "busy" for a moment while another test forks.
+        let mut child = (0..20)
+            .find_map(|_| std::process::Command::new(&bin).args(["--port", "18197"]).spawn().map_err(|_| std::thread::sleep(std::time::Duration::from_millis(50))).ok())
+            .expect("the stand-in engine starts");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let sys = System::new_with_specifics(RefreshKind::nothing().with_processes(ProcessRefreshKind::nothing().with_exe(UpdateKind::Always).with_cmd(UpdateKind::Always)));
+        let p = sys.process(Pid::from_u32(child.id())).expect("the engine is listed");
+        let name = p.name().to_string_lossy().into_owned();
+        let me = Pid::from_u32(std::process::id());
+        let (ours, other_port) = (is_our_engine_process(p, me, &[], 18197), is_our_engine_process(p, me, &[], 18196));
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(name, "yourowai-llama-", "Linux's short name");
+        assert!(ours, "our child engine on its port");
+        assert!(!other_port, "not on another port");
     }
 
     /// Live (headless matrix): a listener that is not ours is named and
