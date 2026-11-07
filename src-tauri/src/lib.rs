@@ -23,7 +23,6 @@ mod ocr;                  // OCR for scanned PDFs (pdfium render + ocrs)
 mod mlx_artifacts;      // MLX model artifacts (safetensors dirs) download/status
 mod mlx_engine;         // Apple Silicon MLX engine (preview) - SwiftLM
 mod conductor;            // the Holochain key store + conductor, through flowsta-hc-lines
-mod rendezvous_keeper;    // keeps this device listed on the rendezvous when the conductor's registration stalls
 pub mod dna;              // DNA installation per AI personality (pub for bin/census)
 pub mod flowsta;          // Sign in with Flowsta via Vault + online-model proxy
 mod holochain;            // Multi-agent manager
@@ -1104,7 +1103,9 @@ pub fn run() {
                         // Fill the OnceCell
                         let _ = hc_state.manager.set(manager);
                         log::info!("Holochain conductor ready");
-                        rendezvous_keeper::start();
+                        // Keep each line's agents listed on its rendezvous when the
+                        // conductor's own registration stalls (flowsta-hc-lines keeper).
+                        conductor::supervisor().start_keeper([conductor::rendezvous_servers(), conductor::rendezvous_servers_07()]);
                         watch::start(hc_app_handle.clone(), data_dir.clone(), resource_dir_for_watch.clone());
                         if identity_watch::RELAUNCHED_INTO_IDENTITY.load(std::sync::atomic::Ordering::Relaxed) {
                             identity_watch::bring_to_front(&hc_app_handle);

@@ -387,7 +387,7 @@ pub(crate) fn conductor_rendezvous() -> Option<String> {
 }
 
 /// Every rendezvous this build knows, for the registration keeper
-/// (`rendezvous_keeper`): Flowsta's with this app's auth material first,
+/// (the keeper, `Supervisor::start_keeper`): Flowsta's with this app's auth material first,
 /// then the open community nodes. `(bootstrap url, base64 auth material)`.
 pub(crate) fn rendezvous_servers() -> Vec<(String, Option<String>)> {
     let mut servers = Vec::new();

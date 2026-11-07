@@ -1903,17 +1903,20 @@ pub async fn leg_devices(app: &AppHandle, sink: Sink<'_>) -> Vec<String> {
         )),
         None => sink("last check for other devices' changes: none yet on this profile".into()),
     }
-    match crate::rendezvous_keeper::last_status() {
-        Some(k) => sink(format!(
-            "rendezvous: conductor started on {} | last round {} - {}/{} server(s) answered | {}{}",
-            k.conductor.as_deref().map(public_server_name).unwrap_or_else(|| "(unknown)".into()),
-            ago(k.at_secs, now),
-            k.reached,
-            k.servers,
-            match k.stalled_min { Some(m) => format!("COVERING for a stalled registration ({m} min)"), None => "registering on its own".into() },
-            if k.put_elsewhere > 0 { " | listed on a fallback too" } else { "" },
-        ) + if crate::conductor::started_offline() { " | started offline, without the rendezvous auth (the next start uses it)" } else { "" }),
-        None => sink("rendezvous: the keeper has not run yet (it starts about a minute after the conductor)".into()),
+    for (line, name) in [(flowsta_hc_lines::Line::V06, "rendezvous"), (flowsta_hc_lines::Line::V07, "rendezvous 0.7")] {
+        match crate::conductor::supervisor().last_round(line) {
+            Some(k) => sink(format!(
+                "{name}: conductor started on {} | last round {} - {}/{} server(s) answered | {}{}",
+                k.conductor.as_deref().map(public_server_name).unwrap_or_else(|| "(unknown)".into()),
+                ago(k.at.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0), now),
+                k.round.reached,
+                k.servers,
+                match k.stalled_for { Some(d) => format!("COVERING for a stalled registration ({} min)", d.as_secs() / 60), None => "registering on its own".into() },
+                if k.round.put_elsewhere > 0 { " | listed on a fallback too" } else { "" },
+            ) + if line == flowsta_hc_lines::Line::V06 && crate::conductor::started_offline() { " | started offline, without the rendezvous auth (the next start uses it)" } else { "" }),
+            None if line == flowsta_hc_lines::Line::V07 && crate::conductor::ports(line).is_none() => {}
+            None => sink(format!("{name}: the keeper has not run yet (it starts about a minute after the conductor)")),
+        }
     }
     let failures = devices_failures(labels_read, vault.unlocked, ai_count, holds_ais, holds_manifest);
     for f in &failures {
