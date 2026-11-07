@@ -4,8 +4,9 @@ version = "0.9.0"
 description = "Offline-first AI App"
 authors = ["Your Own AI"]
 homepage = "https://yourownai.net"
-# The app's binary is your-own-ai (0.9.0 and earlier: app). `cargo run`
-# launches it; the census tool builds only with its feature.
+# The app's binary is your-own-ai (0.9.0 and earlier: app). The census tool
+# is an example (`cargo run --example census`): the bundler packages every
+# [[bin]], built or not, and never an example.
 default-run = "your-own-ai"
 edition = "2021"
 
@@ -14,12 +15,6 @@ edition = "2021"
 [[bin]]
 name = "your-own-ai"
 path = "src/main.rs"
-
-# A developer tool: never built for a release, so never packaged.
-[[bin]]
-name = "census"
-path = "src/bin/census.rs"
-required-features = ["census"]
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
@@ -100,8 +95,6 @@ tauri-plugin-wdio-webdriver = { version = "1.4", optional = true }
 # even in dev, so OCR runs at near-release speed while our own code stays debuggable.
 [features]
 default = []
-# The census tool (src/bin/census.rs): `cargo run --bin census --features census`.
-census = []
 # Test builds only: `npm run e2e` builds with `--features e2e`.
 e2e = ["dep:tauri-plugin-wdio-webdriver"]
 
