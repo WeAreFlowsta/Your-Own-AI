@@ -1,33 +1,77 @@
 name: Linux package smoke
 
-# A release's Linux package, installed the way a person installs it and
-# started under a virtual display: what it prints, its dependencies, its
-# launcher and the app's log. Run it for a release (Actions > Run workflow).
+# A Linux package, installed the way a person installs it and started under
+# a virtual display: what the binary needs, what it prints, its launcher, its
+# app-centre entry (AppStream, what GNOME Software lists) and the app's log.
+# Run it for a release tag, or leave the tag empty to build the package from
+# this commit first (Actions > Run workflow).
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e.g. v0.9.0)"
-        required: true
-        default: "v0.9.0"
+        description: "Release tag (e.g. v0.9.0); empty = build this commit"
+        required: false
+        default: ""
+  push:
+    branches: [linux-packaging]
 
 jobs:
+  build:
+    if: ${{ github.event.inputs.tag == '' || github.event_name == 'push' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v5
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf rpm
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Sidecars (Holochain from its releases; the engine stubbed, it is not started here)
+        run: |
+          ./download-holochain-binaries.sh x86_64-unknown-linux-gnu
+          mkdir -p src-tauri/bin && touch src-tauri/bin/llama-server-x86_64-unknown-linux-gnu && chmod +x src-tauri/bin/llama-server-x86_64-unknown-linux-gnu
+      - name: Build the RPM
+        run: |
+          npm ci
+          npx tauri build --target x86_64-unknown-linux-gnu --bundles rpm
+          cp src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/rpm/*.rpm app.rpm
+          ls -la app.rpm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm
+          path: app.rpm
+          retention-days: 7
+
   fedora:
+    needs: [build]
+    if: ${{ always() && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
     runs-on: ubuntu-latest
     container: fedora:latest
     timeout-minutes: 30
     env:
-      TAG: ${{ github.event.inputs.tag || 'v0.9.0' }}
+      TAG: ${{ github.event.inputs.tag }}
     steps:
       - name: Fedora version
         run: cat /etc/fedora-release
       - name: Tools
-        run: dnf install -y -q xorg-x11-server-Xvfb xorg-x11-xauth curl findutils procps-ng binutils >/dev/null
-      - name: Download the release's RPM
+        run: dnf install -y -q xorg-x11-server-Xvfb xorg-x11-xauth curl findutils procps-ng binutils appstream desktop-file-utils >/dev/null
+      - name: The release's RPM
+        if: ${{ env.TAG != '' }}
         run: |
           V="${TAG#v}"
           curl -fsSL -o app.rpm "https://github.com/${{ github.repository }}/releases/download/${TAG}/Your.Own.AI-${V}-Linux.rpm"
-          ls -la app.rpm
+      - name: The RPM built from this commit
+        if: ${{ env.TAG == '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: rpm
       - name: Install it
         run: dnf install -y ./app.rpm
       - name: What it installed
@@ -35,33 +79,30 @@ jobs:
           rpm -qp --queryformat '%{NAME} %{VERSION}\n' app.rpm
           rpm -qlp app.rpm | grep -vE '/icons/' | head -40
           echo "--- requires"; rpm -qRp app.rpm
-          echo "--- launcher"; cat /usr/share/applications/*.desktop 2>/dev/null || true
+          echo "--- launcher"
+          rpm -qlp app.rpm | grep '\.desktop$' | while read -r f; do cat "$f"; desktop-file-validate "$f" && echo "launcher valid"; done
+          echo "BIN=$(rpm -qlp app.rpm | grep -E '^/usr/bin/(your-own-ai|app)$' | head -1)" >> "$GITHUB_ENV"
+      - name: The app-centre entry (AppStream)
+        run: |
+          set +e
+          ls /usr/share/metainfo/ | grep -i yourowai || echo "no AppStream file"
+          appstreamcli validate --no-net /usr/share/metainfo/com.solar.yourowai.metainfo.xml
+          appstreamcli refresh-cache --force >/dev/null 2>&1
+          appstreamcli get com.solar.yourowai
       - name: Libraries
         run: |
           set +e
-          echo "--- needed by /usr/bin/app"; readelf -d /usr/bin/app | grep NEEDED
-          echo "--- not found"; ldd /usr/bin/app | grep -i "not found"
-          echo "--- this Fedora's OpenSSL"; rpm -qa | grep -i openssl; ls /usr/lib64 | grep -E "^lib(ssl|crypto)\.so" 
-          echo "--- what provides libssl.so.3"; dnf -q provides 'libssl.so.3()(64bit)' 2>&1 | head -5
-      - name: Start it (40 s under a virtual display)
+          echo "--- needed by $BIN"; readelf -d "$BIN" | grep NEEDED
+          echo "--- not found"; ldd "$BIN" | grep -i "not found"
+          echo "--- this Fedora's OpenSSL"; rpm -qa | grep -i openssl
+      - name: Start it (60 s under a virtual display)
         run: |
           set +e
-          xvfb-run -a timeout 40 /usr/bin/app > run.out 2>&1
-          echo "exit status $?"
-          cat run.out | tail -150
-          echo "--- processes left"; pgrep -af "yourowai|/usr/bin/app" || true
-      - name: With OpenSSL 3 installed (Fedora 45 ships OpenSSL 4)
-        if: always()
-        run: |
-          set +e
-          dnf install -y -q openssl3-libs >/dev/null && echo "openssl3-libs installed"
-          echo "--- not found now"; ldd /usr/bin/app | grep -i "not found"
-          xvfb-run -a timeout 60 /usr/bin/app > run2.out 2>&1
+          xvfb-run -a timeout 60 "$BIN" > run.out 2>&1
           echo "exit status $? (124 = still running when the 60 s ran out)"
-          tail -80 run2.out
-          echo "--- processes left"; pgrep -af "yourowai|/usr/bin/app" || true
+          tail -60 run.out
       - name: The app's log
         if: always()
         run: |
           f="$HOME/.local/share/com.solar.yourowai/logs/Your Own AI.log"
-          if [ -f "$f" ]; then tail -150 "$f"; else echo "no log at $f"; find "$HOME" -name "*.log" 2>/dev/null | head; fi
+          if [ -f "$f" ]; then tail -60 "$f"; else echo "no log at $f"; fi

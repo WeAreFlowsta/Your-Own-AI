@@ -386,7 +386,7 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          BIN="src-tauri/target/${{ matrix.target }}/release/app"
+          BIN="src-tauri/target/${{ matrix.target }}/release/your-own-ai"
           if readelf -d "$BIN" | grep -E 'NEEDED.*lib(ssl|crypto)\.so'; then
             echo "$BIN needs the system's OpenSSL: it would not start on a system without that version"
             exit 1

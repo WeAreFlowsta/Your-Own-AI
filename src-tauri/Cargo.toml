@@ -4,12 +4,22 @@ version = "0.9.0"
 description = "Offline-first AI App"
 authors = ["Your Own AI"]
 homepage = "https://yourownai.net"
-# Required since bin/census.rs exists: tauri dev's bare `cargo run`
-# must keep launching the app, not the census tool.
-default-run = "app"
+# The app's binary is your-own-ai (0.9.0 and earlier: app). `cargo run`
+# launches it; the census tool builds only with its feature.
+default-run = "your-own-ai"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[[bin]]
+name = "your-own-ai"
+path = "src/main.rs"
+
+# A developer tool: never built for a release, so never packaged.
+[[bin]]
+name = "census"
+path = "src/bin/census.rs"
+required-features = ["census"]
 
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
@@ -90,6 +100,8 @@ tauri-plugin-wdio-webdriver = { version = "1.4", optional = true }
 # even in dev, so OCR runs at near-release speed while our own code stays debuggable.
 [features]
 default = []
+# The census tool (src/bin/census.rs): `cargo run --bin census --features census`.
+census = []
 # Test builds only: `npm run e2e` builds with `--features e2e`.
 e2e = ["dep:tauri-plugin-wdio-webdriver"]
 

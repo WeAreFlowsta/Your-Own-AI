@@ -6,7 +6,7 @@
 //! written with its admin port in the open profile's conductor config, which
 //! only this OS account can read. Run while the app is up:
 //!
-//!     cargo run --bin census -- <profile>/conductor/conductor-config.yaml
+//!     cargo run --bin census --features census -- <profile>/conductor/conductor-config.yaml
 //!
 //! Read-only: only zome reads (`get_all_conversations`,
 //! `get_conversation_entries`) are issued.

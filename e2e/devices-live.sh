@@ -87,7 +87,7 @@ echo "== phase c: both devices online - A unattended on the default ports, B dri
 mkdir -p "$LOGS/no-models"
 YOAI_E2E_HOME="$A" YOAI_VAULT_PORT="$P1" YOAI_E2E_WITH_MODELS=1 YOAI_E2E_MODELS_DIR="$LOGS/no-models" YOAI_E2E_WITH_RENDEZVOUS=1 TAURI_WEBDRIVER_PORT=4446 e2e/launch-app.sh > "$LOGS/device-a-phase-c.log" 2>&1 &
 A_PID=$!
-killA() { for pid in $(pgrep -x app); do case "$(readlink /proc/$pid/exe 2>/dev/null)" in *"Your Own AI App"*target/debug*) kill "$pid" 2>/dev/null || true;; esac; done; }
+killA() { for pid in $(pgrep -x your-own-ai); do case "$(readlink /proc/$pid/exe 2>/dev/null)" in *"Your Own AI App"*target/debug*) kill "$pid" 2>/dev/null || true;; esac; done; }
 trap 'killA; killtests; sleep 2; killtests' EXIT
 for _ in $(seq 1 60); do curl -s -m 2 http://127.0.0.1:11435/health | grep -q '"ok"' && break; sleep 2; done
 curl -s -m 2 http://127.0.0.1:11435/health | grep -q '"ok"' || { echo "device A never came up for phase c"; exit 1; }

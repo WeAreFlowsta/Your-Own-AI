@@ -8,9 +8,9 @@
 #   WALK_HOME=/some/dir npm run walkthrough
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-APP="$HERE/../src-tauri/target/debug/app"
+APP="$HERE/../src-tauri/target/debug/your-own-ai"
 [ -x "$APP" ] || { echo "no e2e build at $APP - run: npm run e2e:build"; exit 1; }
-pgrep -x app >/dev/null && { echo "an app instance is already running (pgrep -x app) - close it first"; exit 1; }
+pgrep -x your-own-ai >/dev/null && { echo "an app instance is already running (pgrep -x your-own-ai) - close it first"; exit 1; }
 export HOME="${WALK_HOME:-$HERE/walkthrough-home}"
 export XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share" XDG_CACHE_HOME="$HOME/.cache"
 mkdir -p "$HOME"
