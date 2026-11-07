@@ -52,6 +52,16 @@ jobs:
           echo "exit status $?"
           cat run.out | tail -150
           echo "--- processes left"; pgrep -af "yourowai|/usr/bin/app" || true
+      - name: With OpenSSL 3 installed (Fedora 45 ships OpenSSL 4)
+        if: always()
+        run: |
+          set +e
+          dnf install -y -q openssl3-libs >/dev/null && echo "openssl3-libs installed"
+          echo "--- not found now"; ldd /usr/bin/app | grep -i "not found"
+          xvfb-run -a timeout 60 /usr/bin/app > run2.out 2>&1
+          echo "exit status $? (124 = still running when the 60 s ran out)"
+          tail -80 run2.out
+          echo "--- processes left"; pgrep -af "yourowai|/usr/bin/app" || true
       - name: The app's log
         if: always()
         run: |
