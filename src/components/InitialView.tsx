@@ -3,7 +3,6 @@ import CudaOfferCallout from './CudaOfferCallout';
 import HelperModelOfferCallout from './HelperModelOfferCallout';
 import GpuFallbackCallout from './GpuFallbackCallout';
 import EngineCannotStartCallout from './EngineCannotStartCallout';
-import UpdateAvailableCallout from './UpdateAvailableCallout';
 import { ChatInputBar } from './ChatInputBar';
 import { SelectedAiModel, ChatAction, AttachedFile, AttachedImage, UserDefinedAI } from '../types';
 import type { AgentPermissionMode } from '../utils/agentPermissions';
@@ -116,7 +115,6 @@ export default component$<InitialViewProps>((props) => {
       {/* One offer slot: NVIDIA engine first, then the helper model - rules in utils/homeOffers.ts */}
       <CudaOfferCallout />
       <HelperModelOfferCallout />
-      <UpdateAvailableCallout />
     </div>
   );
 });
