@@ -99,7 +99,18 @@ fn other_instance_is_healthy() -> bool {
 /// without extension. Deliberately a NAME list and not "anything in the exe
 /// dir": on a Linux .deb the exe dir is /usr/bin, and a directory-only match
 /// there would kill unrelated system processes.
-const SIDECAR_NAMES: &[&str] = &["llama-server", "yourowai-holochain", "yourowai-lair-keystore", "yourowai-holochain-07", "yourowai-lair-keystore-07"];
+///
+/// Never the bare `llama-server` (0.9.0's engine name): on Linux the exe dir
+/// is `/usr/bin`, where a distribution's llama.cpp package installs one.
+const SIDECAR_NAMES: &[&str] = &[crate::llm::BUNDLED_ENGINE, "yourowai-holochain", "yourowai-lair-keystore", "yourowai-holochain-07", "yourowai-lair-keystore-07"];
+
+/// Whether a process name (`sysinfo`'s, lower-case, no `.exe`) is `listed`.
+/// Linux names a process by the first 15 characters of its file name
+/// (`/proc/<pid>/stat`), so `yourowai-llama-server` runs as
+/// `yourowai-llama-`.
+pub(crate) fn process_name_is(listed: &str, seen: &str) -> bool {
+    listed == seen || (cfg!(target_os = "linux") && seen.len() == 15 && listed.len() > 15 && listed.starts_with(seen))
+}
 
 /// Kill leftover processes from a dead session. Only runs once the caller
 /// holds (or is taking) the instance lock, which is what makes every match
@@ -167,7 +178,7 @@ fn sweep_orphans_once(app: &AppHandle, include_same_exe: bool) -> u32 {
             continue;
         }
         let name_stem = stem_of(proc_.name());
-        let sidecar_by_name = SIDECAR_NAMES.contains(&name_stem.as_str());
+        let sidecar_by_name = SIDECAR_NAMES.iter().any(|n| process_name_is(n, &name_stem));
         // Parent state: our own exe (and not us) = a stacked launch's child;
         // missing = the launch that spawned it is gone.
         let parent = proc_.parent();
@@ -236,4 +247,18 @@ fn show_already_running(app: &AppHandle) {
         )
         .title("Your Own AI is already running")
         .blocking_show();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::process_name_is;
+
+    #[test]
+    fn a_process_name_matches_its_listed_name_and_linux_short_form() {
+        assert!(process_name_is("yourowai-llama-server", "yourowai-llama-server"));
+        assert_eq!(process_name_is("yourowai-llama-server", "yourowai-llama-"), cfg!(target_os = "linux"), "Linux: the first 15 characters");
+        assert!(!process_name_is("yourowai-llama-server", "yourowai-llama"), "14 characters is a different name");
+        assert!(!process_name_is("yourowai-llama-server", "llama-server"), "a person's own llama-server");
+        assert!(!process_name_is("swiftlm", "swiftl"));
+    }
 }

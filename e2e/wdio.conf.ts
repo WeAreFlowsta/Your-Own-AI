@@ -28,7 +28,7 @@ function reapSidecars() {
     // The CUDA engine runs from the scratch profile's engines folder
     // (YOAI_E2E_WITH_CUDA links it in): its servers are the test's too.
     const profileBin = PROFILE + "/";
-    const appBin = resolve(here, "..", "src-tauri", "target", "debug", "app");
+    const appBin = resolve(here, "..", "src-tauri", "target", "debug", "your-own-ai");
     const rows = execFileSync("ps", ["-eo", "pid=,ppid=,args="], { encoding: "utf8" }).split("\n");
     const parsed = rows.map((r) => r.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)).filter(Boolean) as RegExpMatchArray[];
     const liveApps = new Set(parsed.filter((m) => m[3] === appBin || m[3].startsWith(appBin + " ")).map((m) => m[1]));

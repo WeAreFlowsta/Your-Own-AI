@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- What GNOME Software, KDE Discover and other app centres read to list
+     Your Own AI as an installed app (and so to show and remove it). -->
+<component type="desktop-application">
+  <id>com.solar.yourowai</id>
+  <name>Your Own AI</name>
+  <summary>AI that runs on your computer</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-or-later</project_license>
+  <developer id="net.yourownai">
+    <name>Your Own AI</name>
+  </developer>
+  <description>
+    <p>Your Own AI runs AI models on your own computer. Each AI has its own personality, memory and documents, and your conversations are kept on your own devices.</p>
+  </description>
+  <launchable type="desktop-id">Your Own AI.desktop</launchable>
+  <url type="homepage">https://yourownai.net</url>
+  <url type="vcs-browser">https://github.com/WeAreFlowsta/Your-Own-AI</url>
+  <pkgname>your-own-ai</pkgname>
+  <provides>
+    <binary>your-own-ai</binary>
+  </provides>
+  <content_rating type="oars-1.1"/>
+</component>

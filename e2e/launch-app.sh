@@ -65,9 +65,9 @@ if [ "${XDG_SESSION_TYPE:-}" = "wayland" ] && [ -z "${YOAI_E2E_NATIVE_WAYLAND:-}
 # a matrix leg - its instance outlived the session end). Wait for any e2e
 # instance of THIS binary to go; after 20 s, end it by pid. Only the e2e
 # build's own path is matched, never an installed app.
-BIN="$HERE/../src-tauri/target/debug/app"
+BIN="$HERE/../src-tauri/target/debug/your-own-ai"
 BIN_REAL="$(readlink -f "$BIN")"
-leftover() { for pid in $(pgrep -x app); do [ "$(readlink -f "/proc/$pid/exe" 2>/dev/null)" = "$BIN_REAL" ] && echo "$pid"; done; }
+leftover() { for pid in $(pgrep -x your-own-ai); do [ "$(readlink -f "/proc/$pid/exe" 2>/dev/null)" = "$BIN_REAL" ] && echo "$pid"; done; }
 # The two-device harness (devices-live.sh phase c) runs a second instance
 # on shifted ports beside an unattended first one on purpose: the guard
 # stands down for an offset launch, or it would end device A.
