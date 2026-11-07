@@ -56,6 +56,7 @@ mod vault_restore;         // replay conversations from the Vault backup onto th
 mod model_caps;            // capability registry (benchmark-informed scores)
 mod process_ext;           // sidecar spawn and stop (flowsta-hc-lines): hidden consoles, tied to the app
 mod instance_guard;        // single-instance port lock + orphan-process sweep
+mod updater;               // the app's own updates: signed manifest, download, restart to update
 mod clipboard;
 mod skills;               // Add-ons > Skills: SKILL.md folders the AIs read
 mod mcp;                  // Add-ons > Tools: MCP servers an AI carries into a project session
@@ -596,6 +597,7 @@ pub fn run() {
         // the authoritative lock.
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::default().build())
@@ -620,6 +622,10 @@ pub fn run() {
         .manage(LLMState::new())
         .manage(agent_bridge::AgentBridgeState::new())
         .invoke_handler(tauri::generate_handler![
+            updater::update_status,
+            updater::set_update_prefs,
+            updater::dismiss_updated,
+            updater::restart_to_update,
             profile::profile_store_path,
             identity_watch::identity_switched,
             identity_watch::restart_after_identity_switch,
@@ -752,7 +758,6 @@ pub fn run() {
             agent_bridge::build_agent_status,
             agent_bridge::read_agent_task_logs,
             build_install::build_install_status,
-            build_install::check_app_update,
             build_install::download_build_agent,
             build_install::uninstall_build_agent,
             agent_bridge::path_is_dir,
@@ -978,6 +983,10 @@ pub fn run() {
             // and orphaned sidecars (stale conductor/lair/llama-server from
             // a crashed run) so they can't poison this one.
             let inference_listener = instance_guard::acquire_or_exit(app.handle());
+            // The app's own updates: the first check 90 s after start.
+            if let Ok(device) = profile::device_root(app.handle()) {
+                updater::spawn(app.handle().clone(), device);
+            }
             // Windows: a console window titled with one of these is hidden.
             process_ext::register_title_markers(&["yourowai-holochain", "yourowai-lair-keystore", "llama-server"]); // a title containing one: the -07 sidecars too
 
@@ -1147,44 +1156,56 @@ pub fn run() {
                 // counted as a hard crash by safe mode.
                 gpu_safety::mark_clean_exit(app_handle);
                 llm::clear_load_sentinel(app_handle);
-                println!("[Exit] Stopping llama-server...");
-                agent_bridge::kill_on_exit(app_handle);
-                let llm_state = app_handle.state::<LLMState>();
-                
-                // Use blocking lock since we're in sync context
-                let mut server_process = llm_state.server_process.blocking_lock();
-                let mut is_running = llm_state.is_server_running.blocking_lock();
-                
-                if let Some(child) = server_process.take() {
-                    if let Err(e) = child.kill() {
-                        eprintln!("[Exit] Failed to stop llama-server: {}", e);
-                    } else {
-                        println!("[Exit] llama-server stopped");
-                    }
-                    *is_running = false;
-                }
-
-                // Stop the embedding server too, if it was started.
-                if let Some(child) = llm_state.embed_process.blocking_lock().take() {
-                    let _ = child.kill();
-                    *llm_state.embed_running.blocking_lock() = false;
-                    println!("[Exit] embedding server stopped");
-                }
-
-                // Stop the utility server too, if it was started.
-                if let Some(child) = llm_state.util_process.blocking_lock().take() {
-                    let _ = child.kill();
-                    *llm_state.util_running.blocking_lock() = false;
-                    println!("[Exit] utility server stopped");
-                }
-
-                // Stop the conductor, then the key store: each is asked and
-                // given its grace, a start under way ends first.
-                println!("[Exit] Stopping Holochain conductor...");
-                conductor::stop_for_good();
-                println!("[Exit] Holochain stopped");
+                // A waiting update installs on quit where that asks no one
+                // (Windows, macOS); everything stops first.
+                updater::install_on_quit(app_handle, &profile::device_root(app_handle).unwrap_or_default());
+                stop_everything(app_handle);
             }
         });
+}
+
+/// Stop every process the app runs: the agents, the engine servers, then
+/// the conductor and key store (asked and given their graces). At quit, and
+/// before an update installs (Windows cannot replace a file in use).
+pub(crate) fn stop_everything(app_handle: &AppHandle) {
+    println!("[Exit] Stopping llama-server...");
+    agent_bridge::kill_on_exit(app_handle);
+    let llm_state = app_handle.state::<LLMState>();
+
+    // Use blocking lock since we're in sync context
+    let mut server_process = llm_state.server_process.blocking_lock();
+    let mut is_running = llm_state.is_server_running.blocking_lock();
+
+    if let Some(child) = server_process.take() {
+        if let Err(e) = child.kill() {
+            eprintln!("[Exit] Failed to stop llama-server: {}", e);
+        } else {
+            println!("[Exit] llama-server stopped");
+        }
+        *is_running = false;
+    }
+    drop(server_process);
+    drop(is_running);
+
+    // Stop the embedding server too, if it was started.
+    if let Some(child) = llm_state.embed_process.blocking_lock().take() {
+        let _ = child.kill();
+        *llm_state.embed_running.blocking_lock() = false;
+        println!("[Exit] embedding server stopped");
+    }
+
+    // Stop the utility server too, if it was started.
+    if let Some(child) = llm_state.util_process.blocking_lock().take() {
+        let _ = child.kill();
+        *llm_state.util_running.blocking_lock() = false;
+        println!("[Exit] utility server stopped");
+    }
+
+    // Stop the conductor, then the key store: each is asked and given its
+    // grace, a start under way ends first.
+    println!("[Exit] Stopping Holochain conductor...");
+    conductor::stop_for_good();
+    println!("[Exit] Holochain stopped");
 }
 
 /// Where the bundled resources (hApp bundle, pdfium) live. `resource_dir()`
