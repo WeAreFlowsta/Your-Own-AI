@@ -619,6 +619,43 @@ pub fn runner() -> PassRunner<Move> {
 mod tests {
     use super::*;
 
+    #[derive(Serialize, Debug)]
+    struct StartV1 {
+        cipher: Vec<u8>,
+        nonce: Vec<u8>,
+        anchor: Option<AgentPubKey>,
+    }
+
+    #[derive(Serialize, Debug)]
+    struct RecordV1 {
+        conversation_hash: ActionHash,
+        cipher: Vec<u8>,
+        nonce: Vec<u8>,
+    }
+
+    /// Kill this process's sidecars (both lines' conductors and key stores)
+    /// with SIGKILL, as a power-off leaves them. Returns how many.
+    #[cfg(target_os = "linux")]
+    fn kill_sidecars() -> usize {
+        let me = std::process::id().to_string();
+        let mut killed = 0;
+        for e in std::fs::read_dir("/proc").unwrap().flatten() {
+            let pid = e.file_name().to_string_lossy().to_string();
+            if !pid.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            let Ok(stat) = std::fs::read_to_string(e.path().join("stat")) else { continue };
+            // "pid (comm) state ppid ..."
+            let ppid = stat.rsplit_once(") ").and_then(|(_, rest)| rest.split_whitespace().nth(1).map(str::to_string));
+            let comm = std::fs::read_to_string(e.path().join("comm")).unwrap_or_default();
+            if ppid.as_deref() == Some(me.as_str()) && comm.starts_with("yourowai-") {
+                let _ = std::process::Command::new("kill").args(["-9", &pid]).status();
+                killed += 1;
+            }
+        }
+        killed
+    }
+
     /// The real sidecars: an AI writes a conversation and two messages on
     /// 0.6; with both lines up, one pass carries them to 0.7 with their
     /// ids and flips the marker; a second pass writes nothing.
@@ -639,18 +676,6 @@ mod tests {
         start_for_test(profile.clone(), None).await.expect("0.6 starts");
         let manager = HolochainManager::new(resource_dir.clone(), material());
         let agent = manager.provision_agent("live-move").await.expect("an AI");
-        #[derive(Serialize, Debug)]
-        struct StartV1 {
-            cipher: Vec<u8>,
-            nonce: Vec<u8>,
-            anchor: Option<AgentPubKey>,
-        }
-        #[derive(Serialize, Debug)]
-        struct RecordV1 {
-            conversation_hash: ActionHash,
-            cipher: Vec<u8>,
-            nonce: Vec<u8>,
-        }
         let seal = |v: serde_json::Value| encrypt(&data_key, &serde_json::to_vec(&v).unwrap()).unwrap();
         let (n, c) = seal(serde_json::json!({"title": "Plans", "started_at": 1, "ai_personality_id": agent}));
         let out = manager.call_zome(&agent, "transcript", "start_conversation", ExternIO::encode(StartV1 { cipher: c, nonce: n.to_vec(), anchor: None }).unwrap()).await.unwrap();
@@ -735,6 +760,103 @@ mod tests {
             assert_eq!(plain["conversation_id"].as_str(), Some(conversation_id.as_str()));
             assert_eq!(key.as_slice(), message_key(&data_key, plain["id"].as_str().unwrap()), "each listed under its own id's key");
         }
+        supervisor().stop();
+    }
+
+    /// A power-off mid-move: the pass is cut off with part of an AI's
+    /// messages on 0.7 (every sidecar killed, the pass abandoned); the next
+    /// start's pass carries exactly the rest, nothing twice, and only then
+    /// flips the marker.
+    /// Run with the app closed: `cargo test --lib -- --ignored live_move --test-threads 1`
+    #[cfg(target_os = "linux")]
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn live_move_a_power_off_mid_pass_resumes_without_loss_or_duplicates() {
+        use crate::conductor::{prepare_store_07, start_for_test, supervisor, Line07};
+        use crate::holochain::HolochainManager;
+        use crate::transcript_crypto::{encrypt, RecoveryMaterial};
+        use flowsta_hc_lines::marker::{Marker, MarkerRead};
+        use holochain_types::prelude::ExternIO;
+        const N: usize = 400;
+        let tmp = tempfile::tempdir().unwrap();
+        let profile = tmp.path().join("profile");
+        let resource_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
+        let data_key = [7u8; 32];
+        let material = || RecoveryMaterial { network_seed: format!("live-move-cut-{}", std::process::id()), data_key_hex: hex::encode(data_key), version: 1 };
+        let both_lines = || async {
+            let passphrase = prepare_store_07(&profile, &data_key).await.expect("prepared");
+            start_for_test(profile.clone(), Some(Line07 { passphrase, network_seed: material().network_seed, resource_dir: resource_dir.clone() })).await.expect("both lines");
+            let until = std::time::Instant::now() + Duration::from_secs(240);
+            while !supervisor().has(Line::V07) {
+                assert!(std::time::Instant::now() < until, "the 0.7 line did not join");
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            let manager = HolochainManager::new(resource_dir.clone(), material());
+            manager.reconnect_existing_agents().await.expect("the AI reconnects");
+            let hc = Arc::new(HolochainState::new());
+            let _ = hc.manager.set(manager);
+            Arc::new(Move { hc, data_key, cells: crate::hc07::app_cells(), founding: Box::new(|a| a.to_string()), deleted: Box::new(HashSet::new), passed_in_full: Default::default() })
+        };
+
+        start_for_test(profile.clone(), None).await.expect("0.6 starts");
+        let manager = HolochainManager::new(resource_dir.clone(), material());
+        let agent = manager.provision_agent("live-move-cut").await.expect("an AI");
+        let seal = |v: serde_json::Value| encrypt(&data_key, &serde_json::to_vec(&v).unwrap()).unwrap();
+        let (n, c) = seal(serde_json::json!({"title": "Long", "started_at": 1, "ai_personality_id": agent}));
+        let out = manager.call_zome(&agent, "transcript", "start_conversation", ExternIO::encode(StartV1 { cipher: c, nonce: n.to_vec(), anchor: None }).unwrap()).await.unwrap();
+        let conversation: ActionHash = ExternIO::decode(&out).unwrap();
+        for i in 0..N {
+            let (n, c) = seal(serde_json::json!({"role": if i % 2 == 0 { "user" } else { "assistant" }, "content": format!("message {i}"), "sequence": i, "timestamp": i}));
+            manager.call_zome(&agent, "transcript", "record_message", ExternIO::encode(RecordV1 { conversation_hash: conversation.clone(), cipher: c, nonce: n.to_vec() }).unwrap()).await.unwrap();
+        }
+        drop(manager);
+        supervisor().stop();
+
+        let mv = both_lines().await;
+        let anchor = ExternalHash::from_raw_32(conversation_anchor(&data_key, &id_of_v1(conversation.get_raw_39())).to_vec());
+        let on_07 = |mv: Arc<Move>| {
+            let (agent, anchor) = (agent.clone(), anchor.clone());
+            async move { mv.cells.entries_page(&agent, &crate::hc07::EntriesPage { conversation_anchor: anchor, after: None, limit: 1 }).await.map(|p| p.total as usize) }
+        };
+        let pass = tokio::spawn({
+            let (mv, profile) = (mv.clone(), profile.clone());
+            async move { runner().run(&mv, &profile, "to be cut").await }
+        });
+        let mut cut_at = 0;
+        let until = std::time::Instant::now() + Duration::from_secs(600);
+        while cut_at < N / 10 {
+            if pass.is_finished() {
+                panic!("the pass finished before it could be cut ({cut_at} seen): {:?}", pass.await);
+            }
+            assert!(std::time::Instant::now() < until, "the pass carried {cut_at} messages in 10 min");
+            match on_07(mv.clone()).await {
+                Ok(n) => cut_at = n,
+                Err(e) => eprintln!("reading 0.7: {e}"),
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(cut_at < N, "cut with part of the messages carried");
+        let killed = kill_sidecars();
+        pass.abort();
+        assert!(killed >= 2, "both conductors killed (killed {killed})");
+        supervisor().stop();
+        assert_eq!(Marker::load(&profile, &MARKER), MarkerRead::Absent, "an interrupted pass flips nothing");
+        drop(mv);
+
+        let mv = both_lines().await;
+        let out = runner().run(&mv, &profile, "after the power-off").await;
+        assert_eq!(out.error, None, "{out:?}");
+        assert_eq!(out.kind("conversations").map(|k| (k.present, k.written)), Some((1, 0)), "the conversation was carried before the cut");
+        let messages = out.kind("messages").expect("messages");
+        eprintln!("cut with {cut_at} of {N} messages on 0.7; the next pass found {} and wrote {}", messages.present, messages.written);
+        assert_eq!(messages.present + messages.written, N, "{messages:?}");
+        assert!(messages.present >= cut_at, "what was on 0.7 at the cut is still there ({} < {cut_at})", messages.present);
+        assert!(out.flipped, "the marker flips once every kind is complete");
+
+        assert_eq!(on_07(mv.clone()).await.unwrap(), N, "every message under the conversation's anchor");
+        let mine = mv.cells.my_entries_page(&agent, &crate::hc07::MyEntriesPage { anchor: Move::agent_key(&agent).unwrap(), after_seq: None, limit: (2 * N) as u32 }).await.expect("own entries");
+        let keys: HashSet<Vec<u8>> = mine.items.iter().map(|(_, _, k)| k.clone()).collect();
+        assert_eq!((mine.total as usize, mine.items.len(), keys.len()), (N, N, N), "each message written once on the 0.7 chain");
         supervisor().stop();
     }
 
