@@ -864,6 +864,83 @@ mod tests {
         supervisor().stop();
     }
 
+    /// A large profile: twenty AIs, each with a conversation of twenty
+    /// messages and a memory row, carried by one pass that flips the marker.
+    /// Run with the app closed: `cargo test --lib -- --ignored live_move --test-threads 1`
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn live_move_a_large_profile_moves_in_one_pass() {
+        use crate::conductor::{prepare_store_07, start_for_test, supervisor, Line07};
+        use crate::holochain::HolochainManager;
+        use crate::transcript_crypto::{encrypt, RecoveryMaterial};
+        use holochain_types::prelude::ExternIO;
+        const AIS: usize = 20;
+        const MESSAGES: usize = 20;
+        #[derive(Serialize, Debug)]
+        struct SaveRowV1 {
+            cipher: Vec<u8>,
+            nonce: Vec<u8>,
+            anchor: holochain_types::prelude::AnyLinkableHash,
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let profile = tmp.path().join("profile");
+        let resource_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
+        let data_key = [8u8; 32];
+        let material = || RecoveryMaterial { network_seed: format!("live-move-large-{}", std::process::id()), data_key_hex: hex::encode(data_key), version: 1 };
+        let seal = |v: serde_json::Value| encrypt(&data_key, &serde_json::to_vec(&v).unwrap()).unwrap();
+
+        start_for_test(profile.clone(), None).await.expect("0.6 starts");
+        let manager = HolochainManager::new(resource_dir.clone(), material());
+        let started = std::time::Instant::now();
+        let mut agents = Vec::new();
+        for a in 0..AIS {
+            let agent = manager.provision_agent(&format!("live-move-large-{a}")).await.expect("an AI");
+            let (n, c) = seal(serde_json::json!({"title": format!("Conversation {a}"), "started_at": a, "ai_personality_id": agent}));
+            let out = manager.call_zome(&agent, "transcript", "start_conversation", ExternIO::encode(StartV1 { cipher: c, nonce: n.to_vec(), anchor: None }).unwrap()).await.unwrap();
+            let conversation: ActionHash = ExternIO::decode(&out).unwrap();
+            for i in 0..MESSAGES {
+                let (n, c) = seal(serde_json::json!({"role": "user", "content": format!("{a}.{i}"), "sequence": i, "timestamp": i}));
+                manager.call_zome(&agent, "transcript", "record_message", ExternIO::encode(RecordV1 { conversation_hash: conversation.clone(), cipher: c, nonce: n.to_vec() }).unwrap()).await.unwrap();
+            }
+            let scope_anchor = crate::memory_rows::scope_anchor("person", &data_key).unwrap();
+            let row = serde_json::json!({"id": format!("r{a}"), "scope": "person", "kind": "fact", "text": "likes tea", "as_of": 1, "saved_by": "person", "provenance": "test", "updated_at": 1});
+            let (n, c) = seal(row);
+            manager.call_zome(&agent, "transcript", "save_memory_row", ExternIO::encode(SaveRowV1 { cipher: c, nonce: n.to_vec(), anchor: scope_anchor }).unwrap()).await.unwrap();
+            agents.push(agent);
+        }
+        eprintln!("{AIS} AIs written on 0.6 in {} s", started.elapsed().as_secs());
+        drop(manager);
+        supervisor().stop();
+
+        let started = std::time::Instant::now();
+        let passphrase = prepare_store_07(&profile, &data_key).await.expect("prepared");
+        start_for_test(profile.clone(), Some(Line07 { passphrase, network_seed: material().network_seed, resource_dir: resource_dir.clone() })).await.expect("both lines");
+        let until = std::time::Instant::now() + Duration::from_secs(600);
+        while !supervisor().has(Line::V07) {
+            assert!(std::time::Instant::now() < until, "the 0.7 line did not join");
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        eprintln!("both lines up, {AIS} v2 apps installed, in {} s", started.elapsed().as_secs());
+        let manager = HolochainManager::new(resource_dir, material());
+        manager.reconnect_existing_agents().await.expect("the AIs reconnect");
+        let hc = Arc::new(HolochainState::new());
+        let _ = hc.manager.set(manager);
+        let mv = Arc::new(Move { hc, data_key, cells: crate::hc07::app_cells(), founding: Box::new(|a| a.to_string()), deleted: Box::new(HashSet::new), passed_in_full: Default::default() });
+
+        let out = runner().run(&mv, &profile, "large").await;
+        eprintln!("the pass took {} s", out.took_ms / 1000);
+        assert_eq!(out.error, None, "{out:?}");
+        assert_eq!(out.kind("conversations").map(|k| (k.total, k.written)), Some((AIS, AIS)));
+        assert_eq!(out.kind("messages").map(|k| (k.total, k.written)), Some((AIS * MESSAGES, AIS * MESSAGES)));
+        assert_eq!(out.kind("memory rows").map(|k| (k.total, k.written)), Some((AIS, AIS)));
+        assert!(out.flipped, "the marker flips once every kind is complete");
+        for (a, agent) in agents.iter().enumerate() {
+            let mine = mv.cells.my_entries_page(agent, &crate::hc07::MyEntriesPage { anchor: Move::agent_key(agent).unwrap(), after_seq: None, limit: 100 }).await.expect("own entries");
+            assert_eq!(mine.total as usize, MESSAGES, "AI {a}: its messages on its own 0.7 chain, once each");
+        }
+        supervisor().stop();
+    }
+
     #[test]
     fn a_tag_anchor_gives_the_core_the_app_derives() {
         let core = [9u8; 32];
