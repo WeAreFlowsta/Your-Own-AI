@@ -52,6 +52,8 @@ pub struct Move {
     pub founding: Box<dyn Fn(&str) -> String + Send + Sync>,
     /// The deleted ledger's conversation ids.
     pub deleted: Box<dyn Fn() -> HashSet<String> + Send + Sync>,
+    /// Whether this session has had a pass over every AI.
+    pub passed_in_full: std::sync::atomic::AtomicBool,
 }
 
 impl Move {
@@ -64,6 +66,7 @@ impl Move {
             cells: crate::hc07::app_cells(),
             founding: Box::new(move |agent| crate::commands_holochain::founding_key_for(&a, agent)),
             deleted: Box::new(move || crate::conversation_cache::deleted_ledger(&b).into_iter().map(|d| d.hash).collect()),
+            passed_in_full: Default::default(),
         }
     }
 
@@ -119,16 +122,32 @@ impl PassApp for Move {
     }
 }
 
-/// The pass's units: this device's AI cells.
+/// The pass's units: this device's AI cells. A session's first pass, and
+/// any pass before the flip, copies every one; after that a pass copies only
+/// the AIs a write to the 0.7 line missed (a large profile is not read in
+/// full every few minutes), and the tombstones are carried for all.
 pub struct Cells;
+
+impl Cells {
+    async fn all(mv: &Move) -> Result<Vec<CopyUnit>, HookError> {
+        let manager = mv.hc.get()?;
+        let mut ids: Vec<String> = manager.agents.lock().await.keys().cloned().collect();
+        ids.sort();
+        Ok(ids.into_iter().map(|id| CopyUnit { id }).collect())
+    }
+}
 
 #[async_trait::async_trait]
 impl CopyUnits<Move> for Cells {
     async fn units(&self, cx: &PassCx<'_, Move>) -> Result<Vec<CopyUnit>, HookError> {
-        let manager = cx.app.hc.get()?;
-        let mut ids: Vec<String> = manager.agents.lock().await.keys().cloned().collect();
-        ids.sort();
-        Ok(ids.into_iter().map(|id| CopyUnit { id }).collect())
+        let mv = cx.app.as_ref();
+        let first = !mv.passed_in_full.swap(true, std::sync::atomic::Ordering::SeqCst);
+        let all = Cells::all(mv).await?;
+        if first || !cx.moved {
+            return Ok(all);
+        }
+        let missed = crate::hc07::take_missed();
+        Ok(all.into_iter().filter(|u| missed.contains(&u.id)).collect())
     }
 }
 
@@ -462,7 +481,7 @@ impl flowsta_hc_lines::pass::CarriedRecords<Move> for Tombstones {
 
     async fn carry(&self, cx: &PassCx<'_, Move>, report: &mut flowsta_hc_lines::pass::CarryReport) -> Result<flowsta_hc_lines::pass::Carried, HookError> {
         let mv = cx.app.as_ref();
-        let units = Cells.units(cx).await?;
+        let units = Cells::all(mv).await?;
         let mut any = false;
         let mut done_founding = HashSet::new();
         for unit in units {
@@ -569,6 +588,12 @@ pub fn run_passes(app: tauri::AppHandle, data_dir: std::path::PathBuf) {
             }
             let out = runner.run(&m, &data_dir, "the 0.7 line is up").await;
             log::info!("[0.7] pass: {}", describe(&out));
+            // An AI whose copy failed is copied again by the next pass.
+            for kind in &out.kinds {
+                for (unit, _) in &kind.failed_units {
+                    crate::hc07::note_missed(unit);
+                }
+            }
             tokio::time::sleep(PASS_EVERY).await;
         }
         RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -670,7 +695,7 @@ mod tests {
         manager.reconnect_existing_agents().await.expect("the AI reconnects");
         let hc = Arc::new(HolochainState::new());
         let _ = hc.manager.set(manager);
-        let mv = Arc::new(Move { hc, data_key, cells: crate::hc07::app_cells(), founding: Box::new(|a| a.to_string()), deleted: Box::new(HashSet::new) });
+        let mv = Arc::new(Move { hc, data_key, cells: crate::hc07::app_cells(), founding: Box::new(|a| a.to_string()), deleted: Box::new(HashSet::new), passed_in_full: Default::default() });
 
         let first = runner().run(&mv, &profile, "live").await;
         assert_eq!(first.error, None, "{first:?}");
@@ -680,11 +705,18 @@ mod tests {
         assert_eq!(first.kind("tombstones").map(|k| (k.total, k.written)), Some((1, 1)), "the deletion reaches 0.7");
         assert!(first.flipped, "the marker flips once every kind is complete");
 
+        // A later pass in the session copies only AIs a write missed: none.
         let second = runner().run(&mv, &profile, "live again").await;
         assert_eq!(second.error, None, "{second:?}");
-        assert_eq!(second.kind("conversations").map(|k| (k.present, k.written)), Some((1, 0)), "skipped by key");
-        assert_eq!(second.kind("messages").map(|k| (k.present, k.written)), Some((2, 0)));
-        assert_eq!(second.kind("memory rows").map(|k| (k.present, k.written)), Some((2, 0)));
+        assert_eq!(second.kind("conversations").map(|k| (k.total, k.written)), Some((0, 0)), "no AI to copy");
+
+        // A new session's first pass reads every AI again and finds it all there.
+        let fresh = Arc::new(Move { hc: mv.hc.clone(), data_key, cells: crate::hc07::app_cells(), founding: Box::new(|a| a.to_string()), deleted: Box::new(HashSet::new), passed_in_full: Default::default() });
+        let again = runner().run(&fresh, &profile, "next session").await;
+        assert_eq!(again.error, None, "{again:?}");
+        assert_eq!(again.kind("conversations").map(|k| (k.present, k.written)), Some((1, 0)), "skipped by key");
+        assert_eq!(again.kind("messages").map(|k| (k.present, k.written)), Some((2, 0)));
+        assert_eq!(again.kind("memory rows").map(|k| (k.present, k.written)), Some((2, 0)));
         assert_eq!(second.kind("tombstones").map(|k| k.details.clone()), Some(Vec::new()), "no tombstone written twice");
 
         let conversation_id = id_of_v1(conversation.get_raw_39());

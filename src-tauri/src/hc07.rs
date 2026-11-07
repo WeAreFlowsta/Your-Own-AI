@@ -465,12 +465,31 @@ fn sealed(data_key: &[u8; 32], plain: &serde_json::Value) -> Option<(Vec<u8>, Ve
     Some((cipher, nonce.to_vec()))
 }
 
+/// The AIs (agent keys, hex) with a record on the 0.6 line that a write
+/// here missed: the move's next pass copies these, not every AI.
+static MISSED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+pub(crate) fn note_missed(agent_hex: &str) {
+    if let Ok(mut m) = MISSED.lock() {
+        if !m.iter().any(|a| a == agent_hex) {
+            m.push(agent_hex.to_string());
+        }
+    }
+}
+
+/// The AIs a write here missed since the last call.
+pub fn take_missed() -> Vec<String> {
+    MISSED.lock().map(|mut m| std::mem::take(&mut *m)).unwrap_or_default()
+}
+
 fn in_background(what: &'static str, agent_hex: String, job: impl std::future::Future<Output = Result<(), String>> + Send + 'static) {
     if crate::conductor::ports(Line::V07).is_none() {
+        note_missed(&agent_hex);
         return;
     }
     tauri::async_runtime::spawn(async move {
         if let Err(e) = job.await {
+            note_missed(&agent_hex);
             log::info!("[0.7] {what} for {}.. not written yet ({e}); the move's next pass carries it", &agent_hex[..8.min(agent_hex.len())]);
         }
     });
