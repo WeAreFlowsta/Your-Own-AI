@@ -1,0 +1,67 @@
+name: Linux package smoke
+
+# A release's Linux package, installed the way a person installs it and
+# started under a virtual display: what it prints, its dependencies, its
+# launcher and the app's log. Run it for a release (Actions > Run workflow).
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.9.0)"
+        required: true
+        default: "v0.9.0"
+
+jobs:
+  fedora:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    timeout-minutes: 30
+    env:
+      TAG: ${{ github.event.inputs.tag || 'v0.9.0' }}
+    steps:
+      - name: Fedora version
+        run: cat /etc/fedora-release
+      - name: Tools
+        run: dnf install -y -q xorg-x11-server-Xvfb xorg-x11-xauth curl findutils procps-ng binutils >/dev/null
+      - name: Download the release's RPM
+        run: |
+          V="${TAG#v}"
+          curl -fsSL -o app.rpm "https://github.com/${{ github.repository }}/releases/download/${TAG}/Your.Own.AI-${V}-Linux.rpm"
+          ls -la app.rpm
+      - name: Install it
+        run: dnf install -y ./app.rpm
+      - name: What it installed
+        run: |
+          rpm -qp --queryformat '%{NAME} %{VERSION}\n' app.rpm
+          rpm -qlp app.rpm | grep -vE '/icons/' | head -40
+          echo "--- requires"; rpm -qRp app.rpm
+          echo "--- launcher"; cat /usr/share/applications/*.desktop 2>/dev/null || true
+      - name: Libraries
+        run: |
+          set +e
+          echo "--- needed by /usr/bin/app"; readelf -d /usr/bin/app | grep NEEDED
+          echo "--- not found"; ldd /usr/bin/app | grep -i "not found"
+          echo "--- this Fedora's OpenSSL"; rpm -qa | grep -i openssl; ls /usr/lib64 | grep -E "^lib(ssl|crypto)\.so" 
+          echo "--- what provides libssl.so.3"; dnf -q provides 'libssl.so.3()(64bit)' 2>&1 | head -5
+      - name: Start it (40 s under a virtual display)
+        run: |
+          set +e
+          xvfb-run -a timeout 40 /usr/bin/app > run.out 2>&1
+          echo "exit status $?"
+          cat run.out | tail -150
+          echo "--- processes left"; pgrep -af "yourowai|/usr/bin/app" || true
+      - name: With OpenSSL 3 installed (Fedora 45 ships OpenSSL 4)
+        if: always()
+        run: |
+          set +e
+          dnf install -y -q openssl3-libs >/dev/null && echo "openssl3-libs installed"
+          echo "--- not found now"; ldd /usr/bin/app | grep -i "not found"
+          xvfb-run -a timeout 60 /usr/bin/app > run2.out 2>&1
+          echo "exit status $? (124 = still running when the 60 s ran out)"
+          tail -80 run2.out
+          echo "--- processes left"; pgrep -af "yourowai|/usr/bin/app" || true
+      - name: The app's log
+        if: always()
+        run: |
+          f="$HOME/.local/share/com.solar.yourowai/logs/Your Own AI.log"
+          if [ -f "$f" ]; then tail -150 "$f"; else echo "no log at $f"; find "$HOME" -name "*.log" 2>/dev/null | head; fi
