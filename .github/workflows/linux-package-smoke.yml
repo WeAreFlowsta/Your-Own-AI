@@ -24,7 +24,7 @@ jobs:
       - name: Fedora version
         run: cat /etc/fedora-release
       - name: Tools
-        run: dnf install -y -q xorg-x11-server-Xvfb xorg-x11-xauth curl findutils procps-ng >/dev/null
+        run: dnf install -y -q xorg-x11-server-Xvfb xorg-x11-xauth curl findutils procps-ng binutils >/dev/null
       - name: Download the release's RPM
         run: |
           V="${TAG#v}"
@@ -38,6 +38,13 @@ jobs:
           rpm -qlp app.rpm | grep -vE '/icons/' | head -40
           echo "--- requires"; rpm -qRp app.rpm
           echo "--- launcher"; cat /usr/share/applications/*.desktop 2>/dev/null || true
+      - name: Libraries
+        run: |
+          set +e
+          echo "--- needed by /usr/bin/app"; readelf -d /usr/bin/app | grep NEEDED
+          echo "--- not found"; ldd /usr/bin/app | grep -i "not found"
+          echo "--- this Fedora's OpenSSL"; rpm -qa | grep -i openssl; ls /usr/lib64 | grep -E "^lib(ssl|crypto)\.so" 
+          echo "--- what provides libssl.so.3"; dnf -q provides 'libssl.so.3()(64bit)' 2>&1 | head -5
       - name: Start it (40 s under a virtual display)
         run: |
           set +e
