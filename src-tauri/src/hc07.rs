@@ -178,11 +178,14 @@ pub struct Cells07 {
     /// One write at a time per chain: two writes racing on one chain lose
     /// one to "source chain head has moved".
     chain_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// One connection made at a time per cell: its signing grant is a write
+    /// on the cell's chain, so two first calls granting at once lose one.
+    connects: Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }
 
 impl Default for Cells07 {
     fn default() -> Self {
-        Self { clients: Mutex::new(HashMap::new()), ports: Mutex::new(None), chain_locks: Mutex::new(HashMap::new()) }
+        Self { clients: Mutex::new(HashMap::new()), ports: Mutex::new(None), chain_locks: Mutex::new(HashMap::new()), connects: Mutex::new(HashMap::new()) }
     }
 }
 
@@ -203,6 +206,11 @@ impl Cells07 {
                 *ports = now;
             }
         }
+        if let Some(c) = self.clients.lock().await.get(agent_hex) {
+            return Ok(c.clone());
+        }
+        let gate = self.connects.lock().await.entry(agent_hex.to_string()).or_default().clone();
+        let _one = gate.lock().await;
         if let Some(c) = self.clients.lock().await.get(agent_hex) {
             return Ok(c.clone());
         }
@@ -231,6 +239,9 @@ impl Cells07 {
                     }
                     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                 }
+                // A write on the chain (the cell's first call runs its init)
+                // moved the head under the grant.
+                Err(e) if e.to_string().contains("head has moved") && tries < 20 => tokio::time::sleep(std::time::Duration::from_millis(300)).await,
                 Err(e) => return Err(format!("0.7 grant for {}: {e}", app.app_id)),
             }
         };
