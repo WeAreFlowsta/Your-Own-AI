@@ -100,9 +100,11 @@ mod tests {
         let held = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = held.local_addr().unwrap().port();
         assert!(!super::bindable(port), "a port another listener holds");
+        // A port free_port reports was free when it asked; whether it still
+        // is a moment later depends on the other tests' listeners, so only
+        // that it is another port is checked.
         let free = super::free_port().expect("the OS has a free port");
         assert_ne!(free, port);
-        assert!(super::bindable(free));
         drop(held);
         assert!(super::bindable(port), "released once its listener is gone");
     }
