@@ -37,7 +37,7 @@ async function yourAis() {
 }
 
 describe(`devices, phase ${PHASE}`, () => {
-  it(PHASE === "a" ? "A: renames an AI through the form and backs up" : PHASE === "c" ? "C: with A online too, A's conversation arrives in B's own records and the composer opens" : "B: signs in fresh and shows A's edit with its own agent", async () => {
+  it(PHASE === "a" ? "A: renames an AI through the form and backs up" : PHASE === "d" ? "D: with B online, B's reply arrives in A's conversation" : PHASE === "c" ? "C: with A online too, A's conversation arrives in B's own records and the composer opens" : "B: signs in fresh and shows A's edit with its own agent", async () => {
     if (PHASE === "a") {
       await waitForChat();
       const st = await escrow();
@@ -244,8 +244,30 @@ describe(`devices, phase ${PHASE}`, () => {
       const after = await browser.execute(() => [...document.querySelectorAll('[data-testid="chat-message"]')].map((m) => (m as HTMLElement).innerText.slice(0, 60)));
       expect(after.some((t: string) => t.includes("Devices test two"))).toBe(true);
       await shot("devices-c-continued");
+    } else if (PHASE === "d") {
+      // B (unattended, default ports) continued the conversation in phase c,
+      // in its own records; this is A on shifted ports. B's reply arrives in
+      // A's conversation (on a mixed run, from a device on an earlier release).
+      const started = Date.now();
+      await waitForChat();
+      await (await $('button[title^="Conversations"]')).click();
+      const listed = () => browser.execute(() => [...document.querySelectorAll('[data-testid="conversation-item"]')].some((d) => (d as HTMLElement).innerText.includes("Devices test")));
+      await browser.waitUntil(listed, { timeout: 60_000, timeoutMsg: "A's drawer never listed the devices conversation" });
+      const texts = () => browser.execute(() => [...document.querySelectorAll('[data-testid="chat-message"]')].map((m) => (m as HTMLElement).innerText.slice(0, 60)));
+      // Opened again on each look: the open conversation reads its records once.
+      await browser.waitUntil(async () => {
+        await browser.execute(() => {
+          const items = [...document.querySelectorAll('[data-testid="conversation-item"]')] as HTMLElement[];
+          const hit = items.find((d) => d.innerText.includes("Devices test") && d.getAttribute("data-copy") !== "1");
+          (hit?.querySelector("button") as HTMLElement | null)?.click();
+        });
+        await new Promise((r) => setTimeout(r, 1_500));
+        return (await texts()).some((t: string) => t.includes("Devices test two"));
+      }, { timeout: 360_000, interval: 5_000, timeoutMsg: "B's reply never arrived in A's conversation (still missing after 6 min)" });
+      console.log(`e2e: B's reply on A after ${Math.round((Date.now() - started) / 1000)} s: ${JSON.stringify(await texts())}`);
+      await shot("devices-d-arrived");
     } else {
-      throw new Error("set DEVICES_PHASE to a, b or c");
+      throw new Error("set DEVICES_PHASE to a, b, c or d");
     }
   });
 });
