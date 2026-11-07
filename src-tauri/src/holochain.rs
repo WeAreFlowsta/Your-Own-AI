@@ -841,6 +841,13 @@ impl HolochainManager {
     ///
     /// Called after conductor restart to reconnect to apps that were
     /// installed in a previous session.
+    /// After the lines restarted (new ports, a new origin): every agent's
+    /// connection is made again.
+    pub async fn reconnect_after_restart(&self) -> Result<(), String> {
+        self.agents.lock().await.clear();
+        self.reconnect_existing_agents().await
+    }
+
     pub async fn reconnect_existing_agents(&self) -> Result<(), String> {
         let admin_ws = holochain_client::AdminWebsocket::connect(
             format!("localhost:{}", self.admin_port()),

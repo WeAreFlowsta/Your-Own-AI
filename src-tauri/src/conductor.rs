@@ -140,6 +140,23 @@ pub(crate) fn passphrase_07(data_key: &[u8; 32], salt: &[u8; 32]) -> String {
     hex::encode(blake3::derive_key("Your Own AI 2026-11 lair 0.7 key store passphrase", &material))
 }
 
+/// The 0.7 key store's passphrase as it stands (its salt is in it), for a
+/// start beside a running 0.6 line, when the store cannot be copied again.
+pub(crate) fn passphrase_of_store_07(data_dir: &Path, data_key: &[u8; 32]) -> Result<String, String> {
+    let (lair_07, _) = line_dirs(data_dir, Line::V07);
+    let text = std::fs::read_to_string(lair_07.join(SALT_FILE_07)).map_err(|e| format!("read the 0.7 key store's salt: {e}"))?;
+    let salt: [u8; 32] = hex::decode(text.trim()).ok().and_then(|b| b.try_into().ok()).ok_or("the 0.7 key store's salt is malformed")?;
+    Ok(passphrase_07(data_key, &salt))
+}
+
+/// Start the 0.7 line again beside the running session (its conductor
+/// died, or it was stopped for its memory).
+pub fn attach_07(app: tauri::AppHandle, data_dir: PathBuf, line_07: Line07) -> Result<(), String> {
+    let session = supervisor().session().ok_or("no session runs")?;
+    supervisor().attach_line(session, Line::V07, Arc::new(YoaiLines { app: Some(app), data_dir, line_07: Some(line_07) }));
+    Ok(())
+}
+
 /// Make the 0.7 key store ready to start, and return its passphrase.
 ///
 /// While the 0.6 line is in use, the 0.7 store is a fresh copy of the 0.6
@@ -202,6 +219,11 @@ pub fn begin_closing() {
 
 fn closing() -> bool {
     CLOSING.load(Ordering::SeqCst)
+}
+
+/// Whether the app is quitting, resetting or swapping its material.
+pub fn is_closing() -> bool {
+    closing()
 }
 
 /// Stop the lines for good: no start goes on, a start under way is waited
@@ -387,6 +409,14 @@ static STARTED_OFFLINE: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn started_offline() -> bool {
     STARTED_OFFLINE.load(Ordering::SeqCst)
+}
+
+/// Whether the 0.6 line's rendezvous (the one with auth material) answers.
+pub(crate) async fn rendezvous_answers() -> bool {
+    match primary() {
+        Some(p) => answers(&p.bootstrap_url, PROBE_TIMEOUT).await,
+        None => false,
+    }
 }
 
 // ── The start ───────────────────────────────────────────────────────────
