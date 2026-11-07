@@ -7,7 +7,7 @@
 // ARRIVES in B's own records and the composer opens. Three launches, one
 // phase each (DEVICES_PHASE), each against its own TEST Vault
 // (YOAI_VAULT_PORT) - never the installed one. Run: e2e/devices-live.sh
-import { shot, waitForChat, invoke, ask, waitForReplyDone } from "../models/_helpers";
+import { shot, waitForChat, invoke, ask, waitForReplyDone, lastReply } from "../models/_helpers";
 
 const MESSAGE = "Devices test: name one colour and nothing else.";
 const MESSAGE_C = "Devices test two: name one animal and nothing else.";
@@ -262,11 +262,28 @@ describe(`devices, phase ${PHASE}`, () => {
       expect(await $('[data-testid="chat-readonly-reason"]').isExisting()).toBe(false);
       expect(await (await $('[data-testid="chat-input"]')).getAttribute("contenteditable")).not.toBe("false");
       await shot("devices-c-composer-open");
-      // And B continues the conversation in its own records.
+      // And B continues the conversation in its own records. Wait for B's
+      // NEW answer: the last answer on the page is A's, already done, so
+      // waitForReplyDone alone returns at once (11-08: the harness then
+      // stopped B 1 s after the send, before the turn was recorded).
+      const answers = () => browser.execute(() => document.querySelectorAll('[data-testid="chat-message"][data-role="assistant"]').length);
+      const answersBefore = await answers();
       await ask(MESSAGE_C);
-      await waitForReplyDone();
+      await browser.waitUntil(async () => (await answers()) > answersBefore && (await lastReply())?.state === "done", { timeout: 300_000, interval: 2_000, timeoutMsg: "B's answer never finished" });
       const after = await browser.execute(() => [...document.querySelectorAll('[data-testid="chat-message"]')].map((m) => (m as HTMLElement).innerText.slice(0, 60)));
       expect(after.some((t: string) => t.includes("Devices test two"))).toBe(true);
+      // ...and the turn read back from B's own records before this phase
+      // stops B (phase d reads it on A).
+      const aiB = (await aiList()).find((a) => a.name === NAME);
+      expect(aiB).toBeDefined();
+      await browser.waitUntil(async () => {
+        const convs = await invoke<{ hash: string; source?: string | null }[]>("get_conversations", { agentKey: aiB!.agent, maxAgeSecs: null, caller: "e2e" });
+        for (const c of convs.filter((x) => !x.source?.startsWith("copy:"))) {
+          const entries = await invoke<unknown[]>("get_conversation_transcript", { agentKey: aiB!.agent, conversationHash: c.hash });
+          if (JSON.stringify(entries).includes("Devices test two")) return true;
+        }
+        return false;
+      }, { timeout: 120_000, interval: 3_000, timeoutMsg: "B's turn never reached B's own records" });
       await shot("devices-c-continued");
     } else if (PHASE === "d") {
       // B (unattended, default ports) continued the conversation in phase c,
