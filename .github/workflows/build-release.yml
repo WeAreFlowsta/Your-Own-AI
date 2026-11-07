@@ -404,6 +404,32 @@ jobs:
           fi
           echo "$BIN needs no system OpenSSL"
 
+      # The four sidecars' SHA-256 as they ship (after code signing; macOS
+      # signs them at bundle time, so they differ from the upstream pins),
+      # read from inside the final package and published beside the
+      # downloads. A later release compiles them into its kit descriptors,
+      # so a restored binary is checked against a hash from a signed release.
+      - name: Sidecar hashes after signing
+        shell: bash
+        run: node scripts/kit-hashes.mjs "${{ matrix.target }}" "src-tauri/target/${{ matrix.target }}/release/bundle" "kit-hashes-${{ matrix.target }}.json"
+
+      - name: Publish the sidecar hashes
+        uses: actions/github-script@v8
+        env:
+          release_id: ${{ needs.create-release.outputs.release_id }}
+          file: kit-hashes-${{ matrix.target }}.json
+        with:
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const release_id = Number(process.env.release_id);
+            const name = process.env.file;
+            const { data: assets } = await github.rest.repos.listReleaseAssets({ owner, repo, release_id, per_page: 100 });
+            for (const a of assets) {
+              if (a.name === name) await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: a.id });
+            }
+            await github.rest.repos.uploadReleaseAsset({ owner, repo, release_id, name, data: fs.readFileSync(name) });
+
       - name: Dump Windows signing transcript on failure
         if: failure() && runner.os == 'Windows'
         shell: pwsh
