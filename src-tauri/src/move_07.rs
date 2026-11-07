@@ -813,6 +813,10 @@ mod tests {
         supervisor().stop();
 
         let mv = both_lines().await;
+        // The offline leg runs this with auth material and a rendezvous that
+        // does not answer (`FLOWSTA_AUTH_MATERIAL`, `FLOWSTA_BOOTSTRAP_URL`,
+        // `FLOWSTA_BOOTSTRAP_URL_07`): the lines start without their auth.
+        eprintln!("both lines up; started offline: {}", crate::conductor::started_offline());
         let anchor = ExternalHash::from_raw_32(conversation_anchor(&data_key, &id_of_v1(conversation.get_raw_39())).to_vec());
         let on_07 = |mv: Arc<Move>| {
             let (agent, anchor) = (agent.clone(), anchor.clone());
