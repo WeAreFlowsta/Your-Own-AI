@@ -72,6 +72,94 @@ pub async fn ensure_apps_on(admin: &AdminClient, resource_dir: &Path, network_se
     Ok(installed)
 }
 
+// ── Purges and tidies, on both lines ────────────────────────────────────
+
+/// AIs purged while the 0.7 line was not running (or its uninstall failed):
+/// the next 0.7 start uninstalls their v2 apps. A purge is the person asking
+/// for an AI's records to be gone, so its 0.7 copies go too, by this record
+/// only: a v2 app is never removed because its v1 app is missing.
+const PURGED_FILE: &str = "purged-ais-07.json";
+
+fn read_purged(data_dir: &Path) -> Vec<String> {
+    std::fs::read(data_dir.join(PURGED_FILE)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+fn write_purged(data_dir: &Path, ids: &[String]) {
+    let path = data_dir.join(PURGED_FILE);
+    if ids.is_empty() {
+        let _ = std::fs::remove_file(path);
+    } else if let Ok(bytes) = serde_json::to_vec(ids) {
+        let _ = flowsta_hc_lines::files::write_atomic_private(&path, &bytes);
+    }
+}
+
+/// Uninstall every v2 app of the AI (`transcript_v2_*` whose id ends with
+/// `ai_id`, its lineage); returns how many.
+async fn uninstall_ai(admin: &AdminClient, ai_id: &str) -> Result<u32, String> {
+    let apps = admin.list_apps().await.map_err(|e| format!("0.7 list_apps: {e}"))?;
+    let mut removed = 0;
+    for app in apps.iter().filter(|a| a.app_id.starts_with(APP_ID_PREFIX) && a.app_id.ends_with(ai_id)) {
+        admin.uninstall(&app.app_id, APP_ID_PREFIX).await.map_err(|e| format!("0.7 uninstall {}: {e}", app.app_id))?;
+        log::info!("[0.7] purged {}", app.app_id);
+        removed += 1;
+    }
+    Ok(removed)
+}
+
+/// An AI was purged on the 0.6 line: its v2 apps go now, or at the next 0.7
+/// start.
+pub async fn purge(ai_id: &str) {
+    let done = match admin().await {
+        Ok(a) => match uninstall_ai(&a, ai_id).await {
+            Ok(_) => true,
+            Err(e) => {
+                log::warn!("[0.7] purge of {ai_id} waits for the next start: {e}");
+                false
+            }
+        },
+        Err(_) => false,
+    };
+    app_cells().clients.lock().await.clear();
+    if !done {
+        if let Some(root) = crate::conductor::profile_root() {
+            let mut ids = read_purged(root);
+            if !ids.iter().any(|i| i == ai_id) {
+                ids.push(ai_id.to_string());
+            }
+            write_purged(root, &ids);
+        }
+    }
+}
+
+/// The purges noted while the 0.7 line was down, done on its admin
+/// connection at its setup.
+pub async fn purge_noted_on(admin: &AdminClient, data_dir: &Path) {
+    let ids = read_purged(data_dir);
+    if ids.is_empty() {
+        return;
+    }
+    let mut left = Vec::new();
+    for id in ids {
+        if let Err(e) = uninstall_ai(admin, &id).await {
+            log::warn!("[0.7] purge of {id} not done yet: {e}");
+            left.push(id);
+        }
+    }
+    write_purged(data_dir, &left);
+}
+
+/// v1 cells were tidied (disabled as empty): their v2 apps are disabled too.
+pub async fn disable_for(v1_app_ids: &[String]) {
+    let Ok(admin) = admin().await else { return };
+    for v1 in v1_app_ids {
+        let Some(id) = app_id_for(v1) else { continue };
+        match admin.disable(&id).await {
+            Ok(()) => log::info!("[0.7] disabled {id} beside its tidied v1 cell"),
+            Err(e) => log::debug!("[0.7] {id} not disabled: {e}"),
+        }
+    }
+}
+
 /// The app's connections to its v2 cells, one per agent (39-byte key, hex),
 /// each with its signing grant kept for the session (a grant is a chain
 /// write). A new 0.7 start (new ports, a new origin) needs a new

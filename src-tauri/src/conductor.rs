@@ -44,6 +44,14 @@ pub(crate) const PASSPHRASE_06: &str = "your-own-ai-local";
 
 static SUPERVISOR: LazyLock<Arc<Supervisor>> = LazyLock::new(|| Arc::new(Supervisor::new("yoai")));
 
+/// The open profile's root, once its lines have been asked to start.
+static PROFILE_ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// The open profile's root (None before the start).
+pub fn profile_root() -> Option<&'static Path> {
+    PROFILE_ROOT.get().map(|p| p.as_path())
+}
+
 /// The open profile's lines.
 pub fn supervisor() -> &'static Arc<Supervisor> {
     &SUPERVISOR
@@ -510,6 +518,7 @@ impl LineHooks for YoaiLines {
         log::info!("[{line}] app interface attached on port {}", app_port);
         if line == Line::V07 {
             let l07 = self.line_07.as_ref().ok_or("the 0.7 line has no settings")?;
+            crate::hc07::purge_noted_on(&admin, &self.data_dir).await;
             let v1_apps = transcript_apps_06().await?;
             let installed = crate::hc07::ensure_apps_on(&admin, &l07.resource_dir, &l07.network_seed, &v1_apps).await?;
             if installed > 0 {
@@ -554,6 +563,7 @@ async fn transcript_apps_06() -> Result<Vec<(String, Vec<u8>)>, String> {
 /// it from a task. The primary gets one retry after a failure (2 s later,
 /// so ports and processes are released).
 pub async fn start_holochain(app: tauri::AppHandle, data_dir: PathBuf, line_07: Option<Line07>) -> Result<u64, String> {
+    let _ = PROFILE_ROOT.set(data_dir.clone());
     let secondary = line_07.is_some().then_some(Line::V07);
     let hooks = Arc::new(YoaiLines { app: Some(app), data_dir, line_07 });
     match supervisor().start_lines(Line::V06, secondary, hooks).await {
@@ -737,6 +747,11 @@ mod line_07_tests {
         let entries = cells.entries_page(&agent_hex, &EntriesPage { conversation_anchor: conversation, after: None, limit: 10 }).await.expect("entries");
         assert_eq!(entries.items.len(), 1, "one message under the conversation's anchor");
         assert_eq!(entries.items[0].1, mkey, "listed with its key");
+
+        // A purge reaches the 0.7 line: the AI's v2 app is uninstalled.
+        crate::hc07::purge("live").await;
+        let admin = AdminClient::connect(Line::V07, ports(Line::V07).unwrap().0, &origin()).await.unwrap();
+        assert!(!admin.list_apps().await.unwrap().iter().any(|a| a.app_id == "transcript_v2_live"), "purged on 0.7 too");
         supervisor().stop();
     }
 }

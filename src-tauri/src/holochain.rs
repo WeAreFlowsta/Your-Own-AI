@@ -627,6 +627,7 @@ impl HolochainManager {
                 Err(e) => errors.push(format!("{app_id}: {e:?}")),
             }
         }
+        crate::hc07::disable_for(&planned).await;
         log::info!(
             "[cells] tidy v2: {} of {} verified-empty cells disabled, {} errors",
             disabled,
@@ -680,8 +681,12 @@ impl HolochainManager {
         }
 
         // Drop any in-memory agents whose app was removed.
-        let mut agents = self.agents.lock().await;
-        agents.retain(|_, a| !a.installed_app_id.ends_with(ai_id));
+        {
+            let mut agents = self.agents.lock().await;
+            agents.retain(|_, a| !a.installed_app_id.ends_with(ai_id));
+        }
+        // Its copies on the 0.7 line go too.
+        crate::hc07::purge(ai_id).await;
 
         Ok(removed)
     }
