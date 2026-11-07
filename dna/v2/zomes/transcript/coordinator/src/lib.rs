@@ -291,7 +291,19 @@ pub struct ConversationKeys {
 /// tombstoned ones, from links alone.
 #[hdk_extern]
 pub fn get_conversation_keys(anchor: AgentPubKey) -> ExternResult<ConversationKeys> {
-    let all = get_links(LinkQuery::try_new(anchor, LinkTypes::AllConversations)?, GetStrategy::default())?;
+    conversation_keys(anchor, GetStrategy::default())
+}
+
+/// The same from what this conductor already holds (its own links and what
+/// gossip brought): no network round, so it answers at once even when no
+/// peer can be reached. A caller adds the network's answer when it comes.
+#[hdk_extern]
+pub fn get_conversation_keys_local(anchor: AgentPubKey) -> ExternResult<ConversationKeys> {
+    conversation_keys(anchor, GetStrategy::Local)
+}
+
+fn conversation_keys(anchor: AgentPubKey, strategy: GetStrategy) -> ExternResult<ConversationKeys> {
+    let all = get_links(LinkQuery::try_new(anchor, LinkTypes::AllConversations)?, strategy)?;
     let gone: Vec<Vec<u8>> = tombstoned(&all).into_iter().collect();
     let keyed: Vec<(Vec<u8>, Link)> = all.into_iter().filter_map(|l| listed_anchor(&l).map(|a| (a, l))).collect();
     let conversations = one_per_key(keyed).into_iter().map(|(key, l)| KeyItem { key, at: l.timestamp, author: l.author }).collect();
