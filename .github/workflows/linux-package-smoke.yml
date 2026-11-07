@@ -12,12 +12,10 @@ on:
         description: "Release tag (e.g. v0.9.0); empty = build this commit"
         required: false
         default: ""
-  push:
-    branches: [linux-packaging]
 
 jobs:
   build:
-    if: ${{ github.event.inputs.tag == '' || github.event_name == 'push' }}
+    if: ${{ github.event.inputs.tag == '' }}
     runs-on: ubuntu-22.04
     timeout-minutes: 75
     steps:
