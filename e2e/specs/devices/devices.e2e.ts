@@ -216,7 +216,17 @@ describe(`devices, phase ${PHASE}`, () => {
       console.log(`e2e: drawer at start ${JSON.stringify(await drawer())}`);
       // Gossip between two conductors on one seed found peers in ~30 s in the
       // Rust live leg; allow the lane a few minutes here.
+      // Opened again on each look, as a person would: the drawer reads the
+      // list when it opens and does not re-read while it stays open (11-08:
+      // B's first read came 3 s before the two devices met, and the item
+      // stayed a copy). The header button sits under the drawer's backdrop,
+      // so it is clicked through the page.
       await browser.waitUntil(async () => {
+        await browser.execute(() => {
+          const el = document.querySelector('[data-testid="conversations-open"]') as HTMLElement | null;
+          ((el && el.tagName === "BUTTON" ? el : el?.querySelector("button")) as HTMLElement | null)?.click();
+        });
+        await new Promise((r) => setTimeout(r, 2_000));
         const items = await drawer();
         return items.some((d: { copy: string | null; text: string }) => d.text.includes("Devices test") && d.copy !== "1");
       }, { timeout: 360_000, interval: 5_000, timeoutMsg: "A's conversation never arrived in B's own records (still only the Vault copy after 6 min)" });
