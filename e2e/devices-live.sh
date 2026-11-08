@@ -6,6 +6,9 @@
 # Starts two FRESH test Vaults (md-e, md-f), creates an identity on the
 # first, adds the second with the recovery phrase, then runs phase a on the
 # first and phase b on the second. Never touches the installed Vault.
+# DEVICES_VAULT_WRAP: a command the two test Vaults start under (e.g. their
+# own memory scope: `systemd-run --user --scope -q -p MemoryMax=4G`), so a
+# Vault conductor that grows fails the run, not the desktop.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$HERE/.."
@@ -46,9 +49,9 @@ trap 'killtests; sleep 2; killtests' EXIT
 # The Vault's debug test binary (a target clean removes it): build it when missing.
 [ -x "$VAULT/src-tauri/target/debug/flowsta-vault" ] || { echo "== building the Vault test binary"; (cd "$VAULT" && scripts/build-test-binary.sh > "$LOGS/vault-test-build.log" 2>&1) || { echo "Vault test build failed"; tail -20 "$LOGS/vault-test-build.log"; exit 1; }; }
 rm -rf "$HOME/.local/share/flowsta-vault-md-e" "$HOME/.local/share/flowsta-vault-md-f"
-(cd "$VAULT" && dbus-run-session -- scripts/run-test-instance.sh md-e > "$LOGS/md-e.log" 2>&1 &)
+(cd "$VAULT" && ${DEVICES_VAULT_WRAP:-} dbus-run-session -- scripts/run-test-instance.sh md-e > "$LOGS/md-e.log" 2>&1 &)
 P1="$(waitnew)" || { echo "md-e never answered"; exit 1; }
-(cd "$VAULT" && dbus-run-session -- scripts/run-test-instance.sh md-f > "$LOGS/md-f.log" 2>&1 &)
+(cd "$VAULT" && ${DEVICES_VAULT_WRAP:-} dbus-run-session -- scripts/run-test-instance.sh md-f > "$LOGS/md-f.log" 2>&1 &)
 P2="$(waitnew "$P1")" || { echo "md-f never answered"; exit 1; }
 echo "== test Vaults: V1=$P1 V2=$P2 (logs $LOGS)"
 
