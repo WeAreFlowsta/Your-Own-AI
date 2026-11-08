@@ -888,7 +888,9 @@ mod tests {
                 if discrete.is_empty() { None } else { Some(discrete.iter().map(|d| d.free_mib).sum::<u64>() as f64 / 1024.0) }
             });
         eprintln!("[matrix] tune bench free VRAM: {free_vram_gb:?}");
-        let arms = arms_for(&meta, size, 31.0, free_vram_gb, false, None);
+        // This machine's memory, as the app reads it: a fixed figure benched
+        // a context the app would not pick on a smaller machine.
+        let arms = arms_for(&meta, size, crate::matrix::total_ram_gb(), free_vram_gb, false, None);
         assert!(!arms.is_empty());
         // The compact-cache arm and its standard twin: every matrix run
         // measures the pair, so the Auto rule's evidence is never stale.

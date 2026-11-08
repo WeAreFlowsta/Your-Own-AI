@@ -671,7 +671,7 @@ fn mlx_artifact_dirs(dir: &Path) -> Vec<String> {
     dirs
 }
 
-fn total_ram_gb() -> f64 {
+pub(crate) fn total_ram_gb() -> f64 {
     let sys = sysinfo::System::new_with_specifics(
         sysinfo::RefreshKind::nothing().with_memory(sysinfo::MemoryRefreshKind::everything()),
     );
