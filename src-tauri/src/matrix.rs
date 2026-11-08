@@ -2026,6 +2026,134 @@ pub async fn leg_tool_call(bin: &Path, dir: &Path, sink: Sink<'_>) -> Vec<String
     failures
 }
 
+/// The project tasks an agent is given, and the tool each one needs.
+const AGENT_PROBE_TASKS: [(&str, &str); 8] = [
+    ("What files are in this project?", "list_dir"),
+    ("Show me what is in README.md.", "read_file"),
+    ("Create a file called NOTES.md that says: Sprint notes.", "write_file"),
+    ("Run the test suite with npm test.", "run_command"),
+    ("What version is this package? It is in package.json.", "read_file"),
+    ("Look inside the src folder.", "list_dir"),
+    ("Add a .gitignore that ignores node_modules.", "write_file"),
+    ("Check which branch git is on.", "run_command"),
+];
+
+/// The evidence that promotes a model to agent work, or keeps it back:
+/// each named model, WHATEVER its agent grade, is given eight project
+/// tasks with the four project tools and the choice left to it (`auto`),
+/// then three calls where one named tool is required. It reports what it
+/// did; it fails nothing (the grade is decided from its numbers, beside a
+/// model already graded for agent work run the same way).
+pub async fn leg_agent_probe(bin: &Path, dir: &Path, models: &[String], sink: Sink<'_>) -> Vec<String> {
+    let tool = |name: &str, desc: &str, props: serde_json::Value, req: &[&str]| serde_json::json!({
+        "type": "function",
+        "function": {"name": name, "description": desc, "parameters": {"type": "object", "properties": props, "required": req}}
+    });
+    let tools = serde_json::json!([
+        tool("list_dir", "List the files and folders at a path in the project.", serde_json::json!({"path": {"type": "string"}}), &["path"]),
+        tool("read_file", "Read a file in the project.", serde_json::json!({"path": {"type": "string"}}), &["path"]),
+        tool("write_file", "Create or replace a file in the project.", serde_json::json!({"path": {"type": "string"}, "content": {"type": "string"}}), &["path", "content"]),
+        tool("run_command", "Run a shell command in the project folder.", serde_json::json!({"command": {"type": "string"}}), &["command"]),
+    ]);
+    let system = "You are a coding agent working in the person's project folder. Use the tools to look at and change files and to run commands. When a task needs a tool, call it; never describe a tool call in words.";
+    let mut lines = Vec::new();
+    for name in models {
+        if cancelled() {
+            sink("cancelled".into());
+            break;
+        }
+        let path = dir.join(name);
+        let Ok(meta) = crate::gguf::read_meta(&path) else {
+            sink(format!("{name}: not found in {}", dir.display()));
+            continue;
+        };
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let free_now = crate::llm::grading_memory_bytes();
+        if free_now > 0 && free_now < load_room_needed(size, false) {
+            sink(format!("{name}: not tried - {:.1} GB of memory free", free_now as f64 / 1024f64.powi(3)));
+            continue;
+        }
+        let free = free_vram_gb(bin);
+        let ctx = 8192;
+        let mut args: Vec<String> = vec![
+            "--port".into(), bench_port().to_string(),
+            "--host".into(), "127.0.0.1".into(),
+            "--no-webui".into(), "--reasoning".into(), "off".into(),
+            "--ctx-size".into(), ctx.to_string(),
+            "--fit".into(), "off".into(),
+            "--model".into(), name.clone(),
+        ];
+        if let Some(n) = moe_decision(&meta, size, ctx, free).filter(|n| *n > 0) {
+            args.push("--n-cpu-moe".into());
+            args.push(n.to_string());
+        }
+        if meta.surfaces_special_tokens() {
+            args.push("--special".into());
+        }
+        let _guard = match spawn_bench_server(bin, dir, args).await {
+            Ok(g) => g,
+            Err(e) => {
+                sink(format!("{name}: did not load: {e}"));
+                continue;
+            }
+        };
+        let ask = |messages: serde_json::Value, choice: serde_json::Value| {
+            let mut body = serde_json::json!({
+                "model": name, "messages": messages, "tools": tools.clone(),
+                "tool_choice": choice, "max_tokens": 1024, "stream": false,
+            });
+            crate::inference_server::normalize_tool_choice(&mut body);
+            async move {
+                let v = crate::llm::local_http()
+                    .post(format!("http://127.0.0.1:{}/v1/chat/completions", bench_port()))
+                    .json(&body)
+                    .timeout(std::time::Duration::from_secs(180))
+                    .send()
+                    .await
+                    .ok()?
+                    .json::<serde_json::Value>()
+                    .await
+                    .ok()?;
+                let m = &v["choices"][0]["message"];
+                Some((m["tool_calls"][0]["function"]["name"].as_str().map(str::to_string), m["content"].as_str().unwrap_or("").chars().take(80).collect::<String>()))
+            }
+        };
+        let (mut right, mut any) = (0, 0);
+        for (task, want) in AGENT_PROBE_TASKS {
+            let msgs = serde_json::json!([{"role": "system", "content": system}, {"role": "user", "content": task}]);
+            match ask(msgs, serde_json::json!("auto")).await {
+                Some((Some(called), _)) => {
+                    any += 1;
+                    if called == want {
+                        right += 1;
+                    }
+                    sink(format!("{name}: \"{task}\" -> {called}{}", if called == want { "" } else { &" (wanted a different tool)"[..] }));
+                }
+                Some((None, words)) => sink(format!("{name}: \"{task}\" -> words: {words:?}")),
+                None => sink(format!("{name}: \"{task}\" -> no answer")),
+            }
+        }
+        let mut forced = 0;
+        for want in ["list_dir", "read_file", "run_command"] {
+            let msgs = serde_json::json!([{"role": "system", "content": system}, {"role": "user", "content": "Do the next step for this project."}]);
+            match ask(msgs, serde_json::json!({"type": "function", "function": {"name": want}})).await {
+                Some((Some(called), _)) => {
+                    if called == want {
+                        forced += 1;
+                    }
+                    sink(format!("{name}: {want} required -> {called}"));
+                }
+                Some((None, words)) => sink(format!("{name}: {want} required -> words: {words:?}")),
+                None => sink(format!("{name}: {want} required -> no answer")),
+            }
+        }
+        let line = format!("{name}: agent grade {}; project tasks {right}/8 right tool ({any}/8 called one); required calls {forced}/3", crate::model_caps::agent_caps(name));
+        sink(line.clone());
+        lines.push(line);
+    }
+    lines
+}
+
 pub async fn leg_routing(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<String> {
     crate::router::EMBED_PAUSES.store(0, Ordering::SeqCst);
     let reindex_at_start = crate::corpus::reembed_running();
@@ -2532,6 +2660,19 @@ pub async fn matrix_run(
     if !cancelled() && want("toolcall") {
         sink("== Tool call (one named tool, asked the way a program asks) ==".into());
         failures.extend(leg_tool_call(&bin, &dir, sink).await);
+        sink(String::new());
+    }
+
+    // Evidence, not a gate: what each chat model does with project tasks,
+    // whatever its agent grade, so a report from a machine that can run a
+    // model this one cannot shows whether it should drive projects.
+    if !cancelled() && want("agentprobe") {
+        sink("== Agent probe (eight project tasks and three required calls, every chat model) ==".into());
+        let models: Vec<String> = gguf_files(&dir)
+            .into_iter()
+            .filter(|n| crate::gguf::read_meta(&dir.join(n)).map(|m| !m.is_embedding()).unwrap_or(false))
+            .collect();
+        leg_agent_probe(&bin, &dir, &models, sink).await;
         sink(String::new());
     }
 

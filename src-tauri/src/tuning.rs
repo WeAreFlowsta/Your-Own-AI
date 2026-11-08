@@ -982,6 +982,30 @@ mod tests {
         assert!(failures.is_empty(), "grades lied green:\n{}", failures.join("\n"));
     }
 
+    /// Headless: the agent probe (`matrix::leg_agent_probe`) on the models
+    /// named in `YOAI_AGENT_PROBE_MODELS=a.gguf,b.gguf`, from `YOAI_MODELS_DIR`
+    /// (default: the app's models folder). Run under the memory cap.
+    #[tokio::test]
+    #[ignore]
+    async fn live_matrix_agent_probe() {
+        let _one_at_a_time = crate::llm::LIVE_MATRIX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = std::env::var("HOME").unwrap_or_default();
+        let dir = std::env::var("YOAI_MODELS_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::Path::new(&home).join(".local/share/com.solar.yourowai/models"));
+        let triple = if cfg!(target_os = "windows") { "x86_64-pc-windows-msvc.exe" }
+            else if cfg!(target_os = "macos") { if cfg!(target_arch = "aarch64") { "aarch64-apple-darwin" } else { "x86_64-apple-darwin" } }
+            else { "x86_64-unknown-linux-gnu" };
+        let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bin").join(format!("{}-{triple}", crate::llm::BUNDLED_ENGINE));
+        assert!(bin.exists());
+        let models: Vec<String> = std::env::var("YOAI_AGENT_PROBE_MODELS").unwrap_or_default()
+            .split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        assert!(!models.is_empty(), "name the models: YOAI_AGENT_PROBE_MODELS=a.gguf,b.gguf");
+        let sink = |l: String| eprintln!("[agent-probe] {l}");
+        let lines = crate::matrix::leg_agent_probe(&bin, &dir, &models, &sink).await;
+        assert_eq!(lines.len(), models.len(), "a model did not finish the probe");
+    }
+
     #[test]
     fn channel_markers_strip_and_detect() {
         use crate::llm::{contains_channel_marker, strip_channel_markers};
