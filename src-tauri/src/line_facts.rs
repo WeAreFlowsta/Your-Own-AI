@@ -442,6 +442,9 @@ pub struct LineStatus {
     pub holding: Vec<HoldingDevice>,
     pub stopped_waiting: Vec<String>,
     pub checked_at_ms: u64,
+    /// The move's last pass (none yet this session), and the AIs it could
+    /// not carry, with why: a move that does not finish says so.
+    pub last_pass: Option<crate::move_07::LastPass>,
 }
 
 #[derive(Serialize)]
@@ -471,6 +474,7 @@ pub fn line_status(app: tauri::AppHandle) -> Result<LineStatus, String> {
         holding,
         stopped_waiting: facts.stopped_waiting.iter().map(|w| w.id.clone()).collect(),
         checked_at_ms: facts.checked_at_ms,
+        last_pass: crate::move_07::last_pass(),
     })
 }
 

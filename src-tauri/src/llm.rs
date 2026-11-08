@@ -228,7 +228,7 @@ fn mount_matches(path: &str, mount: &std::path::Path) -> bool {
 
 /// (free, total) bytes of the disk holding `path`: the deepest mount point
 /// that is a prefix of it. None when the disk list gives no match.
-fn disk_space_for(path: &std::path::Path) -> Option<(u64, u64)> {
+pub(crate) fn disk_space_for(path: &std::path::Path) -> Option<(u64, u64)> {
     let canon = comparable_path(path);
     let disks = sysinfo::Disks::new_with_refreshed_list();
     disks

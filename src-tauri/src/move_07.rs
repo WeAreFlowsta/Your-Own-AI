@@ -237,13 +237,16 @@ impl PassApp for Move {
 pub struct Cells;
 
 impl Cells {
-    /// This device's AI cells that have their v2 app (one made this session
-    /// gets it at the next start, and is copied then).
-    async fn all(mv: &Move) -> Result<Vec<CopyUnit>, HookError> {
-        let manager = mv.hc.get()?;
-        let on_07 = crate::hc07::agents_with_apps().await?;
-        let mut ids: Vec<String> = manager.agents.lock().await.keys().filter(|k| on_07.contains(*k)).cloned().collect();
+    /// Every AI cell enabled on the 0.6 line. One the pass cannot read (its
+    /// connection failed) or write (no v2 app yet) fails as a unit and is
+    /// tried again, so the move is never counted done without it. (The tidy
+    /// disables only cells it verified empty, so a disabled one has nothing
+    /// to carry.)
+    async fn all(_mv: &Move) -> Result<Vec<CopyUnit>, HookError> {
+        let apps = crate::conductor::transcript_apps_06().await?;
+        let mut ids: Vec<String> = apps.into_iter().map(|(_, key)| hex::encode(key)).collect();
         ids.sort();
+        ids.dedup();
         Ok(ids.into_iter().map(|id| CopyUnit { id }).collect())
     }
 }
@@ -332,8 +335,14 @@ impl VersionedKind<Move> for Conversations {
                 let anchors: Vec<Option<&str>> = if founding == agent { vec![None] } else { vec![Some(founding.as_str()), None] };
                 for anchor in anchors {
                     let read = crate::transcript_pages::all_conversations_at(manager, agent, anchor, READ_TIMEOUT).await?;
-                    if !read.complete || read.missing > 0 {
+                    if !read.complete {
                         return Err(format!("the conversation list was not read in full ({} unreadable)", read.missing).into());
+                    }
+                    // A listed record no peer holds: not this device's (its
+                    // own records are on its own chain), so the device that
+                    // wrote it carries it. It never holds this AI's move.
+                    if read.missing > 0 {
+                        log::info!("[0.7] pass: {} listed conversation(s) of {}.. are on no reachable peer: another device's, left to it", read.missing, &agent[..8.min(agent.len())]);
                     }
                     for r in read.records {
                         if r.action().author().get_raw_39() != author.as_slice() {
@@ -648,6 +657,32 @@ pub async fn line_07_for_start(data_dir: &std::path::Path, recovery: &crate::tra
     }
 }
 
+/// The last pass, for Settings and diagnostics: what it did, and the AIs it
+/// could not carry, with why.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct LastPass {
+    pub at_ms: u64,
+    pub summary: String,
+    pub skipped: Option<String>,
+    pub failing: Vec<(String, String)>,
+}
+
+static LAST_PASS: std::sync::Mutex<Option<LastPass>> = std::sync::Mutex::new(None);
+
+pub fn last_pass() -> Option<LastPass> {
+    LAST_PASS.lock().ok().and_then(|p| p.clone())
+}
+
+fn note_pass(p: LastPass) {
+    if let Ok(mut last) = LAST_PASS.lock() {
+        *last = Some(p);
+    }
+}
+
+/// Free space a pass needs on the profile's disk: a pass copies records,
+/// and a full disk stops every write (this app's and the person's others).
+const PASS_MIN_FREE: u64 = 1024 * 1024 * 1024;
+
 /// How often passes run while both lines do: what a device still on 0.9.0
 /// writes to the 0.6 line (its deletions) reaches the 0.7 line within this.
 const PASS_EVERY: Duration = Duration::from_secs(15 * 60);
@@ -703,14 +738,27 @@ pub fn run_passes(app: tauri::AppHandle, data_dir: std::path::PathBuf) {
             if crate::conductor::ports(Line::V07).is_none() || crate::conductor::ports(Line::V06).is_none() {
                 break;
             }
+            let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+            if let Some((free, _)) = crate::llm::disk_space_for(&data_dir).filter(|(free, _)| *free < PASS_MIN_FREE) {
+                let why = format!("the disk is almost full ({} MB free)", free / (1024 * 1024));
+                log::warn!("[0.7] pass skipped: {why}");
+                note_pass(LastPass { at_ms: now_ms, summary: String::new(), skipped: Some(why), failing: Vec::new() });
+                tokio::time::sleep(PASS_EVERY).await;
+                continue;
+            }
             let out = runner.run(&m, &data_dir, "the 0.7 line is up").await;
             log::info!("[0.7] pass: {}", describe(&out));
             // An AI whose copy failed is copied again by the next pass.
+            let mut failing: Vec<(String, String)> = Vec::new();
             for kind in &out.kinds {
-                for (unit, _) in &kind.failed_units {
+                for (unit, why) in &kind.failed_units {
                     crate::hc07::note_missed(unit);
+                    if !failing.iter().any(|(u, _)| u == unit) {
+                        failing.push((unit.clone(), format!("{}: {why}", kind.name)));
+                    }
                 }
             }
+            note_pass(LastPass { at_ms: now_ms, summary: describe(&out), skipped: out.skipped.clone(), failing });
             tokio::time::sleep(PASS_EVERY).await;
         }
         RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
