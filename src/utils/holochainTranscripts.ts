@@ -25,7 +25,7 @@ import type {
  * call in time (a heavy engine turn, Blender): both are transient - retry
  * with a pause, up to about 40 s. Anything else fails at once.
  */
-const TRANSIENT = /still starting|timeout|timed out|no answer|websocket|not ready|connection refused/i;
+const TRANSIENT = /still starting|not running|timeout|timed out|no answer|websocket|not ready|connection refused/i;
 async function withTransientRetry<T>(label: string, run: () => Promise<T>): Promise<T | null> {
   for (let attempt = 1; ; attempt++) {
     try {

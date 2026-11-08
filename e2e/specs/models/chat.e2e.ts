@@ -4,11 +4,41 @@
 // the person's real models folder - this spec never downloads or deletes.
 import { shot, waitForChat, ask, waitForReplyDone, invoke } from "./_helpers";
 
+// YOAI_E2E_MIN_CONVERSATIONS (move-live.sh): the conversations earlier
+// launches in this scratch home wrote, which every AI's list must hold.
+const MIN_CONVERSATIONS = Number(process.env.YOAI_E2E_MIN_CONVERSATIONS ?? 0);
+
+async function conversationCount(): Promise<number> {
+  const path = await invoke<string>("profile_store_path", { name: "ai-data.json" });
+  const agents = await browser.execute(async (p: string) => {
+    const t = (window as any).__TAURI__.core;
+    const rid = await t.invoke("plugin:store|load", { path: p, autoSave: false });
+    const got = await t.invoke("plugin:store|get", { rid, key: "custom-ais" });
+    const list = Array.isArray(got) ? got[0] : got;
+    return (Array.isArray(list) ? list : []).map((a: any) => a.agentPubKey ?? "").filter((k: string) => !!k);
+  }, path) as string[];
+  let n = 0;
+  for (const agentKey of agents) {
+    n += (await invoke<unknown[]>("get_conversations", { agentKey, maxAgeSecs: null, caller: "e2e count" })).length;
+  }
+  return n;
+}
+
 describe("chat with installed models", () => {
   it("lands on the chat with the composer ready", async () => {
     await waitForChat();
     await shot("10-chat-ready");
     expect(await browser.execute(() => location.pathname)).toBe("/chat/");
+  });
+
+  it("lists every conversation the earlier launches wrote", async function () {
+    if (!MIN_CONVERSATIONS) return this.skip();
+    let n = 0;
+    await browser.waitUntil(async () => { n = await conversationCount(); return n >= MIN_CONVERSATIONS; }, {
+      timeout: 120_000, interval: 5_000, timeoutMsg: `the AIs list fewer conversations than earlier launches wrote`,
+    }).catch(() => undefined);
+    console.log(`e2e: ${n} conversation(s) listed, ${MIN_CONVERSATIONS} expected`);
+    expect(n).toBeGreaterThanOrEqual(MIN_CONVERSATIONS);
   });
 
   it("answers a short question with a local model", async () => {

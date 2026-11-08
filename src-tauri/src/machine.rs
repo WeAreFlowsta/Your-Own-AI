@@ -291,6 +291,13 @@ impl InputIdle {
     }
 
     fn away_secs(&mut self) -> Option<u64> {
+        // The UI harness tests the background work a person at the computer
+        // holds back (the full pass and the 0.6 stop): a debug build may be
+        // told how long nobody has touched it. A release build never reads it.
+        #[cfg(debug_assertions)]
+        if let Some(s) = std::env::var("YOAI_TEST_AWAY_SECS").ok().and_then(|v| v.trim().parse::<u64>().ok()) {
+            return Some(s);
+        }
         #[cfg(target_os = "linux")]
         {
             if self.bus.is_none() {
