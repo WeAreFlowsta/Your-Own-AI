@@ -1368,7 +1368,7 @@ async fn chat_completions(
     };
     // Some chat templates (Mistral/Ministral) accept only ONE system message —
     // coalesce any system messages into a single leading one (order-preserving).
-    body["messages"] = Value::Array(coalesce_system(messages));
+    body["messages"] = Value::Array(fold_same_roles(coalesce_system(messages)));
     // A model without a projector must not receive image parts: llama-server
     // refuses the whole request ("image input is not supported") and the
     // agent's turn dies with it. Replace each image with a note the model can
@@ -1954,6 +1954,95 @@ fn coalesce_system(messages: Vec<Value>) -> Vec<Value> {
     }
     out.extend(rest);
     out
+}
+
+/// Fold consecutive messages of one role into one, after `coalesce_system`.
+/// A system note placed between two of the caller's user messages (the
+/// memory block, the tools note) is lifted to the front, which leaves the two
+/// side by side; a caller may send that shape too. Strict chat templates
+/// refuse it ("conversation roles must alternate user and assistant", the
+/// agent on Ministral 3B, 11-08: every step a 500, the turn never finished)
+/// and lenient ones swallow it. Generic, never per model: user turns join as
+/// the chat path's do (`llm::merge_user_content`, images kept), two plain
+/// assistant turns join their text, and a message carrying tool calls or a
+/// tool result is never merged (templates allow those between turns).
+fn fold_same_roles(messages: Vec<Value>) -> Vec<Value> {
+    fn plain(m: &Value) -> bool {
+        let calls = m.get("tool_calls").map_or(false, |t| !t.is_null() && t.as_array().map_or(true, |a| !a.is_empty()));
+        !calls && m.get("tool_call_id").is_none()
+    }
+    fn join(a: Value, b: Value) -> Value {
+        match (a, b) {
+            (Value::Null, b) => b,
+            (a, Value::Null) => a,
+            (a, b) => crate::llm::merge_user_content(a, b),
+        }
+    }
+    let mut out: Vec<Value> = Vec::with_capacity(messages.len());
+    for m in messages {
+        let role = m.get("role").and_then(Value::as_str).unwrap_or("").to_string();
+        if (role == "user" || role == "assistant") && plain(&m) {
+            if let Some(prev) = out.last_mut() {
+                if prev.get("role").and_then(Value::as_str) == Some(role.as_str()) && plain(prev) {
+                    let a = prev.get_mut("content").map(Value::take).unwrap_or(Value::Null);
+                    let b = m.get("content").cloned().unwrap_or(Value::Null);
+                    prev["content"] = join(a, b);
+                    continue;
+                }
+            }
+        }
+        out.push(m);
+    }
+    out
+}
+
+#[cfg(test)]
+mod role_fold_tests {
+    use super::{coalesce_system, fold_same_roles};
+    use serde_json::json;
+
+    #[test]
+    fn a_note_between_two_user_turns_leaves_one_user_turn() {
+        let msgs = vec![
+            json!({ "role": "system", "content": "be the agent" }),
+            json!({ "role": "user", "content": "the project's memory" }),
+            json!({ "role": "system", "content": "memory block" }),
+            json!({ "role": "user", "content": "what do we know?" }),
+        ];
+        let out = fold_same_roles(coalesce_system(msgs));
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], json!({ "role": "system", "content": "be the agent\n\nmemory block" }));
+        assert_eq!(out[1]["role"], "user");
+        assert_eq!(out[1]["content"], json!("the project's memory\n\nwhat do we know?"));
+    }
+
+    #[test]
+    fn tool_calls_and_results_are_never_merged() {
+        let msgs = vec![
+            json!({ "role": "user", "content": "read the file" }),
+            json!({ "role": "assistant", "content": null, "tool_calls": [{ "id": "c1", "type": "function", "function": { "name": "read", "arguments": "{}" } }] }),
+            json!({ "role": "tool", "tool_call_id": "c1", "content": "file text" }),
+            json!({ "role": "assistant", "content": null, "tool_calls": [{ "id": "c2", "type": "function", "function": { "name": "read", "arguments": "{}" } }] }),
+            json!({ "role": "tool", "tool_call_id": "c2", "content": "more text" }),
+            json!({ "role": "assistant", "content": "done" }),
+        ];
+        assert_eq!(fold_same_roles(msgs.clone()), msgs);
+    }
+
+    #[test]
+    fn two_plain_assistant_turns_join_and_images_stay() {
+        let msgs = vec![
+            json!({ "role": "user", "content": "look" }),
+            json!({ "role": "user", "content": [{ "type": "image_url", "image_url": { "url": "data:x" } }] }),
+            json!({ "role": "assistant", "content": "first" }),
+            json!({ "role": "assistant", "content": "second" }),
+        ];
+        let out = fold_same_roles(msgs);
+        assert_eq!(out.len(), 2);
+        let parts = out[0]["content"].as_array().expect("the image keeps the user turn as parts");
+        assert_eq!((parts.len(), parts[0]["type"].as_str(), parts[1]["type"].as_str()), (2, Some("text"), Some("image_url")));
+        assert_eq!(out[1]["content"], json!("first\n\nsecond"));
+    }
 }
 
 fn find_sub(haystack: &[u8], needle: &[u8]) -> Option<usize> {

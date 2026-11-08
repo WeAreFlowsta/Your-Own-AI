@@ -2387,7 +2387,7 @@ pub async fn count_tokens_text(text: &str) -> u64 {
 /// Two user contents (plain strings or OpenAI content-part arrays) as one:
 /// strings join with a blank line; anything with parts becomes one array
 /// so images survive.
-fn merge_user_content(a: serde_json::Value, b: serde_json::Value) -> serde_json::Value {
+pub(crate) fn merge_user_content(a: serde_json::Value, b: serde_json::Value) -> serde_json::Value {
     match (a, b) {
         (serde_json::Value::String(x), serde_json::Value::String(y)) => {
             serde_json::Value::String(if x.trim().is_empty() { y } else if y.trim().is_empty() { x } else { format!("{}\n\n{}", x, y) })
