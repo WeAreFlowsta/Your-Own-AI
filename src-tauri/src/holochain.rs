@@ -236,6 +236,8 @@ impl HolochainManager {
         let v1_app_id = format!("{}{}", dna::APP_ID_PREFIX, ai_id);
         crate::hc07::ensure_apps(&self.resource_dir, &self.recovery.network_seed, &[(v1_app_id, agent.get_raw_39().to_vec())]).await?;
         let key_hex = hex::encode(agent.get_raw_39());
+        // A key only the 0.7 store holds: it is never replaced by a copy.
+        crate::conductor::note_key_store(crate::conductor::KEYS_07_ONLY_FILE);
         self.lineage_index.lock().await.insert(key_hex.clone(), ai_id.to_string());
         log::info!("Agent provisioned on the 0.7 line for AI: {} (key: {})", ai_id, key_hex);
         Ok(key_hex)
@@ -419,6 +421,8 @@ impl HolochainManager {
                     .add_agent(flowsta_hc_lines::Line::V06, crate::conductor::PASSPHRASE_06, &flowsta_hc_lines::supervisor::KeySource::NewSeed { tag: tag.clone() })
                     .await
                     .map_err(|e| format!("Failed to create the key for AI {}: {}", ai_id, e))?;
+                // In the 0.6 store alone: the next start copies it over.
+                crate::conductor::note_key_store(crate::conductor::COPY_NEEDED_FILE);
                 (k, false)
             }
         };
