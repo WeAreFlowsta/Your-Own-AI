@@ -129,6 +129,30 @@ async fn two_devices_share_a_conversation_by_its_anchor() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_device_alone_reads_its_own_keys_locally() {
+    // The move reads the keys from this conductor first and adds the
+    // network's answer when it comes (a peer that cannot be reached after a
+    // cold start held whole passes before). A device with no peer gets its
+    // own conversations and tombstones from the local read, the same as from
+    // the network read.
+    let dna = dna(false).await;
+    let mut conductor = SweetConductor::standard().await;
+    let a = conductor.setup_app("device-a", [&dna]).await.unwrap().into_cells().remove(0);
+    let az = a.zome(ZOME);
+    let founding = a.agent_pubkey().clone();
+    let (kept, gone) = (anchor(1), anchor(2));
+    let _: ActionHash = conductor.call(&az, "start_conversation", start(&founding, &kept)).await;
+    let _: ActionHash = conductor.call(&az, "start_conversation", start(&founding, &gone)).await;
+    let _: u32 = conductor.call(&az, "delete_conversation", DeleteConversationInput { anchor: founding.clone(), conversation_anchor: gone.clone() }).await;
+    let local: ConversationKeys = conductor.call(&az, "get_conversation_keys_local", founding.clone()).await;
+    let network: ConversationKeys = conductor.call(&az, "get_conversation_keys", founding.clone()).await;
+    assert!(local.conversations.iter().any(|k| k.key == kept.get_raw_39().to_vec()), "the kept conversation's key, read locally");
+    assert_eq!(local.tombstoned, vec![gone.get_raw_39().to_vec()], "the tombstone, read locally");
+    assert_eq!(local.conversations, network.conversations);
+    assert_eq!(local.tombstoned, network.tombstoned);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_malformed_record_is_refused() {
     let dna = dna(false).await;
     let mut conductor = SweetConductor::standard().await;

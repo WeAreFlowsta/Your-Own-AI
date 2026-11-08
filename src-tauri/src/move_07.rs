@@ -39,6 +39,28 @@ pub const MARKER: MarkerSpec = MarkerSpec { file_name: "moved-07", old_line_key:
 /// reads after a cold start take minutes.
 const READ_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// How long a pass waits for the network's answer to a link read once this
+/// conductor's own answer is in. The links at an AI's founding key hold what
+/// the person's other devices wrote too, so the network's answer is added
+/// when it comes; but a peer that cannot be reached after a cold start held
+/// whole passes for 68-180 s before (11-08). Whatever it misses (another
+/// device's tombstone not yet here) the next pass carries.
+const NETWORK_GRACE: Duration = Duration::from_secs(30);
+
+/// `into` plus what `more` adds: keys by (key, author), tombstoned anchors once.
+fn merge_keys(into: &mut crate::hc07::ConversationKeys, more: crate::hc07::ConversationKeys) {
+    for k in more.conversations {
+        if !into.conversations.iter().any(|x| x.key == k.key && x.author == k.author) {
+            into.conversations.push(k);
+        }
+    }
+    for t in more.tombstoned {
+        if !into.tombstoned.contains(&t) {
+            into.tombstoned.push(t);
+        }
+    }
+}
+
 /// What the pass hooks share.
 pub struct Move {
     pub hc: Arc<HolochainState>,
@@ -95,8 +117,39 @@ impl Move {
     /// The conversations tombstoned on the 0.6 line under the AI's founding
     /// key (by any device), as ids.
     async fn tombstones_06(&self, agent: &str) -> Result<HashSet<String>, HookError> {
-        let hashes: Vec<ActionHash> = self.call_06(agent, "get_tombstones", Self::agent_key(&self.founding(agent))?).await?;
+        let anchor = Self::agent_key(&self.founding(agent))?;
+        let hashes: Vec<ActionHash> = match self.call_06::<_, Vec<ActionHash>>(agent, "get_tombstones_local", anchor.clone()).await {
+            Ok(mut local) => {
+                match tokio::time::timeout(NETWORK_GRACE, self.call_06::<_, Vec<ActionHash>>(agent, "get_tombstones", anchor)).await {
+                    Ok(Ok(network)) => local.extend(network),
+                    Ok(Err(e)) => log::info!("[0.7] pass: the 0.6 tombstones' network read failed ({e}); this device's own copy stands"),
+                    Err(_) => log::info!("[0.7] pass: the 0.6 tombstones' network read did not answer within {} s; this device's own copy stands", NETWORK_GRACE.as_secs()),
+                }
+                local
+            }
+            // A cell still on a coordinator before 13 has no local read: the
+            // network read decides, with its full timeout, as before.
+            Err(_) => self.call_06(agent, "get_tombstones", anchor).await?,
+        };
         Ok(hashes.iter().map(|h| id_of_v1(h.get_raw_39())).collect())
+    }
+
+    /// The AI's conversation keys on the 0.7 line: this conductor's own at
+    /// once, and the network's added when they come within NETWORK_GRACE.
+    async fn keys_07(&self, agent: &str, founding: &str) -> Result<crate::hc07::ConversationKeys, HookError> {
+        let anchor = Self::agent_key(founding)?;
+        match self.cells.call::<_, crate::hc07::ConversationKeys>(agent, "get_conversation_keys_local", &anchor).await {
+            Ok(mut keys) => {
+                match tokio::time::timeout(NETWORK_GRACE, self.cells.call::<_, crate::hc07::ConversationKeys>(agent, "get_conversation_keys", &anchor)).await {
+                    Ok(Ok(network)) => merge_keys(&mut keys, network),
+                    Ok(Err(e)) => log::info!("[0.7] pass: the 0.7 conversation keys' network read failed ({e}); this device's own copy stands"),
+                    Err(_) => log::info!("[0.7] pass: the 0.7 conversation keys' network read did not answer within {} s; this device's own copy stands", NETWORK_GRACE.as_secs()),
+                }
+                Ok(keys)
+            }
+            // A v2 cell installed before the local read existed.
+            Err(_) => Ok(self.cells.call(agent, "get_conversation_keys", &anchor).await?),
+        }
     }
 
     /// Conversation ids not to carry: the deleted ledger's and those
@@ -104,7 +157,7 @@ impl Move {
     async fn gone(&self, agent: &str) -> Result<(HashSet<String>, HashSet<[u8; 32]>), HookError> {
         let mut ids = (self.deleted)();
         ids.extend(self.tombstones_06(agent).await?);
-        let keys: crate::hc07::ConversationKeys = self.cells.call(agent, "get_conversation_keys", &Self::agent_key(&self.founding(agent))?).await?;
+        let keys = self.keys_07(agent, &self.founding(agent)).await?;
         let anchors = keys.tombstoned.iter().filter_map(|a| anchor_core(a)).collect();
         Ok((ids, anchors))
     }
@@ -245,7 +298,7 @@ impl VersionedKind<Move> for Conversations {
                 Ok(out)
             }
             Line::V07 => {
-                let keys: crate::hc07::ConversationKeys = mv.cells.call(agent, "get_conversation_keys", &Move::agent_key(&founding)?).await?;
+                let keys = mv.keys_07(agent, &founding).await?;
                 keys.conversations
                     .iter()
                     .filter(|k| k.author.get_raw_39() == author.as_slice())
@@ -495,7 +548,7 @@ impl flowsta_hc_lines::pass::CarriedRecords<Move> for Tombstones {
             }
             let mut ids = mv.tombstones_06(agent).await?;
             ids.extend((mv.deleted)());
-            let keys: crate::hc07::ConversationKeys = mv.cells.call(agent, "get_conversation_keys", &Move::agent_key(&founding)?).await?;
+            let keys = mv.keys_07(agent, &founding).await?;
             let have: HashSet<[u8; 32]> = keys.tombstoned.iter().filter_map(|a| anchor_core(a)).collect();
             for id in ids {
                 any = true;

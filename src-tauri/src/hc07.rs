@@ -21,7 +21,7 @@ pub const APP_ID_PREFIX: &str = "transcript_v2_";
 /// The bundle (in `resources/`), copied from `dna/v2/workdir`; never rebuilt.
 pub const HAPP_FILENAME: &str = "yourown_ai_transcript_v2_happ.happ";
 /// Its SHA-256, as `DNA_VERSION_HISTORY.md` records it.
-pub const HAPP_SHA256: &str = "7c3a6b7b452e0b4f9b95f193d9cc0ea0670bbba2edbb091e112a1dc4cad4d77f";
+pub const HAPP_SHA256: &str = "d46fbbcc0ab73f43e7b2acaa4009b22a6bacecc13f3e8d903c4db9ac920b52e5";
 
 /// The v2 app id for a v1 app id; None for an app that is not a transcript.
 pub fn app_id_for(v1_app_id: &str) -> Option<String> {

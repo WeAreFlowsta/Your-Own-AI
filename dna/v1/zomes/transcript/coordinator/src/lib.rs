@@ -589,7 +589,19 @@ pub fn get_my_entries_page(input: MyEntriesPageInput) -> ExternResult<MyEntriesP
 /// of the person's devices, from links alone.
 #[hdk_extern]
 pub fn get_tombstones(anchor: AgentPubKey) -> ExternResult<Vec<ActionHash>> {
-    let mut out: Vec<ActionHash> = get_links(LinkQuery::try_new(anchor, LinkTypes::AllConversations)?, GetStrategy::default())?
+    tombstones(anchor, GetStrategy::default())
+}
+
+/// The same from what this conductor already holds (its own links and what
+/// gossip brought): no network round, so it answers at once even when no
+/// peer can be reached. A caller adds the network's answer when it comes.
+#[hdk_extern]
+pub fn get_tombstones_local(anchor: AgentPubKey) -> ExternResult<Vec<ActionHash>> {
+    tombstones(anchor, GetStrategy::Local)
+}
+
+fn tombstones(anchor: AgentPubKey, strategy: GetStrategy) -> ExternResult<Vec<ActionHash>> {
+    let mut out: Vec<ActionHash> = get_links(LinkQuery::try_new(anchor, LinkTypes::AllConversations)?, strategy)?
         .into_iter()
         .filter(is_tombstone)
         .filter_map(|l| ActionHash::try_from(l.target).ok())
