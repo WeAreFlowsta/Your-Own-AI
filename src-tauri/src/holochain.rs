@@ -51,6 +51,19 @@ fn chain_stats_from_dump(dump: &str) -> Option<(u64, u64)> {
 }
 
 #[cfg(test)]
+mod lineage_tests {
+    use super::HolochainManager;
+
+    #[test]
+    fn the_suffix_reads_the_same_on_both_lines_and_the_oldest_name() {
+        assert_eq!(HolochainManager::app_id_suffix("transcript_v1_abc"), "abc");
+        assert_eq!(HolochainManager::app_id_suffix("transcript_v2_abc"), "abc", "not v2_abc");
+        assert_eq!(HolochainManager::app_id_suffix("transcript_abc"), "abc");
+        assert_eq!(HolochainManager::app_id_suffix("something_else"), "");
+    }
+}
+
+#[cfg(test)]
 mod census_tests {
     #[test]
     fn dump_parsing_counts_records_and_app_entries() {
@@ -149,12 +162,28 @@ impl HolochainManager {
         })
     }
 
+    /// The suffix a transcript app was installed under, on either line
+    /// (`transcript_v1_X`, `transcript_v2_X`, or the oldest `transcript_X`):
+    /// X is the previous generation's key, or the root local id.
     fn app_id_suffix(installed_app_id: &str) -> String {
         installed_app_id
             .strip_prefix(dna::APP_ID_PREFIX)
+            .or_else(|| installed_app_id.strip_prefix(crate::hc07::APP_ID_PREFIX))
             .or_else(|| installed_app_id.strip_prefix("transcript_"))
             .unwrap_or("")
             .to_string()
+    }
+
+    /// Index the 0.7 line's v2 apps too (disabled ones included), so the
+    /// lineage holds without the 0.6 line. A v2 app mirrors its v1 app's
+    /// suffix, so where both exist they agree.
+    pub async fn index_lineage_07(&self) -> Result<usize, String> {
+        let apps = crate::hc07::transcript_apps().await?;
+        let mut idx = self.lineage_index.lock().await;
+        for a in &apps {
+            idx.entry(a.agent.clone()).or_insert_with(|| Self::app_id_suffix(&a.app_id));
+        }
+        Ok(apps.len())
     }
 
     /// Rebuild the lineage index from a `list_apps` answer. Disabled apps

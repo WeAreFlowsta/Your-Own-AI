@@ -649,6 +649,12 @@ pub fn run_passes(app: tauri::AppHandle, data_dir: std::path::PathBuf) {
                 return;
             }
         };
+        // The lineage holds on the 0.7 line's own apps too.
+        if let Ok(manager) = hc.get() {
+            if let Err(e) = manager.index_lineage_07().await {
+                log::warn!("[0.7] lineage from the 0.7 apps: {e}");
+            }
+        }
         // The connections follow a 0.7 restart by themselves (`Cells07`).
         let m = Arc::new(Move::for_app(&app, data_key));
         loop {

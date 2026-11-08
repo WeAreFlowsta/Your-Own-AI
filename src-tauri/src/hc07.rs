@@ -33,16 +33,37 @@ async fn admin() -> Result<AdminClient, String> {
     AdminClient::connect(Line::V07, port, &crate::conductor::origin()).await.map_err(|e| format!("0.7 admin: {e}"))
 }
 
+/// One v2 transcript app on the 0.7 line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct App07 {
+    pub app_id: String,
+    /// The agent key, hex (39 bytes).
+    pub agent: String,
+    pub enabled: bool,
+}
+
+/// Every v2 transcript app on the 0.7 line, disabled ones too: the AIs
+/// this device has there, without asking the 0.6 line.
+pub async fn transcript_apps() -> Result<Vec<App07>, String> {
+    let apps = admin().await?.list_apps().await.map_err(|e| format!("0.7 list_apps: {e}"))?;
+    Ok(apps
+        .into_iter()
+        .filter(|a| a.app_id.starts_with(APP_ID_PREFIX))
+        .map(|a| App07 { app_id: a.app_id, agent: hex::encode(a.agent_key), enabled: a.enabled })
+        .collect())
+}
+
 /// The agents (keys, hex) with an enabled v2 transcript app.
 pub async fn agents_with_apps() -> Result<std::collections::HashSet<String>, String> {
-    let apps = admin().await?.list_apps().await.map_err(|e| format!("0.7 list_apps: {e}"))?;
-    Ok(apps.into_iter().filter(|a| a.enabled && a.app_id.starts_with(APP_ID_PREFIX)).map(|a| hex::encode(a.agent_key)).collect())
+    Ok(transcript_apps().await?.into_iter().filter(|a| a.enabled).map(|a| a.agent).collect())
 }
 
 /// Make sure each v1 transcript app has its v2 app: an app that exists is
 /// adopted (enabled if it is not), never reinstalled, since a second install
 /// under a key that has a 0.7 chain forks it. `v1_apps` is (app id, agent
-/// key 39 bytes). Returns how many apps were installed.
+/// key 39 bytes). Returns how many apps were installed. A v2 app that runs
+/// as another key is left as it is and skipped: one such app never stops
+/// the others, nor the 0.7 line.
 pub async fn ensure_apps(resource_dir: &Path, network_seed: &str, v1_apps: &[(String, Vec<u8>)]) -> Result<usize, String> {
     ensure_apps_on(&admin().await?, resource_dir, network_seed, v1_apps).await
 }
@@ -60,7 +81,7 @@ pub async fn ensure_apps_on(admin: &AdminClient, resource_dir: &Path, network_se
         let Some(app_id) = app_id_for(v1_app_id) else { continue };
         match have.iter().find(|a| a.app_id == app_id) {
             Some(a) if a.agent_key != *agent => {
-                return Err(format!("{app_id} runs as another key than {v1_app_id}: left as it is"));
+                log::warn!("[0.7] {app_id} runs as another key than {v1_app_id}: left as it is, and skipped");
             }
             Some(a) if !a.enabled => admin.enable(&app_id).await.map_err(|e| format!("0.7 enable {app_id}: {e}"))?,
             Some(_) => {}
