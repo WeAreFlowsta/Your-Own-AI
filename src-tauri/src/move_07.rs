@@ -1117,6 +1117,189 @@ mod tests {
         supervisor().stop();
     }
 
+    /// Nothing left behind: another device's conversation, at the AI's
+    /// founding key, whose own cell is gone (disabled here). A pass in its
+    /// own mode carries this device's records only and says nothing about
+    /// the other devices; once no device needs the 0.6 line (and the machine
+    /// has room), a full pass carries the other device's conversation and
+    /// message too, over every AI, and only then records that nothing is
+    /// left, so the 0.6 line is no longer wanted.
+    /// Run with the app closed: `cargo test --lib -- --ignored live_move --test-threads 1`
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn live_move_a_full_pass_carries_a_gone_devices_records_before_nothing_is_left() {
+        use crate::conductor::{prepare_store_07, start_for_test, supervisor, Line07};
+        use crate::holochain::HolochainManager;
+        use crate::transcript_crypto::{encrypt, RecoveryMaterial};
+        use holochain_types::prelude::ExternIO;
+        let tmp = tempfile::tempdir().unwrap();
+        let profile = tmp.path().join("profile");
+        let resource_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
+        let data_key = [8u8; 32];
+        let material = || RecoveryMaterial { network_seed: format!("live-full-{}", std::process::id()), data_key_hex: hex::encode(data_key), version: 1 };
+        let seal = |v: serde_json::Value| encrypt(&data_key, &serde_json::to_vec(&v).unwrap()).unwrap();
+
+        start_for_test(profile.clone(), None).await.expect("0.6 starts");
+        let manager = HolochainManager::new(resource_dir.clone(), material());
+        let a = manager.provision_agent("live-full-a").await.expect("the AI's founding cell");
+        let b = manager.provision_agent("live-full-b").await.expect("a second cell, standing for another device's");
+        let founding = Move::agent_key(&a).unwrap();
+        // This device's own conversation, and the other device's, both at the founding key.
+        let (n, c) = seal(serde_json::json!({"title": "Mine", "started_at": 1}));
+        manager.call_zome(&a, "transcript", "start_conversation", ExternIO::encode(StartV1 { cipher: c, nonce: n.to_vec(), anchor: None }).unwrap()).await.unwrap();
+        let (n, c) = seal(serde_json::json!({"title": "From the laptop", "started_at": 2}));
+        let out = manager.call_zome(&b, "transcript", "start_conversation", ExternIO::encode(StartV1 { cipher: c, nonce: n.to_vec(), anchor: Some(founding.clone()) }).unwrap()).await.unwrap();
+        let theirs: ActionHash = ExternIO::decode(&out).unwrap();
+        let (n, c) = seal(serde_json::json!({"role": "user", "content": "written on the laptop", "sequence": 0, "timestamp": 3}));
+        manager.call_zome(&b, "transcript", "record_message", ExternIO::encode(RecordV1 { conversation_hash: theirs.clone(), cipher: c, nonce: n.to_vec() }).unwrap()).await.unwrap();
+        // The other device is gone: its cell no longer runs here.
+        let b_app = manager.agents.lock().await.get(&b).map(|x| x.installed_app_id.clone()).unwrap();
+        let admin = holochain_client::AdminWebsocket::connect(format!("localhost:{}", manager.admin_port()), Some(crate::conductor::origin())).await.unwrap();
+        admin.disable_app(b_app).await.unwrap();
+        drop(admin);
+        drop(manager);
+        supervisor().stop();
+
+        let passphrase = prepare_store_07(&profile, &data_key).await.expect("prepared");
+        start_for_test(profile.clone(), Some(Line07 { passphrase, network_seed: material().network_seed, resource_dir: resource_dir.clone() })).await.expect("both lines");
+        let until = std::time::Instant::now() + Duration::from_secs(240);
+        while !supervisor().has(Line::V07) {
+            assert!(std::time::Instant::now() < until, "the 0.7 line did not join");
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        let manager = HolochainManager::new(resource_dir, material());
+        manager.reconnect_existing_agents().await.expect("the AI reconnects");
+        let hc = Arc::new(HolochainState::new());
+        let _ = hc.manager.set(manager);
+        let facts = std::sync::Arc::new(std::sync::Mutex::new(crate::line_facts::Known::Unknown));
+        let f2 = facts.clone();
+        let mv = Arc::new(Move {
+            hc,
+            data_key,
+            cells: crate::hc07::app_cells(),
+            founding: Box::new(|x| x.to_string()),
+            deleted: Box::new(HashSet::new),
+            passed_in_full: Default::default(),
+            known: Box::new(move |_| f2.lock().unwrap().clone()),
+            full: Default::default(),
+        });
+        let keys_at_founding = || async { mv.cells.call::<_, crate::hc07::ConversationKeys>(&a, "get_conversation_keys_local", &founding).await.unwrap().conversations.len() };
+
+        // Own mode: the facts unknown, so this device's own records only.
+        let own = runner().run(&mv, &profile, "own").await;
+        assert_eq!(own.error, None, "{own:?}");
+        assert_eq!(own.kind("conversations").map(|k| (k.total, k.written)), Some((1, 1)), "this device's own conversation only");
+        assert!(own.flipped, "its own records are carried: the marker flips");
+        assert_eq!(keys_at_founding().await, 1, "the gone device's conversation is not on 0.7 yet");
+        let carried_all = |p: &std::path::Path| match flowsta_hc_lines::marker::Marker::load(p, &MARKER) {
+            flowsta_hc_lines::marker::MarkerRead::Present(m) => m.carried_all_ms,
+            _ => None,
+        };
+        assert_eq!(carried_all(&profile), None, "nothing is recorded as left from a pass that did not read every author");
+
+        // No device needs the 0.6 line, the machine has room: a full pass.
+        *facts.lock().unwrap() = crate::line_facts::Known::Facts(crate::line_facts::LineFacts { checked_at_ms: 1, ..Default::default() });
+        crate::machine::set_reading_for_test(Some(crate::machine::Reading { others_cpu_pct: Some(0.0), memory_short: false, on_battery: false, away_secs: Some(3600) }));
+        let full = runner().run(&mv, &profile, "full").await;
+        crate::machine::set_reading_for_test(None);
+        assert_eq!(full.error, None, "{full:?}");
+        assert_eq!(full.kind("conversations").map(|k| (k.total, k.written)), Some((2, 1)), "every author's, the other device's written now (every AI read again)");
+        assert_eq!(full.kind("messages").map(|k| k.written), Some(1), "and its message");
+        assert_eq!(keys_at_founding().await, 2, "both on 0.7 at the founding key");
+        assert!(carried_all(&profile).is_some(), "a full pass over every AI records that nothing is left");
+        let decided = crate::line_facts::decide(&*facts.lock().unwrap(), flowsta_hc_lines::marker::Marker::load(&profile, &MARKER), true, 10);
+        assert!(!decided.decision.wanted(), "the 0.6 line is no longer wanted: {decided:?}");
+
+        // Another full pass writes nothing: present by key, whoever wrote it.
+        crate::machine::set_reading_for_test(Some(crate::machine::Reading { others_cpu_pct: Some(0.0), memory_short: false, on_battery: false, away_secs: Some(3600) }));
+        mv.passed_in_full.store(false, std::sync::atomic::Ordering::SeqCst);
+        let again = runner().run(&mv, &profile, "full again").await;
+        crate::machine::set_reading_for_test(None);
+        assert_eq!(again.kind("conversations").map(|k| (k.present, k.written)), Some((2, 0)), "nothing twice");
+        assert_eq!(again.kind("messages").map(|k| k.written), Some(0));
+        supervisor().stop();
+    }
+
+    /// A profile from an older release moves whole. Every release since
+    /// 0.1.0 ships the same transcript bundle; what differs is the
+    /// coordinator its cells were brought to (none past the bundle's own in
+    /// 0.1.0, 3 in 0.5-0.7, 8 in 0.8), and the records it wrote with it
+    /// (conversations at the cell's own key, before coordinator 9's founding
+    /// key). Each profile here is made with its release's own coordinator,
+    /// taken from that release's tag; then this build's start sweeps the
+    /// coordinator, and the move carries everything and flips.
+    /// Run with the app closed: `cargo test --lib -- --ignored live_move_older --test-threads 1`
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn live_move_older_release_profiles_move_whole() {
+        use crate::conductor::{prepare_store_07, start_for_test, supervisor, Line07};
+        use crate::holochain::HolochainManager;
+        use crate::transcript_crypto::{encrypt, RecoveryMaterial};
+        use holochain_types::prelude::ExternIO;
+        let resources = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
+        let repo = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+        for (tag, coordinator_wasm) in [("v0.1.0", None), ("v0.5.1", Some("v0.5.1")), ("v0.8.1", Some("v0.8.1"))] {
+            let tmp = tempfile::tempdir().unwrap();
+            let profile = tmp.path().join("profile");
+            // That release's resources: the shared bundle and its coordinator.
+            let old_res = tmp.path().join("resources");
+            std::fs::create_dir_all(&old_res).unwrap();
+            std::fs::copy(resources.join(crate::dna::HAPP_FILENAME), old_res.join(crate::dna::HAPP_FILENAME)).unwrap();
+            if let Some(t) = coordinator_wasm {
+                let out = std::process::Command::new("git").current_dir(&repo).args(["show", &format!("{t}:src-tauri/resources/transcript_coordinator.wasm")]).output().unwrap();
+                assert!(out.status.success(), "{tag}'s coordinator from its tag");
+                std::fs::write(old_res.join("transcript_coordinator.wasm"), out.stdout).unwrap();
+            }
+            let data_key = [9u8; 32];
+            let material = || RecoveryMaterial { network_seed: format!("live-older-{tag}-{}", std::process::id()), data_key_hex: hex::encode(data_key), version: 1 };
+            let seal = |v: serde_json::Value| encrypt(&data_key, &serde_json::to_vec(&v).unwrap()).unwrap();
+
+            start_for_test(profile.clone(), None).await.expect("0.6 starts");
+            let old = HolochainManager::new(old_res.clone(), material());
+            // 0.1.0 shipped no coordinator beside the bundle: its install
+            // stops before the swap, leaving the bundle's own, as 0.1.0 did.
+            let _ = old.provision_agent(&format!("older-{tag}")).await;
+            old.reconnect_existing_agents().await.expect("the old cell connects");
+            let agent = old.agents.lock().await.keys().next().cloned().expect("an AI from that release");
+            for c in 0..3 {
+                let (n, ci) = seal(serde_json::json!({"title": format!("{tag} #{c}"), "started_at": c + 1}));
+                let out = old.call_zome(&agent, "transcript", "start_conversation", ExternIO::encode(StartV1 { cipher: ci, nonce: n.to_vec(), anchor: None }).unwrap()).await.unwrap();
+                let conversation: ActionHash = ExternIO::decode(&out).unwrap();
+                for m in 0..2 {
+                    let (n, ci) = seal(serde_json::json!({"role": "user", "content": format!("{tag} {c}.{m}"), "sequence": m, "timestamp": m}));
+                    old.call_zome(&agent, "transcript", "record_message", ExternIO::encode(RecordV1 { conversation_hash: conversation.clone(), cipher: ci, nonce: n.to_vec() }).unwrap()).await.unwrap();
+                }
+            }
+            drop(old);
+            supervisor().stop();
+            let _ = std::fs::remove_file(profile.join("coordinator-version"));
+
+            // This build's first start: its coordinator swept onto the old
+            // cell, both lines up, one pass.
+            let passphrase = prepare_store_07(&profile, &data_key).await.expect("prepared");
+            start_for_test(profile.clone(), Some(Line07 { passphrase, network_seed: material().network_seed, resource_dir: resources.clone() })).await.expect("both lines");
+            let until = std::time::Instant::now() + Duration::from_secs(240);
+            while !supervisor().has(Line::V07) {
+                assert!(std::time::Instant::now() < until, "the 0.7 line did not join");
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            let manager = HolochainManager::new(resources.clone(), material());
+            crate::dna::update_coordinators_sweep(manager.admin_port(), &resources, &profile).await.expect("the coordinator sweep");
+            manager.reconnect_existing_agents().await.expect("the AI reconnects");
+            let hc = Arc::new(HolochainState::new());
+            let _ = hc.manager.set(manager);
+            let mv = Arc::new(Move { hc, data_key, cells: crate::hc07::app_cells(), founding: Box::new(|x| x.to_string()), deleted: Box::new(HashSet::new), passed_in_full: Default::default(), known: Box::new(|_| crate::line_facts::Known::Unknown), full: Default::default() });
+            let out = runner().run(&mv, &profile, tag).await;
+            assert_eq!(out.error, None, "{tag}: {out:?}");
+            assert_eq!(out.kind("conversations").map(|k| (k.total, k.written)), Some((3, 3)), "{tag}: every conversation");
+            assert_eq!(out.kind("messages").map(|k| (k.total, k.written)), Some((6, 6)), "{tag}: every message");
+            assert!(out.flipped, "{tag}: the marker flips");
+            let again = runner().run(&mv, &profile, tag).await;
+            assert_eq!(again.kind("conversations").map(|k| k.written), Some(0), "{tag}: nothing twice");
+            supervisor().stop();
+        }
+    }
+
     /// A power-off mid-move: the pass is cut off with part of an AI's
     /// messages on 0.7 (every sidecar killed, the pass abandoned); the next
     /// start's pass carries exactly the rest, nothing twice, and only then
