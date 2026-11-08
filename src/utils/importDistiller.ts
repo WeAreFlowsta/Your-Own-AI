@@ -17,6 +17,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { looksLikeUserFact, extractAndStoreFacts } from "./memoryExtraction";
 import { isUtilityModelReady } from "./utilityModel";
+import { waitForCalm, machineDone } from "./machine";
+
+const DISTILL_JOB = "learning from imported history";
 
 const CURSOR_KEY = "yoai-import-distill-cursor";
 const DONE_KEY = "yoai-import-distilled";
@@ -217,6 +220,9 @@ async function ensureLoop(): Promise<void> {
         });
         const text = messages[i].slice(0, MAX_EXTRACT_CHARS);
         if (looksLikeUserFact(text)) {
+          // Hours of model calls over a big import: only while the computer
+          // is idle (the cursor keeps the place while it waits).
+          await waitForCalm(DISTILL_JOB);
           try {
             await extractAndStoreFacts({
               userText: text,
@@ -237,6 +243,7 @@ async function ensureLoop(): Promise<void> {
 
       markDone(cursor.archiveId);
       writeCursor(null);
+      machineDone(DISTILL_JOB);
       notify({
         state: "done",
         archiveId: cursor.archiveId,

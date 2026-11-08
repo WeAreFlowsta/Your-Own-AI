@@ -90,6 +90,19 @@ pub(crate) fn get(app: &tauri::AppHandle, model: &str) -> Option<String> {
 }
 
 /// Hash one file and store it. Blocking - call from a blocking task.
+const HASH_JOB: &str = "model file checks";
+/// Reads between two looks at the machine check: 64 x 8 MB.
+const READS_PER_LOOK: usize = 64;
+
+/// Wait while the computer is busy (machine.rs): a hash keeps its value, so
+/// waiting costs nothing, and minutes of disk and a core are not taken from
+/// what the person is doing.
+fn wait_for_calm() {
+    while !crate::machine::may_run(crate::machine::Work::Heavy, HASH_JOB) {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+    }
+}
+
 fn note_file_blocking(app: &tauri::AppHandle, filename: &str) -> Result<(), String> {
     let dir = crate::llm::get_models_dir(app)?;
     let path = dir.join(filename);
@@ -97,7 +110,12 @@ fn note_file_blocking(app: &tauri::AppHandle, filename: &str) -> Result<(), Stri
     let mut f = std::fs::File::open(&path).map_err(|e| e.to_string())?;
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 8 * 1024 * 1024];
+    let mut reads = 0usize;
     loop {
+        reads += 1;
+        if reads % READS_PER_LOOK == 0 {
+            wait_for_calm();
+        }
         let n = f.read(&mut buf).map_err(|e| e.to_string())?;
         if n == 0 {
             break;
@@ -149,10 +167,12 @@ pub(crate) fn backfill_async(app: tauri::AppHandle) {
                 if current {
                     continue;
                 }
+                wait_for_calm();
                 if let Err(e) = note_file_blocking(&app, &name) {
                     log::warn!("[model-hash] {} failed: {}", name, e);
                 }
             }
+            crate::machine::done(HASH_JOB);
         })
         .await;
     });

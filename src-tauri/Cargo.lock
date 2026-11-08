@@ -245,6 +245,7 @@ dependencies = [
  "tokio",
  "url",
  "windows-sys 0.59.0",
+ "zbus",
  "zip 7.2.0",
 ]
 

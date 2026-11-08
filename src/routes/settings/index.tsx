@@ -304,6 +304,9 @@ export default component$(() => {
   // Agent: the permission default for new projects - ask unless set.
   const agentPermMode = useSignal<AgentPermissionMode>("ask");
   const checkUpdates = useSignal(true);
+  // Background work only when the computer is idle (src-tauri/src/machine.rs);
+  // on unless the person turned it off.
+  const backgroundOnlyIdle = useSignal(true);
   // Health questions: which installed model answers them (always offline).
   const medicalModel = useSignal<string>("");
   const installedChatModels = useSignal<string[]>([]);
@@ -409,6 +412,11 @@ export default component$(() => {
       localStorage.getItem("allowAttachmentsOnline") === "true";
     agentPermMode.value = defaultPermissionMode();
     updateStatus().then((st) => (checkUpdates.value = st.auto)).catch(() => {});
+    import("@tauri-apps/plugin-store")
+      .then(({ load }) => load("settings.json"))
+      .then((store) => store.get<boolean>("backgroundOnlyWhenIdle"))
+      .then((v) => (backgroundOnlyIdle.value = v !== false))
+      .catch(() => {});
     (async () => {
       try {
         installedChatModels.value = (await modelManager.listModels()).map((m) => m.name);
@@ -592,6 +600,17 @@ export default component$(() => {
     setHelpTipsEnabled(showHelpTips.value);
   });
 
+  const toggleBackgroundOnlyIdle = $(async () => {
+    backgroundOnlyIdle.value = !backgroundOnlyIdle.value;
+    try {
+      const { load } = await import("@tauri-apps/plugin-store");
+      const store = await load("settings.json");
+      await store.set("backgroundOnlyWhenIdle", backgroundOnlyIdle.value);
+      await store.save();
+    } catch {
+      /* fresh profile: the default stands */
+    }
+  });
   const toggleCheckUpdates = $(async () => {
     checkUpdates.value = !checkUpdates.value;
     try {
@@ -1782,6 +1801,17 @@ export default component$(() => {
                     It installs when you choose Restart to update, or when you
                     quit on Windows and macOS. The check reads two public files
                     and carries nothing about you or this device.
+                  </SettingToggle>
+                  <SettingToggle
+                    title="Do background work only when my computer is idle"
+                    checked={backgroundOnlyIdle}
+                    onToggle$={toggleBackgroundOnlyIdle}
+                  >
+                    Memory upkeep, document indexing and other work nobody is
+                    waiting on run only when your other programs leave the
+                    processor free, the computer is plugged in, and you have
+                    been away from the keyboard for a few minutes. Turned off,
+                    that work runs whenever Your Own AI itself is idle.
                   </SettingToggle>
                 </div>
               </section>

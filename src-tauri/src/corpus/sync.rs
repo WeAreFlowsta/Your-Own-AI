@@ -26,6 +26,17 @@ use std::collections::{HashMap, HashSet};
 
 /// One sync pass at a time, across all folders.
 static SYNC_CANCEL: AtomicBool = AtomicBool::new(false);
+/// The run under way is the timer's (nobody waiting on it): it also stops
+/// when the machine check says the computer is busy (machine.rs).
+static SYNC_AUTOMATIC: AtomicBool = AtomicBool::new(false);
+const SYNC_JOB: &str = "folder indexing";
+
+/// Stop at this file? The person's Stop always; an automatic run also when
+/// the computer got busy (the next run picks up where this one stopped:
+/// unchanged files are skipped).
+fn stop_now() -> bool {
+    SYNC_CANCEL.load(Ordering::SeqCst) || (SYNC_AUTOMATIC.load(Ordering::SeqCst) && !crate::machine::may_run(crate::machine::Work::Heavy, SYNC_JOB))
+}
 
 /// Columns and the table a synced folder needs. Safe to run on every open.
 pub(super) fn ensure_schema(conn: &Connection) -> Result<(), String> {
@@ -330,7 +341,7 @@ async fn read_and_embed(
     }
     let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(passages.len());
     for batch in passages.chunks(EMBED_BATCH) {
-        if SYNC_CANCEL.load(Ordering::SeqCst) {
+        if stop_now() {
             return Err("stopped".into());
         }
         let v = crate::llm::embed_texts(app.clone(), llm_state.clone(), batch.to_vec(), EMBEDDING_MODEL_FILE.to_string())
@@ -393,7 +404,7 @@ async fn sync_one(
 
     // Changed files first: a person who just edited a note asks about it next.
     for (i, doc_id) in &plan.look {
-        if SYNC_CANCEL.load(Ordering::SeqCst) {
+        if stop_now() {
             report.cancelled = true;
             break;
         }
@@ -458,7 +469,7 @@ async fn sync_one(
 
     if !report.cancelled {
         for i in &plan.add {
-            if SYNC_CANCEL.load(Ordering::SeqCst) {
+            if stop_now() {
                 report.cancelled = true;
                 break;
             }
@@ -611,14 +622,23 @@ pub async fn sync_folders(
     hc_state: &State<'_, Arc<HolochainState>>,
     llm_state: &State<'_, crate::llm::LLMState>,
     only: Option<String>,
+    // The half-hour timer, which nobody is waiting on: it asks the machine
+    // check. A look when a documents screen opens or the app comes to the
+    // front is the person's own (they are in the app, waiting to see it).
+    automatic: bool,
 ) -> Result<Vec<SyncReport>, String> {
     // The automatic look (open, focus, timer) asks for `only = None` and
     // takes "busy" as "not now"; a person's Check now gets the reason.
+    // The timer's look runs only when the computer is idle (machine.rs).
+    if automatic && !crate::machine::may_run(crate::machine::Work::Heavy, SYNC_JOB) {
+        return Ok(Vec::new());
+    }
     let _job = match begin_job("a folder check") {
         Ok(j) => j,
         Err(e) => return if only.is_none() { Ok(Vec::new()) } else { Err(e) },
     };
     SYNC_CANCEL.store(false, Ordering::SeqCst);
+    SYNC_AUTOMATIC.store(automatic, Ordering::SeqCst);
     let key = data_key(hc_state)?;
     let folders = {
         let conn = open(app)?;
@@ -872,7 +892,7 @@ async fn check_linked(
     };
     links::never_download_on_this_thread();
     for row in rows {
-        if SYNC_CANCEL.load(Ordering::SeqCst) {
+        if stop_now() {
             break;
         }
         // A document with no known file (given before paths were kept, or
@@ -1022,7 +1042,7 @@ pub async fn corpus_folder_sync(
     llm_state: State<'_, crate::llm::LLMState>,
     folder_id: Option<String>,
 ) -> Result<Vec<SyncReport>, String> {
-    sync_folders(&app, &hc_state, &llm_state, folder_id).await
+    sync_folders(&app, &hc_state, &llm_state, folder_id, false).await
 }
 
 /// Point ONE document at a file the person chose. A file with the same words
@@ -1193,7 +1213,7 @@ pub async fn corpus_search_missing(
     }
     let mut taken: HashSet<PathBuf> = HashSet::new();
     for (doc_id, name, size, content_id) in wanted {
-        if SYNC_CANCEL.load(Ordering::SeqCst) {
+        if stop_now() {
             break;
         }
         let Some(cands) = by_name.get(&name) else { report.still_missing += 1; continue };
@@ -1275,10 +1295,15 @@ pub fn start_folder_sync(app: &AppHandle) {
         let mut wait = std::time::Duration::from_secs(240);
         loop {
             tokio::time::sleep(wait).await;
+            // Held by a busy computer: look again in five minutes, not thirty.
+            if !crate::machine::may_run(crate::machine::Work::Heavy, SYNC_JOB) {
+                wait = std::time::Duration::from_secs(5 * 60);
+                continue;
+            }
             wait = std::time::Duration::from_secs(30 * 60);
             let hc = app.state::<Arc<HolochainState>>();
             let llm = app.state::<crate::llm::LLMState>();
-            match sync_folders(&app, &hc, &llm, None).await {
+            match sync_folders(&app, &hc, &llm, None, true).await {
                 Ok(reports) => {
                     let changed: usize = reports.iter().map(|r| r.added + r.updated + r.removed + r.offline + r.relinked).sum();
                     if changed > 0 {
@@ -1287,6 +1312,7 @@ pub fn start_folder_sync(app: &AppHandle) {
                 }
                 Err(e) => log::debug!("[corpus] folder sync skipped: {e}"),
             }
+            crate::machine::done(SYNC_JOB);
         }
     });
 }

@@ -1,5 +1,6 @@
 //! Dreaming (the design notes §6): consolidation of the
-//! person's memory rows when the app is idle - local, deterministic here
+//! person's memory rows when the computer is idle (the machine check,
+//! machine.rs: other programs, power and the person's input) - local, deterministic here
 //! (the model-assisted parts, relative dates and splitting double
 //! statements, join with the memory slot). Merge rows that say the same
 //! thing (newest wins, history free), type notes that are plainly commands
@@ -15,7 +16,6 @@ use std::sync::atomic::{AtomicI64, Ordering};
 /// many live rows per scope; the oldest, least recent go to history.
 pub const LAYER2_BUDGET_ROWS: usize = 500;
 /// A dream needs this much quiet first.
-const IDLE_SECS: i64 = 10 * 60;
 /// And runs at most this often per scope.
 const EVERY_SECS: i64 = 6 * 60 * 60;
 
@@ -89,6 +89,12 @@ pub fn pmset_on_battery(out: &str) -> bool {
 /// 3-11 charging states, no battery) counts as plugged in.
 pub fn windows_battery_status_discharging(out: &str) -> bool {
     out.lines().any(|l| l.trim() == "1")
+}
+
+/// Our own app's idle seconds, for the machine check's fallback where the
+/// system does not say how long the person has been away.
+pub(crate) fn own_idle_secs() -> i64 {
+    idle_for_secs()
 }
 
 fn idle_for_secs() -> i64 {
@@ -345,9 +351,10 @@ pub fn assist_candidates(live: &[MemoryRow]) -> Vec<MemoryRow> {
 async fn assist_scope(app: &tauri::AppHandle, manager: &crate::holochain::HolochainManager, agent: &str, live: &[MemoryRow], respect_idle: bool) -> usize {
     let mut written = 0usize;
     for row in assist_candidates(live) {
-        // The scheduler stops the moment the person comes back; a dream
-        // asked for (Settings, the tests) runs to the end.
-        if respect_idle && idle_for_secs() < IDLE_SECS {
+        // The scheduler stops the moment the person comes back or the
+        // computer gets busy; a dream asked for (Settings, the tests) runs
+        // to the end.
+        if respect_idle && !crate::machine::may_run(crate::machine::Work::Heavy, "dreaming") {
             break;
         }
         let said = crate::memory_rows::ymd(row.as_of);
@@ -411,7 +418,9 @@ pub fn start_dreaming(app: &tauri::AppHandle) {
         let mut last_by_scope: std::collections::HashMap<String, i64> = Default::default();
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(30 * 60)).await;
-            if idle_for_secs() < IDLE_SECS || on_battery() {
+            // The whole machine, other programs included (machine.rs): its
+            // processor, memory, power and the person's input anywhere.
+            if !crate::machine::may_run(crate::machine::Work::Heavy, "dreaming") {
                 continue;
             }
             let Some(hc) = app.try_state::<std::sync::Arc<crate::commands_holochain::HolochainState>>() else { continue };
@@ -427,8 +436,8 @@ pub fn start_dreaming(app: &tauri::AppHandle) {
                 if now - last_by_scope.get(&scope).copied().unwrap_or(0) < EVERY_SECS * 1000 {
                     continue;
                 }
-                if idle_for_secs() < IDLE_SECS {
-                    break; // the person came back
+                if !crate::machine::may_run(crate::machine::Work::Heavy, "dreaming") {
+                    break; // the person came back, or the computer got busy
                 }
                 match dream_scope(&app, &manager, &agent, &scope, true).await {
                     Ok(0) => {}

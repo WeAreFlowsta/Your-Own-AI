@@ -660,8 +660,9 @@ export default component$(() => {
                 />
                 <p class="mt-1 text-[11px] text-[var(--text-muted)]">
                   The memory model and the helper model run beside your chat model. Automatic puts
-                  them on the card after a chat model loads when the measured room allows, and moves
-                  them back to the processor before a model switch.
+                  them on the card after a chat model loads when the measured room allows. When the
+                  card fills, they leave it and start on the processor only when they are needed, at a
+                  lower priority than your other programs.
                 </p>
               </>
             )}
