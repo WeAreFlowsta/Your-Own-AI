@@ -1897,7 +1897,10 @@ fn pretty_model_name(model: &str) -> String {
 /// OpenAI object form that names a function (`{"type":"function","function":
 /// {"name":..}}`) makes it warn and drop the field, so a caller that forced a
 /// tool (the Build agent's structured output does) got a free-text answer and
-/// no tool call. Naming a function means a tool call is required: say so.
+/// no tool call. Naming a function means a call to THAT function is
+/// required: the engine is told a call is required, and of the tools
+/// offered it is given only the named one (with several offered, "required"
+/// alone let the model call another).
 pub(crate) fn normalize_tool_choice(body: &mut Value) {
     let Some(choice) = body.get("tool_choice") else { return };
     if choice.is_object() {
@@ -1909,7 +1912,13 @@ pub(crate) fn normalize_tool_choice(body: &mut Value) {
             .to_string();
         body["tool_choice"] = json!("required");
         if !name.is_empty() {
-            log::debug!("[inference] tool_choice named {name}; sent to the engine as required");
+            let named = |t: &Value| t.get("function").and_then(|f| f.get("name")).and_then(Value::as_str) == Some(name.as_str());
+            if let Some(tools) = body.get_mut("tools").and_then(Value::as_array_mut) {
+                if tools.iter().any(named) {
+                    tools.retain(named);
+                }
+            }
+            log::debug!("[inference] tool_choice named {name}; sent to the engine as required, with that tool alone");
         }
     }
 }
@@ -1931,6 +1940,23 @@ mod tool_choice_tests {
         let mut b = json!({ "messages": [] });
         normalize_tool_choice(&mut b);
         assert!(b.get("tool_choice").is_none());
+    }
+
+    #[test]
+    fn a_named_function_among_several_is_the_only_tool_sent() {
+        let tool = |n: &str| json!({ "type": "function", "function": { "name": n, "parameters": { "type": "object" } } });
+        let mut b = json!({ "tools": [tool("list_dir"), tool("read_file"), tool("run_command")], "tool_choice": { "type": "function", "function": { "name": "read_file" } } });
+        normalize_tool_choice(&mut b);
+        assert_eq!(b["tool_choice"], json!("required"));
+        assert_eq!(b["tools"], json!([tool("read_file")]));
+        // A name not among the tools leaves them as they are.
+        let mut b = json!({ "tools": [tool("list_dir")], "tool_choice": { "type": "function", "function": { "name": "missing" } } });
+        normalize_tool_choice(&mut b);
+        assert_eq!(b["tools"], json!([tool("list_dir")]));
+        // "auto" never narrows the tools.
+        let mut b = json!({ "tools": [tool("list_dir"), tool("read_file")], "tool_choice": "auto" });
+        normalize_tool_choice(&mut b);
+        assert_eq!(b["tools"].as_array().unwrap().len(), 2);
     }
 }
 
