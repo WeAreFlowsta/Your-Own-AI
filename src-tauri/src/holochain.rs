@@ -751,9 +751,10 @@ impl HolochainManager {
         // Since AppWebsocket uses interior mutability (Arc<RwLock>), we can
         // call methods on it after dropping the outer lock.
 
-        // We need to get a raw pointer or clone. Let's check if we can just
-        // call from within the lock scope by using block_in_place...
-        // Actually, the simplest fix: store AppWebsocket in an Arc so we can clone the Arc.
+        // Counted on the 0.6 line from here, queued behind the chain's lock
+        // included: a retirement of the line drains these first, and the
+        // watch's memory restart waits for them.
+        let _in_flight = flowsta_hc_lines::calling(flowsta_hc_lines::Line::V06);
 
         let agents = self.agents.lock().await;
         let agent = agents

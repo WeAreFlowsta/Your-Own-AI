@@ -560,8 +560,12 @@ impl LineHooks for YoaiLines {
         log::info!("[{line}] Holochain conductor ready (admin: {}, app: {})", admin_port, app_port);
         // The 0.6 line joined after the 0.7 one (it started again for a
         // device still on 0.6): its AI cells get their v2 apps now, as the
-        // 0.7 setup would have given them.
+        // 0.7 setup would have given them, and the passes run again (they
+        // stop whenever either line is down).
         if line == Line::V06 && ports(Line::V07).is_some() {
+            if let Some(app) = &self.app {
+                crate::move_07::run_passes(app.clone(), self.data_dir.clone());
+            }
             if let Some(l07) = &self.line_07 {
                 let (resource_dir, seed) = (l07.resource_dir.clone(), l07.network_seed.clone());
                 tauri::async_runtime::spawn(async move {
