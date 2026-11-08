@@ -165,6 +165,48 @@ impl Move {
     }
 }
 
+/// What a list must hide while both lines hold an AI's conversations, from
+/// this device's own copies (instant; the network's arrive as they gossip):
+/// ids deleted on the 0.6 line or in the deleted ledger, and anchors
+/// tombstoned on the 0.7 line. A conversation deleted on one line stays
+/// hidden even while its copy on the other line still lists.
+#[derive(Default)]
+pub(crate) struct Deleted {
+    pub ids: HashSet<String>,
+    pub anchors_07: HashSet<[u8; 32]>,
+}
+
+impl Deleted {
+    pub fn hides(&self, data_key: &[u8; 32], id: &str) -> bool {
+        self.ids.contains(id) || self.anchors_07.contains(&conversation_anchor(data_key, id))
+    }
+}
+
+/// [`Deleted`] for `reader`'s cell of the AI founded at `founding` (hex).
+pub(crate) async fn deleted_here(app: &tauri::AppHandle, manager: &crate::holochain::HolochainManager, reader: &str, founding: &str) -> Deleted {
+    use holochain_types::prelude::ExternIO;
+    let mut out = Deleted { ids: crate::conversation_cache::deleted_ledger(app).into_iter().map(|d| d.hash).collect(), ..Default::default() };
+    let Ok(anchor) = Move::agent_key(founding) else { return out };
+    let quick = Duration::from_secs(10);
+    if crate::conductor::ports(Line::V06).is_some() && manager.is_provisioned(reader).await {
+        if let Ok(payload) = ExternIO::encode(anchor.clone()) {
+            // Coordinator 13 and later; an older cell has no local read and
+            // its list hides its own tombstones already.
+            if let Ok(io) = manager.call_zome_with_timeout(reader, "transcript", "get_tombstones_local", payload, quick).await {
+                if let Ok(hashes) = ExternIO::decode::<Vec<ActionHash>>(&io) {
+                    out.ids.extend(hashes.iter().map(|h| id_of_v1(h.get_raw_39())));
+                }
+            }
+        }
+    }
+    if crate::conductor::ports(Line::V07).is_some() {
+        if let Ok(Ok(keys)) = tokio::time::timeout(quick, crate::hc07::app_cells().call::<_, crate::hc07::ConversationKeys>(reader, "get_conversation_keys_local", &anchor)).await {
+            out.anchors_07.extend(keys.tombstoned.iter().filter_map(|a| anchor_core(a)));
+        }
+    }
+    out
+}
+
 /// The 32-byte core of a 39-byte `ExternalHash` as a link tag carries it.
 fn anchor_core(raw_39: &[u8]) -> Option<[u8; 32]> {
     (raw_39.len() == 39).then(|| raw_39[3..35].try_into().ok()).flatten()
@@ -685,6 +727,23 @@ pub fn runner() -> PassRunner<Move> {
         vec![Arc::new(Tombstones)],
         Arc::new(NoFlipHook),
     )
+}
+
+#[cfg(test)]
+mod deleted_tests {
+    use super::*;
+
+    #[test]
+    fn a_conversation_deleted_on_either_line_is_hidden_from_both() {
+        let key = [7u8; 32];
+        let mut d = Deleted::default();
+        d.ids.insert("v1-deleted".into());
+        d.anchors_07.insert(conversation_anchor(&key, "v2-deleted"));
+        assert!(d.hides(&key, "v1-deleted"), "deleted on 0.6 (or here): its 0.7 copy hides too");
+        assert!(d.hides(&key, "v2-deleted"), "deleted on 0.7: its 0.6 copy hides too");
+        assert!(!d.hides(&key, "kept"));
+        assert!(!d.hides(&[8u8; 32], "v2-deleted"), "anchors follow the data key");
+    }
 }
 
 #[cfg(test)]
