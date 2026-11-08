@@ -6,7 +6,7 @@ mod device_sync;          // the tray notice for what syncs with the other devic
 mod memory_rows;          // typed, dated, sealed memory rows at scope anchors (the memory design)
 mod project_identity;     // a folder's project id: git root commit / id file / path hash
 mod dreaming;             // memory consolidation when idle (the memory design §6)
-mod machine;              // the whole-machine check every background job asks (BACKGROUND_WORK_AUDIT.md)
+mod machine;              // the whole-machine check every background job asks
 mod memory_slot;          // which local model does the memory work (the memory design §7)
 mod conversation_cache;   // last-known-good conversation lists (encrypted)
 mod ports;                 // every fixed local port, shifted together by YOAI_PORT_OFFSET
@@ -31,6 +31,7 @@ mod transcript_crypto;    // User data key + per-user seed (Phase A privacy)
 mod transcript_ids;       // record ids, and the 0.7 line's anchors and keys derived from them
 mod hc07;                 // the transcript cells on the 0.7 line (DNA v2)
 mod move_07;              // the move of a profile's records to the 0.7 line
+mod line_facts;           // where each of the person's devices is on the move, and the 0.6 stop's facts
 mod watch;                // the lines' watch: dead conductors, offline starts, 0.7 memory
 mod commands_holochain;   // Tauri commands for transcript operations
 mod memory;               // Phase A persistent memory (encrypted profile facts)
@@ -608,7 +609,7 @@ pub fn run() {
             // Remembers size/position/maximized on Windows, macOS, and Linux/X11.
             // NOTE: restore is a no-op on GNOME Wayland (the compositor owns window
             // geometry; saved size isn't honoured on creation, position can't be set
-            // at all). Accepted limitation — see apps/your-own-ai/building.md.
+            // at all). An accepted limitation.
             .with_state_flags(tauri_plugin_window_state::StateFlags::all())
             .build())
         .plugin(tauri_plugin_log::Builder::new()
@@ -649,6 +650,9 @@ pub fn run() {
             config_sync::config_sync_status,
             config_sync::devices_view,
             config_sync::config_sync_now,
+            line_facts::line_status,
+            line_facts::line_stop_waiting,
+            line_facts::line_wait_again,
             commands_holochain::get_copy_transcript,
             memory_rows::save_memory_row,
             memory_rows::list_memory_rows,
@@ -1089,8 +1093,7 @@ pub fn run() {
                 };
 
                 // The 0.7 line starts beside the 0.6 one for the move, from a
-                // freshly prepared key store (the move's design:
-                // TRANSCRIPT_MOVE.md); its passes run once it joins.
+                // freshly prepared key store; its passes run once it joins.
                 let line_07 = move_07::line_07_for_start(&data_dir, &recovery, &resource_dir).await;
                 match conductor::start_holochain(hc_app_handle.clone(), data_dir.clone(), line_07).await {
                     Ok(_session) => {

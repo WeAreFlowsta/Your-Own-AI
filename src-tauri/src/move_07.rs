@@ -1,6 +1,5 @@
 //! The move of a profile's transcript records from the 0.6 line (DNA v1) to
-//! the 0.7 line (DNA v2), through flowsta-hc-lines' pass runner (build-docs
-//! `apps/your-own-ai/planning/TRANSCRIPT_MOVE.md`).
+//! the 0.7 line (DNA v2), through flowsta-hc-lines' pass runner.
 //!
 //! - **Units** are this device's AI cells (the enabled v1 apps, each with
 //!   its v2 app on the 0.7 line).
@@ -42,8 +41,8 @@ const READ_TIMEOUT: Duration = Duration::from_secs(180);
 /// How long a pass waits for the network's answer to a link read once this
 /// conductor's own answer is in. The links at an AI's founding key hold what
 /// the person's other devices wrote too, so the network's answer is added
-/// when it comes; but a peer that cannot be reached after a cold start held
-/// whole passes for 68-180 s before (11-08). Whatever it misses (another
+/// when it comes; but a peer that cannot be reached after a cold start
+/// would otherwise hold whole passes for minutes. Whatever it misses (another
 /// device's tombstone not yet here) the next pass carries.
 const NETWORK_GRACE: Duration = Duration::from_secs(30);
 
@@ -76,12 +75,14 @@ pub struct Move {
     pub deleted: Box<dyn Fn() -> HashSet<String> + Send + Sync>,
     /// Whether this session has had a pass over every AI.
     pub passed_in_full: std::sync::atomic::AtomicBool,
+    /// What this device knows of the person's other devices (`line_facts`).
+    pub known: Box<dyn Fn(&std::path::Path) -> crate::line_facts::Known + Send + Sync>,
 }
 
 impl Move {
     /// The move as the app runs it.
     pub fn for_app(app: &tauri::AppHandle, data_key: [u8; 32]) -> Self {
-        let (a, b) = (app.clone(), app.clone());
+        let (a, b, c) = (app.clone(), app.clone(), app.clone());
         Move {
             hc: app.state::<Arc<HolochainState>>().inner().clone(),
             data_key,
@@ -89,6 +90,7 @@ impl Move {
             founding: Box::new(move |agent| crate::commands_holochain::founding_key_for(&a, agent)),
             deleted: Box::new(move || crate::conversation_cache::deleted_ledger(&b).into_iter().map(|d| d.hash).collect()),
             passed_in_full: Default::default(),
+            known: Box::new(move |root| crate::line_facts::known(&c, root)),
         }
     }
 
@@ -172,6 +174,17 @@ fn anchor_core(raw_39: &[u8]) -> Option<[u8; 32]> {
 impl PassApp for Move {
     fn line_up(&self, line: Line) -> bool {
         crate::conductor::ports(line).is_some()
+    }
+
+    /// The other devices, so a complete pass with none of them on 0.6
+    /// records that nothing is left to carry (`carried_all_ms`). Unknown
+    /// facts say nothing.
+    async fn siblings(app: &Arc<Self>, root: &std::path::Path) -> Option<flowsta_hc_lines::policy::Siblings> {
+        match (app.known)(root) {
+            crate::line_facts::Known::Facts(f) => Some(f.siblings()),
+            crate::line_facts::Known::NeverShared => Some(flowsta_hc_lines::policy::Siblings::NeverShared),
+            crate::line_facts::Known::Unknown => None,
+        }
     }
 }
 
@@ -776,7 +789,7 @@ mod tests {
         manager.reconnect_existing_agents().await.expect("the AI reconnects");
         let hc = Arc::new(HolochainState::new());
         let _ = hc.manager.set(manager);
-        let mv = Arc::new(Move { hc, data_key, cells: crate::hc07::app_cells(), founding: Box::new(|a| a.to_string()), deleted: Box::new(HashSet::new), passed_in_full: Default::default() });
+        let mv = Arc::new(Move { hc, data_key, cells: crate::hc07::app_cells(), founding: Box::new(|a| a.to_string()), deleted: Box::new(HashSet::new), passed_in_full: Default::default(), known: Box::new(|_| crate::line_facts::Known::Unknown) });
 
         let first = runner().run(&mv, &profile, "live").await;
         assert_eq!(first.error, None, "{first:?}");
@@ -792,7 +805,7 @@ mod tests {
         assert_eq!(second.kind("conversations").map(|k| (k.total, k.written)), Some((0, 0)), "no AI to copy");
 
         // A new session's first pass reads every AI again and finds it all there.
-        let fresh = Arc::new(Move { hc: mv.hc.clone(), data_key, cells: crate::hc07::app_cells(), founding: Box::new(|a| a.to_string()), deleted: Box::new(HashSet::new), passed_in_full: Default::default() });
+        let fresh = Arc::new(Move { hc: mv.hc.clone(), data_key, cells: crate::hc07::app_cells(), founding: Box::new(|a| a.to_string()), deleted: Box::new(HashSet::new), passed_in_full: Default::default(), known: Box::new(|_| crate::line_facts::Known::Unknown) });
         let again = runner().run(&fresh, &profile, "next session").await;
         assert_eq!(again.error, None, "{again:?}");
         assert_eq!(again.kind("conversations").map(|k| (k.present, k.written)), Some((1, 0)), "skipped by key");
@@ -848,7 +861,7 @@ mod tests {
             manager.reconnect_existing_agents().await.expect("the AI reconnects");
             let hc = Arc::new(HolochainState::new());
             let _ = hc.manager.set(manager);
-            Arc::new(Move { hc, data_key, cells: crate::hc07::app_cells(), founding: Box::new(|a| a.to_string()), deleted: Box::new(HashSet::new), passed_in_full: Default::default() })
+            Arc::new(Move { hc, data_key, cells: crate::hc07::app_cells(), founding: Box::new(|a| a.to_string()), deleted: Box::new(HashSet::new), passed_in_full: Default::default(), known: Box::new(|_| crate::line_facts::Known::Unknown) })
         };
 
         start_for_test(profile.clone(), None).await.expect("0.6 starts");
@@ -978,7 +991,7 @@ mod tests {
         manager.reconnect_existing_agents().await.expect("the AIs reconnect");
         let hc = Arc::new(HolochainState::new());
         let _ = hc.manager.set(manager);
-        let mv = Arc::new(Move { hc, data_key, cells: crate::hc07::app_cells(), founding: Box::new(|a| a.to_string()), deleted: Box::new(HashSet::new), passed_in_full: Default::default() });
+        let mv = Arc::new(Move { hc, data_key, cells: crate::hc07::app_cells(), founding: Box::new(|a| a.to_string()), deleted: Box::new(HashSet::new), passed_in_full: Default::default(), known: Box::new(|_| crate::line_facts::Known::Unknown) });
 
         let out = runner().run(&mv, &profile, "large").await;
         eprintln!("the pass took {} s", out.took_ms / 1000);

@@ -30,8 +30,8 @@ if [ "$B_TREE" != "$(pwd)" ]; then
 fi
 # The staging test material for B's rendezvous launches, read from this
 # tree's Vault: B's launcher looks for it beside ITS tree (../../flowsta-vault),
-# which a worktree elsewhere does not have (11-08: sed exited 2 under set -e
-# and B never started). Only those two launches get it: set for every launch,
+# which a worktree elsewhere does not have (sed exits 2 under set -e and B
+# never starts). Only those two launches get it: set for every launch,
 # the app would take it to production's rendezvous.
 B_AUTH="$(sed -n 's/^FLOWSTA_AUTH_MATERIAL=\([^ \\]*\).*/\1/p' "$VAULT/scripts/run-test-instance.sh" | head -1)"
 [ -n "$B_AUTH" ] || { echo "no FLOWSTA_AUTH_MATERIAL in $VAULT/scripts/run-test-instance.sh"; exit 1; }

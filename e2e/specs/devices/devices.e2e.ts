@@ -220,8 +220,8 @@ describe(`devices, phase ${PHASE}`, () => {
       // app re-reads while a copy is shown, every 20 s): the open drawer's
       // item flips within its first minute, or, when the records come later,
       // the copy is opened read-only and its composer opens by itself. Either
-      // way the person never reopens anything (11-08: before the fix the
-      // drawer read once, 3 s before the devices met, and stayed a copy).
+      // way the person never reopens anything (a drawer that read once,
+      // before the devices met, would stay a copy).
       const ownInDrawer = (items: { copy: string | null; text: string }[]) => items.some((d) => d.text.includes("Devices test") && d.copy !== "1");
       // On the mixed run B is the earlier release (devices-live.sh sets
       // DEVICES_B_EARLIER): its drawer reads only when it opens, so there the
@@ -281,8 +281,8 @@ describe(`devices, phase ${PHASE}`, () => {
       await shot("devices-c-composer-open");
       // And B continues the conversation in its own records. Wait for B's
       // NEW answer: the last answer on the page is A's, already done, so
-      // waitForReplyDone alone returns at once (11-08: the harness then
-      // stopped B 1 s after the send, before the turn was recorded).
+      // waitForReplyDone alone returns at once (and B would be stopped
+      // before the turn was recorded).
       const answers = () => browser.execute(() => document.querySelectorAll('[data-testid="chat-message"][data-role="assistant"]').length);
       const answersBefore = await answers();
       await ask(MESSAGE_C);

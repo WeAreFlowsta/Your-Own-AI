@@ -30,7 +30,7 @@ use tauri_plugin_store::StoreExt;
 
 /// Fixed label so re-escrow overwrites the same named snapshot instead of
 /// accumulating timestamped ones.
-const ESCROW_LABEL: &str = "recovery";
+pub(crate) const ESCROW_LABEL: &str = "recovery";
 
 #[derive(Serialize, Clone)]
 pub struct EscrowStatus {
@@ -228,6 +228,10 @@ pub(crate) struct SiblingDevice {
     /// The same for the sibling's small `ais` object (None: the sibling
     /// writes none yet - an older app).
     pub ais_at: Option<String>,
+    /// The same for its `line` object (0.9.1 and later) and its `recovery`
+    /// escrow: a round reads them only when they moved.
+    pub line_at: Option<String>,
+    pub escrow_at: Option<String>,
 }
 
 pub(crate) async fn sibling_devices(port: u16) -> Result<Vec<SiblingDevice>, String> {
@@ -257,7 +261,8 @@ pub(crate) async fn sibling_devices(port: u16) -> Result<Vec<SiblingDevice>, Str
                             .map(|x| x["created_at"].to_string())
                     };
                     let (manifest_at, ais_at) = (stamp(MANIFEST_LABEL), stamp(AIS_LABEL));
-                    s(d, "device").map(|id| SiblingDevice { id, name: s(d, "name"), platform: s(d, "platform"), generation: s(d, "generation"), manifest_at, ais_at })
+                    let (line_at, escrow_at) = (stamp(crate::line_facts::LINE_LABEL), stamp(ESCROW_LABEL));
+                    s(d, "device").map(|id| SiblingDevice { id, name: s(d, "name"), platform: s(d, "platform"), generation: s(d, "generation"), manifest_at, ais_at, line_at, escrow_at })
                 })
                 .collect()
         })
@@ -270,7 +275,7 @@ pub(crate) async fn other_devices(port: u16) -> Result<Vec<String>, String> {
 
 /// One named device's copy of a label (`/backup/retrieve` with `across` +
 /// `device`, Vault 1.6.1+). `Ok(None)` = that device holds no such copy.
-async fn retrieve_from_device(port: u16, label: &str, device: &str) -> Result<Option<serde_json::Value>, String> {
+pub(crate) async fn retrieve_from_device(port: u16, label: &str, device: &str) -> Result<Option<serde_json::Value>, String> {
     let resp = http()
         .post(format!("http://127.0.0.1:{}/backup/retrieve", port))
         .header("Origin", VAULT_ORIGIN)
@@ -1069,7 +1074,7 @@ fn ais_object(manifest: &serde_json::Value) -> serde_json::Value {
     out
 }
 
-async fn post_backup_json(port: u16, label: &str, data: &serde_json::Value) -> Result<(), String> {
+pub(crate) async fn post_backup_json(port: u16, label: &str, data: &serde_json::Value) -> Result<(), String> {
     let resp = http()
         .post(format!("http://127.0.0.1:{}/backup", port))
         .header("Origin", VAULT_ORIGIN)
@@ -1464,6 +1469,9 @@ pub(crate) async fn island_merge_start(app: &tauri::AppHandle, identity: &Recove
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
     let mut payload = assemble_full_payload(&local, ai_configs, convs, usize::MAX);
+    if let Ok(root) = crate::profile::root(app) {
+        payload["network_generation"] = serde_json::json!(crate::line_facts::own_generation(&root));
+    }
     attach_extras(app, &local, &mut payload);
     // Plaintext only: the raw entries are ciphertext under the island's
     // key, and the replay re-encrypts human_readable under the identity's.
@@ -1943,7 +1951,8 @@ fn assemble_full_payload(
 
     let mut payload = serde_json::json!({
         "version": 1,
-        "network_generation": crate::conductor::NETWORK_GENERATION,
+        // The caller names this profile's own (`line_facts::own_generation`).
+        "network_generation": crate::conductor::network_generation(flowsta_hc_lines::Line::V06),
         "_readme": "Your Own AI conversation transcripts, backed up from your device. \
                     Each record's human_readable view is the decrypted content; \
                     raw_record holds the encrypted on-chain bytes. The app_keys \
@@ -2387,7 +2396,7 @@ async fn write_incremental_backup(
             "data": cfg,
         });
     }
-    manifest["network_generation"] = serde_json::json!(crate::conductor::NETWORK_GENERATION);
+    manifest["network_generation"] = serde_json::json!(crate::profile::root(app).map(|r| crate::line_facts::own_generation(&r)).unwrap_or(crate::conductor::network_generation(flowsta_hc_lines::Line::V06)));
     attach_extras(app, recovery, &mut manifest);
     // Deletions ride the manifest so a restore on ANOTHER device leaves them
     // deleted too: this device's ledger merged with what the Vault's
@@ -2740,6 +2749,9 @@ async fn write_full_backup_inner(app: &tauri::AppHandle, now: bool) -> Result<se
 
     let conversations = convs.len();
     let mut payload = assemble_full_payload(&recovery, ai_configs, convs, BACKUP_BUDGET_BYTES);
+    if let Ok(root) = crate::profile::root(app) {
+        payload["network_generation"] = serde_json::json!(crate::line_facts::own_generation(&root));
+    }
     let total_records = payload["_summary"]["totalRecords"].as_u64().unwrap_or(0);
     let truncated = payload["truncated_conversations"].as_u64().unwrap_or(0);
 

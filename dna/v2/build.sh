@@ -3,7 +3,7 @@
 #
 # v2 is a new DNA hash, so a new network beside v1's: records carry their
 # ids inside the encrypted plaintext, and links carry the keyed hash of
-# their record's id (TRANSCRIPT_DNA_V2.md in the build docs).
+# their record's id.
 #
 # The app bundles this pack as src-tauri/resources/yourown_ai_transcript_v2_happ.happ.
 # Once a release has shipped it, never rebuild it: a new build is a new DNA

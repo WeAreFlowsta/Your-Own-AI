@@ -1,6 +1,5 @@
-//! The machine check every background job asks (background work audit,
-//! `BACKGROUND_WORK_AUDIT.md` § 4, decided with Eric 2026-11-08: "i would
-//! like to do whatever we can not to over use the users system resources").
+//! The machine check every background job asks, so background work never
+//! takes more of the person's computer than it can spare.
 //!
 //! It reads the WHOLE machine, other programs included: how busy the
 //! processor is with programs other than ours, whether memory is short (the
