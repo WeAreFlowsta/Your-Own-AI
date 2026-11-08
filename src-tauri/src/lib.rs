@@ -6,6 +6,7 @@ mod device_sync;          // the tray notice for what syncs with the other devic
 mod memory_rows;          // typed, dated, sealed memory rows at scope anchors (the memory design)
 mod project_identity;     // a folder's project id: git root commit / id file / path hash
 mod dreaming;             // memory consolidation when idle (the memory design §6)
+mod machine;              // the whole-machine check every background job asks (BACKGROUND_WORK_AUDIT.md)
 mod memory_slot;          // which local model does the memory work (the memory design §7)
 mod conversation_cache;   // last-known-good conversation lists (encrypted)
 mod ports;                 // every fixed local port, shifted together by YOAI_PORT_OFFSET
@@ -655,6 +656,7 @@ pub fn run() {
             memory_rows::list_memory_revisions,
             memory_rows::memory_would_replace,
             dreaming::dream_now,
+            machine::machine_status,
             memory_slot::memory_slot_pick,
             memory_slot::memory_grades_set,
             memory_slot::memory_grades,
@@ -1046,6 +1048,7 @@ pub fn run() {
                 vault_escrow::start_startup_escrow_sync(&link_app_handle);
                 config_sync::start_config_sync_rounds(&link_app_handle);
                 memory_rows::start_person_memory_sync(&link_app_handle);
+                machine::start(&link_app_handle);
                 dreaming::start_dreaming(&link_app_handle);
                 corpus::sync::start_folder_sync(&link_app_handle);
                 tuning::refresh_gpu_choices(&link_app_handle);

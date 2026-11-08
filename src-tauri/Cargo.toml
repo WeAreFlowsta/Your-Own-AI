@@ -121,10 +121,16 @@ opt-level = 3
 [dev-dependencies]
 tempfile = "3"
 
-# A helper model runs below the person's own programs (llm.rs `lower_priority`);
-# the same crates and features the lines library already builds with.
+# A helper model runs below the person's own programs (llm.rs `lower_priority`)
+# and the machine check reads the person's input idle on Windows (machine.rs);
+# the same crates the lines library already builds with.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_UI_Input_KeyboardAndMouse"] }
+
+# The machine check asks GNOME or the freedesktop screensaver how long the
+# person has been away (machine.rs); the zbus the notification plugin builds.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "5"
