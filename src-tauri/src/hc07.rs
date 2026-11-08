@@ -590,7 +590,9 @@ pub async fn write_07_alone(agent_key: &str) -> Result<(), String> {
             _ => false,
         })
         .unwrap_or(false);
-    if stopped {
+    // Stopped by the facts, or wanted but unable to start this session (chat
+    // keeps working; that write does not reach a device still on 0.6).
+    if stopped || crate::conductor::old_line_failed() {
         Ok(())
     } else {
         still()

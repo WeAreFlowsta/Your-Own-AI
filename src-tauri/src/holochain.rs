@@ -403,6 +403,18 @@ impl HolochainManager {
             }
         }
 
+        // An AI made while the 0.6 line was stopped lives on the 0.7 line
+        // alone: adopted as it is, never given a second generation here.
+        if crate::conductor::ports(flowsta_hc_lines::Line::V07).is_some() {
+            if let Ok(apps) = crate::hc07::transcript_apps().await {
+                if let Some(app) = apps.iter().find(|a| a.agent == ai_id || a.app_id.ends_with(ai_id)) {
+                    self.lineage_index.lock().await.entry(app.agent.clone()).or_insert_with(|| Self::app_id_suffix(&app.app_id));
+                    log::info!("AI {} is on the 0.7 line alone ({}): adopted", ai_id, app.app_id);
+                    return Ok(app.agent.clone());
+                }
+            }
+        }
+
         log::info!("Provisioning Holochain agent for AI: {}", ai_id);
 
         // 1. This AI's key. With the 0.7 line up, one random seed goes into

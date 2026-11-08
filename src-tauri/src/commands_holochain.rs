@@ -1463,7 +1463,7 @@ pub async fn get_conversations(
             Ok(r) => r,
             Err(e) => {
                 log::warn!("conversation list read failed for lineage agent {}: {}", key, e);
-                if !e.contains("Agent not found") {
+                if !e.contains("Agent not found") || crate::conductor::old_line_coming() {
                     unanswered.push(key.clone());
                 }
                 continue;

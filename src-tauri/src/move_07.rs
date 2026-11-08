@@ -754,12 +754,7 @@ impl flowsta_hc_lines::pass::CarriedRecords<Move> for Tombstones {
 /// from the next). None when it does not, or when the 0.7 key store could
 /// not be prepared: the app then runs on 0.6 alone this session, and the
 /// move waits.
-pub async fn line_07_for_start(data_dir: &std::path::Path, recovery: &crate::transcript_crypto::RecoveryMaterial, resource_dir: &std::path::Path) -> Option<crate::conductor::Line07> {
-    let (lair_06, _) = crate::conductor::line_dirs(data_dir, Line::V06);
-    if !flowsta_hc_lines::keystore::config_path(&lair_06).exists() {
-        log::info!("[0.7] no 0.6 key store yet: the move begins at the next start");
-        return None;
-    }
+pub async fn line_07_for_start(data_dir: &std::path::Path, recovery: &crate::transcript_crypto::RecoveryMaterial, resource_dir: &std::path::Path, fresh_on_07: bool) -> Option<crate::conductor::Line07> {
     let data_key = match recovery.data_key() {
         Ok(k) => k,
         Err(e) => {
@@ -767,6 +762,22 @@ pub async fn line_07_for_start(data_dir: &std::path::Path, recovery: &crate::tra
             return None;
         }
     };
+    let (lair_06, _) = crate::conductor::line_dirs(data_dir, Line::V06);
+    let moved = !matches!(flowsta_hc_lines::marker::Marker::load(data_dir, &MARKER), flowsta_hc_lines::marker::MarkerRead::Absent);
+    if !moved && !flowsta_hc_lines::keystore::config_path(&lair_06).exists() {
+        if !fresh_on_07 {
+            log::info!("[0.7] no 0.6 key store yet: the move begins at the next start");
+            return None;
+        }
+        // A fresh profile that starts on the 0.7 line alone.
+        return match crate::conductor::fresh_store_07(data_dir, &data_key) {
+            Ok(passphrase) => Some(crate::conductor::Line07 { passphrase, network_seed: recovery.network_seed.clone(), resource_dir: resource_dir.to_path_buf() }),
+            Err(e) => {
+                log::warn!("[0.7] the fresh 0.7 key store: {e}");
+                None
+            }
+        };
+    }
     match crate::conductor::prepare_store_07(data_dir, &data_key).await {
         Ok(passphrase) => Some(crate::conductor::Line07 { passphrase, network_seed: recovery.network_seed.clone(), resource_dir: resource_dir.to_path_buf() }),
         Err(e) => {
@@ -818,8 +829,28 @@ fn describe(out: &flowsta_hc_lines::pass::PassOutcome) -> String {
 /// The move's passes, once the 0.7 line has joined: the first as soon as
 /// the app's 0.6 agents are connected, then every [`PASS_EVERY`] while both
 /// lines run. One runner for the process.
+static RUNNER: std::sync::OnceLock<PassRunner<Move>> = std::sync::OnceLock::new();
+
+/// Stop the 0.6 line by the facts: no device needs it and a full pass left
+/// nothing behind. Only as a secondary line (0.7 leads), never during a
+/// pass: the runner drains the calls in flight, stops the line and records
+/// `old_line_needed: false`, which lets writes go to 0.7 alone. Its data
+/// stays on disk.
+pub async fn retire_06(app: &tauri::AppHandle, data_dir: &std::path::Path) -> bool {
+    if crate::conductor::leading() != Line::V07 {
+        return false;
+    }
+    let hc = app.state::<Arc<HolochainState>>().inner().clone();
+    let Ok(data_key) = hc.get().and_then(|m| m.data_key()) else { return false };
+    let m = Move::for_app(app, data_key);
+    let retired = RUNNER.get_or_init(runner).retire_previous(&m, data_dir, crate::conductor::supervisor()).await;
+    if retired {
+        log::info!("[0.6] stopped: no other device needs it and nothing is left on it to carry (its data stays on disk)");
+    }
+    retired
+}
+
 pub fn run_passes(app: tauri::AppHandle, data_dir: std::path::PathBuf) {
-    static RUNNER: std::sync::OnceLock<PassRunner<Move>> = std::sync::OnceLock::new();
     static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if RUNNING.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;

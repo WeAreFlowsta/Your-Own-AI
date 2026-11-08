@@ -51,13 +51,16 @@ async fn restart_session(app: &tauri::AppHandle, data_dir: &std::path::Path, res
     // Both lines down first: the 0.7 key store is then refreshed from a quiet
     // 0.6 store, as at any start.
     let _ = tokio::task::spawn_blocking(|| supervisor().stop()).await;
-    let line_07 = crate::move_07::line_07_for_start(data_dir, &manager.recovery, resource_dir).await;
+    let fresh_on_07 = crate::line_facts::fresh_starts_on_07(app, data_dir);
+    let line_07 = crate::move_07::line_07_for_start(data_dir, &manager.recovery, resource_dir, fresh_on_07).await;
     match conductor::start_holochain(app.clone(), data_dir.to_path_buf(), line_07).await {
-        Ok(_) => {
+        // A 0.6 line beside 0.7 reconnects its agents when it joins.
+        Ok(_) if conductor::leading() == Line::V06 => {
             if let Err(e) = manager.reconnect_after_restart().await {
                 log::warn!("[watch] the agents did not all reconnect: {e}");
             }
         }
+        Ok(_) => {}
         Err(e) => log::warn!("[watch] the lines did not start again: {e}"),
     }
 }
@@ -72,6 +75,7 @@ pub fn start(app: tauri::AppHandle, data_dir: PathBuf, resource_dir: PathBuf) {
     tauri::async_runtime::spawn(async move {
         let mut holding = false;
         let mut last_memory_restart: Option<Instant> = None;
+        let mut last_06_attach: Option<Instant> = None;
         let total_memory = {
             let mut sys = sysinfo::System::new();
             sys.refresh_memory();
@@ -109,6 +113,22 @@ pub fn start(app: tauri::AppHandle, data_dir: PathBuf, resource_dir: PathBuf) {
                 }
                 #[allow(unreachable_patterns)]
                 _ => {}
+            }
+            // The 0.6 line beside a session 0.7 leads: stopped once no device
+            // needs it and nothing is left on it, started again when one
+            // does (a device on 0.6 came back, or a wait resumed by itself).
+            if conductor::leading() == Line::V07 && supervisor().session().is_some() {
+                let d = crate::line_facts::decision(&app, &data_dir);
+                let has_06 = supervisor().has(Line::V06);
+                if d.decision.wanted() && !has_06 && last_06_attach.map(|t| t.elapsed() > Duration::from_secs(600)).unwrap_or(true) {
+                    log::info!("[watch] the 0.6 line is wanted ({}): attaching it", d.why);
+                    last_06_attach = Some(Instant::now());
+                    if let Err(e) = conductor::attach_06(app.clone(), data_dir.clone()) {
+                        log::warn!("[watch] the 0.6 line was not attached: {e}");
+                    }
+                } else if !d.decision.wanted() && has_06 {
+                    crate::move_07::retire_06(&app, &data_dir).await;
+                }
             }
             // A session that started offline uses its auth once it can.
             if conductor::started_offline() && conductor::rendezvous_answers().await {
