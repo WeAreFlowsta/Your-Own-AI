@@ -40,6 +40,7 @@ pub async fn reset_to_defaults(app: AppHandle) -> Result<(), String> {
     for file in ["ai-data.json", "memory-facts.enc", crate::vault_escrow::SYNC_STATE_FILE] {
         let _ = std::fs::remove_file(data_dir.join(file));
     }
+    crate::move_07::remove_move_files(&data_dir);
     let _ = std::fs::remove_file(device_dir.join("gpu-safety.json"));
     // The Vault may hold the only copy of the conversations this reset just
     // wiped. Without this marker, the first post-reset chat would arm a

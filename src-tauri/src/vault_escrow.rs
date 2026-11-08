@@ -670,6 +670,7 @@ pub(crate) async fn swap_material_and_restart(
             ));
         }
     }
+    crate::move_07::remove_move_files(data_dir);
     transcript_crypto::replace_recovery_material(data_dir, new_material)?;
     match flowsta::find_vault().await.agent_pub_key {
         Some(live) => adopt_escrow_owner(app, &live),
