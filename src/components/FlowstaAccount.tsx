@@ -66,7 +66,10 @@ function devicesLine(s: ConfigSyncState | null): { text: string; warn: boolean }
   const nameOf = (d: ConfigSyncState["devices"][number]) => d.name || "another of your devices";
   const stale = s.devices.filter((d) => d.needs_update);
   if (stale.length > 0) {
-    return { text: `Needs the update to sync with ${stale.map(nameOf).join(" and ")}`, warn: true };
+    // Another computer on an older version of Your Own AI (this one is on
+    // the newest): it is the one to update.
+    const names = stale.map(nameOf).join(" and ");
+    return { text: `${names.charAt(0).toUpperCase()}${names.slice(1)} ${stale.length === 1 ? "is" : "are"} on an older version of Your Own AI`, warn: true };
   }
   const [first, ...rest] = s.devices;
   const who = rest.length === 0 ? nameOf(first) : `${nameOf(first)} and ${rest.length} other${rest.length === 1 ? "" : "s"}`;
