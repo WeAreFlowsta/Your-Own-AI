@@ -566,27 +566,57 @@ fn clear_sync_state(app: &tauri::AppHandle) {
     }
 }
 
-/// Raw conversation-record count across every local agent (no decryption -
-/// undecryptable records still count as data worth protecting).
+/// Raw conversation-record count on this device (no decryption -
+/// undecryptable records still count as data worth protecting), listed the
+/// way the backup lists them: each AI's founding key once, plus each cell's
+/// own key for the conversations started before. From the 0.6 cells while
+/// any runs (writes go there first, so they hold every one), else from the
+/// 0.7 line. A cell or line that cannot answer makes the count unknown, an
+/// error, never zero: this count is what keeps a key restore from wiping a
+/// device that holds conversations.
 async fn count_local_conversations(app: &tauri::AppHandle) -> Result<u64, String> {
     let hc = app
         .try_state::<Arc<HolochainState>>()
         .ok_or("holochain state missing")?;
     let manager = hc.get()?;
-    let keys: Vec<String> = {
-        let agents = manager.agents.lock().await;
-        agents.keys().cloned().collect()
-    };
+    let timeout = std::time::Duration::from_secs(180);
+    let fail = |key: &str, e: String| format!("conversation count failed for {}: {}", key, e);
+    let mut keys: Vec<String> = manager.agents.lock().await.keys().cloned().collect();
+    keys.sort();
     let mut total = 0u64;
-    for key in keys {
-        match crate::transcript_pages::conversation_count(&manager, &key, std::time::Duration::from_secs(180)).await {
-            Ok(n) => total += n,
-            Err(e) => {
-                // A cell that can't answer might hold data - fail safe by
-                // treating the count as unknown rather than zero.
-                return Err(format!("conversation count failed for {}: {}", key, e));
+    let mut foundings: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if !keys.is_empty() {
+        for key in &keys {
+            let founding = crate::commands_holochain::founding_key_for(app, key);
+            if founding == *key {
+                if foundings.insert(founding) {
+                    total += crate::transcript_pages::conversation_count_at(&manager, key, None, timeout).await.map_err(|e| fail(key, e))?;
+                }
+                continue;
+            }
+            total += crate::transcript_pages::conversation_count_at(&manager, key, None, timeout).await.map_err(|e| fail(key, e))?;
+            if foundings.insert(founding.clone()) {
+                total += crate::transcript_pages::conversation_count_at(&manager, key, Some(&founding), timeout).await.map_err(|e| fail(key, e))?;
             }
         }
+        return Ok(total);
+    }
+    if crate::conductor::ports(flowsta_hc_lines::Line::V07).is_none() {
+        return Err("conversation count unknown: no line runs".into());
+    }
+    let mut on_07: Vec<String> = crate::hc07::agents_with_apps().await?.into_iter().collect();
+    on_07.sort();
+    for key in &on_07 {
+        let founding = crate::commands_holochain::founding_key_for(app, key);
+        if !foundings.insert(founding.clone()) {
+            continue;
+        }
+        let anchor = hex::decode(&founding).ok().filter(|b| b.len() == 39).map(holochain_types::prelude::AgentPubKey::from_raw_39).ok_or_else(|| fail(key, "bad founding key".into()))?;
+        let page = crate::hc07::app_cells()
+            .conversations_page(key, &crate::hc07::ConversationsPage { anchor, before: None, limit: 1 })
+            .await
+            .map_err(|e| fail(key, e))?;
+        total += page.total as u64;
     }
     Ok(total)
 }
@@ -1696,24 +1726,46 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
     let full_read_at: Option<i64> = load_full_read_at(app);
     let mut carried: Vec<serde_json::Value> = Vec::new();
     let mut conv_unreadable = 0usize;
+    // A conversation listed through two cells (two generations of one AI
+    // both read its founding key) is backed up once.
+    let mut listed: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (agent_key, installed_app_id) in agents {
         let started = std::time::Instant::now();
-        // A page at a time; a list that stops part way counts as unread,
-        // so a partial list never drops conversations from the backup.
-        let conv_records: Vec<Record> = match crate::transcript_pages::all_conversations(&manager, &agent_key, std::time::Duration::from_secs(180))
-            .await
-            .and_then(|r| r.whole())
-        {
-            Ok(r) => r,
-            Err(e) => {
-                log::warn!(
-                    "[escrow] conversation list read ({}) failed - keeping this AI's conversations from the previous backup: {}",
-                    agent_key, e
-                );
-                unreadable.push(installed_app_id.clone());
-                continue;
+        // Where this AI's conversations are listed: its founding key, where
+        // every device writes since coordinator 9 (so a conversation this
+        // device started with an AI first made on another device is backed
+        // up here too, and this backup alone holds all of them), and this
+        // cell's own key, for the ones started before. A page at a time; a
+        // list that stops part way counts as unread, so a partial list never
+        // drops conversations from the backup.
+        let founding = crate::commands_holochain::founding_key_for(app, &agent_key);
+        let mut anchors: Vec<Option<&str>> = vec![None];
+        if founding != agent_key {
+            anchors.insert(0, Some(founding.as_str()));
+        }
+        let mut conv_records: Vec<Record> = Vec::new();
+        let mut list_failed = None;
+        for anchor in anchors {
+            match crate::transcript_pages::all_conversations_at(&manager, &agent_key, anchor, std::time::Duration::from_secs(180))
+                .await
+                .and_then(|r| r.whole())
+            {
+                Ok(r) => conv_records.extend(r),
+                Err(e) => {
+                    list_failed = Some(e);
+                    break;
+                }
             }
-        };
+        }
+        if let Some(e) = list_failed {
+            log::warn!(
+                "[escrow] conversation list read ({}) failed - keeping this AI's conversations from the previous backup: {}",
+                agent_key, e
+            );
+            unreadable.push(installed_app_id.clone());
+            continue;
+        }
+        conv_records.retain(|r| listed.insert(hex::encode(r.action_address().get_raw_39())));
 
         // Changed-only reads: the local list cache is written through on
         // every turn the app records, so a conversation whose activity stamp

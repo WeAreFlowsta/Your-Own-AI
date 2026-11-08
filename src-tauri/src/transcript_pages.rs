@@ -274,6 +274,15 @@ pub async fn all_my_entries(
 }
 
 /// How many conversations an agent holds, without fetching their records.
+/// How many conversations are listed at `anchor` (an agent key, hex; None =
+/// the cell's own key), read through `agent`'s cell.
+pub async fn conversation_count_at(manager: &HolochainManager, agent: &str, anchor: Option<&str>, timeout: Duration) -> Result<u64, String> {
+    let Some(a) = anchor else { return conversation_count(manager, agent, timeout).await };
+    let raw = hex::decode(a).ok().filter(|b| b.len() == 39).ok_or_else(|| format!("bad anchor key {a}"))?;
+    let input = ConversationsPageInput { anchor: Some(AgentPubKey::from_raw_39(raw)), before: None, limit: 1 };
+    page(manager, agent, "get_conversations_page", &input, timeout).await.map(|p| p.total as u64)
+}
+
 pub async fn conversation_count(manager: &HolochainManager, agent: &str, timeout: Duration) -> Result<u64, String> {
     let input = ConversationsPageInput { anchor: None, before: None, limit: 1 };
     match page(manager, agent, "get_conversations_page", &input, timeout).await {
