@@ -475,10 +475,10 @@ export const modelFamilies: ModelFamily[] = [
     released: '2026-08-10',
     name: 'Muse Glimmer',
     description:
-      'Meta\'s new agent-first model - built for reliable tool use, working in project folders, and recovering from its own mistakes. Sees images too. Brand-new: early support, expect rough edges.',
+      'Meta\'s new agent-first model, built for tool use and recovering from its own mistakes. Sees images too. Brand-new, with early support: Your Own AI uses it for chat and images for now, and for project work once it passes our agent tests.',
     category: 'quality',
     recommended: true,
-    capabilities: ['agentic', 'coding', 'reasoning', 'chat'],
+    capabilities: ['coding', 'reasoning', 'chat'],
     traits: ['new'],
     modality: { in: ['text', 'vision'], out: ['text'] },
     variants: [
@@ -904,7 +904,7 @@ export const modelFamilies: ModelFamily[] = [
     description: 'IBM\'s small hybrid mixture-of-experts - 7B total, about 1B active per token, with a 1M-token context. Apache-2.0. A fast, permissive everyday model for long documents.',
     category: 'fast',
     recommended: true,
-    capabilities: ['chat', 'long-context', 'agentic', 'writing'],
+    capabilities: ['chat', 'long-context', 'writing'],
     traits: ['moe'],
     variants: [
       {
@@ -1077,10 +1077,10 @@ export const modelFamilies: ModelFamily[] = [
     contextWindow: 1048576,
     released: '2026-07-31',
     name: 'DeepSeek V4 Flash',
-    description: 'DeepSeek\'s V4 Flash - a 284B mixture-of-experts with 13B active per token and a 1M-token context. Frontier-class reasoning and agentic work on a workstation with a big graphics card and 128 GB or more of main memory.',
+    description: 'DeepSeek\'s V4 Flash - a 284B mixture-of-experts with 13B active per token and a 1M-token context. Frontier-class reasoning and coding on a workstation with a big graphics card and 128 GB or more of main memory.',
     category: 'quality',
     recommended: false,
-    capabilities: ['reasoning', 'agentic', 'coding', 'math', 'long-context', 'analysis'],
+    capabilities: ['reasoning', 'coding', 'math', 'long-context', 'analysis'],
     traits: ['new', 'moe'],
     variants: [
       {

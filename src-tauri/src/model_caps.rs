@@ -201,6 +201,13 @@ pub fn agent_caps(model_name: &str) -> u8 {
     if n.contains("coder") || n.contains("-code") || n.contains("codestral") || n.contains("devstral") {
         return 8;
     }
+    // Reasoning distills (DeepSeek R1 and V4, QwQ) before the base model's
+    // family: a distill on Qwen3 ("DeepSeek-R1-0528-Qwen3-8B") is a
+    // reasoning tune, not Qwen3's tool caller, and stays below the agent
+    // floor until a live folder test promotes it.
+    if n.contains("deepseek") || n.contains("-r1") || n.contains("qwq") {
+        return 5;
+    }
     // The 2B distill writes prose instead of a call even when one tool is
     // required, thinking on or off (truth matrix 10-20, Linux; the 4B
     // called it), and called a tool in 1 of 8 project tasks where
@@ -224,9 +231,6 @@ pub fn agent_caps(model_name: &str) -> u8 {
     }
     if n.contains("qwythos") {
         return 6;
-    }
-    if n.contains("deepseek") || n.contains("-r1") || n.contains("qwq") {
-        return 5;
     }
     if n.contains("ministral") || n.contains("mistral") {
         return 5;
@@ -418,6 +422,42 @@ pub fn online_caps_for(text: &str) -> Caps {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The catalog and the agent gate say the same thing, both ways: every
+    /// model listed as agentic gets agent work (`agent_caps` >= 6, the
+    /// router's folder filter), and a coding model that is not listed as
+    /// agentic does not. The download page's "Codes with you" picks from the
+    /// agentic list, so it never offers a model the agent mode will not drive,
+    /// nor leaves out one it would. One the gate holds back until a live
+    /// folder test promotes it is not listed as agentic meanwhile.
+    #[test]
+    fn the_catalogs_agentic_list_is_the_agent_gate() {
+        let catalog = include_str!("../../src/data/recommended-models.ts");
+        let mut checked = 0;
+        let mut wrong = Vec::new();
+        for entry in catalog.split("\n    id: '").skip(1) {
+            let id = entry.split('\'').next().unwrap_or("");
+            let caps = entry.lines().find(|l| l.trim_start().starts_with("capabilities: [")).unwrap_or("");
+            let (agentic, coding) = (caps.contains("'agentic'"), caps.contains("'coding'"));
+            if !agentic && !coding {
+                continue;
+            }
+            for l in entry.lines() {
+                let Some(rest) = l.trim_start().strip_prefix("filename: '") else { continue };
+                let file = rest.split('\'').next().unwrap_or("");
+                checked += 1;
+                let score = agent_caps(file);
+                if agentic && score < 6 {
+                    wrong.push(format!("{id}: listed as agentic, but {file} scores {score}"));
+                }
+                if !agentic && score >= 6 {
+                    wrong.push(format!("{id}: a coding model the agent mode drives ({file} scores {score}), not listed as agentic"));
+                }
+            }
+        }
+        assert!(checked > 0, "no agentic or coding model found: the catalog's shape changed");
+        assert!(wrong.is_empty(), "the catalog and the agent gate disagree:\n{}", wrong.join("\n"));
+    }
 
     #[test]
     fn by_task_prefers_a_coder_for_code() {
