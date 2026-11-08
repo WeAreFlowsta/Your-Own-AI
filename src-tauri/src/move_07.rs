@@ -43,13 +43,14 @@ pub const MARKER: MarkerSpec = MarkerSpec { file_name: "moved-07", old_line_key:
 /// a factory reset or a key swap, which remove those folders, removes these
 /// too (a reset profile must not read as moved, nor keep another identity's
 /// facts about its devices).
-pub(crate) const MOVE_FILES: [&str; 6] = [
+pub(crate) const MOVE_FILES: [&str; 7] = [
     "moved-07",
     "purged-ais-07.json",
     "coordinator-version",
     "line-facts.json",
     crate::conductor::COPY_NEEDED_FILE,
     crate::conductor::KEYS_07_ONLY_FILE,
+    crate::line_facts::STOP_PRINT_FILE,
 ];
 
 /// Remove [`MOVE_FILES`] from a profile's root.
@@ -870,6 +871,7 @@ pub async fn retire_06(app: &tauri::AppHandle, data_dir: &std::path::Path) -> bo
     let m = Move::for_app(app, data_key);
     let retired = RUNNER.get_or_init(runner).retire_previous(&m, data_dir, crate::conductor::supervisor()).await;
     if retired {
+        crate::line_facts::note_stopped(data_dir);
         log::info!("[0.6] stopped: no other device needs it and nothing is left on it to carry (its data stays on disk)");
     }
     retired

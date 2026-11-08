@@ -154,6 +154,20 @@ pub fn classify(report: Option<&LineReport>, manifest_generation: Option<&str>, 
     SiblingLine::OnOld
 }
 
+/// A device's `line` object, unless an earlier release runs there again:
+/// it said 0.7, and a newer manifest (or `ais` object) names the 0.6 line.
+/// That happens only when a release before this one is installed by hand
+/// after the move; it writes no `line` object, so the old one would keep
+/// saying "moved" while it writes to the 0.6 line alone.
+fn current_report(report: Option<LineReport>, manifest_generation: Option<&str>, stamps: &Stamps) -> Option<LineReport> {
+    let ms = |s: &Option<String>| s.as_deref().and_then(|v| v.trim_matches('"').parse::<i64>().ok());
+    let generation_at = ms(&stamps.manifest_at).max(ms(&stamps.ais_at));
+    let went_back = report.as_ref().is_some_and(|r| r.network_generation == gen_07())
+        && manifest_generation == Some(gen_06())
+        && matches!((generation_at, ms(&stamps.line_at)), (Some(g), Some(l)) if g > l);
+    if went_back { None } else { report }
+}
+
 impl LineFacts {
     pub fn load(root: &Path) -> Option<LineFacts> {
         let bytes = std::fs::read(root.join(FACTS_FILE)).ok()?;
@@ -328,6 +342,70 @@ pub fn old_line_data_present(root: &Path) -> bool {
     flowsta_hc_lines::keystore::config_path(&lair_06).exists()
 }
 
+/// The newest change to the 0.6 conductor's databases when this device
+/// stopped the line, in ms since the epoch.
+pub(crate) const STOP_PRINT_FILE: &str = "line-06-at-stop";
+
+/// The newest change under the 0.6 conductor's databases, in ms. They
+/// change only while a 0.6 conductor runs.
+fn newest_06_change_ms(root: &Path) -> Option<u64> {
+    let (_, conductor_06) = crate::conductor::line_dirs(root, Line::V06);
+    let mut newest: Option<u64> = None;
+    let mut dirs = vec![(conductor_06.join("databases"), 0u8)];
+    while let Some((dir, depth)) = dirs.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for e in entries.flatten() {
+            let Ok(meta) = e.metadata() else { continue };
+            if meta.is_dir() {
+                if depth < 3 {
+                    dirs.push((e.path(), depth + 1));
+                }
+                continue;
+            }
+            let Some(ms) = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64) else { continue };
+            newest = Some(newest.map_or(ms, |n| n.max(ms)));
+        }
+    }
+    newest
+}
+
+/// Called once the 0.6 line has stopped: what its databases looked like.
+pub fn note_stopped(root: &Path) {
+    let Some(ms) = newest_06_change_ms(root) else { return };
+    if let Err(e) = std::fs::write(root.join(STOP_PRINT_FILE), ms.to_string()) {
+        log::warn!("[0.6] the stop's record did not save: {e}");
+    }
+}
+
+/// Before the start's plan: the 0.6 line ran on this profile after this
+/// device recorded that nothing was left on it (an earlier release
+/// installed by hand). What it wrote is not carried yet, so the record is
+/// cleared and the 0.6 line runs until a full pass carries it. Without a
+/// stop record (the app quit between the full pass and the stop) it runs
+/// once more too: a pass costs time, a record left behind is lost from view.
+pub fn reopen_if_written_since_stop(root: &Path) -> bool {
+    let MarkerRead::Present(m) = Marker::load(root, &MARKER) else { return false };
+    if m.carried_all_ms.is_none() || !old_line_data_present(root) {
+        return false;
+    }
+    let at_stop = std::fs::read_to_string(root.join(STOP_PRINT_FILE)).ok().and_then(|s| s.trim().parse::<u64>().ok());
+    let written = match (at_stop, newest_06_change_ms(root)) {
+        (Some(stop), Some(now)) => now > stop,
+        (Some(_), None) => false,
+        (None, _) => true,
+    };
+    if !written {
+        return false;
+    }
+    if let Err(e) = flowsta_hc_lines::marker::update_marker(root, &MARKER, |m| m.carried_all_ms = None) {
+        log::warn!("[0.6] the 0.6 line changed since the stop, but the marker did not take it: {e}");
+        return false;
+    }
+    let _ = std::fs::remove_file(root.join(STOP_PRINT_FILE));
+    log::info!("[0.6] {}: it runs again until a full pass carries what is on it", if at_stop.is_some() { "written since this device stopped it (an earlier release ran here)" } else { "no record of the stop" });
+    true
+}
+
 /// Which line leads this start, and which joins beside it. `have_07`: the
 /// 0.7 line can start (its key store is ready).
 /// - no marker, 0.6 data here: 0.6 leads and 0.7 joins (the move runs);
@@ -429,6 +507,7 @@ pub async fn observe(
         },
     };
     let manifest_generation = generation.or_else(|| prior.and_then(|p| p.manifest_generation.clone()));
+    let report = current_report(report, manifest_generation.as_deref(), &stamps);
     let line = classify(report.as_ref(), manifest_generation.as_deref(), material_same);
     KnownSibling { id: device.id.clone(), name: device.name.clone(), line, report, manifest_generation, material_same, stamps }
 }
@@ -671,5 +750,99 @@ mod tests {
         f.save(&dir).unwrap();
         assert_eq!(LineFacts::load(&dir), Some(f));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn stamps(manifest: &str, line: &str) -> Stamps {
+        Stamps { manifest_at: Some(manifest.into()), line_at: Some(line.into()), ..Default::default() }
+    }
+
+    #[test]
+    fn a_device_back_on_an_earlier_release_counts_as_on_the_old_line() {
+        // Moved, then an earlier release installed by hand: its manifest is
+        // newer than the line object and names 0.6.
+        let back = current_report(Some(report("holochain-0.7")), Some("holochain-0.6"), &stamps("200", "100"));
+        assert_eq!(back, None);
+        assert_eq!(classify(back.as_ref(), Some("holochain-0.6"), Some(true)), SiblingLine::OnOld);
+        let s = KnownSibling { report: back, manifest_generation: Some("holochain-0.6".into()), ..sib("a", SiblingLine::OnOld, None, "200") };
+        assert!(s.needs_update(), "named as on an older version, with no version of its own shown");
+        // The line object newer than the manifest: moved, its manifest held back.
+        assert!(current_report(Some(report("holochain-0.7")), Some("holochain-0.6"), &stamps("100", "200")).is_some());
+        // Still moving on this release: it says 0.6 itself.
+        assert!(current_report(Some(report("holochain-0.6")), Some("holochain-0.6"), &stamps("200", "100")).is_some());
+        // Moved and its manifest says so.
+        assert!(current_report(Some(report("holochain-0.7")), Some("holochain-0.7"), &stamps("200", "100")).is_some());
+        // Stamps not read: the line object stands.
+        assert!(current_report(Some(report("holochain-0.7")), Some("holochain-0.6"), &Stamps::default()).is_some());
+        // A newer `ais` object counts as the manifest does.
+        let ais = Stamps { manifest_at: Some("50".into()), ais_at: Some("300".into()), line_at: Some("100".into()), ..Default::default() };
+        assert_eq!(current_report(Some(report("holochain-0.7")), Some("holochain-0.6"), &ais), None);
+    }
+
+    /// A moved profile whose 0.6 line holds data and whose marker records
+    /// that nothing was left on it.
+    fn stopped_profile() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (lair, conductor) = crate::conductor::line_dirs(root, Line::V06);
+        std::fs::create_dir_all(&lair).unwrap();
+        std::fs::write(flowsta_hc_lines::keystore::config_path(&lair), "x").unwrap();
+        std::fs::create_dir_all(conductor.join("databases").join("authored")).unwrap();
+        std::fs::write(conductor.join("databases").join("authored").join("a.db"), "1").unwrap();
+        let mut m = Marker::new(&MARKER, 1);
+        m.carried_all_ms = Some(5);
+        m.old_line_needed = Some(false);
+        m.save(root, &MARKER).unwrap();
+        tmp
+    }
+
+    fn carried_all(root: &Path) -> Option<u64> {
+        match Marker::load(root, &MARKER) {
+            MarkerRead::Present(m) => m.carried_all_ms,
+            _ => panic!("no marker"),
+        }
+    }
+
+    #[test]
+    fn the_old_line_stays_stopped_while_nothing_wrote_to_it() {
+        let tmp = stopped_profile();
+        note_stopped(tmp.path());
+        assert!(!reopen_if_written_since_stop(tmp.path()));
+        assert_eq!(carried_all(tmp.path()), Some(5));
+        assert!(!decide(&Known::NeverShared, Marker::load(tmp.path(), &MARKER), true, 10).decision.wanted());
+    }
+
+    #[test]
+    fn an_earlier_release_writing_after_the_stop_opens_the_old_line_until_a_full_pass() {
+        let tmp = stopped_profile();
+        note_stopped(tmp.path());
+        // An earlier release ran here by hand and wrote a conversation.
+        let db = crate::conductor::line_dirs(tmp.path(), Line::V06).1.join("databases").join("authored").join("a.db");
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+        std::fs::File::options().write(true).open(&db).unwrap().set_modified(later).unwrap();
+        assert!(reopen_if_written_since_stop(tmp.path()));
+        assert_eq!(carried_all(tmp.path()), None);
+        assert!(!tmp.path().join(STOP_PRINT_FILE).exists());
+        let d = decide(&Known::NeverShared, Marker::load(tmp.path(), &MARKER), true, 10);
+        assert_eq!(d.decision, Decision::Wanted(Why::NotCarried), "0.6 runs until a full pass carries what it wrote");
+        // Once is enough: nothing more to clear.
+        assert!(!reopen_if_written_since_stop(tmp.path()));
+    }
+
+    #[test]
+    fn a_stop_with_no_record_opens_the_old_line_once_more() {
+        let tmp = stopped_profile();
+        assert!(reopen_if_written_since_stop(tmp.path()));
+        assert_eq!(carried_all(tmp.path()), None);
+    }
+
+    #[test]
+    fn the_old_line_running_again_clears_the_record_that_nothing_is_left() {
+        let tmp = stopped_profile();
+        crate::conductor::note_old_line_needed(tmp.path(), true);
+        assert_eq!(carried_all(tmp.path()), None, "a device back on 0.6 may write what nobody else carries");
+        let MarkerRead::Present(m) = Marker::load(tmp.path(), &MARKER) else { panic!() };
+        assert_eq!(m.old_line_needed, Some(true));
+        crate::conductor::note_old_line_needed(tmp.path(), false);
+        assert_eq!(carried_all(tmp.path()), None, "stopping never records a full pass by itself");
     }
 }

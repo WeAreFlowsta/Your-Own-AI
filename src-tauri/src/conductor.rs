@@ -698,6 +698,7 @@ pub(crate) async fn transcript_apps_06() -> Result<Vec<(String, Vec<u8>)>, Strin
 /// so ports and processes are released).
 pub async fn start_holochain(app: tauri::AppHandle, data_dir: PathBuf, line_07: Option<Line07>) -> Result<u64, String> {
     let _ = PROFILE_ROOT.set(data_dir.clone());
+    crate::line_facts::reopen_if_written_since_stop(&data_dir);
     let (primary, secondary) = crate::line_facts::start_plan(&app, &data_dir, line_07.is_some());
     log::info!("[lines] {primary} leads{}", secondary.map(|l| format!(", {l} joins")).unwrap_or_default());
     set_leading(primary);
@@ -756,11 +757,20 @@ static LINE_07: std::sync::Mutex<Option<Line07>> = std::sync::Mutex::new(None);
 
 /// Record in the move's marker whether the 0.6 line runs (an existing
 /// marker only: there is none before the move flips).
+/// While the 0.6 line runs again on a moved profile, what reaches it (a
+/// device back on 0.9.0, say) is new: a record that nothing is left on it
+/// no longer holds, and the line stops again only after a full pass.
 pub(crate) fn note_old_line_needed(data_dir: &Path, needed: bool) {
     use flowsta_hc_lines::marker::{Marker, MarkerRead};
     if let MarkerRead::Present(m) = Marker::load(data_dir, &crate::move_07::MARKER) {
-        if m.old_line_needed != Some(needed) {
-            if let Err(e) = flowsta_hc_lines::marker::update_marker(data_dir, &crate::move_07::MARKER, |m| m.old_line_needed = Some(needed)) {
+        if m.old_line_needed != Some(needed) || (needed && m.carried_all_ms.is_some()) {
+            let change = |m: &mut flowsta_hc_lines::marker::Marker| {
+                m.old_line_needed = Some(needed);
+                if needed {
+                    m.carried_all_ms = None;
+                }
+            };
+            if let Err(e) = flowsta_hc_lines::marker::update_marker(data_dir, &crate::move_07::MARKER, change) {
                 log::warn!("[lines] the marker did not take old_line_needed = {needed}: {e}");
             }
         }
