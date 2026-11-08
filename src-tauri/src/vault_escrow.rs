@@ -1629,26 +1629,98 @@ pub(crate) fn open_record(
 }
 
 /// Canonical-shape record object.
-fn backup_record(
-    entry_type: &str,
-    record: &holochain_types::prelude::Record,
-    human: serde_json::Value,
-    raw: &[u8],
-) -> serde_json::Value {
+fn backup_record(entry_type: &str, record: Sealed) -> serde_json::Value {
     use base64::Engine;
-    let hash_hex = hex::encode(record.action_address().get_raw_39());
-    let created_ms = record.action().timestamp().as_micros() / 1000;
     serde_json::json!({
         "entryType": entry_type,
-        "actionHash": hash_hex,
-        "createdAtMs": created_ms,
-        "human_readable": human,
+        "actionHash": record.id,
+        "createdAtMs": record.created_ms,
+        "human_readable": record.plain,
         "raw_record": {
-            "entry_b64": base64::engine::general_purpose::STANDARD.encode(raw),
-            "action_address": hash_hex,
+            "entry_b64": base64::engine::general_purpose::STANDARD.encode(&record.raw),
+            "action_address": record.id,
             "action_type": "Create",
         },
     })
+}
+
+/// One record as a backup keeps it, from either line: its id (a v1
+/// record's action hash, or the id a v2 record carries in its plaintext),
+/// when it was written, its plaintext, and its sealed entry's bytes (the
+/// same `{cipher, nonce}` shape on both lines, so a restore reads either).
+#[derive(Clone)]
+pub(crate) struct Sealed {
+    pub id: String,
+    pub created_ms: i64,
+    pub plain: serde_json::Value,
+    pub raw: Vec<u8>,
+}
+
+fn sealed_v1(key: &[u8; 32], record: &holochain_types::prelude::Record) -> Option<Sealed> {
+    let (plain, raw) = open_record(key, record)?;
+    Some(Sealed { id: hex::encode(record.action_address().get_raw_39()), created_ms: record.action().timestamp().as_micros() / 1000, plain, raw })
+}
+
+fn sealed_v2(key: &[u8; 32], view: &flowsta_hc_lines::RecordView) -> Option<Sealed> {
+    let raw = view.entry.clone()?;
+    let ee: crate::commands_holochain::EncryptedEntryRaw = rmp_serde::from_slice(&raw).ok()?;
+    let plain_bytes = crate::transcript_crypto::decrypt(key, &ee.nonce, &ee.cipher).ok()?;
+    let plain: serde_json::Value = serde_json::from_slice(&plain_bytes).ok()?;
+    let id = plain["id"].as_str()?.to_string();
+    Some(Sealed { id, created_ms: view.timestamp_us / 1000, plain, raw })
+}
+
+/// Where a backup reads an AI's records: its 0.6 cell while it has one
+/// (writes go there first, so it holds every record), else the 0.7 line.
+pub(crate) enum BackupSource {
+    V06,
+    V07,
+}
+
+/// An AI's conversations: at its founding key and, on the 0.6 line, the
+/// cell's own key for the ones started before. A list that stops part way
+/// is an error, so a partial list never drops conversations.
+pub(crate) async fn list_sealed(manager: &crate::holochain::HolochainManager, key: &[u8; 32], agent: &str, founding: &str, source: &BackupSource) -> Result<Vec<Sealed>, String> {
+    let timeout = std::time::Duration::from_secs(180);
+    match source {
+        BackupSource::V06 => {
+            let mut anchors: Vec<Option<&str>> = vec![None];
+            if founding != agent {
+                anchors.insert(0, Some(founding));
+            }
+            let mut out = Vec::new();
+            for anchor in anchors {
+                let records = crate::transcript_pages::all_conversations_at(manager, agent, anchor, timeout).await.and_then(|r| r.whole())?;
+                out.extend(records.iter().filter_map(|r| sealed_v1(key, r)));
+            }
+            Ok(out)
+        }
+        BackupSource::V07 => {
+            let anchor = hex::decode(founding).ok().filter(|b| b.len() == 39).map(holochain_types::prelude::AgentPubKey::from_raw_39).ok_or("bad founding key")?;
+            let items = tokio::time::timeout(timeout, crate::hc07::app_cells().conversations_all(agent, &anchor))
+                .await
+                .unwrap_or_else(|_| Err(format!("no answer within {} s", timeout.as_secs())))?;
+            Ok(items.iter().filter_map(|(view, _)| sealed_v2(key, view)).collect())
+        }
+    }
+}
+
+/// A conversation's entries, in order; the whole conversation or an error.
+async fn entries_sealed(manager: &crate::holochain::HolochainManager, key: &[u8; 32], agent: &str, conversation_id: &str, source: &BackupSource, timeout: std::time::Duration) -> Result<Vec<Sealed>, String> {
+    match source {
+        BackupSource::V06 => {
+            let hash = crate::transcript_ids::v1_hash(conversation_id).ok_or("not a v1 conversation")?;
+            let records = crate::transcript_pages::all_entries(manager, agent, hash, timeout).await.and_then(|r| r.whole())?;
+            Ok(records.iter().filter_map(|r| sealed_v1(key, r)).collect())
+        }
+        BackupSource::V07 => {
+            let anchor = holochain_types::prelude::ExternalHash::from_raw_32(crate::transcript_ids::conversation_anchor(key, conversation_id).to_vec());
+            let items = tokio::time::timeout(timeout, crate::hc07::app_cells().entries_all(agent, &anchor))
+                .await
+                .unwrap_or_else(|_| Err(format!("no answer within {} s", timeout.as_secs())))?;
+            Ok(items.iter().filter_map(|(view, _)| sealed_v2(key, view)).collect())
+        }
+    }
 }
 
 /// Walk every agent's conversations + entries, decrypting as we go.
@@ -1696,19 +1768,34 @@ fn save_last_index(app: &tauri::AppHandle, index: &[serde_json::Value]) {
 /// past what one read returns in time). One unreadable cell used to fail
 /// the whole backup, for weeks, silently except for a log line.
 async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle>, Vec<serde_json::Value>), String> {
-    use holochain_types::prelude::Record;
-
     let hc = app
         .try_state::<Arc<HolochainState>>()
         .ok_or("holochain state missing")?;
     let manager = hc.get()?;
     let key = manager.data_key()?;
-    let agents: Vec<(String, String)> = {
+    // Each AI cell, from the line that holds its records: the 0.6 cells, and
+    // the 0.7 line's apps that have no 0.6 cell here (named as their v1 app
+    // would be, as the manifest's index has always named them).
+    let mut agents: Vec<(String, String, BackupSource)> = {
         let map = manager.agents.lock().await;
         map.iter()
-            .map(|(k, a)| (k.clone(), a.installed_app_id.clone()))
+            .map(|(k, a)| (k.clone(), a.installed_app_id.clone(), BackupSource::V06))
             .collect()
     };
+    if crate::conductor::ports(flowsta_hc_lines::Line::V07).is_some() {
+        match crate::hc07::transcript_apps().await {
+            Ok(apps) => {
+                for a in apps.into_iter().filter(|a| a.enabled) {
+                    if agents.iter().any(|(k, _, _)| *k == a.agent) {
+                        continue;
+                    }
+                    let suffix = a.app_id.strip_prefix(crate::hc07::APP_ID_PREFIX).unwrap_or(&a.app_id).to_string();
+                    agents.push((a.agent, format!("{}{}", crate::dna::APP_ID_PREFIX, suffix), BackupSource::V07));
+                }
+            }
+            Err(e) => log::warn!("[escrow] the 0.7 line's AIs could not be listed: {e}"),
+        }
+    }
 
     let mut bundles = Vec::new();
     let mut unreadable: Vec<String> = Vec::new();
@@ -1729,7 +1816,7 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
     // A conversation listed through two cells (two generations of one AI
     // both read its founding key) is backed up once.
     let mut listed: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for (agent_key, installed_app_id) in agents {
+    for (agent_key, installed_app_id, source) in agents {
         let started = std::time::Instant::now();
         // Where this AI's conversations are listed: its founding key, where
         // every device writes since coordinator 9 (so a conversation this
@@ -1739,33 +1826,18 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
         // list that stops part way counts as unread, so a partial list never
         // drops conversations from the backup.
         let founding = crate::commands_holochain::founding_key_for(app, &agent_key);
-        let mut anchors: Vec<Option<&str>> = vec![None];
-        if founding != agent_key {
-            anchors.insert(0, Some(founding.as_str()));
-        }
-        let mut conv_records: Vec<Record> = Vec::new();
-        let mut list_failed = None;
-        for anchor in anchors {
-            match crate::transcript_pages::all_conversations_at(&manager, &agent_key, anchor, std::time::Duration::from_secs(180))
-                .await
-                .and_then(|r| r.whole())
-            {
-                Ok(r) => conv_records.extend(r),
-                Err(e) => {
-                    list_failed = Some(e);
-                    break;
-                }
+        let mut conv_records: Vec<Sealed> = match list_sealed(&manager, &key, &agent_key, &founding, &source).await {
+            Ok(r) => r,
+            Err(e) => {
+                log::warn!(
+                    "[escrow] conversation list read ({}) failed - keeping this AI's conversations from the previous backup: {}",
+                    agent_key, e
+                );
+                unreadable.push(installed_app_id.clone());
+                continue;
             }
-        }
-        if let Some(e) = list_failed {
-            log::warn!(
-                "[escrow] conversation list read ({}) failed - keeping this AI's conversations from the previous backup: {}",
-                agent_key, e
-            );
-            unreadable.push(installed_app_id.clone());
-            continue;
-        }
-        conv_records.retain(|r| listed.insert(hex::encode(r.action_address().get_raw_39())));
+        };
+        conv_records.retain(|r| listed.insert(r.id.clone()));
 
         // Changed-only reads: the local list cache is written through on
         // every turn the app records, so a conversation whose activity stamp
@@ -1794,7 +1866,7 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
                 );
             }
             {
-                let hex = hex::encode(conv.action_address().get_raw_39());
+                let hex = conv.id.clone();
                 let label = format!("conv-{}", &hex[..hex.len().min(24)]);
                 if let (Some(prev), Some(&stamp)) = (sync.get(&label), activity.get(&hex)) {
                     let covered = prev.active_at == Some(stamp)
@@ -1803,15 +1875,13 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
                         // started_at from the stored entry, else from the
                         // list record itself (entries written before the
                         // field existed).
-                        let started = prev
-                            .started_at
-                            .or_else(|| open_record(&key, conv).and_then(|(p, _)| p["started_at"].as_i64()));
+                        let started = prev.started_at.or_else(|| conv.plain["started_at"].as_i64());
                         if let Some(started) = started {
                             carried.push(serde_json::json!({
                                 "label": label,
                                 "role_name": installed_app_id,
                                 "agent": agent_key,
-                                "title": open_record(&key, conv).and_then(|(p, _)| p["title"].as_str().map(String::from)),
+                                "title": conv.plain["title"].as_str().map(String::from),
                                 "started_at": started,
                                 "records": prev.records,
                                 "labels": prev.labels,
@@ -1829,31 +1899,27 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
                 // answering at a rate a pass can finish. The rest of its
                 // conversations keep their previous entries (carried) or
                 // wait for the next pass; the other AIs still back up.
-                let hex = hex::encode(conv.action_address().get_raw_39());
+                let hex = conv.id.clone();
                 let label = format!("conv-{}", &hex[..hex.len().min(24)]);
                 if let Some(prev) = sync.get(&label) {
-                    if let Some((p, _)) = open_record(&key, conv) {
-                        carried.push(serde_json::json!({
-                            "label": label,
-                            "role_name": installed_app_id,
-                            "agent": agent_key,
-                            "title": p["title"].as_str(),
-                            "started_at": p["started_at"].as_i64().unwrap_or(0),
-                            "records": prev.records,
-                            "labels": prev.labels,
-                        }));
-                    }
+                    let p = &conv.plain;
+                    carried.push(serde_json::json!({
+                        "label": label,
+                        "role_name": installed_app_id,
+                        "agent": agent_key,
+                        "title": p["title"].as_str(),
+                        "started_at": p["started_at"].as_i64().unwrap_or(0),
+                        "records": prev.records,
+                        "labels": prev.labels,
+                    }));
                 }
                 conv_unreadable += 1;
                 continue;
             }
-            let Some((conv_plain, conv_raw)) = open_record(&key, conv) else { continue };
-            let started_at = conv_plain["started_at"].as_i64().unwrap_or(0);
-            let title = conv_plain["title"].as_str().map(String::from);
-            let conv_hash = conv.action_address().clone();
-            let conv_hash_hex = hex::encode(conv_hash.get_raw_39());
-            let mut records =
-                vec![backup_record("Conversation", conv, conv_plain, &conv_raw)];
+            let started_at = conv.plain["started_at"].as_i64().unwrap_or(0);
+            let title = conv.plain["title"].as_str().map(String::from);
+            let conv_hash_hex = conv.id.clone();
+            let mut records = vec![backup_record("Conversation", conv.clone())];
 
             // A conversation the Vault already holds may stall at 180 s: the
             // previous copy is carried and nothing is lost. One it does NOT
@@ -1868,10 +1934,7 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
             };
             // `entries_timeout` is per page of messages; half a conversation
             // is never backed up (`whole`).
-            let entry_records: Vec<Record> = match crate::transcript_pages::all_entries(&manager, &agent_key, conv_hash.clone(), entries_timeout)
-                .await
-                .and_then(|r| r.whole())
-            {
+            let entry_records: Vec<Sealed> = match entries_sealed(&manager, &key, &agent_key, &conv_hash_hex, &source, entries_timeout).await {
                 Ok(r) => {
                     stalled_in_a_row = 0;
                     r
@@ -1900,8 +1963,8 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
                     continue;
                 }
             };
-            for er in &entry_records {
-                let Some((mut plain, raw)) = open_record(&key, er) else { continue };
+            for mut er in entry_records {
+                let plain = &mut er.plain;
                 let entry_type = if plain["annotation"] == "grounding" {
                     "GroundingAnnotation"
                 } else {
@@ -1915,7 +1978,7 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
                         serde_json::json!(conv_hash_hex),
                     );
                 }
-                records.push(backup_record(entry_type, er, plain, &raw));
+                records.push(backup_record(entry_type, er));
             }
 
             let size: usize = records
@@ -2509,9 +2572,17 @@ async fn write_incremental_backup(
         manifest_state,
         ais_state,
     );
+    // The backup must hold everything this device holds: when it lists
+    // fewer, say so (some are still unread, or a line did not answer) rather
+    // than let a smaller backup pass as complete.
+    let on_device = count_local_conversations(app).await.ok();
+    if let Some(n) = on_device.filter(|n| (index.len() as u64) < *n) {
+        log::warn!("[escrow] the backup lists {} conversation(s) and this device holds {}: {} not in it yet", index.len(), n, n - index.len() as u64);
+    }
     Ok(serde_json::json!({
         "mode": "incremental",
         "conversations": index.len(),
+        "device_conversations": on_device,
         "records": total_records,
         "truncated_conversations": 0,
         "uploaded_objects": uploaded_objects,

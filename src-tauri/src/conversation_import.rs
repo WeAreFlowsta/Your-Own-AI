@@ -1868,6 +1868,33 @@ async fn commit_encrypted(
     ExternIO::decode(&result).map_err(|e| e.to_string())
 }
 
+/// An imported conversation, on the line that takes the AI's writes: its
+/// 0.6 cell while it has one (its hash the id), else the 0.7 line under a
+/// fresh id, once the 0.6 line cannot take it.
+async fn start_imported(manager: &crate::holochain::HolochainManager, ai_id: &str, founding: &str, key: &[u8; 32], meta: &serde_json::Value) -> Result<String, String> {
+    if manager.is_provisioned(ai_id).await {
+        let hash = commit_encrypted(manager, ai_id, key, "start_conversation", None, meta).await?;
+        return Ok(hex::encode(hash.get_raw_39()));
+    }
+    crate::hc07::write_07_alone(ai_id).await?;
+    let id = crate::transcript_ids::fresh_id();
+    crate::hc07::write_start_conversation(ai_id, founding, *key, &id, meta.clone()).await?;
+    Ok(id)
+}
+
+/// One imported message, on the line its conversation is on.
+async fn record_imported(manager: &crate::holochain::HolochainManager, ai_id: &str, key: &[u8; 32], conversation_id: &str, plain: &serde_json::Value) -> Result<(), String> {
+    if let Some(hash) = crate::transcript_ids::v1_hash(conversation_id) {
+        if manager.is_provisioned(ai_id).await {
+            commit_encrypted(manager, ai_id, key, "record_message", Some(hash), plain).await?;
+            return Ok(());
+        }
+        crate::hc07::write_07_alone(ai_id).await?;
+    }
+    let id = crate::transcript_ids::fresh_id();
+    crate::hc07::write_record_message(ai_id, *key, conversation_id, &id, plain.clone()).await
+}
+
 /// A running adoption's live progress - also the overlap guard's record.
 #[derive(Clone, Serialize)]
 pub struct AdoptProgressStatus {
@@ -1952,29 +1979,13 @@ pub async fn import_archive_adopt(
     let key = manager.data_key()?;
     let archive = load_archive(&app, &archive_id)?;
 
-    // Existing started_at values on the adopting agent's chain.
+    // Existing started_at values of the adopting AI's conversations, listed
+    // as the backup lists them, from the line that holds them.
     let mut existing_started: std::collections::HashSet<i64> = std::collections::HashSet::new();
-    if let Ok(read) = crate::transcript_pages::all_conversations(&manager, &ai_id, std::time::Duration::from_secs(60)).await {
-        {
-            let records = read.records;
-            for record in &records {
-                let Some(entry) = record.entry().as_option() else { continue };
-                let Some(app_bytes) = entry.as_app_entry() else { continue };
-                let Ok(ee) = rmp_serde::from_slice::<EncryptedEntryRaw>(app_bytes.as_ref().bytes())
-                else {
-                    continue;
-                };
-                let Ok(plain) = crate::transcript_crypto::decrypt(&key, &ee.nonce, &ee.cipher)
-                else {
-                    continue;
-                };
-                if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&plain) {
-                    if let Some(s) = v["started_at"].as_i64() {
-                        existing_started.insert(s);
-                    }
-                }
-            }
-        }
+    let source = if manager.is_provisioned(&ai_id).await { crate::vault_escrow::BackupSource::V06 } else { crate::vault_escrow::BackupSource::V07 };
+    let founding = crate::commands_holochain::founding_key_for(&app, &ai_id);
+    if let Ok(records) = crate::vault_escrow::list_sealed(&manager, &key, &ai_id, &founding, &source).await {
+        existing_started.extend(records.iter().filter_map(|r| r.plain["started_at"].as_i64()));
     }
 
     let total = archive.conversations.len();
@@ -2007,13 +2018,12 @@ pub async fn import_archive_adopt(
             "title": conv.title,
             "source": format!("import:{}", archive.source),
         });
-        let conv_hash =
-            commit_encrypted(manager, &ai_id, &key, "start_conversation", None, &meta).await?;
+        let conv_id = start_imported(manager, &ai_id, &founding, &key, &meta).await?;
         crate::conversation_cache::append_to_cache(
             &app,
             &ai_id,
             crate::commands_holochain::ConversationInfo {
-                hash: hex::encode(conv_hash.get_raw_39()),
+                hash: conv_id.clone(),
                 ai_personality_id: ai_id.clone(),
                 ai_personality_name: ai_name.clone(),
                 model_used: "imported".to_string(),
@@ -2035,18 +2045,10 @@ pub async fn import_archive_adopt(
                 "thinking": null,
                 "tokens": null,
             });
-            commit_encrypted(
-                manager,
-                &ai_id,
-                &key,
-                "record_message",
-                Some(conv_hash.clone()),
-                &plain,
-            )
-            .await?;
+            record_imported(manager, &ai_id, &key, &conv_id, &plain).await?;
         }
         written += 1;
-        // Written to the 0.6 line only: the move's next pass copies it.
+        // Written to the 0.6 line first: the move's next pass copies it.
         crate::hc07::note_missed(&ai_id);
 
         let pct = (((idx + 1) * 100) / total.max(1)) as u32;

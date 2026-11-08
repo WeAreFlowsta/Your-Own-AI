@@ -515,10 +515,8 @@ async fn local_conversation_index(
     manager: &HolochainManager,
     key: &[u8; 32],
 ) -> Result<(HashSet<i64>, HashMap<String, u64>), String> {
-    let agent_keys: Vec<String> = {
-        let agents = manager.agents.lock().await;
-        agents.keys().cloned().collect()
-    };
+    // Every AI cell on either line.
+    let agent_keys: Vec<String> = manager.ai_agents().await;
     let mut started = HashSet::new();
     let mut counts = HashMap::new();
     for agent in agent_keys {
@@ -539,16 +537,17 @@ async fn local_conversation_index(
         }
         // The list decides what is already here: a partial one would let
         // a restore write conversations twice, so only a whole list counts.
-        let records = crate::transcript_pages::all_conversations(manager, &agent, std::time::Duration::from_secs(180))
+        // Listed as the backup lists (the founding key too), from the line
+        // that holds the AI's records.
+        let source = if manager.is_provisioned(&agent).await { vault_escrow::BackupSource::V06 } else { vault_escrow::BackupSource::V07 };
+        let founding = crate::commands_holochain::founding_key_for(app, &agent);
+        let records = vault_escrow::list_sealed(manager, key, &agent, &founding, &source)
             .await
-            .and_then(|r| r.whole())
             .map_err(|e| format!("conversation list read ({}): {}", agent, e))?;
         counts.insert(agent, records.len() as u64);
         for rec in &records {
-            if let Some((plain, _)) = vault_escrow::open_record(key, rec) {
-                if let Some(s) = plain["started_at"].as_i64() {
-                    started.insert(s);
-                }
+            if let Some(s) = rec.plain["started_at"].as_i64() {
+                started.insert(s);
             }
         }
     }
@@ -557,6 +556,35 @@ async fn local_conversation_index(
 
 /// Replay one conversation into `agent_key`. Returns the number of records
 /// committed.
+/// Replay a conversation onto the line that takes this AI's writes: its 0.6
+/// cell while it has one (new records, their hashes the ids, as before;
+/// the move's next pass copies them), else the 0.7 line under the backup's
+/// own ids (a copy by id: nothing to remap, and a copy already there has the
+/// same keys, which a reader folds into one).
+async fn replay_any(app: &tauri::AppHandle, manager: &HolochainManager, agent_key: &str, key: &[u8; 32], group: &ConvGroup) -> Result<u64, String> {
+    if manager.is_provisioned(agent_key).await {
+        return replay_group(manager, agent_key, key, group).await;
+    }
+    crate::hc07::write_07_alone(agent_key).await?;
+    let founding = crate::commands_holochain::founding_key_for(app, agent_key);
+    let conversation_id = group.old_hash.clone();
+    crate::hc07::write_start_conversation(agent_key, &founding, *key, &conversation_id, record_plain(key, &group.conversation)?).await?;
+    let mut committed = 1u64;
+    for entry in &group.entries {
+        let id = entry["actionHash"].as_str().ok_or("a backed-up entry without its id")?;
+        crate::hc07::write_record_message(agent_key, *key, &conversation_id, id, record_plain(key, entry)?).await?;
+        committed += 1;
+    }
+    Ok(committed)
+}
+
+/// A backed-up record's plaintext, from its sealed bytes (either line's).
+fn record_plain(key: &[u8; 32], rec: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let (cipher, nonce) = record_cipher(key, rec)?;
+    let bytes = crate::transcript_crypto::decrypt(key, &nonce, &cipher)?;
+    serde_json::from_slice(&bytes).map_err(|e| format!("a backed-up record's plaintext: {e}"))
+}
+
 async fn replay_group(
     manager: &HolochainManager,
     agent_key: &str,
@@ -1017,7 +1045,7 @@ async fn restore_backup(
                 conversations_skipped += 1;
                 continue;
             }
-            let n = replay_group(manager, agent_key, &key, group).await?;
+            let n = replay_any(&app, manager, agent_key, &key, group).await?;
             conversations_restored += 1;
             records_restored += n;
         }
@@ -1052,7 +1080,7 @@ async fn restore_backup(
                 conversations_skipped += 1;
                 continue;
             }
-            let n = replay_group(manager, &agent_key, &key, group).await?;
+            let n = replay_any(&app, manager, &agent_key, &key, group).await?;
             conversations_preserved += 1;
             records_preserved += n;
         }
