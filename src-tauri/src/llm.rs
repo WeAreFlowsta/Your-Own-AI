@@ -2603,6 +2603,103 @@ pub static FORCE_RELOAD_NEXT: std::sync::atomic::AtomicBool = std::sync::atomic:
 /// `only_if_backend` limits it to a currently spawned backend ("mlx" when
 /// the MLX engine was removed). No model loaded: nothing to do - the next
 /// load picks the new engine anyway.
+/// Free graphics memory right after the chat model's load, in MiB (0 = not
+/// measured): what the idle unload compares against to tell another
+/// program's use of the card from our own model filling it.
+static FREE_AFTER_LOAD_MIB: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Our app idle this long before the chat model may unload (Eric 11-08).
+const IDLE_UNLOAD_SECS: i64 = 15 * 60;
+/// Another program has taken at least this much of the card since our load.
+const OTHERS_TOOK_CARD_MIB: u64 = 512;
+
+/// Has another program taken the card's memory since our model loaded?
+/// `free_after_load` is the free figure right after our load, `helpers_mib`
+/// what our own helpers have put on the card since, `free_now` the figure
+/// now. The desktop's own share is in both figures, so it never counts.
+fn others_took_card(free_after_load: u64, helpers_mib: u64, free_now: u64) -> bool {
+    free_after_load > 0 && free_after_load.saturating_sub(helpers_mib).saturating_sub(free_now) >= OTHERS_TOOK_CARD_MIB
+}
+
+/// Give the graphics card and the memory back (BACKGROUND_WORK_AUDIT.md,
+/// decided 11-08): after 15 minutes with our app idle, when another program
+/// is using the card or memory is short, the chat model unloads. The next
+/// reply loads it again ("Loading ..." on its bubble). Never during a reply,
+/// a load, or a turn of the person's.
+pub fn start_idle_unload(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            let idle = crate::dreaming::own_idle_secs();
+            if idle < IDLE_UNLOAD_SECS {
+                continue;
+            }
+            let st = app.state::<LLMState>();
+            if !*st.is_server_running.lock().await || st.loading_model.lock().await.is_some() {
+                continue;
+            }
+            if FOREGROUND_TURNS.load(std::sync::atomic::Ordering::SeqCst) > 0 || st.live_streams.count() > 0 {
+                continue;
+            }
+            let short = crate::machine::reading().is_some_and(|r| r.memory_short);
+            let card = {
+                let base = FREE_AFTER_LOAD_MIB.load(std::sync::atomic::Ordering::SeqCst);
+                if base == 0 {
+                    false
+                } else {
+                    invalidate_vram_cache().await;
+                    match available_vram_mib(&app).await {
+                        Some(free_now) => {
+                            let mut helpers = 0f64;
+                            if *st.embed_place.lock().await == HelperPlace::Card {
+                                let f = st.embed_model.lock().await.clone().unwrap_or_else(|| crate::corpus::EMBEDDING_MODEL_FILE.to_string());
+                                helpers += helper_need_gb(&app, &f, EMBED_CTX).unwrap_or(0.0);
+                            }
+                            if *st.util_place.lock().await == HelperPlace::Card {
+                                let f = st.util_model.lock().await.clone().unwrap_or_else(|| UTILITY_MODEL_FILE.to_string());
+                                helpers += helper_need_gb(&app, &f, UTIL_CTX).unwrap_or(0.0);
+                            }
+                            others_took_card(base, (helpers * 1024.0) as u64, free_now as u64)
+                        }
+                        None => false,
+                    }
+                }
+            };
+            if !(short || card) {
+                continue;
+            }
+            let why = if short { "memory is short" } else { "another program is using the graphics card" };
+            log::info!("[LLM] the chat model unloads after {} min with the app idle: {why}; the next reply loads it again", idle / 60);
+            stop_chat_server_for_maintenance(&st).await;
+            FREE_AFTER_LOAD_MIB.store(0, std::sync::atomic::Ordering::SeqCst);
+        }
+    });
+}
+
+#[cfg(test)]
+mod idle_unload_tests {
+    use super::others_took_card;
+
+    #[test]
+    fn our_own_model_filling_the_card_is_not_another_program() {
+        // A 4 GB card our 4B model left at 180 MiB free, nothing else since.
+        assert!(!others_took_card(180, 0, 170));
+        // Our helpers moved onto the card after the load: still ours.
+        assert!(!others_took_card(2000, 900, 1080));
+    }
+
+    #[test]
+    fn another_program_taking_half_a_gig_is() {
+        assert!(others_took_card(2000, 0, 1400));
+        assert!(others_took_card(2000, 900, 500));
+    }
+
+    #[test]
+    fn an_unmeasured_load_never_unloads_for_the_card() {
+        assert!(!others_took_card(0, 0, 0));
+    }
+}
+
 /// Stop the running chat server for maintenance (a storage move, a tune
 /// run): the loaded model holds VRAM and its file open. The next turn
 /// reloads whatever the router asks for.
@@ -3689,6 +3786,7 @@ pub async fn start_llama_server(
                         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                         invalidate_vram_cache().await;
                         if let Some(after_mib) = available_vram_mib(&app).await {
+                            FREE_AFTER_LOAD_MIB.store(after_mib as u64, std::sync::atomic::Ordering::SeqCst);
                             let after = after_mib as f64 / 1024.0;
                             let actual = (free_before - after).max(0.0);
                             log::info!(
@@ -7115,6 +7213,11 @@ impl Drop for LiveStream {
 
 impl LiveStreams {
     /// Is a stream with this id already running?
+    /// Replies streaming right now.
+    pub fn count(&self) -> usize {
+        self.0.lock().map(|m| m.live.len()).unwrap_or(0)
+    }
+
     pub fn is_live(&self, id: &str) -> bool {
         let map = self.0.lock().unwrap_or_else(|e| e.into_inner());
         map.live.contains_key(id)

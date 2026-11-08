@@ -1051,6 +1051,7 @@ pub fn run() {
                 config_sync::start_config_sync_rounds(&link_app_handle);
                 memory_rows::start_person_memory_sync(&link_app_handle);
                 machine::start(&link_app_handle);
+                llm::start_idle_unload(&link_app_handle);
                 dreaming::start_dreaming(&link_app_handle);
                 corpus::sync::start_folder_sync(&link_app_handle);
                 tuning::refresh_gpu_choices(&link_app_handle);
