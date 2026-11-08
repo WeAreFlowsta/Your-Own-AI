@@ -19,7 +19,15 @@ export DEVICES_NAME="${DEVICES_NAME:-Synced $(date +%H%M)}"
 # worktree of an earlier release, built there with `npm run e2e:build`, makes
 # this the mixed-version run: A on this build, B on that release.
 B_TREE="$(cd "${DEVICES_B_TREE:-$HERE/..}" && pwd)"
-[ "$B_TREE" = "$(pwd)" ] || echo "== device B runs from $B_TREE"
+if [ "$B_TREE" != "$(pwd)" ]; then
+  echo "== device B runs from $B_TREE"
+  # B drives ITS release's app with THIS spec (an earlier release's copy has
+  # no phase d and does not continue the conversation in phase c); the spec
+  # is told B is the earlier release, whose drawer does not re-read while
+  # open, so there phase c reopens it on each look as the person would.
+  cp "$HERE/specs/devices/devices.e2e.ts" "$B_TREE/e2e/specs/devices/devices.e2e.ts"
+  export DEVICES_B_EARLIER=1
+fi
 
 killtests() { for pid in $(pgrep -x flowsta-vault); do case "$(readlink /proc/$pid/exe 2>/dev/null)" in *target/debug*) kill "$pid" 2>/dev/null || true;; esac; done; }
 answering() { for p in 27777 27778 27779; do curl -s -m 2 "http://127.0.0.1:$p/dev/status" | grep -q '"harness":true' && echo "$p"; done; }

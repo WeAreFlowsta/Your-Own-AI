@@ -223,9 +223,26 @@ describe(`devices, phase ${PHASE}`, () => {
       // way the person never reopens anything (11-08: before the fix the
       // drawer read once, 3 s before the devices met, and stayed a copy).
       const ownInDrawer = (items: { copy: string | null; text: string }[]) => items.some((d) => d.text.includes("Devices test") && d.copy !== "1");
-      const inDrawer = await browser
-        .waitUntil(async () => ownInDrawer(await drawer()), { timeout: 60_000, interval: 5_000 })
-        .then(() => true, () => false);
+      // On the mixed run B is the earlier release (devices-live.sh sets
+      // DEVICES_B_EARLIER): its drawer reads only when it opens, so there the
+      // person reopens it on each look (the header button sits under the
+      // drawer's backdrop, so it is clicked through the page).
+      const inDrawer =
+        process.env.DEVICES_B_EARLIER === "1"
+          ? await browser.waitUntil(
+              async () => {
+                await browser.execute(() => {
+                  const el = document.querySelector('[data-testid="conversations-open"]') as HTMLElement | null;
+                  ((el && el.tagName === "BUTTON" ? el : el?.querySelector("button")) as HTMLElement | null)?.click();
+                });
+                await new Promise((r) => setTimeout(r, 2_000));
+                return ownInDrawer(await drawer());
+              },
+              { timeout: 360_000, interval: 5_000, timeoutMsg: "A's conversation never arrived in B's own records on the earlier release (still only the Vault copy after 6 min of reopening)" },
+            )
+          : await browser
+              .waitUntil(async () => ownInDrawer(await drawer()), { timeout: 60_000, interval: 5_000 })
+              .then(() => true, () => false);
       if (inDrawer) {
         console.log(`e2e: arrived in the open drawer after ${Math.round((Date.now() - started) / 1000)} s: ${JSON.stringify(await drawer())}`);
         await shot("devices-c-arrived");
