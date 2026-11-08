@@ -1248,7 +1248,9 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
       key: 'coding',
       title: 'Codes with you',
       blurb: 'The strongest project agent that fits this machine.',
-      pick: pickFor(f => f.capabilities.includes('agentic') || f.capabilities.includes('coding')),
+      // 'agentic' = the agent mode drives it (a unit test holds the catalog
+      // to the agent gate); a coding model it does not drive is no pick here.
+      pick: pickFor(f => f.capabilities.includes('agentic')),
     },
     {
       key: 'chat',
