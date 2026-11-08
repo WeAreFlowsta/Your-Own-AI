@@ -85,9 +85,18 @@ pub fn reduce(rows: Vec<MemoryRow>) -> Vec<MemoryRow> {
     live
 }
 
+/// The later revision: by `updated_at`, a deletion over an edit at the same
+/// moment, then by the revision's own content. Not by action hash: the same
+/// revision has one hash on each line, so two revisions saved in the same
+/// millisecond would resolve differently on the 0.6 and 0.7 lines.
 fn newer(a: &MemoryRow, b: &MemoryRow) -> bool {
-    (a.updated_at, a.deleted, a.action_hash.as_deref().unwrap_or(""))
-        > (b.updated_at, b.deleted, b.action_hash.as_deref().unwrap_or(""))
+    (a.updated_at, a.deleted, revision_print(a)) > (b.updated_at, b.deleted, revision_print(b))
+}
+
+fn revision_print(r: &MemoryRow) -> [u8; 32] {
+    let mut sealed = r.clone();
+    sealed.action_hash = None;
+    *blake3::hash(&serde_json::to_vec(&sealed).unwrap_or_default()).as_bytes()
 }
 
 /// The anchor a scope's rows hang from. An `ai:` scope hangs from the AI's
@@ -178,17 +187,7 @@ pub async fn list_memory_revisions(
         None => any_agent(&manager).await.ok_or("no agent provisioned yet")?,
     };
     let key = manager.data_key()?;
-    let anchor = scope_anchor(&scope, &key)?;
-    let payload = ExternIO::encode(RowsInput { anchor }).map_err(|e| e.to_string())?;
-    let out = manager.call_zome(&agent_key, "transcript", "get_memory_rows", payload).await?;
-    let records: Vec<Record> = ExternIO::decode(&out).map_err(|e| e.to_string())?;
-    let mut rows = Vec::with_capacity(records.len());
-    for record in &records {
-        let Some((plain, _)) = crate::vault_escrow::open_record(&key, record) else { continue };
-        let Ok(mut row) = serde_json::from_value::<MemoryRow>(plain) else { continue };
-        row.action_hash = Some(hex::encode(record.action_address().get_raw_39()));
-        rows.push(row);
-    }
+    let rows = raw_rows(&manager, &agent_key, scope_anchor(&scope, &key)?, &key).await?;
     let live: std::collections::HashSet<Option<String>> = reduce(rows.clone()).into_iter().map(|r| r.action_hash).collect();
     let mut out: Vec<MemoryRevision> = rows.into_iter().map(|row| MemoryRevision { superseded: !live.contains(&row.action_hash), row }).collect();
     out.sort_by(|a, b| b.row.updated_at.cmp(&a.row.updated_at).then(a.row.id.cmp(&b.row.id)));
@@ -390,25 +389,57 @@ pub fn list_memory_rows_cached(
 }
 
 /// Any agent this device has provisioned - the writer for rows whose anchor
-/// is the scope's, not an AI's.
+/// is the scope's, not an AI's. A 0.6 cell first; without one, an AI with a
+/// v2 app on the 0.7 line.
 async fn any_agent(manager: &crate::holochain::HolochainManager) -> Option<String> {
-    let map = manager.agents.lock().await;
-    map.keys().next().cloned()
+    if let Some(k) = manager.agents.lock().await.keys().next().cloned() {
+        return Some(k);
+    }
+    if crate::conductor::ports(flowsta_hc_lines::Line::V07).is_none() {
+        return None;
+    }
+    let mut on_07: Vec<String> = crate::hc07::agents_with_apps().await.ok()?.into_iter().collect();
+    on_07.sort();
+    on_07.into_iter().next()
+}
+
+/// Every revision at `anchor`, read through `agent`'s cell: from its 0.6
+/// cell while it has one (writes go there first, so it holds them all),
+/// else from its v2 cell.
+async fn raw_rows(manager: &crate::holochain::HolochainManager, agent: &str, anchor: AnyLinkableHash, key: &[u8; 32]) -> Result<Vec<MemoryRow>, String> {
+    let mut rows = Vec::new();
+    if manager.is_provisioned(agent).await {
+        let payload = ExternIO::encode(RowsInput { anchor }).map_err(|e| e.to_string())?;
+        let out = manager.call_zome(agent, "transcript", "get_memory_rows", payload).await?;
+        let records: Vec<Record> = ExternIO::decode(&out).map_err(|e| e.to_string())?;
+        for record in &records {
+            let Some((plain, _)) = crate::vault_escrow::open_record(key, record) else { continue };
+            let Ok(mut row) = serde_json::from_value::<MemoryRow>(plain) else { continue };
+            row.action_hash = Some(hex::encode(record.action_address().get_raw_39()));
+            rows.push(row);
+        }
+        return Ok(rows);
+    }
+    if crate::conductor::ports(flowsta_hc_lines::Line::V07).is_none() {
+        return Err("this AI has no cell on a running line".into());
+    }
+    let views = tokio::time::timeout(std::time::Duration::from_secs(60), crate::hc07::app_cells().memory_rows(agent, anchor))
+        .await
+        .unwrap_or_else(|_| Err("no answer within 60 s".to_string()))?;
+    for view in &views {
+        let Ok(ee) = view.entry_as::<crate::commands_holochain::EncryptedEntryRaw>() else { continue };
+        let Ok(plain) = crate::transcript_crypto::decrypt(key, &ee.nonce, &ee.cipher) else { continue };
+        let Ok(mut row) = serde_json::from_slice::<MemoryRow>(&plain) else { continue };
+        row.action_hash = Some(hex::encode(&view.action_hash));
+        rows.push(row);
+    }
+    Ok(rows)
 }
 
 async fn rows_at(app: &tauri::AppHandle, manager: &crate::holochain::HolochainManager, agent: &str, scope: &str) -> Result<Vec<MemoryRow>, String> {
     let key = manager.data_key()?;
     let anchor = scope_anchor(scope, &key)?;
-    let payload = ExternIO::encode(RowsInput { anchor }).map_err(|e| e.to_string())?;
-    let out = manager.call_zome(agent, "transcript", "get_memory_rows", payload).await?;
-    let records: Vec<Record> = ExternIO::decode(&out).map_err(|e| e.to_string())?;
-    let mut rows = Vec::with_capacity(records.len());
-    for record in &records {
-        let Some((plain, _)) = crate::vault_escrow::open_record(&key, record) else { continue };
-        let Ok(mut row) = serde_json::from_value::<MemoryRow>(plain) else { continue };
-        row.action_hash = Some(hex::encode(record.action_address().get_raw_39()));
-        rows.push(row);
-    }
+    let mut rows = raw_rows(manager, agent, anchor, &key).await?;
     // What an offline device's backup copy brought stays in the list.
     rows.extend(read_sealed_rows(siblings_path(app, scope), &key));
     let reduced = reduce(rows);
@@ -1050,7 +1081,7 @@ mod tests {
     }
 
     #[test]
-    fn a_same_time_tie_prefers_the_deletion_then_the_larger_hash_the_same_on_every_device() {
+    fn a_same_time_tie_prefers_the_deletion_then_the_same_revision_on_every_device_and_line() {
         let mut d = row("a", "x", 10);
         d.deleted = true;
         d.action_hash = Some("h1".into());
@@ -1058,12 +1089,16 @@ mod tests {
         l.action_hash = Some("h9".into());
         assert!(reduce(vec![l.clone(), d.clone()]).is_empty());
         assert!(reduce(vec![d, l]).is_empty(), "order of arrival does not matter");
-        let mut p = row("a", "p", 10);
-        p.action_hash = Some("h1".into());
-        let mut q = row("a", "q", 10);
-        q.action_hash = Some("h9".into());
-        assert_eq!(reduce(vec![p.clone(), q.clone()])[0].text, "q");
-        assert_eq!(reduce(vec![q, p])[0].text, "q");
+        // Two revisions at the same moment: the winner follows their content,
+        // so the 0.6 and 0.7 copies (each line gives its own action hash)
+        // pick the same one.
+        let p = row("a", "p", 10);
+        let q = row("a", "q", 10);
+        let winner = reduce(vec![p.clone(), q.clone()])[0].text.clone();
+        assert_eq!(reduce(vec![q.clone(), p.clone()])[0].text, winner, "order of arrival does not matter");
+        let on_line = |r: &MemoryRow, h: &str| MemoryRow { action_hash: Some(h.into()), ..r.clone() };
+        assert_eq!(reduce(vec![on_line(&p, "h1"), on_line(&q, "h9")])[0].text, winner, "0.6 hashes");
+        assert_eq!(reduce(vec![on_line(&p, "h9"), on_line(&q, "h1")])[0].text, winner, "0.7 hashes, the other way round");
     }
 
     fn fact(id: &str, kind: &str, value: &str, at: i64) -> crate::memory::MemoryFact {
