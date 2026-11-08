@@ -195,7 +195,13 @@ pub fn agent_caps(model_name: &str) -> u8 {
     if n.contains("lfm2") {
         return 6;
     }
-    if n.contains("granite-4") || n.contains("ling-mini") {
+    // Granite 4.0 Tiny: promoted by the agent probe (11-09, the dev box's
+    // 4 GB card, experts in RAM): the right tool in 8 of 8 project tasks and
+    // 2 of 3 required calls, beside LFM2.5-8B (6) at 8 of 8 and 1 of 3.
+    if n.contains("granite-4") {
+        return 6;
+    }
+    if n.contains("ling-mini") {
         return 5;
     }
     if n.contains("coder") || n.contains("-code") || n.contains("codestral") || n.contains("devstral") {

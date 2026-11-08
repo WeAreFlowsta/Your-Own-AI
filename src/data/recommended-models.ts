@@ -904,7 +904,7 @@ export const modelFamilies: ModelFamily[] = [
     description: 'IBM\'s small hybrid mixture-of-experts - 7B total, about 1B active per token, with a 1M-token context. Apache-2.0. A fast, permissive everyday model for long documents.',
     category: 'fast',
     recommended: true,
-    capabilities: ['chat', 'long-context', 'writing'],
+    capabilities: ['chat', 'long-context', 'agentic', 'writing'],
     traits: ['moe'],
     variants: [
       {
