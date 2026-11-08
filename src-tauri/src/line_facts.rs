@@ -87,6 +87,11 @@ pub struct Stamps {
     pub escrow_at: Option<String>,
 }
 
+/// A copy's stamp from the Vault's list, in ms (a number, quoted or not).
+pub(crate) fn stamp_ms(s: &Option<String>) -> Option<i64> {
+    s.as_deref().and_then(|v| v.trim_matches('"').parse::<i64>().ok())
+}
+
 impl Stamps {
     pub fn of(d: &crate::vault_escrow::SiblingDevice) -> Self {
         Stamps { manifest_at: d.manifest_at.clone(), ais_at: d.ais_at.clone(), line_at: d.line_at.clone(), escrow_at: d.escrow_at.clone() }
@@ -160,11 +165,10 @@ pub fn classify(report: Option<&LineReport>, manifest_generation: Option<&str>, 
 /// after the move; it writes no `line` object, so the old one would keep
 /// saying "moved" while it writes to the 0.6 line alone.
 fn current_report(report: Option<LineReport>, manifest_generation: Option<&str>, stamps: &Stamps) -> Option<LineReport> {
-    let ms = |s: &Option<String>| s.as_deref().and_then(|v| v.trim_matches('"').parse::<i64>().ok());
-    let generation_at = ms(&stamps.manifest_at).max(ms(&stamps.ais_at));
+    let generation_at = stamp_ms(&stamps.manifest_at).max(stamp_ms(&stamps.ais_at));
     let went_back = report.as_ref().is_some_and(|r| r.network_generation == gen_07())
         && manifest_generation == Some(gen_06())
-        && matches!((generation_at, ms(&stamps.line_at)), (Some(g), Some(l)) if g > l);
+        && matches!((generation_at, stamp_ms(&stamps.line_at)), (Some(g), Some(l)) if g > l);
     if went_back { None } else { report }
 }
 

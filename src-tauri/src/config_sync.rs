@@ -489,6 +489,19 @@ fn stamps_of(devices: &[crate::vault_escrow::SiblingDevice]) -> Vec<(String, cra
 }
 
 /// Did this sibling's manifest move since the last round? (Unknown = yes.)
+/// The Vault holds a newer copy of the sibling's manifest than of its small
+/// `ais` object. The small object is fetched on its own and can lag (a copy
+/// replaced on the other device while it was being fetched); an older one
+/// must not hide a newer edit.
+fn manifest_newer(device: &crate::vault_escrow::SiblingDevice) -> bool {
+    use crate::line_facts::stamp_ms;
+    match (stamp_ms(&device.manifest_at), stamp_ms(&device.ais_at)) {
+        (Some(m), Some(a)) => m > a,
+        (Some(_), None) => true,
+        _ => false,
+    }
+}
+
 fn manifest_moved(last: Option<&Vec<(String, crate::line_facts::Stamps)>>, device: &crate::vault_escrow::SiblingDevice) -> bool {
     last.and_then(|l| l.iter().find(|(id, _)| *id == device.id))
         .map(|(_, s)| s.manifest_at != device.manifest_at)
@@ -554,7 +567,8 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle, force: bool) -> R
                 None
             }
         };
-        let manifest = if force || fast.is_none() || manifest_moved(last_stamps.as_ref(), device) {
+        let manifest_newer = manifest_newer(device);
+        let manifest = if force || fast.is_none() || manifest_newer || manifest_moved(last_stamps.as_ref(), device) {
             match sibling_label(port, &device.id, crate::vault_escrow::MANIFEST_LABEL).await {
                 Ok(m) => m,
                 Err(e) => {
@@ -565,7 +579,8 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle, force: bool) -> R
         } else {
             None
         };
-        let generation = fast.as_ref().or(manifest.as_ref()).and_then(|m| m["network_generation"].as_str()).map(String::from);
+        let newest = if manifest_newer { manifest.as_ref().or(fast.as_ref()) } else { fast.as_ref().or(manifest.as_ref()) };
+        let generation = newest.and_then(|m| m["network_generation"].as_str()).map(String::from);
         let known = crate::line_facts::observe(port, device, prior.siblings.iter().find(|s| s.id == device.id), generation, local_material.as_ref()).await;
         synced.push(SyncedDevice {
             id: device.id.clone(),
@@ -586,7 +601,7 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle, force: bool) -> R
                 }
             }
         }
-        let Some(manifest) = fast.or(manifest) else { continue };
+        let Some(manifest) = (if manifest_newer { manifest.or(fast) } else { fast.or(manifest) }) else { continue };
         let sibling = ai_list(&manifest);
         if sibling.is_empty() {
             continue;
@@ -734,6 +749,24 @@ pub fn start_config_sync_rounds(app: &tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_newer_copy_of_a_siblings_ais_wins() {
+        use super::manifest_newer;
+        let d = |m: Option<&str>, a: Option<&str>| crate::vault_escrow::SiblingDevice {
+            id: "d".into(),
+            manifest_at: m.map(String::from),
+            ais_at: a.map(String::from),
+            ..Default::default()
+        };
+        // The small object lagged: the manifest was copied after the edit.
+        assert!(manifest_newer(&d(Some("1794124570000"), Some("1794124508000"))));
+        assert!(!manifest_newer(&d(Some("1794124508000"), Some("1794124570000"))), "the small object is the newer");
+        assert!(!manifest_newer(&d(Some("5"), Some("5"))), "the same round: the small object");
+        assert!(manifest_newer(&d(Some("5"), None)), "no small object held");
+        assert!(!manifest_newer(&d(None, Some("5"))));
+        assert!(!manifest_newer(&d(Some("x"), Some("5"))), "an unreadable stamp changes nothing");
+    }
+
     #[test]
     fn an_empty_list_is_catching_up_when_others_are_known_here() {
         use super::catching_up;
