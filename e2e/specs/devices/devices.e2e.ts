@@ -7,7 +7,7 @@
 // ARRIVES in B's own records and the composer opens. Three launches, one
 // phase each (DEVICES_PHASE), each against its own TEST Vault
 // (YOAI_VAULT_PORT) - never the installed one. Run: e2e/devices-live.sh
-import { shot, waitForChat, invoke, ask, waitForReplyDone } from "../models/_helpers";
+import { shot, waitForChat, invoke, ask, waitForReplyDone, lastReply } from "../models/_helpers";
 
 const MESSAGE = "Devices test: name one colour and nothing else.";
 const MESSAGE_C = "Devices test two: name one animal and nothing else.";
@@ -37,7 +37,7 @@ async function yourAis() {
 }
 
 describe(`devices, phase ${PHASE}`, () => {
-  it(PHASE === "a" ? "A: renames an AI through the form and backs up" : PHASE === "c" ? "C: with A online too, A's conversation arrives in B's own records and the composer opens" : "B: signs in fresh and shows A's edit with its own agent", async () => {
+  it(PHASE === "a" ? "A: renames an AI through the form and backs up" : PHASE === "d" ? "D: with B online, B's reply arrives in A's conversation" : PHASE === "c" ? "C: with A online too, A's conversation arrives in B's own records and the composer opens" : "B: signs in fresh and shows A's edit with its own agent", async () => {
     if (PHASE === "a") {
       await waitForChat();
       const st = await escrow();
@@ -216,20 +216,61 @@ describe(`devices, phase ${PHASE}`, () => {
       console.log(`e2e: drawer at start ${JSON.stringify(await drawer())}`);
       // Gossip between two conductors on one seed found peers in ~30 s in the
       // Rust live leg; allow the lane a few minutes here.
-      await browser.waitUntil(async () => {
-        const items = await drawer();
-        return items.some((d: { copy: string | null; text: string }) => d.text.includes("Devices test") && d.copy !== "1");
-      }, { timeout: 360_000, interval: 5_000, timeoutMsg: "A's conversation never arrived in B's own records (still only the Vault copy after 6 min)" });
-      console.log(`e2e: arrived after ${Math.round((Date.now() - started) / 1000)} s: ${JSON.stringify(await drawer())}`);
-      await shot("devices-c-arrived");
-      // The arrived item: a conversation-item with the message's text that is
-      // no longer a copy (clicked from the page - the driver's selector
-      // language has no :not() with a text match).
-      await browser.execute(() => {
-        const items = [...document.querySelectorAll('[data-testid="conversation-item"]')] as HTMLElement[];
-        const hit = items.find((d) => d.innerText.includes("Devices test") && d.getAttribute("data-copy") !== "1");
-        (hit?.querySelector("button") as HTMLElement | null)?.click();
-      });
+      // The copy on screen turns into B's own records with NO reopen (the
+      // app re-reads while a copy is shown, every 20 s): the open drawer's
+      // item flips within its first minute, or, when the records come later,
+      // the copy is opened read-only and its composer opens by itself. Either
+      // way the person never reopens anything (11-08: before the fix the
+      // drawer read once, 3 s before the devices met, and stayed a copy).
+      const ownInDrawer = (items: { copy: string | null; text: string }[]) => items.some((d) => d.text.includes("Devices test") && d.copy !== "1");
+      // On the mixed run B is the earlier release (devices-live.sh sets
+      // DEVICES_B_EARLIER): its drawer reads only when it opens, so there the
+      // person reopens it on each look (the header button sits under the
+      // drawer's backdrop, so it is clicked through the page).
+      const inDrawer =
+        process.env.DEVICES_B_EARLIER === "1"
+          ? await browser.waitUntil(
+              async () => {
+                await browser.execute(() => {
+                  const el = document.querySelector('[data-testid="conversations-open"]') as HTMLElement | null;
+                  ((el && el.tagName === "BUTTON" ? el : el?.querySelector("button")) as HTMLElement | null)?.click();
+                });
+                await new Promise((r) => setTimeout(r, 2_000));
+                return ownInDrawer(await drawer());
+              },
+              { timeout: 360_000, interval: 5_000, timeoutMsg: "A's conversation never arrived in B's own records on the earlier release (still only the Vault copy after 6 min of reopening)" },
+            )
+          : await browser
+              .waitUntil(async () => ownInDrawer(await drawer()), { timeout: 60_000, interval: 5_000 })
+              .then(() => true, () => false);
+      if (inDrawer) {
+        console.log(`e2e: arrived in the open drawer after ${Math.round((Date.now() - started) / 1000)} s: ${JSON.stringify(await drawer())}`);
+        await shot("devices-c-arrived");
+        // The arrived item: a conversation-item with the message's text that
+        // is no longer a copy (clicked from the page - the driver's selector
+        // language has no :not() with a text match).
+        await browser.execute(() => {
+          const items = [...document.querySelectorAll('[data-testid="conversation-item"]')] as HTMLElement[];
+          const hit = items.find((d) => d.innerText.includes("Devices test") && d.getAttribute("data-copy") !== "1");
+          (hit?.querySelector("button") as HTMLElement | null)?.click();
+        });
+      } else {
+        await browser.execute(() => {
+          const items = [...document.querySelectorAll('[data-testid="conversation-item"]')] as HTMLElement[];
+          const hit = items.find((d) => d.innerText.includes("Devices test") && d.getAttribute("data-copy") === "1");
+          (hit?.querySelector("button") as HTMLElement | null)?.click();
+        });
+        await (await $('[data-testid="chat-readonly-reason"]')).waitForDisplayed({ timeout: 60_000 });
+        console.log("e2e: not in the drawer within a minute - the copy is open read-only; waiting for it to open by itself");
+        await browser.waitUntil(
+          async () =>
+            !(await $('[data-testid="chat-readonly-reason"]').isExisting()) &&
+            (await (await $('[data-testid="chat-input"]')).getAttribute("contenteditable")) !== "false",
+          { timeout: 360_000, interval: 5_000, timeoutMsg: "the open copy never became B's own conversation (still read-only 6 min after it was opened, with no reopen)" },
+        );
+        console.log(`e2e: arrived in the open copy after ${Math.round((Date.now() - started) / 1000)} s`);
+        await shot("devices-c-arrived");
+      }
       await browser.waitUntil(async () => (await $$('[data-testid="chat-message"]')).length >= 2, { timeout: 60_000, timeoutMsg: "the arrived conversation showed no messages" });
       const texts = await browser.execute(() => [...document.querySelectorAll('[data-testid="chat-message"]')].map((m) => (m as HTMLElement).innerText.slice(0, 60)));
       console.log(`e2e: arrived messages ${JSON.stringify(texts)}`);
@@ -238,14 +279,61 @@ describe(`devices, phase ${PHASE}`, () => {
       expect(await $('[data-testid="chat-readonly-reason"]').isExisting()).toBe(false);
       expect(await (await $('[data-testid="chat-input"]')).getAttribute("contenteditable")).not.toBe("false");
       await shot("devices-c-composer-open");
-      // And B continues the conversation in its own records.
+      // And B continues the conversation in its own records. Wait for B's
+      // NEW answer: the last answer on the page is A's, already done, so
+      // waitForReplyDone alone returns at once (11-08: the harness then
+      // stopped B 1 s after the send, before the turn was recorded).
+      const answers = () => browser.execute(() => document.querySelectorAll('[data-testid="chat-message"][data-role="assistant"]').length);
+      const answersBefore = await answers();
       await ask(MESSAGE_C);
-      await waitForReplyDone();
+      await browser.waitUntil(async () => (await answers()) > answersBefore && (await lastReply())?.state === "done", { timeout: 300_000, interval: 2_000, timeoutMsg: "B's answer never finished" });
       const after = await browser.execute(() => [...document.querySelectorAll('[data-testid="chat-message"]')].map((m) => (m as HTMLElement).innerText.slice(0, 60)));
       expect(after.some((t: string) => t.includes("Devices test two"))).toBe(true);
+      // ...and the turn read back from B's own records before this phase
+      // stops B (phase d reads it on A).
+      const aiB = (await aiList()).find((a) => a.name === NAME);
+      expect(aiB).toBeDefined();
+      await browser.waitUntil(async () => {
+        const convs = await invoke<{ hash: string; source?: string | null }[]>("get_conversations", { agentKey: aiB!.agent, maxAgeSecs: null, caller: "e2e" });
+        for (const c of convs.filter((x) => !x.source?.startsWith("copy:"))) {
+          const entries = await invoke<unknown[]>("get_conversation_transcript", { agentKey: aiB!.agent, conversationHash: c.hash });
+          if (JSON.stringify(entries).includes("Devices test two")) return true;
+        }
+        return false;
+      }, { timeout: 120_000, interval: 3_000, timeoutMsg: "B's turn never reached B's own records" });
       await shot("devices-c-continued");
+    } else if (PHASE === "d") {
+      // B (unattended, default ports) continued the conversation in phase c,
+      // in its own records; this is A on shifted ports. B's reply arrives in
+      // A's conversation (on a mixed run, from a device on an earlier release).
+      const started = Date.now();
+      await waitForChat();
+      await (await $('button[title^="Conversations"]')).click();
+      const listed = () => browser.execute(() => [...document.querySelectorAll('[data-testid="conversation-item"]')].some((d) => (d as HTMLElement).innerText.includes("Devices test")));
+      await browser.waitUntil(listed, { timeout: 60_000, timeoutMsg: "A's drawer never listed the devices conversation" });
+      const texts = () => browser.execute(() => [...document.querySelectorAll('[data-testid="chat-message"]')].map((m) => (m as HTMLElement).innerText.slice(0, 60)));
+      // Opened again on each look: the open conversation reads its records
+      // once. Opening it closes the drawer, so each look opens the drawer
+      // again first (its header button sits under the drawer's backdrop, so
+      // it is clicked through the page).
+      await browser.waitUntil(async () => {
+        await browser.execute(() => {
+          const el = document.querySelector('[data-testid="conversations-open"]') as HTMLElement | null;
+          ((el && el.tagName === "BUTTON" ? el : el?.querySelector("button")) as HTMLElement | null)?.click();
+        });
+        await new Promise((r) => setTimeout(r, 2_000));
+        await browser.execute(() => {
+          const items = [...document.querySelectorAll('[data-testid="conversation-item"]')] as HTMLElement[];
+          const hit = items.find((d) => d.innerText.includes("Devices test") && d.getAttribute("data-copy") !== "1");
+          (hit?.querySelector("button") as HTMLElement | null)?.click();
+        });
+        await new Promise((r) => setTimeout(r, 1_500));
+        return (await texts()).some((t: string) => t.includes("Devices test two"));
+      }, { timeout: 360_000, interval: 5_000, timeoutMsg: "B's reply never arrived in A's conversation (still missing after 6 min)" });
+      console.log(`e2e: B's reply on A after ${Math.round((Date.now() - started) / 1000)} s: ${JSON.stringify(await texts())}`);
+      await shot("devices-d-arrived");
     } else {
-      throw new Error("set DEVICES_PHASE to a, b or c");
+      throw new Error("set DEVICES_PHASE to a, b, c or d");
     }
   });
 });

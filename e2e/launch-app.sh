@@ -52,6 +52,10 @@ fi
 if [ -n "${YOAI_E2E_WITH_RENDEZVOUS:-}" ]; then
   export FLOWSTA_BOOTSTRAP_URL=https://bootstrap-staging.flowsta.com
   export FLOWSTA_SIGNAL_URL=wss://bootstrap-staging.flowsta.com
+  # The 0.7 line's own staging rendezvous: without it the app's default is
+  # production's bootstrap-7, which refuses the staging material (401) and a
+  # 0.7.1 conductor exits at startup on a refused sign-in.
+  export FLOWSTA_BOOTSTRAP_URL_07=https://bootstrap-staging-7.flowsta.com
   if [ -z "${FLOWSTA_AUTH_MATERIAL:-}" ]; then
     FLOWSTA_AUTH_MATERIAL="$(sed -n 's/^FLOWSTA_AUTH_MATERIAL=\([^ \\]*\).*/\1/p' "$HERE/../../flowsta-vault/scripts/run-test-instance.sh" 2>/dev/null | head -1)"
     export FLOWSTA_AUTH_MATERIAL
