@@ -871,10 +871,52 @@ pub async fn retire_06(app: &tauri::AppHandle, data_dir: &std::path::Path) -> bo
     let m = Move::for_app(app, data_key);
     let retired = RUNNER.get_or_init(runner).retire_previous(&m, data_dir, crate::conductor::supervisor()).await;
     if retired {
+        if let Ok(manager) = hc.get() {
+            manager.forget_06_agents().await;
+        }
         crate::line_facts::note_stopped(data_dir);
         log::info!("[0.6] stopped: no other device needs it and nothing is left on it to carry (its data stays on disk)");
     }
     retired
+}
+
+/// How long a pass waits for the app to reach the AIs on the 0.6 line.
+const AGENTS_06_WAIT: Duration = Duration::from_secs(120);
+
+/// Whether the app reaches every AI the 0.6 line holds. With 0.7 leading,
+/// the 0.6 line joins first and the app connects its AIs a moment later; a
+/// pass before that finds none of them.
+async fn agents_06_connected(manager: &crate::holochain::HolochainManager) -> bool {
+    let Ok(apps) = crate::conductor::transcript_apps_06().await else { return false };
+    for (_, key) in apps {
+        if !manager.is_provisioned(&hex::encode(key)).await {
+            return false;
+        }
+    }
+    true
+}
+
+/// Wait, at most [`AGENTS_06_WAIT`], for [`agents_06_connected`]. A pass
+/// after the wait reports any AI it still cannot reach, and the next one
+/// tries it again.
+async fn wait_for_06_agents(hc: &Arc<HolochainState>) {
+    let mut waited = Duration::ZERO;
+    loop {
+        if let Ok(manager) = hc.get() {
+            if agents_06_connected(&manager).await {
+                if !waited.is_zero() {
+                    log::info!("[0.7] the AIs on the 0.6 line connected after {} s: the pass starts", waited.as_secs());
+                }
+                return;
+            }
+        }
+        if waited >= AGENTS_06_WAIT || crate::conductor::ports(Line::V06).is_none() {
+            log::warn!("[0.7] the app does not reach every AI on the 0.6 line after {} s: the pass starts anyway", waited.as_secs());
+            return;
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        waited += Duration::from_secs(2);
+    }
 }
 
 pub fn run_passes(app: tauri::AppHandle, data_dir: std::path::PathBuf) {
@@ -923,6 +965,7 @@ pub fn run_passes(app: tauri::AppHandle, data_dir: std::path::PathBuf) {
                 tokio::time::sleep(PASS_EVERY).await;
                 continue;
             }
+            wait_for_06_agents(&hc).await;
             let out = runner.run(&m, &data_dir, "the 0.7 line is up").await;
             log::info!("[0.7] pass: {}", describe(&out));
             // An AI whose copy failed is copied again by the next pass.

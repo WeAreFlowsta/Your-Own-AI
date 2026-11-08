@@ -1001,6 +1001,13 @@ impl HolochainManager {
         self.reconnect_existing_agents().await
     }
 
+    /// The 0.6 line stopped this session: its AIs' connections go, so every
+    /// read and write takes the 0.7 line ([`Self::is_provisioned`] is false).
+    /// The 0.6 line joining again connects them again.
+    pub async fn forget_06_agents(&self) {
+        self.agents.lock().await.clear();
+    }
+
     pub async fn reconnect_existing_agents(&self) -> Result<(), String> {
         let admin_ws = holochain_client::AdminWebsocket::connect(
             format!("localhost:{}", self.admin_port()),
