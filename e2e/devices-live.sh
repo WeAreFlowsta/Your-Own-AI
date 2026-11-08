@@ -131,8 +131,9 @@ killB; gone || true
 # before the move has none).
 for d in A B; do
   home="$ROOT/$d"; logs="$home/.local/share/com.solar.yourowai/logs"
-  marker="$(ls "$home"/.local/share/com.solar.yourowai/profiles/*/moved-07 2>/dev/null | head -1)"
-  echo "== device $d: marker ${marker:+present}${marker:-absent}; passes:"
-  cat "$logs"/*.log 2>/dev/null | sed -E 's/\x1b\[[0-9;]*m//g' | grep -E '\[0\.7\] pass: ' | sed -E 's/.*\[0\.7\] /   /' | head -6
+  # Under pipefail a release before the move (no marker, no pass line) must not end the run.
+  marker="$(ls "$home"/.local/share/com.solar.yourowai/profiles/*/moved-07 2>/dev/null | head -1 || true)"
+  echo "== device $d: marker $([ -n "$marker" ] && echo present || echo "absent (a release before the move has none)"); passes:"
+  { cat "$logs"/*.log 2>/dev/null | sed -E 's/\x1b\[[0-9;]*m//g' | grep -E '\[0\.7\] pass: ' | sed -E 's/.*\[0\.7\] /   /' | head -6; } || true
 done
 echo "== all four phases passed; profiles kept at $ROOT"
