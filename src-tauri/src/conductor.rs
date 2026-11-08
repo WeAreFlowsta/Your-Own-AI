@@ -23,13 +23,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
 use tauri::Emitter;
 
-/// The Holochain network generation this build's records are on - the
-/// Vault's vocabulary (`devices.rs` NETWORK_GENERATION), so a sibling on
-/// another generation reads the same way everywhere: "Needs the update to
-/// sync with <device>". It follows the records when they move to 0.7.
-pub const NETWORK_GENERATION: &str = "holochain-0.6";
-
-/// Each line's network generation, in the same vocabulary.
+/// Each line's network generation, in the Vault's vocabulary (`devices.rs`
+/// NETWORK_GENERATION), so a device reads the same way everywhere. A
+/// profile's own follows its records to 0.7 (`line_facts::own_generation`).
 pub fn network_generation(line: Line) -> &'static str {
     match line {
         Line::V06 => "holochain-0.6",

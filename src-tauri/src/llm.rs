@@ -1326,8 +1326,8 @@ const UTIL_CTX: u64 = 4096;
 
 /// Threads for a helper: about half the processor. A helper generating on
 /// the processor spun every core at the person's own priority, and with the
-/// agent and the chat model beside it the desktop stopped answering
-/// (2026-11-08, a 16 GB machine with a 4 GB card).
+/// agent and the chat model beside it the desktop could stop answering (a
+/// 16 GB machine with a 4 GB card).
 fn helper_threads() -> usize {
     std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).div_ceil(2).max(1)
 }
@@ -1777,9 +1777,9 @@ pub(crate) async fn move_idle_helpers(app: &AppHandle) {
             if e == HelperPlace::Cpu {
                 // The card filled: give it back and let the helper start
                 // again only when a call needs it, through the processor's
-                // room check - never moved onto the processor unasked
-                // (2026-11-08: a 32768-token chat window filled a 4 GB card,
-                // both helpers moved onto the processor, the machine stalled).
+                // room check - never moved onto the processor unasked (with
+                // a large chat window filling the card, both helpers on the
+                // processor stall the machine).
                 log::info!("[helpers] memory model leaves the card (no room left): it starts again when a call needs it");
                 stop_embedding_server_inner(st.inner()).await;
             } else if let Err(err) = ensure_embedding_server(app, &st, &m).await {
@@ -2607,7 +2607,7 @@ pub static FORCE_RELOAD_NEXT: std::sync::atomic::AtomicBool = std::sync::atomic:
 /// measured): what the idle unload compares against to tell another
 /// program's use of the card from our own model filling it.
 static FREE_AFTER_LOAD_MIB: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-/// Our app idle this long before the chat model may unload (Eric 11-08).
+/// Our app idle this long before the chat model may unload.
 const IDLE_UNLOAD_SECS: i64 = 15 * 60;
 /// Another program has taken at least this much of the card since our load.
 const OTHERS_TOOK_CARD_MIB: u64 = 512;
@@ -2620,8 +2620,7 @@ fn others_took_card(free_after_load: u64, helpers_mib: u64, free_now: u64) -> bo
     free_after_load > 0 && free_after_load.saturating_sub(helpers_mib).saturating_sub(free_now) >= OTHERS_TOOK_CARD_MIB
 }
 
-/// Give the graphics card and the memory back (BACKGROUND_WORK_AUDIT.md,
-/// decided 11-08): after 15 minutes with our app idle, when another program
+/// Give the graphics card and the memory back: after 15 minutes with our app idle, when another program
 /// is using the card or memory is short, the chat model unloads. The next
 /// reply loads it again ("Loading ..." on its bubble). Never during a reply,
 /// a load, or a turn of the person's.

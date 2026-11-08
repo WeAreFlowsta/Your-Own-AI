@@ -1960,9 +1960,8 @@ fn coalesce_system(messages: Vec<Value>) -> Vec<Value> {
 /// A system note placed between two of the caller's user messages (the
 /// memory block, the tools note) is lifted to the front, which leaves the two
 /// side by side; a caller may send that shape too. Strict chat templates
-/// refuse it ("conversation roles must alternate user and assistant", the
-/// agent on Ministral 3B, 11-08: every step a 500, the turn never finished)
-/// and lenient ones swallow it. Generic, never per model: user turns join as
+/// refuse it ("conversation roles must alternate user and assistant": every
+/// step a 500, the turn never finishes) and lenient ones swallow it. Generic, never per model: user turns join as
 /// the chat path's do (`llm::merge_user_content`, images kept), two plain
 /// assistant turns join their text, and a message carrying tool calls or a
 /// tool result is never merged (templates allow those between turns).

@@ -476,31 +476,22 @@ fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
-/// Whether a sibling's manifest comes from another network generation. A
-/// manifest without the field is from a build before it: same generation.
-fn sibling_needs_update(manifest: Option<&serde_json::Value>, device: &crate::vault_escrow::SiblingDevice) -> bool {
-    if let Some(g) = manifest.and_then(|m| m["network_generation"].as_str()) {
-        return g != crate::conductor::NETWORK_GENERATION;
-    }
-    matches!(device.generation.as_deref(), Some(g) if g != crate::conductor::NETWORK_GENERATION)
-}
-
 /// One round: every sibling's manifest copy, merged into this device's AI
 /// list. Returns (updated, added). Silent when not signed in or no Vault.
 /// The manifest stamps the last completed round saw, per sibling. Reading a
 /// sibling's manifest is the cost of a round; the stamps are free (they ride
 /// the backup list), so a round that would read the same manifests again is
 /// skipped - which is what lets the rounds run every minute.
-static LAST_STAMPS: std::sync::Mutex<Option<Vec<(String, Option<String>, Option<String>)>>> = std::sync::Mutex::new(None);
+static LAST_STAMPS: std::sync::Mutex<Option<Vec<(String, crate::line_facts::Stamps)>>> = std::sync::Mutex::new(None);
 
-fn stamps_of(devices: &[crate::vault_escrow::SiblingDevice]) -> Vec<(String, Option<String>, Option<String>)> {
-    devices.iter().map(|d| (d.id.clone(), d.manifest_at.clone(), d.ais_at.clone())).collect()
+fn stamps_of(devices: &[crate::vault_escrow::SiblingDevice]) -> Vec<(String, crate::line_facts::Stamps)> {
+    devices.iter().map(|d| (d.id.clone(), crate::line_facts::Stamps::of(d))).collect()
 }
 
 /// Did this sibling's manifest move since the last round? (Unknown = yes.)
-fn manifest_moved(last: Option<&Vec<(String, Option<String>, Option<String>)>>, device: &crate::vault_escrow::SiblingDevice) -> bool {
-    last.and_then(|l| l.iter().find(|(id, _, _)| *id == device.id))
-        .map(|(_, m, _)| *m != device.manifest_at)
+fn manifest_moved(last: Option<&Vec<(String, crate::line_facts::Stamps)>>, device: &crate::vault_escrow::SiblingDevice) -> bool {
+    last.and_then(|l| l.iter().find(|(id, _)| *id == device.id))
+        .map(|(_, s)| s.manifest_at != device.manifest_at)
         .unwrap_or(true)
 }
 
@@ -511,13 +502,25 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle, force: bool) -> R
     use tauri_plugin_store::StoreExt;
     let port = crate::vault_escrow::escrow_port(app, true).await.map_err(|s| s.error.unwrap_or(s.state))?;
     let devices = crate::vault_escrow::sibling_devices(port).await?;
-    if devices.is_empty() {
-        save_state(app, &ConfigSyncState { checked_at: now_ms(), ..Default::default() });
-        return Ok((0, 0));
-    }
     let stamps = stamps_of(&devices);
     let last_stamps = LAST_STAMPS.lock().unwrap().clone();
     if !force && last_stamps.as_ref() == Some(&stamps) {
+        return Ok((0, 0));
+    }
+    // Where each device is on the move (`line_facts`). A Vault still reading
+    // the identity's records may list too few devices: then this round says
+    // nothing about them and the facts last known stand.
+    let root = crate::profile::root(app)?;
+    let catching_up = crate::line_facts::vault_catching_up(port).await;
+    let prior = crate::line_facts::LineFacts::load(&root).unwrap_or_default();
+    let local_material = crate::vault_escrow::local_recovery(app).ok();
+    let mut seen: Vec<crate::line_facts::KnownSibling> = Vec::new();
+    if devices.is_empty() {
+        if !catching_up {
+            crate::line_facts::take_round(&root, seen)?;
+        }
+        save_state(app, &ConfigSyncState { checked_at: now_ms(), ..Default::default() });
+        *LAST_STAMPS.lock().unwrap() = Some(stamps);
         return Ok((0, 0));
     }
     let mut synced: Vec<SyncedDevice> = Vec::new();
@@ -562,11 +565,14 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle, force: bool) -> R
         } else {
             None
         };
+        let generation = fast.as_ref().or(manifest.as_ref()).and_then(|m| m["network_generation"].as_str()).map(String::from);
+        let known = crate::line_facts::observe(port, device, prior.siblings.iter().find(|s| s.id == device.id), generation, local_material.as_ref()).await;
         synced.push(SyncedDevice {
             id: device.id.clone(),
             name: device.name.clone(),
-            needs_update: sibling_needs_update(fast.as_ref().or(manifest.as_ref()), device),
+            needs_update: known.needs_update(),
         });
+        seen.push(known);
         if let Some(manifest) = &manifest {
             sibling_index.retain(|c| c.device != device.id);
             sibling_index.extend(index_of(manifest, device));
@@ -669,6 +675,9 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle, force: bool) -> R
             let _ = std::fs::write(p, json);
         }
     }
+    if !catching_up {
+        crate::line_facts::take_round(&root, seen)?;
+    }
     save_state(app, &ConfigSyncState { checked_at: now_ms(), devices: synced, updated: total_updated, added: total_added, ..Default::default() });
     if total_updated + total_added > 0 {
         store.set("custom-ais", serde_json::json!(local));
@@ -706,6 +715,13 @@ pub fn start_config_sync_rounds(app: &tauri::AppHandle) {
             }
             let force = pass % 5 == 0;
             pass += 1;
+            // This device's own word first, so the others learn of a move
+            // even while its backups are held.
+            match crate::line_facts::report(&app).await {
+                Ok(_) => {}
+                Err(e) if e == "unlinked" || e == "vault_unavailable" || e == "vault_locked" || e == "identity_switched" || e == "identity_mismatch" => {}
+                Err(e) => log::warn!("[line] could not tell the other devices: {}", e),
+            }
             match sync_from_siblings(&app, force).await {
                 Ok((0, 0)) => {}
                 Ok((u, a)) => log::info!("[config-sync] round: {} updated, {} added", u, a),
@@ -736,7 +752,7 @@ mod tests {
         assert!(!is_here(None, 120), "never heard this session");
     }
 
-    use super::{has_own_picture, mark_picture, merge_sibling_configs, missing_pictures, sibling_needs_update};
+    use super::{has_own_picture, mark_picture, merge_sibling_configs, missing_pictures};
     use crate::vault_escrow::SiblingDevice;
 
     #[test]
@@ -755,19 +771,6 @@ mod tests {
         assert_eq!(idx[0].agent.as_deref(), Some("agentA"));
         assert_eq!(idx[0].title.as_deref(), Some("Hello"));
         assert!(idx[1].agent.is_none(), "an older manifest names no agent");
-    }
-
-    #[test]
-    fn another_generation_needs_the_update_and_a_manifest_without_the_field_does_not() {
-        let dev = |g: Option<&str>| SiblingDevice { id: "d".into(), generation: g.map(String::from), ..Default::default() };
-        let same = serde_json::json!({ "network_generation": crate::conductor::NETWORK_GENERATION });
-        let other = serde_json::json!({ "network_generation": "holochain-0.7" });
-        let older = serde_json::json!({ "version": 1 });
-        assert!(!sibling_needs_update(Some(&same), &dev(None)));
-        assert!(sibling_needs_update(Some(&other), &dev(None)));
-        assert!(!sibling_needs_update(Some(&older), &dev(None)), "a build before the field is this generation");
-        assert!(sibling_needs_update(None, &dev(Some("holochain-0.7"))), "no manifest yet: the registry's word");
-        assert!(!sibling_needs_update(None, &dev(None)));
     }
 
     fn ai(id: &str, founding: &str, name: &str, updated: i64) -> serde_json::Value {

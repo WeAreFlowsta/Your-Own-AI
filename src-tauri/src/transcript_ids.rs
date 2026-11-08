@@ -1,6 +1,5 @@
 //! Record ids on the transcript networks, and the addresses every device
-//! derives from them (the move's design: build-docs
-//! `apps/your-own-ai/planning/TRANSCRIPT_MOVE.md`).
+//! derives from them.
 //!
 //! **A record's id is its v1 action hash whenever it has one**: every record
 //! that exists today, and every record written while the app still writes
