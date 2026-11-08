@@ -31,7 +31,7 @@ import {
   type RememberSurface,
 } from "../../utils/rememberText";
 import { isMemoryPaused, setMemoryPaused } from "../../utils/memory";
-import { setUpdateChecksEnabled, updateChecksEnabled } from "../../utils/updateCheck";
+import { setAutoUpdates, updateStatus } from "../../utils/updates";
 import {
   ensureMedicalModel,
   isMedicalSpecialist,
@@ -408,7 +408,7 @@ export default component$(() => {
     allowAttachmentsOnline.value =
       localStorage.getItem("allowAttachmentsOnline") === "true";
     agentPermMode.value = defaultPermissionMode();
-    checkUpdates.value = updateChecksEnabled();
+    updateStatus().then((st) => (checkUpdates.value = st.auto)).catch(() => {});
     (async () => {
       try {
         installedChatModels.value = (await modelManager.listModels()).map((m) => m.name);
@@ -592,9 +592,13 @@ export default component$(() => {
     setHelpTipsEnabled(showHelpTips.value);
   });
 
-  const toggleCheckUpdates = $(() => {
+  const toggleCheckUpdates = $(async () => {
     checkUpdates.value = !checkUpdates.value;
-    setUpdateChecksEnabled(checkUpdates.value);
+    try {
+      checkUpdates.value = (await setAutoUpdates(checkUpdates.value)).auto;
+    } catch {
+      /* the updater is not in this build */
+    }
   });
   const setAgentPermMode = $((mode: AgentPermissionMode) => {
     agentPermMode.value = mode;
@@ -1769,14 +1773,15 @@ export default component$(() => {
                     </button>
                   </SettingToggle>
                   <SettingToggle
-                    title="Check for updates"
+                    title="Automatic updates"
                     checked={checkUpdates}
                     onToggle$={toggleCheckUpdates}
                   >
-                    Once a day the app asks yourownai.net for the latest
-                    version number so it can tell you when an update exists.
-                    The request carries nothing about you - not even your
-                    current version - and nothing ever installs by itself.
+                    A few times a day the app looks for a new release signed
+                    by Flowsta, downloads it in the background and checks it.
+                    It installs when you choose Restart to update, or when you
+                    quit on Windows and macOS. The check reads two public files
+                    and carries nothing about you or this device.
                   </SettingToggle>
                 </div>
               </section>

@@ -552,8 +552,11 @@ jobs:
           (cd binaries/llama-server-cuda-windows-x64 && zip -9 -j "$GITHUB_WORKSPACE/release/llama-server-cuda-${V}-x86_64-pc-windows-msvc.zip" ./*)
           ls -lh release/
 
+      # Never "Latest": the app's stable update channel reads the latest
+      # release's latest.json (releases/latest/download/...), and an engine
+      # release marked latest would hide the app's from every install.
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag_name }}
           name: "llama.cpp ${{ steps.tag.outputs.llama_version }} - GPU Accelerated Binaries"
@@ -584,3 +587,4 @@ jobs:
           files: release/*
           draft: false
           prerelease: false
+          make_latest: "false"

@@ -13,6 +13,7 @@ import { ModeProvider } from "../contexts/ModeContext";
 import { AiDataProvider } from "../contexts/AiDataContext";
 import { VisionDownloadProvider } from "../contexts/VisionDownloadContext";
 import { ActivityTray } from "../components/ActivityTray";
+import { UpdateNotices } from "../components/UpdateNotices";
 import { useProvideTurns } from "../contexts/TurnsContext";
 import { FirstModelIndicator } from "../components/FirstModelIndicator";
 import { bumpLaunchCount } from "../utils/homeOffers";
@@ -431,6 +432,7 @@ export default component$(() => {
           {/* Every background job in one card: downloads, document reading,
               card writing, and the notes features announce. */}
           <ActivityTray />
+          <UpdateNotices />
           <FirstModelIndicator />
           {/* Root-level so no route stacking context can bury it. */}
           <WorkspaceMemoryModal folderPath={projectMemoryFolder} />
