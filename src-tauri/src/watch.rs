@@ -25,6 +25,14 @@ const POLICY: WatchPolicy = WatchPolicy { current: Line::V07, limit: Some((3, Du
 /// The Vault's: over 1 GiB, after 20 minutes up, at most once in 6 hours.
 const MEMORY: MemoryPolicy = MemoryPolicy { over_bytes: 1 << 30, min_uptime: Duration::from_secs(20 * 60), min_gap: Duration::from_secs(6 * 3600) };
 
+/// The memory restart's line for this machine: 1 GiB, or 8 % of its memory
+/// when that is less (holochain#6064 grows the 0.7 conductor with every idle
+/// hour; 1 GiB is a lot on an 8 GB laptop, about 650 MB there).
+fn memory_policy(total_bytes: u64) -> MemoryPolicy {
+    let scaled = total_bytes / 100 * 8;
+    MemoryPolicy { over_bytes: if total_bytes == 0 { MEMORY.over_bytes } else { MEMORY.over_bytes.min(scaled) }, ..MEMORY }
+}
+
 static WATCHDOG: Watchdog = Watchdog::new();
 
 /// What a 0.7 start needs, from the store as it stands.
@@ -64,6 +72,11 @@ pub fn start(app: tauri::AppHandle, data_dir: PathBuf, resource_dir: PathBuf) {
     tauri::async_runtime::spawn(async move {
         let mut holding = false;
         let mut last_memory_restart: Option<Instant> = None;
+        let total_memory = {
+            let mut sys = sysinfo::System::new();
+            sys.refresh_memory();
+            sys.total_memory()
+        };
         loop {
             tokio::time::sleep(EVERY).await;
             if conductor::is_closing() {
@@ -105,7 +118,11 @@ pub fn start(app: tauri::AppHandle, data_dir: PathBuf, resource_dir: PathBuf) {
             // The 0.7 conductor's memory.
             if let Some(m) = supervisor().conductor_pid(Line::V07).and_then(conductor_memory) {
                 let quiet = flowsta_hc_lines::in_flight(Line::V07) == 0 && flowsta_hc_lines::in_flight(Line::V06) == 0;
-                if memory_restart_due(&m, last_memory_restart.map(|t| t.elapsed()), quiet, &MEMORY) {
+                // While the person is away from the computer (machine.rs),
+                // or at once when memory is short: the restart gives it back.
+                let short = crate::machine::reading().is_some_and(|r| r.memory_short);
+                let now_ok = short || crate::machine::would_run(crate::machine::Work::Heavy);
+                if now_ok && memory_restart_due(&m, last_memory_restart.map(|t| t.elapsed()), quiet, &memory_policy(total_memory)) {
                     log::info!("[watch] the 0.7 conductor holds {} MB after {} min: restarting it once", m.resident_bytes >> 20, m.running.as_secs() / 60);
                     last_memory_restart = Some(Instant::now());
                     supervisor().stop_line(Line::V07);
@@ -116,4 +133,19 @@ pub fn start(app: tauri::AppHandle, data_dir: PathBuf, resource_dir: PathBuf) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod memory_policy_tests {
+    use super::memory_policy;
+
+    #[test]
+    fn the_restart_line_scales_down_on_small_machines() {
+        const GIB: u64 = 1 << 30;
+        assert_eq!(memory_policy(32 * GIB).over_bytes, GIB, "1 GiB at most");
+        assert_eq!(memory_policy(16 * GIB).over_bytes, GIB);
+        let eight = memory_policy(8 * GIB).over_bytes;
+        assert!(eight < GIB && eight > 600 << 20, "about 650 MB on 8 GB ({} MB)", eight >> 20);
+        assert_eq!(memory_policy(0).over_bytes, GIB, "an unread total keeps the default");
+    }
 }
