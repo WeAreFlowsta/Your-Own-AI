@@ -1092,6 +1092,11 @@ pub fn run() {
                     }
                 };
 
+                // A profile that knows nothing yet of the identity's other
+                // devices reads where they are first (bounded): unknown
+                // facts start the 0.6 line alone.
+                line_facts::learn_before_first_start(&hc_app_handle, &data_dir).await;
+
                 // The 0.7 line starts beside the 0.6 one for the move, from a
                 // freshly prepared key store; its passes run once it joins.
                 let fresh_on_07 = line_facts::fresh_starts_on_07(&hc_app_handle, &data_dir);
