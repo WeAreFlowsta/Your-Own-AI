@@ -178,6 +178,18 @@ pub(crate) async fn prepare_store_07(data_dir: &Path, data_key: &[u8; 32]) -> Re
             std::fs::remove_dir_all(leftover).map_err(|e| format!("clear {leftover:?}: {e}"))?;
         }
     }
+    // Once the profile has moved, the 0.7 store is the source: every key
+    // made since went into both stores (or into this one alone, after the
+    // 0.6 line stopped), and a copy from the 0.6 store would delete the
+    // keys only this one holds.
+    let moved = matches!(
+        flowsta_hc_lines::marker::Marker::load(data_dir, &crate::move_07::MARKER),
+        flowsta_hc_lines::marker::MarkerRead::Present(_)
+    );
+    if moved && lair_07.join(SALT_FILE_07).exists() && flowsta_hc_lines::keystore::config_path(&lair_07).exists() {
+        log::info!("[0.7] the profile has moved: its 0.7 key store stands as it is");
+        return passphrase_of_store_07(data_dir, data_key);
+    }
     let salt_path = lair_07.join(SALT_FILE_07);
     let salt: [u8; 32] = match std::fs::read_to_string(&salt_path) {
         Ok(text) => hex::decode(text.trim()).ok().and_then(|b| b.try_into().ok()).ok_or("the 0.7 key store's salt is malformed")?,

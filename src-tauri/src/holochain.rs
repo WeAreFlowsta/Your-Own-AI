@@ -174,6 +174,73 @@ impl HolochainManager {
             .to_string()
     }
 
+    /// One random seed imported into both lines' key stores under `tag`: the
+    /// same key on each. None when the 0.7 line is not up, its store's
+    /// passphrase cannot be read, or the 0.6 store already holds the tag
+    /// with another key (a provisioning that stopped part way): the caller
+    /// then makes the key on the 0.6 line as before.
+    async fn key_on_both_lines(&self, tag: &str) -> Option<[u8; 32]> {
+        use flowsta_hc_lines::supervisor::KeySource;
+        use flowsta_hc_lines::Line;
+        crate::conductor::ports(Line::V07)?;
+        let root = crate::conductor::profile_root()?;
+        let pass_07 = crate::conductor::passphrase_of_store_07(root, &self.data_key().ok()?).ok()?;
+        let mut seed = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut seed);
+        let seed = seed;
+        // The seed lives only in `source`, dropped when this returns.
+        let source = KeySource::Seed { seed, tag: tag.to_string() };
+        let sup = crate::conductor::supervisor();
+        let k06 = match sup.add_agent(Line::V06, crate::conductor::PASSPHRASE_06, &source).await {
+            Ok(k) => k,
+            Err(e) => {
+                log::info!("[keys] {tag}: one key for both lines was not possible on 0.6 ({e}); the 0.6 line makes it");
+                return None;
+            }
+        };
+        match sup.add_agent(Line::V07, &pass_07, &source).await {
+            Ok(k07) if k07 == k06 => Some(k06),
+            Ok(_) => {
+                log::warn!("[keys] {tag}: the two stores gave different keys; the 0.6 one is used, its v2 app waits");
+                None
+            }
+            Err(e) => {
+                log::warn!("[keys] {tag}: the 0.7 store did not take the key ({e}); its v2 app waits for the next start");
+                None
+            }
+        }
+    }
+
+    /// An AI on the 0.7 line alone (no 0.6 line runs): an existing v2 app
+    /// is adopted, by its key or by the AI id it was installed under; a new
+    /// one is made only once the 0.6 line is recorded as stopped (until
+    /// then it is restarting, and the caller tries again).
+    async fn provision_on_07(&self, ai_id: &str) -> Result<String, String> {
+        use flowsta_hc_lines::Line;
+        if crate::conductor::ports(Line::V07).is_none() {
+            return Err("Holochain conductor is still starting...".to_string());
+        }
+        let apps = crate::hc07::transcript_apps().await?;
+        if let Some(app) = apps.iter().find(|a| a.agent == ai_id || a.app_id.ends_with(ai_id)) {
+            self.lineage_index.lock().await.entry(app.agent.clone()).or_insert_with(|| Self::app_id_suffix(&app.app_id));
+            return Ok(app.agent.clone());
+        }
+        crate::hc07::write_07_alone(ai_id).await?;
+        let root = crate::conductor::profile_root().ok_or("no profile")?;
+        let pass_07 = crate::conductor::passphrase_of_store_07(root, &self.data_key()?)?;
+        let key = crate::conductor::supervisor()
+            .add_agent(Line::V07, &pass_07, &flowsta_hc_lines::supervisor::KeySource::NewSeed { tag: format!("ai-{}", ai_id) })
+            .await
+            .map_err(|e| format!("Failed to create the key for AI {}: {}", ai_id, e))?;
+        let agent = holochain_types::prelude::AgentPubKey::from_raw_32(key.to_vec());
+        let v1_app_id = format!("{}{}", dna::APP_ID_PREFIX, ai_id);
+        crate::hc07::ensure_apps(&self.resource_dir, &self.recovery.network_seed, &[(v1_app_id, agent.get_raw_39().to_vec())]).await?;
+        let key_hex = hex::encode(agent.get_raw_39());
+        self.lineage_index.lock().await.insert(key_hex.clone(), ai_id.to_string());
+        log::info!("Agent provisioned on the 0.7 line for AI: {} (key: {})", ai_id, key_hex);
+        Ok(key_hex)
+    }
+
     /// Index the 0.7 line's v2 apps too (disabled ones included), so the
     /// lineage holds without the 0.6 line. A v2 app mirrors its v1 app's
     /// suffix, so where both exist they agree.
@@ -219,6 +286,11 @@ impl HolochainManager {
         // Hold for the entire provision — makes concurrent calls for the
         // same AI idempotent instead of racing the source chain.
         let _provision_guard = self.provision_lock.lock().await;
+
+        // No 0.6 line: the AI is on the 0.7 line alone.
+        if crate::conductor::ports(flowsta_hc_lines::Line::V06).is_none() {
+            return self.provision_on_07(ai_id).await;
+        }
 
         // Check if already provisioned (by scanning for matching lair tag).
         // We can't look up by ai_id anymore since the map is keyed by pub key hex.
@@ -331,19 +403,25 @@ impl HolochainManager {
 
         log::info!("Provisioning Holochain agent for AI: {}", ai_id);
 
-        // 1. This AI's key: a random seed made in the key store under its
-        // tag, or the one already there from a previous session (looked up
-        // by its tag, never by listing the store's entries: the key store's
-        // connection carries at most 8 KiB per message, so listing a large
-        // store aborts the connection).
-        let key = crate::conductor::supervisor()
-            .add_agent(
-                flowsta_hc_lines::Line::V06,
-                crate::conductor::PASSPHRASE_06,
-                &flowsta_hc_lines::supervisor::KeySource::NewSeed { tag: format!("ai-{}", ai_id) },
-            )
-            .await
-            .map_err(|e| format!("Failed to create the key for AI {}: {}", ai_id, e))?;
+        // 1. This AI's key. With the 0.7 line up, one random seed goes into
+        // both lines' key stores, so the AI has the same key on each (a
+        // device still on 0.6 keeps seeing its chats) and the seed is kept
+        // nowhere else. Otherwise a random seed made in the 0.6 store under
+        // its tag, or the one already there from a previous session (looked
+        // up by its tag, never by listing the store's entries: the key
+        // store's connection carries at most 8 KiB per message, so listing a
+        // large store aborts the connection).
+        let tag = format!("ai-{}", ai_id);
+        let (key, on_07) = match self.key_on_both_lines(&tag).await {
+            Some(k) => (k, true),
+            None => {
+                let k = crate::conductor::supervisor()
+                    .add_agent(flowsta_hc_lines::Line::V06, crate::conductor::PASSPHRASE_06, &flowsta_hc_lines::supervisor::KeySource::NewSeed { tag: tag.clone() })
+                    .await
+                    .map_err(|e| format!("Failed to create the key for AI {}: {}", ai_id, e))?;
+                (k, false)
+            }
+        };
         let agent_pub_key = holochain_types::prelude::AgentPubKey::from_raw_32(key.to_vec());
         log::info!("Agent key for AI {}: {}", ai_id, hex::encode(key));
 
@@ -356,6 +434,14 @@ impl HolochainManager {
             &self.recovery.network_seed,
         )
         .await?;
+
+        // Its v2 app now, not at the next start, when its key is on both lines.
+        if on_07 {
+            match crate::hc07::ensure_apps(&self.resource_dir, &self.recovery.network_seed, &[(app_id.clone(), agent_pub_key.get_raw_39().to_vec())]).await {
+                Ok(_) => log::info!("[0.7] {} has its v2 app from the start", ai_id),
+                Err(e) => log::warn!("[0.7] the v2 app for {} waits for the next start: {e}", ai_id),
+            }
+        }
 
         // 3. Connect an AppWebsocket.
         let app_client = dna::connect_app_websocket(
