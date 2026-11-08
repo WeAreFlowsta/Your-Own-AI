@@ -103,6 +103,13 @@ pub fn reading() -> Option<Reading> {
     READING.lock().ok().and_then(|r| r.clone())
 }
 
+/// A test's own reading of the machine (None: no reading, as before the
+/// first one).
+#[cfg(test)]
+pub(crate) fn set_reading_for_test(r: Option<Reading>) {
+    *READING.lock().unwrap_or_else(|e| e.into_inner()) = r;
+}
+
 fn only_when_idle(app: &AppHandle) -> bool {
     use tauri_plugin_store::StoreExt;
     app.store("settings.json")

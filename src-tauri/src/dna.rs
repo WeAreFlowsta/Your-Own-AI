@@ -15,7 +15,7 @@ use holochain_types::prelude::{
 use std::path::Path;
 
 /// The hApp bundle filename (in src-tauri/resources/).
-const HAPP_FILENAME: &str = "yourown_ai_transcript_v1_happ.happ";
+pub(crate) const HAPP_FILENAME: &str = "yourown_ai_transcript_v1_happ.happ";
 
 /// The coordinator zome version this build ships. Bump when the coordinator
 /// zome gains/changes externs (rebuild via dna/v1/build-coordinator.sh); the
