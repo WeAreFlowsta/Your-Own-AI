@@ -6161,7 +6161,11 @@ pub async fn stream_chat_completion(
     // when no helper is installed): it yields to the person's turns.
     background: Option<bool>,
 ) -> Result<(), String> {
-    crate::dreaming::note_activity();
+    // The person's own replies count as activity; work nobody is waiting
+    // on (memory extraction riding the chat model) does not.
+    if background != Some(true) {
+        crate::dreaming::note_activity();
+    }
     // Online models ("online:<id>") route to the YOAI proxy with the
     // Flowsta (Vault-grant) token; external models ("external:<id>") post to
     // the user's own connected OpenAI-compatible server (no auth, their

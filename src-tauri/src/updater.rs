@@ -308,6 +308,16 @@ async fn check_once(app: &tauri::AppHandle, data_dir: &Path) -> Result<String, S
     if update.version != release.version {
         return Err(format!("the version file names {} but the signed manifest {}: not downloaded", update.version, release.version));
     }
+    // A download nobody is waiting on (machine.rs): not while memory is short,
+    // and on battery only when the computer is idle.
+    loop {
+        let on_battery = crate::machine::reading().is_some_and(|r| r.on_battery);
+        let work = if on_battery { crate::machine::Work::Heavy } else { crate::machine::Work::Light };
+        if crate::machine::may_run(work, "update download") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    }
     log::info!("[update] downloading {} {} ({} bytes)", APP_ID, release.version, file.size);
     let bytes = update
         .download(|_, _| {}, || {})

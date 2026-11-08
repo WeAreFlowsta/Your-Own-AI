@@ -137,6 +137,17 @@ pub fn may_run(work: Work, job: &str) -> bool {
     }
 }
 
+/// The same answer without recording the job as held: for upkeep the person
+/// never sees (the 0.7 conductor's memory restart), which must not put a
+/// line in the Activity tray.
+pub fn would_run(work: Work) -> bool {
+    let only = ONLY_WHEN_IDLE.load(std::sync::atomic::Ordering::Relaxed);
+    match reading() {
+        Some(r) => decide(work, &r, only, crate::dreaming::own_idle_secs()) == Verdict::Go,
+        None => work == Work::Light,
+    }
+}
+
 /// A job that finished or gave up is no longer held.
 pub fn done(job: &str) {
     HELD.lock().unwrap_or_else(|e| e.into_inner()).remove(job);
@@ -170,6 +181,10 @@ pub fn machine_status() -> MachineStatus {
 
 /// Start the reading loop (once, at launch).
 pub fn start(app: &AppHandle) {
+    // A session starts "in use": our own idle clock counts from launch, not
+    // from the first chat (before, the app read as idle 30 min after launch
+    // with the person reading or typing).
+    crate::dreaming::note_activity();
     let app = app.clone();
     std::thread::Builder::new()
         .name("machine-check".into())
