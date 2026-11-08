@@ -330,6 +330,29 @@ pub fn known(app: &tauri::AppHandle, root: &Path) -> Known {
     }
 }
 
+/// How long a first start waits for the Vault to say where the other
+/// devices are.
+const FIRST_FACTS_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Before a start that knows nothing of the other devices (no facts kept,
+/// and the profile is linked or escrowed): read them from the Vault, at most
+/// [`FIRST_FACTS_WAIT`]. Without an answer the facts stay unknown, and
+/// unknown runs the 0.6 line.
+pub async fn learn_before_first_start(app: &tauri::AppHandle, root: &Path) {
+    if LineFacts::load(root).is_some_and(|f| f.checked_at_ms > 0) || never_shared(app) {
+        return;
+    }
+    match tokio::time::timeout(FIRST_FACTS_WAIT, crate::config_sync::facts_round(app)).await {
+        Ok(Ok(true)) => {
+            let n = LineFacts::load(root).map(|f| f.siblings.len()).unwrap_or(0);
+            log::info!("[line] before the first start: {n} other device(s) read from the Vault");
+        }
+        Ok(Ok(false)) => log::info!("[line] before the first start: the Vault is still reading the identity's devices; they stay unknown"),
+        Ok(Err(e)) => log::info!("[line] before the first start: the other devices could not be read ({e}); they stay unknown"),
+        Err(_) => log::info!("[line] before the first start: no answer from the Vault within {} s; the other devices stay unknown", FIRST_FACTS_WAIT.as_secs()),
+    }
+}
+
 /// Never linked, and no escrow owner recorded: the key was made here and
 /// has never left this device.
 fn never_shared(app: &tauri::AppHandle) -> bool {

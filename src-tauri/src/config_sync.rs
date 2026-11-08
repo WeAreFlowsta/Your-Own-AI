@@ -508,6 +508,39 @@ fn manifest_moved(last: Option<&Vec<(String, crate::line_facts::Stamps)>>, devic
         .unwrap_or(true)
 }
 
+/// Where the other devices are on the move, read alone, merging nothing:
+/// the same reads as a round's. A profile that knows nothing of them yet
+/// (its first start) asks this before its lines start, so a new computer on
+/// an identity whose devices have moved starts on the 0.7 line, not on 0.6
+/// alone, and one beside a device still on 0.6 starts with it. Returns
+/// whether the facts were taken (a Vault still reading the identity's
+/// records says nothing yet).
+pub(crate) async fn facts_round(app: &tauri::AppHandle) -> Result<bool, String> {
+    let port = crate::vault_escrow::escrow_port(app, true).await.map_err(|s| s.error.unwrap_or(s.state))?;
+    let devices = crate::vault_escrow::sibling_devices(port).await?;
+    if crate::line_facts::vault_catching_up(port).await {
+        return Ok(false);
+    }
+    let root = crate::profile::root(app)?;
+    let prior = crate::line_facts::LineFacts::load(&root).unwrap_or_default();
+    let local_material = crate::vault_escrow::local_recovery(app).ok();
+    let mut seen: Vec<crate::line_facts::KnownSibling> = Vec::new();
+    for device in &devices {
+        let fast = sibling_label(port, &device.id, crate::vault_escrow::AIS_LABEL).await.ok().flatten();
+        let newer = manifest_newer(device);
+        let manifest = if fast.is_none() || newer {
+            sibling_label(port, &device.id, crate::vault_escrow::MANIFEST_LABEL).await.ok().flatten()
+        } else {
+            None
+        };
+        let newest = if newer { manifest.as_ref().or(fast.as_ref()) } else { fast.as_ref().or(manifest.as_ref()) };
+        let generation = newest.and_then(|m| m["network_generation"].as_str()).map(String::from);
+        seen.push(crate::line_facts::observe(port, device, prior.siblings.iter().find(|s| s.id == device.id), generation, local_material.as_ref()).await);
+    }
+    crate::line_facts::take_round(&root, seen)?;
+    Ok(true)
+}
+
 /// `force`: read every manifest even when no sibling's has moved (Settings'
 /// "sync now", and every fifth background round, so a stamp the list did
 /// not carry cannot hide a change for long).
