@@ -28,6 +28,13 @@ if [ "$B_TREE" != "$(pwd)" ]; then
   cp "$HERE/specs/devices/devices.e2e.ts" "$B_TREE/e2e/specs/devices/devices.e2e.ts"
   export DEVICES_B_EARLIER=1
 fi
+# The staging test material for B's rendezvous launches, read from this
+# tree's Vault: B's launcher looks for it beside ITS tree (../../flowsta-vault),
+# which a worktree elsewhere does not have (11-08: sed exited 2 under set -e
+# and B never started). Only those two launches get it: set for every launch,
+# the app would take it to production's rendezvous.
+B_AUTH="$(sed -n 's/^FLOWSTA_AUTH_MATERIAL=\([^ \\]*\).*/\1/p' "$VAULT/scripts/run-test-instance.sh" | head -1)"
+[ -n "$B_AUTH" ] || { echo "no FLOWSTA_AUTH_MATERIAL in $VAULT/scripts/run-test-instance.sh"; exit 1; }
 
 killtests() { for pid in $(pgrep -x flowsta-vault); do case "$(readlink /proc/$pid/exe 2>/dev/null)" in *target/debug*) kill "$pid" 2>/dev/null || true;; esac; done; }
 answering() { for p in 27777 27778 27779; do curl -s -m 2 "http://127.0.0.1:$p/dev/status" | grep -q '"harness":true' && echo "$p"; done; }
@@ -110,11 +117,11 @@ echo "== device A is up (pid $A_PID); driving B"
 # Phase c waits up to six minutes for A's record to reach B through the
 # rendezvous (10-22: it arrived at 5 min and the five-minute harness limit
 # had already fired) - the long limit applies.
-(cd "$B_TREE" && YOAI_E2E_LONG=1 YOAI_E2E_HOME="$B" YOAI_VAULT_PORT="$P2" YOAI_PORT_OFFSET=100 YOAI_E2E_WITH_RENDEZVOUS=1 DEVICES_PHASE=c node e2e/run.mjs models --spec e2e/specs/devices/devices.e2e.ts)
+(cd "$B_TREE" && FLOWSTA_AUTH_MATERIAL="$B_AUTH" YOAI_E2E_LONG=1 YOAI_E2E_HOME="$B" YOAI_VAULT_PORT="$P2" YOAI_PORT_OFFSET=100 YOAI_E2E_WITH_RENDEZVOUS=1 DEVICES_PHASE=c node e2e/run.mjs models --spec e2e/specs/devices/devices.e2e.ts)
 killA; gone || { echo "device A did not stop after phase c"; exit 1; }
 
 echo "== phase d: B unattended on the default ports, A driven on shifted ports: B's reply arrives on A"
-YOAI_E2E_HOME="$B" YOAI_VAULT_PORT="$P2" YOAI_E2E_WITH_MODELS=1 YOAI_E2E_MODELS_DIR="$LOGS/no-models" YOAI_E2E_WITH_RENDEZVOUS=1 TAURI_WEBDRIVER_PORT=4446 "$B_TREE/e2e/launch-app.sh" > "$LOGS/device-b-phase-d.log" 2>&1 &
+FLOWSTA_AUTH_MATERIAL="$B_AUTH" YOAI_E2E_HOME="$B" YOAI_VAULT_PORT="$P2" YOAI_E2E_WITH_MODELS=1 YOAI_E2E_MODELS_DIR="$LOGS/no-models" YOAI_E2E_WITH_RENDEZVOUS=1 TAURI_WEBDRIVER_PORT=4446 "$B_TREE/e2e/launch-app.sh" > "$LOGS/device-b-phase-d.log" 2>&1 &
 for _ in $(seq 1 60); do curl -s -m 2 http://127.0.0.1:11435/health | grep -q '"ok"' && break; sleep 2; done
 curl -s -m 2 http://127.0.0.1:11435/health | grep -q '"ok"' || { echo "device B never came up for phase d"; exit 1; }
 YOAI_E2E_LONG=1 YOAI_E2E_HOME="$A" YOAI_VAULT_PORT="$P1" YOAI_PORT_OFFSET=100 YOAI_E2E_WITH_RENDEZVOUS=1 DEVICES_PHASE=d node e2e/run.mjs models --spec e2e/specs/devices/devices.e2e.ts
