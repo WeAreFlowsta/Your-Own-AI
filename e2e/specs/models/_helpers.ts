@@ -97,6 +97,23 @@ export async function resetAiModels() {
 export const invoke = <T = unknown>(cmd: string, args: Record<string, unknown> = {}) =>
   browser.execute((c: string, a: Record<string, unknown>) => (window as any).__TAURI__.core.invoke(c, a) as Promise<T>, cmd, args) as Promise<T>;
 
+/** A command that may take minutes (a dream through the memory slot, on a
+ *  slow machine). One WebDriver script call waits 30 s, and a timed-out call
+ *  is sent again, which would start the command a second time: fire it once
+ *  from the page and poll for its answer. */
+export async function invokeLong<T = unknown>(cmd: string, args: Record<string, unknown> = {}, timeout = 240_000): Promise<T> {
+  const key = `__e2eLong_${cmd}_${Date.now().toString(36)}`;
+  await browser.execute((k: string, c: string, a: Record<string, unknown>) => {
+    const w = window as any;
+    w[k] = { done: false };
+    w.__TAURI__.core.invoke(c, a).then((v: unknown) => { w[k] = { done: true, value: v }; }).catch((e: unknown) => { w[k] = { done: true, error: String(e) }; });
+  }, key, cmd, args);
+  await browser.waitUntil(async () => browser.execute((k: string) => (window as any)[k]?.done === true, key), { timeout, interval: 2_000, timeoutMsg: `${cmd} did not answer within ${timeout / 1000} s` });
+  const r = await browser.execute((k: string) => (window as any)[k], key) as { value?: T; error?: string };
+  if (r.error !== undefined) throw new Error(r.error);
+  return r.value as T;
+}
+
 /** Scroll an element to the middle of the view, instantly. WebdriverIO's own
  *  scrollIntoView waits on an async script that timed out (30 s per try) on
  *  the models page; a plain DOM scroll needs no frame. */

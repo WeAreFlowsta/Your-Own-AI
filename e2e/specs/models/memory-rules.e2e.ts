@@ -2,7 +2,7 @@
 // the Your Memory page is a pinned person-scope row in the person's own
 // records - it is listed first, survives a reload (read back from the
 // network), and a removal is a record that hides it.
-import { shot, invoke, waitForChat, ask, waitForReplyDone } from "./_helpers";
+import { shot, invoke, invokeLong, waitForChat, ask, waitForReplyDone } from "./_helpers";
 
 const RULE = `Always ask before sending anything (test ${Date.now().toString(36)})`;
 const SAID_RULE = `From now on, answer in one short sentence (test ${Date.now().toString(36)})`;
@@ -156,7 +156,7 @@ describe("memory rules", () => {
     // assisted revision is the proof.
     const noteText = `Met Alex at the market yesterday. The office opens at nine (dream ${stamp})`;
     await invoke("save_memory_row", { agentKey: null, row: { ...mk(`dream-n-${stamp}`, noteText, Date.now() - 3000), kind: "note" } });
-    const n = await invoke<number>("dream_now", { scope: "person", agentKey: null });
+    const n = await invokeLong<number>("dream_now", { scope: "person", agentKey: null });
     console.log(`e2e: dream wrote ${n} revision(s)`);
     expect(n).toBeGreaterThan(0);
     const assisted = (await invoke<any[]>("list_memory_revisions", { agentKey: null, scope: "person" }))
