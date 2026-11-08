@@ -932,10 +932,7 @@ async fn project_memory_read_records_info(
         // An indexed conversation could not be read (rare: cell not up yet) -
         // fall through to the full walk, which rebuilds the index.
     }
-    let agent_keys: Vec<String> = {
-        let agents = manager.agents.lock().await;
-        agents.keys().cloned().collect()
-    };
+    let agent_keys: Vec<String> = manager.ai_agents().await;
     let mut found: Vec<(String, String)> = Vec::new();
     // Every other folder's memory conversations the walk passes go into the
     // index too: one walk, every folder known.

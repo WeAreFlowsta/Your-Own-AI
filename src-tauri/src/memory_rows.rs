@@ -1040,7 +1040,7 @@ pub fn start_person_memory_sync(app: &tauri::AppHandle) {
             // Every AI this device has provisioned: its authored knowledge.
             if let Some(hc) = app.try_state::<Arc<HolochainState>>() {
                 if let Ok(manager) = hc.get() {
-                    let agents: Vec<String> = manager.agents.lock().await.keys().cloned().collect();
+                    let agents: Vec<String> = manager.ai_agents().await;
                     for agent in agents {
                         match migrate_and_reconcile_ai_knowledge(&app, &manager, &agent).await {
                             Ok((0, 0)) => {}

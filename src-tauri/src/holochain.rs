@@ -186,6 +186,20 @@ impl HolochainManager {
         Ok(apps.len())
     }
 
+    /// Every AI agent this device holds a cell for, on either line (keys,
+    /// hex, sorted): the 0.6 line's connected agents and the 0.7 line's
+    /// enabled v2 apps. A 0.7 line that does not answer adds nothing.
+    pub async fn ai_agents(&self) -> Vec<String> {
+        let mut keys: std::collections::BTreeSet<String> = self.agents.lock().await.keys().cloned().collect();
+        if crate::conductor::ports(flowsta_hc_lines::Line::V07).is_some() {
+            match crate::hc07::agents_with_apps().await {
+                Ok(on_07) => keys.extend(on_07),
+                Err(e) => log::warn!("[0.7] the AI list: {e}"),
+            }
+        }
+        keys.into_iter().collect()
+    }
+
     /// Rebuild the lineage index from a `list_apps` answer. Disabled apps
     /// are indexed too - that is the point.
     async fn rebuild_lineage_index(&self, apps: &[holochain_client::AppInfo]) {

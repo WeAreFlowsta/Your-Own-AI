@@ -404,7 +404,7 @@ pub async fn dream_now(
     let manager = hc_state.get()?;
     let agent = match agent_key {
         Some(a) => a,
-        None => manager.agents.lock().await.keys().next().cloned().ok_or("no agent provisioned yet")?,
+        None => manager.ai_agents().await.into_iter().next().ok_or("no agent provisioned yet")?,
     };
     dream_scope(&app, &manager, &agent, &scope, false).await
 }
@@ -425,7 +425,7 @@ pub fn start_dreaming(app: &tauri::AppHandle) {
             }
             let Some(hc) = app.try_state::<std::sync::Arc<crate::commands_holochain::HolochainState>>() else { continue };
             let Ok(manager) = hc.get() else { continue };
-            let agents: Vec<String> = manager.agents.lock().await.keys().cloned().collect();
+            let agents: Vec<String> = manager.ai_agents().await;
             let Some(any) = agents.first().cloned() else { continue };
             let mut scopes: Vec<(String, String)> = vec![("person".to_string(), any)];
             for a in &agents {
