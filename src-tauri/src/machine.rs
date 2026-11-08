@@ -422,6 +422,46 @@ mod tests {
         }
     }
 
+    /// Another program busy on half the processor holds heavy work; the same
+    /// load inside our own process tree does not (run by hand:
+    /// `cargo test --lib -- --ignored live_machine_tells --nocapture`).
+    #[cfg(unix)]
+    #[test]
+    #[ignore]
+    fn live_machine_tells_other_programs_from_ours() {
+        let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+        let n = cores.div_ceil(2) + 1;
+        let read = |s: &mut super::CpuSampler| {
+            let mut last = None;
+            for _ in 0..4 {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                last = s.sample();
+            }
+            last.unwrap_or(0.0)
+        };
+        // Detached (the shell exits, the loops are adopted by init): another program.
+        let _ = std::process::Command::new("bash").arg("-c").arg(format!("for i in $(seq {n}); do (exec -a yoai-test-hog bash -c 'while :; do :; done' &) ; done")).status();
+        let mut s = super::CpuSampler::new();
+        s.sample();
+        let others = read(&mut s);
+        // Anchored: only the loops' own command lines start with the name.
+        let _ = std::process::Command::new("pkill").args(["-f", "^yoai-test-hog"]).status();
+        println!("other programs busy on {n} of {cores} threads: others {others:.1} %");
+        assert!(others >= super::HEAVY_OTHERS_CPU_PCT, "another program's load counts ({others:.1} %)");
+        let r = Reading { others_cpu_pct: Some(others), ..calm() };
+        assert_eq!(decide(Work::Heavy, &r, true, 3600), Verdict::Wait("other programs are busy"));
+        // The same load as our own children: left out.
+        let mut ours: Vec<std::process::Child> = (0..n).map(|_| std::process::Command::new("sh").arg("-c").arg("while :; do :; done").spawn().expect("a loop")).collect();
+        let mut s = super::CpuSampler::new();
+        s.sample();
+        let others = read(&mut s);
+        for c in ours.iter_mut() {
+            let _ = c.kill();
+        }
+        println!("our own children busy on {n} of {cores} threads: others {others:.1} %");
+        assert!(others < super::HEAVY_OTHERS_CPU_PCT, "our own load is left out ({others:.1} %)");
+    }
+
     #[test]
     fn the_processor_figure_starts_unknown_and_does_not_hold() {
         let r = Reading { others_cpu_pct: None, ..calm() };
