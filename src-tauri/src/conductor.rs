@@ -164,6 +164,24 @@ pub fn attach_07(app: tauri::AppHandle, data_dir: PathBuf, line_07: Line07) -> R
 /// finds one whole store, and an interrupted swap is put back. Neither
 /// line may be running: the copy reads a quiet 0.6 store, and the rewrap
 /// writes a store no lair has open.
+/// A key went into the 0.6 store alone after the move (the 0.7 line was not
+/// up yet): the next start copies the store again, which loses nothing
+/// while the 0.7 store holds no key of its own.
+pub(crate) const COPY_NEEDED_FILE: &str = "lair-07-copy-needed";
+/// The 0.7 store holds a key the 0.6 store does not (an AI made on the 0.7
+/// line alone): it is never replaced by a copy again.
+pub(crate) const KEYS_07_ONLY_FILE: &str = "lair-07-own-keys";
+
+/// Note a key made in one store alone ([`COPY_NEEDED_FILE`] or
+/// [`KEYS_07_ONLY_FILE`]).
+pub(crate) fn note_key_store(file: &str) {
+    if let Some(root) = profile_root() {
+        if let Err(e) = flowsta_hc_lines::files::write_atomic_private(&root.join(file), b"") {
+            log::warn!("[keys] could not note {file}: {e}");
+        }
+    }
+}
+
 pub(crate) async fn prepare_store_07(data_dir: &Path, data_key: &[u8; 32]) -> Result<String, String> {
     let (lair_06, _) = line_dirs(data_dir, Line::V06);
     let (lair_07, _) = line_dirs(data_dir, Line::V07);
@@ -177,6 +195,22 @@ pub(crate) async fn prepare_store_07(data_dir: &Path, data_key: &[u8; 32]) -> Re
         if leftover.exists() {
             std::fs::remove_dir_all(leftover).map_err(|e| format!("clear {leftover:?}: {e}"))?;
         }
+    }
+    // Once the profile has moved, the 0.7 store is the source: every key
+    // made since went into both stores (or into this one alone, after the
+    // 0.6 line stopped), and a copy from the 0.6 store would delete the
+    // keys only this one holds.
+    let moved = matches!(
+        flowsta_hc_lines::marker::Marker::load(data_dir, &crate::move_07::MARKER),
+        flowsta_hc_lines::marker::MarkerRead::Present(_)
+    );
+    let copy_needed = data_dir.join(COPY_NEEDED_FILE).exists() && !data_dir.join(KEYS_07_ONLY_FILE).exists();
+    if moved && !copy_needed && lair_07.join(SALT_FILE_07).exists() && flowsta_hc_lines::keystore::config_path(&lair_07).exists() {
+        log::info!("[0.7] the profile has moved: its 0.7 key store stands as it is");
+        return passphrase_of_store_07(data_dir, data_key);
+    }
+    if moved && copy_needed {
+        log::info!("[0.7] a key went into the 0.6 store alone: the 0.7 store is copied again (it holds no key of its own)");
     }
     let salt_path = lair_07.join(SALT_FILE_07);
     let salt: [u8; 32] = match std::fs::read_to_string(&salt_path) {
@@ -200,6 +234,7 @@ pub(crate) async fn prepare_store_07(data_dir: &Path, data_key: &[u8; 32]) -> Re
         let _ = std::fs::remove_dir_all(&prev);
     }
     log::info!("[0.7] key store refreshed from the 0.6 one ({} bytes) under this install's passphrase", copied.bytes);
+    let _ = std::fs::remove_file(data_dir.join(COPY_NEEDED_FILE));
     Ok(passphrase)
 }
 

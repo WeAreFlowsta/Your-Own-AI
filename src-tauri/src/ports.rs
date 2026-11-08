@@ -105,7 +105,9 @@ mod tests {
         // that it is another port is checked.
         let free = super::free_port().expect("the OS has a free port");
         assert_ne!(free, port);
+        // Not checked: that the port is bindable again once dropped. Other
+        // tests bind port 0 in parallel, and the OS may hand them this one
+        // the moment it is free.
         drop(held);
-        assert!(super::bindable(port), "released once its listener is gone");
     }
 }
