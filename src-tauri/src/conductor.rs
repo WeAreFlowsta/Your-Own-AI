@@ -558,6 +558,28 @@ impl LineHooks for YoaiLines {
     async fn joined(&self, line: Line, role: Role, _session: u64, admin_port: u16, app_port: u16) {
         self.emit(role, ConductorStatus::Ready { admin_port, app_port });
         log::info!("[{line}] Holochain conductor ready (admin: {}, app: {})", admin_port, app_port);
+        // The 0.6 line joined after the 0.7 one (it started again for a
+        // device still on 0.6): its AI cells get their v2 apps now, as the
+        // 0.7 setup would have given them, and the passes run again (they
+        // stop whenever either line is down).
+        if line == Line::V06 && ports(Line::V07).is_some() {
+            if let Some(app) = &self.app {
+                crate::move_07::run_passes(app.clone(), self.data_dir.clone());
+            }
+            if let Some(l07) = &self.line_07 {
+                let (resource_dir, seed) = (l07.resource_dir.clone(), l07.network_seed.clone());
+                tauri::async_runtime::spawn(async move {
+                    match transcript_apps_06().await {
+                        Ok(apps) => match crate::hc07::ensure_apps(&resource_dir, &seed, &apps).await {
+                            Ok(0) => {}
+                            Ok(n) => log::info!("[0.7] {n} transcript app(s) installed after the 0.6 line joined"),
+                            Err(e) => log::warn!("[0.7] v2 apps after the 0.6 line joined: {e}"),
+                        },
+                        Err(e) => log::warn!("[0.7] the 0.6 line's apps: {e}"),
+                    }
+                });
+            }
+        }
         if line == Line::V07 {
             if let Some(app) = &self.app {
                 crate::move_07::run_passes(app.clone(), self.data_dir.clone());
@@ -575,10 +597,15 @@ impl LineHooks for YoaiLines {
 }
 
 /// Every enabled transcript app on the running 0.6 line: (app id, agent key
-/// 39 bytes). A disabled one was tidied because it holds no records; it gets
-/// its v2 app at the first 0.7 start after it is enabled again.
+/// 39 bytes). A disabled one was tidied because it holds no records (the
+/// tidy disables only cells it verified empty); it gets its v2 app at the
+/// first 0.7 start after it is enabled again. With no 0.6 line there is
+/// nothing to give a v2 app: the 0.7 line starts with the apps it has.
 async fn transcript_apps_06() -> Result<Vec<(String, Vec<u8>)>, String> {
-    let port = admin_port().ok_or("the 0.6 line is not running")?;
+    let Some(port) = admin_port() else {
+        log::info!("[0.7] no 0.6 line this start: the 0.7 line starts with the apps it has");
+        return Ok(Vec::new());
+    };
     let admin = AdminClient::connect(Line::V06, port, &origin()).await.map_err(|e| format!("0.6 admin: {e}"))?;
     let apps = admin.list_apps().await.map_err(|e| format!("0.6 list_apps: {e}"))?;
     Ok(apps.into_iter().filter(|a| a.enabled && a.app_id.starts_with(crate::dna::APP_ID_PREFIX)).map(|a| (a.app_id, a.agent_key)).collect())

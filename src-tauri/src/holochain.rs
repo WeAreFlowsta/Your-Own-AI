@@ -51,6 +51,19 @@ fn chain_stats_from_dump(dump: &str) -> Option<(u64, u64)> {
 }
 
 #[cfg(test)]
+mod lineage_tests {
+    use super::HolochainManager;
+
+    #[test]
+    fn the_suffix_reads_the_same_on_both_lines_and_the_oldest_name() {
+        assert_eq!(HolochainManager::app_id_suffix("transcript_v1_abc"), "abc");
+        assert_eq!(HolochainManager::app_id_suffix("transcript_v2_abc"), "abc", "not v2_abc");
+        assert_eq!(HolochainManager::app_id_suffix("transcript_abc"), "abc");
+        assert_eq!(HolochainManager::app_id_suffix("something_else"), "");
+    }
+}
+
+#[cfg(test)]
 mod census_tests {
     #[test]
     fn dump_parsing_counts_records_and_app_entries() {
@@ -149,12 +162,42 @@ impl HolochainManager {
         })
     }
 
+    /// The suffix a transcript app was installed under, on either line
+    /// (`transcript_v1_X`, `transcript_v2_X`, or the oldest `transcript_X`):
+    /// X is the previous generation's key, or the root local id.
     fn app_id_suffix(installed_app_id: &str) -> String {
         installed_app_id
             .strip_prefix(dna::APP_ID_PREFIX)
+            .or_else(|| installed_app_id.strip_prefix(crate::hc07::APP_ID_PREFIX))
             .or_else(|| installed_app_id.strip_prefix("transcript_"))
             .unwrap_or("")
             .to_string()
+    }
+
+    /// Index the 0.7 line's v2 apps too (disabled ones included), so the
+    /// lineage holds without the 0.6 line. A v2 app mirrors its v1 app's
+    /// suffix, so where both exist they agree.
+    pub async fn index_lineage_07(&self) -> Result<usize, String> {
+        let apps = crate::hc07::transcript_apps().await?;
+        let mut idx = self.lineage_index.lock().await;
+        for a in &apps {
+            idx.entry(a.agent.clone()).or_insert_with(|| Self::app_id_suffix(&a.app_id));
+        }
+        Ok(apps.len())
+    }
+
+    /// Every AI agent this device holds a cell for, on either line (keys,
+    /// hex, sorted): the 0.6 line's connected agents and the 0.7 line's
+    /// enabled v2 apps. A 0.7 line that does not answer adds nothing.
+    pub async fn ai_agents(&self) -> Vec<String> {
+        let mut keys: std::collections::BTreeSet<String> = self.agents.lock().await.keys().cloned().collect();
+        if crate::conductor::ports(flowsta_hc_lines::Line::V07).is_some() {
+            match crate::hc07::agents_with_apps().await {
+                Ok(on_07) => keys.extend(on_07),
+                Err(e) => log::warn!("[0.7] the AI list: {e}"),
+            }
+        }
+        keys.into_iter().collect()
     }
 
     /// Rebuild the lineage index from a `list_apps` answer. Disabled apps
@@ -722,9 +765,10 @@ impl HolochainManager {
         // Since AppWebsocket uses interior mutability (Arc<RwLock>), we can
         // call methods on it after dropping the outer lock.
 
-        // We need to get a raw pointer or clone. Let's check if we can just
-        // call from within the lock scope by using block_in_place...
-        // Actually, the simplest fix: store AppWebsocket in an Arc so we can clone the Arc.
+        // Counted on the 0.6 line from here, queued behind the chain's lock
+        // included: a retirement of the line drains these first, and the
+        // watch's memory restart waits for them.
+        let _in_flight = flowsta_hc_lines::calling(flowsta_hc_lines::Line::V06);
 
         let agents = self.agents.lock().await;
         let agent = agents

@@ -932,10 +932,7 @@ async fn project_memory_read_records_info(
         // An indexed conversation could not be read (rare: cell not up yet) -
         // fall through to the full walk, which rebuilds the index.
     }
-    let agent_keys: Vec<String> = {
-        let agents = manager.agents.lock().await;
-        agents.keys().cloned().collect()
-    };
+    let agent_keys: Vec<String> = manager.ai_agents().await;
     let mut found: Vec<(String, String)> = Vec::new();
     // Every other folder's memory conversations the walk passes go into the
     // index too: one walk, every folder known.
@@ -1416,6 +1413,8 @@ pub async fn get_conversations(
     anchors.extend(lineage.iter().cloned());
     let reader = if manager.is_provisioned(&agent_key).await { agent_key.clone() } else { lineage[0].clone() };
     let data_key = manager.data_key()?;
+    // Deleted on either line, or here: hidden from both lines' lists.
+    let deleted = crate::move_07::deleted_here(&app, &manager, &reader, &founding_key_for(&app, &agent_key)).await;
     let mut conversations = Vec::new();
     let mut seen_hashes: std::collections::HashSet<String> = std::collections::HashSet::new();
     // Anchors whose read did not answer (a 60 s zome timeout right after
@@ -1465,7 +1464,7 @@ pub async fn get_conversations(
                     };
                     let Ok(conv) = serde_json::from_slice::<serde_json::Value>(&plain_bytes) else { continue };
                     let hash_encoded = hex::encode(record.action_address().get_raw_39());
-                    if !seen_hashes.insert(hash_encoded.clone()) {
+                    if deleted.hides(&data_key, &hash_encoded) || !seen_hashes.insert(hash_encoded.clone()) {
                         continue;
                     }
                     conversations.push(ConversationInfo {
@@ -1491,14 +1490,19 @@ pub async fn get_conversations(
     if crate::conductor::ports(flowsta_hc_lines::Line::V07).is_some() {
         let founding_hex = founding_key_for(&app, &agent_key);
         if let Some(founding_key) = hex::decode(&founding_hex).ok().filter(|b| b.len() == 39).map(holochain_types::prelude::AgentPubKey::from_raw_39) {
-            match crate::hc07::app_cells().conversations_all(&reader, &founding_key).await {
+            // A cold or stuck 0.7 conductor must not hold the list: its
+            // websocket waits up to ten minutes for the long backup reads.
+            let read = tokio::time::timeout(std::time::Duration::from_secs(60), crate::hc07::app_cells().conversations_all(&reader, &founding_key))
+                .await
+                .unwrap_or_else(|_| Err("no answer within 60 s".to_string()));
+            match read {
                 Ok(items) => {
                     for (view, _anchor) in items {
                         let Ok(ee) = view.entry_as::<EncryptedEntryRaw>() else { continue };
                         let Ok(plain_bytes) = crate::transcript_crypto::decrypt(&data_key, &ee.nonce, &ee.cipher) else { continue };
                         let Ok(conv) = serde_json::from_slice::<serde_json::Value>(&plain_bytes) else { continue };
                         let Some(id) = conv["id"].as_str().map(String::from) else { continue };
-                        if !seen_hashes.insert(id.clone()) {
+                        if deleted.hides(&data_key, &id) || !seen_hashes.insert(id.clone()) {
                             continue;
                         }
                         conversations.push(ConversationInfo {
@@ -1762,12 +1766,16 @@ pub async fn get_conversation_transcript(
         &agent_key[..8.min(agent_key.len())],
         &conversation_hash[..12.min(conversation_hash.len())]
     );
-    if !hc_state.get()?.is_provisioned(&agent_key).await {
+    let manager = hc_state.get()?;
+    // Read from each line this AI has a cell on: the 0.6 line's connected
+    // agents, and the 0.7 line whenever it runs (an AI without a v2 app
+    // there answers nothing, and that is logged below).
+    let on_06 = manager.is_provisioned(&agent_key).await;
+    let on_07 = crate::conductor::ports(flowsta_hc_lines::Line::V07).is_some();
+    if !on_06 && !on_07 {
         log::warn!("[records] transcript {who}: agent key not provisioned on this conductor - empty answer");
         return Ok(vec![]);
     }
-
-    let manager = hc_state.get()?;
     let data_key = manager.data_key()?;
     // Every entry of the conversation, from each line it is on, by id: a
     // record's id is its v1 hash, so the 0.7 copy of a v1 message is the
@@ -1776,7 +1784,7 @@ pub async fn get_conversation_transcript(
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut skipped = 0usize;
     // A fresh id (not a v1 hash) has nothing on the 0.6 line.
-    if conversation_hash.len() == 78 {
+    if on_06 && conversation_hash.len() == 78 {
         let raw_bytes = hex::decode(&conversation_hash).map_err(|e| format!("Invalid conversation hash hex: {}", e))?;
         let conv_hash = ActionHash::from_raw_39(raw_bytes);
         let read = crate::transcript_pages::all_entries(&manager, &agent_key, conv_hash, std::time::Duration::from_secs(60)).await.map_err(|e| {
@@ -1797,9 +1805,13 @@ pub async fn get_conversation_transcript(
             sealed_entries.push((id, ee));
         }
     }
-    if crate::conductor::ports(flowsta_hc_lines::Line::V07).is_some() {
+    if on_07 {
         let anchor = holochain_types::prelude::ExternalHash::from_raw_32(crate::transcript_ids::conversation_anchor(&data_key, &conversation_hash).to_vec());
-        match crate::hc07::app_cells().entries_all(&agent_key, &anchor).await {
+        // Bounded: the 0.7 websocket waits up to ten minutes for backup reads.
+        let read = tokio::time::timeout(std::time::Duration::from_secs(60), crate::hc07::app_cells().entries_all(&agent_key, &anchor))
+            .await
+            .unwrap_or_else(|_| Err("no answer within 60 s".to_string()));
+        match read {
             Ok(items) => {
                 for (view, _key) in items {
                     let Ok(ee) = view.entry_as::<EncryptedEntryRaw>() else { skipped += 1; continue };
@@ -1812,6 +1824,12 @@ pub async fn get_conversation_transcript(
                         sealed_entries.push((id, ee));
                     }
                 }
+            }
+            // With no 0.6 cell to read, a silent 0.7 line is a failed read,
+            // never an empty conversation.
+            Err(e) if !on_06 => {
+                log::warn!("[records] transcript {who}: the 0.7 line did not answer ({e}) and this AI has no 0.6 cell here");
+                return Err(e);
             }
             Err(e) => log::info!("[records] transcript {who}: the 0.7 line did not answer ({e}); reading the 0.6 line alone"),
         }
@@ -1888,11 +1906,18 @@ pub struct TranscriptTurnInfo {
 
 #[tauri::command]
 pub async fn get_my_transcript_turns(
+    app: tauri::AppHandle,
     agent_key: String,
     hc_state: State<'_, Arc<HolochainState>>,
 ) -> Result<Vec<TranscriptTurnInfo>, String> {
     let t0 = std::time::Instant::now();
     if !hc_state.get()?.is_provisioned(&agent_key).await {
+        // No 0.6 cell for this AI here: its own turns from the 0.7 line.
+        // While a 0.6 cell exists it holds every turn (writes go there
+        // first), so this is the read only without one.
+        if crate::conductor::ports(flowsta_hc_lines::Line::V07).is_some() {
+            return my_turns_07(&app, &hc_state, &agent_key, t0).await;
+        }
         return Err("agent key not provisioned on this conductor".into());
     }
     let manager = hc_state.get()?;
@@ -1929,6 +1954,48 @@ pub async fn get_my_transcript_turns(
         total,
         t0.elapsed().as_millis()
     );
+    Ok(turns)
+}
+
+/// This device's own turns with an AI from its v2 cell, a page at a time:
+/// each message carries its own id and its conversation's in its sealed
+/// plaintext.
+async fn my_turns_07(app: &tauri::AppHandle, hc_state: &State<'_, Arc<HolochainState>>, agent_key: &str, t0: std::time::Instant) -> Result<Vec<TranscriptTurnInfo>, String> {
+    let data_key = hc_state.get()?.data_key()?;
+    let founding = founding_key_for(app, agent_key);
+    let anchor = hex::decode(&founding)
+        .ok()
+        .filter(|b| b.len() == 39)
+        .map(holochain_types::prelude::AgentPubKey::from_raw_39)
+        .ok_or("bad founding key")?;
+    let cells = crate::hc07::app_cells();
+    let (mut turns, mut skipped, mut after_seq) = (Vec::new(), 0usize, None);
+    loop {
+        let page = cells.my_entries_page(agent_key, &crate::hc07::MyEntriesPage { anchor: anchor.clone(), after_seq, limit: 500 }).await?;
+        for (view, _conversation_anchor, _key) in &page.items {
+            let Ok(ee) = view.entry_as::<EncryptedEntryRaw>() else { skipped += 1; continue };
+            let Ok(plain) = crate::transcript_crypto::decrypt(&data_key, &ee.nonce, &ee.cipher) else { skipped += 1; continue };
+            if serde_json::from_slice::<GroundingAnnotationPlain>(&plain).map(|a| a.annotation == "grounding").unwrap_or(false) {
+                continue;
+            }
+            let ids = serde_json::from_slice::<serde_json::Value>(&plain).ok();
+            let (Some(id), Some(conversation)) = (
+                ids.as_ref().and_then(|v| v["id"].as_str().map(String::from)),
+                ids.as_ref().and_then(|v| v["conversation_id"].as_str().map(String::from)),
+            ) else {
+                skipped += 1;
+                continue;
+            };
+            let Ok(e) = serde_json::from_slice::<MessagePlain>(&plain) else { skipped += 1; continue };
+            let info = entry_info(id, e);
+            turns.push(TranscriptTurnInfo { conversation_hash: conversation, hash: info.hash, role: info.role, content: info.content, timestamp: info.timestamp });
+        }
+        match page.next_seq {
+            Some(next) if !page.items.is_empty() => after_seq = Some(next),
+            _ => break,
+        }
+    }
+    log::info!("[records] my turns {}.. (0.7): {} turns ({skipped} skipped) in {} ms", &agent_key[..8.min(agent_key.len())], turns.len(), t0.elapsed().as_millis());
     Ok(turns)
 }
 
