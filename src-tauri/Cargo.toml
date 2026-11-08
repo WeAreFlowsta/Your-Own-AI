@@ -121,3 +121,10 @@ opt-level = 3
 [dev-dependencies]
 tempfile = "3"
 
+# A helper model runs below the person's own programs (llm.rs `lower_priority`);
+# the same crates and features the lines library already builds with.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading"] }
