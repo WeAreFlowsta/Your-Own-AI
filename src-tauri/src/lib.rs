@@ -1094,28 +1094,32 @@ pub fn run() {
 
                 // The 0.7 line starts beside the 0.6 one for the move, from a
                 // freshly prepared key store; its passes run once it joins.
-                let line_07 = move_07::line_07_for_start(&data_dir, &recovery, &resource_dir).await;
+                let fresh_on_07 = line_facts::fresh_starts_on_07(&hc_app_handle, &data_dir);
+                let line_07 = move_07::line_07_for_start(&data_dir, &recovery, &resource_dir, fresh_on_07).await;
                 match conductor::start_holochain(hc_app_handle.clone(), data_dir.clone(), line_07).await {
                     Ok(_session) => {
                         let resource_dir_for_watch = resource_dir.clone();
                         let manager = HolochainManager::new(resource_dir, recovery);
 
-                        // Hot-swap coordinator zomes to this build's version
-                        // (no-op once applied; new externs reach existing
-                        // cells without touching the DNA hash).
-                        if let Err(e) = dna::update_coordinators_sweep(
-                            manager.admin_port(),
-                            &manager.resource_dir,
-                            &data_dir,
-                        )
-                        .await
-                        {
-                            log::warn!("Coordinator sweep failed: {}", e);
-                        }
-
-                        // Reconnect any agents from previous sessions.
-                        if let Err(e) = manager.reconnect_existing_agents().await {
-                            log::warn!("Failed to reconnect existing agents: {}", e);
+                        // With 0.6 leading: hot-swap its coordinator zomes to
+                        // this build's version (no-op once applied; new
+                        // externs reach existing cells without touching the
+                        // DNA hash) and reconnect the agents of previous
+                        // sessions. A 0.6 line that joins beside 0.7 does
+                        // both when it joins.
+                        if conductor::leading() == flowsta_hc_lines::Line::V06 {
+                            if let Err(e) = dna::update_coordinators_sweep(
+                                manager.admin_port(),
+                                &manager.resource_dir,
+                                &data_dir,
+                            )
+                            .await
+                            {
+                                log::warn!("Coordinator sweep failed: {}", e);
+                            }
+                            if let Err(e) = manager.reconnect_existing_agents().await {
+                                log::warn!("Failed to reconnect existing agents: {}", e);
+                            }
                         }
 
                         // Fill the OnceCell

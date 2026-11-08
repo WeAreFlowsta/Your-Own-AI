@@ -238,6 +238,32 @@ pub(crate) async fn prepare_store_07(data_dir: &Path, data_key: &[u8; 32]) -> Re
     Ok(passphrase)
 }
 
+/// What a 0.6-led start does once the 0.6 line is up, for a 0.6 line that
+/// joined as secondary: the coordinator sweep and the agents' connections.
+async fn connect_06_after_join(app: tauri::AppHandle, data_dir: PathBuf) {
+    use tauri::Manager as _;
+    let Some(hc) = app.try_state::<Arc<crate::commands_holochain::HolochainState>>() else { return };
+    let hc = hc.inner().clone();
+    let mut waited = std::time::Duration::ZERO;
+    let manager = loop {
+        if let Ok(m) = hc.get() {
+            break m;
+        }
+        if waited > std::time::Duration::from_secs(600) {
+            log::warn!("[0.6] joined, but the app's records never became ready: its agents wait for the next start");
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        waited += std::time::Duration::from_secs(2);
+    };
+    if let Err(e) = crate::dna::update_coordinators_sweep(manager.admin_port(), &manager.resource_dir, &data_dir).await {
+        log::warn!("[0.6] coordinator sweep after joining: {e}");
+    }
+    if let Err(e) = manager.reconnect_existing_agents().await {
+        log::warn!("[0.6] agents after joining: {e}");
+    }
+}
+
 // ── Closing ─────────────────────────────────────────────────────────────
 
 static CLOSING: AtomicBool = AtomicBool::new(false);
@@ -442,9 +468,11 @@ pub(crate) fn started_offline() -> bool {
     STARTED_OFFLINE.load(Ordering::SeqCst)
 }
 
-/// Whether the 0.6 line's rendezvous (the one with auth material) answers.
+/// Whether the leading line's rendezvous (the one with auth material)
+/// answers.
 pub(crate) async fn rendezvous_answers() -> bool {
-    match primary() {
+    let r = if leading() == Line::V07 { primary_07() } else { primary() };
+    match r {
         Some(p) => answers(&p.bootstrap_url, PROBE_TIMEOUT).await,
         None => false,
     }
@@ -528,6 +556,7 @@ struct YoaiLines {
 }
 
 /// What a start's 0.7 line needs.
+#[derive(Clone)]
 pub struct Line07 {
     /// The key store's passphrase ([`prepare_store_07`]).
     pub passphrase: String,
@@ -593,10 +622,21 @@ impl LineHooks for YoaiLines {
     async fn joined(&self, line: Line, role: Role, _session: u64, admin_port: u16, app_port: u16) {
         self.emit(role, ConductorStatus::Ready { admin_port, app_port });
         log::info!("[{line}] Holochain conductor ready (admin: {}, app: {})", admin_port, app_port);
-        // The 0.6 line joined after the 0.7 one (it started again for a
-        // device still on 0.6): its AI cells get their v2 apps now, as the
-        // 0.7 setup would have given them, and the passes run again (they
-        // stop whenever either line is down).
+        // The 0.6 line joined after the 0.7 one (0.7 leads, or 0.6 started
+        // again for a device still on it): its coordinators and its agents'
+        // connections, which a 0.6-led start does after the start, are done
+        // now; its AI cells get their v2 apps as the 0.7 setup would have
+        // given them; and the passes run again (they stop whenever either
+        // line is down).
+        if line == Line::V06 {
+            OLD_LINE_FAILED.store(false, Ordering::SeqCst);
+        }
+        if line == Line::V06 && role == Role::Secondary {
+            if let Some(app) = &self.app {
+                let (app, data_dir) = (app.clone(), self.data_dir.clone());
+                tauri::async_runtime::spawn(async move { connect_06_after_join(app, data_dir).await });
+            }
+        }
         if line == Line::V06 && ports(Line::V07).is_some() {
             if let Some(app) = &self.app {
                 crate::move_07::run_passes(app.clone(), self.data_dir.clone());
@@ -623,6 +663,12 @@ impl LineHooks for YoaiLines {
     }
 
     async fn secondary_failed(&self, line: Line, error: &str) {
+        if line == Line::V06 {
+            // Not running this session after all: chat must still work, so
+            // writes may go to the 0.7 line alone until it joins (this
+            // session only; the marker still says it is wanted).
+            OLD_LINE_FAILED.store(true, Ordering::SeqCst);
+        }
         log::warn!("[{line}] did not start ({error}); the app goes on with its other line");
     }
 
@@ -652,12 +698,108 @@ pub(crate) async fn transcript_apps_06() -> Result<Vec<(String, Vec<u8>)>, Strin
 /// so ports and processes are released).
 pub async fn start_holochain(app: tauri::AppHandle, data_dir: PathBuf, line_07: Option<Line07>) -> Result<u64, String> {
     let _ = PROFILE_ROOT.set(data_dir.clone());
-    let secondary = line_07.is_some().then_some(Line::V07);
+    let (primary, secondary) = crate::line_facts::start_plan(&app, &data_dir, line_07.is_some());
+    log::info!("[lines] {primary} leads{}", secondary.map(|l| format!(", {l} joins")).unwrap_or_default());
+    set_leading(primary);
+    if let Some(l07) = &line_07 {
+        *LINE_07.lock().unwrap_or_else(|p| p.into_inner()) = Some(l07.clone());
+    }
+    // Writes go to 0.6 first exactly while it runs: the move's marker says
+    // so (`old_line_needed`), and the write guard reads it.
+    let with_06 = primary == Line::V06 || secondary == Some(Line::V06);
+    note_old_line_needed(&data_dir, with_06);
     let hooks = Arc::new(YoaiLines { app: Some(app), data_dir, line_07 });
-    match supervisor().start_lines(Line::V06, secondary, hooks).await {
+    match supervisor().start_lines(primary, secondary, hooks).await {
         Err(e) if e == NOT_WANTED => Err("the app is closing".into()),
         other => other,
     }
+}
+
+/// The line that leads this session (0.6 until a profile has moved).
+static LEADING_07: AtomicBool = AtomicBool::new(false);
+
+fn set_leading(line: Line) {
+    LEADING_07.store(line == Line::V07, Ordering::SeqCst);
+}
+
+pub fn leading() -> Line {
+    if LEADING_07.load(Ordering::SeqCst) {
+        Line::V07
+    } else {
+        Line::V06
+    }
+}
+
+/// The 0.6 line was wanted beside 0.7 this session but could not start.
+static OLD_LINE_FAILED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn old_line_failed() -> bool {
+    OLD_LINE_FAILED.load(Ordering::SeqCst)
+}
+
+/// The 0.6 line is expected but not up yet (it joins beside 0.7 a little
+/// after the start, or is starting again): a read it cannot answer is
+/// unanswered, not empty.
+pub(crate) fn old_line_coming() -> bool {
+    use flowsta_hc_lines::marker::{Marker, MarkerRead};
+    if ports(Line::V06).is_some() || old_line_failed() {
+        return false;
+    }
+    match profile_root().map(|r| Marker::load(r, &crate::move_07::MARKER)) {
+        Some(MarkerRead::Present(m)) => m.old_line_needed != Some(false),
+        _ => false,
+    }
+}
+
+/// This session's 0.7 settings, for a 0.6 line attached beside it later.
+static LINE_07: std::sync::Mutex<Option<Line07>> = std::sync::Mutex::new(None);
+
+/// Record in the move's marker whether the 0.6 line runs (an existing
+/// marker only: there is none before the move flips).
+pub(crate) fn note_old_line_needed(data_dir: &Path, needed: bool) {
+    use flowsta_hc_lines::marker::{Marker, MarkerRead};
+    if let MarkerRead::Present(m) = Marker::load(data_dir, &crate::move_07::MARKER) {
+        if m.old_line_needed != Some(needed) {
+            if let Err(e) = flowsta_hc_lines::marker::update_marker(data_dir, &crate::move_07::MARKER, |m| m.old_line_needed = Some(needed)) {
+                log::warn!("[lines] the marker did not take old_line_needed = {needed}: {e}");
+            }
+        }
+    }
+}
+
+/// Start the 0.6 line again beside a session that 0.7 leads: a device on
+/// 0.6 came back, or something on 0.6 is not carried yet. The marker says
+/// so first, so every write goes to 0.6 first again.
+pub fn attach_06(app: tauri::AppHandle, data_dir: PathBuf) -> Result<(), String> {
+    let session = supervisor().session().ok_or("no session runs")?;
+    note_old_line_needed(&data_dir, true);
+    let line_07 = LINE_07.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    supervisor().attach_line(session, Line::V06, Arc::new(YoaiLines { app: Some(app), data_dir, line_07 }));
+    Ok(())
+}
+
+/// A 0.7 key store made fresh for a profile that starts on 0.7 alone: a
+/// salt and the passphrase it gives (the key store itself is made at its
+/// first start). Its marker says it is on 0.7 from the first write.
+pub(crate) fn fresh_store_07(data_dir: &Path, data_key: &[u8; 32]) -> Result<String, String> {
+    let (lair_07, _) = line_dirs(data_dir, Line::V07);
+    std::fs::create_dir_all(&lair_07).map_err(|e| format!("make the 0.7 key store's folder: {e}"))?;
+    let salt_path = lair_07.join(SALT_FILE_07);
+    if !salt_path.exists() {
+        let mut salt = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut salt);
+        flowsta_hc_lines::files::write_atomic_private(&salt_path, hex::encode(salt).as_bytes()).map_err(|e| format!("write the 0.7 key store's salt: {e}"))?;
+    }
+    let mut m = flowsta_hc_lines::marker::Marker::new(&crate::move_07::MARKER, now_ms_conductor());
+    m.restored = true;
+    m.old_line_needed = Some(false);
+    m.save(data_dir, &crate::move_07::MARKER).map_err(|e| format!("write the move's marker: {e}"))?;
+    log::info!("[0.7] a fresh profile: it starts on the 0.7 line alone");
+    passphrase_of_store_07(data_dir, data_key)
+}
+
+fn now_ms_conductor() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 /// The lines of a profile in a test, without a window to narrate to.

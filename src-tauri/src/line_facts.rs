@@ -328,6 +328,42 @@ pub fn old_line_data_present(root: &Path) -> bool {
     flowsta_hc_lines::keystore::config_path(&lair_06).exists()
 }
 
+/// Which line leads this start, and which joins beside it. `have_07`: the
+/// 0.7 line can start (its key store is ready).
+/// - no marker, 0.6 data here: 0.6 leads and 0.7 joins (the move runs);
+/// - no marker, no 0.6 data (a fresh profile): the same while a device on
+///   0.6 shares its key or the facts are unknown, else 0.7 alone;
+/// - a marker (moved): 0.7 leads, and 0.6 joins only while it is wanted
+///   (a device still on it, or something not yet carried).
+pub fn start_plan(app: &tauri::AppHandle, root: &Path, have_07: bool) -> (Line, Option<Line>) {
+    if !have_07 {
+        return (Line::V06, None);
+    }
+    let marker = Marker::load(root, &MARKER);
+    let old = old_line_data_present(root);
+    let moved = !matches!(marker, MarkerRead::Absent);
+    let wanted = decide(&known(app, root), marker, old, now_ms()).decision.wanted();
+    plan(moved, old, wanted)
+}
+
+/// [`start_plan`]'s rule, from its three facts.
+fn plan(moved: bool, old_line_data: bool, old_line_wanted: bool) -> (Line, Option<Line>) {
+    match (moved, old_line_data) {
+        (false, true) => (Line::V06, Some(Line::V07)),
+        (false, false) if old_line_wanted => (Line::V06, Some(Line::V07)),
+        (false, false) => (Line::V07, None),
+        (true, _) => (Line::V07, old_line_wanted.then_some(Line::V06)),
+    }
+}
+
+/// A fresh profile (no marker, no 0.6 data) that starts on the 0.7 line
+/// alone: no device on 0.6 shares its key, and the facts are known.
+pub fn fresh_starts_on_07(app: &tauri::AppHandle, root: &Path) -> bool {
+    matches!(Marker::load(root, &MARKER), MarkerRead::Absent)
+        && !old_line_data_present(root)
+        && !decide(&known(app, root), MarkerRead::Absent, false, now_ms()).decision.wanted()
+}
+
 /// The decision for this profile now (diagnostics, the stop).
 pub fn decision(app: &tauri::AppHandle, root: &Path) -> LineDecision {
     decide(&known(app, root), Marker::load(root, &MARKER), old_line_data_present(root), now_ms())
@@ -610,6 +646,20 @@ mod tests {
         let mut m = Marker::new(&MARKER, 1);
         m.carried_all_ms = Some(5);
         assert_eq!(decide(&Known::Facts(f), MarkerRead::Present(m), true, 10).decision, Decision::NotWanted(Why::NothingLeft));
+    }
+
+    #[test]
+    fn a_moved_profile_starts_with_0_7_leading_and_0_6_only_while_wanted() {
+        assert_eq!(plan(false, true, true), (Line::V06, Some(Line::V07)), "not moved: 0.6 leads, the move runs");
+        assert_eq!(plan(false, false, true), (Line::V06, Some(Line::V07)), "fresh, beside a device on 0.6");
+        assert_eq!(plan(false, false, false), (Line::V07, None), "fresh, alone: 0.7 from the first start");
+        assert_eq!(plan(true, true, true), (Line::V07, Some(Line::V06)), "moved, a device still on 0.6");
+        assert_eq!(plan(true, true, false), (Line::V07, None), "moved, nothing needs 0.6: it stays stopped");
+        // Whatever the facts, 0.6 is never the line a moved profile leads with:
+        // a retired primary would send the watch into restarts.
+        for (old, wanted) in [(true, true), (true, false), (false, true), (false, false)] {
+            assert_eq!(plan(true, old, wanted).0, Line::V07);
+        }
     }
 
     #[test]
