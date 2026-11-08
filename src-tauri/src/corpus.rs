@@ -559,6 +559,8 @@ pub fn any_passages(app: &AppHandle) -> bool {
     }
 }
 
+const REEMBED_JOB: &str = "re-indexing documents";
+
 /// Re-embed every stored passage with the current embedding model (a model
 /// change: the old vectors belong to another space and would score as
 /// noise). Walks the table in batches, emits `corpus-reembed-progress`
@@ -590,6 +592,7 @@ pub async fn corpus_reembed_all(
     impl Drop for Running {
         fn drop(&mut self) {
             REEMBED_RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+            crate::machine::done(REEMBED_JOB);
         }
     }
     let _running = Running;
@@ -600,6 +603,10 @@ pub async fn corpus_reembed_all(
     // router fell back to keywords for the whole run).
     for batch in rows.chunks(REEMBED_BATCH) {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // Minutes of embedding: only while the computer is idle (machine.rs).
+        while !crate::machine::may_run(crate::machine::Work::Heavy, REEMBED_JOB) {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        }
         let texts: Vec<String> = batch.iter().map(|(_, _, t)| format!("{}{}", crate::embedding_model::DOC_PREFIX, t)).collect();
         let vecs = crate::llm::embed_texts(app.clone(), llm_state.clone(), texts, EMBEDDING_MODEL_FILE.to_string()).await?;
         let conn = open(&app)?;

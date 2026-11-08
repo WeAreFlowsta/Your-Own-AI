@@ -15,6 +15,9 @@ import {
   cosineSimilarity,
   isEmbeddingModelReady,
 } from "./embeddings";
+import { waitForCalm, machineDone } from "./machine";
+
+const REINDEX_JOB = "re-indexing memory";
 
 export interface TranscriptEmbedding {
   id: string;
@@ -709,6 +712,8 @@ export async function rebuildMemoryIndexIfPending(): Promise<void> {
   for (const [n, ai] of ais.entries()) {
     const agentKey = ai.agentPubKey ?? ai.id;
     setRebuildProgress({ phase: "conversations", done: n, total: ais.length });
+    // Minutes of embedding per AI: only while the computer is idle (machine.ts).
+    await waitForCalm(REINDEX_JOB);
     try {
       const existing = await getEmb(ai.id);
       const authored = existing.filter((e) => e.kind === "authored");
@@ -785,6 +790,7 @@ export async function rebuildMemoryIndexIfPending(): Promise<void> {
   }
 
   setRebuildProgress(null);
+  machineDone(REINDEX_JOB);
   if (!failed) {
     try {
       await invoke("memory_reembed_done");

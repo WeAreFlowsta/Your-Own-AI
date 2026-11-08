@@ -354,7 +354,7 @@ async fn assist_scope(app: &tauri::AppHandle, manager: &crate::holochain::Holoch
         // The scheduler stops the moment the person comes back or the
         // computer gets busy; a dream asked for (Settings, the tests) runs
         // to the end.
-        if respect_idle && !crate::machine::may_run(app, crate::machine::Work::Heavy, "dreaming") {
+        if respect_idle && !crate::machine::may_run(crate::machine::Work::Heavy, "dreaming") {
             break;
         }
         let said = crate::memory_rows::ymd(row.as_of);
@@ -420,7 +420,7 @@ pub fn start_dreaming(app: &tauri::AppHandle) {
             tokio::time::sleep(std::time::Duration::from_secs(30 * 60)).await;
             // The whole machine, other programs included (machine.rs): its
             // processor, memory, power and the person's input anywhere.
-            if !crate::machine::may_run(&app, crate::machine::Work::Heavy, "dreaming") {
+            if !crate::machine::may_run(crate::machine::Work::Heavy, "dreaming") {
                 continue;
             }
             let Some(hc) = app.try_state::<std::sync::Arc<crate::commands_holochain::HolochainState>>() else { continue };
@@ -436,7 +436,7 @@ pub fn start_dreaming(app: &tauri::AppHandle) {
                 if now - last_by_scope.get(&scope).copied().unwrap_or(0) < EVERY_SECS * 1000 {
                     continue;
                 }
-                if !crate::machine::may_run(&app, crate::machine::Work::Heavy, "dreaming") {
+                if !crate::machine::may_run(crate::machine::Work::Heavy, "dreaming") {
                     break; // the person came back, or the computer got busy
                 }
                 match dream_scope(&app, &manager, &agent, &scope, true).await {

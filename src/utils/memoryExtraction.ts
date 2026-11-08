@@ -21,6 +21,7 @@ import {
   type Fact,
 } from "./memory";
 import type { ChatMessage } from "../types";
+import { waitForCalm } from "./machine";
 
 // NOTE: every part of this prompt + the user-message-only input is load-bearing
 // for WEAK local models (tested on Ministral-3-3B, the model that fits a 4 GB
@@ -335,6 +336,9 @@ export async function drainPendingExtractions(model: string): Promise<void> {
     `[Memory] Draining ${pending.length} unfinished extraction(s) from a previous session…`,
   );
   for (const t of pending) {
+    // Last session's leftovers wait for an idle computer (machine.ts); this
+    // session's own turns are extracted as they happen.
+    await waitForCalm("memory from earlier conversations");
     try {
       await runExtraction({
         userText: t.userText,

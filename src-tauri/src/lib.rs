@@ -657,6 +657,8 @@ pub fn run() {
             memory_rows::memory_would_replace,
             dreaming::dream_now,
             machine::machine_status,
+            machine::machine_may_run,
+            machine::machine_done,
             memory_slot::memory_slot_pick,
             memory_slot::memory_grades_set,
             memory_slot::memory_grades,

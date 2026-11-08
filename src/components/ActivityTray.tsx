@@ -29,6 +29,7 @@ import { ACTIVITY_EVENT, labelForFile, formatBytes, homeForFile, type ActivityNo
 import { firstModelInFlight } from "../utils/firstModel";
 import type { CorpusProgress } from "../utils/corpus";
 import type { DownloadProgress, DownloadComplete } from "../utils/modelManager";
+import { machineStatus } from "../utils/machine";
 
 interface Row {
   id: string;
@@ -315,7 +316,24 @@ export const ActivityTray = component$(() => {
       }
     });
 
+    // Work held back for the person's computer (src-tauri/src/machine.rs):
+    // one line while anything waits, gone when nothing does.
+    const machineTick = async () => {
+      const st = await machineStatus();
+      const held = st?.held ?? [];
+      if (held.length === 0) {
+        remove("machine-wait");
+        return;
+      }
+      const jobs = held.map(([job]) => job);
+      const what = jobs[0].charAt(0).toUpperCase() + jobs[0].slice(1) + (jobs.length > 1 ? ` and ${jobs.length - 1} more` : "");
+      upsert("machine-wait", { kind: "note", title: "Waiting for your computer to be free", detail: what, state: "running", percent: null, action: undefined });
+    };
+    void machineTick();
+    const machineTimer = setInterval(() => void machineTick(), 15_000);
+
     cleanup(() => {
+      clearInterval(machineTimer);
       unDeviceSync();
       unProgress();
       unComplete();

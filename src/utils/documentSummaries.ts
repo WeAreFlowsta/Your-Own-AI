@@ -17,6 +17,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { runUtilityTask, isUtilityModelReady } from "./utilityModel";
 import { corpusDocuments, corpusDocumentText, corpusSetSummary, type DocRecord } from "./corpus";
+import { waitForCalm, machineDone } from "./machine";
+
+const CARDS_JOB = "document cards";
 
 /** Characters per sampled part, sized for the helper's 4K window on CPU. */
 const PART_CHARS = 3000;
@@ -176,6 +179,9 @@ export function summarizePendingDocuments(): Promise<void> {
       let index = 0;
       for (const doc of pending) {
         const at = index++;
+        // A card is model work nobody waits on: only while the computer is
+        // idle (machine.ts); the Activity tray says it waits.
+        await waitForCalm(CARDS_JOB);
         notifyCardProgress(at, pending.length, doc.meta.filename);
         try {
           const card = await writeCard(doc, writer, (pd, pt) => notifyCardProgress(at, pending.length, doc.meta.filename, pd, pt));
@@ -188,6 +194,7 @@ export function summarizePendingDocuments(): Promise<void> {
         }
       }
       notifyCardProgress(pending.length, pending.length, "");
+      machineDone(CARDS_JOB);
       if (written > 0) console.log(`[Library] ${written} document card(s) written on this device`);
     } catch (e) {
       console.warn("[Library] card pass skipped:", e);

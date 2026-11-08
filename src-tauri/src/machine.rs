@@ -92,8 +92,11 @@ pub fn decide(work: Work, r: &Reading, only_when_idle: bool, own_idle_secs: i64)
 }
 
 static READING: Mutex<Option<Reading>> = Mutex::new(None);
+/// Settings › "Do background work only when my computer is idle", read at
+/// every tick so a job deep in any module can ask without an app handle.
+static ONLY_WHEN_IDLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 /// Jobs held right now and why: what the Activity tray shows.
-static HELD: Mutex<BTreeMap<&'static str, &'static str>> = Mutex::new(BTreeMap::new());
+static HELD: Mutex<BTreeMap<String, &'static str>> = Mutex::new(BTreeMap::new());
 
 /// The latest reading (a calm default until the first one: a job asked in
 /// the first seconds of a session waits for the first tick instead).
@@ -112,9 +115,10 @@ fn only_when_idle(app: &AppHandle) -> bool {
 
 /// May `job` run now? Records the answer so the Activity tray can say what
 /// waits and why. Before the first reading, heavy work waits.
-pub fn may_run(app: &AppHandle, work: Work, job: &'static str) -> bool {
+pub fn may_run(work: Work, job: &str) -> bool {
+    let only = ONLY_WHEN_IDLE.load(std::sync::atomic::Ordering::Relaxed);
     let verdict = match reading() {
-        Some(r) => decide(work, &r, only_when_idle(app), crate::dreaming::own_idle_secs()),
+        Some(r) => decide(work, &r, only, crate::dreaming::own_idle_secs()),
         None if work == Work::Light => Verdict::Go,
         None => Verdict::Wait("checking the computer"),
     };
@@ -125,7 +129,7 @@ pub fn may_run(app: &AppHandle, work: Work, job: &'static str) -> bool {
             true
         }
         Verdict::Wait(why) => {
-            if held.insert(job, why) != Some(why) {
+            if held.insert(job.to_string(), why) != Some(why) {
                 log::info!("[machine] {job} waits: {why}");
             }
             false
@@ -134,8 +138,20 @@ pub fn may_run(app: &AppHandle, work: Work, job: &'static str) -> bool {
 }
 
 /// A job that finished or gave up is no longer held.
-pub fn done(job: &'static str) {
+pub fn done(job: &str) {
     HELD.lock().unwrap_or_else(|e| e.into_inner()).remove(job);
+}
+
+/// The same question from the front end's own background jobs (the import
+/// learner, document cards, memory from earlier conversations).
+#[tauri::command]
+pub fn machine_may_run(heavy: bool, job: String) -> bool {
+    may_run(if heavy { Work::Heavy } else { Work::Light }, &job)
+}
+
+#[tauri::command]
+pub fn machine_done(job: String) {
+    done(&job);
 }
 
 #[derive(serde::Serialize)]
@@ -153,7 +169,8 @@ pub fn machine_status() -> MachineStatus {
 }
 
 /// Start the reading loop (once, at launch).
-pub fn start(_app: &AppHandle) {
+pub fn start(app: &AppHandle) {
+    let app = app.clone();
     std::thread::Builder::new()
         .name("machine-check".into())
         .spawn(move || {
@@ -172,6 +189,7 @@ pub fn start(_app: &AppHandle) {
                 if let Ok(mut slot) = READING.lock() {
                     *slot = Some(r);
                 }
+                ONLY_WHEN_IDLE.store(only_when_idle(&app), std::sync::atomic::Ordering::Relaxed);
                 std::thread::sleep(TICK);
             }
         })
