@@ -126,7 +126,9 @@ describe(`devices, phase ${PHASE}`, () => {
       }
       expect(sync?.devices.length).toBeGreaterThan(0);
       expect((sync?.total_updated ?? 0) + (sync?.total_added ?? 0)).toBeGreaterThan(0);
-      expect(sync?.devices.some((d) => d.needs_update)).toBe(false);
+      // A on an earlier release (DEVICES_A_EARLIER): this device names it as
+      // needing the update; on the same release, nobody does.
+      expect(sync?.devices.some((d) => d.needs_update)).toBe(process.env.DEVICES_A_EARLIER === "1");
       await yourAis();
       await browser.waitUntil(async () => (await bodyText()).includes(NAME), { timeout: 60_000, timeoutMsg: `B never showed ${NAME}` });
       await shot("devices-b-your-ais");

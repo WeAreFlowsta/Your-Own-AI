@@ -20,7 +20,8 @@ CID="$(grep -A1 'YOAI_HOLOCHAIN_CLIENT_ID: &str' src-tauri/src/flowsta.rs | grep
 export DEVICES_NAME="${DEVICES_NAME:-Synced $(date +%H%M)}"
 # DEVICES_B_TREE: the app tree that drives device B (default: this one). A
 # worktree of an earlier release, built there with `npm run e2e:build`, makes
-# this the mixed-version run: A on this build, B on that release.
+# this a mixed-version run: A on this build, B on that release (a computer
+# on the earlier release added later). DEVICES_A_TREE below is the other way.
 B_TREE="$(cd "${DEVICES_B_TREE:-$HERE/..}" && pwd)"
 if [ "$B_TREE" != "$(pwd)" ]; then
   echo "== device B runs from $B_TREE"
@@ -38,6 +39,18 @@ fi
 # the app would take it to production's rendezvous.
 B_AUTH="$(sed -n 's/^FLOWSTA_AUTH_MATERIAL=\([^ \\]*\).*/\1/p' "$VAULT/scripts/run-test-instance.sh" | head -1)"
 [ -n "$B_AUTH" ] || { echo "no FLOWSTA_AUTH_MATERIAL in $VAULT/scripts/run-test-instance.sh"; exit 1; }
+# DEVICES_A_TREE: the same for device A (default: this one). A on an
+# earlier release and B on this build is the household that already had a
+# computer when the new one joined. A from another tree gets the staging
+# material for its rendezvous launches too, as B does.
+A_TREE="$(cd "${DEVICES_A_TREE:-$HERE/..}" && pwd)"
+a_auth=()
+if [ "$A_TREE" != "$(pwd)" ]; then
+  echo "== device A runs from $A_TREE"
+  cp "$HERE/specs/devices/devices.e2e.ts" "$A_TREE/e2e/specs/devices/devices.e2e.ts"
+  a_auth=(FLOWSTA_AUTH_MATERIAL="$B_AUTH")
+  export DEVICES_A_EARLIER=1
+fi
 
 killtests() { for pid in $(pgrep -x flowsta-vault); do case "$(readlink /proc/$pid/exe 2>/dev/null)" in *target/debug*) kill "$pid" 2>/dev/null || true;; esac; done; }
 answering() { for p in 27777 27778 27779; do curl -s -m 2 "http://127.0.0.1:$p/dev/status" | grep -q '"harness":true' && echo "$p"; done; }
@@ -89,12 +102,18 @@ prelink "$B" "$P2" B
 
 A_START="$(date +%s)"
 echo "== phase a: device A renames an AI to '$DEVICES_NAME' and backs up (Vault $P1)"
-YOAI_E2E_HOME="$A" YOAI_VAULT_PORT="$P1" DEVICES_PHASE=a node e2e/run.mjs models --spec e2e/specs/devices/devices.e2e.ts
-echo "== V2 fetches V1's copies"
+(cd "$A_TREE" && YOAI_E2E_HOME="$A" YOAI_VAULT_PORT="$P1" DEVICES_PHASE=a node e2e/run.mjs models --spec e2e/specs/devices/devices.e2e.ts)
+# The copy must be A's LAST manifest (its forced backup after the chat, the
+# one with the rule), not one from its first start: a start writes one too,
+# and it is newer than A_START. A's log says when the last was written (UTC).
+last_written="$(sed -E 's/\x1b\[[0-9;]*m//g' "$A"/.local/share/com.solar.yourowai/logs/*.log 2>/dev/null | grep "manifest written" | tail -1 | sed -E 's/^\[([0-9-]+)\]\[([0-9:]+)\].*/\1 \2/' || true)"
+if [ -n "$last_written" ]; then A_START="$(date -u -d "$last_written" +%s)"; fi
+echo "== V2 fetches V1's copies (A's last manifest: ${last_written:-unknown})"
 for _ in $(seq 1 150); do
-  dev "$P2" '{"op":"round"}' >/dev/null
-  held="$(dev "$P2" "{\"op\":\"backups\",\"client_id\":\"$CID\"}")"
-  # The copy must be the manifest A wrote AFTER its chat, not the one from its first start.
+  # A round right after a Vault restarted its lines (a memory restart) can
+  # take longer than one call waits: the loop asks again.
+  dev "$P2" '{"op":"round"}' >/dev/null || true
+  held="$(dev "$P2" "{\"op\":\"backups\",\"client_id\":\"$CID\"}" || true)"
   newest="$(printf '%s' "$held" | python3 -c 'import sys,json; h=[x for x in json.load(sys.stdin).get("held",[]) if x.get("label")=="manifest" and x.get("from")]; print(max([x.get("created_at",0) for x in h] or [0]))' 2>/dev/null || echo 0)"
   [ "${newest:-0}" -ge "$A_START" ] && break
   sleep 4
@@ -108,9 +127,9 @@ echo "== phase c: both devices online - A unattended on the default ports, B dri
 # A holds the RECORDS, not a chat: it gets an empty models folder, so it never loads a model - two
 # instances each with a model exceeded 16 GB and the kernel killed the editor (2026-10-13).
 mkdir -p "$LOGS/no-models"
-YOAI_E2E_HOME="$A" YOAI_VAULT_PORT="$P1" YOAI_E2E_WITH_MODELS=1 YOAI_E2E_MODELS_DIR="$LOGS/no-models" YOAI_E2E_WITH_RENDEZVOUS=1 TAURI_WEBDRIVER_PORT=4446 e2e/launch-app.sh > "$LOGS/device-a-phase-c.log" 2>&1 &
+env "${a_auth[@]}" YOAI_E2E_HOME="$A" YOAI_VAULT_PORT="$P1" YOAI_E2E_WITH_MODELS=1 YOAI_E2E_MODELS_DIR="$LOGS/no-models" YOAI_E2E_WITH_RENDEZVOUS=1 TAURI_WEBDRIVER_PORT=4446 "$A_TREE/e2e/launch-app.sh" > "$LOGS/device-a-phase-c.log" 2>&1 &
 A_PID=$!
-killA() { for pid in $(pgrep -x 'app|your-own-ai'); do case "$(readlink /proc/$pid/exe 2>/dev/null)" in "$(pwd)"/src-tauri/target/debug/*) kill "$pid" 2>/dev/null || true;; esac; done; }
+killA() { for pid in $(pgrep -x 'app|your-own-ai'); do case "$(readlink /proc/$pid/exe 2>/dev/null)" in "$A_TREE"/src-tauri/target/debug/*) kill "$pid" 2>/dev/null || true;; esac; done; }
 killB() { for pid in $(pgrep -x 'app|your-own-ai'); do case "$(readlink /proc/$pid/exe 2>/dev/null)" in "$B_TREE"/src-tauri/target/debug/*) kill "$pid" 2>/dev/null || true;; esac; done; }
 gone() { for _ in $(seq 1 30); do [ -z "$(pgrep -x 'app|your-own-ai')" ] && return 0; sleep 2; done; return 1; }
 trap 'killA; killB; killtests; sleep 2; killtests' EXIT
@@ -127,7 +146,7 @@ echo "== phase d: B unattended on the default ports, A driven on shifted ports: 
 FLOWSTA_AUTH_MATERIAL="$B_AUTH" YOAI_E2E_HOME="$B" YOAI_VAULT_PORT="$P2" YOAI_E2E_WITH_MODELS=1 YOAI_E2E_MODELS_DIR="$LOGS/no-models" YOAI_E2E_WITH_RENDEZVOUS=1 TAURI_WEBDRIVER_PORT=4446 "$B_TREE/e2e/launch-app.sh" > "$LOGS/device-b-phase-d.log" 2>&1 &
 for _ in $(seq 1 60); do curl -s -m 2 http://127.0.0.1:11435/health | grep -q '"ok"' && break; sleep 2; done
 curl -s -m 2 http://127.0.0.1:11435/health | grep -q '"ok"' || { echo "device B never came up for phase d"; exit 1; }
-YOAI_E2E_LONG=1 YOAI_E2E_HOME="$A" YOAI_VAULT_PORT="$P1" YOAI_PORT_OFFSET=100 YOAI_E2E_WITH_RENDEZVOUS=1 DEVICES_PHASE=d node e2e/run.mjs models --spec e2e/specs/devices/devices.e2e.ts
+(cd "$A_TREE" && env "${a_auth[@]}" YOAI_E2E_LONG=1 YOAI_E2E_HOME="$A" YOAI_VAULT_PORT="$P1" YOAI_PORT_OFFSET=100 YOAI_E2E_WITH_RENDEZVOUS=1 DEVICES_PHASE=d node e2e/run.mjs models --spec e2e/specs/devices/devices.e2e.ts)
 killB; gone || true
 
 # Each device's move to the 0.7 line, from its own log (a device on a release
