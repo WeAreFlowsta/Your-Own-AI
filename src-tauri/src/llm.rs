@@ -1324,6 +1324,79 @@ pub(crate) const UTILITY_MODEL_FILE: &str = "Ministral-3-3B-Instruct-2512-Q4_K_M
 const EMBED_CTX: u64 = 512;
 const UTIL_CTX: u64 = 4096;
 
+/// Threads for a helper: about half the processor. A helper generating on
+/// the processor spun every core at the person's own priority, and with the
+/// agent and the chat model beside it the desktop stopped answering
+/// (2026-11-08, a 16 GB machine with a 4 GB card).
+fn helper_threads() -> usize {
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).div_ceil(2).max(1)
+}
+
+/// The nice value a helper runs at on Linux and macOS (0 = the person's own
+/// programs, 19 = only what nothing else wants).
+#[cfg(unix)]
+const HELPER_NICE: libc::c_int = 10;
+
+/// Run a helper below the person's own programs: what they are doing
+/// always comes first. Linux sets nice per thread, so every thread the
+/// helper has now (called at spawn, before the engine makes its workers,
+/// and again once it answers); macOS for the whole process; Windows the
+/// process's class, below normal. Best effort: a refusal leaves it as it was.
+fn lower_priority(pid: u32) {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) {
+            for t in tasks.flatten() {
+                if let Ok(tid) = t.file_name().to_string_lossy().parse::<libc::id_t>() {
+                    // SAFETY: setpriority takes plain integers and only reads them.
+                    unsafe { libc::setpriority(libc::PRIO_PROCESS, tid, HELPER_NICE) };
+                }
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // SAFETY: as above.
+        unsafe { libc::setpriority(libc::PRIO_PROCESS, pid as libc::id_t, HELPER_NICE) };
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{OpenProcess, SetPriorityClass, BELOW_NORMAL_PRIORITY_CLASS, PROCESS_SET_INFORMATION};
+        // SAFETY: the handle is checked before use and closed after.
+        unsafe {
+            let h = OpenProcess(PROCESS_SET_INFORMATION, 0, pid);
+            if !h.is_null() {
+                SetPriorityClass(h, BELOW_NORMAL_PRIORITY_CLASS);
+                CloseHandle(h);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod gentle_helper_tests {
+    #[test]
+    fn a_helper_gets_about_half_the_processor() {
+        let all = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+        let t = super::helper_threads();
+        assert!(t >= 1 && t <= all && t * 2 >= all, "{t} of {all}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_helper_runs_below_the_persons_programs() {
+        let mut child = std::process::Command::new("sleep").arg("30").spawn().expect("sleep starts");
+        super::lower_priority(child.id());
+        let stat = std::fs::read_to_string(format!("/proc/{}/stat", child.id())).expect("its stat");
+        let _ = child.kill();
+        // After the command name in parentheses: field 3 (state) first, field 19 (nice) at 16.
+        let after = &stat[stat.rfind(')').expect("a command name") + 2..];
+        let nice: i32 = after.split_whitespace().nth(16).expect("a nice field").parse().expect("a number");
+        assert_eq!(nice, super::HELPER_NICE);
+    }
+}
+
 struct Inflight(&'static std::sync::atomic::AtomicUsize);
 impl Inflight {
     fn new(c: &'static std::sync::atomic::AtomicUsize) -> Self {
@@ -1701,7 +1774,15 @@ pub(crate) async fn move_idle_helpers(app: &AppHandle) {
     let embed_model = st.embed_model.lock().await.clone();
     if let Some(m) = embed_model {
         if *st.embed_running.lock().await && *st.embed_place.lock().await != e && EMBED_INFLIGHT.load(std::sync::atomic::Ordering::SeqCst) == 0 {
-            if let Err(err) = ensure_embedding_server(app, &st, &m).await {
+            if e == HelperPlace::Cpu {
+                // The card filled: give it back and let the helper start
+                // again only when a call needs it, through the processor's
+                // room check - never moved onto the processor unasked
+                // (2026-11-08: a 32768-token chat window filled a 4 GB card,
+                // both helpers moved onto the processor, the machine stalled).
+                log::info!("[helpers] memory model leaves the card (no room left): it starts again when a call needs it");
+                stop_embedding_server_inner(st.inner()).await;
+            } else if let Err(err) = ensure_embedding_server(app, &st, &m).await {
                 log::warn!("[helpers] memory model could not move to the {}: {err}", e.word());
             }
         }
@@ -1709,7 +1790,10 @@ pub(crate) async fn move_idle_helpers(app: &AppHandle) {
     let util_model = st.util_model.lock().await.clone();
     if let Some(m) = util_model {
         if *st.util_running.lock().await && *st.util_place.lock().await != u && UTIL_INFLIGHT.load(std::sync::atomic::Ordering::SeqCst) == 0 {
-            if let Err(err) = ensure_utility_server(app, &st, &m).await {
+            if u == HelperPlace::Cpu {
+                log::info!("[helpers] helper model leaves the card (no room left): it starts again when a call needs it");
+                stop_utility_server_inner(st.inner()).await;
+            } else if let Err(err) = ensure_utility_server(app, &st, &m).await {
                 log::warn!("[helpers] helper model could not move to the {}: {err}", u.word());
             }
         }
@@ -3978,6 +4062,7 @@ async fn ensure_embedding_server(
         }
     }
     args.extend(device_args);
+    args.extend(["--threads".to_string(), helper_threads().to_string()]);
     if place == HelperPlace::Cpu && !helper_has_ram_room(app_handle, model_filename, EMBED_CTX, "memory model", &EMBED_NO_ROOM_SAID) {
         return Err("Not enough free memory for the memory model right now".to_string());
     }
@@ -3997,6 +4082,7 @@ async fn ensure_embedding_server(
         .spawn()
         .map_err(|e| format!("Failed to start embedding server: {}", e))?;
     let child_pid = child.pid();
+    lower_priority(child_pid);
 
     *state.embed_process.lock().await = Some(child);
     *state.embed_running.lock().await = true;
@@ -4022,6 +4108,7 @@ async fn ensure_embedding_server(
     // Wait for the model to load (CPU load of a small embedder is a few seconds).
     for _ in 0..60 {
         if embed_server_ready().await {
+            lower_priority(child_pid);
             if place == HelperPlace::Card {
                 helper_measure_after_ready(app_handle.clone(), model_filename.to_string(), EMBED_CTX, free_before, "memory model");
             } else {
@@ -4316,6 +4403,7 @@ async fn ensure_utility_server(
         }
     }
     args.extend(device_args);
+    args.extend(["--threads".to_string(), helper_threads().to_string()]);
     if place == HelperPlace::Cpu && !helper_has_ram_room(app_handle, model_filename, UTIL_CTX, "helper model", &UTIL_NO_ROOM_SAID) {
         return Err("Not enough free memory for the helper model right now".to_string());
     }
@@ -4335,6 +4423,7 @@ async fn ensure_utility_server(
         .spawn()
         .map_err(|e| format!("Failed to start utility server: {}", e))?;
     let child_pid = child.pid();
+    lower_priority(child_pid);
 
     *state.util_process.lock().await = Some(child);
     *state.util_running.lock().await = true;
@@ -4360,6 +4449,7 @@ async fn ensure_utility_server(
     // CPU load of a ~2 GB model is a few seconds; allow generous headroom.
     for _ in 0..120 {
         if util_server_ready().await {
+            lower_priority(child_pid);
             if place == HelperPlace::Card {
                 helper_measure_after_ready(app_handle.clone(), model_filename.to_string(), UTIL_CTX, free_before, "helper model");
             } else {
