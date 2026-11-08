@@ -156,11 +156,22 @@ pub async fn save_memory_row(
     let plain = serde_json::to_vec(&sealed).map_err(|e| e.to_string())?;
     let (nonce, cipher) = crate::transcript_crypto::encrypt(&key, &plain)?;
     let anchor = scope_anchor(&row.scope, &key)?;
-    let payload = ExternIO::encode(SaveInput { cipher: cipher.clone(), nonce: nonce.to_vec(), anchor: anchor.clone() }).map_err(|e| e.to_string())?;
-    let out = manager.call_zome(&agent_key, "transcript", "save_memory_row", payload).await?;
-    let hash: ActionHash = ExternIO::decode(&out).map_err(|e| e.to_string())?;
-    crate::hc07::also_save_memory_row(&agent_key, cipher, nonce.to_vec(), anchor);
-    Ok(hex::encode(hash.get_raw_39()))
+    save_sealed(&manager, &agent_key, cipher, nonce.to_vec(), anchor).await
+}
+
+/// Save one sealed row: on the AI's 0.6 cell first while it has one (then
+/// the 0.7 line in the background, the same bytes), else on the 0.7 line,
+/// awaited, when the 0.6 line cannot take it. Returns the hash, hex.
+async fn save_sealed(manager: &crate::holochain::HolochainManager, agent: &str, cipher: Vec<u8>, nonce: Vec<u8>, anchor: AnyLinkableHash) -> Result<String, String> {
+    if manager.is_provisioned(agent).await {
+        let payload = ExternIO::encode(SaveInput { cipher: cipher.clone(), nonce: nonce.clone(), anchor: anchor.clone() }).map_err(|e| e.to_string())?;
+        let out = manager.call_zome(agent, "transcript", "save_memory_row", payload).await?;
+        let hash: ActionHash = ExternIO::decode(&out).map_err(|e| e.to_string())?;
+        crate::hc07::also_save_memory_row(agent, cipher, nonce, anchor);
+        return Ok(hex::encode(hash.get_raw_39()));
+    }
+    crate::hc07::write_07_alone(agent).await?;
+    crate::hc07::write_save_memory_row(agent, cipher, nonce, anchor).await
 }
 
 /// One revision as the history view wants it: the row, and whether a
@@ -454,9 +465,7 @@ async fn write_row(manager: &crate::holochain::HolochainManager, agent: &str, ro
     let plain = serde_json::to_vec(&sealed).map_err(|e| e.to_string())?;
     let (nonce, cipher) = crate::transcript_crypto::encrypt(&key, &plain)?;
     let anchor = scope_anchor(&row.scope, &key)?;
-    let payload = ExternIO::encode(SaveInput { cipher: cipher.clone(), nonce: nonce.to_vec(), anchor: anchor.clone() }).map_err(|e| e.to_string())?;
-    manager.call_zome(agent, "transcript", "save_memory_row", payload).await?;
-    crate::hc07::also_save_memory_row(agent, cipher, nonce.to_vec(), anchor);
+    save_sealed(manager, agent, cipher, nonce.to_vec(), anchor).await?;
     Ok(())
 }
 
@@ -572,16 +581,13 @@ pub(crate) async fn upsert_row(app: &tauri::AppHandle, manager: &crate::holochai
     let plain = serde_json::to_vec(&sealed).map_err(|e| e.to_string())?;
     let (nonce, cipher) = crate::transcript_crypto::encrypt(&key, &plain)?;
     let anchor = scope_anchor(&row.scope, &key)?;
-    let payload = ExternIO::encode(SaveInput { cipher: cipher.clone(), nonce: nonce.to_vec(), anchor: anchor.clone() }).map_err(|e| e.to_string())?;
-    let out = manager.call_zome(agent, "transcript", "save_memory_row", payload).await?;
-    let hash: ActionHash = ExternIO::decode(&out).map_err(|e| e.to_string())?;
-    crate::hc07::also_save_memory_row(agent, cipher, nonce.to_vec(), anchor);
+    let hash = save_sealed(manager, agent, cipher, nonce.to_vec(), anchor).await?;
     // The cache sees the change at once.
     let mut after: Vec<MemoryRow> = live.into_iter().filter(|r| r.id != row.id).collect();
-    row.action_hash = Some(hex::encode(hash.get_raw_39()));
+    row.action_hash = Some(hash.clone());
     after.push(row.clone());
     write_cache(app, &key, &row.scope, &reduce(after));
-    Ok((hex::encode(hash.get_raw_39()), replaced))
+    Ok((hash, replaced))
 }
 
 /// Live rows of a scope through `agent` (refreshes the cache) - for dreaming.
