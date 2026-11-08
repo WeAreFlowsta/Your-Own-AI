@@ -533,45 +533,94 @@ fn in_background(what: &'static str, agent_hex: String, job: impl std::future::F
     });
 }
 
+/// A conversation written here as `id`: awaited, for an AI with no 0.6
+/// cell to write first.
+pub async fn write_start_conversation(agent_hex: &str, founding_hex: &str, data_key: [u8; 32], id: &str, plain: serde_json::Value) -> Result<(), String> {
+    let anchor = agent(founding_hex).ok_or("bad founding key")?;
+    let (cipher, nonce) = sealed(&data_key, &crate::transcript_ids::conversation_plaintext_v2(plain, id)).ok_or("not sealed")?;
+    let conversation_anchor = ExternalHash::from_raw_32(crate::transcript_ids::conversation_anchor(&data_key, id).to_vec());
+    let _: holochain_types::prelude::ActionHash = app_cells().write(agent_hex, "start_conversation", &StartConversation { cipher, nonce, anchor, conversation_anchor }).await?;
+    Ok(())
+}
+
+/// A message or annotation written here as `id` in `conversation_id`.
+pub async fn write_record_message(agent_hex: &str, data_key: [u8; 32], conversation_id: &str, id: &str, plain: serde_json::Value) -> Result<(), String> {
+    let (cipher, nonce) = sealed(&data_key, &crate::transcript_ids::message_plaintext_v2(plain, id, conversation_id)).ok_or("not sealed")?;
+    let input = RecordMessage {
+        conversation_anchor: ExternalHash::from_raw_32(crate::transcript_ids::conversation_anchor(&data_key, conversation_id).to_vec()),
+        message_key: crate::transcript_ids::message_key(&data_key, id).to_vec(),
+        cipher,
+        nonce,
+    };
+    let _: holochain_types::prelude::ActionHash = app_cells().write(agent_hex, "record_message", &input).await?;
+    Ok(())
+}
+
+/// A conversation deleted here: this device's parts removed and the
+/// tombstone written.
+pub async fn write_delete_conversation(agent_hex: &str, founding_hex: &str, data_key: [u8; 32], conversation_id: &str) -> Result<(), String> {
+    let anchor = agent(founding_hex).ok_or("bad founding key")?;
+    let conversation_anchor = ExternalHash::from_raw_32(crate::transcript_ids::conversation_anchor(&data_key, conversation_id).to_vec());
+    let _: u32 = app_cells().write(agent_hex, "delete_conversation", &DeleteConversation { anchor, conversation_anchor }).await?;
+    Ok(())
+}
+
+/// Whether a write for `agent_key` may go to the 0.7 line alone, when the
+/// AI is not connected on the 0.6 line. Never while that is only for now:
+/// a 0.6 line that runs, where the AI has its app, is reconnecting; a 0.6
+/// line that is down and not recorded as stopped (the move's marker says
+/// `old_line_needed: false` once the facts stopped it) is restarting.
+/// Either way the caller tries again ("still starting"), so a device still
+/// on 0.6 gets the write. Otherwise the 0.7 line takes it.
+pub async fn write_07_alone(agent_key: &str) -> Result<(), String> {
+    let still = || Err("Holochain conductor is still starting...".to_string());
+    if crate::conductor::ports(Line::V07).is_none() {
+        return still();
+    }
+    if crate::conductor::ports(Line::V06).is_some() {
+        let has_v1 = match crate::conductor::transcript_apps_06().await {
+            Ok(apps) => apps.iter().any(|(_, key)| hex::encode(key) == agent_key),
+            Err(_) => true,
+        };
+        return if has_v1 { still() } else { Ok(()) };
+    }
+    let stopped = crate::conductor::profile_root()
+        .map(|root| match flowsta_hc_lines::marker::Marker::load(root, &crate::move_07::MARKER) {
+            flowsta_hc_lines::marker::MarkerRead::Present(m) => m.old_line_needed == Some(false),
+            _ => false,
+        })
+        .unwrap_or(false);
+    if stopped {
+        Ok(())
+    } else {
+        still()
+    }
+}
+
+/// A memory row written here, awaited (an AI with no 0.6 cell to write
+/// first). Returns the v2 action hash, hex.
+pub async fn write_save_memory_row(agent_hex: &str, cipher: Vec<u8>, nonce: Vec<u8>, anchor: AnyLinkableHash) -> Result<String, String> {
+    let hash: holochain_types::prelude::ActionHash = app_cells().write(agent_hex, "save_memory_row", &SaveMemoryRow { cipher, nonce, anchor }).await?;
+    Ok(hex::encode(hash.get_raw_39()))
+}
+
 /// A conversation just written to the 0.6 line as `id`, written here too.
 pub fn also_start_conversation(agent_hex: &str, founding_hex: &str, data_key: [u8; 32], id: String, plain: serde_json::Value) {
     let (agent_hex, founding_hex) = (agent_hex.to_string(), founding_hex.to_string());
-    in_background("a conversation", agent_hex.clone(), async move {
-        let anchor = agent(&founding_hex).ok_or("bad founding key")?;
-        let (cipher, nonce) = sealed(&data_key, &crate::transcript_ids::conversation_plaintext_v2(plain, &id)).ok_or("not sealed")?;
-        let conversation_anchor = ExternalHash::from_raw_32(crate::transcript_ids::conversation_anchor(&data_key, &id).to_vec());
-        let _: holochain_types::prelude::ActionHash = app_cells().write(&agent_hex, "start_conversation", &StartConversation { cipher, nonce, anchor, conversation_anchor }).await?;
-        Ok(())
-    });
+    in_background("a conversation", agent_hex.clone(), async move { write_start_conversation(&agent_hex, &founding_hex, data_key, &id, plain).await });
 }
 
 /// A message or annotation just written to the 0.6 line as `id`, written
 /// here too.
 pub fn also_record_message(agent_hex: &str, data_key: [u8; 32], conversation_id: String, id: String, plain: serde_json::Value) {
     let agent_hex = agent_hex.to_string();
-    in_background("a message", agent_hex.clone(), async move {
-        let (cipher, nonce) = sealed(&data_key, &crate::transcript_ids::message_plaintext_v2(plain, &id, &conversation_id)).ok_or("not sealed")?;
-        let input = RecordMessage {
-            conversation_anchor: ExternalHash::from_raw_32(crate::transcript_ids::conversation_anchor(&data_key, &conversation_id).to_vec()),
-            message_key: crate::transcript_ids::message_key(&data_key, &id).to_vec(),
-            cipher,
-            nonce,
-        };
-        let _: holochain_types::prelude::ActionHash = app_cells().write(&agent_hex, "record_message", &input).await?;
-        Ok(())
-    });
+    in_background("a message", agent_hex.clone(), async move { write_record_message(&agent_hex, data_key, &conversation_id, &id, plain).await });
 }
 
-/// A conversation just deleted on the 0.6 line, deleted here too: this
-/// device's parts removed and the tombstone written.
+/// A conversation just deleted on the 0.6 line, deleted here too.
 pub fn also_delete_conversation(agent_hex: &str, founding_hex: &str, data_key: [u8; 32], conversation_id: String) {
     let (agent_hex, founding_hex) = (agent_hex.to_string(), founding_hex.to_string());
-    in_background("a deletion", agent_hex.clone(), async move {
-        let anchor = agent(&founding_hex).ok_or("bad founding key")?;
-        let conversation_anchor = ExternalHash::from_raw_32(crate::transcript_ids::conversation_anchor(&data_key, &conversation_id).to_vec());
-        let _: u32 = app_cells().write(&agent_hex, "delete_conversation", &DeleteConversation { anchor, conversation_anchor }).await?;
-        Ok(())
-    });
+    in_background("a deletion", agent_hex.clone(), async move { write_delete_conversation(&agent_hex, &founding_hex, data_key, &conversation_id).await });
 }
 
 /// A memory row just saved on the 0.6 line, saved here too: the same sealed

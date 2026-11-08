@@ -24,12 +24,29 @@ pub fn id_of_v1(raw_39: &[u8]) -> String {
     hex::encode(raw_39)
 }
 
-/// A fresh id, for a record written to the 0.7 line alone: 32 random bytes,
-/// hex.
+/// The first bytes of a fresh id's core: how this app tells a fresh id from
+/// a v1 action hash of the same shape.
+const FRESH_TAG: [u8; 4] = *b"yoa7";
+
+/// A fresh id, for a record written to the 0.7 line alone. It has the shape
+/// of a v1 action hash (39 bytes, hex) with a tag in its core, so an older
+/// release given one (a computer taken back to it by hand) looks it up and
+/// finds nothing, where a shorter id stopped it outright.
 pub fn fresh_id() -> String {
-    let mut b = [0u8; 32];
-    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut b);
-    hex::encode(b)
+    let mut core = [0u8; 32];
+    core[..4].copy_from_slice(&FRESH_TAG);
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut core[4..]);
+    hex::encode(holochain_types::prelude::ActionHash::from_raw_32(core.to_vec()).get_raw_39())
+}
+
+/// The v1 action hash an id is, when it is one: never for a fresh id, and
+/// never a panic on an id of another shape.
+pub fn v1_hash(id: &str) -> Option<holochain_types::prelude::ActionHash> {
+    let raw = hex::decode(id).ok().filter(|b| b.len() == 39)?;
+    if raw[3..7] == FRESH_TAG {
+        return None;
+    }
+    holochain_types::prelude::ActionHash::try_from_raw_39(raw).ok()
 }
 
 /// The keyed hash both addresses use: the memory scopes' scheme
@@ -76,6 +93,22 @@ pub fn message_plaintext_v2(mut plain: serde_json::Value, id: &str, conversation
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_fresh_id_has_a_v1_hashs_shape_and_is_never_taken_for_one() {
+        let id = fresh_id();
+        assert_eq!(id.len(), 78, "39 bytes, hex: an older release reads it without stopping");
+        let raw = hex::decode(&id).unwrap();
+        assert!(holochain_types::prelude::ActionHash::try_from_raw_39(raw).is_ok(), "a valid action hash shape");
+        assert!(super::v1_hash(&id).is_none(), "but never a v1 record");
+        assert_ne!(fresh_id(), id);
+        // A real v1 hash is one; other shapes are not, and never panic.
+        let real = hex::encode(holochain_types::prelude::ActionHash::from_raw_32(vec![9u8; 32]).get_raw_39());
+        assert!(super::v1_hash(&real).is_some());
+        assert!(super::v1_hash(&"ab".repeat(32)).is_none(), "the older 64-hex shape");
+        assert!(super::v1_hash("not hex").is_none());
+        assert!(super::v1_hash("").is_none());
+    }
+
     /// A v1 action hash as the app has it: the 3-byte prefix, 32 bytes, the
     /// 4 location bytes.
     fn v1_hash(n: u8) -> Vec<u8> {
@@ -95,11 +128,11 @@ mod tests {
     }
 
     #[test]
-    fn fresh_ids_are_random_and_never_shaped_like_a_hash() {
+    fn fresh_ids_are_random_and_never_mistaken_for_a_v1_hash() {
         let (a, b) = (fresh_id(), fresh_id());
-        assert_eq!(a.len(), 64);
         assert_ne!(a, b);
-        assert_ne!(a.len(), id_of_v1(&v1_hash(1)).len(), "a fresh id is never mistaken for a v1 hash");
+        assert!(super::v1_hash(&a).is_none(), "the tag tells a fresh id from a v1 hash of the same shape");
+        assert!(super::v1_hash(&id_of_v1(&v1_hash(1))).is_some());
     }
 
     #[test]

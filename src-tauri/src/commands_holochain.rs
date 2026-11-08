@@ -427,22 +427,28 @@ pub async fn start_conversation(
     let (nonce, cipher) = crate::transcript_crypto::encrypt(&key, &plain_bytes)?;
 
     let founding = founding_key_for(&app, &agent_key);
-    let anchor = if founding != agent_key { agent_key_from_hex(&founding) } else { None };
-    let payload = ExternIO::encode(StartConversationInput { cipher, nonce: nonce.to_vec(), anchor })
-        .map_err(|e| format!("Failed to encode input: {}", e))?;
-
-    let result = manager
-        .call_zome(&agent_key, "transcript", "start_conversation", payload)
-        .await?;
-
-    let hash: ActionHash = ExternIO::decode(&result)
-        .map_err(|e| format!("Failed to decode conversation hash: {}", e))?;
-
+    let hex_hash = if manager.is_provisioned(&agent_key).await {
+        // The 0.6 line first: its hash is the id (a device still on 0.6
+        // adds to the conversation under it), then the 0.7 line.
+        let anchor = if founding != agent_key { agent_key_from_hex(&founding) } else { None };
+        let payload = ExternIO::encode(StartConversationInput { cipher, nonce: nonce.to_vec(), anchor })
+            .map_err(|e| format!("Failed to encode input: {}", e))?;
+        let result = manager
+            .call_zome(&agent_key, "transcript", "start_conversation", payload)
+            .await?;
+        let hash: ActionHash = ExternIO::decode(&result)
+            .map_err(|e| format!("Failed to decode conversation hash: {}", e))?;
+        let hex_hash = hex::encode(hash.get_raw_39());
+        crate::hc07::also_start_conversation(&agent_key, &founding, key, hex_hash.clone(), plain.clone());
+        hex_hash
+    } else {
+        // No 0.6 cell for this AI here: the 0.7 line alone, under a fresh id.
+        crate::hc07::write_07_alone(&agent_key).await?;
+        let id = crate::transcript_ids::fresh_id();
+        crate::hc07::write_start_conversation(&agent_key, &founding, key, &id, plain.clone()).await?;
+        id
+    };
     crate::vault_escrow::schedule_full_backup(&app);
-    let raw = hash.get_raw_39();
-    let hex_hash = hex::encode(raw);
-    // The 0.7 line too, under the same id.
-    crate::hc07::also_start_conversation(&agent_key, &founding, key, hex_hash.clone(), plain.clone());
     // Write-through: the new conversation is visible in cached lists
     // immediately, even if full reads are struggling on a loaded box.
     crate::conversation_cache::append_to_cache(
@@ -559,10 +565,8 @@ pub async fn record_transcript_entry(
     folder_path: Option<String>,
     hc_state: State<'_, Arc<HolochainState>>,
 ) -> Result<String, String> {
-    // Decode the conversation hash from raw hex (39 bytes)
-    let raw_bytes = hex::decode(&conversation_hash)
-        .map_err(|e| format!("Invalid conversation hash hex: {}", e))?;
-    let conv_hash = ActionHash::from_raw_39(raw_bytes);
+    // The conversation's v1 hash, when it has one (a fresh id has none).
+    let v1_conv = crate::transcript_ids::v1_hash(&conversation_hash);
     let (seq_for_search, role_for_search, content_for_search) = (sequence, role.clone(), content.clone());
 
     let manager = hc_state.get()?;
@@ -624,23 +628,28 @@ pub async fn record_transcript_entry(
         nonce: Vec<u8>,
     }
 
-    let payload = ExternIO::encode(RecordMessageInput {
-        conversation_hash: conv_hash,
-        cipher,
-        nonce: nonce.to_vec(),
-    })
-    .map_err(|e| format!("Failed to encode input: {}", e))?;
-
-    let result = manager
-        .call_zome(&agent_key, "transcript", "record_message", payload)
-        .await?;
-
-    let hash: ActionHash = ExternIO::decode(&result)
-        .map_err(|e| format!("Failed to decode entry hash: {}", e))?;
-    // The 0.7 line too, under the same ids.
-    if let Ok(value) = serde_json::to_value(&plain) {
-        crate::hc07::also_record_message(&agent_key, key, conversation_hash.clone(), hex::encode(hash.get_raw_39()), value);
-    }
+    let id = match v1_conv {
+        Some(conv_hash) if manager.is_provisioned(&agent_key).await => {
+            let payload = ExternIO::encode(RecordMessageInput {
+                conversation_hash: conv_hash,
+                cipher,
+                nonce: nonce.to_vec(),
+            })
+            .map_err(|e| format!("Failed to encode input: {}", e))?;
+            let result = manager
+                .call_zome(&agent_key, "transcript", "record_message", payload)
+                .await?;
+            let hash: ActionHash = ExternIO::decode(&result)
+                .map_err(|e| format!("Failed to decode entry hash: {}", e))?;
+            let id = hex::encode(hash.get_raw_39());
+            // The 0.7 line too, under the same ids.
+            if let Ok(value) = serde_json::to_value(&plain) {
+                crate::hc07::also_record_message(&agent_key, key, conversation_hash.clone(), id.clone(), value);
+            }
+            id
+        }
+        _ => record_on_07(&agent_key, key, &conversation_hash, &plain).await?,
+    };
 
     if let (Some(folder), Some(text)) = (memory_folder.as_deref(), memory_content.as_deref()) {
         project_memory_cache_set(&app, folder, Some(text)).await;
@@ -656,7 +665,24 @@ pub async fn record_transcript_entry(
     crate::conversation_cache::touch(&app, &conversation_hash, at);
     // Search sees the turn now, without a rebuild.
     crate::transcript_search::note_recorded(&app, &conversation_hash, seq_for_search, &role_for_search, &content_for_search, at);
-    Ok(hex::encode(hash.get_raw_39()))
+    Ok(id)
+}
+
+/// A message or annotation where the 0.6 line cannot take it (the AI has no
+/// 0.6 cell here, or the conversation exists on the 0.7 line alone): written
+/// to the 0.7 line, awaited, under a fresh id.
+async fn record_on_07<T: serde::Serialize>(agent_key: &str, key: [u8; 32], conversation_id: &str, plain: &T) -> Result<String, String> {
+    // A conversation on the 0.7 line alone takes its messages there; one
+    // with a v1 hash goes there only when the 0.6 line cannot take it.
+    if crate::transcript_ids::v1_hash(conversation_id).is_some() {
+        crate::hc07::write_07_alone(agent_key).await?;
+    } else if crate::conductor::ports(flowsta_hc_lines::Line::V07).is_none() {
+        return Err("Holochain conductor is still starting...".to_string());
+    }
+    let id = crate::transcript_ids::fresh_id();
+    let value = serde_json::to_value(plain).map_err(|e| e.to_string())?;
+    crate::hc07::write_record_message(agent_key, key, conversation_id, &id, value).await?;
+    Ok(id)
 }
 
 /// Persist an on-demand grounding result, linked to the message it annotates.
@@ -673,9 +699,7 @@ pub async fn record_grounding_annotation(
     grounded: Vec<GroundedSource>,
     hc_state: State<'_, Arc<HolochainState>>,
 ) -> Result<String, String> {
-    let raw_bytes = hex::decode(&conversation_hash)
-        .map_err(|e| format!("Invalid conversation hash hex: {}", e))?;
-    let conv_hash = ActionHash::from_raw_39(raw_bytes);
+    let v1_conv = crate::transcript_ids::v1_hash(&conversation_hash);
 
     let manager = hc_state.get()?;
     let plain = GroundingAnnotationPlain {
@@ -696,26 +720,31 @@ pub async fn record_grounding_annotation(
         nonce: Vec<u8>,
     }
 
-    let payload = ExternIO::encode(RecordMessageInput {
-        conversation_hash: conv_hash,
-        cipher,
-        nonce: nonce.to_vec(),
-    })
-    .map_err(|e| format!("Failed to encode input: {}", e))?;
-
-    let result = manager
-        .call_zome(&agent_key, "transcript", "record_message", payload)
-        .await?;
-
-    let hash: ActionHash = ExternIO::decode(&result)
-        .map_err(|e| format!("Failed to decode entry hash: {}", e))?;
-    // The 0.7 line too, under the same ids.
-    if let Ok(value) = serde_json::to_value(&plain) {
-        crate::hc07::also_record_message(&agent_key, key, conversation_hash.clone(), hex::encode(hash.get_raw_39()), value);
-    }
+    let id = match v1_conv {
+        Some(conv_hash) if manager.is_provisioned(&agent_key).await => {
+            let payload = ExternIO::encode(RecordMessageInput {
+                conversation_hash: conv_hash,
+                cipher,
+                nonce: nonce.to_vec(),
+            })
+            .map_err(|e| format!("Failed to encode input: {}", e))?;
+            let result = manager
+                .call_zome(&agent_key, "transcript", "record_message", payload)
+                .await?;
+            let hash: ActionHash = ExternIO::decode(&result)
+                .map_err(|e| format!("Failed to decode entry hash: {}", e))?;
+            let id = hex::encode(hash.get_raw_39());
+            // The 0.7 line too, under the same ids.
+            if let Ok(value) = serde_json::to_value(&plain) {
+                crate::hc07::also_record_message(&agent_key, key, conversation_hash.clone(), id.clone(), value);
+            }
+            id
+        }
+        _ => record_on_07(&agent_key, key, &conversation_hash, &plain).await?,
+    };
 
     crate::vault_escrow::schedule_full_backup(&app);
-    Ok(hex::encode(hash.get_raw_39()))
+    Ok(id)
 }
 
 /// Project memory, Rust side - the agent's deliberate-memory MCP tools
@@ -1628,16 +1657,39 @@ pub async fn delete_conversation(
     conversation_hash: String,
     hc_state: State<'_, Arc<HolochainState>>,
 ) -> Result<u32, String> {
-    let raw_bytes = hex::decode(&conversation_hash)
-        .map_err(|e| format!("Invalid conversation hash hex: {}", e))?;
-    let conv_hash = ActionHash::from_raw_39(raw_bytes);
+    let v1_conv = crate::transcript_ids::v1_hash(&conversation_hash);
 
     let manager = hc_state.get()?;
+    let founding = founding_key_for(&app, &agent_key);
+    let on_06 = match &v1_conv {
+        Some(_) => manager.is_provisioned(&agent_key).await,
+        None => false,
+    };
+    if !on_06 {
+        // No 0.6 cell here, or a conversation on the 0.7 line alone: this
+        // device's parts removed there and the tombstone written, awaited.
+        if v1_conv.is_some() {
+            crate::hc07::write_07_alone(&agent_key).await?;
+        } else if crate::conductor::ports(flowsta_hc_lines::Line::V07).is_none() {
+            return Err("Holochain conductor is still starting...".to_string());
+        }
+        let key = manager.data_key()?;
+        crate::hc07::write_delete_conversation(&agent_key, &founding, key, &conversation_hash).await.map_err(|e| {
+            log::warn!("[transcripts] delete conversation {}… on the 0.7 line failed: {}", &conversation_hash[..12.min(conversation_hash.len())], e);
+            e
+        })?;
+        log::info!("[transcripts] deleted conversation {}… (0.7 line)", &conversation_hash[..12.min(conversation_hash.len())]);
+        crate::conversation_cache::record_deleted(&app, &agent_key, &conversation_hash);
+        crate::conversation_cache::remove_from_cache(&app, &agent_key, &conversation_hash);
+        crate::transcript_search::forget_conversation(&app, &conversation_hash);
+        crate::vault_escrow::schedule_full_backup(&app);
+        return Ok(0);
+    }
+    let conv_hash = v1_conv.ok_or("no v1 hash")?;
     // Coordinator 9: a tombstone at the founding anchor, honoured by every
     // device; a cell still on an older coordinator takes the old call.
     // Frontend-only errors were invisible in every diagnostic; a failed
     // delete must leave a line here.
-    let founding = founding_key_for(&app, &agent_key);
     let at = ExternIO::encode(DeleteAtInput {
         conversation_hash: conv_hash.clone(),
         anchor: if founding != agent_key { agent_key_from_hex(&founding) } else { None },
@@ -1784,9 +1836,7 @@ pub async fn get_conversation_transcript(
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut skipped = 0usize;
     // A fresh id (not a v1 hash) has nothing on the 0.6 line.
-    if on_06 && conversation_hash.len() == 78 {
-        let raw_bytes = hex::decode(&conversation_hash).map_err(|e| format!("Invalid conversation hash hex: {}", e))?;
-        let conv_hash = ActionHash::from_raw_39(raw_bytes);
+    if let Some(conv_hash) = crate::transcript_ids::v1_hash(&conversation_hash).filter(|_| on_06) {
         let read = crate::transcript_pages::all_entries(&manager, &agent_key, conv_hash, std::time::Duration::from_secs(60)).await.map_err(|e| {
             log::warn!("[records] transcript {who}: read failed after {} ms: {e}", t0.elapsed().as_millis());
             e

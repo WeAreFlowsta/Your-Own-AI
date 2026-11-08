@@ -601,7 +601,7 @@ impl LineHooks for YoaiLines {
 /// tidy disables only cells it verified empty); it gets its v2 app at the
 /// first 0.7 start after it is enabled again. With no 0.6 line there is
 /// nothing to give a v2 app: the 0.7 line starts with the apps it has.
-async fn transcript_apps_06() -> Result<Vec<(String, Vec<u8>)>, String> {
+pub(crate) async fn transcript_apps_06() -> Result<Vec<(String, Vec<u8>)>, String> {
     let Some(port) = admin_port() else {
         log::info!("[0.7] no 0.6 line this start: the 0.7 line starts with the apps it has");
         return Ok(Vec::new());
