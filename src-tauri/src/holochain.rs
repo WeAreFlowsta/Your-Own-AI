@@ -799,6 +799,13 @@ impl HolochainManager {
     /// (covers the AI's lineage of agent generations) and drops it, then
     /// forgets the agent in-memory. Returns the number of hApps removed.
     pub async fn purge_agent(&self, ai_id: &str) -> Result<u32, String> {
+        // No 0.6 line: the AI's copies on the 0.7 line go (or are noted for
+        // the next 0.7 start), and nothing waits on the 0.6 line.
+        if crate::conductor::ports(flowsta_hc_lines::Line::V06).is_none() {
+            self.agents.lock().await.retain(|_, a| !a.installed_app_id.ends_with(ai_id));
+            crate::hc07::purge(ai_id).await;
+            return Ok(0);
+        }
         let admin_ws = holochain_client::AdminWebsocket::connect(
             format!("localhost:{}", self.admin_port()),
             Some(crate::conductor::origin()),

@@ -39,6 +39,31 @@ use tauri::Manager as _;
 /// The profile's move marker (`moved-07` in the profile's root).
 pub const MARKER: MarkerSpec = MarkerSpec { file_name: "moved-07", old_line_key: "old_line_needed", previous: Line::V06, current: Line::V07 };
 
+/// The move's own files in a profile's root, beside the two lines' folders:
+/// a factory reset or a key swap, which remove those folders, removes these
+/// too (a reset profile must not read as moved, nor keep another identity's
+/// facts about its devices).
+pub(crate) const MOVE_FILES: [&str; 6] = [
+    "moved-07",
+    "purged-ais-07.json",
+    "coordinator-version",
+    "line-facts.json",
+    crate::conductor::COPY_NEEDED_FILE,
+    crate::conductor::KEYS_07_ONLY_FILE,
+];
+
+/// Remove [`MOVE_FILES`] from a profile's root.
+pub(crate) fn remove_move_files(root: &std::path::Path) {
+    for f in MOVE_FILES {
+        let p = root.join(f);
+        if p.exists() {
+            if let Err(e) = std::fs::remove_file(&p) {
+                log::warn!("[0.7] could not remove {f}: {e}");
+            }
+        }
+    }
+}
+
 /// How long one read on either line may take: a large cell's first network
 /// reads after a cold start take minutes.
 const READ_TIMEOUT: Duration = Duration::from_secs(180);
