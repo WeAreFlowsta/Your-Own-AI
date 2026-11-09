@@ -551,9 +551,11 @@ jobs:
             await github.rest.repos.uploadReleaseAsset({ owner, repo, release_id, name: 'latest.json', data: JSON.stringify(latest, null, 2) + '\n' });
             console.log(`latest.json: ${version}, ${Object.keys(platforms).join(', ')}`);
 
-      # Hash every published asset (after the renames above, so the names in
+      # Hash the installers (after the renames above, so the names in
       # SHA256SUMS.txt match the final download filenames) and attach the
-      # checksums file to the release.
+      # checksums file to the release. The updater's files leave the page when
+      # the release manifest is signed (flowsta-dht-node tools/release-manifest.mjs),
+      # so the checksums name what people download.
       - name: Generate SHA256 checksums
         uses: actions/github-script@v8
         env:
@@ -574,9 +576,10 @@ jobs:
               }
             }
 
+            const installer = (name) => /\.(dmg|deb|rpm|msi)$|-Setup\.exe$/.test(name);
             const lines = [];
             for (const a of assets) {
-              if (a.name === 'SHA256SUMS.txt') continue;
+              if (!installer(a.name)) continue;
               const res = await github.request(
                 'GET /repos/{owner}/{repo}/releases/assets/{asset_id}',
                 { owner, repo, asset_id: a.id, headers: { accept: 'application/octet-stream' } }
