@@ -74,7 +74,10 @@ jobs:
         run: cargo test --lib
 
   # Windows-gated code (the machine check's input-idle and connection-cost
-  # readers among it) otherwise first compiles during a release build.
+  # readers among it) otherwise first compiles during a release build. The
+  # tests are compiled, not run: a test binary lacks the common-controls
+  # manifest the app's own build embeds, so on Windows it stops before its
+  # first test (STATUS_ENTRYPOINT_NOT_FOUND).
   rust-tests-windows:
     runs-on: windows-latest
     steps:
@@ -93,6 +96,6 @@ jobs:
             touch "src-tauri/${n}-x86_64-pc-windows-msvc.exe"
           done
 
-      - name: Run unit tests
+      - name: Build unit tests
         working-directory: src-tauri
-        run: cargo test --lib
+        run: cargo test --lib --no-run
