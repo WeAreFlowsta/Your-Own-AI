@@ -58,6 +58,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   names, so the history is not uploaded again.
 - The new version's key store and records are protected with a secret
   made for this install.
+- A computer with more AIs in use than the new version can take yet (about
+  forty) keeps using the earlier version for now, and Settings > Devices
+  says so. Everything keeps working there.
 
 ### Your computer
 - Settings > "Do background work only when my computer is idle" (on by
@@ -110,6 +113,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   PDFs. Each release lists the fingerprints of the programs it ships.
 
 ### Fixed
+- **The chat page offers to continue your own last conversation only.**
+  With two Flowsta identities on one computer, the start page could offer
+  the other identity's last conversation title (never its messages).
+  Renames and project folders are kept per identity too.
 - **An AI renamed or given a new personality on one device keeps it on
   the others.** An older copy from another device could hide the change;
   the newer copy now wins.
