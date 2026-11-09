@@ -308,9 +308,10 @@ async fn check_once(app: &tauri::AppHandle, data_dir: &Path) -> Result<String, S
     if update.version != release.version {
         return Err(format!("the version file names {} but the signed manifest {}: not downloaded", update.version, release.version));
     }
-    // A download nobody is waiting on (machine.rs): not while memory is short,
-    // and on battery or a metered connection only when the person has stepped
-    // away and the computer is calm.
+    // A download nobody is waiting on (machine.rs): light work on mains power
+    // and an unmetered connection (it waits only while memory is short); heavy
+    // work on battery or a metered one (it waits for mains power, the person
+    // away and a calm computer).
     loop {
         let work = download_class(crate::machine::reading().as_ref());
         if crate::machine::may_run(work, "update download") {
@@ -510,7 +511,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_download_waits_for_the_person_on_battery_or_a_metered_connection() {
+    fn the_download_is_heavy_work_on_battery_or_a_metered_connection() {
         use crate::machine::{Reading, Work};
         let mains = Reading { others_cpu_pct: Some(5.0), memory_short: false, on_battery: false, metered: false, away_secs: Some(0) };
         assert_eq!(download_class(Some(&mains)), Work::Light);
