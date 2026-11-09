@@ -28,6 +28,7 @@ import {
   getConversationFolder,
   rememberLastConversation,
   readLastConversation,
+  initConversationNotes,
   sanitizeTitle,
   setConversationTitleOverride,
   getConversationTitleOverride,
@@ -900,8 +901,9 @@ export default component$(() => {
   // honor a resume handoff from the Memory page (sessionStorage - query
   // params are unreliable in the packaged app).
   // eslint-disable-next-line qwik/no-use-visible-task
-  useVisibleTask$(({ track }) => {
+  useVisibleTask$(async ({ track }) => {
     const hash = track(() => chatState.conversationHash);
+    await initConversationNotes();
     lastConversation.value = readLastConversation();
     if (hash) {
       const firstUser = chatState.messages.find((m) => m.role === "user");
