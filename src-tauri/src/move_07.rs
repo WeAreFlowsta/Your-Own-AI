@@ -1244,7 +1244,7 @@ mod tests {
 
         // No device needs the 0.6 line, the machine has room: a full pass.
         *facts.lock().unwrap() = crate::line_facts::Known::Facts(crate::line_facts::LineFacts { checked_at_ms: 1, ..Default::default() });
-        crate::machine::set_reading_for_test(Some(crate::machine::Reading { others_cpu_pct: Some(0.0), memory_short: false, on_battery: false, away_secs: Some(3600) }));
+        crate::machine::set_reading_for_test(Some(crate::machine::Reading { others_cpu_pct: Some(0.0), memory_short: false, on_battery: false, metered: false, away_secs: Some(3600) }));
         let full = runner().run(&mv, &profile, "full").await;
         crate::machine::set_reading_for_test(None);
         assert_eq!(full.error, None, "{full:?}");
@@ -1256,7 +1256,7 @@ mod tests {
         assert!(!decided.decision.wanted(), "the 0.6 line is no longer wanted: {decided:?}");
 
         // Another full pass writes nothing: present by key, whoever wrote it.
-        crate::machine::set_reading_for_test(Some(crate::machine::Reading { others_cpu_pct: Some(0.0), memory_short: false, on_battery: false, away_secs: Some(3600) }));
+        crate::machine::set_reading_for_test(Some(crate::machine::Reading { others_cpu_pct: Some(0.0), memory_short: false, on_battery: false, metered: false, away_secs: Some(3600) }));
         mv.passed_in_full.store(false, std::sync::atomic::Ordering::SeqCst);
         let again = runner().run(&mv, &profile, "full again").await;
         crate::machine::set_reading_for_test(None);

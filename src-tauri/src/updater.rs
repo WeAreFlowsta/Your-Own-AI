@@ -309,10 +309,10 @@ async fn check_once(app: &tauri::AppHandle, data_dir: &Path) -> Result<String, S
         return Err(format!("the version file names {} but the signed manifest {}: not downloaded", update.version, release.version));
     }
     // A download nobody is waiting on (machine.rs): not while memory is short,
-    // and on battery only when the computer is idle.
+    // and on battery or a metered connection only when the person has stepped
+    // away and the computer is calm.
     loop {
-        let on_battery = crate::machine::reading().is_some_and(|r| r.on_battery);
-        let work = if on_battery { crate::machine::Work::Heavy } else { crate::machine::Work::Light };
+        let work = download_class(crate::machine::reading().as_ref());
         if crate::machine::may_run(work, "update download") {
             break;
         }
@@ -338,6 +338,16 @@ async fn check_once(app: &tauri::AppHandle, data_dir: &Path) -> Result<String, S
     *READY.lock().unwrap() = Some(ready);
     let _ = app.emit("update-ready", info);
     Ok(said)
+}
+
+/// How the machine check weighs the update download: light work on mains
+/// power and an unmetered connection, heavy work on battery or a metered one.
+fn download_class(r: Option<&crate::machine::Reading>) -> crate::machine::Work {
+    if r.is_some_and(|r| r.on_battery || r.metered) {
+        crate::machine::Work::Heavy
+    } else {
+        crate::machine::Work::Light
+    }
 }
 
 /// Check on start and every few hours, while this run of Your Own AI lasts.
@@ -498,6 +508,16 @@ pub async fn restart_to_update(app: tauri::AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_download_waits_for_the_person_on_battery_or_a_metered_connection() {
+        use crate::machine::{Reading, Work};
+        let mains = Reading { others_cpu_pct: Some(5.0), memory_short: false, on_battery: false, metered: false, away_secs: Some(0) };
+        assert_eq!(download_class(Some(&mains)), Work::Light);
+        assert_eq!(download_class(Some(&Reading { metered: true, ..mains.clone() })), Work::Heavy);
+        assert_eq!(download_class(Some(&Reading { on_battery: true, ..mains.clone() })), Work::Heavy);
+        assert_eq!(download_class(None), Work::Light, "before the first reading: light work, which waits only for memory");
+    }
 
     #[test]
     fn each_channel_reads_its_own_two_files() {
