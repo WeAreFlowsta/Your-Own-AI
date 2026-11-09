@@ -580,6 +580,9 @@ pub struct LineStatus {
     pub generation: String,
     pub move_state: MoveState,
     pub old_line_wanted: bool,
+    /// The 0.6 line runs on this device right now (it stops at the watch's
+    /// next round once it is no longer wanted).
+    pub old_line_running: bool,
     pub why: String,
     pub holding: Vec<HoldingDevice>,
     pub stopped_waiting: Vec<String>,
@@ -612,6 +615,7 @@ pub fn line_status(app: tauri::AppHandle) -> Result<LineStatus, String> {
         generation: own_generation(&root).to_string(),
         move_state: move_state(&root),
         old_line_wanted: d.decision.wanted(),
+        old_line_running: crate::conductor::supervisor().has(Line::V06),
         why: d.why,
         holding,
         stopped_waiting: facts.stopped_waiting.iter().map(|w| w.id.clone()).collect(),
