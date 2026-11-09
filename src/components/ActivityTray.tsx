@@ -316,18 +316,28 @@ export const ActivityTray = component$(() => {
       }
     });
 
-    // Work held back for the person's computer (src-tauri/src/machine.rs):
-    // one line while anything waits, gone when nothing does.
+    // Work held back for the person's computer (src-tauri/src/machine.rs).
+    // Waiting for them to step away is normal and asks nothing of them, so
+    // the tray stays quiet; only work that has waited a day (a computer never
+    // left alone) is said here. Settings names what waits at any time.
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    let heldSince = 0;
     const machineTick = async () => {
       const st = await machineStatus();
       const held = st?.held ?? [];
       if (held.length === 0) {
+        heldSince = 0;
+        remove("machine-wait");
+        return;
+      }
+      if (!heldSince) heldSince = Date.now();
+      if (Date.now() - heldSince < DAY_MS) {
         remove("machine-wait");
         return;
       }
       const jobs = held.map(([job]) => job);
       const what = jobs[0].charAt(0).toUpperCase() + jobs[0].slice(1) + (jobs.length > 1 ? ` and ${jobs.length - 1} more` : "");
-      upsert("machine-wait", { kind: "note", title: "Waiting for your computer to be free", detail: what, state: "running", percent: null, action: undefined });
+      upsert("machine-wait", { kind: "note", title: "Background work is still waiting", detail: `${what}. It runs when you step away from the computer for a few minutes.`, state: "running", percent: null, action: undefined });
     };
     void machineTick();
     const machineTimer = setInterval(() => void machineTick(), 15_000);

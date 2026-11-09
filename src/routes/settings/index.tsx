@@ -307,6 +307,24 @@ export default component$(() => {
   // Background work only when the computer is idle (src-tauri/src/machine.rs);
   // on unless the person turned it off.
   const backgroundOnlyIdle = useSignal(true);
+  // What waits for a quiet computer right now (machine.rs), named under the
+  // switch: the tray stays quiet about it.
+  const waitingNow = useSignal("");
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ cleanup }) => {
+    const look = async () => {
+      try {
+        const { machineStatus } = await import("../../utils/machine");
+        const st = await machineStatus();
+        waitingNow.value = (st?.held ?? []).map(([job]) => job).join(", ");
+      } catch {
+        waitingNow.value = "";
+      }
+    };
+    void look();
+    const timer = setInterval(() => void look(), 15_000);
+    cleanup(() => clearInterval(timer));
+  });
   // Health questions: which installed model answers them (always offline).
   const medicalModel = useSignal<string>("");
   const installedChatModels = useSignal<string[]>([]);
@@ -1812,6 +1830,11 @@ export default component$(() => {
                     processor free, the computer is plugged in, and you have
                     been away from the keyboard for a few minutes. Turned off,
                     that work runs whenever Your Own AI itself is idle.
+                    {waitingNow.value && (
+                      <span class="block mt-1 text-xs text-[var(--text-muted)]">
+                        Waiting now: {waitingNow.value}
+                      </span>
+                    )}
                   </SettingToggle>
                 </div>
               </section>
