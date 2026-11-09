@@ -1925,19 +1925,10 @@ export default component$(() => {
                   <span class="font-semibold text-[var(--text-primary)]">
                     Truth matrix
                   </span>{" "}
-                  - checks the app's claims about this computer against what
-                  really happens. It loads every downloaded model and checks
-                  that each one loads at the promised size, answers in plain
-                  words, and respects your reply style settings; then it checks
-                  the pieces around them - the helper and memory components,
-                  the routing decisions for your own models, and whether a
-                  model's thinking switch is honored. Routing is decided
-                  only, never sent: nothing goes online and no credits are
-                  used. It asks fixed test questions, never anything from
-                  your conversations. Unloads your current model first and
-                  takes roughly 10-20 minutes, longer with many models;
-                  writes a report file you can send back, with your home
-                  folder name removed.
+                  - tests how your downloaded models really run on this
+                  computer, with fixed test questions. Nothing from your
+                  conversations is used, nothing goes online, and the report
+                  it writes holds no personal data. Takes about 10-20 minutes.
                 </p>
                 <div class="flex flex-wrap items-center gap-3">
                   <LiquidMetalButton

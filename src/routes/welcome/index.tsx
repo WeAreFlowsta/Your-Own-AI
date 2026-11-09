@@ -22,7 +22,6 @@ import { listen, emit } from "@tauri-apps/api/event";
 import { LuHardDriveDownload, LuCheck, LuAlertTriangle, LuPencil, LuArrowRight } from "@qwikest/icons/lucide";
 import LiquidMetalButton from "../../components/LiquidMetalButton";
 import FlowstaWizardStep from "../../components/FlowstaWizardStep";
-import { setAutoUpdates, updateStatus } from "../../utils/updates";
 import { ThemeContext } from "../layout";
 import logoLight from "../../assets/logo-light.svg";
 import logo from "../../assets/logo.svg";
@@ -80,16 +79,6 @@ export default component$(() => {
   const { editUserAi, refreshThumbnail } = useAiDataActions();
 
   const step = useSignal<1 | 2 | 3>(1);
-  // Automatic updates, shown at setup (ticked unless turned off before).
-  const autoUpdates = useSignal(true);
-  // eslint-disable-next-line qwik/no-use-visible-task
-  useVisibleTask$(async () => {
-    try {
-      autoUpdates.value = (await updateStatus()).auto;
-    } catch {
-      /* the updater is not in this build */
-    }
-  });
   const systemInfo = useSignal<SystemInfo | null>(null);
   const gpuUnusable = useSignal(false);
   const catalogModes = useSignal<CatalogModes | null>(null);
@@ -642,27 +631,6 @@ export default component$(() => {
                 </>
               )}
               <FlowstaWizardStep />
-              <label class="flex items-start gap-3 mb-8 max-w-2xl cursor-pointer" data-testid="setup-auto-updates">
-                <input
-                  type="checkbox"
-                  class="mt-1"
-                  checked={autoUpdates.value}
-                  onChange$={async (_, el) => {
-                    autoUpdates.value = el.checked;
-                    try {
-                      autoUpdates.value = (await setAutoUpdates(el.checked)).auto;
-                    } catch {
-                      /* the updater is not in this build */
-                    }
-                  }}
-                />
-                <span>
-                  <span class="block text-sm text-[var(--text-primary)]">Keep Your Own AI up to date automatically</span>
-                  <span class="block text-xs text-[var(--text-muted)]">
-                    New releases signed by Flowsta download in the background and install when you choose Restart to update. You can change this in Settings.
-                  </span>
-                </span>
-              </label>
               <div class="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-4">
                 <button
                   type="button"
