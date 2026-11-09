@@ -307,6 +307,24 @@ export default component$(() => {
   // Background work only when the computer is idle (src-tauri/src/machine.rs);
   // on unless the person turned it off.
   const backgroundOnlyIdle = useSignal(true);
+  // What waits for a quiet computer right now (machine.rs), named under the
+  // switch: the tray stays quiet about it.
+  const waitingNow = useSignal("");
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ cleanup }) => {
+    const look = async () => {
+      try {
+        const { machineStatus } = await import("../../utils/machine");
+        const st = await machineStatus();
+        waitingNow.value = (st?.held ?? []).map(([job]) => job).join(", ");
+      } catch {
+        waitingNow.value = "";
+      }
+    };
+    void look();
+    const timer = setInterval(() => void look(), 15_000);
+    cleanup(() => clearInterval(timer));
+  });
   // Health questions: which installed model answers them (always offline).
   const medicalModel = useSignal<string>("");
   const installedChatModels = useSignal<string[]>([]);
@@ -1812,6 +1830,11 @@ export default component$(() => {
                     processor free, the computer is plugged in, and you have
                     been away from the keyboard for a few minutes. Turned off,
                     that work runs whenever Your Own AI itself is idle.
+                    {waitingNow.value && (
+                      <span class="block mt-1 text-xs text-[var(--text-muted)]">
+                        Waiting now: {waitingNow.value}
+                      </span>
+                    )}
                   </SettingToggle>
                 </div>
               </section>
@@ -1925,19 +1948,10 @@ export default component$(() => {
                   <span class="font-semibold text-[var(--text-primary)]">
                     Truth matrix
                   </span>{" "}
-                  - checks the app's claims about this computer against what
-                  really happens. It loads every downloaded model and checks
-                  that each one loads at the promised size, answers in plain
-                  words, and respects your reply style settings; then it checks
-                  the pieces around them - the helper and memory components,
-                  the routing decisions for your own models, and whether a
-                  model's thinking switch is honored. Routing is decided
-                  only, never sent: nothing goes online and no credits are
-                  used. It asks fixed test questions, never anything from
-                  your conversations. Unloads your current model first and
-                  takes roughly 10-20 minutes, longer with many models;
-                  writes a report file you can send back, with your home
-                  folder name removed.
+                  - tests how your downloaded models really run on this
+                  computer, with fixed test questions. Nothing from your
+                  conversations is used, nothing goes online, and the report
+                  it writes holds no personal data. Takes about 10-20 minutes.
                 </p>
                 <div class="flex flex-wrap items-center gap-3">
                   <LiquidMetalButton
