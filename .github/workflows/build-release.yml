@@ -346,7 +346,10 @@ jobs:
           EXTRA=""
           VERSION="${GITHUB_REF_NAME#v}"
           case "$RUNNER_OS" in
-            macOS) EXTRA=" --bundles dmg" ;;
+            # The app bundle too: the updater file (.app.tar.gz and its
+            # signature) is made from it; with the dmg alone the .app is
+            # cleaned away and macOS ships no update.
+            macOS) EXTRA=" --bundles app,dmg" ;;
             Linux) EXTRA=" --bundles deb,rpm" ;;
             Windows)
               if [[ "$VERSION" == *-* ]]; then
