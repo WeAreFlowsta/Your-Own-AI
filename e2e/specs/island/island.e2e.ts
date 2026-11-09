@@ -36,9 +36,16 @@ describe(`island merge, phase ${PHASE}`, () => {
       await shot("island-b0-chat");
     } else if (PHASE === "b1") {
       // Linked now (the fixture): the startup sync finds the identity's
-      // material elsewhere, exports this device's conversation, swaps the
-      // material and exits (a debug build exits instead of restarting).
+      // material elsewhere and says a restart is needed (the merge is not a
+      // choice; its restart is the person's: the Activity tray's Restart, or
+      // Later). Restart: the app exports this device's conversations, swaps
+      // the material and exits (a debug build exits instead of restarting).
       await waitForChat();
+      await browser.waitUntil(async () => (await escrow()).state === "island_pending", {
+        timeout: 120_000, interval: 5_000, timeoutMsg: "the startup sync never found the identity's material",
+      });
+      // The call does not return: the app exits during it.
+      await browser.execute(() => { (window as any).__TAURI__.core.invoke("vault_escrow_island_join").catch(() => {}); });
       let gone = false;
       for (let i = 0; i < 60 && !gone; i++) {
         await new Promise((r) => setTimeout(r, 3000));
