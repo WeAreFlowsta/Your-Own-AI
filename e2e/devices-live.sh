@@ -107,7 +107,9 @@ echo "== phase a: device A renames an AI to '$DEVICES_NAME' and backs up (Vault 
 # one with the rule), not one from its first start: a start writes one too,
 # and it is newer than A_START. A's log says when the last was written (UTC).
 last_written="$(sed -E 's/\x1b\[[0-9;]*m//g' "$A"/.local/share/com.solar.yourowai/logs/*.log 2>/dev/null | grep "manifest written" | tail -1 | sed -E 's/^\[([0-9-]+)\]\[([0-9:]+)\].*/\1 \2/' || true)"
-if [ -n "$last_written" ]; then A_START="$(date -u -d "$last_written" +%s)"; fi
+# Five seconds of margin: the log line is stamped as the write finishes and
+# the Vault's created_at can be a second earlier.
+if [ -n "$last_written" ]; then A_START="$(( $(date -u -d "$last_written" +%s) - 5 ))"; fi
 echo "== V2 fetches V1's copies (A's last manifest: ${last_written:-unknown})"
 for _ in $(seq 1 150); do
   # A round right after a Vault restarted its lines (a memory restart) can
