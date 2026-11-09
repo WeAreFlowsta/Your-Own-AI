@@ -587,6 +587,16 @@ impl LineHooks for YoaiLines {
             Line::V06 => PASSPHRASE_06,
             Line::V07 => self.line_07.as_ref().map(|l| l.passphrase.as_str()).ok_or("the 0.7 key store is not prepared")?,
         };
+        // Beside a running 0.6 line, the 0.7 key store is a stopped copy of
+        // the 0.6 one: it keeps only the keys in use when its listing would
+        // not fit one lair message (Holochain 0.7.1 lists every key at each
+        // install). Even those not fitting: the 0.7 line waits, and says why.
+        if line == Line::V07 && role == Role::Secondary && ports(Line::V06).is_some() {
+            if let Err(why) = trim_store_07(&self.data_dir, passphrase).await {
+                crate::move_07::note_paused(why.clone());
+                return Err(why);
+            }
+        }
         let entry = entry_for(line, role).await;
         // One origin per app start, shared by both lines: the primary makes
         // it, a line attached beside it keeps the one in force (a fresh one
@@ -675,6 +685,91 @@ impl LineHooks for YoaiLines {
     fn wanted(&self) -> bool {
         !closing()
     }
+}
+
+/// The agent keys an AI list names (its 39-byte keys, hex): every AI's
+/// current, founding and earlier keys, whatever field holds them. A key an
+/// AI may ask for again (a restore, a sync) is a key in use.
+pub(crate) fn ai_list_keys(data_dir: &Path) -> Vec<[u8; 32]> {
+    let Ok(text) = std::fs::read_to_string(data_dir.join("ai-data.json")) else { return Vec::new() };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return Vec::new() };
+    let mut out = Vec::new();
+    fn walk(v: &serde_json::Value, out: &mut Vec<[u8; 32]>) {
+        match v {
+            serde_json::Value::String(s) => {
+                if let Some(k) = core_key_hex(s) {
+                    out.push(k);
+                }
+            }
+            serde_json::Value::Array(a) => a.iter().for_each(|x| walk(x, out)),
+            serde_json::Value::Object(o) => o.values().for_each(|x| walk(x, out)),
+            _ => {}
+        }
+    }
+    walk(&v["custom-ais"], &mut out);
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// An agent key's 32 core bytes, from its 39 bytes in hex.
+fn core_key_hex(s: &str) -> Option<[u8; 32]> {
+    if s.len() != 78 || !s.starts_with("842024") {
+        return None;
+    }
+    core_key(&hex::decode(s).ok()?)
+}
+
+/// An agent key's 32 core bytes (lair's Ed25519 key), from its 39 bytes.
+fn core_key(raw: &[u8]) -> Option<[u8; 32]> {
+    (raw.len() == 39).then(|| raw[3..35].try_into().ok()).flatten()
+}
+
+/// Holochain 0.7.1 checks an existing agent key at app install by listing
+/// every key its lair holds, and the listing must fit one lair message
+/// (about forty keys; `flowsta_hc_lines::keystore::entries`). A 0.7 key
+/// store copied from a 0.6 one that grew past that (every AI ever made has
+/// a key there, tidied ones included) keeps only the keys in use: every
+/// enabled AI cell on the running 0.6 line and every key the AI list names.
+/// A store whose listing fits is left as it is. Err: even the keys in use
+/// do not fit, and the 0.7 line waits this session.
+async fn trim_store_07(data_dir: &Path, passphrase: &str) -> Result<(), String> {
+    let (lair_07, _) = line_dirs(data_dir, Line::V07);
+    if !flowsta_hc_lines::keystore::config_path(&lair_07).exists() {
+        return Ok(());
+    }
+    let listing = flowsta_hc_lines::keystore::entries(&lair_07, Line::V07, passphrase).await.map_err(|e| format!("read the 0.7 key store: {e}"))?;
+    if listing.fits() {
+        return Ok(());
+    }
+    let mut in_use: std::collections::HashSet<[u8; 32]> = transcript_apps_06().await?.iter().filter_map(|(_, k)| core_key(k)).collect();
+    in_use.extend(ai_list_keys(data_dir));
+    trim_to(&lair_07, passphrase, &in_use).await
+}
+
+/// Keep, in the stopped 0.7 key store at `lair_07`, the keys in `in_use`
+/// and Holochain's own entries; Err when even those do not fit one lair
+/// message.
+async fn trim_to(lair_07: &Path, passphrase: &str, in_use: &std::collections::HashSet<[u8; 32]>) -> Result<(), String> {
+    use flowsta_hc_lines::keystore::{keep_only, EntryKind, Kept, LAIR_REPLY_MAX};
+    // Holochain's own entries stay too: its connection check's stub and its
+    // conductor's `<state tag>_ed` seed (each made again when missing).
+    let keep = |e: &flowsta_hc_lines::keystore::Entry| {
+        e.kind != EntryKind::Seed || e.tag.starts_with('_') || e.tag == "HC_CON_CHK_STUB" || e.tag.ends_with("_ed") || e.ed25519.is_some_and(|k| in_use.contains(&k))
+    };
+    let (kept, reply_bytes) = match keep_only(lair_07, Line::V07, passphrase, &keep).await.map_err(|e| format!("trim the 0.7 key store: {e}"))? {
+        Kept::Rebuilt { kept, dropped, reply_bytes } => {
+            log::info!("[0.7] key store: {kept} key(s) in use kept, {dropped} left out (a listing is {reply_bytes} bytes)");
+            (kept, reply_bytes)
+        }
+        Kept::AllKept { entries, reply_bytes } => (entries, reply_bytes),
+    };
+    if reply_bytes > LAIR_REPLY_MAX {
+        let ais = in_use.len().min(kept);
+        log::warn!("[0.7] key store: {kept} entries kept ({ais} AI keys) list in {reply_bytes} bytes, more than one lair message ({LAIR_REPLY_MAX})");
+        return Err(format!("this computer has more AIs than the new version can take yet ({ais} in use)"));
+    }
+    Ok(())
 }
 
 /// Every enabled transcript app on the running 0.6 line: (app id, agent key
@@ -993,5 +1088,73 @@ mod line_07_tests {
         let admin = AdminClient::connect(Line::V07, ports(Line::V07).unwrap().0, &origin()).await.unwrap();
         assert!(!admin.list_apps().await.unwrap().iter().any(|a| a.app_id == "transcript_v2_live"), "purged on 0.7 too");
         supervisor().stop();
+    }
+}
+
+#[cfg(test)]
+mod store_07_trim_tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::time::Duration;
+
+    #[test]
+    fn an_ai_lists_keys_are_every_agent_key_it_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (a, b, c) = (format!("842024{}", "ab".repeat(36)), format!("842024{}", "cd".repeat(36)), format!("842024{}", "ef".repeat(36)));
+        let not_a_key = format!("842025{}", "ab".repeat(36));
+        let list = serde_json::json!({ "custom-ais": [
+            { "agentPubKey": a, "foundingKey": a, "id": a, "restoredFromId": b, "name": "Reeves" },
+            { "agentPubKey": c, "skills": [{ "owner": a }], "seedSlot": "3", "id": not_a_key },
+        ]});
+        std::fs::write(tmp.path().join("ai-data.json"), list.to_string()).unwrap();
+        let got: HashSet<[u8; 32]> = ai_list_keys(tmp.path()).into_iter().collect();
+        let want: HashSet<[u8; 32]> = [&a, &b, &c].iter().map(|h| core_key_hex(h).unwrap()).collect();
+        assert_eq!(got, want, "current, founding and earlier keys, deduplicated; a non-key left out");
+        assert_eq!(core_key_hex(&a).unwrap(), [0xab; 32]);
+        assert!(ai_list_keys(&tmp.path().join("none")).is_empty(), "no AI list: no keys");
+    }
+
+    /// A stopped 0.7 key store of `n` seeds made by the real 0.7 key store,
+    /// with Holochain's connection stub: the seeds' keys.
+    async fn store_07_with(dir: &Path, passphrase: &str, n: usize) -> Vec<[u8; 32]> {
+        use flowsta_hc_lines::keystore::{start, v07, wait_ready, SocketPlan};
+        let bin = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries").join(format!("yourowai-lair-keystore-07-{}", flowsta_hc_lines::TARGET_TRIPLE));
+        let plan = SocketPlan::new("yoai-trim", "lair");
+        let (mut child, url) = start(dir, &bin, passphrase, &plan).unwrap();
+        wait_ready(&url, Duration::from_secs(15), &mut child, dir).await.unwrap();
+        let client = v07::connect(&url, passphrase, Duration::from_secs(30)).await.unwrap();
+        let mut keys = Vec::new();
+        for i in 0..n {
+            keys.push(v07::new_seed(&client, &format!("ai-{i:04}-6f1e3c2a-9b7d-4e21-a8f0-5c3d2b1a0e9f")).await.unwrap());
+        }
+        v07::new_seed(&client, "HC_CON_CHK_STUB").await.unwrap();
+        drop(client);
+        let _ = flowsta_hc_lines::process::stop_gracefully(&mut child, flowsta_hc_lines::process::StopRequest::Terminate, Duration::from_secs(2));
+        keys
+    }
+
+    /// Run by hand: `cargo test --lib -- --ignored live_trim --nocapture`.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn live_trim_keeps_the_keys_in_use_and_waits_when_even_those_do_not_fit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("lair-07");
+        let keys = store_07_with(&dir, "p", 60).await;
+        assert!(!flowsta_hc_lines::keystore::entries(&dir, Line::V07, "p").await.unwrap().fits(), "sixty keys do not fit");
+        let in_use: HashSet<[u8; 32]> = keys[..10].iter().copied().collect();
+        trim_to(&dir, "p", &in_use).await.expect("ten keys fit");
+        let after = flowsta_hc_lines::keystore::entries(&dir, Line::V07, "p").await.unwrap();
+        assert!(after.fits(), "{} bytes", after.reply_bytes);
+        let held: HashSet<[u8; 32]> = after.entries.iter().filter_map(|e| e.ed25519).collect();
+        assert!(in_use.iter().all(|k| held.contains(k)), "every key in use kept");
+        assert!(keys[10..].iter().all(|k| !held.contains(k)), "the rest left out");
+        assert!(after.entries.iter().any(|e| e.tag == "HC_CON_CHK_STUB"), "Holochain's own entry kept");
+        assert_eq!(after.entries.len(), 11);
+
+        let full = tmp.path().join("lair-07-full");
+        let all: HashSet<[u8; 32]> = store_07_with(&full, "p", 60).await.into_iter().collect();
+        let err = trim_to(&full, "p", &all).await.expect_err("sixty keys in use do not fit");
+        assert!(err.starts_with("this computer has more AIs than the new version can take yet"), "{err}");
+        println!("TRIM guard: {err}");
     }
 }
