@@ -983,8 +983,10 @@ mod tests {
     }
 
     /// Headless: the agent probe (`matrix::leg_agent_probe`) on the models
-    /// named in `YOAI_AGENT_PROBE_MODELS=a.gguf,b.gguf`, from `YOAI_MODELS_DIR`
-    /// (default: the app's models folder). Run under the memory cap.
+    /// named in `YOAI_AGENT_PROBE_MODELS=a.gguf,b.gguf`, or by default on the
+    /// folder's chat models the app lets drive projects (the agent gate), from
+    /// `YOAI_MODELS_DIR` (default: the app's models folder). Every one must
+    /// finish. Run under the memory cap.
     #[tokio::test]
     #[ignore]
     async fn live_matrix_agent_probe() {
@@ -998,10 +1000,16 @@ mod tests {
             else { "x86_64-unknown-linux-gnu" };
         let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bin").join(format!("{}-{triple}", crate::llm::BUNDLED_ENGINE));
         assert!(bin.exists());
-        let models: Vec<String> = std::env::var("YOAI_AGENT_PROBE_MODELS").unwrap_or_default()
+        let named: Vec<String> = std::env::var("YOAI_AGENT_PROBE_MODELS").unwrap_or_default()
             .split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
-        assert!(!models.is_empty(), "name the models: YOAI_AGENT_PROBE_MODELS=a.gguf,b.gguf");
+        let models = if named.is_empty() {
+            crate::matrix::chat_models(&dir).into_iter().filter(|n| crate::model_caps::agent_caps(n) >= 6).collect()
+        } else {
+            named
+        };
         let sink = |l: String| eprintln!("[agent-probe] {l}");
+        sink(format!("{} model(s): {}", models.len(), models.join(", ")));
+        assert!(!models.is_empty(), "no model in {} drives projects; name some with YOAI_AGENT_PROBE_MODELS=a.gguf,b.gguf", dir.display());
         let lines = crate::matrix::leg_agent_probe(&bin, &dir, &models, &sink).await;
         assert_eq!(lines.len(), models.len(), "a model did not finish the probe");
     }
