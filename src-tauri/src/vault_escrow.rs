@@ -269,8 +269,44 @@ pub(crate) async fn sibling_devices(port: u16) -> Result<Vec<SiblingDevice>, Str
         .unwrap_or_default())
 }
 
-pub(crate) async fn other_devices(port: u16) -> Result<Vec<String>, String> {
-    Ok(sibling_devices(port).await?.into_iter().map(|d| d.id).collect())
+/// The identity's other devices that hold this app's data, leaving out any
+/// the person stopped waiting for (a computer that is gone). A restore runs
+/// only when none is left: the data arrives from a device that is there.
+pub(crate) async fn devices_holding_data(app: &tauri::AppHandle, port: u16) -> Result<Vec<SiblingDevice>, String> {
+    let stopped: std::collections::HashSet<String> = crate::profile::root(app)
+        .ok()
+        .and_then(|r| crate::line_facts::LineFacts::load(&r))
+        .map(|f| f.stopped_waiting.iter().map(|w| w.id.clone()).collect())
+        .unwrap_or_default();
+    Ok(sibling_devices(port).await?.into_iter().filter(|d| !stopped.contains(&d.id)).collect())
+}
+
+/// The computers the person stopped waiting for whose backup is held here,
+/// newest first (by their manifest's copy): what a computer that replaces
+/// them restores.
+pub(crate) async fn gone_backup_devices(app: &tauri::AppHandle, port: u16) -> Vec<String> {
+    let stopped: std::collections::HashSet<String> = crate::profile::root(app)
+        .ok()
+        .and_then(|r| crate::line_facts::LineFacts::load(&r))
+        .map(|f| f.stopped_waiting.iter().map(|w| w.id.clone()).collect())
+        .unwrap_or_default();
+    let mut held: Vec<(i64, String)> = sibling_devices(port)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|d| stopped.contains(&d.id))
+        .filter_map(|d| crate::line_facts::stamp_ms(&d.manifest_at).map(|at| (at, d.id)))
+        .collect();
+    held.sort_by(|a, b| b.0.cmp(&a.0));
+    held.into_iter().map(|(_, id)| id).collect()
+}
+
+/// The refusal a restore gives while other devices hold the data: the code,
+/// then the devices (id and name) as JSON, so the page can name them and
+/// offer "it is gone" for each.
+pub(crate) fn holding_refusal(devices: &[SiblingDevice]) -> String {
+    let list: Vec<serde_json::Value> = devices.iter().map(|d| serde_json::json!({ "id": d.id, "name": d.name })).collect();
+    format!("siblings_hold_data:{}", serde_json::Value::Array(list))
 }
 
 /// One named device's copy of a label (`/backup/retrieve` with `across` +
@@ -834,8 +870,9 @@ pub async fn vault_escrow_restore(
     // Another device of this identity holds the data: a replay would author
     // every conversation again as new records into the network that already
     // has them. The conversations arrive from the other devices instead.
-    if !other_devices(port).await.unwrap_or_default().is_empty() {
-        return Err("siblings_hold_data".into());
+    let holding = devices_holding_data(&app, port).await.unwrap_or_default();
+    if !holding.is_empty() {
+        return Err(holding_refusal(&holding));
     }
     if !accept_data_loss {
         let count = count_local_conversations(&app).await?;
@@ -3108,6 +3145,17 @@ mod tombstone_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_refused_restore_names_the_computers_for_the_page() {
+        let d = |id: &str, name: Option<&str>| super::SiblingDevice { id: id.into(), name: name.map(String::from), ..Default::default() };
+        let msg = super::holding_refusal(&[d("aaaa", Some("Office PC")), d("bbbb", None)]);
+        let rest = msg.strip_prefix("siblings_hold_data:").expect("the code first");
+        let list: serde_json::Value = serde_json::from_str(rest).unwrap();
+        assert_eq!(list[0]["id"], "aaaa");
+        assert_eq!(list[0]["name"], "Office PC");
+        assert!(list[1]["name"].is_null());
+    }
+
     use super::{ais_object, fingerprint_of, write_decision, Fingerprint, WriteDecision};
 
     #[test]

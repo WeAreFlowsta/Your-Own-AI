@@ -342,14 +342,24 @@ pub async fn learn_before_first_start(app: &tauri::AppHandle, root: &Path) {
     if LineFacts::load(root).is_some_and(|f| f.checked_at_ms > 0) || never_shared(app) {
         return;
     }
-    match tokio::time::timeout(FIRST_FACTS_WAIT, crate::config_sync::facts_round(app)).await {
+    // A Vault still reading the identity's devices (just started, or another
+    // device just joined) is asked again every 2 s within the same bound.
+    let asked = tokio::time::timeout(FIRST_FACTS_WAIT, async {
+        loop {
+            match crate::config_sync::facts_round(app).await {
+                Ok(false) => tokio::time::sleep(std::time::Duration::from_secs(2)).await,
+                other => return other,
+            }
+        }
+    });
+    match asked.await {
         Ok(Ok(true)) => {
             let n = LineFacts::load(root).map(|f| f.siblings.len()).unwrap_or(0);
             log::info!("[line] before the first start: {n} other device(s) read from the Vault");
         }
-        Ok(Ok(false)) => log::info!("[line] before the first start: the Vault is still reading the identity's devices; they stay unknown"),
+        Ok(Ok(false)) => {}
         Ok(Err(e)) => log::info!("[line] before the first start: the other devices could not be read ({e}); they stay unknown"),
-        Err(_) => log::info!("[line] before the first start: no answer from the Vault within {} s; the other devices stay unknown", FIRST_FACTS_WAIT.as_secs()),
+        Err(_) => log::info!("[line] before the first start: the Vault was still reading the identity's devices, or did not answer, within {} s; the other devices stay unknown", FIRST_FACTS_WAIT.as_secs()),
     }
 }
 
