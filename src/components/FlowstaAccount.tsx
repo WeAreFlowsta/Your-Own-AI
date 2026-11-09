@@ -112,12 +112,43 @@ interface FlowstaAccountProps {
   section?: "account" | "backups" | "all";
 }
 
+/** The computers named in a "siblings_hold_data:[...]" refusal. */
+function holdingDevices(msg: string): { id: string; name: string | null }[] {
+  const at = msg.indexOf("siblings_hold_data:");
+  if (at < 0) return [];
+  const rest = msg.slice(at + "siblings_hold_data:".length);
+  // The first complete list (an error may carry more text after it).
+  for (let end = rest.indexOf("]"); end >= 0; end = rest.indexOf("]", end + 1)) {
+    try {
+      const list = JSON.parse(rest.slice(0, end + 1));
+      return Array.isArray(list) ? list.filter((d) => typeof d?.id === "string") : [];
+    } catch { /* not complete yet */ }
+  }
+  return [];
+}
+
+/** What a refused restore says, naming the computers that hold the data. */
+function holdingMessage(devices: { name: string | null }[]): string {
+  const names = devices.map((d) => d.name || "your other computer");
+  if (names.length === 0) {
+    return "Your conversations are on another of your computers and arrive from there by themselves.";
+  }
+  if (names.length === 1) {
+    return `Your conversations are on ${names[0]} and arrive from there whenever it's on. If ${names[0]} is gone for good, restore them here instead.`;
+  }
+  const list = names.length === 2 ? `${names[0]} and ${names[1]}` : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  return `Your conversations are on ${list} and arrive from there whenever one of them is on. If they're gone for good, restore them here instead.`;
+}
+
 export default component$<FlowstaAccountProps>((props) => {
   const section = props.section ?? "all";
   const vault = useSignal<VaultStatus | null>(null);
   const session = useSignal<FlowstaSession | null>(null);
   const busy = useSignal(false);
   const error = useSignal("");
+  // A restore refused because other computers hold the data: which ones, so
+  // the person can say one is gone and restore here instead.
+  const goneOffer = useSignal<{ devices: { id: string; name: string | null }[]; retry: "key" | "data" } | null>(null);
   // Said BEFORE the browser opens (rule 3 of the connection UX): the dashboard
   // opens signed in through the hand-off, so nothing in the browser asks again.
   const opening = useSignal("");
@@ -184,6 +215,7 @@ export default component$<FlowstaAccountProps>((props) => {
   });
 
   const handleRestore = $(async () => {
+    goneOffer.value = null;
     const count = escrow.value?.local_conversations ?? 0;
     try {
       restarting.value = true;
@@ -192,9 +224,13 @@ export default component$<FlowstaAccountProps>((props) => {
     } catch (e) {
       restarting.value = false;
       const msg = String(e);
-      error.value = msg.includes("siblings_hold_data")
-        ? "Your conversations are on another of your devices and arrive from there by themselves - nothing to restore here."
-        : `Restore failed: ${msg}`;
+      if (msg.includes("siblings_hold_data")) {
+        const devices = holdingDevices(msg);
+        error.value = holdingMessage(devices);
+        goneOffer.value = devices.length > 0 ? { devices, retry: "key" } : null;
+      } else {
+        error.value = `Restore failed: ${msg}`;
+      }
     } finally {
       confirmAction.value = null;
     }
@@ -205,6 +241,7 @@ export default component$<FlowstaAccountProps>((props) => {
   // already here are skipped, so re-running is always safe.
   const handleRestoreData = $(async () => {
     confirmAction.value = null;
+    goneOffer.value = null;
     restoreDataBusy.value = true;
     restoreDataResult.value = "";
     restoreDataWarning.value = "";
@@ -270,8 +307,9 @@ export default component$<FlowstaAccountProps>((props) => {
     } catch (e) {
       const msg = String(e);
       if (msg.includes("siblings_hold_data")) {
-        error.value =
-          "Your conversations are on another of your devices and arrive from there by themselves - nothing to restore here.";
+        const devices = holdingDevices(msg);
+        error.value = holdingMessage(devices);
+        goneOffer.value = devices.length > 0 ? { devices, retry: "data" } : null;
       } else if (msg.includes("key_mismatch")) {
         error.value =
           "Your Vault backup was made by a different setup of this app. Restore from Vault first (above), then try again.";
@@ -290,6 +328,20 @@ export default component$<FlowstaAccountProps>((props) => {
     } finally {
       restoreDataBusy.value = false;
     }
+  });
+
+  // "<name> is gone": stop waiting for those computers (the wait resumes by
+  // itself if one writes again), then the same restore again.
+  const handleGone = $(async () => {
+    const offer = goneOffer.value;
+    if (!offer) return;
+    goneOffer.value = null;
+    error.value = "";
+    for (const d of offer.devices) {
+      await invoke("line_stop_waiting", { device: d.id }).catch((e) => console.warn("[Flowsta] stop waiting:", e));
+    }
+    if (offer.retry === "data") await handleRestoreData();
+    else await handleRestore();
   });
 
   const handleKeepLocal = $(async () => {
@@ -440,6 +492,18 @@ export default component$<FlowstaAccountProps>((props) => {
         <p class="mb-4 rounded-lg border border-red-800 bg-red-900/30 p-3 text-sm text-red-300">
           {error.value}
         </p>
+      )}
+
+      {goneOffer.value && (
+        <button
+          type="button"
+          class="mb-4 rounded-full border border-[var(--border-subtle)] px-5 py-2 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)]"
+          onClick$={handleGone}
+        >
+          {goneOffer.value.devices.length === 1
+            ? `${goneOffer.value.devices[0].name || "That computer"} is gone: restore here`
+            : "They're gone: restore here"}
+        </button>
       )}
 
       {!vault.value ? (
@@ -900,6 +964,17 @@ export default component$<FlowstaAccountProps>((props) => {
               <p class="mt-2 rounded-lg border border-red-800 bg-red-900/30 p-3 text-sm text-red-300">
                 {error.value}
               </p>
+            )}
+            {goneOffer.value && section === "backups" && (
+              <button
+                type="button"
+                class="mt-2 rounded-full border border-[var(--border-subtle)] px-5 py-2 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)]"
+                onClick$={handleGone}
+              >
+                {goneOffer.value.devices.length === 1
+                  ? `${goneOffer.value.devices[0].name || "That computer"} is gone: restore here`
+                  : "They're gone: restore here"}
+              </button>
             )}
           </div>
         )}

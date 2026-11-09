@@ -356,10 +356,6 @@ fn remap_annotation(
 
 /// Fetch the "latest" full-data backup from Vault.
 /// Retrieve one labeled backup; the full IPC response (data / data_base64).
-async fn retrieve_label(port: u16, label: &str) -> Result<serde_json::Value, String> {
-    retrieve_label_across(port, label, None).await
-}
-
 /// One backup object by label - this device's own, or (`device`) the copy
 /// held here of another device's (Vault 1.6.1 names it; 1.6.0 answers with
 /// the newest copy across devices).
@@ -417,14 +413,14 @@ pub(crate) fn decode_conv_object(label: &str, obj: &serde_json::Value) -> Result
 /// restore reported as "no backup at all". Such objects are collected into
 /// `_missing_objects` for the caller to surface. TRANSIENT failures (Vault
 /// unreachable mid-walk) still abort - retrying later loses nothing.
-async fn fetch_data_backup(port: u16) -> Result<serde_json::Value, String> {
-    match retrieve_label(port, vault_escrow::MANIFEST_LABEL).await {
+async fn fetch_data_backup(port: u16, device: Option<&str>) -> Result<serde_json::Value, String> {
+    match retrieve_label_across(port, vault_escrow::MANIFEST_LABEL, device).await {
         Ok(v) => {
             let mut manifest = v["data"].clone();
             // The AIs, pictures, knowledge and cards travel in their own
             // object too, written as they change while the manifest waits
             // its ten minutes: when that one is newer, it has the last word.
-            if let Ok(a) = retrieve_label(port, vault_escrow::AIS_LABEL).await {
+            if let Ok(a) = retrieve_label_across(port, vault_escrow::AIS_LABEL, device).await {
                 let newer = a["data"]["exported_at_iso"].as_str() >= manifest["exported_at_iso"].as_str();
                 if newer {
                     for k in ["ai_configs", "thumbnails", "ai_knowledge", "corpus"] {
@@ -452,7 +448,7 @@ async fn fetch_data_backup(port: u16) -> Result<serde_json::Value, String> {
                     })
                     .unwrap_or_default();
                 for label in &labels {
-                    let records = match retrieve_label(port, label).await {
+                    let records = match retrieve_label_across(port, label, device).await {
                         Ok(obj) => match decode_conv_object(label, &obj) {
                             Ok(r) => r,
                             Err(e) => {
@@ -500,7 +496,7 @@ async fn fetch_data_backup(port: u16) -> Result<serde_json::Value, String> {
             Ok(manifest)
         }
         Err(e) if e == "no_backup" => {
-            let v = retrieve_label(port, vault_escrow::DATA_LABEL).await?;
+            let v = retrieve_label_across(port, vault_escrow::DATA_LABEL, device).await?;
             Ok(v["data"].clone())
         }
         Err(e) => Err(e),
@@ -883,26 +879,72 @@ pub async fn vault_restore_conversations(
     // Another device of this identity holds the conversations: they arrive
     // through the person's own network; a replay here would author every
     // one of them again as new records.
-    if !vault_escrow::other_devices(port).await.unwrap_or_default().is_empty() {
-        return Err("siblings_hold_data".into());
+    let holding = vault_escrow::devices_holding_data(&app, port).await.unwrap_or_default();
+    if !holding.is_empty() {
+        return Err(vault_escrow::holding_refusal(&holding));
     }
-    let backup = fetch_data_backup(port).await?;
-    // The raw cipher bytes only decrypt under the key they were written
-    // with - a different local key means "restore the key first" (the
-    // escrow conflict panel), never a partial mixed-key restore.
+    // This device's own backup, then the backup held here of each computer
+    // the person stopped waiting for (one that is gone): a computer that
+    // replaces it restores what it had. Each restore skips what is already
+    // here, so the second adds only the gone computer's conversations.
     let local = vault_escrow::local_recovery(&app)?;
-    let backup_keys = vault_escrow::parse_escrow(&backup).ok_or("backup_unreadable")?;
-    if backup_keys != local {
-        return Err("key_mismatch".into());
-    }
-    restore_backup(&app, backup, None).await.map_err(|e| {
-        if still_starting(&e) {
-            log::info!("[restore] not yet: {e}");
-            format!("Your records are still starting - {e}")
-        } else {
-            e
+    let mut sources: Vec<Option<String>> = vec![None];
+    sources.extend(vault_escrow::gone_backup_devices(&app, port).await.into_iter().map(Some));
+    let mut total: Option<serde_json::Value> = None;
+    for source in sources {
+        let backup = match fetch_data_backup(port, source.as_deref()).await {
+            Ok(b) => b,
+            Err(e) if e == "no_backup" => continue,
+            Err(e) => return Err(e),
+        };
+        // The raw cipher bytes only decrypt under the key they were written
+        // with - a different local key means "restore the key first" (the
+        // escrow conflict panel), never a partial mixed-key restore.
+        let backup_keys = vault_escrow::parse_escrow(&backup).ok_or("backup_unreadable")?;
+        if backup_keys != local {
+            match &source {
+                None => return Err("key_mismatch".into()),
+                Some(d) => {
+                    log::warn!("[restore] the backup held for {} was made under other keys: left out", &d[..d.len().min(8)]);
+                    continue;
+                }
+            }
         }
-    })
+        if let Some(d) = &source {
+            log::info!("[restore] restoring the backup held for {} (a computer the person said is gone)", &d[..d.len().min(8)]);
+        }
+        let stats = restore_backup(&app, backup, None).await.map_err(|e| {
+            if still_starting(&e) {
+                log::info!("[restore] not yet: {e}");
+                format!("Your records are still starting - {e}")
+            } else {
+                e
+            }
+        })?;
+        total = Some(match total {
+            None => stats,
+            Some(t) => add_restore_stats(t, stats),
+        });
+    }
+    total.ok_or_else(|| "no_backup".to_string())
+}
+
+/// Two restores' outcomes as one: counts add up, the rest keeps the first.
+fn add_restore_stats(mut a: serde_json::Value, b: serde_json::Value) -> serde_json::Value {
+    if let (Some(ao), Some(bo)) = (a.as_object_mut(), b.as_object()) {
+        for (k, v) in bo {
+            match (ao.get(k).and_then(|x| x.as_u64()), v.as_u64()) {
+                (Some(x), Some(y)) => {
+                    ao.insert(k.clone(), serde_json::json!(x + y));
+                }
+                (None, _) if !ao.contains_key(k) || ao[k].is_null() => {
+                    ao.insert(k.clone(), v.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+    a
 }
 
 /// A refusal the first seconds after a start give, while the AIs' cells are
@@ -1200,6 +1242,16 @@ pub fn memory_reembed_done(app: tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn two_restores_add_up() {
+        let a = serde_json::json!({ "conversations_restored": 2, "records_restored": 5, "island": null });
+        let b = serde_json::json!({ "conversations_restored": 1, "records_restored": 3, "island": "x" });
+        let t = super::add_restore_stats(a, b);
+        assert_eq!(t["conversations_restored"], 3);
+        assert_eq!(t["records_restored"], 8);
+        assert_eq!(t["island"], "x");
+    }
+
     #[test]
     fn a_restore_right_after_a_start_waits_for_the_cells_on_either_line() {
         assert!(super::still_starting("no 0.7 transcript app for 8420248a10ee"));
