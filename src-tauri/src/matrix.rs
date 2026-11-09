@@ -640,6 +640,15 @@ async fn ask_think(model: &str, on: bool, strength: bool, marker: Option<&'stati
     Ok((reasoning, visible.trim().chars().count()))
 }
 
+/// The chat models in a folder: its model files that are not embedding
+/// models.
+pub(crate) fn chat_models(dir: &Path) -> Vec<String> {
+    gguf_files(dir)
+        .into_iter()
+        .filter(|n| crate::gguf::read_meta(&dir.join(n)).map(|m| !m.is_embedding()).unwrap_or(false))
+        .collect()
+}
+
 fn gguf_files(dir: &Path) -> Vec<String> {
     let mut files: Vec<String> = std::fs::read_dir(dir)
         .map(|rd| {
@@ -2668,10 +2677,7 @@ pub async fn matrix_run(
     // model this one cannot shows whether it should drive projects.
     if !cancelled() && want("agentprobe") {
         sink("== Agent probe (eight project tasks and three required calls, every chat model) ==".into());
-        let models: Vec<String> = gguf_files(&dir)
-            .into_iter()
-            .filter(|n| crate::gguf::read_meta(&dir.join(n)).map(|m| !m.is_embedding()).unwrap_or(false))
-            .collect();
+        let models = chat_models(&dir);
         leg_agent_probe(&bin, &dir, &models, sink).await;
         sink(String::new());
     }
