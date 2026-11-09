@@ -113,8 +113,11 @@ describe("background work on a busy computer", () => {
     const asked = Date.now();
     await ask("Name one ocean and nothing else.");
     const r = await waitForReplyDone(300_000);
-    console.log(`e2e: ${at()}: a reply answered in ${Math.round((Date.now() - asked) / 1000)} s while the other program ran: ${r.text.slice(0, 80)}`);
-    expect(r.text.trim().length).toBeGreaterThan(0);
+    // The message's text starts with its header (the AI's name, its buttons):
+    // the answer is the last line.
+    const answer = r.text.trim().split("\n").map((l) => l.trim()).filter(Boolean).pop() ?? "";
+    console.log(`e2e: ${at()}: a reply answered in ${Math.round((Date.now() - asked) / 1000)} s while the other program ran: ${answer.slice(0, 80)}`);
+    expect(answer).toMatch(/pacific|atlantic|indian|arctic|southern/i);
     await shot("busy-reply");
     // Long enough for the timer's next look (every 5 minutes while held).
     await browser.waitUntil(async () => (await status()).held.some(([j]) => j === FOLDER_JOB) && Date.now() - asked > 330_000, {
