@@ -3,9 +3,116 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
-## [Unreleased]
+## [0.9.1] - 2026-11-09
+
+### Highlights
+- **Your Own AI updates itself.** It looks for a new version when it
+  starts and every few hours, downloads it in the background, checks that
+  it is the file Flowsta signed, and installs it when you choose Restart
+  to update (or when you quit, on Windows and macOS). It is on from the
+  start; the switch is in Settings. (Updates)
+- **Your history moves to the new version of the network it is built
+  on, by itself.** Your AIs, conversations and memory are records signed
+  by you and kept on your own computers, built on Holochain, so nobody
+  can move them for you: Your Own AI moves them itself, on this computer,
+  to Holochain 0.7.1. There is nothing to do, the app stays usable while
+  it runs, and nothing is uploaded again. A computer still on 0.9.0 stays
+  in sync with an updated one until it updates too. (The move)
+- **Background work waits for your computer.** Reading your folders,
+  document cards, tidying memory, learning from imports and file checks run
+  when other programs leave the processor alone, memory is not short, the
+  computer is on mains power and you have stepped away for a few minutes.
+  What you ask for never waits. (Your computer)
+- **A computer that replaces one you no longer have brings its
+  conversations back.** When you restore on the new computer, Your Own AI
+  names the computer that still holds conversations; choose "is gone:
+  restore here" and it restores what that computer backed up to your
+  Vault. (Devices)
+
+### Updates
+- The update is checked twice before it installs: the release is listed
+  in a manifest signed by Flowsta, and the download must match both its
+  signature and the size and fingerprint the manifest names.
+- On a metered connection (a phone's hotspot, a capped plan, macOS's Low
+  Data Mode) the download waits until you have stepped away and the
+  computer is calm. On battery it waits for mains power, and it never
+  runs while memory is short.
+- On Linux, installing asks for your computer's password.
+- A copy installed with the Windows Installer (MSI) says when a new
+  version is out and does not replace itself.
+- Setup no longer asks about updates; Settings has the switch.
+
+### The move
+- Each computer moves its own history in the background, a little at a
+  time, and carries on where it stopped after a restart or a power cut,
+  with nothing lost or doubled.
+- Nothing is removed from the earlier version. Its background service
+  keeps running while any of your devices still needs it, then stops by
+  itself, and starts again if one of them comes back.
+- Settings > Devices names a computer that is still on an older version
+  of Your Own AI (with How to update), and one that is still moving. For
+  a computer you no longer have, Stop waiting for this computer; its
+  conversations stay here.
+- Backups, restores, imports and joining a computer that you used before
+  signing in all work during and after the move. Backups keep their
+  names, so the history is not uploaded again.
+- The new version's key store and records are protected with a secret
+  made for this install.
+
+### Your computer
+- Settings > "Do background work only when my computer is idle" (on by
+  default). With it off, background work waits only for Your Own AI to be
+  idle and the computer to be on mains power, as before. Settings shows
+  what is waiting right now.
+- The helper models run on half the processor, below your own programs,
+  and when the graphics card is full they unload instead of moving onto
+  the processor.
+- The chat model gives the graphics card and memory back after 15 idle
+  minutes when another program uses the card or memory is short. The
+  next reply loads it again.
+
+### Devices
+- A conversation copied from another device becomes this device's own as
+  soon as its records arrive, in the open drawer and the open
+  conversation, with no reopening.
+- A conversation started while the background service restarts is tried
+  again instead of being dropped.
+- The restore at startup keeps trying for about two minutes while the
+  background service is still starting.
+
+### Models
+- **Granite 4.0 Tiny drives projects** (Codes with you), on the evidence
+  of a new set of project tasks every chat model is tested on.
+- Codes with you picks only from the models that can drive projects.
+  Muse Glimmer and DeepSeek V4 Flash are no longer offered for it; their
+  descriptions say what they do well.
+- Messages of one role in a row are joined before they reach the engine,
+  so models with strict chat templates answer where they stopped before.
+
+### For developers
+- A tool named in `tool_choice` is the only tool the engine is given, so
+  the model cannot call a different one.
+
+### Linux
+- The app's program is `your-own-ai` (was `app`), and the bundled engine
+  is `yourowai-llama-server`, so it no longer clashes with Ubuntu's
+  `llama.cpp-tools` package.
+- An AppStream entry: GNOME Software lists Your Own AI and can remove it.
+- Release builds no longer need the system's OpenSSL, so they run on
+  Fedora 45 and others that ship OpenSSL 4.
+
+### Security
+- The background service's admin connection accepts only the address
+  Your Own AI picks at each start, so a web page in your browser cannot
+  reach it, and its settings file is readable only by you.
+- Every Holochain program the build downloads is checked against a pinned
+  fingerprint, as are the Windows signing tool and the part that reads
+  PDFs. Each release lists the fingerprints of the programs it ships.
 
 ### Fixed
+- **An AI renamed or given a new personality on one device keeps it on
+  the others.** An older copy from another device could hide the change;
+  the newer copy now wins.
 - **Your Own AI no longer stops other programs that use its ports.** When
   another program already listens on port 8080 (or 8091 or 8092), the AI
   engine starts on a free port instead. Before, Your Own AI stopped that
