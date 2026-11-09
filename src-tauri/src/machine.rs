@@ -5,7 +5,8 @@
 //! processor is with programs other than ours, whether memory is short (the
 //! give-back watch in `llm.rs`), whether the computer runs on battery, and
 //! how long the person has been away from the keyboard and mouse anywhere on
-//! the computer. One reading every 10 s, shared by every caller.
+//! the computer. One reading every 10 s, shared by every caller. It also
+//! reads whether the connection is metered, for the update download.
 //!
 //! - **Light** work (syncs, small backups, checks) runs unless memory is short.
 //! - **Heavy** work (dreaming, folder indexing, re-embedding, the import
@@ -51,6 +52,11 @@ pub struct Reading {
     /// The give-back watch's verdict (free memory or kernel pressure).
     pub memory_short: bool,
     pub on_battery: bool,
+    /// The connection in use is metered (a phone's hotspot, a capped plan,
+    /// macOS's Low Data Mode), where the system says; unknown reads as not.
+    /// Only the update download weighs it (updater.rs): background work
+    /// itself sends nothing.
+    pub metered: bool,
     /// Seconds since the person's last input anywhere on the computer.
     /// None where this system does not say (the check then falls back on our
     /// own app's idle).
@@ -199,14 +205,25 @@ pub fn start(app: &AppHandle) {
             let mut input = InputIdle::new();
             let mut battery_at: Option<std::time::Instant> = None;
             let mut battery = false;
+            let mut metered = false;
+            let mut said: Option<(bool, bool)> = None;
             loop {
                 let others = cpu.sample();
-                // Battery spawns a program on macOS and Windows: once a minute.
+                let away = input.away_secs();
+                // Battery spawns a program on macOS and Windows: once a minute,
+                // with the connection's cost.
                 if battery_at.is_none_or(|t| t.elapsed() >= Duration::from_secs(60)) {
                     battery = crate::dreaming::on_battery();
+                    metered = connection_metered();
                     battery_at = Some(std::time::Instant::now());
+                    // One line at the start and at each change: what this
+                    // system's readers say.
+                    if said != Some((battery, metered)) {
+                        log::info!("[machine] on battery: {battery}, metered connection: {metered}, away from the computer: {away:?} s");
+                        said = Some((battery, metered));
+                    }
                 }
-                let r = Reading { others_cpu_pct: others, memory_short: crate::llm::machine_short_now(), on_battery: battery, away_secs: input.away_secs() };
+                let r = Reading { others_cpu_pct: others, memory_short: crate::llm::machine_short_now(), on_battery: battery, metered, away_secs: away };
                 if let Ok(mut slot) = READING.lock() {
                     *slot = Some(r);
                 }
@@ -379,12 +396,124 @@ fn windows_away_secs() -> Option<u64> {
     Some(u64::from(now.wrapping_sub(info.dwTime)) / 1000)
 }
 
+/// Whether the connection in use is metered, where this system says.
+fn connection_metered() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        linux_metered()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows_metered()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        mac_path::metered()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+    {
+        false
+    }
+}
+
+/// NetworkManager's verdict for the connection in use; no NetworkManager
+/// reads as not metered.
+#[cfg(target_os = "linux")]
+fn linux_metered() -> bool {
+    let Ok(bus) = zbus::blocking::Connection::system() else { return false };
+    let Ok(nm) = zbus::blocking::Proxy::new(&bus, "org.freedesktop.NetworkManager", "/org/freedesktop/NetworkManager", "org.freedesktop.NetworkManager") else {
+        return false;
+    };
+    nm.get_property::<u32>("Metered").is_ok_and(nm_metered)
+}
+
+/// NetworkManager's `NMMetered`: 1 yes and 3 guessed yes are metered; 0
+/// unknown, 2 no and 4 guessed no are not.
+#[cfg(any(target_os = "linux", test))]
+fn nm_metered(v: u32) -> bool {
+    matches!(v, 1 | 3)
+}
+
+/// The internet connection's cost: a fixed or variable plan, roaming, or
+/// over its data limit.
+#[cfg(target_os = "windows")]
+fn windows_metered() -> bool {
+    use windows::Networking::Connectivity::{NetworkCostType, NetworkInformation};
+    let Ok(cost) = NetworkInformation::GetInternetConnectionProfile().and_then(|p| p.GetConnectionCost()) else {
+        return false;
+    };
+    let kind = cost.NetworkCostType().unwrap_or(NetworkCostType::Unknown);
+    kind == NetworkCostType::Fixed || kind == NetworkCostType::Variable || cost.Roaming().unwrap_or(false) || cost.OverDataLimit().unwrap_or(false)
+}
+
+/// macOS says whether the path in use is expensive (a phone's hotspot,
+/// cellular) or constrained (Low Data Mode). One monitor for the life of the
+/// app; the system calls it when the path changes.
+#[cfg(target_os = "macos")]
+mod mac_path {
+    use std::ffi::{c_char, c_void};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Once;
+
+    static METERED: AtomicBool = AtomicBool::new(false);
+    static START: Once = Once::new();
+
+    #[link(name = "Network", kind = "framework")]
+    extern "C" {
+        fn nw_path_monitor_create() -> *mut c_void;
+        fn nw_path_monitor_set_queue(monitor: *mut c_void, queue: *mut c_void);
+        fn nw_path_monitor_set_update_handler(monitor: *mut c_void, handler: &block2::Block<dyn Fn(*mut c_void)>);
+        fn nw_path_monitor_start(monitor: *mut c_void);
+        fn nw_path_is_expensive(path: *mut c_void) -> bool;
+        fn nw_path_is_constrained(path: *mut c_void) -> bool;
+    }
+    extern "C" {
+        fn dispatch_queue_create(label: *const c_char, attr: *mut c_void) -> *mut c_void;
+    }
+
+    pub fn metered() -> bool {
+        START.call_once(|| {
+            // SAFETY: plain Network.framework and libdispatch calls; the
+            // monitor, its queue and its handler live as long as the app.
+            unsafe {
+                let monitor = nw_path_monitor_create();
+                if monitor.is_null() {
+                    return;
+                }
+                let queue = dispatch_queue_create(c"net.yourownai.network-path".as_ptr(), std::ptr::null_mut());
+                let handler = block2::RcBlock::new(|path: *mut c_void| {
+                    // SAFETY: the system hands the handler a live path.
+                    let m = unsafe { nw_path_is_expensive(path) || nw_path_is_constrained(path) };
+                    METERED.store(m, Ordering::Relaxed);
+                });
+                nw_path_monitor_set_queue(monitor, queue);
+                nw_path_monitor_set_update_handler(monitor, &handler);
+                std::mem::forget(handler);
+                nw_path_monitor_start(monitor);
+            }
+        });
+        METERED.load(Ordering::Relaxed)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{decide, Reading, Verdict, Work};
 
     fn calm() -> Reading {
-        Reading { others_cpu_pct: Some(5.0), memory_short: false, on_battery: false, away_secs: Some(600) }
+        Reading { others_cpu_pct: Some(5.0), memory_short: false, on_battery: false, metered: false, away_secs: Some(600) }
+    }
+
+    #[test]
+    fn network_managers_yes_and_guessed_yes_are_metered() {
+        assert!(super::nm_metered(1) && super::nm_metered(3));
+        assert!(!super::nm_metered(0) && !super::nm_metered(2) && !super::nm_metered(4));
+    }
+
+    #[test]
+    fn a_metered_connection_does_not_hold_background_work() {
+        let r = Reading { metered: true, ..calm() };
+        assert_eq!(decide(Work::Heavy, &r, true, 0), Verdict::Go);
     }
 
     #[test]
@@ -443,7 +572,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_secs(2));
         let others = cpu.sample();
         let away = input.away_secs();
-        println!("others' processor {others:?} %, away {away:?} s, battery {}", crate::dreaming::on_battery());
+        println!("others' processor {others:?} %, away {away:?} s, battery {}, metered {}", crate::dreaming::on_battery(), super::connection_metered());
         assert!(others.is_some_and(|p| (0.0..=100.0).contains(&p)));
         if cfg!(target_os = "linux") && std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.contains("GNOME")) {
             assert!(away.is_some(), "GNOME's idle monitor answers");

@@ -129,6 +129,14 @@ libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_UI_Input_KeyboardAndMouse"] }
+# Whether the connection is metered, for the update download (machine.rs);
+# the version Tauri already builds.
+windows = { version = "0.61", features = ["Networking_Connectivity"] }
+
+# Whether the connection is metered (Network.framework's path monitor takes a
+# block; machine.rs); the version Tauri already builds.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
 
 # The machine check asks GNOME or the freedesktop screensaver how long the
 # person has been away (machine.rs); the zbus the notification plugin builds.

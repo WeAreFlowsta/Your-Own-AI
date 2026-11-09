@@ -72,3 +72,30 @@ jobs:
       - name: Run unit tests
         working-directory: src-tauri
         run: cargo test --lib
+
+  # Windows-gated code (the machine check's input-idle and connection-cost
+  # readers among it) otherwise first compiles during a release build. The
+  # tests are compiled, not run: a test binary lacks the common-controls
+  # manifest the app's own build embeds, so on Windows it stops before its
+  # first test (STATUS_ENTRYPOINT_NOT_FOUND).
+  rust-tests-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Stub sidecar binaries
+        shell: bash
+        run: |
+          mkdir -p src-tauri/bin src-tauri/binaries
+          for n in bin/yourowai-llama-server binaries/yourowai-holochain binaries/yourowai-lair-keystore binaries/yourowai-holochain-07 binaries/yourowai-lair-keystore-07; do
+            touch "src-tauri/${n}-x86_64-pc-windows-msvc.exe"
+          done
+
+      - name: Build unit tests
+        working-directory: src-tauri
+        run: cargo test --lib --no-run
