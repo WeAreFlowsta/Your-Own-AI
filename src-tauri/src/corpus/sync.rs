@@ -574,8 +574,12 @@ async fn sync_one(
     }
     progress("done", "", total, report.added, report.failed.len());
     log::info!(
-        "[corpus] folder sync {}: {} new, {} changed, {} gone, {} offline, {} online only, {} unchanged, {} failed{}",
+        "[corpus] folder sync {}{}: {} new, {} changed, {} gone, {} offline, {} online only, {} unchanged, {} failed{}",
         folder.folder_id,
+        // The half-hour timer's look (it waits for the machine check) or one
+        // the person started (Check now, a documents screen, the app back in
+        // front), which does not wait.
+        if SYNC_AUTOMATIC.load(Ordering::SeqCst) { " (timer)" } else { "" },
         report.added,
         report.updated,
         report.removed,
