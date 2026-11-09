@@ -141,7 +141,10 @@ export const AiDataProvider = component$(() => {
       const restorePending = await invoke<boolean>("vault_restore_pending");
       if (restorePending) {
         setLoadingText("Restoring your conversations from your Vault…");
-        for (let attempt = 0; attempt < 15; attempt++) {
+        // Up to about two minutes: after a key swap or on a slow machine the
+        // AIs' cells are still being installed for a while (the restore waits
+        // for the records the same two minutes).
+        for (let attempt = 0; attempt < 60; attempt++) {
           try {
             const stats = await invoke<{ missing_objects?: number; missing_records?: number; orphan_entries?: number; island?: string | null; conversations_restored?: number; conversations_preserved?: number }>(
               "vault_restore_conversations"
