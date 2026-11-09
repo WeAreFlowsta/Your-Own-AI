@@ -864,7 +864,7 @@ pub async fn vault_restore_conversations(
         let result = match restore_backup(&app, backup, Some(source)).await {
             Ok(r) => r,
             Err(e) => {
-                let transient = e.contains("CellDisabled") || e.contains("still starting") || e.contains("Agent not found") || e.contains("head has moved");
+                let transient = still_starting(&e);
                 log::warn!("[restore] island merge {}: {}", if transient { "not yet" } else { "failed" }, e);
                 return Err(if transient { format!("Your records are still starting - {}", e) } else { e });
             }
@@ -895,7 +895,26 @@ pub async fn vault_restore_conversations(
     if backup_keys != local {
         return Err("key_mismatch".into());
     }
-    restore_backup(&app, backup, None).await
+    restore_backup(&app, backup, None).await.map_err(|e| {
+        if still_starting(&e) {
+            log::info!("[restore] not yet: {e}");
+            format!("Your records are still starting - {e}")
+        } else {
+            e
+        }
+    })
+}
+
+/// A refusal the first seconds after a start give, while the AIs' cells are
+/// still being installed, re-enabled or connected, on either line: the
+/// restore is tried again (the page retries "still starting").
+fn still_starting(e: &str) -> bool {
+    e.contains("CellDisabled")
+        || e.contains("still starting")
+        || e.contains("Agent not found")
+        || e.contains("head has moved")
+        || e.contains("no 0.7 transcript app")
+        || e.contains("the 0.7 line is not running")
 }
 
 /// Replay a backup (from the Vault, or this device's island export) onto
@@ -1181,6 +1200,16 @@ pub fn memory_reembed_done(app: tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_restore_right_after_a_start_waits_for_the_cells_on_either_line() {
+        assert!(super::still_starting("no 0.7 transcript app for 8420248a10ee"));
+        assert!(super::still_starting("the 0.7 line is not running"));
+        assert!(super::still_starting("Agent not found for key: 842024"));
+        assert!(super::still_starting("source chain head has moved"));
+        assert!(!super::still_starting("key_mismatch"));
+        assert!(!super::still_starting("backup_unreadable"));
+    }
+
     use super::*;
 
     fn gz_object(records: serde_json::Value) -> serde_json::Value {
