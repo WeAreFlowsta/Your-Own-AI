@@ -1089,6 +1089,157 @@ mod line_07_tests {
         assert!(!admin.list_apps().await.unwrap().iter().any(|a| a.app_id == "transcript_v2_live"), "purged on 0.7 too");
         supervisor().stop();
     }
+
+    async fn wait_for_07(secs: u64) {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        while !supervisor().has(Line::V07) {
+            assert!(std::time::Instant::now() < until, "the 0.7 line did not join");
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+    }
+
+    /// The pid of the 0.7 conductor running on `conductor_dir`'s config.
+    fn conductor_pid(conductor_dir: &Path) -> Option<u32> {
+        let config = conductor_dir.join("conductor-config.yaml").to_string_lossy().into_owned();
+        std::fs::read_dir("/proc").ok()?.flatten().find_map(|e| {
+            let pid: u32 = e.file_name().to_str()?.parse().ok()?;
+            let cmdline = std::fs::read(e.path().join("cmdline")).ok()?;
+            let args = String::from_utf8_lossy(&cmdline);
+            (args.contains("yourowai-holochain-07") && args.contains(&config)).then_some(pid)
+        })
+    }
+
+    /// What `pid` has read (bytes, page cache included) and its CPU time (seconds).
+    fn reads_and_cpu(pid: u32) -> (u64, f64) {
+        let io = std::fs::read_to_string(format!("/proc/{pid}/io")).unwrap_or_default();
+        let rchar = io.lines().find_map(|l| l.strip_prefix("rchar: ")).and_then(|v| v.trim().parse().ok()).unwrap_or(0);
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        let after_name = stat.rsplit_once(')').map(|(_, rest)| rest).unwrap_or("");
+        let fields: Vec<&str> = after_name.split_whitespace().collect();
+        let ticks: u64 = fields.get(11).and_then(|v| v.parse().ok()).unwrap_or(0) + fields.get(12).and_then(|v| v.parse().ok()).unwrap_or(0);
+        (rchar, ticks as f64 / 100.0)
+    }
+
+    /// The conductor's reads and CPU each minute for `secs`, while nothing is asked of it.
+    async fn watch_idle(pid: u32, secs: u64, what: &str) -> f64 {
+        let start = std::time::Instant::now();
+        let (r0, c0) = reads_and_cpu(pid);
+        let mut last = (r0, c0, std::time::Instant::now());
+        while start.elapsed().as_secs() < secs {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            let (r, c) = reads_and_cpu(pid);
+            let dt = last.2.elapsed().as_secs_f64();
+            eprintln!("[repro] {what} {:>4} s: reads {:>7.1} MB/s, CPU {:>4.0}%", start.elapsed().as_secs(), (r - last.0) as f64 / dt / 1e6, (c - last.1) / dt * 100.0);
+            last = (r, c, std::time::Instant::now());
+        }
+        let (r, _) = reads_and_cpu(pid);
+        (r - r0) as f64 / start.elapsed().as_secs_f64() / 1e6
+    }
+
+    /// A reproduction, run by hand beside the app on shifted ports: what a
+    /// 0.7 line holding many records, with no peers, does while nothing is
+    /// asked of it; then how long each AI's cell takes to answer after a
+    /// restart. The conductor's own log (publish rounds, cell starts) is
+    /// copied to `YOAI_REPRO_OUT`.
+    /// `YOAI_PORT_OFFSET=300 RUST_LOG=error,holochain::core::workflow::publish_dht_ops_workflow=info,holochain::conductor::conductor=info YOAI_REPRO_OUT=<dir> cargo test --lib -- --ignored live_07_idle --nocapture --test-threads 1`
+    /// Sizes: `YOAI_REPRO_AIS` (6), `YOAI_REPRO_MESSAGES` (the first AI's, 3000), `YOAI_REPRO_IDLE_SECS` (600).
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn live_07_idle_with_many_records_and_no_peers() {
+        use crate::hc07::{Cells07, ConversationsPage, RecordMessage, StartConversation};
+        use flowsta_hc_lines::supervisor::KeySource;
+        use holochain_types::prelude::{ActionHash, AgentPubKey, ExternalHash};
+        let env = |k: &str, d: u64| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+        let (ais, messages, idle) = (env("YOAI_REPRO_AIS", 6) as usize, env("YOAI_REPRO_MESSAGES", 3000) as usize, env("YOAI_REPRO_IDLE_SECS", 600));
+        let out = std::env::var("YOAI_REPRO_OUT").ok().map(PathBuf::from);
+        let tmp = tempfile::tempdir().unwrap();
+        let profile = tmp.path().join("profile");
+        let resource_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
+        let (data_key, seed) = ([5u8; 32], format!("live-07-idle-{}", std::process::id()));
+        let keep_logs = |name: &str| {
+            if let Some(out) = &out {
+                let _ = std::fs::create_dir_all(out);
+                for f in ["holochain-stderr.log", "holochain-stderr.previous.log"] {
+                    let _ = std::fs::copy(profile.join("conductor-07").join(f), out.join(format!("{name}-{f}")));
+                }
+            }
+        };
+
+        // The AIs on 0.6; the 0.7 line joins and installs their v2 apps.
+        let only_06 = Arc::new(YoaiLines { app: None, data_dir: profile.clone(), line_07: None });
+        supervisor().start_lines(Line::V06, None, only_06).await.expect("0.6 starts");
+        let mut agents = Vec::new();
+        for a in 0..ais {
+            let key = supervisor().add_agent(Line::V06, PASSPHRASE_06, &KeySource::NewSeed { tag: format!("ai-idle-{a}") }).await.unwrap();
+            let agent = AgentPubKey::from_raw_32(key.to_vec());
+            crate::dna::install_transcript_app(admin_port().unwrap(), &resource_dir, agent.clone(), &format!("idle-{a}"), &seed).await.expect("v1 app");
+            agents.push(agent);
+        }
+        supervisor().stop();
+        let passphrase = prepare_store_07(&profile, &data_key).await.expect("prepared");
+        let lines = || Arc::new(YoaiLines { app: None, data_dir: profile.clone(), line_07: Some(Line07 { passphrase: passphrase.clone(), network_seed: seed.clone(), resource_dir: resource_dir.clone() }) });
+        supervisor().start_lines(Line::V06, Some(Line::V07), lines()).await.expect("both lines");
+        wait_for_07(600).await;
+
+        // The first AI holds most of the records, as a long-used AI does.
+        let cells = Cells07::default();
+        let started = std::time::Instant::now();
+        let mut written = 0;
+        for (a, agent) in agents.iter().enumerate() {
+            let agent_hex = hex::encode(agent.get_raw_39());
+            let total = if a == 0 { messages } else { 10 };
+            for c in 0..total.div_ceil(20) {
+                let conversation = ExternalHash::from_raw_32(crate::transcript_ids::conversation_anchor(&data_key, &format!("c-{a}-{c}")).to_vec());
+                let start = StartConversation { cipher: vec![7u8; 120], nonce: vec![1u8; 24], anchor: agent.clone(), conversation_anchor: conversation.clone() };
+                let _: ActionHash = cells.write(&agent_hex, "start_conversation", &start).await.expect("a conversation");
+                for m in (c * 20)..((c + 1) * 20).min(total) {
+                    let message_key = crate::transcript_ids::message_key(&data_key, &format!("m-{a}-{m}")).to_vec();
+                    let record = RecordMessage { conversation_anchor: conversation.clone(), message_key, cipher: vec![8u8; 600], nonce: vec![1u8; 24] };
+                    let _: ActionHash = cells.write(&agent_hex, "record_message", &record).await.expect("a message");
+                    written += 1;
+                }
+            }
+        }
+        eprintln!("[repro] {written} messages on 0.7 for {ais} AIs in {} s", started.elapsed().as_secs());
+        drop(cells);
+
+        let pid = conductor_pid(&profile.join("conductor-07")).expect("the 0.7 conductor's pid");
+        let rate = watch_idle(pid, idle, "idle").await;
+        eprintln!("[repro] idle with no peers: {rate:.1} MB/s read on average over {idle} s");
+        keep_logs("first");
+
+        // A restart, as the watch's memory restart does: each AI's cell, asked
+        // every few seconds, until it answers.
+        supervisor().stop();
+        let restarted = std::time::Instant::now();
+        supervisor().start_lines(Line::V06, Some(Line::V07), lines()).await.expect("both lines again");
+        wait_for_07(600).await;
+        eprintln!("[repro] the 0.7 line is back {} s after the restart", restarted.elapsed().as_secs());
+        let cells = Arc::new(Cells07::default());
+        let asks = agents.iter().enumerate().map(|(a, agent)| {
+            let (cells, agent) = (cells.clone(), agent.clone());
+            async move {
+                let agent_hex = hex::encode(agent.get_raw_39());
+                let page = ConversationsPage { anchor: agent.clone(), before: None, limit: 1 };
+                loop {
+                    match cells.conversations_page(&agent_hex, &page).await {
+                        Ok(_) => break eprintln!("[repro] AI {a} answers {} s after the restart", restarted.elapsed().as_secs()),
+                        Err(e) if restarted.elapsed().as_secs() < 3 * 3600 => {
+                            eprintln!("[repro] AI {a} at {} s: {e}", restarted.elapsed().as_secs());
+                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        }
+                        Err(e) => panic!("AI {a} never answered: {e}"),
+                    }
+                }
+            }
+        });
+        futures::future::join_all(asks).await;
+        let pid = conductor_pid(&profile.join("conductor-07")).expect("the restarted 0.7 conductor's pid");
+        let rate = watch_idle(pid, idle / 2, "after the restart").await;
+        eprintln!("[repro] after the restart: {rate:.1} MB/s read on average over {} s", idle / 2);
+        keep_logs("restarted");
+        supervisor().stop();
+    }
 }
 
 #[cfg(test)]
