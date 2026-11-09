@@ -829,6 +829,13 @@ pub fn last_pass() -> Option<LastPass> {
     LAST_PASS.lock().ok().and_then(|p| p.clone())
 }
 
+/// The move cannot go on this session, for a reason the person can act on
+/// or should know (Settings shows it).
+pub(crate) fn note_paused(why: String) {
+    let at_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    note_pass(LastPass { at_ms, summary: String::new(), skipped: Some(why), failing: Vec::new() });
+}
+
 fn note_pass(p: LastPass) {
     if let Ok(mut last) = LAST_PASS.lock() {
         *last = Some(p);
@@ -1521,6 +1528,87 @@ mod tests {
             assert_eq!(mine.total as usize, MESSAGES, "AI {a}: its messages on its own 0.7 chain, once each");
         }
         supervisor().stop();
+    }
+
+    /// A profile whose 0.6 key store outgrew one lair message (a long-used
+    /// profile holds a key for every AI it ever made): sixty AIs, fifty of them
+    /// tidied, one tidied AI still named by the AI list. Holochain 0.7.1
+    /// lists every key at each install, so the 0.7 line joins only once its
+    /// copied store holds the keys in use; then the live AIs get their v2
+    /// apps and one pass carries them and flips the marker.
+    /// Run with the app closed: `cargo test --lib -- --ignored live_move_a_profile_with_many --test-threads 1 --nocapture`
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn live_move_a_profile_with_many_tidied_ais_joins_once_its_07_store_holds_the_keys_in_use() {
+        use crate::conductor::{admin_port, line_dirs, origin, prepare_store_07, start_for_test, supervisor, Line07};
+        use crate::holochain::HolochainManager;
+        use crate::transcript_crypto::{encrypt, RecoveryMaterial};
+        use holochain_types::prelude::ExternIO;
+        const AIS: usize = 60;
+        const LIVE: usize = 10;
+        let tmp = tempfile::tempdir().unwrap();
+        let profile = tmp.path().join("profile");
+        let resource_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
+        let data_key = [8u8; 32];
+        let material = || RecoveryMaterial { network_seed: format!("live-move-tidied-{}", std::process::id()), data_key_hex: hex::encode(data_key), version: 1 };
+        let seal = |v: serde_json::Value| encrypt(&data_key, &serde_json::to_vec(&v).unwrap()).unwrap();
+
+        start_for_test(profile.clone(), None).await.expect("0.6 starts");
+        let manager = HolochainManager::new(resource_dir.clone(), material());
+        let mut agents = Vec::new();
+        for a in 0..AIS {
+            let agent = manager.provision_agent(&format!("live-move-tidied-{a}")).await.expect("an AI");
+            if a < LIVE {
+                let (n, c) = seal(serde_json::json!({"title": format!("Conversation {a}"), "started_at": a, "ai_personality_id": agent}));
+                manager.call_zome(&agent, "transcript", "start_conversation", ExternIO::encode(StartV1 { cipher: c, nonce: n.to_vec(), anchor: None }).unwrap()).await.unwrap();
+            }
+            agents.push(agent);
+        }
+        // Fifty tidied (their cells disabled, as the tidy leaves empty ones).
+        let admin = flowsta_hc_lines::AdminClient::connect(Line::V06, admin_port().unwrap(), &origin()).await.unwrap();
+        let apps = admin.list_apps().await.unwrap();
+        for agent in &agents[LIVE..] {
+            let raw = hex::decode(agent).unwrap();
+            let app = apps.iter().find(|x| x.agent_key == raw).expect("the tidied AI's app");
+            admin.disable(&app.app_id).await.unwrap();
+        }
+        drop(admin);
+        // The AI list names the live AIs and one tidied AI (restorable).
+        let listed: Vec<serde_json::Value> = agents[..=LIVE].iter().map(|a| serde_json::json!({ "id": a, "agentPubKey": a, "foundingKey": a })).collect();
+        std::fs::write(profile.join("ai-data.json"), serde_json::json!({ "custom-ais": listed }).to_string()).unwrap();
+        drop(manager);
+        supervisor().stop();
+
+        let passphrase = prepare_store_07(&profile, &data_key).await.expect("prepared");
+        let (lair_07, _) = line_dirs(&profile, Line::V07);
+        let before = flowsta_hc_lines::keystore::entries(&lair_07, Line::V07, &passphrase).await.unwrap();
+        eprintln!("the copied 0.7 store: {} entries, a listing of {} bytes", before.entries.len(), before.reply_bytes);
+        assert!(!before.fits(), "sixty AIs' keys do not fit one lair message");
+
+        start_for_test(profile.clone(), Some(Line07 { passphrase: passphrase.clone(), network_seed: material().network_seed, resource_dir: resource_dir.clone() })).await.expect("both lines");
+        let until = std::time::Instant::now() + Duration::from_secs(600);
+        while !supervisor().has(Line::V07) {
+            assert!(std::time::Instant::now() < until, "the 0.7 line did not join: {:?}", last_pass());
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        let manager = HolochainManager::new(resource_dir, material());
+        manager.reconnect_existing_agents().await.expect("the AIs reconnect");
+        let hc = Arc::new(HolochainState::new());
+        let _ = hc.manager.set(manager);
+        let mv = Arc::new(Move { hc, data_key, cells: crate::hc07::app_cells(), founding: Box::new(|a| a.to_string()), deleted: Box::new(HashSet::new), passed_in_full: Default::default(), known: Box::new(|_| crate::line_facts::Known::Unknown), full: Default::default() });
+        let out = runner().run(&mv, &profile, "tidied").await;
+        assert_eq!(out.error, None, "{out:?}");
+        assert_eq!(out.kind("conversations").map(|k| (k.total, k.written)), Some((LIVE, LIVE)));
+        assert!(out.flipped, "the marker flips once every kind is complete");
+        supervisor().stop();
+
+        let after = flowsta_hc_lines::keystore::entries(&lair_07, Line::V07, &passphrase).await.unwrap();
+        let held: HashSet<[u8; 32]> = after.entries.iter().filter_map(|e| e.ed25519).collect();
+        let core = |a: &String| -> [u8; 32] { hex::decode(a).unwrap()[3..35].try_into().unwrap() };
+        assert!(agents[..=LIVE].iter().all(|a| held.contains(&core(a))), "every live AI's key, and the listed tidied one's");
+        assert!(agents[LIVE + 1..].iter().all(|a| !held.contains(&core(a))), "the other tidied AIs' keys left out");
+        assert!(after.fits(), "{} bytes", after.reply_bytes);
+        eprintln!("the 0.7 store after the move: {} entries, a listing of {} bytes", after.entries.len(), after.reply_bytes);
     }
 
     #[test]

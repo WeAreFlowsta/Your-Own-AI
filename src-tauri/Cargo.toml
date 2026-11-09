@@ -69,7 +69,7 @@ log = "0.4"
 tauri-plugin-updater = "~2.12.0"
 flowsta-update-check = { git = "https://github.com/WeAreFlowsta/flowsta-update-check", rev = "1e892e20aa577a3ece65945b3d8f0fd4b95532f6" }
 url = "2"
-flowsta-hc-lines = { git = "https://github.com/WeAreFlowsta/flowsta-hc-lines", rev = "b8b1559a6b5cae2cea2ff61f69f458942a0428f5" }
+flowsta-hc-lines = { git = "https://github.com/WeAreFlowsta/flowsta-hc-lines", rev = "e8b3d68633ef3982f6aa812a03c0195ef900e31e" }
 async-trait = "0.1"
 lair_keystore_api = "=0.6.3"
 holochain_client = { version = "=0.8.1", default-features = false }
@@ -142,3 +142,4 @@ block2 = "0.6"
 # person has been away (machine.rs); the zbus the notification plugin builds.
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "5"
+

@@ -277,47 +277,100 @@ const FOLDER_MAP_KEY = "conversation-folders";
 const LAST_CONVERSATION_KEY = "last-conversation";
 const TITLE_MAP_KEY = "conversation-titles";
 
+/* The window's storage is one for every identity on this computer, so each
+ * note below is kept under the open profile's name (one profile per
+ * identity; it stays the same for a run, and an identity switch restarts the
+ * app). Until the profile is known, notes read as absent and are not
+ * written. Notes an older build kept for every identity at once: a rename or
+ * a project folder is still read (it can only match its own identity's
+ * conversations); the continue pointer is taken over only by the profile
+ * whose AI it names. */
+let scope: string | null = null;
+let scoping: Promise<void> | null = null;
+
+function scoped(base: string): string | null {
+  return scope ? `${base}:${scope}` : null;
+}
+
+/** Learn the open profile (once per run); every note helper waits for it. */
+export function initConversationNotes(): Promise<void> {
+  if (!scoping) {
+    scoping = (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const path = await invoke<string>("profile_store_path", { name: "ai-data.json" });
+        const parts = path.split(/[\\/]/);
+        scope = parts[parts.length - 2] || "default";
+      } catch {
+        scope = "default";
+      }
+      try {
+        const raw = localStorage.getItem(LAST_CONVERSATION_KEY);
+        const p = raw ? JSON.parse(raw) : null;
+        if (p && typeof p.hash === "string") {
+          const { getLocalCustomAis } = await import("./localAiStorage");
+          const mine = (await getLocalCustomAis()).some((ai) => ai.agentPubKey === p.agentKey);
+          if (mine) {
+            localStorage.setItem(scoped(LAST_CONVERSATION_KEY)!, raw!);
+            localStorage.removeItem(LAST_CONVERSATION_KEY);
+          }
+        }
+      } catch {
+        /* convenience metadata */
+      }
+    })();
+  }
+  return scoping;
+}
+
+function readMap(key: string | null): Record<string, string> {
+  if (!key) return {};
+  try {
+    const map = JSON.parse(localStorage.getItem(key) || "{}");
+    return map && typeof map === "object" ? map : {};
+  } catch {
+    return {};
+  }
+}
+
+/** This profile's note for `hash`, else what an older build kept for every
+ *  identity (it names this identity's conversations only). */
+function readNote(base: string, hash: string): string | undefined {
+  if (!scope) return undefined;
+  const v = readMap(scoped(base))[hash] ?? readMap(base)[hash];
+  return typeof v === "string" ? v : undefined;
+}
+
+function writeNote(base: string, hash: string, value: string) {
+  const key = scoped(base);
+  if (!key) return;
+  try {
+    const map = readMap(key);
+    map[hash] = value;
+    localStorage.setItem(key, JSON.stringify(map));
+  } catch {
+    /* convenience metadata */
+  }
+}
+
 /** Rename is a client-side override for now: on-chain rename needs a small
  *  zome addition (conversation titles are zome-side metadata, unlike the
  *  encrypted entries) - queued for the next DNA window. */
 export function setConversationTitleOverride(hash: string, title: string) {
-  try {
-    const map = JSON.parse(localStorage.getItem(TITLE_MAP_KEY) || "{}");
-    map[hash] = title;
-    localStorage.setItem(TITLE_MAP_KEY, JSON.stringify(map));
-  } catch {
-    /* convenience metadata */
-  }
+  writeNote(TITLE_MAP_KEY, hash, title);
 }
 
 export function getConversationTitleOverride(hash: string): string | undefined {
-  try {
-    const map = JSON.parse(localStorage.getItem(TITLE_MAP_KEY) || "{}");
-    return typeof map[hash] === "string" && map[hash].trim()
-      ? map[hash]
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  const t = readNote(TITLE_MAP_KEY, hash);
+  return t && t.trim() ? t : undefined;
 }
 
 export function rememberConversationFolder(hash: string, folderPath: string) {
-  try {
-    const map = JSON.parse(localStorage.getItem(FOLDER_MAP_KEY) || "{}");
-    map[hash] = folderPath;
-    localStorage.setItem(FOLDER_MAP_KEY, JSON.stringify(map));
-  } catch {
-    /* convenience metadata */
-  }
+  writeNote(FOLDER_MAP_KEY, hash, folderPath);
 }
 
 export function getConversationFolder(hash: string): string | undefined {
-  try {
-    const map = JSON.parse(localStorage.getItem(FOLDER_MAP_KEY) || "{}");
-    return typeof map[hash] === "string" ? map[hash] : undefined;
-  } catch {
-    return undefined;
-  }
+  return readNote(FOLDER_MAP_KEY, hash);
 }
 
 export interface LastConversationPointer {
@@ -328,16 +381,20 @@ export interface LastConversationPointer {
 }
 
 export function rememberLastConversation(p: LastConversationPointer) {
+  const key = scoped(LAST_CONVERSATION_KEY);
+  if (!key) return;
   try {
-    localStorage.setItem(LAST_CONVERSATION_KEY, JSON.stringify(p));
+    localStorage.setItem(key, JSON.stringify(p));
   } catch {
     /* convenience metadata */
   }
 }
 
 export function readLastConversation(): LastConversationPointer | null {
+  const key = scoped(LAST_CONVERSATION_KEY);
+  if (!key) return null;
   try {
-    const raw = JSON.parse(localStorage.getItem(LAST_CONVERSATION_KEY) || "null");
+    const raw = JSON.parse(localStorage.getItem(key) || "null");
     return raw && typeof raw.hash === "string" ? raw : null;
   } catch {
     return null;

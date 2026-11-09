@@ -90,7 +90,10 @@ export default component$(() => {
   const l = line.value;
   const stopped = new Set(l?.stopped_waiting ?? []);
   const failing = l?.last_pass?.failing ?? [];
-  const paused = l?.last_pass?.skipped?.startsWith("the disk is almost full") ? l.last_pass.skipped : null;
+  // Reasons the move waits that the person should know (the others are
+  // passing states the next pass clears).
+  const skipped = l?.last_pass?.skipped ?? "";
+  const paused = skipped.startsWith("the disk is almost full") || skipped.startsWith("this computer has more AIs") ? skipped : null;
 
   return (
     <section

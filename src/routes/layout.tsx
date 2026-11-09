@@ -367,6 +367,12 @@ export default component$(() => {
       /* the notice stays; the person can quit and reopen */
     }
   });
+  // The conversation notes (renames, project folders, the continue
+  // pointer) are kept per profile: learn the open one before any page reads them.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(() => {
+    import("../utils/conversationResume").then((m) => m.initConversationNotes()).catch(() => { /* not inside Tauri */ });
+  });
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async ({ cleanup }) => {
     try {
