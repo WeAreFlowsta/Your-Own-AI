@@ -65,7 +65,14 @@ pub async fn agents_with_apps() -> Result<std::collections::HashSet<String>, Str
 /// as another key is left as it is and skipped: one such app never stops
 /// the others, nor the 0.7 line.
 pub async fn ensure_apps(resource_dir: &Path, network_seed: &str, v1_apps: &[(String, Vec<u8>)]) -> Result<usize, String> {
-    ensure_apps_on(&admin().await?, resource_dir, network_seed, v1_apps).await
+    let admin = admin().await?;
+    let installed = ensure_apps_on(&admin, resource_dir, network_seed, v1_apps).await?;
+    if installed > 0 {
+        if let Some(root) = crate::conductor::profile_root() {
+            crate::conductor::note_apps_07(&admin, root).await;
+        }
+    }
+    Ok(installed)
 }
 
 /// [`ensure_apps`] on a 0.7 admin connection the caller holds (the line's

@@ -596,6 +596,10 @@ impl LineHooks for YoaiLines {
                 crate::move_07::note_paused(why.clone());
                 return Err(why);
             }
+        } else if line == Line::V07 {
+            // With no 0.6 line to ask, the keys in use are the ones noted
+            // while the 0.7 line last ran. The line starts either way.
+            prune_store_07(&self.data_dir, passphrase).await;
         }
         let entry = entry_for(line, role).await;
         // One origin per app start, shared by both lines: the primary makes
@@ -640,6 +644,12 @@ impl LineHooks for YoaiLines {
         // line is down).
         if line == Line::V06 {
             OLD_LINE_FAILED.store(false, Ordering::SeqCst);
+        }
+        if line == Line::V07 {
+            match AdminClient::connect(Line::V07, admin_port, &supervisor().origin()).await {
+                Ok(admin) => note_apps_07(&admin, &self.data_dir).await,
+                Err(e) => log::warn!("[0.7] key store: the keys in use were not noted ({e})"),
+            }
         }
         if line == Line::V06 && role == Role::Secondary {
             if let Some(app) = &self.app {
@@ -744,7 +754,82 @@ async fn trim_store_07(data_dir: &Path, passphrase: &str) -> Result<(), String> 
     }
     let mut in_use: std::collections::HashSet<[u8; 32]> = transcript_apps_06().await?.iter().filter_map(|(_, k)| core_key(k)).collect();
     in_use.extend(ai_list_keys(data_dir));
+    in_use.extend(noted_keys_07(data_dir).unwrap_or_default());
     trim_to(&lair_07, passphrase, &in_use).await
+}
+
+/// The agent keys the 0.7 line's transcript apps run under (32 core bytes,
+/// hex, one a line), noted while the line runs: what [`prune_store_07`]
+/// keeps when no 0.6 line can be asked.
+pub(crate) const KEYS_07_IN_USE_FILE: &str = "lair-07-keys-in-use";
+
+/// The room a 0.7 key store keeps for new AIs: [`prune_store_07`] acts once
+/// a listing of the store comes within this of one lair message (three
+/// keys, at about 200 bytes each).
+const PRUNE_ROOM: usize = 600;
+
+fn write_noted_keys_07(data_dir: &Path, keys: &std::collections::BTreeSet<[u8; 32]>) {
+    let text: String = keys.iter().map(|k| hex::encode(k) + "\n").collect();
+    if let Err(e) = flowsta_hc_lines::files::write_atomic_private(&data_dir.join(KEYS_07_IN_USE_FILE), text.as_bytes()) {
+        log::warn!("[0.7] key store: the keys in use were not noted ({e})");
+    }
+}
+
+/// The keys noted as in use on the 0.7 line; None before any 0.7 session
+/// has noted them.
+pub(crate) fn noted_keys_07(data_dir: &Path) -> Option<std::collections::BTreeSet<[u8; 32]>> {
+    let text = std::fs::read_to_string(data_dir.join(KEYS_07_IN_USE_FILE)).ok()?;
+    Some(text.lines().filter_map(|l| hex::decode(l.trim()).ok()?.try_into().ok()).collect())
+}
+
+/// Note every transcript app the 0.7 line holds (disabled ones too) as the
+/// keys in use there, replacing the last note. An app that was removed
+/// gives up its key unless the AI list still names it.
+pub(crate) async fn note_apps_07(admin: &AdminClient, data_dir: &Path) {
+    match admin.list_apps().await {
+        Ok(apps) => {
+            let keys = apps.iter().filter(|a| a.app_id.starts_with(crate::hc07::APP_ID_PREFIX)).filter_map(|a| core_key(&a.agent_key)).collect();
+            write_noted_keys_07(data_dir, &keys);
+        }
+        Err(e) => log::warn!("[0.7] key store: the keys in use were not noted ({e})"),
+    }
+}
+
+/// Note one more key as in use on the 0.7 line: a key just made there,
+/// before its app is installed.
+pub(crate) fn note_key_07(key: [u8; 32]) {
+    let Some(root) = profile_root() else { return };
+    let mut keys = noted_keys_07(root).unwrap_or_default();
+    if keys.insert(key) {
+        write_noted_keys_07(root, &keys);
+    }
+}
+
+/// A 0.7 key store with no 0.6 line beside it (the profile has moved, or
+/// the 0.6 line did not start) grows by a key for every AI made, and keeps
+/// the keys of AIs since removed. Before a listing of it outgrows one lair
+/// message, when Holochain 0.7.1 could no longer install an app for a new
+/// AI, it keeps only the keys in use: the ones noted while the line ran
+/// ([`KEYS_07_IN_USE_FILE`]) and every key the AI list names. With no note
+/// yet the store is left as it is. Nothing here stops the line starting.
+async fn prune_store_07(data_dir: &Path, passphrase: &str) {
+    let (lair_07, _) = line_dirs(data_dir, Line::V07);
+    if !flowsta_hc_lines::keystore::config_path(&lair_07).exists() {
+        return;
+    }
+    let Some(noted) = noted_keys_07(data_dir) else { return };
+    let listing = match flowsta_hc_lines::keystore::entries(&lair_07, Line::V07, passphrase).await {
+        Ok(l) => l,
+        Err(e) => return log::warn!("[0.7] key store: not read before the start ({e})"),
+    };
+    if listing.reply_bytes + PRUNE_ROOM <= flowsta_hc_lines::keystore::LAIR_REPLY_MAX {
+        return;
+    }
+    let mut in_use: std::collections::HashSet<[u8; 32]> = noted.into_iter().collect();
+    in_use.extend(ai_list_keys(data_dir));
+    if let Err(e) = trim_to(&lair_07, passphrase, &in_use).await {
+        log::warn!("[0.7] key store: {e}; new AIs wait until some are removed");
+    }
 }
 
 /// Keep, in the stopped 0.7 key store at `lair_07`, the keys in `in_use`
@@ -1156,5 +1241,58 @@ mod store_07_trim_tests {
         let err = trim_to(&full, "p", &all).await.expect_err("sixty keys in use do not fit");
         assert!(err.starts_with("this computer has more AIs than the new version can take yet"), "{err}");
         println!("TRIM guard: {err}");
+    }
+
+    #[test]
+    fn the_keys_noted_on_07_read_back_and_none_noted_is_not_an_empty_note() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(noted_keys_07(tmp.path()).is_none(), "no 0.7 session has noted its keys yet");
+        write_noted_keys_07(tmp.path(), &[[1u8; 32], [2u8; 32]].into_iter().collect());
+        assert_eq!(noted_keys_07(tmp.path()).unwrap().into_iter().collect::<Vec<_>>(), vec![[1u8; 32], [2u8; 32]]);
+        write_noted_keys_07(tmp.path(), &Default::default());
+        assert_eq!(noted_keys_07(tmp.path()).map(|k| k.len()), Some(0), "a line with no apps noted none");
+    }
+
+    /// A moved profile's store: `cargo test --lib -- --ignored live_prune --nocapture`.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn live_prune_keeps_noted_and_listed_keys_once_the_store_nears_one_lair_message() {
+        let held = |profile: PathBuf| async move {
+            let l = flowsta_hc_lines::keystore::entries(&profile.join("lair-07"), Line::V07, "p").await.unwrap();
+            (l.entries.iter().filter_map(|e| e.ed25519).collect::<HashSet<[u8; 32]>>(), l.entries.len(), l.reply_bytes)
+        };
+        let agent_hex = |k: &[u8; 32]| hex::encode(holochain_types::prelude::AgentPubKey::from_raw_32(k.to_vec()).get_raw_39());
+
+        // Forty-five keys, most from AIs since removed.
+        let tmp = tempfile::tempdir().unwrap();
+        let profile = tmp.path().join("moved");
+        let keys = store_07_with(&profile.join("lair-07"), "p", 45).await;
+        prune_store_07(&profile, "p").await;
+        assert_eq!(held(profile.clone()).await.1, 46, "with no note of the keys in use, the store is left as it is");
+
+        // Ten noted while the line ran, two more named by the AI list.
+        write_noted_keys_07(&profile, &keys[..10].iter().copied().collect());
+        let list = serde_json::json!({ "custom-ais": [{ "agentPubKey": agent_hex(&keys[10]), "foundingKey": agent_hex(&keys[11]) }] });
+        std::fs::write(profile.join("ai-data.json"), list.to_string()).unwrap();
+        prune_store_07(&profile, "p").await;
+        let (after, entries, bytes) = held(profile.clone()).await;
+        assert!(keys[..12].iter().all(|k| after.contains(k)), "the noted and the listed keys are kept");
+        assert!(keys[12..].iter().all(|k| !after.contains(k)), "the rest are left out");
+        assert_eq!(entries, 13, "and Holochain's own entry");
+        println!("PRUNE: 46 entries -> {entries} ({bytes} bytes)");
+
+        // A store with room is not touched, whatever the note says.
+        let roomy = tmp.path().join("roomy");
+        let few = store_07_with(&roomy.join("lair-07"), "p", 20).await;
+        write_noted_keys_07(&roomy, &few[..5].iter().copied().collect());
+        prune_store_07(&roomy, "p").await;
+        assert_eq!(held(roomy).await.1, 21, "twenty keys leave room for more");
+
+        // Every key in use and still too many: nothing is lost, and the store stands.
+        let full = tmp.path().join("full");
+        let all = store_07_with(&full.join("lair-07"), "p", 45).await;
+        write_noted_keys_07(&full, &all.iter().copied().collect());
+        prune_store_07(&full, "p").await;
+        assert_eq!(held(full).await.1, 46);
     }
 }
