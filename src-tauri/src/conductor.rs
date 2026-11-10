@@ -1211,6 +1211,9 @@ mod line_07_tests {
                     let record = RecordMessage { conversation_anchor: conversation.clone(), message_key, cipher: vec![8u8; 600], nonce: vec![1u8; 24] };
                     let _: ActionHash = cells.write(&agent_hex, "record_message", &record).await.expect("a message");
                     written += 1;
+                    if written % 1000 == 0 {
+                        eprintln!("[repro] {written} messages at {} s", started.elapsed().as_secs());
+                    }
                 }
             }
         }
