@@ -318,11 +318,14 @@ impl CopyUnits<Move> for Cells {
         let mv = cx.app.as_ref();
         let first = !mv.passed_in_full.swap(true, std::sync::atomic::Ordering::SeqCst);
         let all = Cells::all(mv).await?;
-        if first || !cx.moved {
-            return Ok(all);
-        }
-        let missed = crate::hc07::take_missed();
-        Ok(all.into_iter().filter(|u| missed.contains(&u.id)).collect())
+        let units: Vec<CopyUnit> = if first || !cx.moved {
+            all
+        } else {
+            let missed = crate::hc07::take_missed();
+            all.into_iter().filter(|u| missed.contains(&u.id)).collect()
+        };
+        note_pass_units(&units, !cx.moved);
+        Ok(units)
     }
 }
 
@@ -419,6 +422,10 @@ impl VersionedKind<Move> for Conversations {
     }
 
     async fn versions(&self, cx: &PassCx<'_, Move>, line: Line, unit: &CopyUnit) -> Result<Vec<Version>, HookError> {
+        if line == Line::V06 {
+            note_pass_at(self.name(), unit);
+        }
+        give_way().await;
         let mv = cx.app.as_ref();
         let agent = unit.id.as_str();
         let founding = mv.founding(agent);
@@ -452,6 +459,8 @@ impl VersionedKind<Move> for Conversations {
         if line != Line::V07 {
             return Err("conversations are carried to the 0.7 line only".into());
         }
+        give_way().await;
+        progress(|p| p.written += 1);
         let mv = cx.app.as_ref();
         let body: Body = rmp_serde::from_slice(&v.body)?;
         let (cipher, nonce) = reseal(&mv.data_key, &body)?;
@@ -477,6 +486,10 @@ impl VersionedKind<Move> for Messages {
     }
 
     async fn versions(&self, cx: &PassCx<'_, Move>, line: Line, unit: &CopyUnit) -> Result<Vec<Version>, HookError> {
+        if line == Line::V06 {
+            note_pass_at(self.name(), unit);
+        }
+        give_way().await;
         let mv = cx.app.as_ref();
         let agent = unit.id.as_str();
         match line {
@@ -557,6 +570,8 @@ impl VersionedKind<Move> for Messages {
         if line != Line::V07 {
             return Err("messages are carried to the 0.7 line only".into());
         }
+        give_way().await;
+        progress(|p| p.written += 1);
         let mv = cx.app.as_ref();
         let body: Body = rmp_serde::from_slice(&v.body)?;
         let conversation_id = body.conversation_id.clone().ok_or("a message without its conversation")?;
@@ -619,6 +634,10 @@ impl VersionedKind<Move> for MemoryRows {
     }
 
     async fn versions(&self, cx: &PassCx<'_, Move>, line: Line, unit: &CopyUnit) -> Result<Vec<Version>, HookError> {
+        if line == Line::V06 {
+            note_pass_at(self.name(), unit);
+        }
+        give_way().await;
         let mv = cx.app.as_ref();
         let agent = unit.id.as_str();
         let mut rows = mine_06(mv, agent).await?;
@@ -671,6 +690,8 @@ impl VersionedKind<Move> for MemoryRows {
         if line != Line::V07 {
             return Err("memory rows are carried to the 0.7 line only".into());
         }
+        give_way().await;
+        progress(|p| p.written += 1);
         let mv = cx.app.as_ref();
         let b: RowBody = rmp_serde::from_slice(&v.body)?;
         // A row's plaintext already carries its id: the sealed bytes go
@@ -737,7 +758,7 @@ pub struct Tombstones;
 #[async_trait::async_trait]
 impl flowsta_hc_lines::pass::CarriedRecords<Move> for Tombstones {
     fn name(&self) -> &'static str {
-        "tombstones"
+        TOMBSTONES
     }
 
     fn blocks_flip(&self) -> bool {
@@ -764,6 +785,7 @@ impl flowsta_hc_lines::pass::CarriedRecords<Move> for Tombstones {
                 report.total += 1;
                 let anchor = conversation_anchor(&mv.data_key, &id);
                 if !have.contains(&anchor) {
+                    give_way().await;
                     let input = crate::hc07::DeleteConversation { anchor: Move::agent_key(&founding)?, conversation_anchor: ExternalHash::from_raw_32(anchor.to_vec()) };
                     let _: u32 = mv.cells.write(agent, "delete_conversation", &input).await?;
                     report.add("written", 1);
@@ -842,6 +864,125 @@ fn note_pass(p: LastPass) {
     }
 }
 
+/// The carried kind's name in a pass outcome.
+const TOMBSTONES: &str = "tombstones";
+
+/// Where a running pass is, for the log and Settings > Devices.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+pub struct PassProgress {
+    /// The kind being copied ("conversations", "messages", "memory rows").
+    pub kind: &'static str,
+    /// The AI being copied, counted from 1, and how many the pass covers.
+    pub ai: usize,
+    pub ais: usize,
+    /// Records written so far this pass.
+    pub written: usize,
+    /// The pass is giving way to the person right now.
+    pub waiting: bool,
+    /// The profile's writes have not moved yet: this is the move itself,
+    /// not a later pass that keeps the two lines level.
+    pub first_move: bool,
+}
+
+static PROGRESS: std::sync::Mutex<Option<PassProgress>> = std::sync::Mutex::new(None);
+/// The AIs of the running pass, in the order it copies them.
+static PASS_UNITS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// The running pass's place, None between passes.
+pub fn pass_progress() -> Option<PassProgress> {
+    PROGRESS.lock().ok().and_then(|p| p.clone())
+}
+
+fn progress(change: impl FnOnce(&mut PassProgress)) -> Option<PassProgress> {
+    let mut p = PROGRESS.lock().ok()?;
+    let at = p.get_or_insert_with(PassProgress::default);
+    change(at);
+    Some(at.clone())
+}
+
+/// A pass begins on these AIs.
+fn note_pass_units(units: &[CopyUnit], first_move: bool) {
+    if let Ok(mut ids) = PASS_UNITS.lock() {
+        *ids = units.iter().map(|u| u.id.clone()).collect();
+    }
+    if let Ok(mut p) = PROGRESS.lock() {
+        *p = Some(PassProgress { ais: units.len(), first_move, ..Default::default() });
+    }
+}
+
+/// The pass reads `unit`'s records of `kind` on the 0.6 line: its next AI.
+/// The move itself logs each one, so a long move shows where it is.
+fn note_pass_at(kind: &'static str, unit: &CopyUnit) {
+    let ai = PASS_UNITS.lock().ok().and_then(|ids| ids.iter().position(|id| *id == unit.id)).map(|i| i + 1).unwrap_or(0);
+    let mut moved_on = false;
+    let now = progress(|p| {
+        moved_on = p.kind != kind || p.ai != ai;
+        p.kind = kind;
+        p.ai = ai;
+    });
+    if let Some(p) = now.filter(|p| moved_on && p.first_move) {
+        log::info!("[0.7] pass: {kind}, AI {} of {} ({} written so far)", p.ai, p.ais, p.written);
+    }
+}
+
+fn note_pass_over() {
+    if let Ok(mut p) = PROGRESS.lock() {
+        *p = None;
+    }
+}
+
+/// The person's own reads and writes of their conversations, in flight now
+/// or just finished: the pass gives way to them.
+static PERSON_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static PERSON_LAST_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// How long after the person's last call the pass stays out of the way: the
+/// next call of one click (a list, then its conversation) follows within it.
+const PERSON_QUIET: Duration = Duration::from_secs(5);
+
+fn clock_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+/// Held by a command the person waits on, for as long as it runs.
+pub struct PersonCall(());
+
+/// A command the person waits on (a conversation list, a conversation, a
+/// message written) begins: the pass's next read or write waits for it.
+pub fn person_call() -> PersonCall {
+    PERSON_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    PersonCall(())
+}
+
+impl Drop for PersonCall {
+    fn drop(&mut self) {
+        PERSON_LAST_MS.store(clock_ms(), std::sync::atomic::Ordering::SeqCst);
+        PERSON_CALLS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+fn person_busy(now_ms: u64) -> bool {
+    PERSON_CALLS.load(std::sync::atomic::Ordering::SeqCst) > 0
+        || now_ms.saturating_sub(PERSON_LAST_MS.load(std::sync::atomic::Ordering::SeqCst)) < PERSON_QUIET.as_millis() as u64
+}
+
+/// Before each of the pass's reads and writes: wait while the person is
+/// reading or writing their conversations, and while the computer is short
+/// of memory. A pass copies thousands of records one at a time, and each one
+/// would otherwise stand in front of what the person just asked for.
+async fn give_way() {
+    let mut waited = false;
+    while person_busy(clock_ms()) || !crate::machine::would_run(crate::machine::Work::Light) {
+        if !waited {
+            waited = true;
+            progress(|p| p.waiting = true);
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    if waited {
+        progress(|p| p.waiting = false);
+    }
+}
+
 /// Free space a pass needs on the profile's disk: a pass copies records,
 /// and a full disk stops every write (this app's and the person's others).
 const PASS_MIN_FREE: u64 = 1024 * 1024 * 1024;
@@ -855,7 +996,16 @@ fn describe(out: &flowsta_hc_lines::pass::PassOutcome) -> String {
     if let Some(why) = &out.skipped {
         return format!("skipped: {why}");
     }
-    let kinds: Vec<String> = out.kinds.iter().map(|k| format!("{} {}/{} (+{}){}", k.name, k.present + k.written, k.total, k.written, if k.complete { "" } else { " incomplete" })).collect();
+    // An own kind counts what it wrote. A carried kind's `written` is what
+    // the 0.7 line holds after the pass; its writes are the "written" detail.
+    let kinds: Vec<String> = out
+        .kinds
+        .iter()
+        .map(|k| {
+            let (held, wrote) = if k.name == TOMBSTONES { (k.written, k.detail("written")) } else { (k.present + k.written, k.written) };
+            format!("{} {held}/{} (+{wrote}){}", k.name, k.total, if k.complete { "" } else { " incomplete" })
+        })
+        .collect();
     format!("{}{}{} in {} ms", kinds.join(", "), if out.flipped { "; flipped" } else { "" }, out.error.as_ref().map(|e| format!("; {e}")).unwrap_or_default(), out.took_ms)
 }
 
@@ -974,6 +1124,7 @@ pub fn run_passes(app: tauri::AppHandle, data_dir: std::path::PathBuf) {
             }
             wait_for_06_agents(&hc).await;
             let out = runner.run(&m, &data_dir, "the 0.7 line is up").await;
+            note_pass_over();
             log::info!("[0.7] pass: {}", describe(&out));
             // An AI whose copy failed is copied again by the next pass.
             let mut failing: Vec<(String, String)> = Vec::new();
@@ -1609,6 +1760,30 @@ mod tests {
         assert!(agents[LIVE + 1..].iter().all(|a| !held.contains(&core(a))), "the other tidied AIs' keys left out");
         assert!(after.fits(), "{} bytes", after.reply_bytes);
         eprintln!("the 0.7 store after the move: {} entries, a listing of {} bytes", after.entries.len(), after.reply_bytes);
+    }
+
+    #[test]
+    fn the_pass_line_counts_a_carried_kinds_writes_not_what_it_confirmed() {
+        use flowsta_hc_lines::pass::{KindOutcome, PassOutcome};
+        let own = KindOutcome { name: "messages", total: 10, present: 7, written: 3, complete: true, ..Default::default() };
+        let confirmed = KindOutcome { name: TOMBSTONES, total: 1880, written: 1880, complete: true, ..Default::default() };
+        let out = PassOutcome { kinds: vec![own.clone(), confirmed], took_ms: 5, ..Default::default() };
+        assert_eq!(describe(&out), "messages 10/10 (+3), tombstones 1880/1880 (+0) in 5 ms");
+        let wrote = KindOutcome { name: TOMBSTONES, total: 4, written: 4, details: vec![("written", 2)], complete: true, ..Default::default() };
+        let out = PassOutcome { kinds: vec![own, wrote], took_ms: 5, ..Default::default() };
+        assert_eq!(describe(&out), "messages 10/10 (+3), tombstones 4/4 (+2) in 5 ms");
+    }
+
+    #[test]
+    fn the_pass_gives_way_during_a_persons_call_and_just_after() {
+        // Nothing asked yet this session.
+        assert!(!person_busy(clock_ms()));
+        let call = person_call();
+        assert!(person_busy(clock_ms()), "a call in flight");
+        drop(call);
+        let ended = PERSON_LAST_MS.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(person_busy(ended + 1_000), "just after it");
+        assert!(!person_busy(ended + PERSON_QUIET.as_millis() as u64), "quiet again");
     }
 
     #[test]

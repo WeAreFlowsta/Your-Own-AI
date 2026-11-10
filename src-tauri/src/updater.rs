@@ -468,19 +468,43 @@ pub fn dismiss_updated(app: tauri::AppHandle) {
     }
 }
 
+/// How long "Restart to update" waits for the Vault backup before it: a
+/// long-used profile's backup takes minutes, and one already running when
+/// the button is pressed is waited for too.
+const BACKUP_BEFORE_INSTALL: Duration = Duration::from_secs(15 * 60);
+
 /// "Restart to update". The install runs off the main thread, so the window
 /// keeps drawing (and says each step, as `update-stage`) while the
 /// conductors stop and the package installs.
 #[tauri::command]
 pub async fn restart_to_update(app: tauri::AppHandle) -> Result<(), String> {
-    // A Vault backup first, for a person who uses the Vault: bounded, and
-    // without the Vault it ends at once (no app needs the Vault to update).
+    // A Vault backup first, for a person who uses the Vault: without the
+    // Vault it ends at once (no app needs the Vault to update). A backup
+    // already running is waited for, then ours runs: the install stops the
+    // conductors, and a backup cut off there fails its reads and leaves no
+    // backup of this moment. Bounded, so a backup that hangs never blocks
+    // an update for good.
     if READY.lock().unwrap().is_some() {
         let _ = app.emit("update-stage", "backup");
-        match tokio::time::timeout(Duration::from_secs(90), crate::vault_escrow::write_full_backup(&app)).await {
+        let backup = async {
+            let mut waited_for_another = false;
+            loop {
+                match crate::vault_escrow::write_full_backup(&app).await {
+                    Err(e) if e == "backup_in_progress" => {
+                        if !waited_for_another {
+                            waited_for_another = true;
+                            log::info!("[update] a Vault backup is running: the install waits for it");
+                        }
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                    other => break other,
+                }
+            }
+        };
+        match tokio::time::timeout(BACKUP_BEFORE_INSTALL, backup).await {
             Ok(Ok(_)) => log::info!("[update] backed up to the Vault before the install"),
             Ok(Err(e)) => log::info!("[update] no Vault backup before the install ({e})"),
-            Err(_) => log::warn!("[update] the Vault backup took over 90 s: installing without waiting for it"),
+            Err(_) => log::warn!("[update] the Vault backup took over {} min: installing without waiting for it", BACKUP_BEFORE_INSTALL.as_secs() / 60),
         }
     }
     let data_dir = device_root(&app);

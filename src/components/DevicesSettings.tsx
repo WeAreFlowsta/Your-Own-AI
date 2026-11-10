@@ -27,6 +27,8 @@ interface LineStatus {
   stopped_waiting: string[];
   checked_at_ms: number;
   last_pass: { at_ms: number; summary: string; skipped: string | null; failing: [string, string][] } | null;
+  /** Where the running pass is; null between passes. */
+  pass_progress: { kind: string; ai: number; ais: number; written: number; waiting: boolean; first_move: boolean } | null;
 }
 
 const DOWNLOAD_PAGE = "https://yourownai.net/download/";
@@ -94,6 +96,9 @@ export default component$(() => {
   // passing states the next pass clears).
   const skipped = l?.last_pass?.skipped ?? "";
   const paused = skipped.startsWith("the disk is almost full") || skipped.startsWith("this computer has more AIs") ? skipped : null;
+  // The move itself, while it runs (later passes only keep the two versions
+  // level and say nothing).
+  const moving = l?.pass_progress?.first_move && l.pass_progress.ais > 0 ? l.pass_progress : null;
 
   return (
     <section
@@ -200,8 +205,19 @@ export default component$(() => {
           </div>
         )}
 
+        {/* The move while it runs: which AI it is on, and that it waits for the person. */}
+        {moving && !paused && (
+          <div class="flex items-center gap-3" data-testid="device-move-running">
+            <LuLoader2 class={`w-5 h-5 text-[var(--text-muted)] shrink-0 ${moving.waiting ? "" : "animate-spin"}`} />
+            <span class="text-sm text-[var(--text-secondary)]">
+              {`Moving your history to the new version: AI ${Math.max(moving.ai, 1)} of ${moving.ais}.`}
+              {moving.waiting ? " It waits while you read or write, and carries on when you stop." : " You can keep using the app."}
+            </span>
+          </div>
+        )}
+
         {/* This computer's own move to the new version, while it has not finished. */}
-        {(paused || failing.length > 0) && (
+        {(paused || (failing.length > 0 && !moving)) && (
           <div class="flex items-center gap-3" data-testid="device-move-pending" title={paused ? undefined : failing[0]?.[1]}>
             <LuLoader2 class="w-5 h-5 text-[var(--text-muted)] shrink-0" />
             <span class="text-sm text-[var(--text-secondary)]">

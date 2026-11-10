@@ -600,6 +600,8 @@ pub struct LineStatus {
     /// The move's last pass (none yet this session), and the AIs it could
     /// not carry, with why: a move that does not finish says so.
     pub last_pass: Option<crate::move_07::LastPass>,
+    /// Where the running pass is (none between passes).
+    pub pass_progress: Option<crate::move_07::PassProgress>,
 }
 
 #[derive(Serialize)]
@@ -631,6 +633,7 @@ pub fn line_status(app: tauri::AppHandle) -> Result<LineStatus, String> {
         stopped_waiting: facts.stopped_waiting.iter().map(|w| w.id.clone()).collect(),
         checked_at_ms: facts.checked_at_ms,
         last_pass: crate::move_07::last_pass(),
+        pass_progress: crate::move_07::pass_progress(),
     })
 }
 
