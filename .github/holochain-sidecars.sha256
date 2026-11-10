@@ -15,10 +15,10 @@ c3312988eb14fcb0ee0d6cba01e8a41601f48c7a69e03135cbd737d0d9ad774d  holochain-0.6.
 5ec0c1a70b96ccc625efcee3e23f9d054cadccee379101e179eebb225d7b19d7  holochain-0.6.1/lair-keystore-x86_64-apple-darwin
 2bbb29415da515a3732cb8d3c51fcf933eb2c44605de2036b8671821b5a414a0  holochain-0.6.1/lair-keystore-x86_64-pc-windows-msvc.exe
 4d13042d70803d9556bad5f2bfcd01e7daf33ee51ced16cd8d2377a321cceed0  holochain-0.6.1/lair-keystore-x86_64-unknown-linux-gnu
-9463140246a0c122d56750ff3d413fbd5102168bdcc979caaa978e2836f0386e  holochain-0.7.1-flowsta.1/holochain-aarch64-apple-darwin
-60de5b803dd4ad9e42f864f63fd2620f49a8154cc817db43524140513cbed30b  holochain-0.7.1-flowsta.1/holochain-x86_64-apple-darwin
-2513fe1e5c6bd4c4fee0734e4061308884db991e1d8725b782ed54a0141ddcdf  holochain-0.7.1-flowsta.1/holochain-x86_64-pc-windows-msvc.exe
-4abbddd83644ffbb48a27eabe6652c8c29c0642cd055db52558789d21b0f20e0  holochain-0.7.1-flowsta.1/holochain-x86_64-unknown-linux-gnu
+8a917d456c15aa591f6050ddc894eef8ba5d1edee0292f1cb37dd08913af6484  holochain-0.7.1-flowsta.2/holochain-aarch64-apple-darwin
+96bfa80aca17df21eae458ffd626f1da5c960ddddf2c9485784ffbf16cc95b6f  holochain-0.7.1-flowsta.2/holochain-x86_64-apple-darwin
+b7c42bdacef00e69c77bd484fccb7266ff71e91526a0989f86d703824f7679b1  holochain-0.7.1-flowsta.2/holochain-x86_64-pc-windows-msvc.exe
+242c2ebca7a4616527f6677bdba365d36d5008e0e1fee8c19c0e2c080907bc0a  holochain-0.7.1-flowsta.2/holochain-x86_64-unknown-linux-gnu
 1e074d8587b8bc2125d9a379a443c27363b8e60955cad5faa8638d653dd19289  holochain-0.7.1/lair-keystore-aarch64-apple-darwin
 69a96c3b06eec29a288f04ecf0210bb281697423a3ee10bc393ceea0d712c823  holochain-0.7.1/lair-keystore-aarch64-unknown-linux-gnu
 34a40c1b4324801db1c028dafaf82ea3276c808971c6ad1830fcf445e6f35419  holochain-0.7.1/lair-keystore-x86_64-apple-darwin
