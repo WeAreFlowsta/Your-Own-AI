@@ -407,6 +407,8 @@ pub async fn start_conversation(
     source: Option<String>,
     hc_state: State<'_, Arc<HolochainState>>,
 ) -> Result<String, String> {
+    // The move's pass gives way to this call (move_07::give_way).
+    let _person = crate::move_07::person_call();
     let manager = hc_state.get()?;
 
     // Phase A: conversation metadata is encrypted with the user data key
@@ -565,6 +567,8 @@ pub async fn record_transcript_entry(
     folder_path: Option<String>,
     hc_state: State<'_, Arc<HolochainState>>,
 ) -> Result<String, String> {
+    // The move's pass gives way to this call (move_07::give_way).
+    let _person = crate::move_07::person_call();
     // The conversation's v1 hash, when it has one (a fresh id has none).
     let v1_conv = crate::transcript_ids::v1_hash(&conversation_hash);
     let (seq_for_search, role_for_search, content_for_search) = (sequence, role.clone(), content.clone());
@@ -1398,6 +1402,8 @@ pub async fn get_conversations(
     // asked for two AIs' lists every few seconds and no line said what).
     caller: Option<String>,
 ) -> Result<Vec<ConversationInfo>, String> {
+    // The move's pass gives way to this call (move_07::give_way).
+    let _person = crate::move_07::person_call();
     let manager = hc_state.get()?;
     if let Some(secs) = max_age_secs {
         if crate::conversation_cache::fresh_within(&app, &agent_key, secs) {
@@ -1657,6 +1663,8 @@ pub async fn delete_conversation(
     conversation_hash: String,
     hc_state: State<'_, Arc<HolochainState>>,
 ) -> Result<u32, String> {
+    // The move's pass gives way to this call (move_07::give_way).
+    let _person = crate::move_07::person_call();
     let v1_conv = crate::transcript_ids::v1_hash(&conversation_hash);
 
     let manager = hc_state.get()?;
@@ -1776,6 +1784,8 @@ pub async fn get_copy_transcript(
     device: String,
     hc_state: State<'_, Arc<HolochainState>>,
 ) -> Result<Vec<TranscriptEntryInfo>, String> {
+    // The move's pass gives way to this call (move_07::give_way).
+    let _person = crate::move_07::person_call();
     let data_key = hc_state.get()?.data_key()?;
     let port = crate::vault_escrow::escrow_port(&app, true).await.map_err(|s| s.error.unwrap_or(s.state))?;
     let labels: Vec<String> = crate::config_sync::sibling_conversations(&app)
@@ -1808,6 +1818,8 @@ pub async fn get_conversation_transcript(
     conversation_hash: String,
     hc_state: State<'_, Arc<HolochainState>>,
 ) -> Result<Vec<TranscriptEntryInfo>, String> {
+    // The move's pass gives way to this call (move_07::give_way).
+    let _person = crate::move_07::person_call();
     // Every way this read comes back empty is logged: an empty answer opens
     // as a blank conversation with a banner, and the log has to say which
     // of the three causes it was (field 09-10: the drawer click that only
@@ -1960,6 +1972,8 @@ pub async fn get_my_transcript_turns(
     agent_key: String,
     hc_state: State<'_, Arc<HolochainState>>,
 ) -> Result<Vec<TranscriptTurnInfo>, String> {
+    // The move's pass gives way to this call (move_07::give_way).
+    let _person = crate::move_07::person_call();
     let t0 = std::time::Instant::now();
     if !hc_state.get()?.is_provisioned(&agent_key).await {
         // No 0.6 cell for this AI here: its own turns from the 0.7 line.

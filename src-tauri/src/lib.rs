@@ -614,6 +614,9 @@ pub fn run() {
             .build())
         .plugin(tauri_plugin_log::Builder::new()
             .level(log::LevelFilter::Info)
+            // The machine check asks the session bus once a minute, and zbus
+            // logs every connection it opens at info: eight lines a minute.
+            .level_for("zbus", log::LevelFilter::Warn)
             // Keep rotated logs instead of discarding them - a support
             // case's history must survive an app restart (a beta failure's
             // log was lost to single-file rotation on 2026-08-06).
