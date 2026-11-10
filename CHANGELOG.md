@@ -41,6 +41,8 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - A copy installed with the Windows Installer (MSI) says when a new
   version is out and does not replace itself.
 - Setup no longer asks about updates; Settings has the switch.
+- Restart to update waits for a backup that is already running, up to 15
+  minutes, then takes its own backup before it installs.
 
 ### The move
 - Each computer moves its own history in the background, a little at a
@@ -61,6 +63,19 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - A computer with more AIs in use than the new version can take yet (about
   forty) keeps using the earlier version for now, and Settings > Devices
   says so. Everything keeps working there.
+- The move waits while you read or write a conversation and carries on
+  when you stop, so opening and sending stay quick while it runs. It does
+  not wait for the computer to be idle, so it finishes on a computer in
+  constant use. Settings > Devices shows which AI it has reached.
+- An AI with a long history stays quick to write to and to open. The
+  Holochain 0.7.1 that ships with Your Own AI is built by Flowsta from
+  the official source with five fixes for slowdowns that grew with the
+  size of your history; each one is listed, with its measurements, at
+  github.com/WeAreFlowsta/holochain-build.
+- With nothing to do, the background service rests: 1 to 2 percent of
+  one processor core in our tests with twenty AIs.
+- A computer where many AIs were made and later removed keeps room for
+  new ones.
 
 ### Your computer
 - Settings > "Do background work only when my computer is idle" (on by
