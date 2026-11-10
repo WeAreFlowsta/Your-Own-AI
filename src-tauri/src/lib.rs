@@ -73,8 +73,8 @@ use std::sync::Arc;
 /// Resolve a sidecar binary path.
 ///
 /// In production (bundled app), binaries are next to the main executable
-/// (e.g. Contents/MacOS/holochain on macOS). In development, the official
-/// release binaries in `src-tauri/binaries/` are preferred (same binaries
+/// (e.g. Contents/MacOS/holochain on macOS). In development, the
+/// downloaded binaries in `src-tauri/binaries/` are preferred (same binaries
 /// production ships — keeps dev and prod on the same conductor version),
 /// falling back to PATH if absent.
 pub fn resolve_sidecar_bin(name: &str) -> PathBuf {

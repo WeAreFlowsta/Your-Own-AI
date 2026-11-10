@@ -193,35 +193,16 @@ jobs:
           chmod +x "$DEST" 2>/dev/null || true
           echo "${BINARY} (${SIZE} bytes)"
 
-      # Official Holochain release binaries, downloaded at build time - the
-      # same pattern as Flowsta Vault (nothing compiled from source): each
-      # line's conductor and key store (0.6.1, and 0.7.1 with a -07 suffix).
-      # The binaries get a yourowai- prefix so the installers never collide
-      # with other Holochain apps' bundled conductors.
-      - name: Download Holochain binaries (official releases)
+      # The Holochain conductors and key stores, downloaded at build time and
+      # checked against .github/holochain-sidecars.sha256 (nothing is compiled
+      # here). 0.6.1 and both key stores are the official release binaries;
+      # the 0.7.1 conductor is WeAreFlowsta/holochain-build's, the official
+      # source with the patches listed in that repository. The binaries get a
+      # yourowai- prefix so the installers never collide with other Holochain
+      # apps' bundled conductors.
+      - name: Download Holochain binaries
         shell: bash
-        run: |
-          mkdir -p src-tauri/binaries
-          pinned() { awk -v k="$1" '$1 !~ /^#/ && $2 == k { print $1 }' .github/holochain-sidecars.sha256; }
-          sha() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
-          check() { # file, release/asset
-            w=$(pinned "$2"); g=$(sha "$1")
-            [ -n "$w" ] && [ "$g" = "$w" ] || { echo "$2: SHA-256 $g does not match the pinned ${w:-(none)}"; exit 1; }
-          }
-          T="${{ matrix.target }}"
-          EXT=""
-          if [ "$T" = "x86_64-pc-windows-msvc" ]; then EXT=".exe"; fi
-          for LINE in "holochain-0.6.1:" "holochain-0.7.1:-07"; do
-            HC_RELEASE="${LINE%%:*}"; SUFFIX="${LINE#*:}"
-            BASE="https://github.com/holochain/holochain/releases/download/${HC_RELEASE}"
-            for BIN in holochain lair-keystore; do
-              DEST="src-tauri/binaries/yourowai-${BIN}${SUFFIX}-${T}${EXT}"
-              curl -fsSL --retry 5 --retry-delay 20 --retry-all-errors "${BASE}/${BIN}-${T}${EXT}" -o "$DEST"
-              chmod +x "$DEST"
-              check "$DEST" "${HC_RELEASE}/${BIN}-${T}${EXT}"
-              echo "yourowai-${BIN}${SUFFIX}-${T}${EXT} (${HC_RELEASE}, checksum verified)"
-            done
-          done
+        run: ./download-holochain-binaries.sh "${{ matrix.target }}"
 
       # pdfium renders scanned-PDF pages for OCR. tauri.conf bundles
       # resources/pdfium/* but the binaries are gitignored - without this
