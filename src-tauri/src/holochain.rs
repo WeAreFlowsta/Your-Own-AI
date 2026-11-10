@@ -199,7 +199,10 @@ impl HolochainManager {
             }
         };
         match sup.add_agent(Line::V07, &pass_07, &source).await {
-            Ok(k07) if k07 == k06 => Some(k06),
+            Ok(k07) if k07 == k06 => {
+                crate::conductor::note_key_07(k07);
+                Some(k06)
+            }
             Ok(_) => {
                 log::warn!("[keys] {tag}: the two stores gave different keys; the 0.6 one is used, its v2 app waits");
                 None
@@ -232,6 +235,7 @@ impl HolochainManager {
             .add_agent(Line::V07, &pass_07, &flowsta_hc_lines::supervisor::KeySource::NewSeed { tag: format!("ai-{}", ai_id) })
             .await
             .map_err(|e| format!("Failed to create the key for AI {}: {}", ai_id, e))?;
+        crate::conductor::note_key_07(key);
         let agent = holochain_types::prelude::AgentPubKey::from_raw_32(key.to_vec());
         let v1_app_id = format!("{}{}", dna::APP_ID_PREFIX, ai_id);
         crate::hc07::ensure_apps(&self.resource_dir, &self.recovery.network_seed, &[(v1_app_id, agent.get_raw_39().to_vec())]).await?;
