@@ -1109,10 +1109,19 @@ mod line_07_tests {
         })
     }
 
+    /// What the conductor had written (bytes) at the last `reads_and_cpu`.
+    static WCHAR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    /// The size of everything under `dir`, in bytes.
+    fn dir_bytes(dir: &Path) -> u64 {
+        std::fs::read_dir(dir).map(|d| d.flatten().map(|e| if e.path().is_dir() { dir_bytes(&e.path()) } else { e.metadata().map(|m| m.len()).unwrap_or(0) }).sum()).unwrap_or(0)
+    }
+
     /// What `pid` has read (bytes, page cache included) and its CPU time (seconds).
     fn reads_and_cpu(pid: u32) -> (u64, f64) {
         let io = std::fs::read_to_string(format!("/proc/{pid}/io")).unwrap_or_default();
         let rchar = io.lines().find_map(|l| l.strip_prefix("rchar: ")).and_then(|v| v.trim().parse().ok()).unwrap_or(0);
+        WCHAR.store(io.lines().find_map(|l| l.strip_prefix("wchar: ")).and_then(|v| v.trim().parse().ok()).unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
         let after_name = stat.rsplit_once(')').map(|(_, rest)| rest).unwrap_or("");
         let fields: Vec<&str> = after_name.split_whitespace().collect();
@@ -1121,15 +1130,18 @@ mod line_07_tests {
     }
 
     /// The conductor's reads and CPU each minute for `secs`, while nothing is asked of it.
-    async fn watch_idle(pid: u32, secs: u64, what: &str) -> f64 {
+    async fn watch_idle(pid: u32, secs: u64, what: &str, data: &Path) -> f64 {
         let start = std::time::Instant::now();
         let (r0, c0) = reads_and_cpu(pid);
         let mut last = (r0, c0, std::time::Instant::now());
+        let mut last_w = WCHAR.load(std::sync::atomic::Ordering::Relaxed);
         while start.elapsed().as_secs() < secs {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
             let (r, c) = reads_and_cpu(pid);
             let dt = last.2.elapsed().as_secs_f64();
-            eprintln!("[repro] {what} {:>4} s: reads {:>7.1} MB/s, CPU {:>4.0}%", start.elapsed().as_secs(), (r - last.0) as f64 / dt / 1e6, (c - last.1) / dt * 100.0);
+            let w = WCHAR.load(std::sync::atomic::Ordering::Relaxed);
+            eprintln!("[repro] {what} {:>4} s: reads {:>7.1} MB/s, writes {:>6.2} MB/s, CPU {:>4.0}%, data {:>6.1} MB", start.elapsed().as_secs(), (r - last.0) as f64 / dt / 1e6, (w - last_w) as f64 / dt / 1e6, (c - last.1) / dt * 100.0, dir_bytes(data) as f64 / 1e6);
+            last_w = w;
             last = (r, c, std::time::Instant::now());
         }
         let (r, _) = reads_and_cpu(pid);
@@ -1142,6 +1154,8 @@ mod line_07_tests {
     /// restart. The conductor's own log (publish rounds, cell starts) is
     /// copied to `YOAI_REPRO_OUT`.
     /// `YOAI_PORT_OFFSET=300 RUST_LOG=error,holochain::core::workflow::publish_dht_ops_workflow=info,holochain::conductor::conductor=info YOAI_REPRO_OUT=<dir> cargo test --lib -- --ignored live_07_idle --nocapture --test-threads 1`
+    /// With `FLOWSTA_AUTH_MATERIAL` and `FLOWSTA_BOOTSTRAP_URL_07` set and a second run on the same `YOAI_REPRO_SEED`
+    /// (another port offset, `YOAI_REPRO_MESSAGES=0`), the two conductors are peers.
     /// Sizes: `YOAI_REPRO_AIS` (6), `YOAI_REPRO_MESSAGES` (the first AI's, 3000), `YOAI_REPRO_IDLE_SECS` (600).
     #[tokio::test(flavor = "multi_thread")]
     #[ignore]
@@ -1155,7 +1169,7 @@ mod line_07_tests {
         let tmp = tempfile::tempdir().unwrap();
         let profile = tmp.path().join("profile");
         let resource_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
-        let (data_key, seed) = ([5u8; 32], format!("live-07-idle-{}", std::process::id()));
+        let (data_key, seed) = ([5u8; 32], std::env::var("YOAI_REPRO_SEED").unwrap_or_else(|_| format!("live-07-idle-{}", std::process::id())));
         let keep_logs = |name: &str| {
             if let Some(out) = &out {
                 let _ = std::fs::create_dir_all(out);
@@ -1204,7 +1218,7 @@ mod line_07_tests {
         drop(cells);
 
         let pid = conductor_pid(&profile.join("conductor-07")).expect("the 0.7 conductor's pid");
-        let rate = watch_idle(pid, idle, "idle").await;
+        let rate = watch_idle(pid, idle, "idle", &profile.join("conductor-07")).await;
         eprintln!("[repro] idle with no peers: {rate:.1} MB/s read on average over {idle} s");
         keep_logs("first");
 
@@ -1235,7 +1249,7 @@ mod line_07_tests {
         });
         futures::future::join_all(asks).await;
         let pid = conductor_pid(&profile.join("conductor-07")).expect("the restarted 0.7 conductor's pid");
-        let rate = watch_idle(pid, idle / 2, "after the restart").await;
+        let rate = watch_idle(pid, idle / 2, "after the restart", &profile.join("conductor-07")).await;
         eprintln!("[repro] after the restart: {rate:.1} MB/s read on average over {} s", idle / 2);
         keep_logs("restarted");
         supervisor().stop();
