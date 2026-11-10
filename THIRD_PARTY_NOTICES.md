@@ -7,6 +7,7 @@ components and their licenses:
 
 - **llama.cpp** (`llama-server`) — MIT License. https://github.com/ggml-org/llama.cpp
 - **Holochain** (`holochain`, `lair-keystore`) — Cryptographic Autonomy License 1.0. https://github.com/holochain/holochain
+  The 0.7.1 conductor is built from the official 0.7.1 source with a small set of patches. The patches and the build are at https://github.com/WeAreFlowsta/holochain-build. The 0.6.1 conductor and both key stores are the official release binaries.
 - **pdfium** (prebuilt binaries by bblanchon) — Apache License 2.0. https://github.com/bblanchon/pdfium-binaries
 
 ## Downloaded on demand (optional components)

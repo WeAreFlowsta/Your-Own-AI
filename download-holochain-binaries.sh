@@ -1,8 +1,12 @@
 #!/bin/bash
-# The Holochain sidecars for a dev build on this machine: each line's
-# conductor and key store from the official Holochain releases, the same
-# files the release build downloads (.github/workflows/build-release.yml),
-# each checked against .github/holochain-sidecars.sha256.
+# The Holochain sidecars, for a dev build on this machine and for the release
+# build (.github/workflows/build-release.yml runs this script), each checked
+# against .github/holochain-sidecars.sha256:
+#
+#   0.6.1  conductor and key store from the official Holochain release
+#   0.7.1  key store from the official Holochain release; conductor from
+#          https://github.com/WeAreFlowsta/holochain-build, which builds the
+#          official 0.7.1 source with the patches listed there
 #
 #   ./download-holochain-binaries.sh            this machine's target
 #   ./download-holochain-binaries.sh <triple>   another target
@@ -32,10 +36,20 @@ mkdir -p "$BINDIR"
 pinned() { awk -v k="$1" '$1 !~ /^#/ && $2 == k { print $1 }' .github/holochain-sidecars.sha256; }
 sha() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
 
-for LINE in "holochain-0.6.1:" "holochain-0.7.1:-07"; do
-  HC_RELEASE="${LINE%%:*}"; SUFFIX="${LINE#*:}"
-  BASE="https://github.com/holochain/holochain/releases/download/${HC_RELEASE}"
-  for BIN in holochain lair-keystore; do
+# <binary>:<suffix>:<release tag>. A tag with "-flowsta." is a release of
+# WeAreFlowsta/holochain-build; any other is a release of holochain/holochain.
+for ITEM in \
+  "holochain::holochain-0.6.1" \
+  "lair-keystore::holochain-0.6.1" \
+  "holochain:-07:holochain-0.7.1-flowsta.1" \
+  "lair-keystore:-07:holochain-0.7.1"; do
+  BIN="${ITEM%%:*}"; REST="${ITEM#*:}"; SUFFIX="${REST%%:*}"; HC_RELEASE="${REST#*:}"
+  case "$HC_RELEASE" in
+    *-flowsta.*) REPO="WeAreFlowsta/holochain-build" ;;
+    *) REPO="holochain/holochain" ;;
+  esac
+  BASE="https://github.com/${REPO}/releases/download/${HC_RELEASE}"
+  {
     ASSET="${BIN}-${T}${EXT}"
     DEST="${BINDIR}/yourowai-${BIN}${SUFFIX}-${T}${EXT}"
     want=$(pinned "${HC_RELEASE}/${ASSET}")
@@ -50,5 +64,5 @@ for LINE in "holochain-0.6.1:" "holochain-0.7.1:-07"; do
     mv "$DEST.part" "$DEST"
     chmod +x "$DEST"
     echo "$DEST (${HC_RELEASE}, checksum verified)"
-  done
+  }
 done
