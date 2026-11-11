@@ -62,8 +62,9 @@ pub fn on_battery() -> bool {
     }
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", "(Get-CimInstance Win32_Battery).BatteryStatus"])
+        // Once a minute for the life of the app: without the no-window flag
+        // this is a console window on the screen every minute.
+        crate::mcp::quiet(std::process::Command::new("powershell").args(["-NoProfile", "-Command", "(Get-CimInstance Win32_Battery).BatteryStatus"]))
             .output()
             .ok()
             .map(|o| windows_battery_status_discharging(&String::from_utf8_lossy(&o.stdout)))

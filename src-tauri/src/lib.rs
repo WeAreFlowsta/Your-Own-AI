@@ -4,6 +4,8 @@
 mod config_sync;          // AI configs across the person's devices (sibling manifests)
 mod device_sync;          // the tray notice for what syncs with the other devices
 mod memory_rows;          // typed, dated, sealed memory rows at scope anchors (the memory design)
+#[cfg(test)]
+mod spawn_guard;          // no program start without the no-window flag (Windows consoles)
 mod project_identity;     // a folder's project id: git root commit / id file / path hash
 mod dreaming;             // memory consolidation when idle (the memory design §6)
 mod machine;              // the whole-machine check every background job asks
