@@ -70,10 +70,13 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   when you stop, so opening and sending stay quick while it runs. It does
   not wait for the computer to be idle, so it finishes on a computer in
   constant use. Settings > Devices shows which AI it has reached.
-- An AI with a long history stays quick to write to and to open. The
-  Holochain 0.7.1 that ships with Your Own AI is built by Flowsta from
-  the official source with five fixes for slowdowns that grew with the
-  size of your history; each one is listed, with its measurements, at
+- An AI with a long history stays quick to write to and to open, and a
+  long history reaches your other computers. The Holochain 0.7.1 that
+  ships with Your Own AI is built by Flowsta from the official source
+  with six fixes: five for slowdowns that grew with the size of your
+  history, and one for a sync between two computers that could stop part
+  way for good when the app was closed while a long history was still
+  arriving. Each is listed, with its measurements, at
   github.com/WeAreFlowsta/holochain-build.
 - With nothing to do, the background service rests: 1 to 2 percent of
   one processor core in our tests with twenty AIs.
