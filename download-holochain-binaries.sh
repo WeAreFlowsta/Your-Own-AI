@@ -41,7 +41,7 @@ sha() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 
 for ITEM in \
   "holochain::holochain-0.6.1" \
   "lair-keystore::holochain-0.6.1" \
-  "holochain:-07:holochain-0.7.1-flowsta.2" \
+  "holochain:-07:holochain-0.7.1-flowsta.3" \
   "lair-keystore:-07:holochain-0.7.1"; do
   BIN="${ITEM%%:*}"; REST="${ITEM#*:}"; SUFFIX="${REST%%:*}"; HC_RELEASE="${REST#*:}"
   case "$HC_RELEASE" in
