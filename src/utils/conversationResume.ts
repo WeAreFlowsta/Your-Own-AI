@@ -373,6 +373,19 @@ export function getConversationFolder(hash: string): string | undefined {
   return readNote(FOLDER_MAP_KEY, hash);
 }
 
+/* A conversation whose project folder is on another of the person's
+ * computers, which they chose to read here without a folder: not asked
+ * again on this computer. */
+const READ_WITHOUT_FOLDER_KEY = "conversation-read-without-folder";
+
+export function rememberReadWithoutFolder(hash: string) {
+  writeNote(READ_WITHOUT_FOLDER_KEY, hash, "1");
+}
+
+export function readsWithoutFolder(hash: string): boolean {
+  return readNote(READ_WITHOUT_FOLDER_KEY, hash) === "1";
+}
+
 export interface LastConversationPointer {
   hash: string;
   agentKey: string;
