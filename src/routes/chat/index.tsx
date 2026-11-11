@@ -38,11 +38,18 @@ import {
   withoutUnansweredPlaceholder,
 } from "../../utils/conversationResume";
 import { emptyMayBeWarmup, noteRecordsSeen, WARMUP_POLL_MS } from "../../utils/recordsWarmup";
-import { getConversations, waitForHolochainReady } from "../../utils/holochainTranscripts";
+import { getConversationArrival, getConversations, getHistoryArrival, waitForHolochainReady } from "../../utils/holochainTranscripts";
 
 /** How often a copy on screen (an item in the open drawer, or the
  *  conversation open read-only) asks whether its records have arrived. */
 const COPY_RECHECK_MS = 20_000;
+// A conversation waiting for its messages to arrive from another device: how
+// often it looks again, when it adds the pointer for a computer that is
+// gone, and when it stops looking (a later click starts it again).
+const ARRIVAL_POLL_MS = 5_000;
+const ARRIVAL_POLL_PARTIAL_MS = 20_000;
+const ARRIVAL_GONE_HINT_MS = 10 * 60_000;
+const ARRIVAL_MAX_MS = 2 * 60 * 60_000;
 import ConfirmModal from "../../components/ConfirmModal";
 import { drainPendingExtractions, prewarmExtractionModel } from "../../utils/memoryExtraction";
 import GpuSafeModeNotice from "../../components/GpuSafeModeNotice";
@@ -411,7 +418,17 @@ export default component$(() => {
    *  that long reads as broken. "warming" inside the launch records window
    *  (utils/recordsWarmup), "opening" otherwise; the poll loop below
    *  upgrades opening -> warming if reads come back empty in the window. */
-  const resumeState = useSignal<"idle" | "opening" | "warming">("idle");
+  const resumeState = useSignal<"idle" | "opening" | "warming" | "arriving">("idle");
+  // "arriving": the conversation is listed here and its messages are not -
+  // they are on another of the person's devices (or in a locked Vault's
+  // copy). What it waits for and what makes it open; the page keeps
+  // checking and opens it without another click. Never a warning.
+  const arrivalNote = useSignal<{ what: string; then: string; partial: boolean } | null>(null);
+  // "Open what is here" on a partly arrived conversation: the resume
+  // generation it was asked for.
+  const openPartial = useSignal(0);
+  // The drawer's line while history from another device is still on its way.
+  const historyArriving = useSignal<string | null>(null);
   // A resume whose records read came back empty/failed - shown as a
   // banner, NEVER as a silently blank conversation (which reads as
   // data loss, the one message a records product must never send).
@@ -572,6 +589,7 @@ export default component$(() => {
       resumeState.value = emptyMayBeWarmup() ? "warming" : "opening";
       conversationsOpen.value = false;
       let loaded: Awaited<ReturnType<typeof loadConversationMessages>>;
+      let stoppedWaiting = false;
       let ai = selectedAi.value;
       const turnHere = allTurns().find((x) => x.conversationHash === target.hash) ?? null;
       try {
@@ -622,6 +640,65 @@ export default component$(() => {
           await new Promise((r) => setTimeout(r, WARMUP_POLL_MS));
           loaded = await loadConversationMessages(target.agentKey, target.hash, ai, target.source);
         }
+        // Not all of it is on this computer: its messages (all, or the
+        // rest) are on another of the person's devices and arrive by
+        // themselves, or it is the Vault's copy and the Vault is locked.
+        // Wait where the person can see why, and open it when it is whole.
+        // Starting anything else ends the wait; "Open what is here" opens
+        // the part that has arrived.
+        const movedOn = () => resumeGeneration.value !== gen || chatState.messages.length > 0 || chatState.isLoading;
+        const waitingSince = Date.now();
+        let waited = false;
+        while (!turnHere && !movedOn() && openPartial.value !== gen && Date.now() - waitingSince < ARRIVAL_MAX_MS) {
+          let note: { what: string; then: string; partial: boolean } | null = null;
+          const none = loaded.messages.length === 0;
+          if (loaded.copiedFrom) {
+            let locked = false;
+            if (none) {
+              try {
+                locked = await invoke<boolean>("vault_is_locked");
+              } catch { /* no Vault: the plain message below */ }
+            }
+            if (locked) {
+              note = { what: "Unlock Flowsta Vault on this computer to open this conversation", then: "It opens here by itself once the Vault is unlocked.", partial: false };
+            }
+          } else {
+            const arrival = await getConversationArrival(target.agentKey, target.hash);
+            const from = arrival.device ?? "your other computer";
+            const gone = Date.now() - waitingSince > ARRIVAL_GONE_HINT_MS;
+            if (none && arrival.listed > 0) {
+              note = {
+                what: `Getting this conversation from ${from}…`,
+                then: gone
+                  ? "No longer have that computer? Settings › Devices can restore its conversations here."
+                  : "It opens here by itself when it arrives. Both computers need to be on.",
+                partial: false,
+              };
+            } else if (!none && arrival.not_here > 0) {
+              note = {
+                what: `Getting the rest of this conversation from ${from}…`,
+                then: `${arrival.not_here.toLocaleString()} message${arrival.not_here === 1 ? "" : "s"} still to arrive. It opens here by itself when it is whole.`,
+                partial: true,
+              };
+            }
+          }
+          if (!note) break;
+          if (!waited) uiLog(`resume ${who}: waiting - ${note.what} ${note.then}`);
+          waited = true;
+          arrivalNote.value = note;
+          resumeState.value = "arriving";
+          // A whole read each look: slower for a part that is already here.
+          const until = Date.now() + (note.partial ? ARRIVAL_POLL_PARTIAL_MS : ARRIVAL_POLL_MS);
+          while (Date.now() < until && !movedOn() && openPartial.value !== gen) {
+            await new Promise((r) => setTimeout(r, 500));
+          }
+          if (movedOn() || openPartial.value === gen) break;
+          loaded = await loadConversationMessages(target.agentKey, target.hash, ai, target.source);
+        }
+        if (waited && resumeGeneration.value === gen && (chatState.messages.length > 0 || chatState.isLoading)) {
+          // The person started something else while it waited.
+          stoppedWaiting = true;
+        }
         if (loaded.copiedFrom && resumeGeneration.value === gen) {
           // The device's name, as the last sync round recorded it.
           let name = "another of your devices";
@@ -635,11 +712,16 @@ export default component$(() => {
         if (resumeGeneration.value === gen) {
           resumeState.value = "idle";
           openingTitle.value = null;
+          arrivalNote.value = null;
         }
       }
       if (resumeGeneration.value !== gen) {
         uiLog(`resume ${who}: superseded by a newer click after ${Date.now() - t0} ms`);
         return; // superseded by a newer click
+      }
+      if (stoppedWaiting) {
+        uiLog(`resume ${who}: the person started something else while it waited, after ${Date.now() - t0} ms`);
+        return;
       }
       const { messages, nextSequence, folderPath } = loaded;
       if (resumeGeneration.value !== gen) {
@@ -667,7 +749,7 @@ export default component$(() => {
         } catch { /* no Vault: the plain message */ }
         resumeWarning.value = joinWaiting
           ? "This device hasn't joined your other devices yet, so their conversations can't open here. Restart Your Own AI to join them."
-          : `${ai.label}'s records didn't answer, so this didn't open. Nothing is lost - try again in a moment.`;
+          : "This is taking longer than usual to open. Nothing is lost. Try again in a moment.";
         return;
       }
       resumeWarning.value = null;
@@ -830,6 +912,13 @@ export default component$(() => {
         }
         break;
       }
+      // History from another of the person's devices still on its way: one
+      // line in the drawer, so a conversation that is not ready has a reason.
+      const arrival = await getHistoryArrival();
+      historyArriving.value =
+        arrival.not_here > 0
+          ? `Receiving your history from ${arrival.device ?? "your other computer"}. ${arrival.not_here.toLocaleString()} conversation${arrival.not_here === 1 ? "" : "s"} still to arrive.`
+          : null;
     } finally {
       conversationsLoading.value = false;
       conversationsWarming.value = false;
@@ -2216,6 +2305,10 @@ export default component$(() => {
                   : undefined)
               }
               continueState={resumeState.value}
+              continueNote={arrivalNote.value}
+              onOpenPartial$={$(() => {
+                openPartial.value = resumeGeneration.value;
+              })}
               onContinueLast$={$(() => {
                 const last = lastConversation.value;
                 if (last && resumeState.value === "idle") resumeConversation(last);
@@ -2864,6 +2957,7 @@ export default component$(() => {
         items={conversationItems.value}
         loading={conversationsLoading.value}
         warming={conversationsWarming.value}
+        arriving={historyArriving.value}
 
         onClose$={$(() => {
           conversationsOpen.value = false;

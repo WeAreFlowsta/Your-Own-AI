@@ -250,6 +250,31 @@ export async function getTranscript(
   }
 }
 
+/** How much of a conversation is on this device, as its last read counted:
+ *  the messages it `listed`, how many of those are `not_here` yet (on another
+ *  of the person's devices), and that device's name when there is exactly
+ *  one. */
+export async function getConversationArrival(
+  agentKey: string,
+  conversationHash: string,
+): Promise<{ listed: number; not_here: number; device: string | null }> {
+  try {
+    return await invoke<{ listed: number; not_here: number; device: string | null }>("conversation_arrival", { agentKey, conversationHash });
+  } catch {
+    return { listed: 0, not_here: 0, device: null };
+  }
+}
+
+/** Conversations listed here whose records are still on another of the
+ *  person's devices, as of each AI's last live list. */
+export async function getHistoryArrival(): Promise<{ not_here: number; device: string | null }> {
+  try {
+    return await invoke<{ not_here: number; device: string | null }>("history_arrival");
+  } catch {
+    return { not_here: 0, device: null };
+  }
+}
+
 /** A conversation another of the person's devices holds, read from the
  *  Vault's copy of that device's backup object - read-only until its records
  *  arrive here. `label` is the drawer item's hash (`conv-…`), `device` the

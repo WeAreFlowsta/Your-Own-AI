@@ -1457,6 +1457,10 @@ pub async fn get_conversations(
     // still in the cache. They must not vanish from a list that is about
     // to be written back as the last-known-good one.
     let mut unanswered: Vec<String> = Vec::new();
+    // Listed conversations with no record on this device, by line (None: the
+    // line was not read): another device's, still to arrive.
+    let mut not_here_06: Option<u32> = None;
+    let mut not_here_07: Option<u32> = None;
     for key in &anchors {
         let read = match crate::transcript_pages::all_conversations_at(
             &manager,
@@ -1487,6 +1491,7 @@ pub async fn get_conversations(
             );
             unanswered.push(key.clone());
         }
+        not_here_06 = Some(not_here_06.unwrap_or(0) + read.missing);
         let records = read.records;
 
         for record in &records {
@@ -1527,11 +1532,12 @@ pub async fn get_conversations(
         if let Some(founding_key) = hex::decode(&founding_hex).ok().filter(|b| b.len() == 39).map(holochain_types::prelude::AgentPubKey::from_raw_39) {
             // A cold or stuck 0.7 conductor must not hold the list: its
             // websocket waits up to ten minutes for the long backup reads.
-            let read = tokio::time::timeout(std::time::Duration::from_secs(60), crate::hc07::app_cells().conversations_all(&reader, &founding_key))
+            let read = tokio::time::timeout(std::time::Duration::from_secs(60), crate::hc07::app_cells().conversations_all_counted(&reader, &founding_key))
                 .await
                 .unwrap_or_else(|_| Err("no answer within 60 s".to_string()));
             match read {
-                Ok(items) => {
+                Ok((items, missing)) => {
+                    not_here_07 = Some(missing);
                     for (view, _anchor) in items {
                         let Ok(ee) = view.entry_as::<EncryptedEntryRaw>() else { continue };
                         let Ok(plain_bytes) = crate::transcript_crypto::decrypt(&data_key, &ee.nonce, &ee.cipher) else { continue };
@@ -1628,11 +1634,22 @@ pub async fn get_conversations(
         crate::conversation_cache::clear_stale(&app, &agent_key);
     }
     crate::conversation_cache::remember_live(&agent_key, &conversations);
+    // A conversation carried to the 0.7 line has the same id on both, so one
+    // missing on a line and held on the other is here: the smaller count is
+    // the most that can still be on its way.
+    let not_here = match (not_here_06, not_here_07) {
+        (Some(a), Some(b)) => a.min(b),
+        (a, b) => a.or(b).unwrap_or(0),
+    };
+    if let Ok(mut held) = NOT_HERE.lock() {
+        held.insert(agent_key.clone(), not_here);
+    }
     log::info!(
-        "[records] conversation list {} live for {}: {} conversation(s) in {} ms",
+        "[records] conversation list {} live for {}: {} conversation(s), {} still to arrive, in {} ms",
         &agent_key[..agent_key.len().min(12)],
         caller,
         conversations.len(),
+        not_here,
         started.elapsed().as_millis()
     );
 
@@ -1812,6 +1829,91 @@ pub async fn get_copy_transcript(
     Ok(entries)
 }
 
+/// Per AI, how many listed conversations had no record on this device at its
+/// last live list read.
+static NOT_HERE: std::sync::Mutex<std::collections::BTreeMap<String, u32>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+/// The person's other device by name, when there is exactly one.
+fn the_other_device(app: &tauri::AppHandle) -> Option<String> {
+    let root = crate::profile::root(app).ok()?;
+    let facts = crate::line_facts::LineFacts::load(&root)?;
+    match facts.siblings.as_slice() {
+        [one] => one.name.clone().filter(|n| !n.trim().is_empty()),
+        _ => None,
+    }
+}
+
+/// History written on the person's other devices that has not reached this
+/// one: the conversations drawer says so while there is any.
+#[derive(Serialize, Debug)]
+pub struct HistoryArrival {
+    /// Listed conversations whose record is not on this device yet.
+    pub not_here: u32,
+    pub device: Option<String>,
+}
+
+#[tauri::command]
+pub async fn history_arrival(app: tauri::AppHandle) -> Result<HistoryArrival, String> {
+    let not_here = NOT_HERE.lock().map(|h| h.values().sum()).unwrap_or(0);
+    Ok(HistoryArrival { not_here, device: the_other_device(&app) })
+}
+
+/// Whether the Vault this profile uses is locked right now: its copies of
+/// the other devices' conversations cannot be read until it is unlocked.
+#[tauri::command]
+pub async fn vault_is_locked(app: tauri::AppHandle) -> bool {
+    matches!(crate::vault_escrow::escrow_port(&app, true).await, Err(s) if s.state == "vault_locked")
+}
+
+/// How much of a conversation is on this device: the messages it lists (on
+/// either line), and how many of those have no record here yet. Those are on
+/// another of the person's devices and arrive by themselves.
+#[derive(Serialize, Debug)]
+pub struct ConversationArrival {
+    pub listed: u32,
+    pub not_here: u32,
+    pub device: Option<String>,
+}
+
+/// A conversation's counts from its last read ([`get_conversation_transcript`]),
+/// by its id: (listed, not here, when).
+static ARRIVED: std::sync::Mutex<std::collections::BTreeMap<String, (u32, u32, std::time::Instant)>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+const ARRIVED_KEPT: std::time::Duration = std::time::Duration::from_secs(120);
+
+#[tauri::command]
+pub async fn conversation_arrival(
+    app: tauri::AppHandle,
+    agent_key: String,
+    conversation_hash: String,
+    hc_state: State<'_, Arc<HolochainState>>,
+) -> Result<ConversationArrival, String> {
+    // The read that just opened it counted both.
+    let counted = ARRIVED.lock().ok().and_then(|h| h.get(&conversation_hash).filter(|(_, _, at)| at.elapsed() < ARRIVED_KEPT).map(|(l, n, _)| (*l, *n)));
+    if let Some((listed, not_here)) = counted {
+        return Ok(ConversationArrival { listed, not_here, device: the_other_device(&app) });
+    }
+    let manager = hc_state.get()?;
+    let quick = std::time::Duration::from_secs(30);
+    let mut listed = 0u32;
+    if manager.is_provisioned(&agent_key).await {
+        if let Some(conv_hash) = crate::transcript_ids::v1_hash(&conversation_hash) {
+            if let Ok(n) = crate::transcript_pages::entries_listed(&manager, &agent_key, conv_hash, quick).await {
+                listed = listed.max(n);
+            }
+        }
+    }
+    if crate::conductor::ports(flowsta_hc_lines::Line::V07).is_some() {
+        if let Ok(data_key) = manager.data_key() {
+            let anchor = holochain_types::prelude::ExternalHash::from_raw_32(crate::transcript_ids::conversation_anchor(&data_key, &conversation_hash).to_vec());
+            let page = crate::hc07::EntriesPage { conversation_anchor: anchor, after: None, limit: 1 };
+            if let Ok(Ok(p)) = tokio::time::timeout(quick, crate::hc07::app_cells().entries_page(&agent_key, &page)).await {
+                listed = listed.max(p.total);
+            }
+        }
+    }
+    Ok(ConversationArrival { listed, not_here: listed, device: the_other_device(&app) })
+}
+
 #[tauri::command]
 pub async fn get_conversation_transcript(
     agent_key: String,
@@ -1847,6 +1949,9 @@ pub async fn get_conversation_transcript(
     let mut sealed_entries: Vec<(String, EncryptedEntryRaw)> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut skipped = 0usize;
+    // Per line read: (entries listed, listed with no record on this device).
+    let mut counts_06: Option<(u32, u32)> = None;
+    let mut counts_07: Option<(u32, u32)> = None;
     // A fresh id (not a v1 hash) has nothing on the 0.6 line.
     if let Some(conv_hash) = crate::transcript_ids::v1_hash(&conversation_hash).filter(|_| on_06) {
         let read = crate::transcript_pages::all_entries(&manager, &agent_key, conv_hash, std::time::Duration::from_secs(60)).await.map_err(|e| {
@@ -1859,6 +1964,7 @@ pub async fn get_conversation_transcript(
             log::warn!("[records] transcript {who}: stopped after {} of {} messages in {} ms: {why}", read.records.len(), read.total, t0.elapsed().as_millis());
             return Err(why);
         }
+        counts_06 = Some((read.total, read.missing));
         for record in read.records.iter() {
             let Some(app_bytes) = record.entry().as_option().and_then(|e| e.as_app_entry()) else { continue };
             let Ok(ee) = rmp_serde::from_slice::<EncryptedEntryRaw>(app_bytes.as_ref().bytes()) else { skipped += 1; continue };
@@ -1870,11 +1976,12 @@ pub async fn get_conversation_transcript(
     if on_07 {
         let anchor = holochain_types::prelude::ExternalHash::from_raw_32(crate::transcript_ids::conversation_anchor(&data_key, &conversation_hash).to_vec());
         // Bounded: the 0.7 websocket waits up to ten minutes for backup reads.
-        let read = tokio::time::timeout(std::time::Duration::from_secs(60), crate::hc07::app_cells().entries_all(&agent_key, &anchor))
+        let read = tokio::time::timeout(std::time::Duration::from_secs(60), crate::hc07::app_cells().entries_all_counted(&agent_key, &anchor))
             .await
             .unwrap_or_else(|_| Err("no answer within 60 s".to_string()));
         match read {
-            Ok(items) => {
+            Ok((items, total, missing)) => {
+                counts_07 = Some((total, missing));
                 for (view, _key) in items {
                     let Ok(ee) = view.entry_as::<EncryptedEntryRaw>() else { skipped += 1; continue };
                     let id = crate::transcript_crypto::decrypt(&data_key, &ee.nonce, &ee.cipher)
@@ -1946,10 +2053,22 @@ pub async fn get_conversation_transcript(
     sort_entries(&mut entries);
 
     let ms = t0.elapsed().as_millis();
+    // A message carried to the 0.7 line has one id on both, so one missing
+    // on a line and held on the other is here: the smaller count is the most
+    // that can still be on its way from another device.
+    let listed = counts_06.map_or(0, |c| c.0).max(counts_07.map_or(0, |c| c.0));
+    let not_here = match (counts_06, counts_07) {
+        (Some(a), Some(b)) => a.1.min(b.1),
+        (a, b) => a.or(b).map_or(0, |c| c.1),
+    };
+    if let Ok(mut held) = ARRIVED.lock() {
+        held.retain(|_, (_, _, at)| at.elapsed() < ARRIVED_KEPT);
+        held.insert(conversation_hash.clone(), (listed, not_here, std::time::Instant::now()));
+    }
     if entries.is_empty() {
-        log::warn!("[records] transcript {who}: {} records, {skipped} skipped, 0 entries in {ms} ms - empty answer", sealed_entries.len());
+        log::warn!("[records] transcript {who}: {} records, {skipped} skipped, 0 entries in {ms} ms - empty answer ({listed} listed, {not_here} not on this device)", sealed_entries.len());
     } else {
-        log::info!("[records] transcript {who}: {} entries from {} records ({skipped} skipped) in {ms} ms", entries.len(), sealed_entries.len());
+        log::info!("[records] transcript {who}: {} entries from {} records ({skipped} skipped, {not_here} still to arrive) in {ms} ms", entries.len(), sealed_entries.len());
     }
     Ok(entries)
 }

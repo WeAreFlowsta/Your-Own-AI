@@ -273,6 +273,61 @@ pub async fn all_my_entries(
     }
 }
 
+/// How many messages a conversation lists on the 0.6 line, whether or not
+/// their records are on this device.
+pub async fn entries_listed(manager: &HolochainManager, agent: &str, conversation_hash: ActionHash, timeout: Duration) -> Result<u32, String> {
+    let input = EntriesPageInput { conversation_hash, after: None, limit: 1 };
+    page(manager, agent, "get_conversation_entries_page", &input, timeout).await.map(|p| p.total)
+}
+
+#[derive(Serialize, Debug)]
+struct OthersEntriesInput {
+    conversations: Vec<ActionHash>,
+}
+#[derive(Deserialize, Debug)]
+struct OthersEntries {
+    items: Vec<MyEntry>,
+    incomplete: Vec<ActionHash>,
+}
+/// Conversations per `get_others_entries` call: each costs one local link
+/// read inside the call, so a call stays well inside its timeout.
+const OTHERS_PER_CALL: usize = 100;
+
+/// The messages other agents recorded in `conversations`, each with its
+/// conversation, from what this conductor holds (`get_others_entries`,
+/// coordinator 14); and the conversations holding one it does not have,
+/// which the caller reads in full. Err when the cell's coordinator predates
+/// the function (callers fall back to the per-conversation reads) or a call
+/// fails. `between` runs before each call (the move gives way to the person).
+pub async fn others_entries<F: std::future::Future<Output = ()>>(
+    manager: &HolochainManager,
+    agent: &str,
+    conversations: &[ActionHash],
+    timeout: Duration,
+    between: impl Fn() -> F,
+) -> Result<(Vec<(Record, ActionHash)>, Vec<ActionHash>), String> {
+    let mut out = Vec::new();
+    let mut incomplete = Vec::new();
+    let t0 = std::time::Instant::now();
+    for chunk in conversations.chunks(OTHERS_PER_CALL) {
+        between().await;
+        let payload = ExternIO::encode(OthersEntriesInput { conversations: chunk.to_vec() }).map_err(|e| format!("Failed to encode: {}", e))?;
+        let raw = manager.call_zome_with_timeout(agent, "transcript", "get_others_entries", payload, timeout).await?;
+        let page: OthersEntries = ExternIO::decode(&raw).map_err(|e| format!("Failed to decode get_others_entries: {}", e))?;
+        out.extend(page.items.into_iter().map(|i| (i.record, i.conversation)));
+        incomplete.extend(page.incomplete);
+    }
+    log::info!(
+        "[records] get_others_entries {}..: {} message(s) of other devices in {} conversation(s), {} to read in full, {} ms",
+        &agent[..8.min(agent.len())],
+        out.len(),
+        conversations.len(),
+        incomplete.len(),
+        t0.elapsed().as_millis()
+    );
+    Ok((out, incomplete))
+}
+
 /// How many conversations an agent holds, without fetching their records.
 /// How many conversations are listed at `anchor` (an agent key, hex; None =
 /// the cell's own key), read through `agent`'s cell.

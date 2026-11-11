@@ -51,6 +51,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - Nothing is removed from the earlier version. Its background service
   keeps running while any of your devices still needs it, then stops by
   itself, and starts again if one of them comes back.
+- Once the last of your devices has moved, the earlier version's
+  background service stops soon after, on a computer in constant use
+  too. Its last check looks only for what your other devices wrote.
 - Settings > Devices names a computer that is still on an older version
   of Your Own AI (with How to update), and one that is still moving. For
   a computer you no longer have, Stop waiting for this computer; its
@@ -93,6 +96,14 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - A conversation copied from another device becomes this device's own as
   soon as its records arrive, in the open drawer and the open
   conversation, with no reopening.
+- A conversation written on another of your computers that has not
+  reached this one yet says so while it waits ("Getting this conversation
+  from ...") and opens by itself when all of it has arrived. Before, it
+  opened blank with a warning. "Open what is here" opens the part that
+  has arrived, and the conversations list says how many are still to
+  come.
+- When Flowsta Vault is locked, a conversation that opens from the Vault's
+  copy asks you to unlock it, and opens by itself once you do.
 - A conversation started while the background service restarts is tried
   again instead of being dropped.
 - The restore at startup keeps trying for about two minutes while the

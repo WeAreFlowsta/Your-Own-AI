@@ -83,7 +83,9 @@ interface ChatContainerProps {
   onUndoTurn$?: QRL<(messageId: string) => void>;
   /** Hero continuity line: the last conversation, one click to re-enter. */
   lastConversationTitle?: string;
-  continueState?: "idle" | "opening" | "warming";
+  continueState?: "idle" | "opening" | "warming" | "arriving";
+  continueNote?: { what: string; then: string; partial: boolean } | null;
+  onOpenPartial$?: QRL<() => void>;
   onContinueLast$?: QRL<() => void>;
 }
 
@@ -209,6 +211,8 @@ export default component$<ChatContainerProps>((props) => {
           onToolsAction$={props.onToolsAction$}
           lastConversationTitle={props.lastConversationTitle}
           continueState={props.continueState}
+            continueNote={props.continueNote}
+            onOpenPartial$={props.onOpenPartial$}
           onContinueLast$={props.onContinueLast$}
           theme={props.theme}
         />

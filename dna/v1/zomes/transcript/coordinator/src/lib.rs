@@ -585,6 +585,48 @@ pub fn get_my_entries_page(input: MyEntriesPageInput) -> ExternResult<MyEntriesP
     Ok(MyEntriesPage { items, next_seq, total })
 }
 
+/// The messages ANOTHER agent recorded in the given conversations, from what
+/// this conductor already holds (links and records: no network round). With
+/// `get_my_entries_page` this reads every author's messages of an AI without
+/// one call per conversation: the move's last pass, before the 0.6 line
+/// stops, looked into every conversation in turn (hours on a long history)
+/// to find the few another device wrote.
+#[derive(Serialize, Deserialize, Debug)]
+pub struct OthersEntriesInput {
+    /// The conversations to look in, by their record hash.
+    pub conversations: Vec<ActionHash>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct OthersEntries {
+    pub items: Vec<MyEntry>,
+    /// Conversations with a message of another agent's that this conductor
+    /// does not hold: the caller reads those in full, network and all.
+    pub incomplete: Vec<ActionHash>,
+}
+
+#[hdk_extern]
+pub fn get_others_entries(input: OthersEntriesInput) -> ExternResult<OthersEntries> {
+    let me = agent_anchor()?;
+    let mut items = Vec::new();
+    let mut incomplete = Vec::new();
+    for conversation in input.conversations {
+        let links = get_links(LinkQuery::try_new(conversation.clone(), LinkTypes::ConversationToEntries)?, GetStrategy::Local)?;
+        let mut held = true;
+        for link in links.into_iter().filter(|l| l.author != me) {
+            let Ok(hash) = ActionHash::try_from(link.target) else { continue };
+            match get(hash, GetOptions::local())? {
+                Some(record) => items.push(MyEntry { record, conversation: conversation.clone() }),
+                None => held = false,
+            }
+        }
+        if !held {
+            incomplete.push(conversation);
+        }
+    }
+    Ok(OthersEntries { items, incomplete })
+}
+
 /// The conversations tombstoned under `anchor` (an AI's founding key) by any
 /// of the person's devices, from links alone.
 #[hdk_extern]

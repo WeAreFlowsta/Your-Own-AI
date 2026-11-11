@@ -35,7 +35,12 @@ interface InitialViewProps {
   lastConversationTitle?: string;
   /** The resume's visible state: opening (conductor + first read) or
    *  polling through the launch records warmup. */
-  continueState?: 'idle' | 'opening' | 'warming';
+  continueState?: 'idle' | 'opening' | 'warming' | 'arriving';
+  /** While 'arriving': what the conversation is waiting for, and what makes
+   *  it open (two short lines). */
+  continueNote?: { what: string; then: string; partial: boolean } | null;
+  /** A partly arrived conversation: open the part that is here now. */
+  onOpenPartial$?: QRL<() => void>;
   onContinueLast$?: QRL<() => void>;
   theme: 'light' | 'dark';
 }
@@ -94,7 +99,15 @@ export default component$<InitialViewProps>((props) => {
             class="inline-flex items-center gap-2 text-sm text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
             disabled={!!props.continueState && props.continueState !== 'idle'}
           >
-            {props.continueState === 'warming' ? (
+            {props.continueState === 'arriving' && props.continueNote ? (
+              <span class="inline-flex flex-col items-center gap-1" data-testid="conversation-arriving">
+                <span class="inline-flex items-center gap-2">
+                  <span class="inline-block h-3 w-3 rounded-full border-2 border-[var(--border-subtle)] border-t-[var(--text-secondary)] animate-spin" />
+                  {props.continueNote.what}
+                </span>
+                <span class="text-xs">{props.continueNote.then}</span>
+              </span>
+            ) : props.continueState === 'warming' ? (
               <>
                 <span class="inline-block h-3 w-3 rounded-full border-2 border-[var(--border-subtle)] border-t-[var(--text-secondary)] animate-spin" />
                 Your records are warming up - opening "{props.lastConversationTitle}" in a moment
@@ -108,6 +121,17 @@ export default component$<InitialViewProps>((props) => {
               <>&#8635; Continue: {props.lastConversationTitle}</>
             )}
           </button>
+          {props.continueState === 'arriving' && props.continueNote?.partial && props.onOpenPartial$ && (
+            <div class="mt-1">
+              <button
+                onClick$={props.onOpenPartial$}
+                data-testid="open-partial"
+                class="text-xs underline text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+              >
+                Open what is here
+              </button>
+            </div>
+          )}
         </div>
       )}
       <EngineCannotStartCallout />
