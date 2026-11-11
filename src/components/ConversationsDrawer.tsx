@@ -10,6 +10,9 @@ interface ConversationsDrawerProps {
   loading: boolean;
   /** Records answered empty inside the launch grace window - "not yet", not "none". */
   warming?: boolean;
+  /** History from another of the person's devices is still on its way: one
+   *  quiet line saying so, so a conversation that is not ready has a reason. */
+  arriving?: string | null;
 
   onClose$: QRL<() => void>;
   onResume$: QRL<(item: ConversationListItem) => void>;
@@ -50,7 +53,7 @@ function whenText(us: number): string {
  * data.)
  */
 export const ConversationsDrawer = component$<ConversationsDrawerProps>(
-  ({ open, items, loading, warming, onClose$, onResume$, onRename$ }) => {
+  ({ open, items, loading, warming, arriving, onClose$, onResume$, onRename$ }) => {
     const renamingHash = useSignal<string | null>(null);
     const renameDraft = useSignal("");
     /** Filter by AI - null = all. Cleared when the filtered AI has no rows. */
@@ -172,6 +175,12 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
               if (drawn.value < shown.length && el.scrollHeight - el.scrollTop - el.clientHeight < 600) drawn.value += ROWS_MORE;
             }}
           >
+            {arriving && (
+              <div class="flex items-start gap-2 px-4 py-2 text-xs text-[var(--text-muted)]" data-testid="history-arriving">
+                <span class="mt-0.5 inline-block h-3 w-3 flex-shrink-0 rounded-full border-2 border-[var(--border-subtle)] border-t-[var(--text-secondary)] animate-spin" />
+                <span>{arriving}</span>
+              </div>
+            )}
             {loading && !warming && (
               <p class="px-4 py-3 text-sm text-[var(--text-muted)]">
                 Loading your conversations..

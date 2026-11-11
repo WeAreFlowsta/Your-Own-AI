@@ -440,15 +440,26 @@ fn view(r: &Record07) -> Result<RecordView, String> {
     flowsta_hc_lines::view_07(r).map_err(|e| e.to_string())
 }
 
+/// A page read's line in the log, as the 0.6 line's reads have
+/// (`transcript_pages`), marked 0.7: on a profile running both lines the two
+/// could not be told apart, and the 0.6 line's times were read as this one's.
+fn page_line(what: &str, agent_hex: &str, raw: &RecordsPageRaw, t0: std::time::Instant) {
+    log::info!("[records] 0.7 {what} {}..: {} of {} record(s), {} missing, {} ms", &agent_hex[..8.min(agent_hex.len())], raw.items.len(), raw.total, raw.missing, t0.elapsed().as_millis());
+}
+
 impl Cells07 {
     pub async fn conversations_page(&self, agent_hex: &str, input: &ConversationsPage) -> Result<RecordsPage, String> {
+        let t0 = std::time::Instant::now();
         let raw: RecordsPageRaw = self.call(agent_hex, "get_conversations_page", input).await?;
+        page_line("get_conversations_page", agent_hex, &raw, t0);
         let items = raw.items.iter().map(|i| Ok((view(&i.record)?, i.key.clone()))).collect::<Result<_, String>>()?;
         Ok(RecordsPage { items, next: raw.next, total: raw.total, missing: raw.missing })
     }
 
     pub async fn entries_page(&self, agent_hex: &str, input: &EntriesPage) -> Result<RecordsPage, String> {
+        let t0 = std::time::Instant::now();
         let raw: RecordsPageRaw = self.call(agent_hex, "get_conversation_entries_page", input).await?;
+        page_line("get_conversation_entries_page", agent_hex, &raw, t0);
         let items = raw.items.iter().map(|i| Ok((view(&i.record)?, i.key.clone()))).collect::<Result<_, String>>()?;
         Ok(RecordsPage { items, next: raw.next, total: raw.total, missing: raw.missing })
     }
@@ -461,28 +472,45 @@ impl Cells07 {
 
     /// Every conversation listed under `founding`, with its anchor.
     pub async fn conversations_all(&self, agent_hex: &str, founding: &AgentPubKey) -> Result<Vec<(RecordView, Vec<u8>)>, String> {
+        self.conversations_all_counted(agent_hex, founding).await.map(|(items, _)| items)
+    }
+
+    /// [`Self::conversations_all`], and how many listed conversations have
+    /// no record on this device yet (another device's, still to arrive).
+    pub async fn conversations_all_counted(&self, agent_hex: &str, founding: &AgentPubKey) -> Result<(Vec<(RecordView, Vec<u8>)>, u32), String> {
         let mut out = Vec::new();
+        let mut missing = 0u32;
         let mut before = None;
         loop {
             let page = self.conversations_page(agent_hex, &ConversationsPage { anchor: founding.clone(), before, limit: 100 }).await?;
+            missing += page.missing;
             out.extend(page.items);
             match page.next {
                 Some(n) => before = Some(n),
-                None => return Ok(out),
+                None => return Ok((out, missing)),
             }
         }
     }
 
     /// Every entry under a conversation's anchor, oldest first, with its key.
     pub async fn entries_all(&self, agent_hex: &str, conversation_anchor: &ExternalHash) -> Result<Vec<(RecordView, Vec<u8>)>, String> {
+        self.entries_all_counted(agent_hex, conversation_anchor).await.map(|(items, _, _)| items)
+    }
+
+    /// [`Self::entries_all`], with how many entries the conversation lists
+    /// and how many of those have no record on this device yet.
+    pub async fn entries_all_counted(&self, agent_hex: &str, conversation_anchor: &ExternalHash) -> Result<(Vec<(RecordView, Vec<u8>)>, u32, u32), String> {
         let mut out = Vec::new();
+        let (mut total, mut missing) = (0u32, 0u32);
         let mut after = None;
         loop {
             let page = self.entries_page(agent_hex, &EntriesPage { conversation_anchor: conversation_anchor.clone(), after, limit: 500 }).await?;
+            total = page.total;
+            missing += page.missing;
             out.extend(page.items);
             match page.next {
                 Some(n) => after = Some(n),
-                None => return Ok(out),
+                None => return Ok((out, total, missing)),
             }
         }
     }

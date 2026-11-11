@@ -258,11 +258,13 @@ impl PassApp for Move {
     /// as each pass begins, which is also where the pass's mode is set:
     /// once no other device needs the 0.6 line, the pass carries every
     /// author's records, not only this device's (a removed or reset
-    /// device's would vanish from view at the stop). That full pass reads
-    /// every conversation, so it waits for the machine check's room for
-    /// heavy work; until then the pass carries this device's own and says
-    /// nothing here, so "nothing left" is only ever recorded by a full pass
-    /// over every AI. Unknown facts say nothing.
+    /// device's would vanish from view at the stop). That full pass runs
+    /// under the move's own rules (it gives way to the person, it does not
+    /// wait for an idle computer): it adds only the other devices' records
+    /// to the bulk reads of this device's own ([`others_of`]), and until it
+    /// has run the 0.6 line stays up, slowing every read. "Nothing left" is
+    /// only ever recorded by a full pass over every AI. Unknown facts say
+    /// nothing.
     async fn siblings(app: &Arc<Self>, root: &std::path::Path) -> Option<flowsta_hc_lines::policy::Siblings> {
         use std::sync::atomic::Ordering;
         let known = (app.known)(root);
@@ -271,7 +273,10 @@ impl PassApp for Move {
             crate::line_facts::Known::NeverShared => true,
             crate::line_facts::Known::Unknown => false,
         };
-        let full = none_needs_06 && crate::machine::would_run(crate::machine::Work::Heavy);
+        if let Some(read) = OTHERS.get() {
+            read.lock().await.clear();
+        }
+        let full = none_needs_06;
         if app.full.swap(full, Ordering::SeqCst) != full {
             log::info!("[0.7] passes carry {}", if full { "every author's records (no other device needs the 0.6 line)" } else { "this device's own records" });
             if full {
@@ -279,9 +284,6 @@ impl PassApp for Move {
                 // write missed.
                 app.passed_in_full.store(false, Ordering::SeqCst);
             }
-        }
-        if none_needs_06 && !full {
-            return None;
         }
         match known {
             crate::line_facts::Known::Facts(f) => Some(f.siblings()),
@@ -413,6 +415,60 @@ async fn listed_06(mv: &Move, agent: &str, all_authors: bool) -> Result<Vec<holo
     Ok(out)
 }
 
+/// What a full pass reads of one AI beyond this device's own records.
+struct Others {
+    /// Every listed conversation of the AI, whoever started it.
+    listed: Vec<holochain_types::prelude::Record>,
+    /// The other devices' messages on the 0.6 line, each with its
+    /// conversation's id.
+    entries: Vec<(holochain_types::prelude::Record, String)>,
+}
+
+/// [`Others`] by AI cell for the pass in hand: read once, used by each kind
+/// and line. Emptied as a pass begins ([`PassApp::siblings`]).
+static OTHERS: std::sync::OnceLock<tokio::sync::Mutex<std::collections::HashMap<String, Arc<Others>>>> = std::sync::OnceLock::new();
+
+/// The other devices' part of an AI's records on the 0.6 line. This device's
+/// own messages come from its chain in bulk (`get_my_entries_page`); the
+/// rest are found from the links this conductor holds, a hundred
+/// conversations a call (`get_others_entries`), and only a conversation
+/// holding another device's message that is not here is read in full.
+/// Reading every conversation in turn took hours on a long history where
+/// one device had written nearly all of it (11-11: 207 of 1,046 in 31 min).
+async fn others_of(mv: &Move, agent: &str) -> Result<Arc<Others>, HookError> {
+    let mut held = OTHERS.get_or_init(Default::default).lock().await;
+    if let Some(o) = held.get(agent) {
+        return Ok(o.clone());
+    }
+    let manager = mv.hc.get()?;
+    let me = hex::decode(agent)?;
+    let listed = listed_06(mv, agent, true).await?;
+    let hashes: Vec<ActionHash> = listed.iter().map(|r| r.action_address().clone()).collect();
+    let (mut found, in_full) = match crate::transcript_pages::others_entries(manager, agent, &hashes, READ_TIMEOUT, give_way).await {
+        Ok(read) => read,
+        // A cell still on a coordinator before 14: every conversation in turn.
+        Err(e) if crate::transcript_pages::is_missing_function(&e) => (Vec::new(), hashes.clone()),
+        Err(e) => return Err(e.into()),
+    };
+    let mut seen: HashSet<Vec<u8>> = found.iter().map(|(r, _)| r.action_address().get_raw_39().to_vec()).collect();
+    for conversation in in_full {
+        give_way().await;
+        let read = crate::transcript_pages::all_entries(manager, agent, conversation.clone(), READ_TIMEOUT).await?;
+        if !read.complete {
+            return Err(format!("a conversation's entries were not read in full ({})", read.stopped_by.unwrap_or_default()).into());
+        }
+        for r in read.records {
+            if r.action().author().get_raw_39() != me.as_slice() && seen.insert(r.action_address().get_raw_39().to_vec()) {
+                found.push((r, conversation.clone()));
+            }
+        }
+    }
+    let entries = found.into_iter().map(|(r, c)| (r, id_of_v1(c.get_raw_39()))).collect();
+    let others = Arc::new(Others { listed, entries });
+    held.insert(agent.to_string(), others.clone());
+    Ok(others)
+}
+
 pub struct Conversations;
 
 #[async_trait::async_trait]
@@ -433,7 +489,8 @@ impl VersionedKind<Move> for Conversations {
             Line::V06 => {
                 let full = mv.full.load(std::sync::atomic::Ordering::SeqCst);
                 let mut out = Vec::new();
-                for r in listed_06(mv, agent, full).await? {
+                let listed = if full { others_of(mv, agent).await?.listed.clone() } else { listed_06(mv, agent, false).await? };
+                for r in listed {
                     let hash = r.action_address().get_raw_39().to_vec();
                     let id = id_of_v1(&hash);
                     let anchor = conversation_anchor(&mv.data_key, &id);
@@ -493,41 +550,6 @@ impl VersionedKind<Move> for Messages {
         let mv = cx.app.as_ref();
         let agent = unit.id.as_str();
         match line {
-            Line::V06 if mv.full.load(std::sync::atomic::Ordering::SeqCst) => {
-                // Every author's entries, conversation by conversation.
-                let manager = mv.hc.get()?;
-                let mut out = Vec::new();
-                for c in listed_06(mv, agent, true).await? {
-                    let conversation_id = id_of_v1(c.action_address().get_raw_39());
-                    let read = crate::transcript_pages::all_entries(manager, agent, c.action_address().clone(), READ_TIMEOUT).await?;
-                    if !read.complete {
-                        return Err(format!("a conversation's entries were not read in full ({})", read.stopped_by.unwrap_or_default()).into());
-                    }
-                    for r in read.records {
-                        let hash = r.action_address().get_raw_39().to_vec();
-                        let id = id_of_v1(&hash);
-                        let Some((cipher, nonce)) = sealed(&r) else { continue };
-                        let key = message_key(&mv.data_key, &id);
-                        let body = Body { cipher, nonce, id, conversation_id: Some(conversation_id.clone()) };
-                        out.push(version(key, r.action().timestamp().as_micros(), hash, Some(&body))?);
-                    }
-                }
-                Ok(out)
-            }
-            Line::V07 if mv.full.load(std::sync::atomic::Ordering::SeqCst) => {
-                // Every author's message keys, for the same conversations.
-                let mut out = Vec::new();
-                for c in listed_06(mv, agent, true).await? {
-                    let conversation_id = id_of_v1(c.action_address().get_raw_39());
-                    let anchor = ExternalHash::from_raw_32(conversation_anchor(&mv.data_key, &conversation_id).to_vec());
-                    let keys: Vec<crate::hc07::KeyItem> = mv.cells.call(agent, "get_message_keys", &anchor).await?;
-                    for k in keys {
-                        let Ok(core) = <[u8; 32]>::try_from(k.key.as_slice()) else { continue };
-                        out.push(version(core, k.at.as_micros(), k.key.clone(), None)?);
-                    }
-                }
-                Ok(out)
-            }
             Line::V06 => {
                 let manager = mv.hc.get()?;
                 let (gone_ids, gone_anchors) = mv.gone(agent).await?;
@@ -545,23 +567,54 @@ impl VersionedKind<Move> for Messages {
                     let body = Body { cipher, nonce, id, conversation_id: Some(conversation_id) };
                     out.push(version(key, r.action().timestamp().as_micros(), hash, Some(&body))?);
                 }
+                // A full pass: the other devices' messages too.
+                if mv.full.load(std::sync::atomic::Ordering::SeqCst) {
+                    for (r, conversation_id) in &others_of(mv, agent).await?.entries {
+                        let hash = r.action_address().get_raw_39().to_vec();
+                        let id = id_of_v1(&hash);
+                        let Some((cipher, nonce)) = sealed(r) else { continue };
+                        let key = message_key(&mv.data_key, &id);
+                        let body = Body { cipher, nonce, id, conversation_id: Some(conversation_id.clone()) };
+                        out.push(version(key, r.action().timestamp().as_micros(), hash, Some(&body))?);
+                    }
+                }
                 Ok(out)
             }
             Line::V07 => {
                 let founding = Move::agent_key(&mv.founding(agent))?;
                 let mut out = Vec::new();
+                let mut have: HashSet<[u8; 32]> = HashSet::new();
                 let mut after_seq = None;
                 loop {
                     let page = mv.cells.my_entries_page(agent, &crate::hc07::MyEntriesPage { anchor: founding.clone(), after_seq, limit: 500 }).await?;
                     for (record, _, key) in &page.items {
                         let Ok(core) = <[u8; 32]>::try_from(key.as_slice()) else { continue };
+                        have.insert(core);
                         out.push(version(core, record.timestamp_us, record.action_hash.clone(), None)?);
                     }
                     match page.next_seq {
                         Some(s) => after_seq = Some(s),
-                        None => return Ok(out),
+                        None => break,
                     }
                 }
+                // A full pass: what any device wrote there in the
+                // conversations holding another device's message (its own
+                // copy of one counts as present).
+                if mv.full.load(std::sync::atomic::Ordering::SeqCst) {
+                    let conversations: HashSet<String> = others_of(mv, agent).await?.entries.iter().map(|(_, c)| c.clone()).collect();
+                    for conversation_id in conversations {
+                        give_way().await;
+                        let anchor = ExternalHash::from_raw_32(conversation_anchor(&mv.data_key, &conversation_id).to_vec());
+                        let keys: Vec<crate::hc07::KeyItem> = mv.cells.call(agent, "get_message_keys", &anchor).await?;
+                        for k in keys {
+                            let Ok(core) = <[u8; 32]>::try_from(k.key.as_slice()) else { continue };
+                            if have.insert(core) {
+                                out.push(version(core, k.at.as_micros(), k.key.clone(), None)?);
+                            }
+                        }
+                    }
+                }
+                Ok(out)
             }
         }
     }
@@ -1323,10 +1376,11 @@ mod tests {
     /// Nothing left behind: another device's conversation, at the AI's
     /// founding key, whose own cell is gone (disabled here). A pass in its
     /// own mode carries this device's records only and says nothing about
-    /// the other devices; once no device needs the 0.6 line (and the machine
-    /// has room), a full pass carries the other device's conversation and
-    /// message too, over every AI, and only then records that nothing is
-    /// left, so the 0.6 line is no longer wanted.
+    /// the other devices; once no device needs the 0.6 line, a full pass
+    /// (on a computer in use too) carries the other device's conversation
+    /// and its messages, in its own conversation and in one of this
+    /// device's, over every AI, and only then records that nothing is left,
+    /// so the 0.6 line is no longer wanted.
     /// Run with the app closed: `cargo test --lib -- --ignored live_move --test-threads 1`
     #[tokio::test(flavor = "multi_thread")]
     #[ignore]
@@ -1349,12 +1403,18 @@ mod tests {
         let founding = Move::agent_key(&a).unwrap();
         // This device's own conversation, and the other device's, both at the founding key.
         let (n, c) = seal(serde_json::json!({"title": "Mine", "started_at": 1}));
-        manager.call_zome(&a, "transcript", "start_conversation", ExternIO::encode(StartV1 { cipher: c, nonce: n.to_vec(), anchor: None }).unwrap()).await.unwrap();
+        let out = manager.call_zome(&a, "transcript", "start_conversation", ExternIO::encode(StartV1 { cipher: c, nonce: n.to_vec(), anchor: None }).unwrap()).await.unwrap();
+        let mine: ActionHash = ExternIO::decode(&out).unwrap();
+        let (n, c) = seal(serde_json::json!({"role": "user", "content": "written here", "sequence": 0, "timestamp": 2}));
+        manager.call_zome(&a, "transcript", "record_message", ExternIO::encode(RecordV1 { conversation_hash: mine.clone(), cipher: c, nonce: n.to_vec() }).unwrap()).await.unwrap();
         let (n, c) = seal(serde_json::json!({"title": "From the laptop", "started_at": 2}));
         let out = manager.call_zome(&b, "transcript", "start_conversation", ExternIO::encode(StartV1 { cipher: c, nonce: n.to_vec(), anchor: Some(founding.clone()) }).unwrap()).await.unwrap();
         let theirs: ActionHash = ExternIO::decode(&out).unwrap();
         let (n, c) = seal(serde_json::json!({"role": "user", "content": "written on the laptop", "sequence": 0, "timestamp": 3}));
         manager.call_zome(&b, "transcript", "record_message", ExternIO::encode(RecordV1 { conversation_hash: theirs.clone(), cipher: c, nonce: n.to_vec() }).unwrap()).await.unwrap();
+        // The other device also continued this device's conversation.
+        let (n, c) = seal(serde_json::json!({"role": "user", "content": "continued on the laptop", "sequence": 1, "timestamp": 4}));
+        manager.call_zome(&b, "transcript", "record_message", ExternIO::encode(RecordV1 { conversation_hash: mine.clone(), cipher: c, nonce: n.to_vec() }).unwrap()).await.unwrap();
         // The other device is gone: its cell no longer runs here.
         let b_app = manager.agents.lock().await.get(&b).map(|x| x.installed_app_id.clone()).unwrap();
         let admin = holochain_client::AdminWebsocket::connect(format!("localhost:{}", manager.admin_port()), Some(crate::conductor::origin())).await.unwrap();
@@ -1387,11 +1447,16 @@ mod tests {
             full: Default::default(),
         });
         let keys_at_founding = || async { mv.cells.call::<_, crate::hc07::ConversationKeys>(&a, "get_conversation_keys_local", &founding).await.unwrap().conversations.len() };
+        // The other device's two messages are found without reading either
+        // conversation in full (coordinator 14 answers; no fallback).
+        let (others, in_full) = crate::transcript_pages::others_entries(mv.hc.get().unwrap(), &a, &[mine.clone(), theirs.clone()], READ_TIMEOUT, || async {}).await.expect("get_others_entries answers");
+        assert_eq!((others.len(), in_full.len()), (2, 0), "the other device's messages, both held here");
 
         // Own mode: the facts unknown, so this device's own records only.
         let own = runner().run(&mv, &profile, "own").await;
         assert_eq!(own.error, None, "{own:?}");
         assert_eq!(own.kind("conversations").map(|k| (k.total, k.written)), Some((1, 1)), "this device's own conversation only");
+        assert_eq!(own.kind("messages").map(|k| (k.total, k.written)), Some((1, 1)), "and its own message only");
         assert!(own.flipped, "its own records are carried: the marker flips");
         assert_eq!(keys_at_founding().await, 1, "the gone device's conversation is not on 0.7 yet");
         let carried_all = |p: &std::path::Path| match flowsta_hc_lines::marker::Marker::load(p, &MARKER) {
@@ -1400,24 +1465,24 @@ mod tests {
         };
         assert_eq!(carried_all(&profile), None, "nothing is recorded as left from a pass that did not read every author");
 
-        // No device needs the 0.6 line, the machine has room: a full pass.
+        // No device needs the 0.6 line: a full pass, on a computer in use
+        // and on battery too (it runs under the move's rules, not as heavy
+        // background work).
         *facts.lock().unwrap() = crate::line_facts::Known::Facts(crate::line_facts::LineFacts { checked_at_ms: 1, ..Default::default() });
-        crate::machine::set_reading_for_test(Some(crate::machine::Reading { others_cpu_pct: Some(0.0), memory_short: false, on_battery: false, metered: false, away_secs: Some(3600) }));
+        crate::machine::set_reading_for_test(Some(crate::machine::Reading { others_cpu_pct: Some(90.0), memory_short: false, on_battery: true, metered: false, away_secs: Some(0) }));
         let full = runner().run(&mv, &profile, "full").await;
         crate::machine::set_reading_for_test(None);
         assert_eq!(full.error, None, "{full:?}");
         assert_eq!(full.kind("conversations").map(|k| (k.total, k.written)), Some((2, 1)), "every author's, the other device's written now (every AI read again)");
-        assert_eq!(full.kind("messages").map(|k| k.written), Some(1), "and its message");
+        assert_eq!(full.kind("messages").map(|k| (k.total, k.written)), Some((3, 2)), "and its messages: in its own conversation and in this device's");
         assert_eq!(keys_at_founding().await, 2, "both on 0.7 at the founding key");
         assert!(carried_all(&profile).is_some(), "a full pass over every AI records that nothing is left");
         let decided = crate::line_facts::decide(&*facts.lock().unwrap(), flowsta_hc_lines::marker::Marker::load(&profile, &MARKER), true, 10);
         assert!(!decided.decision.wanted(), "the 0.6 line is no longer wanted: {decided:?}");
 
         // Another full pass writes nothing: present by key, whoever wrote it.
-        crate::machine::set_reading_for_test(Some(crate::machine::Reading { others_cpu_pct: Some(0.0), memory_short: false, on_battery: false, metered: false, away_secs: Some(3600) }));
         mv.passed_in_full.store(false, std::sync::atomic::Ordering::SeqCst);
         let again = runner().run(&mv, &profile, "full again").await;
-        crate::machine::set_reading_for_test(None);
         assert_eq!(again.kind("conversations").map(|k| (k.present, k.written)), Some((2, 0)), "nothing twice");
         assert_eq!(again.kind("messages").map(|k| k.written), Some(0));
         supervisor().stop();
