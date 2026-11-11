@@ -481,7 +481,7 @@ pub async fn mcp_which(program: String) -> Result<Option<String>, String> {
 /// A tool call (git, powershell, cmd, Blender) that must not flash a console
 /// window on Windows: the app is a GUI process, so every console child gets
 /// a window of its own unless told otherwise.
-fn quiet(cmd: &mut std::process::Command) -> &mut std::process::Command {
+pub(crate) fn quiet(cmd: &mut std::process::Command) -> &mut std::process::Command {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

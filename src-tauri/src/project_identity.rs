@@ -27,8 +27,7 @@ pub fn project_identity(folder: &Path) -> String {
 /// The earliest root commit of the repo the folder is in, if git says so.
 fn git_root_commit(folder: &Path) -> Option<String> {
     let git = crate::mcp::which_sync("git")?;
-    let out = std::process::Command::new(git)
-        .args(["-C", &folder.to_string_lossy(), "rev-list", "--max-parents=0", "HEAD"])
+    let out = crate::mcp::quiet(std::process::Command::new(git).args(["-C", &folder.to_string_lossy(), "rev-list", "--max-parents=0", "HEAD"]))
         .output()
         .ok()?;
     if !out.status.success() {
