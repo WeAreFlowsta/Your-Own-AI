@@ -90,13 +90,26 @@ fn admin_ports(line: Line) -> [u16; 3] {
 /// A line's conductor settings. SQLite synced in full on every write
 /// (0.6 `Resilient`, 0.7 `Full`), errors logged plus the bootstrap client's
 /// warnings (a refused registration, "Bootstrap PUT returned HTTP error", is
-/// the one line that tells a stranded device from a quiet one); on 0.7 the
-/// library's gossip cap.
+/// the one line that tells a stranded device from a quiet one).
+///
+/// On 0.7, NO gossip cap (the library's default is 1 MiB an exchange).
+/// Kitsune2 sends the ops of one sector and time slice as one batch and
+/// skips a batch over the cap, every round: one AI's activity during a busy
+/// spell (the move writes thousands of actions in minutes) is such a batch,
+/// so a second computer never received a long history once its sync had
+/// been interrupted (0.9.1 betas, 2026-11-11: two computers offering each
+/// other the same ids for hours). The cap was there for the 0.7.1 presence
+/// check, which failed above ~10.9k offered ids; the conductor this app
+/// ships checks in chunks (WeAreFlowsta/holochain-build patch 0006), so
+/// Kitsune2's own 100 MB an exchange applies.
 fn tuning(line: Line) -> NetworkTuning {
     let mut t = NetworkTuning::for_line(line);
     match line {
         Line::V06 => t.db_sync_strategy = Some("Resilient".into()),
-        Line::V07 => t.db_sync_level = Some("Full".into()),
+        Line::V07 => {
+            t.db_sync_level = Some("Full".into());
+            t.gossip_max_op_bytes = None;
+        }
     }
     t.rust_log = Some("error,kitsune2_bootstrap_client=warn".into());
     t
@@ -1065,7 +1078,7 @@ mod line_07_tests {
         assert_eq!(sidecars(Line::V07), ("yourowai-lair-keystore-07", "yourowai-holochain-07"));
         let t = tuning(Line::V07);
         assert_eq!(t.db_sync_level.as_deref(), Some("Full"));
-        assert!(t.gossip_max_op_bytes.is_some(), "the gossip cap on every 0.7 conductor");
+        assert!(t.gossip_max_op_bytes.is_none(), "no gossip cap: this app's 0.7 conductor checks offered ids in chunks");
         assert_eq!(network_generation(Line::V07), "holochain-0.7");
     }
 
@@ -1107,7 +1120,7 @@ mod line_07_tests {
         let mut p07 = start_one(Line::V07, &profile, &passphrase, &alone(), &origin, &[KeySource::Existing { tag: tag.clone() }], |_| {}).await.expect("0.7 starts under the derived passphrase");
         assert_eq!(p07.agents[0], key, "the AI's key on 0.7 is its key on 0.6");
         let config = std::fs::read_to_string(line_dirs(&profile, Line::V07).1.join("conductor-config.yaml")).unwrap();
-        assert!(config.contains("maxGossipOpBytes") && config.contains("db_sync_level: Full"));
+        assert!(!config.contains("maxGossipOpBytes") && config.contains("db_sync_level: Full"));
         p07.stop();
 
         let mut again = start_one(Line::V06, &profile, PASSPHRASE_06, &alone(), &origin, &[KeySource::Existing { tag }], |_| {}).await.expect("0.6 still opens");
