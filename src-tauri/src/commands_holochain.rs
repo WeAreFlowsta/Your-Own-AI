@@ -1873,6 +1873,37 @@ pub struct ConversationArrival {
     pub listed: u32,
     pub not_here: u32,
     pub device: Option<String>,
+    /// Another of the person's devices wrote this conversation. A message's
+    /// listing does not arrive ahead of its record, so a conversation whose
+    /// messages have not arrived lists none: who wrote it is what tells
+    /// "still arriving" from "nothing to read".
+    pub elsewhere: bool,
+    /// The Vault holds that device's copy of it: its label and the device,
+    /// for a read-only view until the records arrive.
+    pub copy_label: Option<String>,
+    pub copy_device: Option<String>,
+}
+
+/// The Vault copy of a conversation another device backed up, by the
+/// conversation's id: (label, device).
+fn sibling_copy_of(app: &tauri::AppHandle, conversation_hash: &str) -> Option<(String, String)> {
+    crate::config_sync::sibling_conversations(app).into_iter().find_map(|c| {
+        let prefix = c.label.strip_prefix("conv-")?;
+        (!prefix.is_empty() && conversation_hash.starts_with(prefix)).then(|| (c.label.clone(), c.device.clone()))
+    })
+}
+
+/// Whether the conversation's record on the 0.7 line was written by an agent
+/// that is not one of this device's: read from what this conductor holds.
+/// None when the line or the record is not here.
+async fn written_elsewhere_07(app: &tauri::AppHandle, manager: &crate::holochain::HolochainManager, agent_key: &str, conversation_hash: &str) -> Option<bool> {
+    crate::conductor::ports(flowsta_hc_lines::Line::V07)?;
+    let data_key = manager.data_key().ok()?;
+    let anchor = crate::transcript_ids::conversation_anchor(&data_key, conversation_hash);
+    let founding = agent_key_from_hex(&founding_key_for(app, agent_key))?;
+    let keys = tokio::time::timeout(std::time::Duration::from_secs(10), crate::hc07::app_cells().call::<_, crate::hc07::ConversationKeys>(agent_key, "get_conversation_keys_local", &founding)).await.ok()?.ok()?;
+    let item = keys.conversations.iter().find(|k| k.key.as_slice() == anchor.as_slice() || (k.key.len() == 39 && k.key[3..35] == anchor[..]))?;
+    Some(!manager.is_provisioned(&hex::encode(item.author.get_raw_39())).await)
 }
 
 /// A conversation's counts from its last read ([`get_conversation_transcript`]),
@@ -1889,10 +1920,13 @@ pub async fn conversation_arrival(
 ) -> Result<ConversationArrival, String> {
     // The read that just opened it counted both.
     let counted = ARRIVED.lock().ok().and_then(|h| h.get(&conversation_hash).filter(|(_, _, at)| at.elapsed() < ARRIVED_KEPT).map(|(l, n, _)| (*l, *n)));
-    if let Some((listed, not_here)) = counted {
-        return Ok(ConversationArrival { listed, not_here, device: the_other_device(&app) });
-    }
     let manager = hc_state.get()?;
+    let copy = sibling_copy_of(&app, &conversation_hash);
+    let elsewhere = copy.is_some() || written_elsewhere_07(&app, &manager, &agent_key, &conversation_hash).await.unwrap_or(false);
+    let (copy_label, copy_device) = copy.map_or((None, None), |(l, d)| (Some(l), Some(d)));
+    if let Some((listed, not_here)) = counted {
+        return Ok(ConversationArrival { listed, not_here, device: the_other_device(&app), elsewhere, copy_label, copy_device });
+    }
     let quick = std::time::Duration::from_secs(30);
     let mut listed = 0u32;
     if manager.is_provisioned(&agent_key).await {
@@ -1911,7 +1945,7 @@ pub async fn conversation_arrival(
             }
         }
     }
-    Ok(ConversationArrival { listed, not_here: listed, device: the_other_device(&app) })
+    Ok(ConversationArrival { listed, not_here: listed, device: the_other_device(&app), elsewhere, copy_label, copy_device })
 }
 
 #[tauri::command]

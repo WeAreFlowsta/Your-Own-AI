@@ -664,9 +664,34 @@ export default component$(() => {
             }
           } else {
             const arrival = await getConversationArrival(target.agentKey, target.hash);
+            // None of it is here and the Vault holds the other device's
+            // copy: read that (read-only, as a conversation listed from the
+            // copy alone opens) instead of waiting for the records.
+            if (none && arrival.copy_label && arrival.copy_device) {
+              const copy = await loadConversationMessages(target.agentKey, arrival.copy_label, ai, `copy:${arrival.copy_device}`);
+              if (copy.messages.length > 0 || waited === false) {
+                uiLog(`resume ${who}: its records are not here yet; the Vault's copy has ${copy.messages.length} message(s)`);
+              }
+              if (copy.messages.length > 0) {
+                loaded = copy;
+                break;
+              }
+              // An empty copy: a locked Vault says so on the next look.
+              if (copy.copiedFrom) {
+                let locked = false;
+                try {
+                  locked = await invoke<boolean>("vault_is_locked");
+                } catch { /* no Vault */ }
+                if (locked) {
+                  note = { what: "Unlock Flowsta Vault on this computer to open this conversation", then: "It opens here by itself once the Vault is unlocked.", partial: false };
+                }
+              }
+            }
             const from = arrival.device ?? "your other computer";
             const gone = Date.now() - waitingSince > ARRIVAL_GONE_HINT_MS;
-            if (none && arrival.listed > 0) {
+            if (note) {
+              // the locked Vault, above
+            } else if (none && (arrival.listed > 0 || arrival.elsewhere)) {
               note = {
                 what: `Getting this conversation from ${from}…`,
                 then: gone

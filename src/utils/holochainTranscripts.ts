@@ -250,6 +250,19 @@ export async function getTranscript(
   }
 }
 
+/** How much of a conversation is on this computer. `elsewhere`: another of
+ *  the person's devices wrote it (a conversation whose messages have not
+ *  arrived lists none, so this is what marks it as arriving). `copy_*`: the
+ *  Vault holds that device's copy, for a read-only view meanwhile. */
+export interface ConversationArrival {
+  listed: number;
+  not_here: number;
+  device: string | null;
+  elsewhere: boolean;
+  copy_label: string | null;
+  copy_device: string | null;
+}
+
 /** How much of a conversation is on this device, as its last read counted:
  *  the messages it `listed`, how many of those are `not_here` yet (on another
  *  of the person's devices), and that device's name when there is exactly
@@ -257,11 +270,11 @@ export async function getTranscript(
 export async function getConversationArrival(
   agentKey: string,
   conversationHash: string,
-): Promise<{ listed: number; not_here: number; device: string | null }> {
+): Promise<ConversationArrival> {
   try {
-    return await invoke<{ listed: number; not_here: number; device: string | null }>("conversation_arrival", { agentKey, conversationHash });
+    return await invoke<ConversationArrival>("conversation_arrival", { agentKey, conversationHash });
   } catch {
-    return { listed: 0, not_here: 0, device: null };
+    return { listed: 0, not_here: 0, device: null, elsewhere: false, copy_label: null, copy_device: null };
   }
 }
 
