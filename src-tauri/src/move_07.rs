@@ -31,7 +31,7 @@ use flowsta_hc_lines::pass::{CopyUnit, CopyUnits, HookError, NoFlipHook, OwnKind
 use flowsta_hc_lines::Line;
 use holochain_types::prelude::{ActionHash, AgentPubKey, ExternalHash};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::Manager as _;
@@ -326,7 +326,7 @@ impl CopyUnits<Move> for Cells {
             let missed = crate::hc07::take_missed();
             all.into_iter().filter(|u| missed.contains(&u.id)).collect()
         };
-        note_pass_units(&units, !cx.moved);
+        note_pass_units(&units, !cx.moved, mv.full.load(std::sync::atomic::Ordering::SeqCst));
         Ok(units)
     }
 }
@@ -760,10 +760,6 @@ impl VersionedKind<Move> for MemoryRows {
 /// person's, this AI's, and those this agent's own rows are under (a
 /// project another device alone knew has an anchor no one here can name).
 async fn others_06(mv: &Move, agent: &str, mine: &[(holochain_types::prelude::Record, holochain_types::prelude::AnyLinkableHash)]) -> Result<Vec<(holochain_types::prelude::Record, holochain_types::prelude::AnyLinkableHash)>, HookError> {
-    #[derive(Serialize, Debug)]
-    struct RowsAt {
-        anchor: holochain_types::prelude::AnyLinkableHash,
-    }
     let author = hex::decode(agent)?;
     let mut anchors: Vec<holochain_types::prelude::AnyLinkableHash> = Vec::new();
     for scope in ["person".to_string(), format!("ai:{}", mv.founding(agent))] {
@@ -776,15 +772,113 @@ async fn others_06(mv: &Move, agent: &str, mine: &[(holochain_types::prelude::Re
     }
     let have: HashSet<Vec<u8>> = mine.iter().map(|(r, _)| r.action_address().get_raw_39().to_vec()).collect();
     let mut out = Vec::new();
-    for anchor in anchors {
-        let records: Vec<holochain_types::prelude::Record> = mv.call_06(agent, "get_memory_rows", RowsAt { anchor: anchor.clone() }).await?;
-        for r in records {
+    for (anchor, records) in rows_at_06(mv, agent, &anchors).await? {
+        for r in records.iter() {
             if r.action().author().get_raw_39() == author.as_slice() || have.contains(r.action_address().get_raw_39()) {
                 continue;
             }
-            out.push((r, anchor.clone()));
+            out.push((r.clone(), anchor.clone()));
         }
     }
+    Ok(out)
+}
+
+/// What a pass has read at each scope anchor on the 0.6 line, every author's
+/// rows. The AIs share one DHT store, so a scope reads the same from any of
+/// them: the person's scope was read once per AI (twenty times over) before.
+/// Emptied as each pass begins (and when the app's own pass loop ends one).
+static ROWS_AT_06: std::sync::Mutex<Option<HashMap<Vec<u8>, Arc<Vec<holochain_types::prelude::Record>>>>> = std::sync::Mutex::new(None);
+
+fn forget_rows_at_06() {
+    if let Ok(mut c) = ROWS_AT_06.lock() {
+        *c = None;
+    }
+}
+
+/// Anchors per `get_memory_rows_held` call.
+const SCOPES_PER_CALL: usize = 20;
+
+/// Every author's memory rows at `anchors` on the 0.6 line: from this pass's
+/// earlier reads, else from what the conductor holds in one call
+/// (`get_memory_rows_held`, coordinator 15), and from the network only for a
+/// scope listing a row this conductor does not hold. A cell whose
+/// coordinator predates the call is read the old way.
+async fn rows_at_06(mv: &Move, agent: &str, anchors: &[holochain_types::prelude::AnyLinkableHash]) -> Result<Vec<(holochain_types::prelude::AnyLinkableHash, Arc<Vec<holochain_types::prelude::Record>>)>, HookError> {
+    #[derive(Serialize, Debug)]
+    struct RowsAt {
+        anchor: holochain_types::prelude::AnyLinkableHash,
+    }
+    #[derive(Serialize, Debug)]
+    struct HeldInput {
+        anchors: Vec<holochain_types::prelude::AnyLinkableHash>,
+    }
+    #[derive(Deserialize, Debug)]
+    struct Held {
+        items: Vec<MyRow>,
+        incomplete: Vec<holochain_types::prelude::AnyLinkableHash>,
+    }
+    let known = |a: &holochain_types::prelude::AnyLinkableHash| ROWS_AT_06.lock().ok().and_then(|c| c.as_ref().and_then(|m| m.get(a.get_raw_39()).cloned()));
+    let keep = |a: &holochain_types::prelude::AnyLinkableHash, rows: Vec<holochain_types::prelude::Record>| {
+        let rows = Arc::new(rows);
+        if let Ok(mut c) = ROWS_AT_06.lock() {
+            c.get_or_insert_with(HashMap::new).insert(a.get_raw_39().to_vec(), rows.clone());
+        }
+        rows
+    };
+    let t0 = std::time::Instant::now();
+    let mut out = Vec::new();
+    let mut to_read = Vec::new();
+    for a in anchors {
+        match known(a) {
+            Some(rows) => out.push((a.clone(), rows)),
+            None => to_read.push(a.clone()),
+        }
+    }
+    if to_read.is_empty() {
+        return Ok(out);
+    }
+    let mut from_network = Vec::new();
+    let mut held_rows = 0usize;
+    for chunk in to_read.chunks(SCOPES_PER_CALL) {
+        give_way().await;
+        match mv.call_06::<_, Held>(agent, "get_memory_rows_held", HeldInput { anchors: chunk.to_vec() }).await {
+            Ok(held) => {
+                let mut by_anchor: HashMap<Vec<u8>, Vec<holochain_types::prelude::Record>> = HashMap::new();
+                for item in held.items {
+                    by_anchor.entry(item.anchor.get_raw_39().to_vec()).or_default().push(item.record);
+                }
+                for a in chunk {
+                    if held.incomplete.contains(a) {
+                        from_network.push(a.clone());
+                        continue;
+                    }
+                    let rows = by_anchor.remove(a.get_raw_39()).unwrap_or_default();
+                    held_rows += rows.len();
+                    out.push((a.clone(), keep(a, rows)));
+                }
+            }
+            Err(e) => {
+                log::info!("[0.7] pass: memory rows of every device are read a scope at a time ({e})");
+                from_network.extend(chunk.iter().cloned());
+            }
+        }
+    }
+    let mut network_rows = 0usize;
+    for a in &from_network {
+        give_way().await;
+        let rows: Vec<holochain_types::prelude::Record> = mv.call_06(agent, "get_memory_rows", RowsAt { anchor: a.clone() }).await?;
+        network_rows += rows.len();
+        out.push((a.clone(), keep(a, rows)));
+    }
+    log::info!(
+        "[0.7] pass: memory rows at {} scope(s) of AI {}..: {} held here, {} at {} scope(s) read from the network, {} ms",
+        to_read.len(),
+        &agent[..8.min(agent.len())],
+        held_rows,
+        network_rows,
+        from_network.len(),
+        t0.elapsed().as_millis()
+    );
     Ok(out)
 }
 
@@ -953,8 +1047,15 @@ fn progress(change: impl FnOnce(&mut PassProgress)) -> Option<PassProgress> {
     Some(at.clone())
 }
 
+/// The pass logs each AI and kind as it reaches it: the move itself, and the
+/// last check over every device's records (both can run for many minutes;
+/// a later pass that only keeps the lines level is quick and stays quiet).
+static SAY_EACH_AI: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// A pass begins on these AIs.
-fn note_pass_units(units: &[CopyUnit], first_move: bool) {
+fn note_pass_units(units: &[CopyUnit], first_move: bool, full: bool) {
+    forget_rows_at_06();
+    SAY_EACH_AI.store(first_move || full, std::sync::atomic::Ordering::SeqCst);
     if let Ok(mut ids) = PASS_UNITS.lock() {
         *ids = units.iter().map(|u| u.id.clone()).collect();
     }
@@ -973,12 +1074,13 @@ fn note_pass_at(kind: &'static str, unit: &CopyUnit) {
         p.kind = kind;
         p.ai = ai;
     });
-    if let Some(p) = now.filter(|p| moved_on && p.first_move) {
+    if let Some(p) = now.filter(|_| moved_on && SAY_EACH_AI.load(std::sync::atomic::Ordering::SeqCst)) {
         log::info!("[0.7] pass: {kind}, AI {} of {} ({} written so far)", p.ai, p.ais, p.written);
     }
 }
 
 fn note_pass_over() {
+    forget_rows_at_06();
     if let Ok(mut p) = PROGRESS.lock() {
         *p = None;
     }
@@ -1415,6 +1517,19 @@ mod tests {
         // The other device also continued this device's conversation.
         let (n, c) = seal(serde_json::json!({"role": "user", "content": "continued on the laptop", "sequence": 1, "timestamp": 4}));
         manager.call_zome(&b, "transcript", "record_message", ExternIO::encode(RecordV1 { conversation_hash: mine.clone(), cipher: c, nonce: n.to_vec() }).unwrap()).await.unwrap();
+        // A memory row in the person's scope from each device.
+        #[derive(Serialize, Debug)]
+        struct SaveRowV1 {
+            cipher: Vec<u8>,
+            nonce: Vec<u8>,
+            anchor: holochain_types::prelude::AnyLinkableHash,
+        }
+        let scope_anchor = crate::memory_rows::scope_anchor("person", &data_key).unwrap();
+        for (cell, id, text) in [(&a, "r-here", "likes tea"), (&b, "r-laptop", "works from the laptop on Fridays")] {
+            let row = serde_json::json!({"id": id, "scope": "person", "kind": "fact", "text": text, "as_of": 10, "saved_by": "person", "provenance": "test", "updated_at": 10});
+            let (n, c) = seal(row);
+            manager.call_zome(cell, "transcript", "save_memory_row", ExternIO::encode(SaveRowV1 { cipher: c, nonce: n.to_vec(), anchor: scope_anchor.clone() }).unwrap()).await.unwrap();
+        }
         // The other device is gone: its cell no longer runs here.
         let b_app = manager.agents.lock().await.get(&b).map(|x| x.installed_app_id.clone()).unwrap();
         let admin = holochain_client::AdminWebsocket::connect(format!("localhost:{}", manager.admin_port()), Some(crate::conductor::origin())).await.unwrap();
@@ -1457,6 +1572,7 @@ mod tests {
         assert_eq!(own.error, None, "{own:?}");
         assert_eq!(own.kind("conversations").map(|k| (k.total, k.written)), Some((1, 1)), "this device's own conversation only");
         assert_eq!(own.kind("messages").map(|k| (k.total, k.written)), Some((1, 1)), "and its own message only");
+        assert_eq!(own.kind("memory rows").map(|k| (k.total, k.written)), Some((1, 1)), "and its own memory row only");
         assert!(own.flipped, "its own records are carried: the marker flips");
         assert_eq!(keys_at_founding().await, 1, "the gone device's conversation is not on 0.7 yet");
         let carried_all = |p: &std::path::Path| match flowsta_hc_lines::marker::Marker::load(p, &MARKER) {
@@ -1475,6 +1591,7 @@ mod tests {
         assert_eq!(full.error, None, "{full:?}");
         assert_eq!(full.kind("conversations").map(|k| (k.total, k.written)), Some((2, 1)), "every author's, the other device's written now (every AI read again)");
         assert_eq!(full.kind("messages").map(|k| (k.total, k.written)), Some((3, 2)), "and its messages: in its own conversation and in this device's");
+        assert_eq!(full.kind("memory rows").map(|k| (k.total, k.written)), Some((2, 1)), "and its memory row, read from what this conductor holds (coordinator 15)");
         assert_eq!(keys_at_founding().await, 2, "both on 0.7 at the founding key");
         assert!(carried_all(&profile).is_some(), "a full pass over every AI records that nothing is left");
         let decided = crate::line_facts::decide(&*facts.lock().unwrap(), flowsta_hc_lines::marker::Marker::load(&profile, &MARKER), true, 10);
@@ -1485,6 +1602,116 @@ mod tests {
         let again = runner().run(&mv, &profile, "full again").await;
         assert_eq!(again.kind("conversations").map(|k| (k.present, k.written)), Some((2, 0)), "nothing twice");
         assert_eq!(again.kind("messages").map(|k| k.written), Some(0));
+        assert_eq!(again.kind("memory rows").map(|k| (k.total, k.written)), Some((2, 0)), "nor a memory row twice");
+        supervisor().stop();
+    }
+
+    /// The last check at the size of a long-used profile: twenty AIs, and
+    /// another device's 800 memory rows (400 in the person's scope, 20 in
+    /// each AI's). Prints how long the full pass takes, and for comparison
+    /// how long the old read of the person's scope alone takes
+    /// (`get_memory_rows`: one network read per row, which the pass made
+    /// once per AI).
+    /// Run with the app closed: `cargo test --lib -- --ignored live_move_full_pass_timing --test-threads 1 --nocapture`
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn live_move_full_pass_timing_with_another_devices_memory_rows() {
+        use crate::conductor::{prepare_store_07, start_for_test, supervisor, Line07};
+        use crate::holochain::HolochainManager;
+        use crate::transcript_crypto::{encrypt, RecoveryMaterial};
+        use holochain_types::prelude::ExternIO;
+        const AIS: usize = 20;
+        const PERSON_ROWS: usize = 400;
+        const ROWS_PER_AI: usize = 20;
+        #[derive(Serialize, Debug)]
+        struct SaveRowV1 {
+            cipher: Vec<u8>,
+            nonce: Vec<u8>,
+            anchor: holochain_types::prelude::AnyLinkableHash,
+        }
+        #[derive(Serialize, Debug)]
+        struct RowsAt {
+            anchor: holochain_types::prelude::AnyLinkableHash,
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let profile = tmp.path().join("profile");
+        let resource_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
+        let data_key = [8u8; 32];
+        let material = || RecoveryMaterial { network_seed: format!("live-full-timing-{}", std::process::id()), data_key_hex: hex::encode(data_key), version: 1 };
+        let seal = |v: serde_json::Value| encrypt(&data_key, &serde_json::to_vec(&v).unwrap()).unwrap();
+        let row = |id: String, scope: &str| serde_json::json!({"id": id, "scope": scope, "kind": "fact", "text": "a fact the other device saved, of an ordinary length for a memory row", "as_of": 1, "saved_by": "person", "provenance": "test", "updated_at": 1});
+
+        start_for_test(profile.clone(), None).await.expect("0.6 starts");
+        let manager = HolochainManager::new(resource_dir.clone(), material());
+        let started = std::time::Instant::now();
+        let mut agents = Vec::new();
+        for a in 0..AIS {
+            let agent = manager.provision_agent(&format!("live-full-timing-{a}")).await.expect("an AI");
+            let (n, c) = seal(serde_json::json!({"title": format!("Conversation {a}"), "started_at": a, "ai_personality_id": agent}));
+            manager.call_zome(&agent, "transcript", "start_conversation", ExternIO::encode(StartV1 { cipher: c, nonce: n.to_vec(), anchor: None }).unwrap()).await.unwrap();
+            agents.push(agent);
+        }
+        // The other device: one cell, its rows in the person's scope and in every AI's.
+        let laptop = manager.provision_agent("live-full-timing-laptop").await.expect("another device's cell");
+        let person = crate::memory_rows::scope_anchor("person", &data_key).unwrap();
+        for i in 0..PERSON_ROWS {
+            let (n, c) = seal(row(format!("p{i}"), "person"));
+            manager.call_zome(&laptop, "transcript", "save_memory_row", ExternIO::encode(SaveRowV1 { cipher: c, nonce: n.to_vec(), anchor: person.clone() }).unwrap()).await.unwrap();
+        }
+        for (a, agent) in agents.iter().enumerate() {
+            let scope = format!("ai:{agent}");
+            let anchor = crate::memory_rows::scope_anchor(&scope, &data_key).unwrap();
+            for i in 0..ROWS_PER_AI {
+                let (n, c) = seal(row(format!("a{a}-{i}"), &scope));
+                manager.call_zome(&laptop, "transcript", "save_memory_row", ExternIO::encode(SaveRowV1 { cipher: c, nonce: n.to_vec(), anchor: anchor.clone() }).unwrap()).await.unwrap();
+            }
+        }
+        let rows = PERSON_ROWS + AIS * ROWS_PER_AI;
+        eprintln!("{AIS} AIs and the other device's {rows} memory rows written on 0.6 in {} s", started.elapsed().as_secs());
+        // The old read of the person's scope, once (the pass made it per AI).
+        let t = std::time::Instant::now();
+        let out = manager.call_zome(&agents[0], "transcript", "get_memory_rows", ExternIO::encode(RowsAt { anchor: person.clone() }).unwrap()).await.unwrap();
+        let old: Vec<holochain_types::prelude::Record> = ExternIO::decode(&out).unwrap();
+        eprintln!("the old read of the person's scope: {} rows in {} ms (one AI; the pass made it for each of {AIS})", old.len(), t.elapsed().as_millis());
+        // The other device is gone: its cell no longer runs here.
+        let laptop_app = manager.agents.lock().await.get(&laptop).map(|x| x.installed_app_id.clone()).unwrap();
+        let admin = holochain_client::AdminWebsocket::connect(format!("localhost:{}", manager.admin_port()), Some(crate::conductor::origin())).await.unwrap();
+        admin.disable_app(laptop_app).await.unwrap();
+        drop(admin);
+        drop(manager);
+        supervisor().stop();
+
+        let passphrase = prepare_store_07(&profile, &data_key).await.expect("prepared");
+        start_for_test(profile.clone(), Some(Line07 { passphrase, network_seed: material().network_seed, resource_dir: resource_dir.clone() })).await.expect("both lines");
+        let until = std::time::Instant::now() + Duration::from_secs(600);
+        while !supervisor().has(Line::V07) {
+            assert!(std::time::Instant::now() < until, "the 0.7 line did not join");
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        let manager = HolochainManager::new(resource_dir, material());
+        manager.reconnect_existing_agents().await.expect("the AIs reconnect");
+        let hc = Arc::new(HolochainState::new());
+        let _ = hc.manager.set(manager);
+        let facts = std::sync::Arc::new(std::sync::Mutex::new(crate::line_facts::Known::Unknown));
+        let f2 = facts.clone();
+        let mv = Arc::new(Move { hc, data_key, cells: crate::hc07::app_cells(), founding: Box::new(|x| x.to_string()), deleted: Box::new(HashSet::new), passed_in_full: Default::default(), known: Box::new(move |_| f2.lock().unwrap().clone()), full: Default::default() });
+
+        let own = runner().run(&mv, &profile, "own").await;
+        assert_eq!(own.error, None, "{own:?}");
+        eprintln!("the own pass took {} ms", own.took_ms);
+        assert_eq!(own.kind("memory rows").map(|k| (k.total, k.written)), Some((0, 0)), "this device wrote no memory rows");
+
+        *facts.lock().unwrap() = crate::line_facts::Known::Facts(crate::line_facts::LineFacts { checked_at_ms: 1, ..Default::default() });
+        let full = runner().run(&mv, &profile, "full").await;
+        assert_eq!(full.error, None, "{full:?}");
+        eprintln!("the full pass took {} ms: {:?}", full.took_ms, full.kind("memory rows").map(|k| (k.total, k.written)));
+        assert_eq!(full.kind("memory rows").map(|k| k.written), Some(rows), "every row of the other device, once");
+
+        mv.passed_in_full.store(false, std::sync::atomic::Ordering::SeqCst);
+        let again = runner().run(&mv, &profile, "full again").await;
+        assert_eq!(again.error, None, "{again:?}");
+        eprintln!("a full pass with nothing left to carry took {} ms", again.took_ms);
+        assert_eq!(again.kind("memory rows").map(|k| k.written), Some(0), "nothing twice");
         supervisor().stop();
     }
 

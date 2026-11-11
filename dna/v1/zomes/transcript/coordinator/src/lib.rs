@@ -627,6 +627,48 @@ pub fn get_others_entries(input: OthersEntriesInput) -> ExternResult<OthersEntri
     Ok(OthersEntries { items, incomplete })
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MemoryRowsHeldInput {
+    pub anchors: Vec<AnyLinkableHash>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct MemoryRowsHeld {
+    pub items: Vec<MyMemoryRow>,
+    /// Anchors listing a row whose record this conductor does not hold: the
+    /// caller reads those from the network (`get_memory_rows`).
+    pub incomplete: Vec<AnyLinkableHash>,
+}
+
+/// Every author's memory rows at the anchors, from what this conductor
+/// holds: no network round. `get_memory_rows` asks the network for each row
+/// in turn, which on a long history is minutes per scope; the move's last
+/// pass reads every scope of every AI.
+#[hdk_extern]
+pub fn get_memory_rows_held(input: MemoryRowsHeldInput) -> ExternResult<MemoryRowsHeld> {
+    let mut items = Vec::new();
+    let mut incomplete = Vec::new();
+    for anchor in input.anchors {
+        let mut links: Vec<Link> = get_links(LinkQuery::try_new(anchor.clone(), LinkTypes::AllConversations)?, GetStrategy::Local)?
+            .into_iter()
+            .filter(is_memory)
+            .collect();
+        links.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+        let mut held = true;
+        for link in links {
+            let Ok(hash) = ActionHash::try_from(link.target) else { continue };
+            match get(hash, GetOptions::local())? {
+                Some(record) => items.push(MyMemoryRow { record, anchor: anchor.clone() }),
+                None => held = false,
+            }
+        }
+        if !held {
+            incomplete.push(anchor);
+        }
+    }
+    Ok(MemoryRowsHeld { items, incomplete })
+}
+
 /// The conversations tombstoned under `anchor` (an AI's founding key) by any
 /// of the person's devices, from links alone.
 #[hdk_extern]

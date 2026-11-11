@@ -37,7 +37,7 @@ pub(crate) const HAPP_FILENAME: &str = "yourown_ai_transcript_v1_happ.happ";
 /// SEQUENCE RANGE only - v6/v7 asked for entries across the whole chain and
 /// the conductor loaded every entry before filtering (froze the dev box).
 /// v4-v7 never left the dev box).
-pub const COORDINATOR_VERSION: u32 = 14; // 14: get_others_entries (the move's last pass finds other devices' messages without reading every conversation); 13: get_tombstones_local (the move's link read from this conductor first); 12: get_tombstones and get_my_memory_rows_page (the move to the 0.7 line); 11: get_my_entries_page (own-chain read of every message, for the memory index rebuild)
+pub const COORDINATOR_VERSION: u32 = 15; // 15: get_memory_rows_held (the move's last pass reads every author's memory rows from this conductor, not one network read per row); 14: get_others_entries (the move's last pass finds other devices' messages without reading every conversation); 13: get_tombstones_local (the move's link read from this conductor first); 12: get_tombstones and get_my_memory_rows_page (the move to the 0.7 line); 11: get_my_entries_page (own-chain read of every message, for the memory index rebuild)
 // 10: // 9: anchored listing + tombstones (one person's network across devices); 10: memory rows at scope anchors (`mem` links)
 /// The standalone coordinator wasm (in src-tauri/resources/), staged by
 /// dna/v1/build-coordinator.sh.

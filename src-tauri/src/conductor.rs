@@ -96,9 +96,11 @@ fn admin_ports(line: Line) -> [u16; 3] {
 /// Kitsune2 sends the ops of one sector and time slice as one batch and
 /// skips a batch over the cap, every round: one AI's activity during a busy
 /// spell (the move writes thousands of actions in minutes) is such a batch,
-/// so a second computer never received a long history once its sync had
-/// been interrupted (0.9.1 betas, 2026-11-11: two computers offering each
-/// other the same ids for hours). The cap was there for the 0.7.1 presence
+/// and anything older than the new-ops window (about 30 minutes back for
+/// a peer with no bookmark, which is any peer after a restart) travels only
+/// in those batches. So under the cap history older than ~30 minutes did
+/// not reach another conductor (0.9.1 betas, 2026-11-11: two computers
+/// offering each other the same ids for hours). The cap was there for the 0.7.1 presence
 /// check, which failed above ~10.9k offered ids; the conductor this app
 /// ships checks in chunks (WeAreFlowsta/holochain-build patch 0006), so
 /// Kitsune2's own 100 MB an exchange applies.
