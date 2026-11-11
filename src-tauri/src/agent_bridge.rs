@@ -519,7 +519,19 @@ pub async fn start_build_agent(
     }
     *state.session_id.lock().await = None;
 
-    std::fs::create_dir_all(&cwd).map_err(|e| format!("cannot create workspace dir: {}", e))?;
+    // The app makes its own workspaces (a tools session's folder under its
+    // data folder). A project's folder is the person's: it is opened where
+    // it is, never made. A conversation from another of their computers
+    // names a path on that computer, and making an empty folder there (or
+    // failing with the system's error where it cannot be made) is wrong
+    // both ways.
+    if !std::path::Path::new(&cwd).is_dir() {
+        if is_app_workspace(&app_handle, &cwd) {
+            std::fs::create_dir_all(&cwd).map_err(|e| format!("The app could not make its working folder: {e}"))?;
+        } else {
+            return Err(format!("This project's folder is not on this computer: {cwd}"));
+        }
+    }
 
     // Checks after edits ride on the agent's Stop hook - keep its files
     // current before the process reads them.
@@ -1464,6 +1476,13 @@ pub async fn read_agent_task_logs(
         out.insert(id, tail);
     }
     Ok(out)
+}
+
+/// Whether `path` is a workspace the app itself keeps: under its data folder.
+fn is_app_workspace(app: &tauri::AppHandle, path: &str) -> bool {
+    use tauri::Manager as _;
+    let p = std::path::Path::new(path);
+    app.path().app_data_dir().map(|d| p.starts_with(&d)).unwrap_or(false) || crate::profile::root(app).map(|d| p.starts_with(&d)).unwrap_or(false)
 }
 
 /// Dropped-path classifier for the chat's drag-and-drop: a folder drop opens

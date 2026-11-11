@@ -26,6 +26,9 @@ import {
   listAllConversationsCached,
   loadConversationMessages,
   getConversationFolder,
+  rememberConversationFolder,
+  rememberReadWithoutFolder,
+  readsWithoutFolder,
   rememberLastConversation,
   readLastConversation,
   initConversationNotes,
@@ -410,6 +413,8 @@ export default component$(() => {
   const lastConversation = useSignal<LastConversationPointer | null>(null);
   // A folder the resumed conversation worked in (ask before switching).
   const resumeFolderAsk = useSignal<string | null>(null);
+  // A resumed conversation whose project folder is not on this computer.
+  const folderElsewhere = useSignal<{ hash: string; path: string; device: string | null } | null>(null);
   // A resume that is waiting out the records warmup (drives the hero
   // Continue line's state so the click never looks dead).
   /** Hero "Continue" line state. Set on the CLICK itself - the resume then
@@ -833,9 +838,23 @@ export default component$(() => {
       // Worked in a folder? Ask before switching the workspace - never
       // silently swap it. The transcript's own record wins; the client map
       // covers conversations from before the transcript carried it.
-      const folder = folderPath ?? getConversationFolder(target.hash);
-      if (folder && !folder.includes("tool-sessions") && folder !== agentState.folderPath) {
-        resumeFolderAsk.value = folder;
+      // A folder the person chose for it on THIS computer comes first: the
+      // record names the path on the computer that wrote it, which may be
+      // another of theirs.
+      const here = async (p?: string) => !!p && (await invoke<boolean>("path_is_dir", { path: p }).catch(() => false));
+      const chosenHere = getConversationFolder(target.hash);
+      const folder = (await here(chosenHere)) ? chosenHere : (folderPath ?? chosenHere);
+      if (folder && !folder.includes("tool-sessions") && folder !== agentState.folderPath && resumeGeneration.value === gen) {
+        if (await here(folder)) {
+          resumeFolderAsk.value = folder;
+        } else if (!readsWithoutFolder(target.hash)) {
+          // Its folder is not on this computer: say where it is and let the
+          // person point at it here, or read without it. Never made, never
+          // an error.
+          const arrival = await getConversationArrival(target.agentKey, target.hash);
+          uiLog(`resume ${who}: its project folder is not on this computer`);
+          folderElsewhere.value = { hash: target.hash, path: folder, device: arrival.device };
+        }
       }
     },
   );
@@ -3113,6 +3132,42 @@ export default component$(() => {
         }}
       />
 
+
+      {/* The conversation's project folder is on another of the person's
+          computers: point at it here, or read without it. */}
+      <ConfirmModal
+        isOpen={folderElsewhere.value !== null}
+        title="This project's folder is not on this computer"
+        message={`This conversation worked in the folder ${folderElsewhere.value?.path ?? ""}${
+          folderElsewhere.value?.device ? ` on ${folderElsewhere.value.device}` : " on another of your computers"
+        }. Files do not travel between your computers yet. If you have the project here too, choose its folder to keep building. You can read the conversation either way.`}
+        confirmLabel="Choose its folder on this computer"
+        cancelLabel="Read without the folder"
+        onConfirm$={async () => {
+          const ask = folderElsewhere.value;
+          folderElsewhere.value = null;
+          if (!ask) return;
+          if (!buildInstalled.value) {
+            installAsk.value = true;
+            return;
+          }
+          try {
+            const { open } = await import("@tauri-apps/plugin-dialog");
+            const selected = await open({ directory: true, title: "Choose the project's folder" });
+            if (typeof selected === "string" && selected) {
+              rememberConversationFolder(ask.hash, selected);
+              await openFolder$(selected);
+            }
+          } catch (err) {
+            console.error("[ChatPage] Folder picker error:", err);
+          }
+        }}
+        onCancel$={() => {
+          const ask = folderElsewhere.value;
+          folderElsewhere.value = null;
+          if (ask) rememberReadWithoutFolder(ask.hash);
+        }}
+      />
 
       {/* Closing the folder mid-task is the one destructive gesture here -
           confirm it. Idle closes never see this. */}
