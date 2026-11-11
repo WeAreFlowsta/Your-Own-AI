@@ -1606,6 +1606,115 @@ mod tests {
         supervisor().stop();
     }
 
+    /// The last check at the size of a long-used profile: twenty AIs, and
+    /// another device's 800 memory rows (400 in the person's scope, 20 in
+    /// each AI's). Prints how long the full pass takes, and for comparison
+    /// how long the old read of the person's scope alone takes
+    /// (`get_memory_rows`: one network read per row, which the pass made
+    /// once per AI).
+    /// Run with the app closed: `cargo test --lib -- --ignored live_move_full_pass_timing --test-threads 1 --nocapture`
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn live_move_full_pass_timing_with_another_devices_memory_rows() {
+        use crate::conductor::{prepare_store_07, start_for_test, supervisor, Line07};
+        use crate::holochain::HolochainManager;
+        use crate::transcript_crypto::{encrypt, RecoveryMaterial};
+        use holochain_types::prelude::ExternIO;
+        const AIS: usize = 20;
+        const PERSON_ROWS: usize = 400;
+        const ROWS_PER_AI: usize = 20;
+        #[derive(Serialize, Debug)]
+        struct SaveRowV1 {
+            cipher: Vec<u8>,
+            nonce: Vec<u8>,
+            anchor: holochain_types::prelude::AnyLinkableHash,
+        }
+        #[derive(Serialize, Debug)]
+        struct RowsAt {
+            anchor: holochain_types::prelude::AnyLinkableHash,
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let profile = tmp.path().join("profile");
+        let resource_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
+        let data_key = [8u8; 32];
+        let material = || RecoveryMaterial { network_seed: format!("live-full-timing-{}", std::process::id()), data_key_hex: hex::encode(data_key), version: 1 };
+        let seal = |v: serde_json::Value| encrypt(&data_key, &serde_json::to_vec(&v).unwrap()).unwrap();
+        let row = |id: String, scope: &str| serde_json::json!({"id": id, "scope": scope, "kind": "fact", "text": "a fact the other device saved, of an ordinary length for a memory row", "as_of": 1, "saved_by": "person", "provenance": "test", "updated_at": 1});
+
+        start_for_test(profile.clone(), None).await.expect("0.6 starts");
+        let manager = HolochainManager::new(resource_dir.clone(), material());
+        let started = std::time::Instant::now();
+        let mut agents = Vec::new();
+        for a in 0..AIS {
+            let agent = manager.provision_agent(&format!("live-full-timing-{a}")).await.expect("an AI");
+            let (n, c) = seal(serde_json::json!({"title": format!("Conversation {a}"), "started_at": a, "ai_personality_id": agent}));
+            manager.call_zome(&agent, "transcript", "start_conversation", ExternIO::encode(StartV1 { cipher: c, nonce: n.to_vec(), anchor: None }).unwrap()).await.unwrap();
+            agents.push(agent);
+        }
+        // The other device: one cell, its rows in the person's scope and in every AI's.
+        let laptop = manager.provision_agent("live-full-timing-laptop").await.expect("another device's cell");
+        let person = crate::memory_rows::scope_anchor("person", &data_key).unwrap();
+        for i in 0..PERSON_ROWS {
+            let (n, c) = seal(row(format!("p{i}"), "person"));
+            manager.call_zome(&laptop, "transcript", "save_memory_row", ExternIO::encode(SaveRowV1 { cipher: c, nonce: n.to_vec(), anchor: person.clone() }).unwrap()).await.unwrap();
+        }
+        for (a, agent) in agents.iter().enumerate() {
+            let scope = format!("ai:{agent}");
+            let anchor = crate::memory_rows::scope_anchor(&scope, &data_key).unwrap();
+            for i in 0..ROWS_PER_AI {
+                let (n, c) = seal(row(format!("a{a}-{i}"), &scope));
+                manager.call_zome(&laptop, "transcript", "save_memory_row", ExternIO::encode(SaveRowV1 { cipher: c, nonce: n.to_vec(), anchor: anchor.clone() }).unwrap()).await.unwrap();
+            }
+        }
+        let rows = PERSON_ROWS + AIS * ROWS_PER_AI;
+        eprintln!("{AIS} AIs and the other device's {rows} memory rows written on 0.6 in {} s", started.elapsed().as_secs());
+        // The old read of the person's scope, once (the pass made it per AI).
+        let t = std::time::Instant::now();
+        let out = manager.call_zome(&agents[0], "transcript", "get_memory_rows", ExternIO::encode(RowsAt { anchor: person.clone() }).unwrap()).await.unwrap();
+        let old: Vec<holochain_types::prelude::Record> = ExternIO::decode(&out).unwrap();
+        eprintln!("the old read of the person's scope: {} rows in {} ms (one AI; the pass made it for each of {AIS})", old.len(), t.elapsed().as_millis());
+        // The other device is gone: its cell no longer runs here.
+        let laptop_app = manager.agents.lock().await.get(&laptop).map(|x| x.installed_app_id.clone()).unwrap();
+        let admin = holochain_client::AdminWebsocket::connect(format!("localhost:{}", manager.admin_port()), Some(crate::conductor::origin())).await.unwrap();
+        admin.disable_app(laptop_app).await.unwrap();
+        drop(admin);
+        drop(manager);
+        supervisor().stop();
+
+        let passphrase = prepare_store_07(&profile, &data_key).await.expect("prepared");
+        start_for_test(profile.clone(), Some(Line07 { passphrase, network_seed: material().network_seed, resource_dir: resource_dir.clone() })).await.expect("both lines");
+        let until = std::time::Instant::now() + Duration::from_secs(600);
+        while !supervisor().has(Line::V07) {
+            assert!(std::time::Instant::now() < until, "the 0.7 line did not join");
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        let manager = HolochainManager::new(resource_dir, material());
+        manager.reconnect_existing_agents().await.expect("the AIs reconnect");
+        let hc = Arc::new(HolochainState::new());
+        let _ = hc.manager.set(manager);
+        let facts = std::sync::Arc::new(std::sync::Mutex::new(crate::line_facts::Known::Unknown));
+        let f2 = facts.clone();
+        let mv = Arc::new(Move { hc, data_key, cells: crate::hc07::app_cells(), founding: Box::new(|x| x.to_string()), deleted: Box::new(HashSet::new), passed_in_full: Default::default(), known: Box::new(move |_| f2.lock().unwrap().clone()), full: Default::default() });
+
+        let own = runner().run(&mv, &profile, "own").await;
+        assert_eq!(own.error, None, "{own:?}");
+        eprintln!("the own pass took {} ms", own.took_ms);
+        assert_eq!(own.kind("memory rows").map(|k| (k.total, k.written)), Some((0, 0)), "this device wrote no memory rows");
+
+        *facts.lock().unwrap() = crate::line_facts::Known::Facts(crate::line_facts::LineFacts { checked_at_ms: 1, ..Default::default() });
+        let full = runner().run(&mv, &profile, "full").await;
+        assert_eq!(full.error, None, "{full:?}");
+        eprintln!("the full pass took {} ms: {:?}", full.took_ms, full.kind("memory rows").map(|k| (k.total, k.written)));
+        assert_eq!(full.kind("memory rows").map(|k| k.written), Some(rows), "every row of the other device, once");
+
+        mv.passed_in_full.store(false, std::sync::atomic::Ordering::SeqCst);
+        let again = runner().run(&mv, &profile, "full again").await;
+        assert_eq!(again.error, None, "{again:?}");
+        eprintln!("a full pass with nothing left to carry took {} ms", again.took_ms);
+        assert_eq!(again.kind("memory rows").map(|k| k.written), Some(0), "nothing twice");
+        supervisor().stop();
+    }
+
     /// A profile from an older release moves whole. Every release since
     /// 0.1.0 ships the same transcript bundle; what differs is the
     /// coordinator its cells were brought to (none past the bundle's own in
