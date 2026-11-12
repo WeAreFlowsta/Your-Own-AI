@@ -1012,6 +1012,7 @@ mod tests {
 
     #[test]
     fn starters_that_stand_twice_become_one_under_the_smaller_founding_key() {
+        use super::{fold_twins, folded_into};
         let starter = |id: &str, founding: &str, base: &str, name: &str| serde_json::json!({ "id": id, "agentPubKey": id, "foundingKey": founding, "baseArchetypeId": base, "name": name, "systemPrompt": "p", "status": "active" });
         // This device's own Veebo and Teresa, and the other device's, each
         // provisioned here under an agent of its own.
@@ -1043,6 +1044,7 @@ mod tests {
 
     #[test]
     fn a_twin_that_was_made_its_own_ai_stays_and_a_fold_is_undone_when_it_becomes_one() {
+        use super::{fold_twins, folded_into};
         let starter = |id: &str, name: &str, prompt: &str, updated: i64| serde_json::json!({ "id": id, "agentPubKey": id, "foundingKey": id, "baseArchetypeId": "veebo", "name": name, "systemPrompt": prompt, "updatedAt": updated, "status": "active" });
         // Renamed on one computer: two AIs.
         let mut renamed = vec![starter("a", "Veebo", "p", 0), starter("b", "Max", "p", 5)];
@@ -1071,6 +1073,7 @@ mod tests {
 
     #[test]
     fn the_newest_settings_of_a_folded_group_go_to_the_leader() {
+        use super::{fold_twins, folded_into};
         let starter = |id: &str, updated: i64, length: &str| serde_json::json!({ "id": id, "agentPubKey": id, "foundingKey": id, "baseArchetypeId": "veebo", "name": "Veebo", "systemPrompt": "p", "updatedAt": updated, "lengthDisposition": length, "model": format!("{id}.gguf"), "status": "active" });
         let mut list = vec![starter("a", 10, "conversational"), starter("b", 20, "brief")];
         fold_twins(&mut list);
