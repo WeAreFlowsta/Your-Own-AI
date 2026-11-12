@@ -81,6 +81,36 @@ fn updated_at(ai: &serde_json::Value) -> i64 {
     ai["updatedAt"].as_i64().unwrap_or(0)
 }
 
+/// The three starter personalities in slot order (the same on every
+/// install), and the ids that shipped as their duplicates until 2026-10-08.
+const STARTER_ARCHETYPES: [&str; 3] = ["veebo", "teresa", "reeves"];
+const RETIRED_STARTER_IDS: [(&str, &str); 3] = [("a7ov7JfOR6rOW3SPKJHt", "veebo"), ("mhJ4WU8bn34In1lJUuHH", "teresa"), ("teJ8K9PHyejIYmdZj8wk", "reeves")];
+
+/// Each AI's starter slot (1 to 3), as the app reads it: the stamp when the
+/// AI carries one, else the slot of its starter personality, first come
+/// first served. Starters seeded before the stamp existed carry none in the
+/// stored list (the app adds it when it reads), so a merge that looked only
+/// at the stored field found no slot on either side and stood two Veebos,
+/// two Teresas and two Reeveses beside each other.
+pub(crate) fn starter_slots(list: &[serde_json::Value]) -> Vec<Option<u64>> {
+    let mut taken: Vec<u64> = list.iter().filter_map(|ai| ai["seedSlot"].as_u64()).collect();
+    list.iter()
+        .map(|ai| {
+            if let Some(slot) = ai["seedSlot"].as_u64() {
+                return Some(slot);
+            }
+            let base = ai["baseArchetypeId"].as_str()?;
+            let base = RETIRED_STARTER_IDS.iter().find(|(old, _)| *old == base).map(|(_, twin)| *twin).unwrap_or(base);
+            let slot = STARTER_ARCHETYPES.iter().position(|a| *a == base)? as u64 + 1;
+            if taken.contains(&slot) {
+                return None;
+            }
+            taken.push(slot);
+            Some(slot)
+        })
+        .collect()
+}
+
 /// Merge one sibling's AI list into ours. Returns the merged list, how many
 /// were updated, how many added, and (sibling id → local id) for every AI
 /// that was updated or added - the key the sibling's thumbnails are under.
@@ -91,7 +121,8 @@ pub(crate) fn merge_sibling_configs(
     let mut merged = local;
     let (mut updated, mut added) = (0u32, 0u32);
     let mut touched: Vec<(String, String)> = Vec::new();
-    for s in sibling {
+    let sibling_slots = starter_slots(sibling);
+    for (s, s_slot) in sibling.iter().zip(sibling_slots) {
         let Some(founding) = founding_of(s) else { continue };
         let s_id = s["id"].as_str().unwrap_or("").to_string();
         let pos = merged.iter().position(|l| {
@@ -105,10 +136,11 @@ pub(crate) fn merge_sibling_configs(
         // key and config; keeps this device's agent) instead of standing
         // beside it as a twin. An edited starter is this person's work and
         // stays.
+        let local_slots = starter_slots(&merged);
         let fold = pos.is_none()
-            && s["seedSlot"].as_u64().is_some()
-            && merged.iter().position(|l| {
-                l["seedSlot"] == s["seedSlot"]
+            && s_slot.is_some()
+            && merged.iter().zip(&local_slots).position(|(l, l_slot)| {
+                *l_slot == s_slot
                     && founding_of(l).as_deref() == l["agentPubKey"].as_str()
             }).map(|i| { merged[i]["foundingKey"] = serde_json::json!(founding); i }).is_some();
         let pos = if fold {
@@ -841,6 +873,35 @@ mod tests {
 
     fn ai(id: &str, founding: &str, name: &str, updated: i64) -> serde_json::Value {
         serde_json::json!({ "id": id, "agentPubKey": id, "foundingKey": founding, "name": name, "model": "LFM.gguf", "seedSlot": 1, "updatedAt": updated, "status": "active" })
+    }
+
+    #[test]
+    fn starters_seeded_before_the_slot_stamp_still_fold_into_one() {
+        // Both lists as an older install stored them: no seedSlot, the
+        // sibling still on a retired duplicate id for Teresa.
+        let starter = |id: &str, base: &str, name: &str| serde_json::json!({ "id": id, "agentPubKey": id, "baseArchetypeId": base, "name": name, "model": "auto:offline", "status": "active" });
+        let local = vec![starter("b-veebo", "veebo", "Veebo"), starter("b-teresa", "teresa", "Teresa"), starter("b-reeves", "reeves", "Reeves")];
+        let sibling = vec![starter("a-veebo", "veebo", "Veebo"), starter("a-teresa", "mhJ4WU8bn34In1lJUuHH", "Teresa"), starter("a-reeves", "reeves", "Reeves")];
+        let (merged, _updated, added, _touched) = merge_sibling_configs(local, &sibling);
+        assert_eq!(added, 0, "no twin is added");
+        assert_eq!(merged.len(), 3, "three starters, once each");
+        assert_eq!(merged[1]["id"], "b-teresa", "this device's agent stays");
+        assert_eq!(merged[1]["foundingKey"], "a-teresa", "and takes the identity's founding key");
+        // A second round finds them by founding key and adds nothing.
+        let (again, _, added, _) = merge_sibling_configs(merged, &sibling);
+        assert_eq!((again.len(), added), (3, 0));
+    }
+
+    #[test]
+    fn a_slot_is_read_from_the_stamp_first_then_the_personality_once() {
+        let list = vec![
+            serde_json::json!({ "id": "x", "seedSlot": 2, "baseArchetypeId": "veebo" }),
+            serde_json::json!({ "id": "y", "baseArchetypeId": "teresa" }),
+            serde_json::json!({ "id": "z", "baseArchetypeId": "veebo" }),
+            serde_json::json!({ "id": "w", "baseArchetypeId": "veebo" }),
+            serde_json::json!({ "id": "own", "baseArchetypeId": "custom-1" }),
+        ];
+        assert_eq!(super::starter_slots(&list), vec![Some(2), None, Some(1), None, None], "slot 2 is taken by the stamp; one Veebo takes slot 1");
     }
 
     #[test]
