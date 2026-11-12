@@ -484,7 +484,10 @@ pub async fn restart_to_update(app: tauri::AppHandle, without_backup: Option<boo
     // conductors, and a backup cut off there fails its reads and leaves no
     // backup of this moment. Bounded, so a backup that hangs never blocks
     // an update for good.
-    if READY.lock().unwrap().is_some() {
+    // A debug build's live test (e2e/locked-live.sh) runs the backup step
+    // alone: no update is waiting there, and nothing is installed.
+    let backup_only = cfg!(debug_assertions) && std::env::var_os("YOAI_TEST_UPDATE_BACKUP_ONLY").is_some();
+    if backup_only || READY.lock().unwrap().is_some() {
         let _ = app.emit("update-stage", "backup");
         let backup = async {
             let mut waited_for_another = false;
@@ -515,6 +518,9 @@ pub async fn restart_to_update(app: tauri::AppHandle, without_backup: Option<boo
             Ok(Err(e)) => log::info!("[update] no Vault backup before the install ({e}){}", if without_backup.unwrap_or(false) { ": the person said to go on without one" } else { "" }),
             Err(_) => log::warn!("[update] the Vault backup took over {} min: installing without waiting for it", BACKUP_BEFORE_INSTALL.as_secs() / 60),
         }
+    }
+    if backup_only {
+        return Ok(());
     }
     let data_dir = device_root(&app);
     let worker = app.clone();
