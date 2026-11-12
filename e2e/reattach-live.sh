@@ -108,9 +108,10 @@ run a "$FROM" "$A" "$P1" e2e/specs/devices/devices.e2e.ts DEVICES_PHASE=a
 vault_holds_newest "$A" "$P2"
 run b "$FROM" "$B" "$P2" e2e/specs/devices/devices.e2e.ts DEVICES_PHASE=b
 
-run move "$THIS" "$A" "$P1" e2e/specs/models/chat.e2e.ts
+# The pass waits while the chat runs, so the launch waits for its outcome.
+run move "$THIS" "$A" "$P1" e2e/specs/models/chat.e2e.ts YOAI_E2E_WAIT_LOG='\[0\.7\] pass: [a-z ]+ [0-9]+/[0-9]+ \(\+.*; flipped'
 ahas "\[lines\] 0\.6 leads, 0\.7 joins" || fail "move: A did not start 0.6 with 0.7 beside it"
-ahas "\[0\.7\] pass: .*; flipped" || fail "move: A's pass did not flip"
+ahas "\[0\.7\] pass: [a-z ]+ [0-9]+/[0-9]+ .*; flipped" || fail "move: A's pass did not flip"
 ! ahas "\[0\.6\] stopped" || fail "move: A stopped the 0.6 line while B is on it"
 echo "   A moved, 0.6 kept for B"
 

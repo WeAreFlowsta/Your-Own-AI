@@ -37,10 +37,15 @@ for p in 27777 27778 27779; do
   ! curl -s -m 2 "http://127.0.0.1:$p/status" >/dev/null 2>&1 || fail "a Vault answers on $p: this run is the no-Vault case"
 done
 
+# A pass's outcome line ("conversations 3/3 (+3), ..."), not the lines that
+# say where a running pass is. A launch of this build that must see one (or
+# the stop) is told to wait for it: the pass waits while the chat runs.
+PASS_DONE='\[0\.7\] pass: [a-z ]+ [0-9]+/[0-9]+ \(\+'
+STOPPED='\[0\.6\] stopped: no other device needs it'
 seen=0
-launch() {  # <n> <tree>: one launch of the chat spec; its log lines go to launch-<n>.log
+launch() {  # <n> <tree> [pattern its log must say before it ends]: one launch of the chat spec; its log lines go to launch-<n>.log
   echo "== launch $1 ($(basename "$2"))"
-  (cd "$2" && YOAI_E2E_HOME="$H" node e2e/run.mjs models --spec e2e/specs/models/chat.e2e.ts) > "$H/launch-$1.out" 2>&1 || { tail -30 "$H/launch-$1.out"; fail "launch $1: the chat spec failed"; }
+  (cd "$2" && YOAI_E2E_WAIT_LOG="${3:-}" YOAI_E2E_HOME="$H" node e2e/run.mjs models --spec e2e/specs/models/chat.e2e.ts) > "$H/launch-$1.out" 2>&1 || { tail -30 "$H/launch-$1.out"; fail "launch $1: the chat spec failed"; }
   local total; total="$(cat "$DATA"/logs/*.log 2>/dev/null | wc -l)"
   cat "$DATA"/logs/*.log | sed -E 's/\x1b\[[0-9;]*m//g' | tail -n "$((total - seen))" > "$H/launch-$1.log"
   seen="$total"
@@ -49,7 +54,7 @@ launch() {  # <n> <tree>: one launch of the chat spec; its log lines go to launc
 
 # The first pass line of a launch, every kind complete and nothing failed.
 first_pass() {  # <n>
-  local line; line="$(grep -m1 -E '\[0\.7\] pass: ' "$H/launch-$1.log" || true)"
+  local line; line="$(grep -m1 -E "$PASS_DONE" "$H/launch-$1.log" || true)"
   [ -n "$line" ] || fail "launch $1: no pass ran"
   echo "   launch $1: ${line#*\[0.7\] }" >&2
   ! grep -q " incomplete" <<< "$line" || fail "launch $1: a kind is incomplete"
@@ -89,7 +94,7 @@ after_stop() {  # <n> <conversations expected>
   no_07_warnings "$n"
   launch "$back" "$FROM"
   echo "   launch $back: the previous release ran on the moved profile"
-  launch "$again" "$(pwd)"
+  launch "$again" "$(pwd)" "$PASS_DONE"
   grep -q "\[0\.6\] written since this device stopped it" "$H/launch-$again.log" || fail "launch $again: what the previous release wrote on 0.6 went unnoticed"
   grep -q "\[lines\] 0.7 leads, 0.6 joins" "$H/launch-$again.log" || { grep -m2 "\[lines\]" "$H/launch-$again.log" >&2; fail "launch $again: the 0.6 line did not start again to carry it"; }
   local p; p="$(first_pass "$again")"
@@ -99,7 +104,7 @@ after_stop() {  # <n> <conversations expected>
   exit 0
 }
 
-launch 2 "$(pwd)"
+launch 2 "$(pwd)" "$PASS_DONE"
 grep -q "\[lines\] 0.6 leads, 0.7 joins" "$H/launch-2.log" || { grep -m2 "\[lines\]" "$H/launch-2.log" >&2; fail "launch 2: an unmoved profile did not start 0.6 with 0.7 beside it"; }
 p2="$(first_pass 2)"
 grep -q "; flipped" <<< "$p2" || fail "launch 2: the first full pass did not flip the marker"
@@ -107,7 +112,7 @@ grep -q "; flipped" <<< "$p2" || fail "launch 2: the first full pass did not fli
 conv2="$(total_of "$p2")"
 [ "${conv2:-0}" -ge 1 ] || fail "launch 2: no conversation carried"
 
-launch 3 "$(pwd)"
+launch 3 "$(pwd)" "$STOPPED"
 grep -q "\[lines\] 0.7 leads, 0.6 joins" "$H/launch-3.log" || { grep -m2 "\[lines\]" "$H/launch-3.log" >&2; fail "launch 3: a moved profile did not lead with 0.7 while 0.6 still holds records"; }
 p3="$(first_pass 3)"
 total3="$(total_of "$p3")"; written3="$(written_of "$p3")"
