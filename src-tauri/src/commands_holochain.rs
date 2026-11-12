@@ -450,7 +450,7 @@ pub async fn start_conversation(
         crate::hc07::write_start_conversation(&agent_key, &founding, key, &id, plain.clone()).await?;
         id
     };
-    crate::vault_escrow::schedule_full_backup(&app);
+    crate::vault_escrow::schedule_full_backup_for(&app, &agent_key);
     // Write-through: the new conversation is visible in cached lists
     // immediately, even if full reads are struggling on a loaded box.
     crate::conversation_cache::append_to_cache(
@@ -663,7 +663,7 @@ pub async fn record_transcript_entry(
         PROJECT_MEMORY_CACHE.lock().await.clear();
     }
 
-    crate::vault_escrow::schedule_full_backup(&app);
+    crate::vault_escrow::schedule_full_backup_for(&app, &agent_key);
     // The conversation was just continued: it moves to the top of the list.
     let at = now_micros();
     crate::conversation_cache::touch(&app, &conversation_hash, at);
@@ -747,7 +747,7 @@ pub async fn record_grounding_annotation(
         _ => record_on_07(&agent_key, key, &conversation_hash, &plain).await?,
     };
 
-    crate::vault_escrow::schedule_full_backup(&app);
+    crate::vault_escrow::schedule_full_backup_for(&app, &agent_key);
     Ok(id)
 }
 

@@ -44,6 +44,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   been written on this computer since the last complete one, also when
   the app was closed in between. On a long-used profile that wait was
   several minutes, or the full fifteen.
+- A Vault backup no longer lists the conversations of an AI nothing was
+  written to since its last backup, and starting the app no longer
+  counts as a change. On a long-used profile each backup spent minutes
+  listing every conversation, also when nothing had changed.
 - Each Holochain version the app ships is set aside in the app's data
   folder (about 45 MB), so a later version of Your Own AI can still open
   what an older one wrote, with no download.
