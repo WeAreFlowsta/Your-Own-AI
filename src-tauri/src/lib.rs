@@ -62,6 +62,7 @@ mod instance_guard;        // single-instance port lock + orphan-process sweep
 mod updater;               // the app's own updates: signed manifest, download, restart to update
 mod clipboard;
 mod skills;               // Add-ons > Skills: SKILL.md folders the AIs read
+mod webview_env;          // the webview's platform fix (Linux, NVIDIA) never reaches a child program
 mod mcp;                  // Add-ons > Tools: MCP servers an AI carries into a project session
 mod checks;               // Projects: the project's own checks run before a turn ends (agent Stop hook)             // Rust-side copy (WebView2 denies navigator.clipboard)
 
@@ -558,8 +559,16 @@ async fn get_context_window_size() -> Result<u64, String> {
 // Main Application Entry Point
 // ============================================================================
 
+/// What the webview's platform fix did at startup; logged once the logger is up.
+static WEBVIEW_FIX: std::sync::OnceLock<flowsta_hc_lines::webview::Outcome> = std::sync::OnceLock::new();
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // First, before anything starts a thread: on Linux with the NVIDIA driver
+    // loaded, WebKitGTK 2.52 segfaults on a page change when NVIDIA's EGL
+    // draws the window. The fix sets one or two environment variables for
+    // the webview only (webview_env.rs takes them out of every child).
+    let _ = WEBVIEW_FIX.set(flowsta_hc_lines::webview::apply());
     let builder = tauri::Builder::default();
     // UI test harness (e2e/README.md): the embedded WebDriver
     // server that @wdio/tauri-service drives. Compiled in ONLY with the
@@ -902,6 +911,9 @@ pub fn run() {
             flowsta::share_submit,
         ])
         .setup(|app| {
+            if let Some(fix) = WEBVIEW_FIX.get() {
+                log::info!("[webview] Linux NVIDIA fix: {fix:?}");
+            }
             // The system asking the app to quit (a logout, a session manager,
             // a closed terminal): say so in the log and quit the clean way, so
             // the model servers and helpers stop with it. Before 10-20 such an

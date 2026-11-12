@@ -62,6 +62,13 @@ struct State {
     /// no model, force-quit at the welcome screen) cannot have crashed
     /// the GPU and must not count a strike.
     gpu_started: bool,
+    /// The app is loading a model onto the GPU right now (set when the
+    /// engine starts on it, cleared when the load ends either way). An
+    /// exit while this is not set was not a crash of the GPU load: the
+    /// window's own crash, a force-quit, the app killed for memory. An
+    /// engine that dies under the app is counted on its own
+    /// (`note_gpu_child_crash`).
+    gpu_loading: bool,
 }
 
 #[derive(Serialize)]
@@ -149,6 +156,7 @@ fn decide(mut st: State) -> (State, bool) {
         // The sentinel written for THIS run starts fresh and unproven.
         st.pending_since = now_secs();
         st.gpu_started = false;
+        st.gpu_loading = false;
     }
     (st, allow)
 }
@@ -188,10 +196,16 @@ fn discount_pending(mut st: State, boot_time: u64) -> State {
         return st;
     }
     let rebooted = st.pending_since > 0 && boot_time > st.pending_since;
-    if rebooted || !st.gpu_started {
+    if rebooted || !st.gpu_started || !st.gpu_loading {
         log::info!(
             "[GPU] previous run left a sentinel but {} - not counted",
-            if rebooted { "the machine has rebooted since" } else { "it never reached the GPU" }
+            if rebooted {
+                "the machine has rebooted since"
+            } else if !st.gpu_started {
+                "it never reached the GPU"
+            } else {
+                "the app closed while no model was loading onto the GPU"
+            }
         );
         st.pending = false;
     }
@@ -210,10 +224,45 @@ pub fn note_gpu_started(app: &AppHandle) {
     if !enabled() {
         return;
     }
+    // No load window on this path (the MLX server reports ready elsewhere):
+    // an unclean exit of such a run counts as it always has.
     let mut st = load(app);
-    if !st.gpu_started {
+    if !st.gpu_started || !st.gpu_loading {
         st.gpu_started = true;
+        st.gpu_loading = true;
         save(app, &st);
+    }
+}
+
+/// A model is loading onto the GPU for as long as this lives: an unclean
+/// exit of the app inside it counts toward the ladder, one outside it does
+/// not. Hold it from the engine's start to the end of the load, whichever
+/// way the load ends.
+pub struct LoadWindow(Option<AppHandle>);
+
+impl LoadWindow {
+    pub fn open(app: &AppHandle) -> Self {
+        if !enabled() {
+            return Self(None);
+        }
+        let mut st = load(app);
+        if !st.gpu_loading {
+            st.gpu_loading = true;
+            save(app, &st);
+        }
+        Self(Some(app.clone()))
+    }
+}
+
+impl Drop for LoadWindow {
+    fn drop(&mut self) {
+        if let Some(app) = self.0.take() {
+            let mut st = load(&app);
+            if st.gpu_loading {
+                st.gpu_loading = false;
+                save(&app, &st);
+            }
+        }
     }
 }
 
@@ -356,13 +405,27 @@ mod tests {
     }
 
     #[test]
-    fn real_unclean_gpu_exit_still_counts() {
-        let st = State { pending: true, crashes: 0, pending_since: 5_000, gpu_started: true, ..Default::default() };
+    fn an_exit_outside_a_gpu_load_is_not_a_strike() {
+        // The window's own crash (WebKitGTK on NVIDIA's EGL, 0.9.0), a
+        // force-quit, the app killed for memory: the engine was up and no
+        // model was loading.
+        let st = State { pending: true, crashes: 1, pending_since: 5_000, gpu_started: true, gpu_loading: false, ..Default::default() };
         let st = discount_pending(st, 1_000);
-        assert!(st.pending, "no reboot, GPU ran: the strike stands");
+        assert!(!st.pending);
+        let (st, allow) = decide(st);
+        assert!(allow);
+        assert_eq!(st.crashes, 0);
+    }
+
+    #[test]
+    fn real_unclean_gpu_exit_still_counts() {
+        let st = State { pending: true, crashes: 0, pending_since: 5_000, gpu_started: true, gpu_loading: true, ..Default::default() };
+        let st = discount_pending(st, 1_000);
+        assert!(st.pending, "no reboot, a model was loading onto the GPU: the strike stands");
         let (st, _) = decide(st);
         assert_eq!(st.crashes, 1);
         assert!(!st.gpu_started, "the new run starts unproven");
+        assert!(!st.gpu_loading);
         assert!(st.pending_since > 0);
     }
 

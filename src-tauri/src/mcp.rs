@@ -487,7 +487,8 @@ pub(crate) fn quiet(cmd: &mut std::process::Command) -> &mut std::process::Comma
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
-    cmd
+    // Nor does it inherit the webview's platform fix (Linux, NVIDIA).
+    crate::webview_env::strip(cmd)
 }
 
 pub(crate) fn which_sync(program: &str) -> Option<String> {
@@ -662,7 +663,7 @@ pub async fn mcp_requirement_install(program: String) -> Result<String, String> 
                 quiet(std::process::Command::new("cmd").args(["/C", &plan.command])).output()
             }
         } else {
-            std::process::Command::new("sh").args(["-c", &plan.command]).output()
+            crate::webview_env::strip(std::process::Command::new("sh").args(["-c", &plan.command])).output()
         }
     })
     .await

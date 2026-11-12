@@ -129,6 +129,12 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - The app's program is `your-own-ai` (was `app`), and the bundled engine
   is `yourowai-llama-server`, so it no longer clashes with Ubuntu's
   `llama.cpp-tools` package.
+- **Computers with an NVIDIA graphics card: the window no longer closes
+  by itself.** With recent system updates (WebKitGTK 2.52) Your Own AI
+  could close seconds after it opened, or show an empty window. The
+  window is now drawn in a way that avoids the fault. The AI still runs
+  on the NVIDIA card. On a computer whose only graphics card is NVIDIA
+  the window itself is drawn by the processor.
 - An AppStream entry: GNOME Software lists Your Own AI and can remove it.
 - Release builds no longer need the system's OpenSSL, so they run on
   Fedora 45 and others that ship OpenSSL 4.
@@ -142,6 +148,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   PDFs. Each release lists the fingerprints of the programs it ships.
 
 ### Fixed
+- **"Running on CPU for stability" no longer appears after the app itself
+  closed unexpectedly.** Your Own AI moved the AI off the graphics card
+  when it had closed twice without a clean exit, whatever the cause. It
+  now does so only when it closed while a model was loading onto the
+  graphics card.
 - **The chat page offers to continue your own last conversation only.**
   With two Flowsta identities on one computer, the start page could offer
   the other identity's last conversation title (never its messages).

@@ -706,10 +706,7 @@ fn chat_server_command(
         crate::engine::Backend::Cuda => {
             let bin = crate::engine::cuda_engine_binary(app_handle)
                 .ok_or("CUDA engine binary missing")?;
-            Ok(app_handle
-                .shell()
-                .command(bin)
-                .current_dir(work_dir.to_path_buf()))
+            Ok(crate::webview_env::strip_shell(app_handle.shell().command(bin)).current_dir(work_dir.to_path_buf()))
         }
         crate::engine::Backend::Bundled => Ok(bundled_llama_command(app_handle)?
             .current_dir(work_dir.to_path_buf())),
@@ -746,7 +743,7 @@ fn bundled_llama_command(
         log::error!("[LLM] {msg}");
         return Err(msg);
     }
-    Ok(app_handle.shell().command(bin))
+    Ok(crate::webview_env::strip_shell(app_handle.shell().command(bin)))
 }
 
 /// Heuristic: is this GPU integrated / shared-memory (iGPU, APU, or software
@@ -1876,6 +1873,7 @@ async fn driver_vram() -> Option<DriverVram> {
     }
     for bin in candidates {
         let mut cmd = tokio::process::Command::new(&bin);
+        crate::webview_env::strip_tokio(&mut cmd);
         cmd.args(["--query-gpu=memory.used,memory.total", "--format=csv,noheader,nounits"]);
         #[cfg(target_os = "windows")]
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
@@ -3123,9 +3121,7 @@ async fn start_mlx_server(
         mlx_dir.display()
     );
     let t_spawn = std::time::Instant::now();
-    let (mut rx, child) = app_handle
-        .shell()
-        .command(&bin)
+    let (mut rx, child) = crate::webview_env::strip_shell(app_handle.shell().command(&bin))
         .current_dir(models_dir)
         .args([
             "--model",
@@ -3589,6 +3585,9 @@ pub async fn start_llama_server(
             crate::engine::Backend::Bundled => "bundled",
         },
     );
+    // Open until this function returns, however the load ends: only an
+    // exit of the app inside it counts toward the ladder.
+    let _gpu_load = crate::gpu_safety::LoadWindow::open(&app_handle);
     CHAT_LOAD_FAILED.store(false, std::sync::atomic::Ordering::SeqCst);
     CHAT_LOAD_OOM.store(false, std::sync::atomic::Ordering::SeqCst);
     CHAT_LOAD_OPEN_FAILED.store(false, std::sync::atomic::Ordering::SeqCst);

@@ -10,5 +10,7 @@ fn main() {
     // is stable; disabling it crashes. The actual first-page bug was the
     // Vite mid-hydration reload, fixed via optimizeDeps.include in
     // vite.config.ts.
+    // What IS set on such machines (first thing in app_lib::run): Mesa's EGL
+    // for the webview, flowsta_hc_lines::webview::apply().
     app_lib::run()
 }
