@@ -14,7 +14,7 @@ import {
   getConversations,
   getTranscript,
 } from "./holochainTranscripts";
-import { getLocalCustomAis } from "./localAiStorage";
+import { getLocalCustomAis, getStoredCustomAis } from "./localAiStorage";
 
 export const WORKSPACE_MEMORY_SOURCE = "workspace-memory";
 /** The cap is the staleness defense - curation forced, accumulation refused. */
@@ -34,7 +34,8 @@ export interface WorkspaceMemory {
 
 /** Every provisioned AI's agent key (the chains to scan). */
 async function provisionedAgents(): Promise<{ agentKey: string; name: string }[]> {
-  const ais = await getLocalCustomAis();
+  // Folded twins too: their chains hold records.
+  const ais = await getStoredCustomAis();
   return ais
     .filter((a) => a.agentPubKey)
     .map((a) => ({ agentKey: a.agentPubKey!, name: a.name }));

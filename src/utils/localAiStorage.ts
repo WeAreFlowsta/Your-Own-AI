@@ -317,7 +317,17 @@ export async function republishStoredPersonas(): Promise<void> {
   }
 }
 
+/** The AIs the person sees: every stored AI but a twin folded into another
+ *  (two starters that are one AI to the person; `config_sync.rs`
+ *  `fold_twins`). A folded twin stays stored, with its cell and its records;
+ *  its conversations and memory show under the AI it is folded into. */
 export async function getLocalCustomAis(): Promise<UserDefinedAI[]> {
+  return (await getStoredCustomAis()).filter((ai) => !ai.foldedInto);
+}
+
+/** Every stored AI, folded twins included: for writing the list back, and
+ *  for whatever walks every chain on this device. */
+export async function getStoredCustomAis(): Promise<UserDefinedAI[]> {
   try {
     const store = await getStore();
     const ais = await store.get<UserDefinedAI[]>(CUSTOM_AIS_KEY);
@@ -372,7 +382,7 @@ function noteAiConfigsChanged(): void {
 export async function saveLocalCustomAi(ai: Omit<UserDefinedAI, 'id' | 'status'>): Promise<UserDefinedAI> {
   try {
     const store = await getStore();
-    const existingAis = await getLocalCustomAis();
+    const existingAis = await getStoredCustomAis();
     
     // Generate a unique ID with "local-" prefix
     const newAi: UserDefinedAI = {
@@ -404,7 +414,7 @@ export async function updateLocalCustomAi(
 ): Promise<UserDefinedAI | null> {
   try {
     const store = await getStore();
-    const existingAis = await getLocalCustomAis();
+    const existingAis = await getStoredCustomAis();
     
     const aiIndex = existingAis.findIndex(ai => ai.id === id);
     if (aiIndex === -1) {
@@ -441,7 +451,7 @@ export async function updateLocalCustomAi(
 export async function deleteLocalCustomAi(id: string): Promise<boolean> {
   try {
     const store = await getStore();
-    const existingAis = await getLocalCustomAis();
+    const existingAis = await getStoredCustomAis();
     
     const filteredAis = existingAis.filter(ai => ai.id !== id);
     
@@ -496,7 +506,7 @@ export async function syncLocalAisToCloud(
 ): Promise<{ synced: number; failed: number }> {
   try {
     const store = await getStore();
-    const localAis = await getLocalCustomAis();
+    const localAis = await getStoredCustomAis();
     
     // Filter AIs that haven't been synced yet (have "local-" prefix)
     const unsyncedAis = localAis.filter(ai => ai.id.startsWith('local-'));
@@ -560,7 +570,7 @@ export async function syncLocalAisToCloud(
 export async function mergeCloudAisToLocal(cloudAis: UserDefinedAI[]): Promise<void> {
   try {
     const store = await getStore();
-    const localAis = await getLocalCustomAis();
+    const localAis = await getStoredCustomAis();
     
     // Keep local-only AIs and add/update cloud AIs
     const localOnlyAis = localAis.filter(ai => ai.id.startsWith('local-'));
@@ -601,7 +611,7 @@ export async function clearLocalAis(): Promise<void> {
  */
 export async function getUnsyncedAisCount(): Promise<number> {
   try {
-    const localAis = await getLocalCustomAis();
+    const localAis = await getStoredCustomAis();
     const unsyncedCount = localAis.filter(ai => ai.id.startsWith('local-')).length;
     return unsyncedCount;
   } catch (error) {

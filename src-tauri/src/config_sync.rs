@@ -164,6 +164,13 @@ pub(crate) fn fold_twins(list: &mut [serde_json::Value]) -> u32 {
         }
         let leader = *group.iter().min_by_key(|j| founding_of(&list[**j]).unwrap_or_default()).expect("not empty");
         if i == leader {
+            // The starter's place in the list (a per-device stamp the twin
+            // may hold alone) goes with the AI the person sees.
+            if list[leader]["seedSlot"].is_null() {
+                if let Some(slot) = group.iter().find_map(|j| list[*j]["seedSlot"].as_u64()) {
+                    list[leader]["seedSlot"] = serde_json::json!(slot);
+                }
+            }
             // The newest settings of the group, once per group.
             let newest = *group.iter().max_by_key(|j| updated_at(&list[**j])).expect("not empty");
             if newest != leader && updated_at(&list[newest]) > updated_at(&list[leader]) {
@@ -869,11 +876,20 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle, force: bool) -> R
         crate::line_facts::take_round(&root, seen)?;
     }
     save_state(app, &ConfigSyncState { checked_at: now_ms(), devices: synced, updated: total_updated, added: total_added, ..Default::default() });
-    if total_updated + total_added > 0 {
+    // Starters that stand twice (a second computer added before joins
+    // folded) become one, the same one on every device.
+    let folded = fold_twins(&mut local);
+    if folded > 0 {
+        let names: Vec<String> = local.iter().filter(|ai| ai["foldedInto"].is_string()).filter_map(|ai| ai["name"].as_str().map(String::from)).collect();
+        log::info!("[config-sync] {} mark(s) changed: {} AI(s) stand as one with their twin ({})", folded, names.len(), names.join(", "));
+    }
+    if total_updated + total_added + folded > 0 {
         store.set("custom-ais", serde_json::json!(local));
         store.save().map_err(|e| e.to_string())?;
-        log::info!("[config-sync] AIs from the other devices: {} updated, {} added", total_updated, total_added);
-        let _ = app.emit("ai-configs-changed", serde_json::json!({ "updated": total_updated, "added": total_added }));
+        if total_updated + total_added > 0 {
+            log::info!("[config-sync] AIs from the other devices: {} updated, {} added", total_updated, total_added);
+        }
+        let _ = app.emit("ai-configs-changed", serde_json::json!({ "updated": total_updated, "added": total_added, "folded": folded }));
     }
     *LAST_STAMPS.lock().unwrap() = Some(stamps);
     Ok((total_updated, total_added))
@@ -1027,6 +1043,13 @@ mod tests {
         assert_eq!(list[1]["foldedInto"], "a-teresa", "a retired duplicate id is its twin");
         assert!(list[2].get("foldedInto").is_none() && list[3].get("foldedInto").is_none());
         assert_eq!(folded_into(&list, "a-veebo").len(), 1);
+        // The starter's place in the list goes to the AI the person sees.
+        let mut stamped = vec![
+            { let mut t = starter("b-veebo", "b-veebo", "veebo", "Veebo"); t["seedSlot"] = serde_json::json!(1); t },
+            starter("k1", "a-veebo", "veebo", "Veebo"),
+        ];
+        fold_twins(&mut stamped);
+        assert_eq!(stamped[1]["seedSlot"], 1);
         // The other device, holding the same four under its own agents,
         // makes the same choice.
         let mut other = vec![
