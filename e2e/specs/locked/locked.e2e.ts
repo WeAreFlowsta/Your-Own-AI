@@ -54,6 +54,24 @@ async function chat(what: string): Promise<number> {
   return at;
 }
 
+/** What Settings > Devices shows for this computer: the lock's own words
+ *  when nothing travels, null when there is no lock. */
+async function devicesLock(): Promise<{ kind: string | null; says: string | null }> {
+  await browser.url("tauri://localhost/settings/");
+  const panel = await $('[data-testid="settings-devices"]');
+  await panel.waitForExist({ timeout: 60_000, timeoutMsg: "Settings > Devices never showed" });
+  await panel.scrollIntoView();
+  await (await $('[data-testid="device-row"][data-this="yes"]')).waitForExist({ timeout: 30_000 });
+  await browser.pause(3000); // the panel reads the Vault once it is in view
+  const got = await browser.execute(() => {
+    const lock = document.querySelector('[data-testid="device-locked"]');
+    return { kind: lock?.getAttribute("data-kind") ?? null, says: lock?.getAttribute("title") ?? null };
+  });
+  await browser.url("tauri://localhost/chat/");
+  await waitForChat();
+  return got;
+}
+
 describe("Restart to update with the Vault locked", () => {
   it("says each step at the button, backs up to a locked and still-syncing Vault, and never skips the backup without a word", async () => {
     await waitForChat();
@@ -98,6 +116,10 @@ describe("Restart to update with the Vault locked", () => {
     console.log(`e2e: locked backup ${JSON.stringify(again).slice(0, 300)}`);
     expect(again.manifest).toBe("written");
     await shot("locked-still-syncing");
+    // Settings > Devices shows no lock: everything still travels.
+    const whileSyncing = await devicesLock();
+    console.log(`e2e: Settings > Devices, locked and still syncing: ${JSON.stringify(whileSyncing)}`);
+    expect(whileSyncing.says).toBeNull();
 
     // 4. Locked with syncing stopped: the notice says why, offers both
     //    choices, and installs nothing until one is taken.
@@ -105,6 +127,9 @@ describe("Restart to update with the Vault locked", () => {
     expect(await kind("unlocked")).toBe("unlocked");
     expect((await vault("/dev/lock")).status).toBe(200);
     expect(await kind("stopped")).toBe("stopped");
+    const whileStopped = await devicesLock();
+    console.log(`e2e: Settings > Devices, syncing stopped: ${JSON.stringify(whileStopped)}`);
+    expect(whileStopped.says).toBe("Syncing is stopped on this computer. Unlock Flowsta Vault to start it again.");
     await chat("animal");
     await offerUpdate();
     await (await $('[data-testid="restart-to-update"]')).click();

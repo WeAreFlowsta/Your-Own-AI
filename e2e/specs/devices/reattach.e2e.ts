@@ -53,11 +53,30 @@ describe(`the 0.6 line stops and starts again, phase ${PHASE}`, () => {
       console.log(`e2e: before: ${JSON.stringify(st)}`);
       const b = st!.holding[0];
       expect(b.needs_update).toBe(true);
-      await invoke("line_stop_waiting", { device: b.id });
+      // Settings > Devices says which computer holds the older background
+      // service and why, and offers the two ways out. Through its buttons.
+      await browser.url("tauri://localhost/settings/");
+      const panel = await $('[data-testid="settings-devices"]');
+      await panel.waitForExist({ timeout: 60_000, timeoutMsg: "Settings > Devices never showed" });
+      await panel.scrollIntoView();
+      const holding = await $('[data-testid="device-holding"]');
+      await holding.waitForDisplayed({ timeout: 60_000, timeoutMsg: "Settings > Devices never named the computer on the older version" });
+      const callout = (await holding.getText()).replace(/\s+/g, " ");
+      console.log(`e2e: Settings > Devices says ${JSON.stringify(callout)}`);
+      expect(callout).toContain("is on an older version of Your Own AI");
+      expect(callout).toContain("This computer keeps a second background service running so the two stay in sync.");
+      expect(await (await $('[data-testid="device-how-to-update"]')).getText()).toBe("How to update");
+      await shot("reattach-devices-holding");
+      await (await $('[data-testid="device-stop-waiting"]')).click();
+      await browser.waitUntil(async () => !(await $('[data-testid="device-holding"]').isExisting()), { timeout: 30_000, timeoutMsg: "the callout stayed after Stop waiting" });
+      const again = await $('[data-testid="device-wait-again"]');
+      await again.waitForDisplayed({ timeout: 30_000, timeoutMsg: "the row never offered to wait again" });
+      expect(await again.getText()).toContain("not waiting for it: wait again");
       const after = await status();
       console.log(`e2e: after stopping the wait: ${JSON.stringify(after)}`);
       expect(after.stopped_waiting).toContain(b.id);
       expect(after.holding.length).toBe(0);
+      await shot("reattach-devices-not-waiting");
     } else if (PHASE === "stopped") {
       let st: Status | null = null;
       // Not wanted once the full pass has carried everything; stopped at the
