@@ -508,6 +508,37 @@ pub(crate) fn local_recovery(app: &tauri::AppHandle) -> Result<RecoveryMaterial,
 /// adoption: first contact, or a user-driven conversation restore.
 pub(crate) const ESCROW_OWNER_KEY: &str = "escrow_owner";
 
+/// Whether a locked Vault can be used for backups: only one that says it is
+/// still syncing, holding the identity recorded as this profile's owner.
+/// Everything else is `vault_locked` (or `identity_mismatch` when the
+/// locked Vault names another identity), as before.
+pub(crate) fn locked_vault_usable(syncing: Option<bool>, active: Option<&str>, owner: Option<&str>, require_owner_match: bool) -> Result<(), &'static str> {
+    if syncing != Some(true) || !require_owner_match {
+        return Err("vault_locked");
+    }
+    match (active, owner) {
+        (Some(active), Some(owner)) if crate::identity_watch::same_identity(active, owner) => Ok(()),
+        (Some(_), Some(_)) => Err("identity_mismatch"),
+        _ => Err("vault_locked"),
+    }
+}
+
+/// How the Vault is locked, for what the app says: "syncing" (locked, and
+/// app backups keep passing), "stopped" (locked with syncing stopped: the
+/// person chose it on that computer), "locked" (a Vault that does not say,
+/// from before 1.8.0), "unlocked", or "none" (no Vault answered).
+#[tauri::command]
+pub async fn vault_lock_kind() -> &'static str {
+    let vault = flowsta::find_vault().await;
+    match (vault.port, vault.unlocked, vault.syncing_while_locked) {
+        (None, _, _) => "none",
+        (Some(_), true, _) => "unlocked",
+        (Some(_), false, Some(true)) => "syncing",
+        (Some(_), false, Some(false)) => "stopped",
+        (Some(_), false, None) => "locked",
+    }
+}
+
 /// Preconditions shared by every escrow operation. Returns the Vault port.
 /// The link ceremony is never triggered from here - it rides sign-in; without
 /// a completed link the escrow simply waits ("unlinked").
@@ -543,9 +574,18 @@ pub(crate) async fn escrow_port(
         None => return Err(EscrowStatus::state("vault_unavailable")),
     };
     // A locked Vault reports agent_pub_key: null - indistinguishable from a
-    // never-created one, and no identity to compare. No writes until unlock.
+    // never-created one. One that is locked and still syncing (Vault 1.8.0
+    // on) names the identity it holds and keeps taking and handing back
+    // backups: the app goes on when that identity is this profile's recorded
+    // owner. It never adopts an owner from a locked Vault, and the Vault
+    // itself refuses any request naming another identity. Locked with
+    // syncing stopped, or an older Vault: nothing until the unlock.
     if !vault.unlocked {
-        return Err(EscrowStatus::state("vault_locked"));
+        let owner = store.get(ESCROW_OWNER_KEY).and_then(|v| v.as_str().map(String::from));
+        return match locked_vault_usable(vault.syncing_while_locked, vault.active_identity.as_deref(), owner.as_deref(), require_owner_match) {
+            Ok(()) => Ok(port),
+            Err(state) => Err(EscrowStatus::state(state)),
+        };
     }
     let live = match vault.agent_pub_key {
         Some(k) => k,
@@ -3145,6 +3185,19 @@ mod tombstone_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_locked_vault_is_used_only_when_it_still_syncs_this_profiles_identity() {
+        const A: &str = "uhCAkXJ2rQ8oO0e0iTqk8m0C9mSxWcZ0sQy8k3o1mT5nE6fJ8K2pL";
+        const B: &str = "uhCAkQw3zR9pP1f1jUrl9n1D0nTyXdA1tRz9l4p2nU6oF7gK9L3qM";
+        assert_eq!(locked_vault_usable(Some(true), Some(A), Some(A), true), Ok(()), "locked, still syncing, this profile's identity");
+        assert_eq!(locked_vault_usable(Some(true), Some(B), Some(A), true), Err("identity_mismatch"), "another identity in the locked Vault");
+        assert_eq!(locked_vault_usable(Some(true), Some(A), None, true), Err("vault_locked"), "an owner is never adopted from a locked Vault");
+        assert_eq!(locked_vault_usable(Some(true), None, Some(A), true), Err("vault_locked"), "no identity named: nothing to compare");
+        assert_eq!(locked_vault_usable(Some(false), Some(A), Some(A), true), Err("vault_locked"), "syncing was stopped on that computer");
+        assert_eq!(locked_vault_usable(None, Some(A), Some(A), true), Err("vault_locked"), "a Vault from before it said so");
+        assert_eq!(locked_vault_usable(Some(true), Some(A), Some(A), false), Err("vault_locked"), "the adoption path needs the unlocked Vault");
+    }
+
     #[test]
     fn a_refused_restore_names_the_computers_for_the_page() {
         let d = |id: &str, name: Option<&str>| super::SiblingDevice { id: id.into(), name: name.map(String::from), ..Default::default() };

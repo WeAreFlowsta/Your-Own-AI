@@ -651,6 +651,7 @@ pub fn run() {
             flowsta::list_online_models,
             flowsta::list_online_providers,
             flowsta::vault_sign_document,
+            vault_escrow::vault_lock_kind,
             vault_escrow::vault_escrow_sync,
             config_sync::config_sync_status,
             config_sync::devices_view,

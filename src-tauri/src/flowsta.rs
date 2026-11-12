@@ -141,6 +141,14 @@ pub struct VaultStatus {
     /// answered: "open it", never "get it".
     #[serde(default)]
     pub present: bool,
+    /// The identity the Vault holds, locked or not (its `/status`).
+    #[serde(default)]
+    pub active_identity: Option<String>,
+    /// Locked, with its devices still syncing (Vault 1.8.0 on): app backups
+    /// keep passing and it answers backup requests. `Some(false)`: locked
+    /// with syncing stopped. None: unlocked, or a Vault from before it said.
+    #[serde(default)]
+    pub syncing_while_locked: Option<bool>,
 }
 
 /// Is Flowsta Vault installed on this computer? Looks where its installers
@@ -511,6 +519,8 @@ pub async fn find_vault() -> VaultStatus {
                 port: Some(*port),
                 agent_pub_key: v["agent_pub_key"].as_str().map(String::from),
                 present: true,
+                active_identity: v["active_identity"].as_str().map(String::from),
+                syncing_while_locked: v["syncing_while_locked"].as_bool(),
             }
         }
         None => {
