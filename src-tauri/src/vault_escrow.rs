@@ -2849,9 +2849,56 @@ pub(crate) struct Freshness {
 static CHANGES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static COVERED: std::sync::Mutex<Option<(u64, u64)>> = std::sync::Mutex::new(None);
 
-/// A change that wants a backup (every scheduling call counts one).
-fn note_change() {
+/// A change that wants a backup (every scheduling call counts one). It
+/// also leaves a mark in the profile that outlives the app: until a complete
+/// pass has covered it, the backup in the Vault is not this profile's
+/// latest (`settled_backup_age_secs`).
+fn note_change(app: &tauri::AppHandle) {
     CHANGES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    if let Some(p) = backup_owed_path(app) {
+        if !p.exists() {
+            if let Err(e) = std::fs::write(&p, b"") {
+                log::warn!("[escrow] could not mark a backup as owed: {e}");
+            }
+        }
+    }
+}
+
+/// Present from the first write that wants a backup until a complete pass
+/// that began after it ends.
+const BACKUP_OWED_FILE: &str = "backup-owed";
+/// When the last complete pass with nothing owed after it finished (unix seconds).
+const BACKUP_SETTLED_FILE: &str = "backup-settled-at";
+
+fn backup_owed_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    crate::profile::root(app).ok().map(|d| d.join(BACKUP_OWED_FILE))
+}
+
+/// A complete pass ended having seen every change asked for so far: nothing
+/// is owed, and the time is kept.
+fn note_backup_settled(app: &tauri::AppHandle) {
+    let Ok(root) = crate::profile::root(app) else { return };
+    let _ = std::fs::write(root.join(BACKUP_SETTLED_FILE), unix_now_secs().to_string());
+    let _ = std::fs::remove_file(root.join(BACKUP_OWED_FILE));
+}
+
+/// Pure: nothing is owed and a complete pass is on record, no older than
+/// `max_age_secs`. Returns its age.
+pub(crate) fn settled_age(owed: bool, settled_at_secs: Option<u64>, now_secs: u64, max_age_secs: u64) -> Option<u64> {
+    let at = settled_at_secs.filter(|at| *at > 0 && *at <= now_secs)?;
+    let age = now_secs - at;
+    (!owed && age <= max_age_secs).then_some(age)
+}
+
+/// How long ago the last complete backup finished, when nothing has been
+/// written on this computer since (also across restarts of the app). A pass
+/// then would list every conversation to write nothing: on a long-used
+/// profile the list alone takes minutes (a person's Linux box, 11-11: 14
+/// minutes for one AI's 1,046 conversations, none read).
+pub(crate) fn settled_backup_age_secs(app: &tauri::AppHandle, max_age_secs: u64) -> Option<u64> {
+    let root = crate::profile::root(app).ok()?;
+    let at = std::fs::read_to_string(root.join(BACKUP_SETTLED_FILE)).ok().and_then(|s| s.trim().parse::<u64>().ok());
+    settled_age(root.join(BACKUP_OWED_FILE).exists(), at, unix_now_secs(), max_age_secs)
 }
 
 pub(crate) fn freshness() -> Freshness {
@@ -2908,12 +2955,20 @@ pub async fn write_full_backup_with(app: &tauri::AppHandle, now: bool) -> Result
         }
     }
     let seen = CHANGES.load(Ordering::SeqCst);
+    let began_micros = unix_now_secs() as i64 * 1_000_000;
     let result = write_full_backup_inner(app, now).await;
     if let Ok(v) = &result {
         // A held pass wrote nothing and is not a backup of this moment.
         if v.get("skipped").is_none() {
             if let Ok(mut c) = COVERED.lock() {
                 *c = Some((seen, unix_now_secs()));
+            }
+            // Nothing asked for a backup while it ran, and the pass left
+            // nothing unread (its own marker, written at its end): the Vault
+            // holds this profile as it is now.
+            let read_everything = load_full_read_at(app).map(|at| at >= began_micros).unwrap_or(false);
+            if CHANGES.load(Ordering::SeqCst) == seen && read_everything {
+                note_backup_settled(app);
             }
         }
     }
@@ -3072,7 +3127,7 @@ async fn write_full_backup_inner(app: &tauri::AppHandle, now: bool) -> Result<se
 pub fn schedule_full_backup(app: &tauri::AppHandle) {
     use std::sync::atomic::{AtomicU64, Ordering};
     static GENERATION: AtomicU64 = AtomicU64::new(0);
-    note_change();
+    note_change(app);
     let my_gen = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -3102,7 +3157,7 @@ pub fn schedule_full_backup(app: &tauri::AppHandle) {
 pub fn schedule_ai_backup(app: &tauri::AppHandle) {
     use std::sync::atomic::{AtomicU64, Ordering};
     static GENERATION: AtomicU64 = AtomicU64::new(0);
-    note_change();
+    note_change(app);
     let my_gen = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -3850,6 +3905,19 @@ mod network_decision_tests {
 #[cfg(test)]
 mod freshness_tests {
     use super::*;
+
+    #[test]
+    fn a_settled_backup_counts_until_something_is_written() {
+        // Nothing owed, a complete pass on record: its age, however long the app was closed.
+        assert_eq!(settled_age(false, Some(1_000), 1_000 + 3 * 86_400, 7 * 86_400), Some(3 * 86_400));
+        // A write since: owed, so a pass runs.
+        assert_eq!(settled_age(true, Some(1_000), 1_030, 7 * 86_400), None);
+        // Never backed up, an unreadable or future time, or older than the limit.
+        assert_eq!(settled_age(false, None, 1_000, 7 * 86_400), None);
+        assert_eq!(settled_age(false, Some(0), 1_000, 7 * 86_400), None);
+        assert_eq!(settled_age(false, Some(2_000), 1_000, 7 * 86_400), None);
+        assert_eq!(settled_age(false, Some(1_000), 1_001 + 7 * 86_400, 7 * 86_400), None);
+    }
 
     #[test]
     fn a_pass_that_just_finished_with_nothing_written_since_is_current() {

@@ -40,6 +40,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - On Linux, installing asks for your computer's password.
 - A copy installed with the Windows Installer (MSI) says when a new
   version is out and does not replace itself.
+- "Restart to update" does not wait for a Vault backup when nothing has
+  been written on this computer since the last complete one, also when
+  the app was closed in between. On a long-used profile that wait was
+  several minutes, or the full fifteen.
 - Each Holochain version the app ships is set aside in the app's data
   folder (about 45 MB), so a later version of Your Own AI can still open
   what an older one wrote, with no download.
