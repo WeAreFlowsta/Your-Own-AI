@@ -64,14 +64,19 @@ describe("chat with installed models", () => {
   });
 
   it("answers a short question with a local model", async () => {
-    await ask("Reply with exactly the word: ready");
+    // An ordinary question. "Reply with exactly the word: ready" was the
+    // question until 0.9.1: the 2B test model answers a bare "say only X"
+    // with a bracketed outline of how it would answer in 10 to 30 of 100
+    // tries, with or without the warm-up (measured against the engine,
+    // 2026-11-13), and never does that for a question like this one.
+    await ask("What colour is the sky on a clear day?");
     await shot("11-sent");
     // A model may need to load first (cold start on this card): up to three
     // minutes. The ASSISTANT's finished message must carry the word - never
     // the page as a whole, which also holds the question.
     const r = await waitForReplyDone();
     await shot("12-replied");
-    expect(r.text.toLowerCase()).toContain("ready");
+    expect(r.text.toLowerCase()).toContain("blue");
   });
 
   it("answers a real short question, not with a greeting", async () => {

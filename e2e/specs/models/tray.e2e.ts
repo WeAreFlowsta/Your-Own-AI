@@ -7,7 +7,7 @@ import { shot, waitForChat, ask, waitForReplyDone } from "./_helpers";
 describe("activity tray and the composer", () => {
   it("lifts above the composer while a download runs", async () => {
     await waitForChat();
-    await ask("Reply with exactly the word: ready");
+    await ask("What colour is the sky on a clear day?");
     await waitForReplyDone();
     await browser.execute(async () => {
       const t = (window as any).__TAURI__;
