@@ -454,7 +454,8 @@ fn crash_records() -> String {
         match std::process::Command::new("journalctl").args(*args).output() {
             Ok(o) if o.status.success() => {
                 for line in String::from_utf8_lossy(&o.stdout).lines() {
-                    if matches_marker(line) {
+                    // The kernel cuts a process name to 15 characters.
+                    if matches_marker(line) || line.contains("WebKitWebProces") {
                         found.push(line.to_string());
                     }
                 }
@@ -478,10 +479,113 @@ fn crash_records() -> String {
             }
         }
     }
+    // Ubuntu keeps crashes as apport reports (no coredumpctl by default).
+    // Only the report's own header fields are read, never the memory dump.
+    if let Ok(dir) = std::fs::read_dir("/var/crash") {
+        let week_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(CRASH_LOOKBACK_DAYS * 24 * 3600);
+        let mut files: Vec<std::path::PathBuf> = dir
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "crash"))
+            .filter(|p| p.file_name().is_some_and(|n| is_our_apport_report(&n.to_string_lossy())))
+            .filter(|p| p.metadata().and_then(|m| m.modified()).map(|t| t >= week_ago).unwrap_or(false))
+            .collect();
+        files.sort();
+        for path in files {
+            use std::io::BufRead;
+            let Ok(file) = std::fs::File::open(&path) else {
+                found.push(format!("(crash report {} could not be read)", path.display()));
+                continue;
+            };
+            let mut header = String::new();
+            let mut reader = std::io::BufReader::new(file);
+            let mut line = Vec::new();
+            // The fields wanted come before the dump; stop there, and never
+            // read more than the first part of the file.
+            for _ in 0..20_000 {
+                line.clear();
+                match reader.read_until(b'\n', &mut line) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                if line.starts_with(b"CoreDump:") {
+                    break;
+                }
+                header.push_str(&String::from_utf8_lossy(&line));
+            }
+            found.push(format!("crash report {}:\n{}", path.display(), apport_summary(&header)));
+        }
+    }
     if found.is_empty() {
         "no crash records for this app in the last 7 days".to_string()
     } else {
         found.join("\n")
+    }
+}
+
+/// An apport report (`/var/crash/<path with _ for />.<uid>.crash`) of this
+/// app, its engine, or the webview's own process. The webview's process
+/// serves every WebKitGTK program, so its reports are included and say
+/// which program they are in their own fields.
+#[cfg_attr(any(target_os = "windows", target_os = "macos"), allow(dead_code))]
+fn is_our_apport_report(file_name: &str) -> bool {
+    matches_marker(file_name) || file_name.contains("WebKitWebProcess")
+}
+
+/// The fields of an apport report that say what crashed and where, with
+/// their continuation lines. Left out on purpose: the command line, the
+/// working directory, the environment and the memory map (paths and names
+/// of the person's own), and the dump itself.
+#[cfg_attr(any(target_os = "windows", target_os = "macos"), allow(dead_code))]
+fn apport_summary(header: &str) -> String {
+    const KEEP: &[&str] = &["ProblemType", "Date", "ExecutablePath", "Package", "DistroRelease", "Signal", "SignalName", "SegvAnalysis", "SegvReason", "StacktraceTop", "Stacktrace"];
+    let mut out = String::new();
+    let mut keeping = false;
+    let mut kept_lines = 0usize;
+    for line in header.lines() {
+        if line.starts_with(' ') {
+            // A continuation of the field above; a full stack is capped.
+            if keeping && kept_lines < 60 {
+                out.push_str(line);
+                out.push('\n');
+                kept_lines += 1;
+            }
+            continue;
+        }
+        let key = line.split(':').next().unwrap_or("");
+        keeping = KEEP.contains(&key);
+        kept_lines = 0;
+        if keeping {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod apport_tests {
+    use super::*;
+
+    #[test]
+    fn a_report_keeps_what_crashed_and_drops_what_names_the_person() {
+        let header = "ProblemType: Crash\nDate: Thu Nov 12 16:20:45 2026\nExecutablePath: /usr/bin/your-own-ai\nProcCmdline: /usr/bin/your-own-ai --profile /home/alice/x\nProcCwd: /home/alice\nProcEnviron:\n LANG=en_AU.UTF-8\n HOME=/home/alice\nProcMaps:\n 7d6ba12f1000-7d6ba4eaa000 r-xp /usr/lib/libwebkit2gtk-4.1.so.0\nSegvAnalysis:\n Segfault happened at: 0x7d6ba1bd1172\n PC (0x7d6ba1bd1172) ok\nSignal: 11\nSignalName: SIGSEGV\nStacktraceTop:\n ?? () from /usr/lib/x86_64-linux-gnu/libwebkit2gtk-4.1.so.0\n g_main_context_iteration ()\nUserGroups: adm sudo\n";
+        let out = apport_summary(header);
+        for wanted in ["ProblemType: Crash", "ExecutablePath: /usr/bin/your-own-ai", "Signal: 11", "SignalName: SIGSEGV", "Segfault happened at", "libwebkit2gtk-4.1.so.0", "g_main_context_iteration"] {
+            assert!(out.contains(wanted), "missing {wanted}: {out}");
+        }
+        for dropped in ["alice", "ProcCmdline", "ProcEnviron", "LANG=", "ProcMaps", "UserGroups", "r-xp"] {
+            assert!(!out.contains(dropped), "kept {dropped}: {out}");
+        }
+    }
+
+    #[test]
+    fn our_reports_are_the_apps_the_engines_and_the_webviews() {
+        assert!(is_our_apport_report("_usr_bin_your-own-ai.1000.crash"));
+        assert!(is_our_apport_report("_usr_lib_x86_64-linux-gnu_webkit2gtk-4.1_WebKitWebProcess.1000.crash"));
+        assert!(is_our_apport_report("_usr_bin_yourowai-llama-server.1000.crash"));
+        assert!(!is_our_apport_report("_opt_Signal_signal-desktop.1000.crash"));
+        assert!(!is_our_apport_report("_usr_lib_x86_64-linux-gnu_webkit2gtk-4.1_MiniBrowser.1000.crash"));
     }
 }
 
