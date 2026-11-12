@@ -9,11 +9,14 @@ import { listen } from "@tauri-apps/api/event";
 import { carryOverOldUpdateChoice, updateStatus, type ReadyUpdate, type UpdatedFrom } from "../utils/updates";
 import LiquidMetalButton from "./LiquidMetalButton";
 
-type Stage = "backup" | "password" | "installing" | "restarting" | "failed";
+type Stage = "backup" | "password" | "installing" | "restarting" | "failed" | "nobackup";
 
 export const UpdateNotices = component$(() => {
   const ready = useSignal<ReadyUpdate | null>(null);
   const stage = useSignal<Stage | null>(null);
+  // Why no backup could be made before the install ("vault_locked" or
+  // "vault_unavailable"), while the person decides (stage "nobackup").
+  const noBackupWhy = useSignal<string | null>(null);
   const updated = useSignal<UpdatedFrom | null>(null);
   const notice = useSignal<string | null>(null);
 
@@ -82,7 +85,44 @@ export const UpdateNotices = component$(() => {
 
       {ready.value && (
         <div data-testid="update-ready" class="rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] px-4 py-3 shadow-xl">
-          {stage.value === null || stage.value === "failed" ? (
+          {stage.value === "nobackup" ? (
+            <>
+              <p class="text-sm text-[var(--text-primary)]">Your Own AI {ready.value.version} is ready to install</p>
+              <p class="mt-0.5 text-xs text-[var(--text-secondary)]" data-testid="update-no-backup">
+                {noBackupWhy.value === "vault_unavailable"
+                  ? "Flowsta Vault is not running, so this update cannot back up to it first."
+                  : "Flowsta Vault is locked, so this update cannot back up to it first."}
+              </p>
+              <div class="mt-2 flex items-center justify-end gap-2">
+                <LiquidMetalButton
+                  variant="secondary"
+                  class="px-3 py-1.5 text-xs"
+                  testId="update-without-backup"
+                  onClick$={async () => {
+                    stage.value = ready.value!.asks_password ? "password" : "installing";
+                    try {
+                      await invoke("restart_to_update", { withoutBackup: true });
+                    } catch (e) {
+                      console.error("Update did not install:", e);
+                      stage.value = "failed";
+                    }
+                  }}
+                >
+                  Update without a backup
+                </LiquidMetalButton>
+                <LiquidMetalButton
+                  class="px-3 py-1.5 text-xs"
+                  testId="update-unlock-first"
+                  title="Unlock Flowsta Vault, then choose Restart to update again."
+                  onClick$={() => {
+                    stage.value = null;
+                  }}
+                >
+                  {noBackupWhy.value === "vault_unavailable" ? "Open the Vault first" : "Unlock the Vault first"}
+                </LiquidMetalButton>
+              </div>
+            </>
+          ) : stage.value === null || stage.value === "failed" ? (
             <>
               <p class="text-sm text-[var(--text-primary)]">Your Own AI {ready.value.version} is ready to install</p>
               {stage.value === "failed" && <p class="mt-0.5 text-xs text-[var(--text-secondary)]">It was not installed, and nothing changed.</p>}
@@ -112,6 +152,14 @@ export const UpdateNotices = component$(() => {
                     try {
                       await invoke("restart_to_update");
                     } catch (e) {
+                      // No backup could be made: the person decides, the
+                      // update never goes on without one in silence.
+                      const why = /no_backup:(\w+)/.exec(String(e))?.[1];
+                      if (why) {
+                        noBackupWhy.value = why;
+                        stage.value = "nobackup";
+                        return;
+                      }
                       console.error("Update did not install:", e);
                       stage.value = "failed";
                     }

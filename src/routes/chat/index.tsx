@@ -665,7 +665,9 @@ export default component$(() => {
               } catch { /* no Vault: the plain message below */ }
             }
             if (locked) {
-              note = { what: "Unlock Flowsta Vault on this computer to open this conversation", then: "It opens here by itself once the Vault is unlocked.", partial: false };
+              note = (await invoke<string>("vault_lock_kind").catch(() => "locked")) === "stopped"
+                ? { what: "Syncing is stopped on this computer", then: "Unlock Flowsta Vault to start it again. This conversation opens here by itself then.", partial: false }
+                : { what: "Unlock Flowsta Vault on this computer to open this conversation", then: "It opens here by itself once the Vault is unlocked.", partial: false };
             }
           } else {
             const arrival = await getConversationArrival(target.agentKey, target.hash);
@@ -688,7 +690,9 @@ export default component$(() => {
                   locked = await invoke<boolean>("vault_is_locked");
                 } catch { /* no Vault */ }
                 if (locked) {
-                  note = { what: "Unlock Flowsta Vault on this computer to open this conversation", then: "It opens here by itself once the Vault is unlocked.", partial: false };
+                  note = (await invoke<string>("vault_lock_kind").catch(() => "locked")) === "stopped"
+                ? { what: "Syncing is stopped on this computer", then: "Unlock Flowsta Vault to start it again. This conversation opens here by itself then.", partial: false }
+                : { what: "Unlock Flowsta Vault on this computer to open this conversation", then: "It opens here by itself once the Vault is unlocked.", partial: false };
                 }
               }
             }

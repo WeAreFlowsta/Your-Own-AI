@@ -477,14 +477,17 @@ const BACKUP_BEFORE_INSTALL: Duration = Duration::from_secs(15 * 60);
 /// keeps drawing (and says each step, as `update-stage`) while the
 /// conductors stop and the package installs.
 #[tauri::command]
-pub async fn restart_to_update(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn restart_to_update(app: tauri::AppHandle, without_backup: Option<bool>) -> Result<(), String> {
     // A Vault backup first, for a person who uses the Vault: without the
     // Vault it ends at once (no app needs the Vault to update). A backup
     // already running is waited for, then ours runs: the install stops the
     // conductors, and a backup cut off there fails its reads and leaves no
     // backup of this moment. Bounded, so a backup that hangs never blocks
     // an update for good.
-    if READY.lock().unwrap().is_some() {
+    // A debug build's live test (e2e/locked-live.sh) runs the backup step
+    // alone: no update is waiting there, and nothing is installed.
+    let backup_only = cfg!(debug_assertions) && std::env::var_os("YOAI_TEST_UPDATE_BACKUP_ONLY").is_some();
+    if backup_only || READY.lock().unwrap().is_some() {
         let _ = app.emit("update-stage", "backup");
         let backup = async {
             let mut waited_for_another = false;
@@ -503,9 +506,21 @@ pub async fn restart_to_update(app: tauri::AppHandle) -> Result<(), String> {
         };
         match tokio::time::timeout(BACKUP_BEFORE_INSTALL, backup).await {
             Ok(Ok(_)) => log::info!("[update] backed up to the Vault before the install"),
-            Ok(Err(e)) => log::info!("[update] no Vault backup before the install ({e})"),
+            // A person who backs up to the Vault is never updated without
+            // their backup and without a word: the Vault is locked (and not
+            // syncing, or from before it took backups locked) or not
+            // running. They unlock or open it and ask again, or say to go
+            // on without one.
+            Ok(Err(e)) if (e == "vault_locked" || e == "vault_unavailable") && !without_backup.unwrap_or(false) => {
+                log::info!("[update] not installed yet: no Vault backup could be made ({e}), and the person has not said to go on without one");
+                return Err(format!("no_backup:{e}"));
+            }
+            Ok(Err(e)) => log::info!("[update] no Vault backup before the install ({e}){}", if without_backup.unwrap_or(false) { ": the person said to go on without one" } else { "" }),
             Err(_) => log::warn!("[update] the Vault backup took over {} min: installing without waiting for it", BACKUP_BEFORE_INSTALL.as_secs() / 60),
         }
+    }
+    if backup_only {
+        return Ok(());
     }
     let data_dir = device_root(&app);
     let worker = app.clone();
