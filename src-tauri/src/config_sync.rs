@@ -895,6 +895,34 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle, force: bool) -> R
     Ok((total_updated, total_added))
 }
 
+/// Fold the stored list's twins with no other device asked: the doubles are
+/// in this device's own list, and the other computer may be off or gone.
+/// Returns how many marks changed.
+pub(crate) fn fold_stored_twins(app: &tauri::AppHandle) -> Result<u32, String> {
+    use tauri_plugin_store::StoreExt;
+    let store = app.store(crate::profile::store_path(app, "ai-data.json")).map_err(|e| e.to_string())?;
+    let mut list = match store.get("custom-ais") {
+        Some(serde_json::Value::Array(a)) => a,
+        Some(serde_json::Value::String(raw)) => serde_json::from_str::<Vec<serde_json::Value>>(&raw).unwrap_or_default(),
+        _ => return Ok(0),
+    };
+    let folded = fold_twins(&mut list);
+    if folded > 0 {
+        let names: Vec<String> = list.iter().filter(|ai| ai["foldedInto"].is_string()).filter_map(|ai| ai["name"].as_str().map(String::from)).collect();
+        store.set("custom-ais", serde_json::json!(list));
+        store.save().map_err(|e| e.to_string())?;
+        log::info!("[config-sync] {} mark(s) changed: {} AI(s) stand as one with their twin ({})", folded, names.len(), names.join(", "));
+        let _ = app.emit("ai-configs-changed", serde_json::json!({ "updated": 0, "added": 0, "folded": folded }));
+    }
+    Ok(folded)
+}
+
+/// `fold_stored_twins` now (the start of the app, tests).
+#[tauri::command]
+pub fn fold_twins_now(app: tauri::AppHandle) -> Result<u32, String> {
+    fold_stored_twins(&app)
+}
+
 /// One round now (Settings, tests). The same answer the background round
 /// records.
 #[tauri::command]
@@ -916,6 +944,10 @@ pub fn start_config_sync_rounds(app: &tauri::AppHandle) {
         loop {
             tokio::time::sleep(wait).await;
             wait = std::time::Duration::from_secs(60);
+            // With or without a Vault: this device's own list.
+            if let Err(e) = fold_stored_twins(&app) {
+                log::warn!("[config-sync] the stored AIs could not be checked for twins: {e}");
+            }
             if flowsta::find_vault().await.port.is_none() {
                 continue;
             }

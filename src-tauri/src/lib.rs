@@ -666,6 +666,7 @@ pub fn run() {
             config_sync::config_sync_status,
             config_sync::devices_view,
             config_sync::config_sync_now,
+            config_sync::fold_twins_now,
             line_facts::line_status,
             line_facts::line_stop_waiting,
             line_facts::line_wait_again,

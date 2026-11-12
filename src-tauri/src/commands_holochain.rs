@@ -155,6 +155,21 @@ pub(crate) fn folded_twins_for(app: &tauri::AppHandle, agent_key: &str) -> Vec<(
     folded_twins_from_list(&list, agent_key)
 }
 
+/// The founding keys of the twins folded into the AI founded as `founding`.
+pub(crate) fn folded_foundings(app: &tauri::AppHandle, founding: &str) -> Vec<String> {
+    use tauri_plugin_store::StoreExt;
+    let Ok(store) = app.store(crate::profile::store_path(app, "ai-data.json")) else { return Vec::new() };
+    let list = match store.get("custom-ais") {
+        Some(serde_json::Value::Array(a)) => a,
+        Some(serde_json::Value::String(raw)) => serde_json::from_str::<Vec<serde_json::Value>>(&raw).unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    crate::config_sync::folded_into(&list, founding)
+        .into_iter()
+        .filter_map(|twin| twin["foundingKey"].as_str().or_else(|| twin["agentPubKey"].as_str()).filter(|f| !f.is_empty() && *f != founding).map(String::from))
+        .collect()
+}
+
 pub(crate) fn folded_twins_from_list(ais: &[serde_json::Value], agent_key: &str) -> Vec<(String, Option<String>)> {
     let leader = founding_from_list(ais, agent_key);
     crate::config_sync::folded_into(ais, &leader)

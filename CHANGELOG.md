@@ -169,6 +169,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   PDFs. Each release lists the fingerprints of the programs it ships.
 
 ### Fixed
+- A starter AI that showed twice (on computers linked before 0.9.1) is one
+  AI again: one entry in every list, with the conversations and the
+  memory of both. Every computer of yours picks the same one, and nothing
+  is deleted. An AI you renamed or gave new instructions stays its own.
 - **A message sent in a new install's first half minute is kept.** While
   the AIs were still being set up, a message could be answered without
   being saved as a conversation. It now waits in the box and is sent as
