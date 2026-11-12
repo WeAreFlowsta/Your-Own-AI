@@ -754,9 +754,7 @@ pub async fn start_build_agent(
     } else {
         format!("{DROPPED_TOOLS},web_search")
     };
-    let mut command = app_handle
-        .shell()
-        .command(&binary)
+    let mut command = crate::webview_env::strip_shell(app_handle.shell().command(&binary))
         .args(["--disallowed-tools", &disallowed, "agent", "stdio"])
         .current_dir(std::path::PathBuf::from(&cwd));
     if let Some(cap) = tool_result_cap {

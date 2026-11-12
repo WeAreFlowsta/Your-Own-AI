@@ -84,6 +84,9 @@ pub fn open_in_terminal(
             cmd.args(pre)
                 .args(["bash", "-c", &script])
                 .current_dir(&dir);
+            // The person's terminal, and all they start from it, never
+            // inherits the webview's platform fix.
+            crate::webview_env::strip(&mut cmd);
             if cmd.spawn().is_ok() {
                 return Ok(());
             }
