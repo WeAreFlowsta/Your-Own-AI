@@ -9,7 +9,7 @@ import { listen } from "@tauri-apps/api/event";
 import { carryOverOldUpdateChoice, updateStatus, type ReadyUpdate, type UpdatedFrom } from "../utils/updates";
 import LiquidMetalButton from "./LiquidMetalButton";
 
-type Stage = "backup" | "password" | "installing" | "restarting" | "failed" | "nobackup";
+type Stage = "backup" | "backup-running" | "password" | "installing" | "restarting" | "failed" | "nobackup";
 
 export const UpdateNotices = component$(() => {
   const ready = useSignal<ReadyUpdate | null>(null);
@@ -179,6 +179,8 @@ export const UpdateNotices = component$(() => {
                 <p class="mt-0.5 text-xs text-[var(--text-secondary)]">
                   {stage.value === "backup"
                     ? "Backing up to your Vault first."
+                    : stage.value === "backup-running"
+                    ? "Finishing a backup to your Vault that was already running."
                     : stage.value === "password"
                     ? "Your computer asks for your password, then Your Own AI closes and opens again."
                     : stage.value === "installing"

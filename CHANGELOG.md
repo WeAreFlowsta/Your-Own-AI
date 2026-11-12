@@ -41,8 +41,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - A copy installed with the Windows Installer (MSI) says when a new
   version is out and does not replace itself.
 - Setup no longer asks about updates; Settings has the switch.
-- Restart to update waits for a backup that is already running, up to 15
-  minutes, then takes its own backup before it installs.
+- Restart to update backs up to your Vault before it installs, and does
+  not make you wait for a backup that has nothing new to save. When one
+  finished in the last ten minutes and nothing was written since, the
+  update goes ahead. When one is still running, the update waits for it
+  (up to 15 minutes) and says so, and does not start a second one after it.
 
 ### The move
 - Each computer moves its own history in the background, a little at a

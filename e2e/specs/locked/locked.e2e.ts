@@ -43,6 +43,13 @@ describe("Restart to update with the Vault locked", () => {
     const locked = await vault("/dev/devices", { op: "lock" });
     console.log(`e2e: lock ${locked.status} ${JSON.stringify(locked.data)}`);
     expect(await kind("syncing")).toBe("syncing");
+    // Nothing written since the backup above: the step does not repeat it.
+    const current = await update(false);
+    console.log(`e2e: update step, backup current: ${current}`);
+    expect(current).toBe("ok");
+    // Something new to back up, so the step runs its own pass.
+    await ask(`Locked test ${STAMP}: name one color and nothing else.`);
+    await waitForReplyDone(300_000);
     const whileSyncing = await update(false);
     console.log(`e2e: update step, locked and still syncing: ${whileSyncing}`);
     expect(whileSyncing).toBe("ok");
@@ -56,6 +63,8 @@ describe("Restart to update with the Vault locked", () => {
     expect(await kind("unlocked")).toBe("unlocked");
     expect((await vault("/dev/lock")).status).toBe(200);
     expect(await kind("stopped")).toBe("stopped");
+    await ask(`Locked test ${STAMP}: name one animal and nothing else.`);
+    await waitForReplyDone(300_000);
     const stopped = await update(false);
     console.log(`e2e: update step, syncing stopped: ${stopped}`);
     expect(stopped).toContain("no_backup:vault_locked");

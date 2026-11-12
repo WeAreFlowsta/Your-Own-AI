@@ -2813,6 +2813,47 @@ pub async fn write_full_backup(app: &tauri::AppHandle) -> Result<serde_json::Val
     write_full_backup_with(app, false).await
 }
 
+/// What the backup passes know of their own freshness: how many changes
+/// have asked for a backup, how many of them the last complete pass had
+/// seen when it started, and when that pass finished.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Freshness {
+    pub changes: u64,
+    pub covered: Option<u64>,
+    pub finished_at_secs: u64,
+}
+
+static CHANGES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static COVERED: std::sync::Mutex<Option<(u64, u64)>> = std::sync::Mutex::new(None);
+
+/// A change that wants a backup (every scheduling call counts one).
+fn note_change() {
+    CHANGES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub(crate) fn freshness() -> Freshness {
+    let covered = COVERED.lock().ok().and_then(|c| *c);
+    Freshness {
+        changes: CHANGES.load(std::sync::atomic::Ordering::SeqCst),
+        covered: covered.map(|(n, _)| n),
+        finished_at_secs: covered.map(|(_, at)| at).unwrap_or(0),
+    }
+}
+
+/// Pure: a complete pass finished no more than `max_age_secs` ago and
+/// nothing has asked for a backup since it started. Then another pass would
+/// read everything again to write nothing ("Restart to update", 11-11:
+/// minutes of waiting, three times in a day).
+pub(crate) fn is_current(f: Freshness, now_secs: u64, max_age_secs: u64) -> bool {
+    f.covered == Some(f.changes) && f.finished_at_secs > 0 && now_secs.saturating_sub(f.finished_at_secs) <= max_age_secs
+}
+
+/// How long ago the last complete pass finished, when the backup is current.
+pub(crate) fn current_backup_age_secs(max_age_secs: u64) -> Option<u64> {
+    let (f, now) = (freshness(), unix_now_secs());
+    is_current(f, now, max_age_secs).then(|| now.saturating_sub(f.finished_at_secs))
+}
+
 /// `now`: the person asked for it (Settings' "Back up now") - the full
 /// record is written whatever its ten-minute hold says; unchanged objects
 /// are still not rewritten. (10-20: the button was held like the timer.)
@@ -2836,7 +2877,16 @@ pub async fn write_full_backup_with(app: &tauri::AppHandle, now: bool) -> Result
         }
     }
     let _done = Done;
+    let seen = CHANGES.load(Ordering::SeqCst);
     let result = write_full_backup_inner(app, now).await;
+    if let Ok(v) = &result {
+        // A held pass wrote nothing and is not a backup of this moment.
+        if v.get("skipped").is_none() {
+            if let Ok(mut c) = COVERED.lock() {
+                *c = Some((seen, unix_now_secs()));
+            }
+        }
+    }
     match &result {
         Ok(v) => {
             if let Some(reason) = v.get("skipped").and_then(|r| r.as_str()) {
@@ -2992,6 +3042,7 @@ async fn write_full_backup_inner(app: &tauri::AppHandle, now: bool) -> Result<se
 pub fn schedule_full_backup(app: &tauri::AppHandle) {
     use std::sync::atomic::{AtomicU64, Ordering};
     static GENERATION: AtomicU64 = AtomicU64::new(0);
+    note_change();
     let my_gen = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -3021,6 +3072,7 @@ pub fn schedule_full_backup(app: &tauri::AppHandle) {
 pub fn schedule_ai_backup(app: &tauri::AppHandle) {
     use std::sync::atomic::{AtomicU64, Ordering};
     static GENERATION: AtomicU64 = AtomicU64::new(0);
+    note_change();
     let my_gen = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -3761,5 +3813,29 @@ mod network_decision_tests {
         let used = m("yoai-user-9999");
         let me = m("yoai-user-5555");
         assert_eq!(decide_network(&me, false, &[(fresh_low, false), (used.clone(), true)]), NetworkDecision::Join(used));
+    }
+}
+
+#[cfg(test)]
+mod freshness_tests {
+    use super::*;
+
+    #[test]
+    fn a_pass_that_just_finished_with_nothing_written_since_is_current() {
+        let f = Freshness { changes: 7, covered: Some(7), finished_at_secs: 1_000 };
+        assert!(is_current(f, 1_030, 600));
+        assert!(is_current(f, 1_600, 600), "the limit itself still counts");
+    }
+
+    #[test]
+    fn a_change_since_the_pass_started_wants_another_pass() {
+        let f = Freshness { changes: 8, covered: Some(7), finished_at_secs: 1_000 };
+        assert!(!is_current(f, 1_030, 600), "written during or after the pass");
+    }
+
+    #[test]
+    fn an_old_pass_or_none_is_not_current() {
+        assert!(!is_current(Freshness { changes: 7, covered: Some(7), finished_at_secs: 1_000 }, 1_601, 600));
+        assert!(!is_current(Freshness { changes: 0, covered: None, finished_at_secs: 0 }, 1_000, 600), "no complete pass this run");
     }
 }
