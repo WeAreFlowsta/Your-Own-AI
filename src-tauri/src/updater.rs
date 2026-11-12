@@ -473,6 +473,10 @@ pub fn dismiss_updated(app: tauri::AppHandle) {
 /// the button is pressed is waited for too.
 const BACKUP_BEFORE_INSTALL: Duration = Duration::from_secs(15 * 60);
 
+/// A complete backup pass this recent, with nothing written since it
+/// started, is not repeated before the install.
+const BACKUP_IS_CURRENT_FOR: Duration = Duration::from_secs(10 * 60);
+
 /// "Restart to update". The install runs off the main thread, so the window
 /// keeps drawing (and says each step, as `update-stage`) while the
 /// conductors stop and the package installs.
@@ -489,11 +493,22 @@ pub async fn restart_to_update(app: tauri::AppHandle) -> Result<(), String> {
         let backup = async {
             let mut waited_for_another = false;
             loop {
-                match crate::vault_escrow::write_full_backup(&app).await {
+                // A pass that finished moments ago with nothing written
+                // since IS the backup of this moment: a second one would
+                // read every conversation again to write nothing. That
+                // includes the pass this loop just waited for.
+                if let Some(age) = crate::vault_escrow::current_backup_age_secs(BACKUP_IS_CURRENT_FOR.as_secs()) {
+                    log::info!("[update] the Vault backup is current (a pass finished {age} s ago and nothing was written since): not repeated");
+                    break Ok(serde_json::json!({ "current": true }));
+                }
+                // The person's own moment: the manifest's ten-minute hold
+                // does not apply (unchanged objects are still not rewritten).
+                match crate::vault_escrow::write_full_backup_with(&app, true).await {
                     Err(e) if e == "backup_in_progress" => {
                         if !waited_for_another {
                             waited_for_another = true;
                             log::info!("[update] a Vault backup is running: the install waits for it");
+                            let _ = app.emit("update-stage", "backup-running");
                         }
                         tokio::time::sleep(Duration::from_secs(1)).await;
                     }
