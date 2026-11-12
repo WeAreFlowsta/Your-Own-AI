@@ -966,7 +966,7 @@ pub async fn vault_escrow_island_join(app: tauri::AppHandle) -> Result<EscrowSta
             Err(e) => return Err(e),
         },
     };
-    let n = island_merge_start(&app, &identity).await?;
+    let n = island_merge_start(&app, &identity).await.map_err(|e| { log::warn!("[escrow] island: the join did not run: {e}"); e })?;
     Ok(EscrowStatus { state: "island_merging".into(), local_conversations: Some(n), error: None, backups_held: false })
 }
 
@@ -1560,6 +1560,9 @@ fn facts_file_rekeyed(dir: &std::path::Path, old_key: &[u8; 32], new_key: &[u8; 
 /// under the identity's key - verify the count, then swap the material and
 /// relaunch; the pending marker makes the next start replay the export.
 /// Nothing is touched until the export is complete and checked.
+/// How long a join waits for a conductor that is still starting.
+const ISLAND_CONDUCTOR_WAIT: std::time::Duration = std::time::Duration::from_secs(180);
+
 pub(crate) async fn island_merge_start(app: &tauri::AppHandle, identity: &RecoveryMaterial) -> Result<u64, String> {
     let data_dir = crate::profile::root(&app).map_err(|e| format!("no app data dir: {}", e))?;
     let local = local_recovery(app)?;
@@ -1568,9 +1571,29 @@ pub(crate) async fn island_merge_start(app: &tauri::AppHandle, identity: &Recove
     }
     let old_key = local.data_key()?;
     let new_key = identity.data_key()?;
-    let expected = count_local_conversations(app).await?;
-    let (convs, _carried) = collect_conversations(app).await?;
+    // The join at launch is asked for before the conductor is up, and
+    // "Restart" can be pressed in a start's first seconds: wait for the
+    // conductor rather than refuse (the launch join never ran: it was
+    // always refused as "still starting", and nothing asked again).
+    {
+        let waited = std::time::Instant::now();
+        loop {
+            let up = app.try_state::<Arc<HolochainState>>().map(|hc| hc.manager.get().is_some()).unwrap_or(false);
+            if up || waited.elapsed() >= ISLAND_CONDUCTOR_WAIT {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+        if waited.elapsed().as_secs() >= 2 {
+            log::info!("[escrow] island: waited {} s for the conductor before the join", waited.elapsed().as_secs());
+        }
+    }
+    // A refusal says which step refused, in the log: the join's caller shows
+    // the person a plain line, and the reason used to be nowhere.
+    let expected = count_local_conversations(app).await.map_err(|e| { log::warn!("[escrow] island: this device's conversations could not be counted: {e}"); e })?;
+    let (convs, _carried) = collect_conversations(app).await.map_err(|e| { log::warn!("[escrow] island: this device's conversations could not be read: {e}"); e })?;
     if convs.len() as u64 != expected {
+        log::warn!("[escrow] island: {} of {} conversation(s) read; nothing is swapped", convs.len(), expected);
         return Err(format!("island_export_incomplete:{}/{}", convs.len(), expected));
     }
     let ai_configs = std::fs::read_to_string(data_dir.join("ai-data.json"))

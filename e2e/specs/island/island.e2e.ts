@@ -35,23 +35,18 @@ describe(`island merge, phase ${PHASE}`, () => {
       await waitForReplyDone();
       await shot("island-b0-chat");
     } else if (PHASE === "b1") {
-      // Linked now (the fixture): the startup sync finds the identity's
-      // material elsewhere and says a restart is needed (the merge is not a
-      // choice; its restart is the person's: the Activity tray's Restart, or
-      // Later). Restart: the app exports this device's conversations, swaps
-      // the material and exits (a debug build exits instead of restarting).
-      await waitForChat();
-      await browser.waitUntil(async () => (await escrow()).state === "island_pending", {
-        timeout: 120_000, interval: 5_000, timeoutMsg: "the startup sync never found the identity's material",
-      });
-      // The call does not return: the app exits during it.
-      await browser.execute(() => { (window as any).__TAURI__.core.invoke("vault_escrow_island_join").catch(() => {}); });
+      // Linked now (the fixture): the launch sync finds the identity's
+      // material elsewhere and the join runs by itself, as soon as the
+      // conductor is up and before anything is in use. The app exports this
+      // device's conversations, swaps the material and exits (a debug build
+      // exits instead of restarting). Nothing is pressed here: the session
+      // ending is the app going.
       let gone = false;
-      for (let i = 0; i < 60 && !gone; i++) {
+      for (let i = 0; i < 80 && !gone; i++) {
         await new Promise((r) => setTimeout(r, 3000));
         try { await browser.execute(() => 1); } catch { gone = true; }
       }
-      console.log(`e2e: app ${gone ? "exited for the swap" : "still running after 180 s"}`);
+      console.log(`e2e: app ${gone ? "exited for the swap" : "still running after 240 s"}`);
       expect(gone).toBe(true);
     } else if (PHASE === "b2") {
       // The startup restore runs this itself; calling it here too makes its
@@ -90,7 +85,12 @@ describe(`island merge, phase ${PHASE}`, () => {
         throw e;
       }
       const titles = await browser.execute(() =>
-        [...document.querySelectorAll('button[title="Rename"]')].map((b) => (b.parentElement?.querySelector("span")?.textContent || "").trim()),
+        // The row's whole text (title, AI, age): the nearest ancestor that says anything.
+        [...document.querySelectorAll('button[title="Rename"]')].map((b) => {
+          let el: HTMLElement | null = b.parentElement;
+          for (let i = 0; i < 5 && el && !(el.innerText || "").trim(); i++) el = el.parentElement;
+          return (el?.innerText || "").replace(/\s+/g, " ").trim();
+        }),
       );
       console.log(`e2e: drawer after the merge ${JSON.stringify(titles)}`);
       await shot("island-b2-drawer");

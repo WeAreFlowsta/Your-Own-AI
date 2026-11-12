@@ -158,6 +158,18 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   PDFs. Each release lists the fingerprints of the programs it ships.
 
 ### Fixed
+- **A message sent in a new install's first half minute is kept.** While
+  the AIs were still being set up, a message could be answered without
+  being saved as a conversation. It now waits in the box and is sent as
+  soon as the AI is there.
+- **A quick follow-up stays in the same conversation.** Just after a start,
+  a second message sent before the first one's conversation had been saved
+  was saved as a separate conversation.
+- **A computer used before signing in joins your other devices by itself.**
+  Its join at the next start was refused while the app was still starting
+  and not tried again, leaving a key-conflict warning in Settings. It now
+  waits for the start to finish, and the conversations written before
+  signing in come across.
 - **A second computer no longer lists Veebo, Teresa and Reeves twice.**
   When a computer joined an identity whose starter AIs were made by an
   older version, it kept its own three beside the three that arrived.
