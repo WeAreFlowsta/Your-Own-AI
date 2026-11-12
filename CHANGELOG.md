@@ -161,8 +161,8 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - **A second computer no longer lists Veebo, Teresa and Reeves twice.**
   When a computer joined an identity whose starter AIs were made by an
   older version, it kept its own three beside the three that arrived.
-  They are now recognized as the same AIs. (AIs already listed twice stay
-  as they are; remove the extra ones in Edit AI.)
+  They are now recognized as the same AIs. AIs already listed twice stay
+  as they are.
 - **The diagnostic report includes Linux crash reports.** On Ubuntu it now
   reads the system's crash reports for Your Own AI, its engine and the
   window's own process: what crashed, when and with which signal. It never
