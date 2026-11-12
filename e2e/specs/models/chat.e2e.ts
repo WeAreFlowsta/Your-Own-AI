@@ -3,6 +3,9 @@
 // YOAI_E2E_WITH_MODELS=1 (npm run e2e:models): the scratch profile reads
 // the person's real models folder - this spec never downloads or deletes.
 import { shot, waitForChat, ask, waitForReplyDone, invoke } from "./_helpers";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
 // YOAI_E2E_MIN_CONVERSATIONS (move-live.sh): the conversations earlier
 // launches in this scratch home wrote, which every AI's list must hold.
@@ -24,7 +27,26 @@ async function conversationCount(): Promise<number> {
   return n;
 }
 
+// YOAI_E2E_WAIT_LOG (move-live.sh and the like): a pattern the app's log
+// must say during this launch before the spec ends. The move's pass waits
+// while the person uses their conversations, so it finishes after the chat,
+// and a launch that ended with the chat would close the app in the middle.
+const WAIT_LOG = process.env.YOAI_E2E_WAIT_LOG ?? "";
+const LOG_DIR = path.join(process.env.YOAI_E2E_HOME ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../profile"), ".local/share/com.solar.yourowai/logs");
+function logSaid(pattern: string): number {
+  const re = new RegExp(pattern);
+  let n = 0;
+  for (const f of fs.existsSync(LOG_DIR) ? fs.readdirSync(LOG_DIR) : []) {
+    if (!f.endsWith(".log")) continue;
+    for (const line of fs.readFileSync(path.join(LOG_DIR, f), "utf8").replace(/\x1b\[[0-9;]*m/g, "").split("\n")) if (re.test(line)) n++;
+  }
+  return n;
+}
+let saidBefore = 0;
+
 describe("chat with installed models", () => {
+  before(() => { if (WAIT_LOG) saidBefore = logSaid(WAIT_LOG); });
+
   it("lands on the chat with the composer ready", async () => {
     await waitForChat();
     await shot("10-chat-ready");
@@ -90,5 +112,12 @@ describe("chat with installed models", () => {
     console.log(`e2e: episode ${JSON.stringify(ep.text.slice(0, 160))}`);
     expect(ep.text).toContain("Conversation: Name one primary colour");
     expect(ep.text).toContain("(2 questions)");
+  });
+
+  (WAIT_LOG ? it : it.skip)("the app's log says what this launch waits for", async function () {
+    this.timeout(1_500_000);
+    await browser.waitUntil(async () => logSaid(WAIT_LOG) > saidBefore, {
+      timeout: 1_200_000, interval: 5000, timeoutMsg: `the app's log never said /${WAIT_LOG}/ in this launch`,
+    });
   });
 });

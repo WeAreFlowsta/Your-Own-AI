@@ -67,6 +67,11 @@ link() {
 }
 link
 
+# A pass's outcome line, not the lines that say where a running pass is. A
+# launch that must see one (or the stop) waits for it: the pass waits while
+# the chat runs.
+PASS_DONE='\[0\.7\] pass: [a-z ]+ [0-9]+/[0-9]+ \(\+'
+STOPPED='\[0\.6\] stopped: no other device needs it'
 seen=0
 launch() {  # <n> <tree> <spec> [env...]: one launch; its log lines go to launch-<n>.log
   local n="$1" tree="$2" spec="$3"; shift 3
@@ -78,7 +83,7 @@ launch() {  # <n> <tree> <spec> [env...]: one launch; its log lines go to launch
   grep -E "passing|failing" "$LOGS/launch-$n.out" | tail -2
 }
 first_pass() {  # <n>: the first pass line, every kind complete
-  local line; line="$(grep -m1 -E '\[0\.7\] pass: ' "$LOGS/launch-$1.log" || true)"
+  local line; line="$(grep -m1 -E "$PASS_DONE" "$LOGS/launch-$1.log" || true)"
   [ -n "$line" ] || fail "launch $1: no pass ran"
   echo "   launch $1: ${line#*\[0.7\] }" >&2
   ! grep -q " incomplete" <<< "$line" || fail "launch $1: a kind is incomplete"
@@ -93,12 +98,12 @@ PROFILE="$(dirname "$(find "$DATA/profiles" -maxdepth 2 -name 'lair' -type d | h
 grep -q "incremental backup\|full backup" "$LOGS/launch-1.log" || echo "   launch 1: no backup line seen (the Vault may not have taken one yet)"
 echo "   the previous release on 0.6 alone, linked; profile $(basename "$PROFILE")"
 
-launch 2 "$(pwd)" e2e/specs/models/chat.e2e.ts
+launch 2 "$(pwd)" e2e/specs/models/chat.e2e.ts YOAI_E2E_WAIT_LOG="$PASS_DONE"
 [ "$(lines_said 2)" = "0.6 leads, 0.7 joins" ] || fail "launch 2: started '$(lines_said 2)', not 0.6 with 0.7 beside it"
 p2="$(first_pass 2)"
 grep -q "; flipped" <<< "$p2" || fail "launch 2: the first pass did not flip the marker"
 
-launch 3 "$(pwd)" e2e/specs/models/chat.e2e.ts
+launch 3 "$(pwd)" e2e/specs/models/chat.e2e.ts YOAI_E2E_WAIT_LOG="$STOPPED"
 [ "$(lines_said 3)" = "0.7 leads, 0.6 joins" ] || fail "launch 3: started '$(lines_said 3)'"
 p3="$(first_pass 3)"
 grep -q "\[0\.6\] stopped: no other device needs it" "$LOGS/launch-3.log" || { grep -E "passes carry|pass skipped" "$LOGS/launch-3.log" | head -3 >&2; fail "launch 3: the 0.6 line did not stop"; }

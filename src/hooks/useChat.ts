@@ -360,6 +360,16 @@ async function turnTokensFor(
  *  the last write) - a conversation left again with nothing new writes nothing. */
 const episodeMarks = new Map<string, number>();
 
+// A page's conversation while a turn is still creating it. Creating one can
+// take longer than the reply (a conductor that has just started), and the
+// next message on the same page used to find no conversation yet and start a
+// second one: one chat, saved as two. The next turn now joins the one being
+// created, after the earlier turn's records are written, and carries on its
+// numbering. Keyed by the page's cache key; gone once the turn is recorded.
+type PageThread = { conv: string | null; seq: number; done: Promise<void>; finish: () => void };
+const pageThreads = new Map<string, PageThread>();
+const THREAD_WAIT_MS = 90_000;
+
 /** The episode of a conversation being left: the first question and the
  *  latest answer, one row per conversation (a stable id revises it). */
 async function leaveEpisode(hash: string | null, messages: Message[], ai: SelectedAiModel): Promise<void> {
@@ -1443,9 +1453,24 @@ export function useChat(props: UseChatProps) {
       let turnConv: string | null = state.conversationHash;
       let turnSeq = state.messageSequence;
       const pageOwns = () => abortControllerRef.value === controller && state.cacheKey === pageKey;
+      // With no conversation yet: an earlier turn of this page may be
+      // creating it (joined below, in preRecord), and this turn is the one
+      // the next will join.
+      const earlier = turnConv ? undefined : pageThreads.get(pageKey);
+      let finishThread: () => void = () => {};
+      const thread: PageThread | null = turnConv ? null : { conv: null, seq: turnSeq, done: Promise.resolve(), finish: () => {} };
+      if (thread) {
+        thread.done = new Promise<void>((resolve) => { finishThread = resolve; });
+        thread.finish = () => {
+          finishThread();
+          if (pageThreads.get(pageKey) === thread) pageThreads.delete(pageKey);
+        };
+        pageThreads.set(pageKey, thread);
+      }
       const takeSeq = (): number => {
         const n = turnSeq++;
         if (pageOwns()) state.messageSequence = turnSeq;
+        if (thread) thread.seq = turnSeq;
         return n;
       };
       state.stopAtBoundary = null;
@@ -1749,6 +1774,18 @@ export function useChat(props: UseChatProps) {
             return { userMsgHash: null, userAttachment, imageInfos, appVersion };
           }
           try {
+            if (!turnConv && earlier) {
+              // The earlier turn's records first, so this one follows them.
+              await Promise.race([earlier.done, new Promise<void>((r) => setTimeout(r, THREAD_WAIT_MS))]);
+              if (earlier.conv && state.cacheKey === pageKey) {
+                turnConv = earlier.conv;
+                turnSeq = earlier.seq;
+                if (thread) { thread.conv = turnConv; thread.seq = turnSeq; }
+                uiLog(`[turns] ${assistantId.slice(0, 8)} joins conversation ${turnConv.slice(0, 12)}, which an earlier message was still creating`);
+                if (pageOwns()) { state.conversationHash = turnConv; state.messageSequence = turnSeq; }
+                updateTurn(assistantId, { conversationHash: turnConv });
+              }
+            }
             if (!turnConv) {
               // Use the first user message as the conversation title
               const title = userInput.length > 80
@@ -1766,6 +1803,7 @@ export function useChat(props: UseChatProps) {
                 return null;
               }
               turnConv = hash;
+              if (thread) thread.conv = hash;
               uiLog(`[turns] conversation ${hash.slice(0, 12)} started for ${assistantId.slice(0, 8)}; page owns the turn: ${pageOwns()}`);
               if (pageOwns()) state.conversationHash = hash;
               updateTurn(assistantId, { conversationHash: hash });
@@ -2272,6 +2310,8 @@ export function useChat(props: UseChatProps) {
           } catch (e) {
             console.warn("[Holochain] Transcript recording failed:", e);
             settleUserMsgHash(null); // write failed (e.g. mid user-message) → unlinked
+          } finally {
+            thread?.finish();
           }
         })();
       } catch (err) {
@@ -2303,7 +2343,7 @@ export function useChat(props: UseChatProps) {
             const stoppedSeq = takeSeq();
             void (async () => {
               const pre = stoppedPre ? await stoppedPre : null;
-              if (!pre || !recordCtx.holochainId || !turnConv) return;
+              if (!pre || !recordCtx.holochainId || !turnConv) { thread?.finish(); return; }
               try {
                 await recordMessage(
                   recordCtx.holochainId,
@@ -2328,12 +2368,16 @@ export function useChat(props: UseChatProps) {
                 console.log("[Holochain] Stopped reply recorded as far as it got");
               } catch (e) {
                 console.warn("[Holochain] Stopped reply not recorded:", e);
+              } finally {
+                thread?.finish();
               }
             })();
           } else {
             state.messages = state.messages.filter((m) => m.id !== assistantId);
+            thread?.finish();
           }
         } else {
+          thread?.finish();
           const errorMsg =
             err instanceof Error ? err.message : "Failed to get response";
           console.error("[useChat] Error:", errorMsg);

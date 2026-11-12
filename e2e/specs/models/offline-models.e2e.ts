@@ -57,7 +57,7 @@ describe("offline models", () => {
     // projectors and the embedding model, which are not chat models).
     const names = listed.map((m) => m.name);
     for (const r of rows) expect(names).toContain(r);
-    expect(rows.some((r) => /mmproj|bge-/i.test(r))).toBe(false);
+    expect(rows.some((r) => /mmproj|bge-|embeddinggemma/i.test(r))).toBe(false);
     // The grades arrive with the fit probe, after the rows.
     await browser.waitUntil(async () => (await $$('[data-testid="downloaded-model"] [data-testid="model-fit"]').length) === rows.length, {
       timeout: 60_000,

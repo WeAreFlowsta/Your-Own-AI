@@ -51,7 +51,7 @@ export default component$(() => {
   if ((!active.value && !cudaStepped.value) || dismissed.value) return null;
 
   return (
-    <div class="mx-auto max-w-3xl mt-3 px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-sm text-amber-300 flex items-start gap-3">
+    <div data-testid="gpu-safe-mode-notice" class="mx-auto max-w-3xl mt-3 px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-sm text-amber-300 flex items-start gap-3">
       <LuInfo class="w-4 h-4 mt-0.5 flex-shrink-0" />
       <div class="min-w-0 flex-1">
         {retried.value ? (
@@ -78,6 +78,7 @@ export default component$(() => {
       </div>
       {!retried.value && (
         <button
+          data-testid="gpu-retry"
           onClick$={retry}
           disabled={busy.value}
           class="flex-shrink-0 px-3 py-1.5 rounded-lg text-xs border border-amber-500/40 hover:bg-amber-500/15 transition-colors disabled:opacity-50"

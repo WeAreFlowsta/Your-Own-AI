@@ -50,6 +50,11 @@ describe("conversation notes per identity", () => {
     const mine = await browser.execute((s: string) => localStorage.getItem(`last-conversation:${s}`), scope);
     expect(mine).toContain("This identity's own plan");
     expect(await browser.execute(() => localStorage.getItem("last-conversation"))).toBeNull();
+    // And it is what the start page offers (the check above alone would
+    // pass with no Continue line at all).
+    const offered = await browser.execute(() => (document.querySelector('[data-testid="continue-last"]') as HTMLElement | null)?.innerText ?? null);
+    console.log(`e2e: the start page offers ${JSON.stringify(offered)}`);
+    expect(offered ?? "").toContain("This identity's own plan");
     console.log("e2e: this profile's own pointer is taken over");
   });
 });

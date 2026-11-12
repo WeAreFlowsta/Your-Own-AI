@@ -13,4 +13,6 @@ if not "%YOAI_E2E_ONLINE%"=="" (
   if "%YOAI_PROXY_URL%"=="" set "YOAI_PROXY_URL=https://yoai-model-proxy-staging-386500392150.us-central1.run.app"
   if "%YOAI_VAULT_PORT%"=="" set "YOAI_VAULT_PORT=27990"
 )
-"%HERE%..\src-tauri\target\debug\app.exe" %*
+rem The fresh spec presses "Download and continue": never a real download.
+set "YOAI_BLOCK_MODEL_DOWNLOADS=1"
+"%HERE%..\src-tauri\target\debug\your-own-ai.exe" %*

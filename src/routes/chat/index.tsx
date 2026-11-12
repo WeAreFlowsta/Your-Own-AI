@@ -146,6 +146,8 @@ export default component$(() => {
 
   // Selected AI (placeholder until data loads from store)
   // Uses a non-matching ID so TASK B auto-switches to the real first active AI on hydration
+  // A message sent before the AIs are read is waiting for them (handleSubmit).
+  const sendWaitsForAi = useSignal(false);
   const selectedAi = useSignal<SelectedAiModel>({
     id: "__placeholder__",
     label: "",
@@ -1696,6 +1698,19 @@ export default component$(() => {
     };
 
     if (!input.value.trim()) return;
+    // The AIs are still being read (a first start creates them, which can
+    // take half a minute). A message sent now would be answered by no AI in
+    // particular and saved in no conversation: it stays in the box and goes
+    // as soon as the AI is there.
+    if (selectedAi.value.id === "__placeholder__") {
+      if (sendWaitsForAi.value) return;
+      sendWaitsForAi.value = true;
+      uiLog("[send] the AIs are not read yet: the message waits for them");
+      const until = Date.now() + 120_000;
+      while (selectedAi.value.id === "__placeholder__" && Date.now() < until) await new Promise((r) => setTimeout(r, 200));
+      sendWaitsForAi.value = false;
+      if (selectedAi.value.id === "__placeholder__" || !input.value.trim()) return;
+    }
     uiLog(`[send] submit: ${input.value.trim().length} chars, folder ${agentState.folderPath ? "open" : "none"}, mode ${agentState.mode}, agent ${agentState.status}`);
 
     // Typing while a permission card waits IS the answer: decline with
