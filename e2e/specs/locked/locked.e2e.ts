@@ -149,6 +149,10 @@ describe("Restart to update with the Vault locked", () => {
     await browser.waitUntil(async () => (await noticeText()).includes("Installing Your Own AI 9.9.9"), { timeout: 60_000, timeoutMsg: `the notice did not go on to the install: ${await noticeText()}` });
     expect(await $('[data-testid="update-no-backup"]').isExisting()).toBe(false);
     await shot("locked-stopped");
+    // The Vault stays stopped until the install's own backup attempt has
+    // been refused (the test build holds each backup for a few seconds):
+    // unlocked sooner, a backup would be made after all.
+    await browser.pause(10_000);
     await vault("/dev/unlock");
   });
 });

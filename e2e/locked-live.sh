@@ -55,4 +55,5 @@ grep -q '"conversations":[1-9]' <<< "$(grep -o 'e2e: locked backup {.*' "$LOGS/l
 [ "$(grep -c "\[update\] a Vault backup is running: the install waits for it" "$LOGS/app.log")" -ge 1 ] || fail "the update never waited for a backup that was already running"
 grep -q "\[update\] the Vault backup is current" "$LOGS/app.log" || fail "a backup that had just finished was repeated"
 grep -q "\[update\] not installed yet: no Vault backup could be made (vault_locked)" "$LOGS/app.log" || fail "the stopped Vault did not hold the update"
+grep -q "\[update\] no Vault backup before the install (vault_locked): the person said to go on without one" "$LOGS/app.log" || fail "\"Update without a backup\" did not go on without one"
 echo "== Restart to update with the Vault locked: passed (logs kept at $LOGS)"
