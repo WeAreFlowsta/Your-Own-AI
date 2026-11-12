@@ -1367,7 +1367,8 @@ fn read_import_file(
     let mut candidates: Vec<(String, u64)> = (0..archive.len())
         .filter_map(|i| {
             let entry = archive.by_index(i).ok()?;
-            let name = entry.name().to_string();
+            // An entry whose name cannot be read is not one of ours.
+            let name = entry.name().ok()?.to_string();
             if name.to_ascii_lowercase().ends_with(".json") && !name.starts_with("__MACOSX") {
                 Some((name, entry.size()))
             } else {
