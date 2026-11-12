@@ -520,6 +520,7 @@ pub async fn restart_to_update(app: tauri::AppHandle, without_backup: Option<boo
             }
         };
         match tokio::time::timeout(BACKUP_BEFORE_INSTALL, backup).await {
+            Ok(Ok(v)) if v.get("current").is_some() => {}
             Ok(Ok(_)) => log::info!("[update] backed up to the Vault before the install"),
             // A person who backs up to the Vault is never updated without
             // their backup and without a word: the Vault is locked (and not

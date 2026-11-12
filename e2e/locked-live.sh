@@ -51,7 +51,7 @@ YOAI_TEST_UPDATE_BACKUP_ONLY=1 YOAI_E2E_LONG=1 YOAI_E2E_HOME="$H" YOAI_VAULT_POR
 sed -E 's/\x1b\[[0-9;]*m//g' "$DATA"/logs/*.log > "$LOGS/app.log"
 grep -oE "e2e: .*" "$LOGS/launch.out" | cut -c1-300 | sed 's/^/   /'
 grep -E "\[update\]" "$LOGS/app.log" | sed -E 's/^\[[0-9-]+\]\[([0-9:]+)\]\[[^]]*\]\[[A-Z]+\] /   \1 /'
-[ "$(grep -c "\[update\] backed up to the Vault before the install" "$LOGS/app.log")" -ge 1 ] || fail "no backup before the install against the locked, still-syncing Vault"
+grep -q '"conversations":[1-9]' <<< "$(grep -o 'e2e: locked backup {.*' "$LOGS/launch.out")" || fail "the backup made while the Vault was locked holds no conversation"
 grep -q "\[update\] the Vault backup is current" "$LOGS/app.log" || fail "a backup that had just finished was repeated"
 grep -q "\[update\] not installed yet: no Vault backup could be made (vault_locked)" "$LOGS/app.log" || fail "the stopped Vault did not hold the update"
 echo "== Restart to update with the Vault locked: passed (logs kept at $LOGS)"
