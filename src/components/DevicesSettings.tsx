@@ -138,7 +138,7 @@ export default component$(() => {
             : d.here
               ? `${name}: on, with Flowsta Vault running - changes reach it in about a minute`
               : d.here === false
-                ? `${name}: asleep or off, or Flowsta Vault is not running or has stopped syncing - changes reach it when it is back`
+                ? `${name}: off, asleep, or its Flowsta Vault is not syncing. Changes reach it when it is back.`
                 : name;
           return (
             <div key={d.id} class="flex items-center gap-3" data-testid="device-row" data-here={d.here ? "yes" : "no"} title={tip}>
