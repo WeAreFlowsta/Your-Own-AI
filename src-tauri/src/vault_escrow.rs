@@ -3138,7 +3138,8 @@ pub fn backup_when_vault_unlocks(app: &tauri::AppHandle) {
             tokio::time::sleep(std::time::Duration::from_secs(120)).await;
             waited += 1;
             let vault = flowsta::find_vault().await;
-            if vault.port.is_some() && vault.unlocked {
+            // Unlocked, or locked again and still syncing: either takes backups.
+            if vault.port.is_some() && (vault.unlocked || vault.syncing_while_locked == Some(true)) {
                 match write_full_backup(&app).await {
                     Ok(_) => log::info!("[escrow] backup written after the Vault unlocked ({} min wait)", waited * 2),
                     Err(e) if e == "vault_locked" => continue,

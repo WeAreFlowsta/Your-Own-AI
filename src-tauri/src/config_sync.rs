@@ -404,7 +404,10 @@ pub struct DeviceView {
 
 #[derive(Serialize, Clone, Debug)]
 pub struct DevicesView {
-    /// "none" (no Vault found), "locked", "unlocked".
+    /// "none" (no Vault found), "unlocked", "syncing" (locked and still
+    /// syncing: backups keep passing and the devices are listed), "stopped"
+    /// (locked with syncing stopped), "locked" (a Vault from before 1.8.0,
+    /// which does not say).
     pub vault: String,
     pub devices: Vec<DeviceView>,
     /// The Vault is still reading the identity's devices (just started or
@@ -417,6 +420,17 @@ pub struct DevicesView {
 /// sync round named them) - an older Vault does not say (10-20).
 pub(crate) fn catching_up(vault_says: Option<bool>, others_listed: usize, others_known_here: usize) -> bool {
     vault_says.unwrap_or(false) || (others_listed == 0 && others_known_here > 0)
+}
+
+/// The Vault's state as Settings names it, and whether it lists the
+/// identity's devices in that state (a locked, still-syncing Vault does).
+pub(crate) fn vault_state_of(unlocked: bool, syncing_while_locked: Option<bool>) -> (&'static str, bool) {
+    match (unlocked, syncing_while_locked) {
+        (true, _) => ("unlocked", true),
+        (false, Some(true)) => ("syncing", true),
+        (false, Some(false)) => ("stopped", false),
+        (false, None) => ("locked", false),
+    }
 }
 
 /// A device heard within this many announcement periods is "here".
@@ -433,8 +447,9 @@ pub async fn devices_view(app: tauri::AppHandle) -> DevicesView {
     let Some(port) = vault.port else {
         return DevicesView { vault: "none".into(), devices: Vec::new(), catching_up: false };
     };
-    if !vault.unlocked {
-        return DevicesView { vault: "locked".into(), devices: Vec::new(), catching_up: false };
+    let (vault_state, lists_devices) = vault_state_of(vault.unlocked, vault.syncing_while_locked);
+    if !lists_devices {
+        return DevicesView { vault: vault_state.into(), devices: Vec::new(), catching_up: false };
     }
     let now = now_ms() / 1000;
     let listed: Option<serde_json::Value> = match http()
@@ -501,7 +516,7 @@ pub async fn devices_view(app: tauri::AppHandle) -> DevicesView {
     };
     let others_listed = devices.iter().filter(|d| !d.this_device).count();
     let others_known_here = siblings.len().max(status.as_ref().map(|s| s.devices.len()).unwrap_or(0));
-    DevicesView { vault: "unlocked".into(), catching_up: catching_up(vault_says, others_listed, others_known_here), devices }
+    DevicesView { vault: vault_state.into(), catching_up: catching_up(vault_says, others_listed, others_known_here), devices }
 }
 
 fn now_ms() -> u64 {
@@ -873,6 +888,14 @@ mod tests {
 
     fn ai(id: &str, founding: &str, name: &str, updated: i64) -> serde_json::Value {
         serde_json::json!({ "id": id, "agentPubKey": id, "foundingKey": founding, "name": name, "model": "LFM.gguf", "seedSlot": 1, "updatedAt": updated, "status": "active" })
+    }
+
+    #[test]
+    fn a_locked_vault_that_still_syncs_lists_the_devices() {
+        assert_eq!(super::vault_state_of(true, None), ("unlocked", true));
+        assert_eq!(super::vault_state_of(false, Some(true)), ("syncing", true));
+        assert_eq!(super::vault_state_of(false, Some(false)), ("stopped", false));
+        assert_eq!(super::vault_state_of(false, None), ("locked", false), "a Vault before 1.8.0 does not say");
     }
 
     #[test]

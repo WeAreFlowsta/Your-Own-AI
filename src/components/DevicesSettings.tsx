@@ -1,9 +1,10 @@
 /**
  * Settings > Devices: the computers this identity uses Your Own AI on, which
  * are reachable right now, and what travels between them. Taught with dots
- * and icons, not paragraphs (10-20: "it's not obvious that you need
- * both Vaults unlocked"). One sentence appears only while this is the only
- * device: how to add another.
+ * and icons, not paragraphs. Changes pass between two computers that are
+ * on with Flowsta Vault running, locked or not; only "Lock and stop
+ * syncing" (or a Vault before 1.8.0 that is locked) holds them. One
+ * sentence appears only while this is the only device: how to add another.
  */
 import { $, component$, useSignal, useVisibleTask$ } from "@builder.io/qwik";
 import { LuLaptop, LuLock, LuPlus, LuBot, LuImage, LuBrain, LuFileText, LuMessageSquare, LuLoader2 } from "@qwikest/icons/lucide";
@@ -34,7 +35,9 @@ interface LineStatus {
 const DOWNLOAD_PAGE = "https://yourownai.net/download/";
 
 interface DevicesView {
-  vault: "none" | "locked" | "unlocked";
+  /** "syncing": locked and still syncing (backups keep passing); "stopped":
+   *  locked with syncing stopped; "locked": a Vault that does not say. */
+  vault: "none" | "locked" | "unlocked" | "syncing" | "stopped";
   devices: DeviceView[];
   catching_up?: boolean;
 }
@@ -88,7 +91,14 @@ export default component$(() => {
 
   const v = view.value;
   const others = v?.devices.filter((d) => !d.this_device) ?? [];
-  const locked = v?.vault === "locked";
+  // Nothing travels: syncing was stopped on this computer, or its Vault is
+  // an older one that stops when locked. A locked Vault that still syncs is
+  // not shown as anything: everything works.
+  const locked = v?.vault === "locked" || v?.vault === "stopped";
+  const lockedTip =
+    v?.vault === "stopped"
+      ? "Syncing is stopped on this computer. Unlock Flowsta Vault to start it again."
+      : "Your Vault is locked - nothing travels to or from your other devices until it is unlocked";
   const l = line.value;
   const stopped = new Set(l?.stopped_waiting ?? []);
   const failing = l?.last_pass?.failing ?? [];
@@ -109,13 +119,12 @@ export default component$(() => {
       <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela mb-4">Devices</h2>
 
       <div class="flex flex-col gap-3">
-        {/* This computer - a lock when its own Vault is locked: nothing
-            travels until it is unlocked. */}
+        {/* This computer - a lock when nothing travels to or from it. */}
         <div class="flex items-center gap-3" data-testid="device-row" data-this="yes">
           <LuLaptop class="w-5 h-5 text-[var(--text-secondary)] shrink-0" />
           <span class="text-sm text-[var(--text-primary)]">This computer</span>
           {locked && (
-            <span title="Your Vault is locked - nothing travels to or from your other devices until it is unlocked" class="flex items-center" data-testid="device-locked">
+            <span title={lockedTip} class="flex items-center" data-testid="device-locked" data-kind={v?.vault}>
               <LuLock class="w-4 h-4 text-amber-400" />
             </span>
           )}
@@ -127,9 +136,9 @@ export default component$(() => {
           const tip = d.needs_update
             ? `${name}: on an older version of Your Own AI`
             : d.here
-              ? `${name}: Vault unlocked and reachable - changes reach it in about a minute`
+              ? `${name}: on, with Flowsta Vault running - changes reach it in about a minute`
               : d.here === false
-                ? `${name}: Vault locked, or the computer asleep or off - changes reach it when it is back`
+                ? `${name}: asleep or off, or Flowsta Vault is not running or has stopped syncing - changes reach it when it is back`
                 : name;
           return (
             <div key={d.id} class="flex items-center gap-3" data-testid="device-row" data-here={d.here ? "yes" : "no"} title={tip}>
@@ -198,7 +207,7 @@ export default component$(() => {
         })}
 
         {/* Linked, but the other computers are not known yet. */}
-        {v && v.vault === "unlocked" && !v.catching_up && l?.old_line_wanted && l.checked_at_ms === 0 && (
+        {v && (v.vault === "unlocked" || v.vault === "syncing") && !v.catching_up && l?.old_line_wanted && l.checked_at_ms === 0 && (
           <div class="flex items-center gap-3" data-testid="device-waiting-to-hear">
             <LuLoader2 class="w-5 h-5 text-[var(--text-muted)] animate-spin shrink-0" />
             <span class="text-sm text-[var(--text-secondary)]">Waiting to hear from your other computers...</span>

@@ -1846,7 +1846,18 @@ pub async fn leg_devices(app: &AppHandle, sink: Sink<'_>) -> Vec<String> {
         sink("Vault: not found on this computer (this device keeps everything to itself)".into());
         return Vec::new();
     };
-    sink(format!("Vault: on port {port}, {}", if vault.unlocked { "unlocked" } else { "locked (backups wait for it)" }));
+    // A locked Vault that still syncs takes and hands back backups and lists the devices.
+    let takes_backups = vault.unlocked || vault.syncing_while_locked == Some(true);
+    sink(format!(
+        "Vault: on port {port}, {}",
+        if vault.unlocked {
+            "unlocked"
+        } else if takes_backups {
+            "locked and still syncing (backups keep passing)"
+        } else {
+            "locked (backups wait for it)"
+        }
+    ));
     // Which identity the lines below describe - by count, never by name: the
     // report is made to be shared (10-20: the Vault had been unlocked as
     // another identity, and its lines read as faults).
@@ -1868,7 +1879,7 @@ pub async fn leg_devices(app: &AppHandle, sink: Sink<'_>) -> Vec<String> {
     // None: the Vault's list did not answer (locked or busy at that moment)
     // - not read, which is not the same as missing (10-20: a Windows run
     // failed "holds no backup" while the list simply did not answer).
-    let labels = if vault.unlocked { crate::vault_escrow::own_backup_labels_read(port).await } else { None };
+    let labels = if takes_backups { crate::vault_escrow::own_backup_labels_read(port).await } else { None };
     let held = |label: &str| match &labels {
         Some(l) if l.contains(label) => "held",
         Some(_) => "missing",
@@ -1885,7 +1896,7 @@ pub async fn leg_devices(app: &AppHandle, sink: Sink<'_>) -> Vec<String> {
         Some(l) => (l.contains(crate::vault_escrow::AIS_LABEL), l.contains(crate::vault_escrow::MANIFEST_LABEL), true),
         None => (false, false, false),
     };
-    if vault.unlocked {
+    if takes_backups {
         match crate::vault_escrow::sibling_devices(port).await {
             Ok(devs) if devs.is_empty() => sink("other devices: none on this identity".into()),
             Ok(devs) => {
@@ -1927,7 +1938,7 @@ pub async fn leg_devices(app: &AppHandle, sink: Sink<'_>) -> Vec<String> {
             None => sink(format!("{name}: the keeper has not run yet (it starts about a minute after the conductor)")),
         }
     }
-    let failures = devices_failures(labels_read, vault.unlocked, ai_count, holds_ais, holds_manifest);
+    let failures = devices_failures(labels_read, takes_backups, ai_count, holds_ais, holds_manifest);
     for f in &failures {
         sink(format!("FAIL: {f}"));
     }
