@@ -42,7 +42,10 @@ echo "== phase b0: profile B chats before it is linked"
 YOAI_E2E_HOME="$B" ISLAND_PHASE=b0 node e2e/run.mjs models --spec e2e/specs/island/island.e2e.ts
 prelink "$B" B
 echo "== phase b1: profile B, linked now - the merge runs by itself and the app exits"
-YOAI_E2E_HOME="$B" ISLAND_PHASE=b1 node e2e/run.mjs models --spec e2e/specs/island/island.e2e.ts || true
+# The app exits inside this spec (the swap), which ends the driver's session:
+# the run's own status says nothing, so the spec's line is what is checked.
+YOAI_E2E_HOME="$B" ISLAND_PHASE=b1 node e2e/run.mjs models --spec e2e/specs/island/island.e2e.ts 2>&1 | tee "$ROOT/b1.out" || true
+grep -q "e2e: app exited for the swap" "$ROOT/b1.out" || { echo "FAIL: phase b1: the app never exited for the swap (the merge did not run)" >&2; exit 1; }
 echo "== marker in B:"; ls "$B"/.local/share/com.solar.yourowai/profiles/*/island-* 2>/dev/null || echo "(no island files found)"
 echo "== phase b2: profile B comes back"
 YOAI_E2E_HOME="$B" ISLAND_PHASE=b2 node e2e/run.mjs models --spec e2e/specs/island/island.e2e.ts

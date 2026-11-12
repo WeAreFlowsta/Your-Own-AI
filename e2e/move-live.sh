@@ -116,8 +116,7 @@ total3="$(total_of "$p3")"; written3="$(written_of "$p3")"
 no_07_warnings 3
 if ! stopped 3; then
   grep -E "passes carry|pass skipped|computer is in use|other programs are busy" "$H/launch-3.log" | head -5 >&2 || true
-  echo "== the move with no Vault: launches 1-3 passed; the 0.6 line did not stop (the full pass waits for an idle computer). Home kept at $H"
-  exit 3
+  fail "launch 3: the 0.6 line did not stop (every record was carried and no other device needs it). Home kept at $H"
 fi
 echo "   launch 3 stopped the 0.6 line"
 after_stop 4 "$total3"

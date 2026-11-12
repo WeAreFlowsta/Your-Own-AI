@@ -47,11 +47,12 @@ for prof in "$DATA/profiles/$folder" "$DATA/profiles/local"; do
 done
 dev "$P1" "{\"op\":\"connect\",\"client_id\":\"$CID\",\"app_name\":\"Your Own AI (locked)\",\"origin\":\"yoai://app\",\"app_agent_pub_key\":\"$key\"}" >/dev/null
 
-YOAI_TEST_UPDATE_BACKUP_ONLY=1 YOAI_E2E_LONG=1 YOAI_E2E_HOME="$H" YOAI_VAULT_PORT="$P1" node e2e/run.mjs models --spec e2e/specs/locked/locked.e2e.ts > "$LOGS/launch.out" 2>&1 || { grep -vE "window states|get_window_states" "$LOGS/launch.out" | tail -40; fail "the spec failed"; }
+YOAI_TEST_UPDATE_BACKUP_ONLY=1 YOAI_TEST_BACKUP_HOLD_MS=4000 YOAI_E2E_LONG=1 YOAI_E2E_HOME="$H" YOAI_VAULT_PORT="$P1" node e2e/run.mjs models --spec e2e/specs/locked/locked.e2e.ts > "$LOGS/launch.out" 2>&1 || { grep -vE "window states|get_window_states" "$LOGS/launch.out" | tail -40; fail "the spec failed"; }
 sed -E 's/\x1b\[[0-9;]*m//g' "$DATA"/logs/*.log > "$LOGS/app.log"
 grep -oE "e2e: .*" "$LOGS/launch.out" | cut -c1-300 | sed 's/^/   /'
 grep -E "\[update\]" "$LOGS/app.log" | sed -E 's/^\[[0-9-]+\]\[([0-9:]+)\]\[[^]]*\]\[[A-Z]+\] /   \1 /'
 grep -q '"conversations":[1-9]' <<< "$(grep -o 'e2e: locked backup {.*' "$LOGS/launch.out")" || fail "the backup made while the Vault was locked holds no conversation"
+[ "$(grep -c "\[update\] a Vault backup is running: the install waits for it" "$LOGS/app.log")" -ge 1 ] || fail "the update never waited for a backup that was already running"
 grep -q "\[update\] the Vault backup is current" "$LOGS/app.log" || fail "a backup that had just finished was repeated"
 grep -q "\[update\] not installed yet: no Vault backup could be made (vault_locked)" "$LOGS/app.log" || fail "the stopped Vault did not hold the update"
 echo "== Restart to update with the Vault locked: passed (logs kept at $LOGS)"

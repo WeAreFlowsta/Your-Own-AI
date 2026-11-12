@@ -94,7 +94,8 @@ describe(`island merge, phase ${PHASE}`, () => {
       );
       console.log(`e2e: drawer after the merge ${JSON.stringify(titles)}`);
       await shot("island-b2-drawer");
-      expect(titles.length).toBeGreaterThanOrEqual(1);
+      // The conversation B wrote before it was linked, not just any one.
+      expect(titles.some((t) => t.toLowerCase().includes("island test"))).toBe(true);
     } else {
       throw new Error("set ISLAND_PHASE to a, b0, b1 or b2");
     }

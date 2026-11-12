@@ -105,7 +105,8 @@ describe("background work on a busy computer", () => {
     expect(logLines().some((l) => TIMER_SYNC.test(l))).toBe(false);
     const tray = await browser.execute(() => (document.querySelector('[data-testid="activity-tray"]') as HTMLElement | null)?.innerText ?? "");
     console.log(`e2e: ${at()}: the Activity tray reads ${JSON.stringify(tray.replace(/\s+/g, " ").slice(0, 200))}`);
-    expect(tray).not.toContain("Waiting for your computer to be free");
+    // Nothing is said in the tray for a short wait (its "still waiting"
+    // note is for work held a whole day): what is waiting shows in Settings.
     expect(tray).not.toContain("Background work is still waiting");
     writeFileSync(resolve(dir, "ferry.md"), "# Ferry notes\n\nThe ferry's bell is named Marigold.\n");
 

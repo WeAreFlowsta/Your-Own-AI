@@ -2877,6 +2877,13 @@ pub async fn write_full_backup_with(app: &tauri::AppHandle, now: bool) -> Result
         }
     }
     let _done = Done;
+    // A debug build's live test holds a pass open this long, so that
+    // "Restart to update" can be pressed while one is running.
+    if cfg!(debug_assertions) {
+        if let Some(ms) = std::env::var("YOAI_TEST_BACKUP_HOLD_MS").ok().and_then(|v| v.trim().parse::<u64>().ok()) {
+            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+        }
+    }
     let seen = CHANGES.load(Ordering::SeqCst);
     let result = write_full_backup_inner(app, now).await;
     if let Ok(v) = &result {

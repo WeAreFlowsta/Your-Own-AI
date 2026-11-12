@@ -19,58 +19,110 @@ async function kind(want: string): Promise<string> {
   await browser.waitUntil(async () => (got = await invoke<string>("vault_lock_kind")) === want, { timeout: 60_000, interval: 2_000, timeoutMsg: `the Vault never read as "${want}"` }).catch(() => undefined);
   return got;
 }
-async function update(withoutBackup: boolean): Promise<string> {
-  try {
-    await invokeLong("restart_to_update", { withoutBackup }, 600_000);
-    return "ok";
-  } catch (e) {
-    return String((e as Error).message ?? e);
-  }
+
+/** Offer an update the way the updater does once a download is ready,
+ *  and start recording everything the notice says from here on. */
+async function offerUpdate() {
+  await browser.execute(() => location.reload());
+  await browser.pause(1500);
+  await waitForChat();
+  // The notice starts listening a moment after the page is up: offer until it shows.
+  await browser.waitUntil(async () => {
+    await browser.execute(async () => {
+      const w = window as any;
+      w.__updateSaid = [];
+      await w.__TAURI__.event.emit("update-ready", { version: "9.9.9", notes_url: "", changes_line: false, asks_password: false });
+    });
+    return $('[data-testid="restart-to-update"]').isDisplayed();
+  }, { timeout: 30_000, interval: 1_000, timeoutMsg: "the update notice never showed Restart to update" });
+  await browser.execute(() => {
+    const w = window as any;
+    const card = document.querySelector('[data-testid="update-notices"]') as HTMLElement;
+    const note = () => { const t = (card.innerText || "").replace(/\s+/g, " ").trim(); if (w.__updateSaid[w.__updateSaid.length - 1] !== t) w.__updateSaid.push(t); };
+    note();
+    new MutationObserver(note).observe(card, { childList: true, subtree: true, characterData: true });
+  });
+}
+const said = () => browser.execute(() => ((window as any).__updateSaid ?? []) as string[]);
+const noticeText = () => browser.execute(() => ((document.querySelector('[data-testid="update-ready"]') as HTMLElement | null)?.innerText ?? "").replace(/\s+/g, " ").trim());
+const backupAt = async () => Number(((await invoke<Record<string, unknown> | null>("last_backup_outcome")) ?? {}).at_secs ?? 0);
+const nowSecs = () => Math.floor(Date.now() / 1000);
+async function chat(what: string): Promise<number> {
+  const at = nowSecs();
+  await ask(`Locked test ${STAMP}: name one ${what} and nothing else.`);
+  await waitForReplyDone(300_000);
+  return at;
 }
 
 describe("Restart to update with the Vault locked", () => {
-  it("backs up to a locked, still-syncing Vault and never skips the backup without a word", async () => {
+  it("says each step at the button, backs up to a locked and still-syncing Vault, and never skips the backup without a word", async () => {
     await waitForChat();
-    await ask(`Locked test ${STAMP}: name one fruit and nothing else.`);
-    await waitForReplyDone(300_000);
-
+    await chat("fruit");
     expect(await kind("unlocked")).toBe("unlocked");
     const first = await invokeLong<Record<string, unknown>>("vault_backup_now", {}, 300_000);
     console.log(`e2e: unlocked backup ${JSON.stringify(first).slice(0, 300)}`);
     expect(first.manifest).toBe("written");
 
-    // The ordinary lock: locked, still syncing.
+    // 1. The button, the Vault unlocked, something new to save: the notice
+    //    says it is backing up, and a backup newer than the chat exists
+    //    when the step is over.
+    const wrote1 = await chat("color");
+    await offerUpdate();
+    expect(await noticeText()).toContain("Your Own AI 9.9.9 is ready to install");
+    await (await $('[data-testid="restart-to-update"]')).click();
+    await browser.waitUntil(async () => (await backupAt()) >= wrote1 && (await said()).some((t) => t.includes("Installing Your Own AI 9.9.9")), { timeout: 400_000, interval: 2_000, timeoutMsg: "the update step never finished its backup" });
+    console.log(`e2e: the notice said ${JSON.stringify(await said())}`);
+    expect((await said()).some((t) => t.includes("Backing up to your Vault first."))).toBe(true);
+    await shot("update-backing-up");
+
+    // 2. A backup already running when the button is pressed: the notice
+    //    says it is finishing that one.
+    await chat("river");
+    await offerUpdate();
+    await browser.execute(() => { (window as any).__TAURI__.core.invoke("vault_backup_now").catch(() => {}); });
+    await browser.pause(500);
+    await (await $('[data-testid="restart-to-update"]')).click();
+    await browser.waitUntil(async () => (await said()).some((t) => t.includes("Finishing a backup to your Vault that was already running.")), { timeout: 120_000, interval: 500, timeoutMsg: `the notice never said it was finishing a running backup: ${JSON.stringify(await said())}` });
+    await shot("update-finishing-a-backup");
+
+    // 3. The ordinary lock (locked, still syncing): the step backs up.
     const locked = await vault("/dev/devices", { op: "lock" });
     console.log(`e2e: lock ${locked.status} ${JSON.stringify(locked.data)}`);
     expect(await kind("syncing")).toBe("syncing");
-    // Nothing written since the backup above: the step does not repeat it.
-    const current = await update(false);
-    console.log(`e2e: update step, backup current: ${current}`);
-    expect(current).toBe("ok");
-    // Something new to back up, so the step runs its own pass.
-    await ask(`Locked test ${STAMP}: name one color and nothing else.`);
-    await waitForReplyDone(300_000);
-    const whileSyncing = await update(false);
-    console.log(`e2e: update step, locked and still syncing: ${whileSyncing}`);
-    expect(whileSyncing).toBe("ok");
+    const wrote3 = await chat("tree");
+    await offerUpdate();
+    await (await $('[data-testid="restart-to-update"]')).click();
+    await browser.waitUntil(async () => (await backupAt()) >= wrote3, { timeout: 400_000, interval: 2_000, timeoutMsg: "no backup newer than the chat was made against the locked, still-syncing Vault" });
+    expect(await $('[data-testid="update-no-backup"]').isExisting()).toBe(false);
     const again = await invokeLong<Record<string, unknown>>("vault_backup_now", {}, 300_000);
     console.log(`e2e: locked backup ${JSON.stringify(again).slice(0, 300)}`);
     expect(again.manifest).toBe("written");
     await shot("locked-still-syncing");
 
-    // Lock and stop syncing.
+    // 4. Locked with syncing stopped: the notice says why, offers both
+    //    choices, and installs nothing until one is taken.
     expect((await vault("/dev/unlock")).status).toBe(200);
     expect(await kind("unlocked")).toBe("unlocked");
     expect((await vault("/dev/lock")).status).toBe(200);
     expect(await kind("stopped")).toBe("stopped");
-    await ask(`Locked test ${STAMP}: name one animal and nothing else.`);
-    await waitForReplyDone(300_000);
-    const stopped = await update(false);
-    console.log(`e2e: update step, syncing stopped: ${stopped}`);
-    expect(stopped).toContain("no_backup:vault_locked");
-    const goOn = await update(true);
-    console.log(`e2e: update step, syncing stopped, "Update without a backup": ${goOn}`);
-    expect(goOn).toBe("ok");
+    await chat("animal");
+    await offerUpdate();
+    await (await $('[data-testid="restart-to-update"]')).click();
+    const why = await $('[data-testid="update-no-backup"]');
+    await why.waitForDisplayed({ timeout: 400_000, timeoutMsg: "the notice never said no backup could be made" });
+    expect(await why.getText()).toContain("Flowsta Vault is locked, so this update cannot back up to it first.");
+    expect(await (await $('[data-testid="update-without-backup"]')).getText()).toContain("Update without a backup");
+    expect(await (await $('[data-testid="update-unlock-first"]')).getText()).toContain("Unlock the Vault first");
+    await shot("update-no-backup");
+    // "Unlock the Vault first" returns to the offer.
+    await (await $('[data-testid="update-unlock-first"]')).click();
+    await (await $('[data-testid="restart-to-update"]')).waitForDisplayed({ timeout: 10_000 });
+    // Asked again, then "Update without a backup" goes on.
+    await (await $('[data-testid="restart-to-update"]')).click();
+    await (await $('[data-testid="update-without-backup"]')).waitForDisplayed({ timeout: 400_000 });
+    await (await $('[data-testid="update-without-backup"]')).click();
+    await browser.waitUntil(async () => (await noticeText()).includes("Installing Your Own AI 9.9.9"), { timeout: 60_000, timeoutMsg: `the notice did not go on to the install: ${await noticeText()}` });
+    expect(await $('[data-testid="update-no-backup"]').isExisting()).toBe(false);
     await shot("locked-stopped");
     await vault("/dev/unlock");
   });
