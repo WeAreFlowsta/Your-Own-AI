@@ -47,7 +47,24 @@ const said = () => browser.execute(() => ((window as any).__updateSaid ?? []) as
 const noticeText = () => browser.execute(() => ((document.querySelector('[data-testid="update-ready"]') as HTMLElement | null)?.innerText ?? "").replace(/\s+/g, " ").trim());
 const backupAt = async () => Number(((await invoke<Record<string, unknown> | null>("last_backup_outcome")) ?? {}).at_secs ?? 0);
 const nowSecs = () => Math.floor(Date.now() / 1000);
+/** "Back up now", waiting out a pass the app started by itself (one runs
+ * some seconds after a start, and after an AI changes): one backup at a time. */
+async function backupNow(): Promise<Record<string, unknown>> {
+  const until = Date.now() + 300_000;
+  for (;;) {
+    try {
+      return await invokeLong<Record<string, unknown>>("vault_backup_now", {}, 300_000);
+    } catch (e) {
+      if (!String(e).includes("backup_in_progress") || Date.now() > until) throw e;
+      await browser.pause(1_000);
+    }
+  }
+}
 async function chat(what: string): Promise<number> {
+  // Backups are stamped to the second: a backup that finished in the second
+  // this chat begins must not read as one made after it (a pass that finds
+  // nothing to do ends within a second, and did, 2026-11-13).
+  await browser.pause(1_100);
   const at = nowSecs();
   await ask(`Locked test ${STAMP}: name one ${what} and nothing else.`);
   await waitForReplyDone(300_000);
@@ -77,7 +94,7 @@ describe("Restart to update with the Vault locked", () => {
     await waitForChat();
     await chat("fruit");
     expect(await kind("unlocked")).toBe("unlocked");
-    const first = await invokeLong<Record<string, unknown>>("vault_backup_now", {}, 300_000);
+    const first = await backupNow();
     console.log(`e2e: unlocked backup ${JSON.stringify(first).slice(0, 300)}`);
     expect(first.manifest).toBe("written");
 
@@ -96,12 +113,20 @@ describe("Restart to update with the Vault locked", () => {
     // 2. A backup already running when the button is pressed: the notice
     //    says it is finishing that one.
     await chat("river");
+    const before2 = await backupAt();
     await offerUpdate();
     await browser.execute(() => { (window as any).__TAURI__.core.invoke("vault_backup_now").catch(() => {}); });
     await browser.pause(500);
     await (await $('[data-testid="restart-to-update"]')).click();
     await browser.waitUntil(async () => (await said()).some((t) => t.includes("Finishing a backup to your Vault that was already running.")), { timeout: 120_000, interval: 500, timeoutMsg: `the notice never said it was finishing a running backup: ${JSON.stringify(await said())}` });
     await shot("update-finishing-a-backup");
+    // The step runs to its end before the next one begins: its backup would
+    // otherwise still be finishing while step 3 looks for a newer one.
+    // Told by the backup itself (the notice keeps the earlier step's install
+    // line, and in this test's backup-only mode shows no new one): the pass
+    // that was running has ended, and the step's own check then returns at once.
+    await browser.waitUntil(async () => (await backupAt()) > before2, { timeout: 400_000, interval: 1_000, timeoutMsg: "the backup that was already running never finished" });
+    await browser.pause(2_000);
 
     // 3. The ordinary lock (locked, still syncing): the step backs up.
     const locked = await vault("/dev/devices", { op: "lock" });
@@ -112,7 +137,7 @@ describe("Restart to update with the Vault locked", () => {
     await (await $('[data-testid="restart-to-update"]')).click();
     await browser.waitUntil(async () => (await backupAt()) >= wrote3, { timeout: 400_000, interval: 2_000, timeoutMsg: "no backup newer than the chat was made against the locked, still-syncing Vault" });
     expect(await $('[data-testid="update-no-backup"]').isExisting()).toBe(false);
-    const again = await invokeLong<Record<string, unknown>>("vault_backup_now", {}, 300_000);
+    const again = await backupNow();
     console.log(`e2e: locked backup ${JSON.stringify(again).slice(0, 300)}`);
     expect(again.manifest).toBe("written");
     await shot("locked-still-syncing");
