@@ -12,6 +12,25 @@
 //
 // Permission requests are ALWAYS surfaced to the user; nothing is auto-approved.
 
+/// The API key the app writes into its Build helper's config: random, made
+/// once per run. The local endpoint takes a call carrying it as the app's
+/// own helper (whose sessions the app records itself); a program that sends
+/// any other key, `local` included, is an outside caller and is recorded.
+pub(crate) fn harness_key() -> &'static str {
+    static KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    KEY.get_or_init(|| {
+        use rand::RngCore;
+        let mut bytes = [0u8; 24];
+        rand::thread_rng().fill_bytes(&mut bytes);
+        format!("yoai-build-{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>())
+    })
+}
+
+/// Whether an `Authorization` header is this run's Build helper's.
+pub(crate) fn is_own_harness(authorization: Option<&str>, key: &str) -> bool {
+    authorization.map(str::trim).and_then(|a| a.strip_prefix("Bearer ").or_else(|| a.strip_prefix("bearer "))).is_some_and(|k| k.trim() == key)
+}
+
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -216,6 +235,9 @@ fn ensure_agent_model_entry(
     let config_path = home.join(".your-own-ai-build").join("config.toml");
     let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
     let header = format!("[model.{}]", slug);
+    // The key this run's Build helper sends, so the endpoint knows its own
+    // helper from any other program on this computer.
+    let harness_key = harness_key();
     // context_window must be the SERVING model's true window (resolved by
     // router::agent_serving_window): the agent compacts as it approaches
     // this number. Too big for a local model = truncation ("Internal
@@ -223,7 +245,7 @@ fn ensure_agent_model_entry(
     // = compacting constantly inside a million-token window.
     let ctx = agent_ctx;
     let entry = format!(
-        "{header}\nmodel = \"{slug}:agent\"\nbase_url = \"http://localhost:{inference_port}/v1\"\nname = \"{slug}\"\napi_key = \"local\"\napi_backend = \"chat_completions\"\ncontext_window = {ctx}\n",
+        "{header}\nmodel = \"{slug}:agent\"\nbase_url = \"http://localhost:{inference_port}/v1\"\nname = \"{slug}\"\napi_key = \"{harness_key}\"\napi_backend = \"chat_completions\"\ncontext_window = {ctx}\n",
     );
     let content = if let Some(start) = existing.find(&header) {
         // Replace our managed section in place (up to the next section or
@@ -244,7 +266,7 @@ fn ensure_agent_model_entry(
     let plan_header = "[model.planning]";
     let ctx = plan_ctx;
     let plan_entry = format!(
-        "{plan_header}\nmodel = \"{slug}:plan\"\nbase_url = \"http://localhost:{inference_port}/v1\"\nname = \"planning\"\napi_key = \"local\"\napi_backend = \"chat_completions\"\ncontext_window = {ctx}\n",
+        "{plan_header}\nmodel = \"{slug}:plan\"\nbase_url = \"http://localhost:{inference_port}/v1\"\nname = \"planning\"\napi_key = \"{harness_key}\"\napi_backend = \"chat_completions\"\ncontext_window = {ctx}\n",
     );
     let content = if let Some(start) = content.find(plan_header) {
         let after = &content[start + plan_header.len()..];
@@ -263,7 +285,7 @@ fn ensure_agent_model_entry(
     let dw_header = "[model.device-worker]";
     let dw_ctx = crate::llm::current_ctx_size();
     let dw_entry = format!(
-        "{dw_header}\nmodel = \"{slug}:agent-device\"\nbase_url = \"http://localhost:{inference_port}/v1\"\nname = \"device-worker\"\napi_key = \"local\"\napi_backend = \"chat_completions\"\ncontext_window = {dw_ctx}\n",
+        "{dw_header}\nmodel = \"{slug}:agent-device\"\nbase_url = \"http://localhost:{inference_port}/v1\"\nname = \"device-worker\"\napi_key = \"{harness_key}\"\napi_backend = \"chat_completions\"\ncontext_window = {dw_ctx}\n",
     );
     let content = if let Some(start) = content.find(dw_header) {
         let after = &content[start + dw_header.len()..];
@@ -1521,5 +1543,21 @@ pub fn kill_on_exit(app_handle: &AppHandle) {
     let mut child = state.child.blocking_lock();
     if let Some(c) = child.take() {
         let _ = c.kill();
+    }
+}
+
+#[cfg(test)]
+mod harness_key_tests {
+    use super::*;
+
+    #[test]
+    fn only_this_runs_key_is_the_apps_own_helper() {
+        let key = harness_key();
+        assert!(key.len() > 40 && key == harness_key(), "one key per run");
+        assert!(is_own_harness(Some(&format!("Bearer {key}")), key));
+        assert!(is_own_harness(Some(&format!("  bearer {key} ")), key));
+        assert!(!is_own_harness(Some("Bearer local"), key), "an outside program using the old key is recorded");
+        assert!(!is_own_harness(Some(key), key), "not a bearer header");
+        assert!(!is_own_harness(None, key));
     }
 }

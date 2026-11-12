@@ -132,11 +132,13 @@
       "deb": {
         "section": "utils",
         "priority": "optional",
+        "depends": ["xdg-utils"],
         "files": {
           "/usr/share/metainfo/com.solar.yourowai.metainfo.xml": "linux/com.solar.yourowai.metainfo.xml"
         }
       },
       "rpm": {
+        "depends": ["xdg-utils"],
         "files": {
           "/usr/share/metainfo/com.solar.yourowai.metainfo.xml": "linux/com.solar.yourowai.metainfo.xml"
         }

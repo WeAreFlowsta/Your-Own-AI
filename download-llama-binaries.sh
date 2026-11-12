@@ -13,7 +13,7 @@ echo "📥 Downloading llama-server binaries..."
 echo ""
 
 # Get latest release from OUR repository
-REPO="Your-Own-AI/App"
+REPO="WeAreFlowsta/Your-Own-AI"
 
 # Check for GitHub token (needed for private repos)
 AUTH_HEADER=""
@@ -47,25 +47,25 @@ echo ""
 
 # Linux (x86_64)
 echo "⬇️  Downloading Linux binary..."
-curl -L ${AUTH_HEADER:+-H "$AUTH_HEADER"} "${BASE_URL}/llama-server-x86_64-unknown-linux-gnu" -o "${BINDIR}/yourowai-llama-server-x86_64-unknown-linux-gnu"
+curl -fL ${AUTH_HEADER:+-H "$AUTH_HEADER"} "${BASE_URL}/llama-server-x86_64-unknown-linux-gnu" -o "${BINDIR}/yourowai-llama-server-x86_64-unknown-linux-gnu"
 chmod +x "${BINDIR}/yourowai-llama-server-x86_64-unknown-linux-gnu"
 echo "✅ Linux binary ready"
 
 # macOS (Apple Silicon - ARM64)
 echo "⬇️  Downloading macOS ARM64 binary..."
-curl -L ${AUTH_HEADER:+-H "$AUTH_HEADER"} "${BASE_URL}/llama-server-aarch64-apple-darwin" -o "${BINDIR}/yourowai-llama-server-aarch64-apple-darwin"
+curl -fL ${AUTH_HEADER:+-H "$AUTH_HEADER"} "${BASE_URL}/llama-server-aarch64-apple-darwin" -o "${BINDIR}/yourowai-llama-server-aarch64-apple-darwin"
 chmod +x "${BINDIR}/yourowai-llama-server-aarch64-apple-darwin"
 echo "✅ macOS ARM64 binary ready"
 
 # macOS (Intel - x86_64)
 echo "⬇️  Downloading macOS Intel binary..."
-curl -L ${AUTH_HEADER:+-H "$AUTH_HEADER"} "${BASE_URL}/llama-server-x86_64-apple-darwin" -o "${BINDIR}/yourowai-llama-server-x86_64-apple-darwin"
+curl -fL ${AUTH_HEADER:+-H "$AUTH_HEADER"} "${BASE_URL}/llama-server-x86_64-apple-darwin" -o "${BINDIR}/yourowai-llama-server-x86_64-apple-darwin"
 chmod +x "${BINDIR}/yourowai-llama-server-x86_64-apple-darwin"
 echo "✅ macOS Intel binary ready"
 
 # Windows (x86_64)
 echo "⬇️  Downloading Windows binary..."
-curl -L ${AUTH_HEADER:+-H "$AUTH_HEADER"} "${BASE_URL}/llama-server-x86_64-pc-windows-msvc.exe" -o "${BINDIR}/yourowai-llama-server-x86_64-pc-windows-msvc.exe"
+curl -fL ${AUTH_HEADER:+-H "$AUTH_HEADER"} "${BASE_URL}/llama-server-x86_64-pc-windows-msvc.exe" -o "${BINDIR}/yourowai-llama-server-x86_64-pc-windows-msvc.exe"
 echo "✅ Windows binary ready"
 
 echo ""

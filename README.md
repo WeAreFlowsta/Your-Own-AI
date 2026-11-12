@@ -117,6 +117,10 @@ app is open source, that claim is verifiable, not promised.
 
 ## Development
 
+The release installers are the supported way to run Your Own AI. Building
+from source is for people who want to read or change the code (Node 22,
+Rust, and the two download scripts below).
+
 ```bash
 npm install
 ./download-llama-binaries.sh       # the inference engine sidecars
