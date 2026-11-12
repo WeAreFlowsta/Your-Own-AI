@@ -1315,16 +1315,21 @@ async fn chat_completions(
         Some("off" | "false" | "0" | "no")
     );
     // The app's own project and tools sessions run through the Build helper,
-    // which calls back here in agent mode with the `local` key the app wrote
-    // into its config. The app records each such session as ONE conversation
+    // which calls back here in agent mode with the key the app wrote into
+    // its config for this run (`agent_bridge::harness_key`). The app records each such session as ONE conversation
     // (useAgentSession: startConversation + recordMessage), so recording every
     // model call here too listed one "conversation" per step, titled with the
     // last user message and badged API (a real records page, 2026-09-04: dozens
     // of identical entries seconds apart). External callers keep their record.
     let own_harness = agent_mode
-        && header_str(&headers, "authorization")
-            .map(|a| a.trim().eq_ignore_ascii_case("bearer local"))
-            .unwrap_or(false);
+        && crate::agent_bridge::is_own_harness(header_str(&headers, "authorization").as_deref(), crate::agent_bridge::harness_key());
+    if own_harness {
+        // Once per run: the proof in the log that the helper's key matches.
+        static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !SAID.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            log::info!("[inference] the app's own Build helper is calling: its sessions are recorded by the app, not per call");
+        }
+    }
     let record_exchange = record_exchange && !own_harness;
 
     let messages = if agent_mode {

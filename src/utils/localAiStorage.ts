@@ -294,7 +294,8 @@ export async function republishStoredPersonas(): Promise<void> {
     if (ais.length === 0) return;
     let changed = false;
     const next = ais.map((ai) => {
-      const archetype = getArchetypeById(ai.baseArchetypeId);
+      // An AI still on a personality retired on 2026-10-08 follows its twin.
+      const archetype = getArchetypeById(RETIRED_ARCHETYPE_IDS[ai.baseArchetypeId] ?? ai.baseArchetypeId);
       const freshPrompt = archetype
         ? `${MISSION_CORE}\n\n${archetype.systemPromptTemplate}`
         : ai.systemPrompt;
