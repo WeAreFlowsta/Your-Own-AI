@@ -358,6 +358,34 @@ fn build_persona_prompt(ai: &ResolvedAi, user_memory: &str) -> String {
 
 // ── handlers ────────────────────────────────────────────────────────────────
 
+/// The memory task a call names in `X-Your-Own-AI-Task`, when it names one
+/// (the app's own memory writers send these; they are not public values).
+fn memory_task_of(header: Option<&str>) -> Option<&'static str> {
+    match header.map(|s| s.trim().to_lowercase()).as_deref() {
+        Some("memory-prose") => Some("memory-prose"),
+        Some("memory-precision") => Some("memory-precision"),
+        _ => None,
+    }
+}
+
+/// The Auto mode a call is routed in, if any: the AI's own (`auto:<mode>`),
+/// and always "offline" for memory work, whatever the AI's model.
+fn routing_mode(model: &str, memory_work: bool) -> Option<String> {
+    if memory_work {
+        return Some("offline".to_string());
+    }
+    model.strip_prefix("auto:").map(str::to_string)
+}
+
+/// The persona prompt's memory slot when the caller switched memory off:
+/// nothing about the person, and no guessing at a name.
+const MEMORY_OFF_LINE: &str = "Their name is unknown. Do not assume or allude to it.";
+
+/// Whether a call asked for no memory (`X-Your-Own-AI-Memory: off`).
+fn memory_switched_off(header: Option<&str>) -> bool {
+    matches!(header.map(|s| s.trim().to_ascii_lowercase()).as_deref(), Some("off" | "false" | "0" | "no"))
+}
+
 /// OpenAI error envelope.
 fn err(status: StatusCode, msg: &str, kind: &str) -> Response {
     (
@@ -841,7 +869,15 @@ async fn chat_completions(
             })
             .unwrap_or(false)
     });
-    let auto_mode = ai.model.strip_prefix("auto:").map(str::to_string);
+    // Memory work stays on this computer whatever the AI's own model: a
+    // call marked as a memory task is routed as an offline Auto call, so an
+    // AI set to an online model or to the person's own server never sends
+    // a session digest there.
+    let memory_task = memory_task_of(header_str(&headers, "x-your-own-ai-task").as_deref());
+    if memory_task.is_some() && !ai.model.starts_with("auto:") {
+        log::info!("[inference] memory work for {} stays on this computer (its model is {})", ai.name, ai.model);
+    }
+    let auto_mode = routing_mode(&ai.model, memory_task.is_some());
     // Set inside the routing below: this call is a subagent's, answered on this
     // device - its seat in the device queue is taken at that decision (two
     // calls deciding at once must not both pass the cap) and held until the
@@ -862,7 +898,7 @@ async fn chat_completions(
             Some("code") => "code",
             Some("math") => "math",
             Some("reasoning") => "reasoning",
-            _ => "general",
+            _ => memory_task.unwrap_or("general"),
         };
         let difficulty = match header_str(&headers, "x-your-own-ai-difficulty")
             .map(|s| s.trim().to_lowercase())
@@ -1262,15 +1298,12 @@ async fn chat_completions(
     let says_served_window = agent_mode;
 
 
-    // Agent mode injects memory by DEFAULT; a caller can opt out — e.g. to keep
-    // tool-calling reliable on smaller models, where a memory block can tip the
-    // model toward refusing tools — with `X-Your-Own-AI-Memory: off`.
-    let agent_memory = !matches!(
-        header_str(&headers, "x-your-own-ai-memory")
-            .map(|s| s.to_ascii_lowercase())
-            .as_deref(),
-        Some("off" | "false" | "0" | "no")
-    );
+    // Memory is included by DEFAULT in both modes; a caller can opt out with
+    // `X-Your-Own-AI-Memory: off` - to keep what the person told their AI out
+    // of a draft for someone else, or to keep tool-calling reliable on
+    // smaller models, where a memory block can tip the model toward refusing
+    // tools. The persona and its core stay either way.
+    let with_memory = !memory_switched_off(header_str(&headers, "x-your-own-ai-memory").as_deref());
     // `X-Your-Own-AI-Record: off` skips transcript recording for this
     // exchange - for internal calls whose output is stored elsewhere (the
     // workspace-memory updater writes its own revision entry; recording the
@@ -1315,7 +1348,7 @@ async fn chat_completions(
             );
             msgs.insert(pos, note);
         }
-        if agent_memory {
+        if with_memory {
             // Agent sessions call per STEP; the user-memory block barely
             // changes within one, but rebuilding it costs a CPU embedding
             // query every time (measured ~0.7s/step on modest hardware).
@@ -1359,8 +1392,11 @@ async fn chat_completions(
         msgs
     } else {
         // Persona mode: we own the system prompt (persona + memory in the slot).
-        let user_memory =
-            crate::inference_memory::build_memory_block(&app, &query, &ai.id, None).await;
+        let user_memory = if with_memory {
+            crate::inference_memory::build_memory_block(&app, &query, &ai.id, None).await
+        } else {
+            MEMORY_OFF_LINE.to_string()
+        };
         let persona = build_persona_prompt(&ai, &user_memory);
         let mut msgs = vec![json!({ "role": "system", "content": persona })];
         msgs.extend(incoming.clone());
@@ -2979,5 +3015,59 @@ mod vision_guard_tests {
         let before = msgs.clone();
         assert_eq!(strip_image_parts(&mut msgs), 0);
         assert_eq!(msgs, before);
+    }
+}
+
+#[cfg(test)]
+mod memory_stays_home_tests {
+    use super::*;
+
+    #[test]
+    fn memory_work_is_routed_offline_whatever_the_ais_model() {
+        for model in ["online:gpt-5.6-sol", "external:my-server", "Qwen3.5-4B.gguf", "auto:online-offline", "auto:offline"] {
+            assert_eq!(routing_mode(model, true).as_deref(), Some("offline"), "{model}");
+        }
+    }
+
+    #[test]
+    fn other_calls_keep_the_ais_own_routing() {
+        assert_eq!(routing_mode("online:gpt-5.6-sol", false), None, "a set online model is not routed");
+        assert_eq!(routing_mode("auto:online-offline", false).as_deref(), Some("online-offline"));
+        assert_eq!(routing_mode("auto:offline", false).as_deref(), Some("offline"));
+    }
+
+    #[test]
+    fn only_the_two_memory_tasks_count_as_memory_work() {
+        assert_eq!(memory_task_of(Some("memory-prose")), Some("memory-prose"));
+        assert_eq!(memory_task_of(Some(" Memory-Precision ")), Some("memory-precision"));
+        for other in [Some("code"), Some("memory"), Some("general"), Some(""), None] {
+            assert_eq!(memory_task_of(other), None, "{other:?}");
+        }
+    }
+
+    #[test]
+    fn memory_off_is_read_the_same_in_both_modes() {
+        for v in ["off", "OFF", " false ", "0", "no"] {
+            assert!(memory_switched_off(Some(v)), "{v}");
+        }
+        for v in [Some("on"), Some("1"), Some(""), None] {
+            assert!(!memory_switched_off(v), "{v:?}");
+        }
+    }
+
+    #[test]
+    fn a_persona_call_with_memory_off_carries_the_persona_and_nothing_about_the_person() {
+        let ai = ResolvedAi {
+            id: "a".into(),
+            name: "Reeves".into(),
+            model: "auto:offline".into(),
+            web_access: true,
+            system_prompt: "CORE. You are {{aiName}}. {{userNameInfo}}".into(),
+            use_emojis: false,
+            agent_pub_key: String::new(),
+        };
+        let prompt = build_persona_prompt(&ai, MEMORY_OFF_LINE);
+        assert!(prompt.starts_with("CORE. You are Reeves. Their name is unknown."), "{prompt}");
+        assert!(!prompt.contains("{{userNameInfo}}"));
     }
 }

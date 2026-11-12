@@ -124,6 +124,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 ### For developers
 - A tool named in `tool_choice` is the only tool the engine is given, so
   the model cannot call a different one.
+- `X-Your-Own-AI-Memory: off` works in persona mode too: the AI keeps its
+  personality and answers with nothing of what it remembers about you.
+  Before, only agent mode honored it.
 
 ### Linux
 - The app's program is `your-own-ai` (was `app`), and the bundled engine
@@ -140,6 +143,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   Fedora 45 and others that ship OpenSSL 4.
 
 ### Security
+- **Memory work stays on your computer whatever model an AI uses.** When
+  an AI was set to one specific online model (not Automatic), the summary
+  a project session writes into its memory was sent to that online model.
+  It is now always written by a model on your computer.
 - The background service's admin connection accepts only the address
   Your Own AI picks at each start, so a web page in your browser cannot
   reach it, and its settings file is readable only by you.
