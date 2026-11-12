@@ -344,10 +344,10 @@ fn install_cuda_zip(app: &AppHandle, zip_name: &str) -> Result<(), String> {
         }
         // Flat archive: take the basename only - never join archive paths
         // (zip-slip). Our zips are built with `zip -j`.
-        let Some(name) = std::path::Path::new(entry.name())
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(String::from)
+        let Some(name) = entry
+            .name()
+            .ok()
+            .and_then(|n| std::path::Path::new(n.as_ref()).file_name().and_then(|f| f.to_str()).map(String::from))
         else {
             continue;
         };

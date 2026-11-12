@@ -203,10 +203,10 @@ fn extract_archive(archive: &std::path::Path, dest: &std::path::Path) -> Result<
             if entry.is_dir() {
                 continue;
             }
-            let Some(name) = std::path::Path::new(entry.name())
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(String::from)
+            let Some(name) = entry
+                .name()
+                .ok()
+                .and_then(|n| std::path::Path::new(n.as_ref()).file_name().and_then(|f| f.to_str()).map(String::from))
             else {
                 continue;
             };

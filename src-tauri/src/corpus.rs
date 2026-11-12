@@ -225,7 +225,7 @@ pub(crate) fn extract_epub_text(path: &Path) -> Result<String, String> {
     if order.is_empty() {
         // No usable spine: every page in archive order.
         let mut names: Vec<String> = (0..archive.len())
-            .filter_map(|i| archive.by_index(i).ok().map(|f| f.name().to_string()))
+            .filter_map(|i| archive.by_index(i).ok().and_then(|f| f.name().ok().map(|n| n.to_string())))
             .filter(|n| {
                 let l = n.to_ascii_lowercase();
                 l.ends_with(".xhtml") || l.ends_with(".html") || l.ends_with(".htm")
