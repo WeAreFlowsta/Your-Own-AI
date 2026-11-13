@@ -195,7 +195,11 @@ describe(`devices, phase ${PHASE}`, () => {
       // where the conversation would be, and opens it by itself once the
       // Vault is unlocked.
       const vaultPort = process.env.YOAI_VAULT_PORT;
-      if (vaultPort) {
+      // The previous release (device B in reattach-live.sh) has neither the
+      // message nor the command that reads the lock: the step is this build's.
+      const readsLock = await invoke<string>("vault_lock_kind").then(() => true, () => false);
+      if (!readsLock) console.log("e2e: this app does not read the Vault's lock kind (an earlier release): the locked-Vault step is skipped");
+      if (vaultPort && readsLock) {
         const vaultPost = (path: string) => fetch(`http://127.0.0.1:${vaultPort}${path}`, { method: "POST", headers: { "content-type": "application/json", origin: "https://ourtest.flowsta.com" }, body: "{}" });
         await (await $('[data-testid="new-chat"]')).click();
         await (await $('button[title^="Conversations"]')).click();

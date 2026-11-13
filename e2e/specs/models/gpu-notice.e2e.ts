@@ -11,7 +11,9 @@ const PHASE = process.env.GPU_NOTICE_PHASE ?? "";
 type Status = { active: boolean; just_engaged: boolean; cuda_disabled?: boolean };
 const notice = () => browser.execute(() => (document.querySelector('[data-testid="gpu-safe-mode-notice"]') as HTMLElement | null)?.innerText?.replace(/\s+/g, " ") ?? null);
 
-describe(`GPU safe mode notice, exits ${PHASE} a model load`, () => {
+// Run by its live script only: in the models suite, where no phase is set,
+// it is skipped.
+(PHASE ? describe : describe.skip)(`GPU safe mode notice, exits ${PHASE || "(no phase set)"} a model load`, () => {
   it(PHASE === "outside" ? "does not move the AI off the graphics card" : "says it is running on CPU and can be turned back", async function () {
     this.timeout(600_000);
     await waitForChat();
